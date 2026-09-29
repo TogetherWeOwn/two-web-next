@@ -171,12 +171,12 @@ go hunting for them.
 
 ## 13. New cards created by this matrix (all in TWO Web Next, one PR each)
 
-- **N1** — `/privacy` versioned policy page: render `privacy-policy-v1.md` from disk via `Str::markdown`-equivalent, funnel-style (no session/cache/DB), CSP header. Acceptance: 200 with DB down; version bump = new file + const.
-- **N2** — webmanifest + install icons + theme-color + branded 404/429/500/503. Acceptance: manifest serves, icons resolve, each error code renders brand (no stack traces; 429 shape per W9).
-- **N3** — `GET /up` always-200 `{status, queue{…}}` with warn 20 / critical 100, unknown-not-500. Blocked by W13 (queue visibility). Replaces `queue:check-depth`.
-- **N4** — log-based error alert (1 per fingerprint / 5 min, dont-report list respected) + queue-failing critical line; runbook for tailing. Blocked by W13.
-- **N5** — human-route throttles: 10,1 join/login/QA + 30,1 logout/event writes, one 429 shape, `every-POST-throttled` audit. Rides the W9 throttle mechanism; blocked by W9.
-- **N6** — user-roster write on sign-in/join (`updateOrCreate` Discord id/username/avatar/member flag; never the moderator flag — recompute owns that). The `users` table exists from W3 but nothing writes it; W7/W11 reads need it. Acceptance: repeat login updates the row, no duplicates, moderator flag untouched by the write path.
+- **N1** ([TOG-9893](/TOG/issues/TOG-9893)) — `/privacy` versioned policy page: render `privacy-policy-v1.md` from disk via `Str::markdown`-equivalent, funnel-style (no session/cache/DB), CSP header. Acceptance: 200 with DB down; version bump = new file + const.
+- **N2** ([TOG-9894](/TOG/issues/TOG-9894)) — webmanifest + install icons + theme-color + branded 404/429/500/503. Acceptance: manifest serves, icons resolve, each error code renders brand (no stack traces; 429 shape per W9).
+- **N3** ([TOG-9895](/TOG/issues/TOG-9895)) — `GET /up` always-200 `{status, queue{…}}` with warn 20 / critical 100, unknown-not-500. Blocked by W13 (queue visibility). Replaces `queue:check-depth`.
+- **N4** ([TOG-9896](/TOG/issues/TOG-9896)) — log-based error alert (1 per fingerprint / 5 min, dont-report list respected) + queue-failing critical line; runbook for tailing. Blocked by W13.
+- **N5** ([TOG-9897](/TOG/issues/TOG-9897)) — human-route throttles: 10,1 join/login/QA + 30,1 logout/event writes, one 429 shape, `every-POST-throttled` audit. Rides the W9 throttle mechanism; blocked by W9.
+- **N6** ([TOG-9898](/TOG/issues/TOG-9898)) — user-roster write on sign-in/join (`updateOrCreate` Discord id/username/avatar/member flag; never the moderator flag — recompute owns that). The `users` table exists from W3 but nothing writes it; W7/W11 reads need it. Acceptance: repeat login updates the row, no duplicates, moderator flag untouched by the write path.
 
 Unmapped rows remaining: **0**. Dropped rows carry reasons above; every other
 row names its card. Re-run this matrix before W16 (DNS flip).
