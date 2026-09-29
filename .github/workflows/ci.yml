@@ -27,5 +27,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - name: Neon backup selftest (stubbed, no secrets)
+        run: bash ci/neon-backup-selftest.sh
+      - name: Migration numbering check
+        run: bash ci/check-migration-numbers.sh
       - name: Build (wrangler dry run)
         run: npx wrangler deploy --dry-run --outdir dist
