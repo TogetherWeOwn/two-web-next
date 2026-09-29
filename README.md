@@ -1,5 +1,7 @@
 # two-web-next
 
+[![Release](https://img.shields.io/github/v/release/TogetherWeOwn/two-web-next)](https://github.com/TogetherWeOwn/two-web-next/releases)
+
 The Together We Own website, rebuilt for Cloudflare Workers. It replaces
 [two-web](https://github.com/TogetherWeOwn/two-web) (Laravel), which is now in
 maintenance mode: fixes only, no new features.
