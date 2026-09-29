@@ -1,0 +1,20 @@
+// Staging first. Production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "two-web-next",
+  "main": "src/index.tsx",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "workers_dev": true,
+  "assets": { "directory": "./public" },
+  // Not secrets (the client id is public: it is in every OAuth URL). Secrets (DISCORD_CLIENT_SECRET, DISCORD_BOT_TOKEN, SESSION_SECRET) are set with
+  // `wrangler secret put` and never live in this file.
+  "vars": {
+    "APP_URL": "https://next.togetherweown.com",
+    "DISCORD_CLIENT_ID": "1539711683898118154",
+    "DISCORD_GUILD_ID": "326474832151838730",
+    // WEB-HOMEPAGE campaign invite (never expires, unlimited); the fallback when auto-join fails.
+    "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
+  }
+}

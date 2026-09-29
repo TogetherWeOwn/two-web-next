@@ -1,0 +1,5 @@
+# Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
+DISCORD_CLIENT_SECRET=
+DISCORD_BOT_TOKEN=
+# 32+ random bytes, e.g. `openssl rand -base64 48`
+SESSION_SECRET=

@@ -1,0 +1,8 @@
+# Default rules, plus an allowlist for values that are public by design.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public Discord ids: the Owen application (client) id is in every OAuth URL, the TWO guild id is in its public widget"
+targetRules = ["discord-client-id"]
+regexes = ['''1539711683898118154''', '''326474832151838730''']
