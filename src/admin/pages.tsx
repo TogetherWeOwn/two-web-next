@@ -421,8 +421,7 @@ export const FeaturedFormPage: FC<{
   row?: FeaturedRow;
   values: Record<string, unknown>;
   errors: Record<string, string>;
-  roster?: RosterEntry[];
-}> = ({ mode, row, values, errors, roster }) => {
+}> = ({ mode, row, values, errors }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked = values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
