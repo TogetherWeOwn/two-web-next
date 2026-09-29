@@ -1,5 +1,4 @@
 import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp } from "drizzle-orm/pg-core";
-import { users } from "./schema";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -12,9 +11,10 @@ import { users } from "./schema";
 // - activity_log is the spatie shape minus the event/batch columns the legacy
 //   app added but the admin rebuild never reads; subject/causer are stored as
 //   type+id string pairs (nullableMorphs) rather than separate tables.
-// - member_data_access_logs.viewer_user_id is text (Discord snowflake owner:
-//   legacy constrained to users.id, which in this repo is already the
-//   snowflake text PK, so the FK is kept).
+// - created_by / viewer_user_id are plain text (Discord snowflakes), NOT
+//   foreign keys to users: main's login flow never maintains the users
+//   roster, so an FK would reject every admin write with 23503. The W-auth
+//   slice owns the roster question; this slice stores the snowflake.
 
 export const events = pgTable(
   "events",
@@ -36,7 +36,7 @@ export const events = pgTable(
     capacity: integer("capacity"),
     status: text("status").notNull().default("draft"),
     discordEventId: text("discord_event_id").unique(),
-    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdBy: text("created_by"),
     // Pause flag (TOG-8725): a published event stays visible while taking no
     // new answers. Default true so every row written by a caller that does
     // not know about the flag keeps today's behaviour: open.
@@ -78,7 +78,7 @@ export const featuredContents = pgTable(
     // Optional show-window in UTC (legacy labels the fields "(UTC)").
     startsAt: timestamp("starts_at", { withTimezone: true }),
     endsAt: timestamp("ends_at", { withTimezone: true }),
-    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdBy: text("created_by"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -99,7 +99,7 @@ export const memberDataAccessLogs = pgTable(
     // Discord snowflake as a string (never arithmetic); the literal
     // 'unauthenticated' marks the defect shape of a read with no viewer.
     viewerDiscordId: text("viewer_discord_id").notNull(),
-    viewerUserId: text("viewer_user_id").references(() => users.id, { onDelete: "set null" }),
+    viewerUserId: text("viewer_user_id"),
     // Free-form strings on purpose: an enum would need a migration every
     // time the panel grows a screen. Evidence, not control flow.
     resource: text("resource").notNull(),

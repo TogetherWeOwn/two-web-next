@@ -25,7 +25,8 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
 import { dbFor } from "./db";
-import { type AccessDecl, type Actor, adminGuard, type Lookup } from "./guard";
+import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./guard";
+import type { SessionStore } from "../sessions";
 import {
   type EventRow,
   type FeaturedRow,
@@ -92,9 +93,15 @@ function formError(
   return render(err.fields, values);
 }
 
-export function adminApp(lookup?: Lookup) {
+/**
+ * Optional overrides (tests only — production resolves through the seams).
+ * A bare SessionStore overrides session resolution (guard pins); live route
+ * tests pass `{ sessionStore, db }` so sessions resolve from memory while
+ * admin tables read/write Postgres.
+ */
+export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
-  admin.use("/*", adminGuard(lookup));
+  admin.use("/*", adminGuard(overrides));
 
   admin.get("/", (c) => {
     declareAccess(c, { resource: "dashboard", action: "view", route: "admin.dashboard", subjects: [] });

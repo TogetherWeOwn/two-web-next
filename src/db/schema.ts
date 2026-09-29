@@ -9,11 +9,6 @@ export const users = pgTable("users", {
   username: text("username").notNull(),
   avatar: text("avatar"),
   member: boolean("member").notNull().default(false),
-  // Recomputed from Discord roles at every login (W5). The site stores the
-  // answer, not the role list: "can this person moderate" is the only
-  // question asked, and a copy of somebody's roles would be member data with
-  // no shipped feature. Fail-closed default: nobody is a moderator.
-  isModerator: boolean("is_moderator").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

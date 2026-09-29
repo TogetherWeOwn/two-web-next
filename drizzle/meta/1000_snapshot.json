@@ -1,5 +1,5 @@
 {
-  "id": "00290f31-77e3-449c-969b-a91733f5381d",
+  "id": "c5c739f4-062c-4c2c-8f75-373a9ac7ceb9",
   "prevId": "c1143063-a1c8-4ffc-a9a6-78d7a73c58fd",
   "version": "7",
   "dialect": "postgresql",
@@ -520,13 +520,6 @@
           "notNull": true,
           "default": false
         },
-        "is_moderator": {
-          "name": "is_moderator",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -811,19 +804,6 @@
         }
       },
       "foreignKeys": {
-        "events_created_by_users_id_fk": {
-          "name": "events_created_by_users_id_fk",
-          "tableFrom": "events",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
         "events_parent_event_id_events_id_fk": {
           "name": "events_parent_event_id_events_id_fk",
           "tableFrom": "events",
@@ -969,21 +949,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "featured_contents_created_by_users_id_fk": {
-          "name": "featured_contents_created_by_users_id_fk",
-          "tableFrom": "featured_contents",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -1088,21 +1054,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "member_data_access_logs_viewer_user_id_users_id_fk": {
-          "name": "member_data_access_logs_viewer_user_id_users_id_fk",
-          "tableFrom": "member_data_access_logs",
-          "tableTo": "users",
-          "columnsFrom": [
-            "viewer_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
