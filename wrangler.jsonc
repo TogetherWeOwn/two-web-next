@@ -7,6 +7,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "workers_dev": true,
+  // Staging host. The Discord application must list ${APP_URL}/auth/discord/callback as a redirect URI.
+  "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],
   "assets": { "directory": "./public" },
   // Not secrets (the client id is public: it is in every OAuth URL). Secrets (DISCORD_CLIENT_SECRET, DISCORD_BOT_TOKEN, SESSION_SECRET) are set with
   // `wrangler secret put` and never live in this file.
