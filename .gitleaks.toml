@@ -6,3 +6,8 @@ useDefault = true
 description = "Public Discord ids: the Owen application (client) id is in every OAuth URL, the TWO guild id is in its public widget"
 targetRules = ["discord-client-id"]
 regexes = ['''1539711683898118154''', '''326474832151838730''']
+
+[[allowlists]]
+description = "Fixture moderator snowflake: the public SySOp role id (TOG-106/TOG-427), referenced in tests and the QA seam against fixture role lists only — the live grant stays env-only via DISCORD_MODERATOR_ROLE_IDS"
+targetRules = ["discord-client-id"]
+regexes = ['''508654771276873729''']
