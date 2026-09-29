@@ -16,6 +16,9 @@ Any intentional change needs a 301 map entry, not a silent move.
 | `/rules` | `routes/web.php` `Route::view` | ✅ (invalid `RULES_LAST_UPDATED` hides the stamp, TOG-7323) |
 | `/sitemap_index.xml` | `routes/web.php` sitemap closure | ✅ static entries; published `/e/{key}` rows land with W8 |
 | `/robots.txt` | `routes/web.php` robots closure (per-env host, TOG-7071) | ✅ |
+| `/join` | `JoinController` landing page (one-click button + invite fallback + widget) | ✅ W6: database-free leaf, in sitemap (monthly, 0.9) |
+| `/join/discord` | `JoinController` OAuth start (`identify` + `guilds.join`, `throttle:10,1`) | ✅ W6: Postgres throttle, signed `join_source` / `join_next` cookies |
+| `/join/callback` | `JoinController` OAuth callback (synchronous bot add, then sign-in) | ✅ W6: synchronous `PUT /guilds/{guild}/members/{user}`, one `join_attempts` row per terminal path |
 
 Crawl-set contract (TOG-7072): published events only. Drafts 403 for guests,
 cancelled answers 410 Gone (TOG-6781), past events are never indexed. The
@@ -26,7 +29,6 @@ route-level 403/410 for `/e/{key}` land with W8; `crawlableEvents` in
 
 | Path | Owner |
 |---|---|
-| `/join`, `/join/discord`, `/join/callback` | W6 (already live here as `/auth/discord*` — see note) |
 | `/events`, `/events/past` | W8 |
 | `/e/{key}` | W8 |
 | `/events.json` | W8 |
@@ -37,7 +39,28 @@ route-level 403/410 for `/e/{key}` land with W8; `crawlableEvents` in
 
 Note: legacy `/join*` is the one-click OAuth journey; this repo's equivalent
 `/auth/discord*` shipped in W3 with the same `identify` + `guilds.join`
-scopes. The `/join` path alias itself lands with W6 so bookmarks never break.
+scopes. The `/join` paths landed with W6 alongside it (same scopes, same
+synchronous bot add); both stay until the strangler cutover retires one.
+
+## Discord redirect-URI discipline (W6)
+
+Discord answers `redirect_uri` values that are not registered on the
+application with `Unknown redirect_uri` — after the deploy, not before. The
+callback URL is `${APP_URL}/join/callback`, so every environment that serves
+the join journey needs its own exact URL registered in the Discord developer
+portal **before** traffic can reach the new code:
+
+1. **Add** the new redirect URI in the portal (staging first, then prod at cutover).
+2. **Deploy** the code that builds it.
+3. **Only then** switch traffic / announce. Never remove the old
+   `/auth/discord/callback` URI until the cutover retires that path.
+
+Same-app constraint: `DISCORD_BOT_TOKEN` must belong to the same Discord
+application as `DISCORD_CLIENT_ID` — Discord only lets an application's own
+bot add a member with that application's `guilds.join` token. A token from a
+different app fails the synchronous add on every attempt (verified against
+the staging Discord app at W6 sign-off, not in CI: CI never holds real
+Discord credentials).
 
 ## Rules
 
