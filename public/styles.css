@@ -15,3 +15,9 @@ button.link { background: none; border: 0; color: var(--brand); cursor: pointer;
 .who { margin-right: .5rem; color: var(--muted); }
 .notice { background: #fff7ed; border-left: 4px solid var(--brand); padding: .75rem 1rem; }
 footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 2rem; }
+.facts { list-style: none; margin: 1.5rem 0; padding: 0; display: grid; gap: 1rem; }
+dl.facts > div { display: block; }
+.card { border: 1px solid #d8cfc0; background: #fffdf8; padding: 1rem 1.25rem; border-radius: .5rem; }
+.card dt, .card h2, .card h3 { margin: 0 0 .25rem; font-size: 1.05rem; }
+.card dd, .card p { margin: 0; color: var(--muted); }
+.counts { color: var(--muted); font-size: .95rem; }
