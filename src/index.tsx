@@ -18,7 +18,9 @@ import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord
 import { dbPing, hyperdriveQuery } from "./db/ping";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import type { Env, Session } from "./env";
-import { Join, Recovery, About, Faq, Home, Rules, type Notice } from "./pages";
+import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
+import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
+import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
 import { registerJoinRoutes } from "./join/route";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
@@ -263,6 +265,20 @@ app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
   return c.html(<Rules lastUpdated={stamp?.iso ?? null} />);
+});
+
+// Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
+// `/privacy` + PrivacyController). Funnel-style: no session, no cookie, no
+// cache, no database — stays 200 during an app-DB outage. The markdown is
+// bundled at build (src/privacy-content.ts, generated from
+// content/privacy-policy-vN.md) and pre-rendered once at module load, so the
+// request path performs zero reads of any kind. CSP comes from the global
+// secureHeaders middleware above.
+const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
+
+app.get("/privacy", (c) => {
+  c.header("cache-control", "public, max-age=3600");
+  return c.html(<Privacy version={POLICY_VERSION} html={PRIVACY_HTML} />);
 });
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;

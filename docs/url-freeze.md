@@ -14,6 +14,7 @@ Any intentional change needs a 301 map entry, not a silent move.
 | `/about` | `routes/funnel.php` `Route::view` | ✅ |
 | `/faq` | `routes/funnel.php` `Route::view` | ✅ |
 | `/rules` | `routes/web.php` `Route::view` | ✅ (invalid `RULES_LAST_UPDATED` hides the stamp, TOG-7323) |
+| `/privacy` | `routes/funnel.php` + `PrivacyController` (versioned policy, zero-query) | ✅ N1: versioned bundle, no session/cookie/cache/DB, in sitemap (monthly, 0.7) |
 | `/sitemap_index.xml` | `routes/web.php` sitemap closure | ✅ static entries; published `/e/{key}` rows land with W8 |
 | `/robots.txt` | `routes/web.php` robots closure (per-env host, TOG-7071) | ✅ |
 | `/join` | `JoinController` landing page (one-click button + invite fallback + widget) | ✅ W6: database-free leaf, in sitemap (monthly, 0.9) |
