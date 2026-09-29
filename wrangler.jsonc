@@ -2,13 +2,27 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "two-web-next",
-  "main": "src/index.tsx",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "workers_dev": true,
   // Staging host. The Discord application must list ${APP_URL}/auth/discord/callback as a redirect URI.
   "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],
+  // W13: Laravel queue + scheduler parity (TOG-9692). Cron expressions are pinned to
+  // src/jobs/constants.ts by test/jobs-constants.test.ts.
+  "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
+  "queues": {
+    "producers": [
+      { "queue": "two-sync-event", "binding": "SYNC_EVENT_QUEUE" },
+      { "queue": "two-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
+    ],
+    // Terminal outcomes are acked by the consumer; max_retries is only a backstop above the largest `tries`.
+    "consumers": [
+      { "queue": "two-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
+      { "queue": "two-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+    ]
+  },
   "assets": { "directory": "./public" },
   // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
   // project two-web-next, staging branch (pooled endpoint). Local dev sets
