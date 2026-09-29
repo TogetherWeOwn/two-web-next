@@ -117,7 +117,7 @@ go hunting for them.
 | No mailables / notifications (confirmed absent) | ✅ nothing to build | — (pinned here) |
 | No Slack/Discord webhook posts (confirmed absent) | ✅ nothing to build | — (pinned here) |
 | RestartCardClient/Paperclip value objects (dead code, no callers) | ✅ do not port | dropped (dead) |
-| Log-line alerting instead (error alert 1/5 min, Queue::failing critical) | ❌ no equivalent on Workers | **N4** (new: alert parity) |
+| Log-line alerting instead (error alert 1/5 min, Queue::failing critical) | ✅ `src/alerts.ts` (`error.alert`, 1 per `class@route` / 5 min per isolate; `queue.failing` from `src/jobs/consumer.ts`), runbook `docs/runbook-alerts.md` | **N4** ✅ |
 
 ## 9. Policies and gates
 

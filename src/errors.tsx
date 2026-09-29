@@ -1,5 +1,6 @@
 import type { Context, Hono } from "hono";
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
 import { Layout } from "./pages";
 
@@ -104,6 +105,7 @@ export function notFoundHandler(c: Context): Response | Promise<Response> {
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
   console.error("unhandled error:", err);
+  alertRequestError(err, { method: c.req.method, route: c.req.routePath || c.req.path });
   c.header("cache-control", "no-store, private");
   c.status(500);
   return c.html(<InternalErrorPage />);
