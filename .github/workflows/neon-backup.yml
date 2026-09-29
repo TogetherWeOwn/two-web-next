@@ -1,7 +1,11 @@
 name: neon-backup
 
 # Nightly pg_dump of the Neon staging branch (and prod after cutover) to R2
-# `paperclip-backups`. See docs/db-migrations.md and bin/neon-backup.sh.
+# `two-web-next-backups`. See docs/db-migrations.md and bin/neon-backup.sh.
+# CISO condition (TOG-9837): member-data dumps land ONLY in the
+# EU-jurisdiction-pinned `two-web-next-backups` bucket (every wrangler r2
+# object call passes --jurisdiction eu). The legacy `paperclip-backups`
+# bucket (jurisdiction default / ENAM) is out of scope for member-data dumps.
 # Secrets (operator-provisioned, never in logs): NEON_STAGING_DATABASE_URL,
 # CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID. While Neon is unprovisioned
 # the probe step skips the rest green so the schedule is quiet, not red.

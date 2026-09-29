@@ -19,9 +19,13 @@ bot rewrite, framework ADR pending).
 
 Status 2026-09-29: Neon **not yet provisioned** (host step:
 `Operator:` card under [TOG-9679](/TOG/issues/TOG-9679)). R2 bucket
-`paperclip-backups` **exists** (verified 2026-09-29). Until Neon lands,
-all DB tests run against `agent-testdb` — never prod or staging
-databases.
+`two-web-next-backups` **exists, EU-jurisdiction-pinned** (jurisdiction
+`eu` / location `EEUR`, verified 2026-09-29 on the host track
+[TOG-9836](/TOG/issues/TOG-9836); empty, no data uploaded). The legacy
+`paperclip-backups` bucket (jurisdiction `default` / location `ENAM`)
+is explicitly out of scope for member-data dumps per the CISO condition
+[TOG-9837](/TOG/issues/TOG-9837). Until Neon lands, all DB tests run
+against `agent-testdb` — never prod or staging databases.
 
 ## Migration numbering (reserved)
 
@@ -53,11 +57,17 @@ Rules:
 ## Backups
 
 Nightly `pg_dump -Fc` of the `staging` branch (and `main` after
-cutover) to R2 `paperclip-backups`:
+cutover) to R2 `two-web-next-backups` (EU-jurisdiction-pinned,
+jurisdiction immutable after creation):
 
 - Script: `bin/neon-backup.sh` (`backup` | `promote-weekly` |
   `rotate` | `check`). Connection comes from `DATABASE_URL` env only —
-  never argv, never logs.
+  never argv, never logs. Every `wrangler r2 object` call passes
+  `--jurisdiction eu` (overridable via `BACKUP_JURISDICTION`, default
+  `eu`); the bucket default is `two-web-next-backups` (overridable via
+  `BACKUP_BUCKET`).
+- `paperclip-backups` is explicitly out of scope for member-data dumps
+  (jurisdiction `default` / location `ENAM`; must never receive them).
 - Schedule: `.github/workflows/neon-backup.yml` — nightly `03:17Z` cron
   + manual `workflow_dispatch`. Needs repo secrets `NEON_STAGING_DATABASE_URL`
   (operator-provisioned), `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
