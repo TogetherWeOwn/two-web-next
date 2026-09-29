@@ -389,3 +389,150 @@ export const RSVP_RATE_LIMIT = { maxAttempts: 12, decaySeconds: 60 } as const;
  */
 export const RSVP_HONEY_FIELD = "website";
 export const RSVP_MIN_FILL_MS = 1000;
+
+/* ------------------------------------------------------------ member-profile
+ * Legacy: app/Livewire/MemberProfile.php + member-profile.blade.php +
+ * MemberProfileTest.php (TOG-8137 session-first ordering, TOG-6957 focus
+ * moves, TOG-8715/TOG-9361 oracle-free trap). Server: src/profiles/routes.tsx
+ * (W7, TOG-9686). Re-spec §5.
+ *
+ * Deviations from the legacy row list, recorded so nobody hunts for them:
+ * - Rank has no W7 source yet; the view renders it only when SSR is handed
+ *   one (`MemberView.rank`), never a placeholder. Joined month comes from
+ *   users.created_at.
+ * - The save is one PATCH /members/{id} sent as JSON with `accept:
+ *   application/json`; the no-JS form posts `_method=PATCH` and gets the same
+ *   outcome as a 303.
+ */
+
+export const MEMBER_PROFILE_ISLAND = "member-profile";
+
+export const PROFILE_VIEW_TESTID = "profile-view";
+export const PROFILE_AVATAR_TESTID = "profile-avatar";
+export const PROFILE_NAME_TESTID = "profile-name";
+export const PROFILE_RANK_TESTID = "profile-rank";
+export const PROFILE_JOINED_TESTID = "profile-joined";
+export const PROFILE_EDIT_TESTID = "profile-edit";
+export const PROFILE_FORM_TESTID = "profile-form";
+export const PROFILE_SAVE_TESTID = "profile-save";
+export const PROFILE_CANCEL_TESTID = "profile-cancel";
+export const PROFILE_SAVED_TESTID = "profile-saved";
+export const PROFILE_ERROR_TESTID = "profile-error";
+export const PROFILE_SAVE_FAILED_TESTID = "profile-save-failed";
+export const PROFILE_SESSION_EXPIRED_TESTID = "profile-session-expired";
+
+export const PROFILE_LIMITS = { bio: 1000, gamesMax: 20, gameChars: 80 } as const;
+
+export const PROFILE_COPY = {
+  saved: "Profile saved.",
+  saveFailed: "Could not save your profile. Your changes are still here — try again.",
+  sessionExpired: "Your session expired. Your changes are still here.",
+  logIn: "Log in with Discord",
+  edit: "Edit profile",
+  save: "Save",
+  cancel: "Cancel",
+} as const;
+
+/** Spam trap (TOG-8715/TOG-9361): decoy field + server-side open-time floor. */
+export const PROFILE_HONEY_FIELD = "website";
+export const PROFILE_OPENED_AT_FIELD = "formOpenedAt";
+export const PROFILE_MIN_FILL_MS = 1000;
+
+/** The one exposure rule: only the owner is ever handed an edit control. */
+export function profileEditVisible(viewerId: string, memberId: string): boolean {
+  return viewerId === memberId;
+}
+
+export interface ProfileWriteBody {
+  bio: string;
+  games_text: string;
+  timezone: string;
+  website: string;
+  formOpenedAt: number;
+}
+
+export interface ProfileWriteRequest {
+  method: "PATCH";
+  url: string;
+  body: ProfileWriteBody;
+}
+
+/** Exactly one PATCH per save; cancel fires nothing. */
+export function profileWriteRequest(memberId: string, body: ProfileWriteBody): ProfileWriteRequest {
+  return { method: "PATCH", url: `/members/${encodeURIComponent(memberId)}`, body };
+}
+
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+
+/** Client-side mirror of the server rules; the server stays authoritative. */
+export function profileClientErrors(input: {
+  bio: string;
+  games_text: string;
+  timezone: string;
+}): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (CONTROL_CHARS.test(input.bio) || CONTROL_CHARS.test(input.games_text) || CONTROL_CHARS.test(input.timezone)) {
+    errors.control = "Remove control characters.";
+  }
+  if ([...input.bio].length > PROFILE_LIMITS.bio) errors.bio = "Keep your bio to 1000 characters or fewer.";
+  const games: string[] = [];
+  for (const line of input.games_text.split(/\r\n|\r|\n/)) {
+    const t = line.trim();
+    if ([...t].length > PROFILE_LIMITS.gameChars) errors.games ??= "Keep each game name to 80 characters or fewer.";
+    if (t !== "" && !games.includes(t)) games.push(t);
+  }
+  if (games.length > PROFILE_LIMITS.gamesMax) errors.games ??= "Add no more than 20 games.";
+  if (input.timezone !== "") {
+    try {
+      new Intl.DateTimeFormat("en", { timeZone: input.timezone });
+    } catch {
+      errors.timezone = "Choose a valid IANA timezone, e.g. Europe/London.";
+    }
+  }
+  return errors;
+}
+
+export type ProfileOutcome = "saved" | "invalid" | "failed" | "session-expired" | "cancelled";
+
+/** Focus after each outcome: heading, alert, or saved confirmation (TOG-6957). */
+export function profileFocusTarget(outcome: ProfileOutcome): string | null {
+  switch (outcome) {
+    case "saved":
+      return PROFILE_SAVED_TESTID;
+    case "invalid":
+      return PROFILE_ERROR_TESTID;
+    case "failed":
+      return PROFILE_SAVE_FAILED_TESTID;
+    case "session-expired":
+      return PROFILE_SESSION_EXPIRED_TESTID;
+    case "cancelled":
+      return PROFILE_NAME_TESTID;
+  }
+}
+
+/**
+ * Trap verdict: true when a VALID save should be silently swallowed. Missing
+ * `formOpenedAt` is no signal (API clients), a future/garbled one counts as
+ * bot-fast. Called only after validation passed — errors always surface first.
+ */
+export function profileTrapTripped(input: Record<string, unknown>, nowMs: number): boolean {
+  const honey = input[PROFILE_HONEY_FIELD];
+  if (typeof honey === "string" ? honey !== "" : honey !== undefined && honey !== null) return true;
+  const opened = input[PROFILE_OPENED_AT_FIELD];
+  if (opened === undefined || opened === null || opened === "") return false;
+  const n = Number(opened);
+  return !Number.isFinite(n) || nowMs - n < PROFILE_MIN_FILL_MS;
+}
+
+/** Discord CDN avatar with srcset, or null so SSR renders the initial fallback. */
+export function profileAvatarSrcset(id: string, avatar: string | null): { src: string; srcset: string } | null {
+  if (!avatar || !/^[a-z0-9_]{1,64}$/i.test(avatar)) return null;
+  const base = `https://cdn.discordapp.com/avatars/${id}/${avatar}.png`;
+  return { src: `${base}?size=128`, srcset: `${base}?size=64 1x, ${base}?size=128 2x, ${base}?size=256 3x` };
+}
+
+export function profileJoinedMonth(joinedAt: Date | null): string | null {
+  return joinedAt
+    ? joinedAt.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" })
+    : null;
+}
