@@ -18,6 +18,7 @@ import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord
 import { dbPing, hyperdriveQuery } from "./db/ping";
 import type { Env, Session } from "./env";
 import { Join, Recovery, About, Faq, Home, Rules, type Notice } from "./pages";
+import { registerErrorHandlers } from "./errors";
 import { registerJoinRoutes } from "./join/route";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
@@ -267,6 +268,9 @@ app.post("/api/agent-events", agentEventsRoute);
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/healthz", (c) => c.json({ ok: true }));
+
+// Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
+registerErrorHandlers(app);
 
 // Shared-Postgres acceptance ping (S1: TOG-9679): proves the Neon staging
 // branch serves this Worker through Hyperdrive. 503s without the binding or
