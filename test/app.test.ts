@@ -41,6 +41,14 @@ function mockDiscord(joinStatus: number) {
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe("health", () => {
+  it("returns 200 { ok: true } on /health", async () => {
+    const res = await app.request("/health", {}, env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+});
+
 describe("homepage", () => {
   it("renders with a Discord sign-in link and security headers", async () => {
     const res = await app.request("/", {}, env);

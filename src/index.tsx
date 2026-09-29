@@ -49,6 +49,7 @@ app.get("/", async (c) => {
   return c.html(<Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} />);
 });
 
+app.get("/health", (c) => c.json({ ok: true }));
 app.get("/healthz", (c) => c.json({ ok: true }));
 
 app.get("/auth/discord", async (c) => {

@@ -1,0 +1,53 @@
+name: deploy
+
+# Staging deploy on merge to main. Production (togetherweown.com) is only
+# switched at cutover (plan TOG-9671, W16): there is deliberately no prod job here.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    name: deploy-staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Production-style gate: GitHub Environment protection rules (required
+    # reviewers, etc.) apply to staging deploys the same way they would to prod.
+    environment:
+      name: staging
+      url: https://next.togetherweown.com
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Deploy to Cloudflare Workers
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Smoke test /health
+        run: |
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /tmp/health.json -w "%{http_code}" https://next.togetherweown.com/health) || code="000"
+            if [ "$code" = "200" ] && grep -q '"ok":true' /tmp/health.json; then
+              echo "smoke ok (attempt $i): $(cat /tmp/health.json)"
+              exit 0
+            fi
+            echo "attempt $i: HTTP $code, retrying in 10s..."
+            sleep 10
+          done
+          echo "::error::staging /health did not return 200 {\"ok\":true} after deploy"
+          cat /tmp/health.json || true
+          exit 1
