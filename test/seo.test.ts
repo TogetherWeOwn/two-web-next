@@ -116,6 +116,7 @@ describe("sitemap + robots (per-env host)", () => {
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     for (const loc of [
       "https://next.example.test/",
+      "https://next.example.test/join",
       "https://next.example.test/about",
       "https://next.example.test/faq",
       "https://next.example.test/rules",
@@ -183,7 +184,7 @@ describe("share meta parity (TOG-5624)", () => {
 });
 
 describe("URL freeze (W4 slice)", () => {
-  it.each(["/", "/about", "/faq", "/rules", "/sitemap_index.xml", "/robots.txt"])(
+  it.each(["/", "/join", "/about", "/faq", "/rules", "/sitemap_index.xml", "/robots.txt"])(
     "%s answers",
     async (path) => {
       const res = await app.request(path, {}, env);

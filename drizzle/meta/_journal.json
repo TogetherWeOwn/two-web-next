@@ -15,6 +15,13 @@
       "when": 1790706146402,
       "tag": "0001_agent-events",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790713325933,
+      "tag": "1000_join-attempts-throttle",
+      "breakpoints": true
     }
   ]
 }

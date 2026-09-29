@@ -16,6 +16,42 @@ export const users = pgTable("users", {
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 
+// W6: one row per terminal join path (ports two-web JoinController::recordAttempt, TOG-5617).
+// Only the four safe columns ever reach the table: outcome, source, request_id,
+// discord_id. The member OAuth token lives in the signed bot request body and the
+// stack frame only — never a parameter here, so it can never end up in the row.
+// The token-hygiene test (test/join.test.ts) pins this: a full join round trip
+// with a known token leaves no trace of it in any table.
+export const joinAttempts = pgTable(
+  "join_attempts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    outcome: varchar("outcome", { length: 16 }).notNull(),
+    source: varchar("source", { length: 64 }),
+    requestId: text("request_id"),
+    discordId: text("discord_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("join_attempts_created_at_idx").on(t.createdAt)],
+);
+
+export type JoinAttempt = typeof joinAttempts.$inferSelect;
+export type NewJoinAttempt = typeof joinAttempts.$inferInsert;
+
+// W6: throttle hits for the join journey (ports the `throttle:10,1` middleware on
+// legacy /join/discord + /join/callback). Same shape as agent_event_hits: one row
+// per counted request, the budget is the rows in the last 60 s. Never holds tokens,
+// user ids or anything but the bucket name — the token-hygiene scan covers it too.
+export const webThrottleHits = pgTable(
+  "web_throttle_hits",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    bucket: text("bucket").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("web_throttle_hits_bucket_at_idx").on(t.bucket, t.at)],
+);
+
 // W14: scoped machine ingress for agent-originated events (ports two-web TOG-5510 Gate 2).
 // Tables mirror two-web's agent_event_* migration; `agent_events` is the minimal proof-event
 // table these five operations act on until the events slice lands.

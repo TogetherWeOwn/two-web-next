@@ -16,7 +16,8 @@ import {
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
 import { dbPing, hyperdriveQuery } from "./db/ping";
 import type { Env, Session } from "./env";
-import { About, Faq, Home, Rules, type Notice } from "./pages";
+import { Join, Recovery, About, Faq, Home, Rules, type Notice } from "./pages";
+import { registerJoinRoutes } from "./join/route";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, renderSitemap } from "./seo";
@@ -219,9 +220,34 @@ app.get("/rules", (c) => {
   return c.html(<Rules lastUpdated={stamp?.iso ?? null} />);
 });
 
+// The one-click join journey (W6: TOG-9685). /join is the database-free page;
+// /join/discord + /join/callback run the throttled OAuth round trip with the
+// synchronous bot add. JoinAttempt rows land in Postgres when DATABASE_URL is
+// set; without it the journey degrades to no persistence (never a 500).
+registerJoinRoutes(app, { storeFor, issueSession }, {
+  joinPage: (c, props) => {
+    c.header("cache-control", "public, max-age=3600");
+    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} />);
+  },
+  recovery: (c, props, status = 200) => {
+    c.header("cache-control", "no-store, private");
+    c.status(status);
+    return c.html(
+      <Recovery
+        title={props.title}
+        message={props.message}
+        retryUrl={props.retryUrl}
+        retryLabel={props.retryLabel}
+        inviteUrl={props.inviteUrl}
+      />,
+    );
+  },
+});
+
 // Sitemap (ports two-web routes/web.php's sitemap closure; crawl set per TOG-7072): published
 // events only. No DB binding yet, so the static entries ship now; the W8 events slice adds the
 // published /e/{key} rows (drafts 403 / cancelled 410 stay out of the index).
+// W6 adds /join (changefreq monthly, priority 0.9 — same as legacy).
 app.get("/sitemap_index.xml", (c) => {
   c.header("content-type", "application/xml; charset=UTF-8");
   c.header("cache-control", "public, max-age=3600");
