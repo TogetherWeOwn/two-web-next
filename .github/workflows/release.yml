@@ -51,6 +51,8 @@ jobs:
     steps:
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job: gh needs the repo named explicitly.
+          GH_REPO: ${{ github.repository }}
           PR_JSON: ${{ needs.release-please.outputs.pr }}
         run: |
           set -euo pipefail
