@@ -25,6 +25,7 @@ import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log
 import type { Env } from "../env";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
+import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { createDbProfileStore, type ProfileStore } from "./store";
 import { validateProfile } from "./validation";
@@ -155,6 +156,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
 
     const result = validateProfile(input);
     if (!result.ok) {
+      if ((c.req.header("accept") ?? "").includes("application/json")) return c.json({ errors: result.errors }, 422);
       c.status(422);
       return c.html(
         <ProfilePage
@@ -169,11 +171,18 @@ export function profilesApp(deps: ProfileDeps = {}) {
         />,
       );
     }
+    // Trap (TOG-8715/TOG-9361): only after validation, so errors surface first.
+    // A tripped trap skips the write and answers the byte-identical success
+    // shape: no oracle, nothing logged.
+    const trapped = profileTrapTripped(input, Date.now());
     try {
-      await store.save(id, result.attrs);
+      if (!trapped) await store.save(id, result.attrs);
     } catch (err) {
       console.error("profile save failed", { exception: (err as Error)?.constructor?.name });
       return c.text("Could not save your profile.", 500);
+    }
+    if ((c.req.header("accept") ?? "").includes("application/json")) {
+      return c.json({ saved: true, message: PROFILE_COPY.saved });
     }
     return c.redirect(`/members/${id}`, 303);
   };
