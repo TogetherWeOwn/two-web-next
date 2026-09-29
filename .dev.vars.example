@@ -3,3 +3,5 @@ DISCORD_CLIENT_SECRET=
 DISCORD_BOT_TOKEN=
 # 32+ random bytes, e.g. `openssl rand -base64 48`
 SESSION_SECRET=
+# Local dev DB (agent-testdb) for `npm run db:migrate` and the live db test.
+DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next
