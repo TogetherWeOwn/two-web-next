@@ -4,13 +4,24 @@ import type { Session } from "./env";
 
 const SITE_NAME = "Together We Own";
 
-const Layout: FC<
-  PropsWithChildren<{ title: string; canonical?: string; shareTitle?: string; shareDescription?: string | null }>
-> = ({ title, canonical, shareTitle, shareDescription, children }) => (
+export const Layout: FC<
+  PropsWithChildren<{
+    title: string;
+    canonical?: string;
+    shareTitle?: string;
+    shareDescription?: string | null;
+    robots?: string;
+  }>
+> = ({ title, canonical, shareTitle, shareDescription, robots, children }) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <meta name="theme-color" content="#0b0714" />
+      <link rel="manifest" href="/site.webmanifest" />
+      <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
+      <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
+      {robots ? <meta name="robots" content={robots} /> : null}
       <title>{title}</title>
       <meta name="description" content="Together We Own: a close-knit adult gaming community, founded 1998." />
       {canonical ? (
