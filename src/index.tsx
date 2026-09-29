@@ -2,6 +2,7 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
+import { adminApp } from "./admin/routes";
 import { agentEventsRoute } from "./agent-events/route";
 import { readCounts } from "./counts";
 import {
@@ -18,6 +19,7 @@ import { dbPing, hyperdriveQuery } from "./db/ping";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import type { Env, Session } from "./env";
 import { Join, Recovery, About, Faq, Home, Rules, type Notice } from "./pages";
+import { registerErrorHandlers } from "./errors";
 import { registerJoinRoutes } from "./join/route";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
@@ -310,6 +312,9 @@ app.post("/api/agent-events", agentEventsRoute);
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/healthz", (c) => c.json({ ok: true }));
 
+// Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
+registerErrorHandlers(app);
+
 // Shared-Postgres acceptance ping (S1: TOG-9679): proves the Neon staging
 // branch serves this Worker through Hyperdrive. 503s without the binding or
 // on any DB error, with no internals in the body.
@@ -378,6 +383,10 @@ app.get("/auth/discord/callback", async (c) => {
   });
   return c.redirect(`/?n=${join === "failed" ? "join_failed" : join}`, 302);
 });
+
+// Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard
+// redirects guests to Discord OAuth and 403s signed-in non-moderators.
+app.route("/admin", adminApp());
 
 app.post("/logout", async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;

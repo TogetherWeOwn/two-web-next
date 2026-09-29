@@ -3,7 +3,7 @@ import { defineConfig } from "drizzle-kit";
 // Not typechecked by `npm run typecheck` (tsconfig covers src/ + test/); this
 // is only read by the drizzle-kit CLI for `db:generate` / `db:migrate`.
 export default defineConfig({
-  schema: "./src/db/schema.ts",
+  schema: ["./src/db/schema.ts", "./src/db/admin-schema.ts"],
   out: "./drizzle",
   dialect: "postgresql",
   dbCredentials: {

@@ -20,10 +20,14 @@ export type Env = AgentEventsEnv & {
   // Optional. `DATABASE_URL` (agent-testdb locally; absent in unit tests, which
   // use the memory store) and the Hyperdrive binding (S1/W1) share the Sql
   // surface in `db.ts`. `QA_AUTH_TOKEN` enables the staging-only QA seam; it is
-  // unset everywhere else and the route 404s without it.
+  // unset everywhere else and the route 404s without it. The admin slice (W11)
+  // reads Postgres through the same var in dev/staging and fails closed
+  // without it; `MEMBER_ACCESS_LOG_ENFORCE` defaults to true when unset
+  // (a log write failure refuses the read; set "false" to degrade instead).
   DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  MEMBER_ACCESS_LOG_ENFORCE?: string;
 };
 
 export type Session = {
