@@ -45,6 +45,7 @@ export function buildSitemapUrls(appUrl: string, events: SitemapEvent[]): Sitema
   const base = stripTrailingSlash(appUrl);
   const urls: SitemapUrl[] = [
     { loc: `${base}/`, changefreq: "weekly", priority: "1.0" },
+    { loc: `${base}/join`, changefreq: "monthly", priority: "0.9" },
     { loc: `${base}/about`, changefreq: "monthly", priority: "0.7" },
     { loc: `${base}/faq`, changefreq: "monthly", priority: "0.7" },
     { loc: `${base}/rules`, changefreq: "monthly", priority: "0.7" },
