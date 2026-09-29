@@ -4,6 +4,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { agentEventsRoute } from "./agent-events/route";
 import { readCounts } from "./counts";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
+import { dbPing, hyperdriveQuery } from "./db/ping";
 import type { Env, Session } from "./env";
 import { About, Faq, Home, Rules, type Notice } from "./pages";
 import { buildRobots, buildSitemapUrls, renderSitemap } from "./seo";
@@ -157,6 +158,19 @@ app.post("/api/agent-events", agentEventsRoute);
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/healthz", (c) => c.json({ ok: true }));
+
+// Shared-Postgres acceptance ping (S1: TOG-9679): proves the Neon staging
+// branch serves this Worker through Hyperdrive. 503s without the binding or
+// on any DB error, with no internals in the body.
+app.get("/db-ping", async (c) => {
+  if (!c.env.DB) return c.json({ ok: false, error: "db_unavailable" }, 503);
+  try {
+    return c.json(await dbPing(hyperdriveQuery(c.env.DB.connectionString)));
+  } catch (err) {
+    console.warn("db-ping failed", { error: String(err) });
+    return c.json({ ok: false, error: "db_unavailable" }, 503);
+  }
+});
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();

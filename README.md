@@ -6,6 +6,7 @@ maintenance mode: fixes only, no new features.
 
 Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest,
 [Drizzle](https://orm.drizzle.team) + Postgres. Migration plan: TOG-9671.
+Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
 
 ## What works today
 

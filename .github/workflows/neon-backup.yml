@@ -1,0 +1,97 @@
+name: neon-backup
+
+# Nightly pg_dump of the Neon staging branch (and prod after cutover) to R2
+# `paperclip-backups`. See docs/db-migrations.md and bin/neon-backup.sh.
+# Secrets (operator-provisioned, never in logs): NEON_STAGING_DATABASE_URL,
+# CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID. While Neon is unprovisioned
+# the probe step skips the rest green so the schedule is quiet, not red.
+
+on:
+  schedule:
+    # 03:17Z nightly: off-peak for EU, outside the 10-min reconcile cron.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Neon branch to dump"
+        default: "staging"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: neon-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BRANCH: ${{ inputs.branch || 'staging' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - id: probe
+        name: Probe provisioning
+        run: |
+          set -euo pipefail
+          if [ -n "${{ secrets.NEON_STAGING_DATABASE_URL }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Neon staging not provisioned yet (TOG-9679); skipping."
+          fi
+
+      - uses: actions/setup-node@v7
+        if: steps.probe.outputs.ready == 'true'
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+        if: steps.probe.outputs.ready == 'true'
+
+      - name: Install pg_dump 17 (PGDG)
+        if: steps.probe.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
+      - name: Backup to R2
+        if: steps.probe.outputs.ready == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: ./bin/neon-backup.sh backup "$BRANCH"
+
+      - name: Promote weekly + rotate (Sundays)
+        if: steps.probe.outputs.ready == 'true' && github.event.schedule != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ "$(date -u +%u)" = 7 ]; then
+            ./bin/neon-backup.sh promote-weekly "$BRANCH"
+          fi
+          ./bin/neon-backup.sh rotate "$BRANCH"
+
+      - name: Verify all keys
+        if: steps.probe.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: ./bin/neon-backup.sh check "$BRANCH"
