@@ -10,6 +10,7 @@
 // - POST /admin/events/:key          update
 // - POST /admin/events/:key/publish  draft → published (write-back due)
 // - POST /admin/events/:key/cancel   draft|published → cancelled
+// - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
 // - GET  /admin/featured             list, position order
 // - GET  /admin/featured/new         create form
 // - POST /admin/featured             create
@@ -42,9 +43,11 @@ import {
   updateEvent,
   updateFeatured,
 } from "./store";
+import { JOIN_OUTCOMES } from "../join/service";
+import { joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
-import { AdminDashboard, ErrorPage, EventFormPage, EventsPage, FeaturedFormPage, FeaturedPage } from "./pages";
+import { AdminDashboard, ErrorPage, EventFormPage, EventsPage, FeaturedFormPage, FeaturedPage, JoinAttemptsPage } from "./pages";
 
 type Vars = {
   Bindings: Env;
@@ -103,9 +106,28 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
   admin.use("/*", adminGuard(overrides));
 
-  admin.get("/", (c) => {
+  admin.get("/", async (c) => {
     declareAccess(c, { resource: "dashboard", action: "view", route: "admin.dashboard", subjects: [] });
-    return c.html(<AdminDashboard actor={c.get("adminActor")} />);
+    // Funnel counts are outcomes only (no member data): no access-log subjects.
+    // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
+    const db = await dbFor(c);
+    const funnel = db ? await joinFunnelStats(db) : undefined;
+    return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} />);
+  });
+
+  admin.get("/join-attempts", async (c) => {
+    const db = await dbOr503(c);
+    if (!db) return c.text("Admin temporarily unavailable", 503);
+    const outcome = c.req.query("outcome") ?? "";
+    const q = (c.req.query("q") ?? "").trim();
+    const rows = await listJoinAttempts(db, { outcome: outcome || undefined, q: q || undefined });
+    declareAccess(c, {
+      resource: "join_attempts",
+      action: "list",
+      route: "admin.join-attempts.index",
+      subjects: rows.flatMap((r) => (r.discordId ? [r.discordId] : [])),
+    });
+    return c.html(<JoinAttemptsPage rows={rows} outcome={outcome} q={q} outcomes={JOIN_OUTCOMES} />);
   });
 
   admin.get("/events", async (c) => {
@@ -150,13 +172,21 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const row = await getEvent(db, c.req.param("key"));
     if (!row) return errorPage(c, 404, "Event not found");
-    declareAccess(c, { resource: "events", action: "view", route: "admin.events.edit", subjects: [row.eventKey] });
+    const roster = await listRoster(db, row.eventKey);
+    // The roster is member data: the viewed members are the access-log subjects.
+    declareAccess(c, {
+      resource: "events",
+      action: "view",
+      route: "admin.events.edit",
+      subjects: roster.map((r) => r.userId),
+    });
     return c.html(
       <EventFormPage
         mode="edit"
         row={row}
         values={eventValues(row)}
         errors={{}}
+        roster={roster}
       />,
     );
   });

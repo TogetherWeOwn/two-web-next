@@ -5,6 +5,7 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
 import type { EventRow, FeaturedRow } from "./store";
+import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 
 const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
   <html lang="en">
@@ -30,7 +31,7 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
       <header class="bar">
         <a class="brand" href="/admin">TWO admin</a>
         <nav>
-          <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/">Site</a>
+          <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
         </nav>
       </header>
       <main>{children}</main>
@@ -51,7 +52,7 @@ export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, d
   </Shell>
 );
 
-export const AdminDashboard: FC<{ actor: Actor }> = ({ actor }) => (
+export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number> }> = ({ actor, funnel }) => (
   <Shell title="Dashboard">
     <section>
       <h1>Moderation</h1>
@@ -72,6 +73,94 @@ export const AdminDashboard: FC<{ actor: Actor }> = ({ actor }) => (
           <p>Landing-page slots: publish toggle, ordering, show window.</p>
         </li>
       </ul>
+      {funnel ? (
+        <section data-testid="join-funnel">
+          <h2>Join funnel, last {JOIN_RETENTION_DAYS} days</h2>
+          {Object.keys(funnel).length === 0 ? (
+            <p data-testid="join-funnel-empty">No join attempts in the window.</p>
+          ) : (
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Outcome</th>
+                  <th>Attempts</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(funnel).map(([outcome, n]) => (
+                  <tr key={outcome}>
+                    <td>{outcome}</td>
+                    <td data-testid={`funnel-${outcome}`}>{n}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      ) : null}
+    </section>
+  </Shell>
+);
+
+export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: string; outcomes: readonly string[] }> = ({
+  rows,
+  outcome,
+  q,
+  outcomes,
+}) => (
+  <Shell title="Join attempts">
+    <section>
+      <h1>Join attempts</h1>
+      <p class="hint">Read-only. Last {JOIN_RETENTION_DAYS} days, newest first. Search is an exact Discord id or request id.</p>
+      <form method="get" action="/admin/join-attempts" class="filters">
+        <div class="field">
+          <label for="q">Discord id or request id</label>
+          <input id="q" name="q" type="search" value={q} />
+        </div>
+        <div class="field">
+          <label for="outcome">Outcome</label>
+          <select id="outcome" name="outcome">
+            {["", ...outcomes].map((o) => (
+              <option value={o} selected={o === outcome}>
+                {o === "" ? "All" : o}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <button type="submit" class="btn">Filter</button>
+        </div>
+      </form>
+      <table class="admin-table" data-testid="join-attempts-table">
+        <thead>
+          <tr>
+            <th>Outcome</th>
+            <th>Source</th>
+            <th>Discord id</th>
+            <th>Request id</th>
+            <th>Attempted</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td colspan={5} data-testid="join-attempts-empty">
+                No join attempts.
+              </td>
+            </tr>
+          ) : (
+            rows.map((r) => (
+              <tr key={r.id}>
+                <td>{r.outcome}</td>
+                <td>{r.source ?? ""}</td>
+                <td>{r.discordId ?? ""}</td>
+                <td>{r.requestId ?? ""}</td>
+                <td>{r.createdAt.toISOString()}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
     </section>
   </Shell>
 );
@@ -182,7 +271,8 @@ export const EventFormPage: FC<{
   row?: EventRow;
   values: Record<string, unknown>;
   errors: Record<string, string>;
-}> = ({ mode, row, values, errors }) => {
+  roster?: RosterEntry[];
+}> = ({ mode, row, values, errors, roster }) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
@@ -247,6 +337,37 @@ export const EventFormPage: FC<{
             </div>
           </section>
         ) : null}
+        {mode === "edit" && roster ? (
+          <section aria-label="RSVP roster" data-testid="rsvp-roster">
+            <h2>RSVPs ({roster.length})</h2>
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Member</th>
+                  <th>Status</th>
+                  <th>Answered</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roster.length === 0 ? (
+                  <tr>
+                    <td colspan={3} data-testid="roster-empty">
+                      No RSVPs yet.
+                    </td>
+                  </tr>
+                ) : (
+                  roster.map((r) => (
+                    <tr key={r.userId}>
+                      <td>{r.username ?? r.userId}</td>
+                      <td>{r.status}</td>
+                      <td>{r.answeredAt.toISOString()}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </section>
+        ) : null}
       </section>
     </Shell>
   );
@@ -300,7 +421,8 @@ export const FeaturedFormPage: FC<{
   row?: FeaturedRow;
   values: Record<string, unknown>;
   errors: Record<string, string>;
-}> = ({ mode, row, values, errors }) => {
+  roster?: RosterEntry[];
+}> = ({ mode, row, values, errors, roster }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked = values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
