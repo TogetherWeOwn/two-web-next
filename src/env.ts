@@ -17,6 +17,13 @@ export type Env = AgentEventsEnv & {
   DISCORD_CLIENT_SECRET: string;
   DISCORD_BOT_TOKEN: string;
   SESSION_SECRET: string;
+  // Optional. `DATABASE_URL` (agent-testdb locally; absent in unit tests, which
+  // use the memory store) and the Hyperdrive binding (S1/W1) share the Sql
+  // surface in `db.ts`. `QA_AUTH_TOKEN` enables the staging-only QA seam; it is
+  // unset everywhere else and the route 404s without it.
+  DATABASE_URL?: string;
+  DISCORD_MODERATOR_ROLE_IDS?: string;
+  QA_AUTH_TOKEN?: string;
 };
 
 export type Session = {
@@ -24,7 +31,7 @@ export type Session = {
   username: string;
   avatar: string | null;
   member: boolean;
-  exp: number;
+  moderator: boolean;
 };
 
 // W14: agent-events ingress. Postgres comes through a Hyperdrive binding in the worker; tests
