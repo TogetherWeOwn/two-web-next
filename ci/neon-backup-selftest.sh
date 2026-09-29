@@ -165,4 +165,13 @@ OUT_PWLESS="$(DATABASE_URL="postgres://tester@fake-host:5432/testdb" "$BIN" back
 echo "$OUT_PWLESS" | grep -q '^backup: ' || fail "backup must accept a passwordless DATABASE_URL"
 ok "backup accepts passwordless DATABASE_URL"
 
+# 10. EU pinning (TOG-9837): the default bucket is the EU-pinned
+# `two-web-next-backups` and every `wrangler r2 object` call addresses the EU
+# jurisdiction explicitly — never the default jurisdiction.
+grep -q 'BACKUP_BUCKET:=two-web-next-backups' "$BIN" || fail "default bucket must be two-web-next-backups"
+ok "default bucket is two-web-next-backups"
+UNWIRED="$(grep 'wr r2 object' "$BIN" | grep -vc 'BACKUP_JURISDICTION' || true)"
+[ "$UNWIRED" = 0 ] || fail "$UNWIRED r2 object call(s) lack --jurisdiction"
+ok "every r2 object call passes --jurisdiction"
+
 echo "selftest: $PASS passed"

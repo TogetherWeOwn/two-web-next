@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Nightly Neon Postgres backup to R2 `paperclip-backups`, with the proof that
-# the backup restores.
+# Nightly Neon Postgres backup to R2 `two-web-next-backups` (EU jurisdiction),
+# with the proof that the backup restores.
 #
 # The Cloudflare build (bot + web) shares one Neon Postgres (see
 # docs/db-migrations.md). A backup with no restore test is a rumour, so this
@@ -10,9 +10,15 @@
 # count before and after.
 #
 # Backup target naming: neon-<branch>/neon-<UTC>.dump inside R2
-# `paperclip-backups`. Weeklies are `promote-weekly` copies named
+# `two-web-next-backups` (EU-jurisdiction-pinned; jurisdiction immutable after
+# creation). Weeklies are `promote-weekly` copies named
 # neon-<UTC>-weekly-<UTC>.dump. Retention (rotate): newest 7 dailies + newest
 # 4 weeklies — the same policy as two-web bin/pg-backup.sh.
+#
+# CISO condition (TOG-9837): member-data dumps land ONLY in the EU-pinned
+# `two-web-next-backups`. The legacy `paperclip-backups` bucket (jurisdiction
+# `default` / location `ENAM`) is explicitly out of scope for member-data
+# dumps and must never receive them.
 #
 # Deletion hygiene: wrangler has no `r2 object list`, so `rotate` and `check`
 # resolve the key set by downloading the checked-in-nearby remote manifest
@@ -52,7 +58,12 @@
 #
 # Env overrides (mirroring two-web pg-backup.sh):
 #   BACKUP_KEEP_DAILY (default 7), BACKUP_KEEP_WEEKLY (default 4),
-#   BACKUP_BUCKET (default paperclip-backups), BACKUP_PREFIX (default neon).
+#   BACKUP_BUCKET (default two-web-next-backups),
+#   BACKUP_JURISDICTION (default eu),
+#   BACKUP_PREFIX (default neon).
+# Every `wrangler r2 object` call below passes
+# `--jurisdiction "$BACKUP_JURISDICTION"` so member-data dumps address the
+# EU-pinned bucket explicitly, never the default jurisdiction.
 
 set -euo pipefail
 
@@ -61,7 +72,8 @@ cd "$ROOT"
 
 : "${BACKUP_KEEP_DAILY:=7}"
 : "${BACKUP_KEEP_WEEKLY:=4}"
-: "${BACKUP_BUCKET:=paperclip-backups}"
+: "${BACKUP_BUCKET:=two-web-next-backups}"
+: "${BACKUP_JURISDICTION:=eu}"
 : "${BACKUP_PREFIX:=neon}"
 
 usage() {
@@ -142,13 +154,13 @@ write_manifest() {
   local keys_file="$1" tmp
   tmp="$(mktemp)"
   sort "$keys_file" > "$tmp"
-  wr r2 object put "$BACKUP_BUCKET/$(manifest_key)" --file "$tmp" --remote --force >/dev/null
+  wr r2 object put "$BACKUP_BUCKET/$(manifest_key)" --file "$tmp" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
   rm -f "$tmp"
 }
 
 fetch_manifest() {
   local out="$1"
-  wr r2 object get "$BACKUP_BUCKET/$(manifest_key)" --file "$out" --remote >/dev/null
+  wr r2 object get "$BACKUP_BUCKET/$(manifest_key)" --file "$out" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
 }
 
 remote_tmp() { mktemp -d; }
@@ -162,13 +174,13 @@ do_backup() {
   dump_to_file "$tmp"
   [ -s "$tmp" ] || { echo "neon-backup: refusing to upload an empty dump" >&2; exit 1; }
   key="$(prefix)-${ts}.dump"
-  wr r2 object put "$BACKUP_BUCKET/$key" --file "$tmp" --remote --force >/dev/null
+  wr r2 object put "$BACKUP_BUCKET/$key" --file "$tmp" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
   rm -f "$tmp"
   trap - EXIT
   # Manifest update + upload proof: re-download the manifest we just wrote.
   dir="$(remote_tmp)"
   trap 'rm -rf "$dir"' EXIT
-  if wr r2 object get "$BACKUP_BUCKET/$(manifest_key)" --file "$dir/MANIFEST.txt" --remote >/dev/null 2>&1; then
+  if wr r2 object get "$BACKUP_BUCKET/$(manifest_key)" --file "$dir/MANIFEST.txt" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
     printf '%s\n' "$key" >> "$dir/MANIFEST.txt"
   else
     printf '%s\n' "$key" > "$dir/MANIFEST.txt"
@@ -195,8 +207,8 @@ do_promote_weekly() {
   [ -n "$src" ] || { echo "neon-backup: no daily to promote under branch '$BRANCH'" >&2; exit 1; }
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   weekly="${src%.dump}-weekly-${ts}.dump"
-  wr r2 object get "$BACKUP_BUCKET/$src" --file "$dir/dl.dump" --remote >/dev/null
-  wr r2 object put "$BACKUP_BUCKET/$weekly" --file "$dir/dl.dump" --remote --force >/dev/null
+  wr r2 object get "$BACKUP_BUCKET/$src" --file "$dir/dl.dump" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
+  wr r2 object put "$BACKUP_BUCKET/$weekly" --file "$dir/dl.dump" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
   printf '%s\n' "$weekly" >> "$dir/MANIFEST.txt"
   write_manifest "$dir/MANIFEST.txt"
   rm -rf "$dir"
@@ -217,7 +229,7 @@ do_rotate() {
     [ -n "$key" ] || continue
     if [ "$DRY_RUN" = 1 ]; then
       echo "delete: $key"
-    elif wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force >/dev/null; then
+    elif wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null; then
       echo "delete: $key"
     else
       echo "neon-backup: delete failed: $key" >&2
@@ -228,7 +240,7 @@ do_rotate() {
     [ -n "$key" ] || continue
     if [ "$DRY_RUN" = 1 ]; then
       echo "delete: $key"
-    elif wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force >/dev/null; then
+    elif wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null; then
       echo "delete: $key"
     else
       echo "neon-backup: delete failed: $key" >&2
@@ -253,7 +265,7 @@ do_check() {
   fetch_manifest "$dir/MANIFEST.txt"
   while IFS= read -r key; do
     [ -n "$key" ] || continue
-    if wr r2 object get "$BACKUP_BUCKET/$key" --pipe --remote > /dev/null 2>&1; then
+    if wr r2 object get "$BACKUP_BUCKET/$key" --pipe --remote --jurisdiction "$BACKUP_JURISDICTION" > /dev/null 2>&1; then
       echo "ok: $key"
     else
       echo "missing: $key" >&2
