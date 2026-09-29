@@ -143,3 +143,26 @@ export const agentEvents = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
 );
+
+// W7: member-authored profile (ports two-web `profiles`). Split from `users` on
+// purpose: `users` is overwritten from Discord on every sign-in, this row is
+// written by the member and must survive that sync. user_id is the Discord
+// snowflake, plain text with no FK (same reasoning as rsvps.user_id: the roster
+// upsert is best-effort, so an FK would reject a legitimate save).
+export const profiles = pgTable("profiles", {
+  userId: text("user_id").primaryKey(),
+  bio: text("bio"),
+  games: jsonb("games").notNull().$type<string[]>().default([]),
+  timezone: text("timezone"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type ProfileRow = typeof profiles.$inferSelect;
+
+// W13: ShouldBeUnique lock rows for queued jobs (Cache::lock equivalent). Acquired atomically with a
+// conditional upsert that only wins over expired rows; see src/jobs/postgres.ts.
+export const jobUniqueLocks = pgTable("job_unique_locks", {
+  key: text("key").primaryKey(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});

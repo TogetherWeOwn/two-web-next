@@ -29,6 +29,27 @@
       "when": 1790713766388,
       "tag": "1001_admin-slice",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790716932559,
+      "tag": "1002_rsvps",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790725085590,
+      "tag": "1003_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790725495112,
+      "tag": "1004_job-unique-locks",
+      "breakpoints": true
     }
   ]
 }

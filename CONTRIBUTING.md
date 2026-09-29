@@ -18,6 +18,12 @@ Releases are automated with [release-please](https://github.com/googleapis/relea
 updates a release PR; merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z`
 and publishes a GitHub Release. Never tag or release by hand.
 
+`CHANGELOG.md` uses the [Common Changelog](https://common-changelog.org/)
+categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
+**Fixed** (`fix`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
+stay out of the changelog. Each squash-merged PR title becomes one entry, so
+write it for a reader of the changelog: imperative mood, one user-facing change.
+
 Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
 cutover. `feat!` / `BREAKING CHANGE` bumps major (minor while `0.x`).
 
