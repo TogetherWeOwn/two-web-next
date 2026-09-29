@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -147,9 +147,30 @@ export const activityLog = pgTable(
   (t) => [index("activity_log_log_name_idx").on(t.logName)],
 );
 
+// One answer per member per event (legacy `rsvps`, unique event_id+user_id).
+// W12 only READS this (the roster, M6); the write routes are W9's. user_id is
+// the Discord snowflake, plain text like created_by (no FK to users — the
+// roster upsert is best-effort). "Answered" in the roster is updated_at.
+export const rsvps = pgTable(
+  "rsvps",
+  {
+    id: serial("id").primaryKey(),
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    // going | maybe | not_going | waitlisted (src/islands/contracts.ts RSVP_STATUSES).
+    status: text("status").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("rsvps_event_user_unique").on(t.eventId, t.userId), index("rsvps_user_id_idx").on(t.userId)],
+);
+
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type FeaturedContent = typeof featuredContents.$inferSelect;
 export type NewFeaturedContent = typeof featuredContents.$inferInsert;
 export type MemberDataAccessLog = typeof memberDataAccessLogs.$inferSelect;
+export type RsvpRow = typeof rsvps.$inferSelect;
 export type ActivityLogRow = typeof activityLog.$inferSelect;

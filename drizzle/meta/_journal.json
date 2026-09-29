@@ -29,6 +29,13 @@
       "when": 1790713766388,
       "tag": "1001_admin-slice",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790716932559,
+      "tag": "1002_rsvps",
+      "breakpoints": true
     }
   ]
 }

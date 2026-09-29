@@ -1,3 +1,4 @@
 import { defineConfig } from "vitest/config";
 
-export default defineConfig({ test: { include: ["test/**/*.test.ts"] } });
+// Live suites truncate shared tables in one database, so files run serially.
+export default defineConfig({ test: { include: ["test/**/*.test.ts"], fileParallelism: false } });
