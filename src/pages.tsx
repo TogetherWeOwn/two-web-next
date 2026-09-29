@@ -1,13 +1,32 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
+import type { Counts } from "./counts";
 import type { Session } from "./env";
 
-const Layout: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
+const SITE_NAME = "Together We Own";
+
+const Layout: FC<
+  PropsWithChildren<{ title: string; canonical?: string; shareTitle?: string; shareDescription?: string | null }>
+> = ({ title, canonical, shareTitle, shareDescription, children }) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title}</title>
       <meta name="description" content="Together We Own: a close-knit adult gaming community, founded 1998." />
+      {canonical ? (
+        <>
+          <link rel="canonical" href={canonical} />
+          <meta property="og:type" content="website" />
+          <meta property="og:site_name" content={SITE_NAME} />
+          <meta property="og:url" content={canonical} />
+          <meta property="og:title" content={shareTitle ?? title} />
+          {shareDescription ? <meta property="og:description" content={shareDescription} /> : null}
+          <meta name="twitter:card" content="summary" />
+          <meta name="twitter:title" content={shareTitle ?? title} />
+          {shareDescription ? <meta name="twitter:description" content={shareDescription} /> : null}
+        </>
+      ) : null}
+      <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
     </head>
     <body>{children}</body>
@@ -23,8 +42,20 @@ const NOTICES: Record<Exclude<Notice, null>, string> = {
   signin_failed: "Discord sign-in didn't complete. Please try again.",
 };
 
-export const Home: FC<{ session: Session | null; notice: Notice; inviteUrl: string }> = ({ session, notice, inviteUrl }) => (
-  <Layout title="Together We Own — adult gaming community">
+const JOIN_HREF = "/auth/discord";
+
+export const Home: FC<{
+  session: Session | null;
+  notice: Notice;
+  inviteUrl: string;
+  appUrl: string;
+  counts: Counts;
+}> = ({ session, notice, inviteUrl, appUrl, counts }) => (
+  <Layout
+    title="Together We Own — adult gaming community"
+    canonical={`${appUrl}/`}
+    shareDescription="Small enough that people notice when you come back."
+  >
     <header class="bar">
       <a class="brand" href="/">TWO</a>
       <nav>
@@ -50,6 +81,16 @@ export const Home: FC<{ session: Session | null; notice: Notice; inviteUrl: stri
           <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
         )}
         {notice === "join_failed" && <p><a href={inviteUrl}>Join with an invite link instead</a></p>}
+        {counts.memberCount != null && (
+          <p class="counts" data-testid="member-count">
+            <strong>{counts.memberCount}</strong> members
+            {counts.onlineCount != null && (
+              <>
+                {" · "}<strong>{counts.onlineCount}</strong> online
+              </>
+            )}
+          </p>
+        )}
       </section>
       <section>
         <h2>No application. No interview.</h2>
@@ -59,7 +100,215 @@ export const Home: FC<{ session: Session | null; notice: Notice; inviteUrl: stri
         <h2>Not a crowd. A place that knows your name.</h2>
         <p>The community is voice-first. Game nights get posted in the Discord first.</p>
       </section>
+      <section aria-label="Community ladder">
+        <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
+        <p>Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.</p>
+      </section>
     </main>
     <footer>Together We Own · adult gaming community · founded 1998</footer>
   </Layout>
+);
+
+const Leaf: FC<PropsWithChildren<{ title: string; headingId: string; heading: string }>> = ({
+  title,
+  headingId,
+  heading,
+  children,
+}) => (
+  <Layout title={title}>
+    <header class="bar">
+      <a class="brand" href="/">TWO</a>
+      <nav>
+        <a class="btn" href={JOIN_HREF}>Join with Discord</a>
+      </nav>
+    </header>
+    <main>
+      <section aria-labelledby={headingId}>
+        <h1 id={headingId}>{heading}</h1>
+        {children}
+      </section>
+    </main>
+    <footer>Together We Own · adult gaming community · founded 1998</footer>
+  </Layout>
+);
+
+export const About: FC = () => (
+  <Leaf title="About — Together We Own" headingId="about-heading" heading="About Together We Own">
+    <p class="strap">Est. 1998</p>
+    <p class="lead">
+      An adult gaming community that spent most of its life private. Now the doors are open: turn up, say hello,
+      come back.
+    </p>
+    <dl data-testid="about-facts" class="facts">
+      <div class="card">
+        <dt>Voice-first</dt>
+        <dd>The community lives in voice. Turn up, say hello, and come back — that is the whole membership path.</dd>
+      </div>
+      <div class="card">
+        <dt>No application, no interview</dt>
+        <dd>
+          You start as a Prospect. Show up a few times, play, become a Member. The ladder records trust and time,
+          not grind.
+        </dd>
+      </div>
+      <div class="card">
+        <dt>From forum threads to voice rooms</dt>
+        <dd>Founded in 1998. Forum years, then voice years — duos, trios, quads, squads. Today: doors open.</dd>
+      </div>
+    </dl>
+    <p>
+      <a class="btn" href={JOIN_HREF} data-testid="about-join">Join with Discord</a>{" "}
+      <a href="/">Back to the homepage</a>
+    </p>
+  </Leaf>
+);
+
+const RULES: Array<[string, string]> = [
+  ["18+ only", "Together We Own is an adult gaming community. If you are under 18, this is not your lobby yet."],
+  [
+    "Respect the room",
+    "No harassment, hate, or punching down. Argue about games all you like; never about people.",
+  ],
+  [
+    "Voice-first",
+    "The community lives in voice. Turn up, say hello, and come back — that is the whole membership path.",
+  ],
+  ["Play fair", "No cheating, exploits, or griefing. Do not spoil the game for the people you share it with."],
+  [
+    "Moderators have the last word",
+    "If a moderator asks you to stop, stop. Appeals happen in private, not in the lobby.",
+  ],
+];
+
+export const Rules: FC<{ lastUpdated: string | null }> = ({ lastUpdated }) => (
+  <Leaf title="House rules — Together We Own" headingId="rules-heading" heading="House rules">
+    <p class="lead">
+      Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in
+      Discord before you assume.
+    </p>
+    {lastUpdated ? (
+      <p data-testid="rules-last-updated" class="strap">
+        Last updated <time datetime={lastUpdated}>{lastUpdated}</time>
+      </p>
+    ) : null}
+    <ol data-testid="rules-list" class="facts">
+      {RULES.map(([name, body]) => (
+        <li class="card" key={name}>
+          <h2>{name}</h2>
+          <p>{body}</p>
+        </li>
+      ))}
+    </ol>
+    <p>
+      <a class="btn" href={JOIN_HREF} data-testid="rules-join">Join with Discord</a>{" "}
+      <a href="/">Back to the homepage</a>
+    </p>
+  </Leaf>
+);
+
+const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, string]> }> = [
+  {
+    section: "Getting in",
+    sectionId: "faq-getting-in",
+    items: [
+      [
+        "What is Together We Own?",
+        "A close-knit gaming clan, running since 1998, mostly evenings, 18+. We spent most of our life private; now the lobby is open and you can just turn up. Small enough that people notice when you come back.",
+      ],
+      [
+        "How do I join?",
+        "Approve once with Discord on the join page and we'll add you to the server — or use the Discord invite link instead. Then accept the rules on Discord's membership screen: that's the gate, and it's how we know you're really in.",
+      ],
+      [
+        "Do I need an invite, referral, or eligibility check?",
+        "No. The doors are open — no invite code, no referral, no waitlist. If you can open the join page, you're eligible.",
+      ],
+      [
+        "Is there an application, interview, or skill requirement?",
+        "No application, no interview, no tryout. Everyone starts as a Prospect: show up a few times, play, become a Member. The ladder records trust and time, not grind.",
+      ],
+    ],
+  },
+  {
+    section: "Your first week",
+    sectionId: "faq-first-week",
+    items: [
+      [
+        "I joined but I can't post — what now?",
+        "You're at a locked door: Discord holds new members as pending until they accept the rules on the membership screen. Accept them and you're in.",
+      ],
+      [
+        "What should I do first?",
+        "Three things: pick your games, say hi in general, and come back once that week. Saying hi is genuinely contributing.",
+      ],
+    ],
+  },
+  {
+    section: "Ranks and rewards",
+    sectionId: "faq-ranks",
+    items: [
+      [
+        "How do ranks, XP, and role rewards work?",
+        "Hanging out earns XP: messages earn 15 XP (at most once a minute), voice time earns 5 XP per minute. At certain levels the bot grants you a role reward automatically — it never takes an earned reward away.",
+      ],
+      [
+        "What are the rank rungs?",
+        "Five, in order: Prospect → Member → Soldier → Veteran → Legend. Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.",
+      ],
+    ],
+  },
+  {
+    section: "Events",
+    sectionId: "faq-events",
+    items: [
+      [
+        "When do you actually play together?",
+        "Sunday Squad, every Sunday at 8pm Eastern, about an hour in the Lobby voice room. It runs whether there's two of us or eight.",
+      ],
+      [
+        "Where do I find events, and do I need an account to look?",
+        "On the site's Events page: game nights, tournaments, whatever the community puts on. Anyone can read it — including signed-out visitors arriving from a Discord link.",
+      ],
+      [
+        "How do I RSVP, and what do the answers mean?",
+        "Log in with Discord first — signed-out visitors get a log-in prompt instead of a button. Then it's one tap: I'm in. One answer per member per event; changing your mind updates the same answer.",
+      ],
+    ],
+  },
+  {
+    section: "Privacy and conduct",
+    sectionId: "faq-privacy",
+    items: [
+      [
+        "What do you store about me, and what are the rules?",
+        "We store Discord user IDs, timestamps, and channel IDs — enough to count joins honestly. We never store message content, email, location, or voice audio. The conduct version is one line: be someone a nervous newcomer is glad to meet.",
+      ],
+    ],
+  },
+];
+
+export const Faq: FC = () => (
+  <Leaf title="FAQ — Together We Own" headingId="faq-heading" heading="Frequently asked questions">
+    <p class="strap">New here? Start here</p>
+    <p class="lead">
+      Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a moderator.
+    </p>
+    <div data-testid="faq-list">
+      {FAQS.map((group) => (
+        <section aria-labelledby={group.sectionId} key={group.sectionId}>
+          <h2 id={group.sectionId}>{group.section}</h2>
+          {group.items.map(([q, a]) => (
+            <div class="card" key={q}>
+              <h3>{q}</h3>
+              <p>{a}</p>
+            </div>
+          ))}
+        </section>
+      ))}
+    </div>
+    <p>
+      <a class="btn" href={JOIN_HREF} data-testid="faq-join">Join with Discord</a>{" "}
+      <a href="/">Back to the homepage</a>
+    </p>
+  </Leaf>
 );
