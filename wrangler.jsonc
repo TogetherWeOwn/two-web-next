@@ -10,10 +10,10 @@
   // Staging host. The Discord application must list ${APP_URL}/auth/discord/callback as a redirect URI.
   "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],
   "assets": { "directory": "./public" },
-  // Shared Postgres (S1: TOG-9679). Uncomment when the operator provisions
-  // Hyperdrive → Neon staging branch, and set the real id from
-  // `wrangler hyperdrive create`. Until then /db-ping answers 503.
-  // "hyperdrive": [{ "binding": "DB", "id": "REPLACE-WITH-HYPERDRIVE-ID" }],
+  // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
+  // project two-web-next, staging branch (pooled endpoint). Local dev sets
+  // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB to agent-testdb.
+  "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],
   // Not secrets (the client id is public: it is in every OAuth URL). Secrets (DISCORD_CLIENT_SECRET, DISCORD_BOT_TOKEN, SESSION_SECRET) are set with
   // `wrangler secret put` and never live in this file.
   "vars": {
