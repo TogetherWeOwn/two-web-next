@@ -22,6 +22,15 @@ jobs:
     name: check
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-node@v7
@@ -30,7 +39,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      - name: Apply migrations
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Test
+        run: npm test
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Neon backup selftest (stubbed, no secrets)
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
