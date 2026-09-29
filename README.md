@@ -14,7 +14,10 @@ Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](doc
 - Sign in with Discord (`identify` + `guilds.join`). On sign-in the Owen bot adds the
   member to the TWO server automatically; if that fails, sign-in still succeeds and the
   page offers the invite link. The Discord access token is used once and never stored.
-- Signed, HttpOnly `__Host-` session cookie; OAuth `state` bound to a signed cookie.
+- Signed, HttpOnly `__Host-` session cookie carrying a random token; OAuth `state` bound to a signed cookie.
+- DB-backed sessions (Postgres `web_sessions`, token hashes only): rotation on every authenticated view, logout revokes, replays become guests.
+- Moderator flag recomputed at login from Discord snowflake role IDs (never names) via the bot token; blank allowlist and failed lookups fail closed without blocking sign-in.
+- Staging-only QA seam (`POST /auth/qa/:identity`): 404s everywhere but the staging host with `QA_AUTH_TOKEN` set.
 
 ## Develop
 
@@ -59,6 +62,9 @@ production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 | `DISCORD_CLIENT_SECRET` | secret | `wrangler secret put` |
 | `DISCORD_BOT_TOKEN` | secret | Same application as the client id (Discord requires it for `guilds.join`). Needs Create Instant Invite in the guild. |
 | `SESSION_SECRET` | secret | 32+ random bytes. |
+| `DATABASE_URL` | var (dev) / Hyperdrive binding (staging/prod) | Local/dev: agent-testdb. Without it sessions cannot persist (per-request memory store, fails closed to guest). |
+| `DISCORD_MODERATOR_ROLE_IDS` | var | Snowflake IDs, comma-separated, never names. Blank = nobody is a moderator (safe default). |
+| `QA_AUTH_TOKEN` | secret (staging only) | Enables `POST /auth/qa/:identity`. Unset everywhere else; the route 404s without it. |
 
 ## Contributing
 

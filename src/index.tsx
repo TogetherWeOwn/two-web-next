@@ -1,12 +1,24 @@
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
+import postgres from "postgres";
 import { agentEventsRoute } from "./agent-events/route";
 import { readCounts } from "./counts";
+import {
+  createMemorySessionStore,
+  createPostgresSessionStore,
+  hashToken,
+  migrate,
+  newSessionToken,
+  type SessionStore,
+  type Sql,
+} from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
 import { dbPing, hyperdriveQuery } from "./db/ping";
 import type { Env, Session } from "./env";
 import { About, Faq, Home, Rules, type Notice } from "./pages";
+import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
+import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, renderSitemap } from "./seo";
 
 const SESSION_COOKIE = "__Host-two_session";
@@ -59,21 +71,91 @@ function inviteDestination(configured: string): string {
 
 const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 
-async function readSession(c: Context<{ Bindings: Env }>): Promise<Session | null> {
-  const raw = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!raw) return null;
-  try {
-    const s = JSON.parse(raw) as Session;
-    return s.exp > Date.now() / 1000 ? s : null;
-  } catch {
-    return null;
+// Test seam: tests carry a SessionStore on the env object (`{...env, SESSION_STORE: store}`,
+// cast at the call site). Production bindings never set it, so this branch is dead in
+// production. It keeps per-request store isolation without module-global state.
+type EnvWithStore = Env & { SESSION_STORE?: SessionStore };
+
+// The cookie never carries identity claims. It carries a random token; the row
+// in Postgres is the session. A stolen DB dump yields hashes, not logins, and
+// rotation/revocation are a row delete, not waiting for a signature to expire.
+const migratedUrls = new Set<string>();
+
+async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
+  const injected = (c.env as EnvWithStore).SESSION_STORE;
+  if (injected) return injected;
+  const url = c.env.DATABASE_URL;
+  // No DB binding: sessions cannot persist (a fresh memory store per request
+  // fails closed to guest). This is the transitional state until the
+  // Hyperdrive binding lands (W1/S1); staging sets DATABASE_URL meanwhile.
+  if (!url) return createMemorySessionStore();
+  // Short-lived per-request client, one pooled connection max. Never ended
+  // while the store holds it (ending here would hand the store a dead client);
+  // idle sockets close themselves via idle_timeout. The W1 Hyperdrive spike
+  // owns production pooling; Hyperdrive will use this same Sql surface.
+  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  if (!migratedUrls.has(url)) {
+    await migrate(sql);
+    migratedUrls.add(url);
   }
+  return createPostgresSessionStore(sql);
+}
+
+async function issueSession(
+  c: Context<{ Bindings: Env }>,
+  store: SessionStore,
+  row: { userId: string; username: string; avatar: string | null; member: boolean; moderator: boolean },
+): Promise<void> {
+  const token = newSessionToken();
+  await store.create({
+    tokenHash: await hashToken(token),
+    userId: row.userId,
+    username: row.username,
+    avatar: row.avatar,
+    member: row.member,
+    moderator: row.moderator,
+    expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+  });
+  await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "Lax",
+    maxAge: SESSION_TTL_SECONDS,
+  });
+}
+
+async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore): Promise<Session | null> {
+  const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+  if (!token || !token.startsWith("two_")) return null;
+  const row = await store.get(await hashToken(token));
+  if (!row) return null;
+  // Rotation: every authenticated page view mints a fresh token and deletes
+  // the old row in the same statement. A replayed cookie finds no row: guest.
+  const replacement = newSessionToken();
+  const rotated = await store
+    .rotate(await hashToken(token), {
+      tokenHash: await hashToken(replacement),
+      ...row,
+      expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    })
+    .catch(() => false);
+  if (!rotated) return null;
+  await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "Lax",
+    maxAge: SESSION_TTL_SECONDS,
+  });
+  return { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator };
 }
 
 const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
 
 app.get("/", async (c) => {
-  const session = await readSession(c);
+  const store = await storeFor(c);
+  const session = await readSession(c, store);
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
@@ -208,30 +290,55 @@ app.get("/auth/discord/callback", async (c) => {
   );
   if (join === "failed") console.warn("guild auto-join failed", { user: user.id });
 
-  const session: Session = {
-    id: user.id,
+  // Moderator recompute: roles re-read with the bot token against snowflake IDs
+  // (never names). A failed lookup fails closed on the flag, never on sign-in.
+  const moderator = await recomputeModerator({
+    guildId: c.env.DISCORD_GUILD_ID,
+    userId: user.id,
+    botToken: c.env.DISCORD_BOT_TOKEN,
+    moderatorRoleIds: parseModeratorRoleIds(c.env.DISCORD_MODERATOR_ROLE_IDS),
+  });
+
+  const store = await storeFor(c);
+  await issueSession(c, store, {
+    userId: user.id,
     username: user.global_name ?? user.username,
     avatar: user.avatar,
     member: join !== "failed",
-    exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
-  };
-  await setSignedCookie(c, SESSION_COOKIE, JSON.stringify(session), c.env.SESSION_SECRET, {
-    path: "/",
-    secure: true,
-    httpOnly: true,
-    sameSite: "Lax",
-    maxAge: SESSION_TTL_SECONDS,
+    moderator,
   });
   return c.redirect(`/?n=${join === "failed" ? "join_failed" : join}`, 302);
 });
 
-app.post("/logout", (c) => {
+app.post("/logout", async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
   // the origin check below refuses one anyway.
   const origin = c.req.header("origin");
   if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
+  const store = await storeFor(c);
+  const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+  if (token) await store.revoke(await hashToken(token)).catch(() => {});
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
   return c.redirect("/", 303);
+});
+
+// Staging-only QA seam. 404 everywhere that is not the staging host with
+// QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
+app.post("/auth/qa/:identity", async (c) => {
+  if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
+  const presented = c.req.header(QA_HEADER) ?? "";
+  const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
+  const fixture = QA_IDENTITIES[c.req.param("identity") ?? ""];
+  if (!ok || !fixture) return c.notFound();
+  const store = await storeFor(c);
+  await issueSession(c, store, {
+    userId: fixture.discordId,
+    username: fixture.username,
+    avatar: null,
+    member: true,
+    moderator: fixture.moderator,
+  });
+  return c.body(null, 204);
 });
 
 export default app;

@@ -4,4 +4,11 @@ DISCORD_BOT_TOKEN=
 # 32+ random bytes, e.g. `openssl rand -base64 48`
 SESSION_SECRET=
 # Local dev DB (agent-testdb) for `npm run db:migrate` and the live db test.
+# Without it sessions fall back to a per-request memory store and cannot
+# persist: every view is a guest. Staging/prod use the Hyperdrive binding
+# (W1/S1) through the same Sql surface instead.
 DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next
+# Moderator snowflake role IDs, comma-separated (never names). Blank = nobody.
+DISCORD_MODERATOR_ROLE_IDS=
+# Staging-only QA seam. Unset everywhere else: the route 404s without it.
+QA_AUTH_TOKEN=
