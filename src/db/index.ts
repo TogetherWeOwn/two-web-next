@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import * as adminSchema from "./admin-schema";
 import * as schema from "./schema";
 
 // Script/test helper only: nothing in the worker bundle imports this.
@@ -7,8 +8,8 @@ import * as schema from "./schema";
 // Hyperdrive binding instead (later slice), not this helper.
 export function createDb(url: string) {
   const client = postgres(url, { max: 1 });
-  return drizzle(client, { schema });
+  return drizzle(client, { schema: { ...schema, ...adminSchema } });
 }
 
 export type Db = ReturnType<typeof createDb>;
-export { schema };
+export { adminSchema, schema };
