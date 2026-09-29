@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
+import { agentEventsRoute } from "./agent-events/route";
 import { readCounts } from "./counts";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
 import type { Env, Session } from "./env";
@@ -151,6 +152,8 @@ app.get("/robots.txt", (c) => {
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildRobots(c.env.APP_URL));
 });
+
+app.post("/api/agent-events", agentEventsRoute);
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/healthz", (c) => c.json({ ok: true }));

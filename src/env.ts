@@ -1,4 +1,4 @@
-export type Env = {
+export type Env = AgentEventsEnv & {
   APP_URL: string;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
@@ -20,4 +20,16 @@ export type Session = {
   avatar: string | null;
   member: boolean;
   exp: number;
+};
+
+// W14: agent-events ingress. Postgres comes through a Hyperdrive binding in the worker; tests
+// and `wrangler dev` inject a connection string via the same shape (agent-testdb only).
+export type AgentEventsEnv = {
+  AGENT_DB?: { connectionString: string };
+  // Kill switch, default off: an unconfigured environment answers 404 ingress_disabled.
+  AGENT_EVENTS_ENABLED?: string;
+  // The one admitted caller. Env-only, no default: unset denies every grant (wrong_caller).
+  AGENT_EVENTS_CALLER_AGENT_ID?: string;
+  AGENT_EVENTS_GUILD_ID?: string;
+  AGENT_EVENTS_PRODUCTION_GUILD_ID?: string;
 };
