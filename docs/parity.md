@@ -32,7 +32,8 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | ✅ same-app flow (`identify`+`guilds.join`, auto-join, role recompute) | W5 ✅ |
 | `GET /auth/qa/{identity}` (staging-only, header token) | ✅ as `POST /auth/qa/:identity` — **deliberate divergence**: GET login is CSRF-able; POST + byte-identical 404s | W5 ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; throttle pending | W5 ✅ + N5 (new card, throttle) |
-| `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | pending | W7 📋 |
+| `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block (bot DB) pending | W7 ✅ |
+| `PATCH /members/{user}` (owner-only, throttle 30,1, bio/games/timezone validation) | ✅ + `POST _method=PATCH` for the plain form | W7 ✅ |
 | `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | contract pinned (`EVENTS_JSON_URL`, row shape), route pending | W8 📋 |
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | pending | W8 📋 (public) + W11 🔶 (admin loop) |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | pending | W8 📋 + W11 🔶 |
@@ -136,7 +137,7 @@ go hunting for them.
 | `secureHeaders`-equivalent (CSP on web+admin+leaves, static anti-framing/sniffing globally) | ✅ global secureHeaders (stricter: no inline/eval — no Livewire to need it) | W3 ✅/W4 ✅ |
 | One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; human routes pending | W14 ✅ + W9 📋 |
 | Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes) | ❌ no throttle layer yet | **N5** (new: human-route throttles) |
-| `member-access-log` (arm/flush, fail-closed 503 when enforced) | pending | W7 📋 + W12 📋 |
+| `member-access-log` (arm/flush, fail-closed 503 when enforced) | ✅ `src/access-log.ts` middleware on member routes; admin guard carries the same contract | W7 ✅ + W12 📋 (retention) |
 | TrustHosts (APP_URL host only) / trustProxies (nginx socket) | Workers: platform TLS; host check pending | W16 📋 |
 | Maintenance mode except `/discord` | dropped — Workers deploys are atomic, no maintenance mode; DB-free `/discord` floor preserved | dropped (platform) |
 | CompressStaticAssets (gzips Livewire runtime) | dropped — no Livewire runtime; edge compresses static assets | dropped (platform) |

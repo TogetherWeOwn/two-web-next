@@ -23,6 +23,7 @@ import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
 import { registerJoinRoutes } from "./join/route";
+import { profilesApp } from "./profiles/routes";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, renderSitemap } from "./seo";
@@ -403,6 +404,10 @@ app.get("/auth/discord/callback", async (c) => {
 // Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard
 // redirects guests to Discord OAuth and 403s signed-in non-moderators.
 app.route("/admin", adminApp());
+
+// Member journeys (W7): /profile, /members/:user. Gate + member-access-log are
+// scoped to those paths inside profilesApp; see src/profiles/routes.tsx.
+app.route("/", profilesApp());
 
 app.post("/logout", async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
