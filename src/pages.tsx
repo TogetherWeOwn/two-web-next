@@ -42,7 +42,75 @@ const NOTICES: Record<Exclude<Notice, null>, string> = {
   signin_failed: "Discord sign-in didn't complete. Please try again.",
 };
 
-const JOIN_HREF = "/auth/discord";
+const JOIN_HREF = "/join";
+
+export const Join: FC<{ inviteUrl: string; widgetUrl: string | null }> = ({ inviteUrl, widgetUrl }) => (
+  <Layout title="Join — Together We Own" canonical={undefined}>
+    <header class="bar">
+      <a class="brand" href="/">TWO</a>
+      <nav>
+        <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+      </nav>
+    </header>
+    <main>
+      <section aria-labelledby="join-heading">
+        <h1 id="join-heading">Join Together We Own</h1>
+        <p class="lead">
+          One click with Discord and we'll add you to the server — no invite link, no waiting.
+          Prefer the manual way? The invite link is right below.
+        </p>
+        <p>
+          <a class="btn" href="/join/discord" data-testid="join-oneclick">Join with Discord</a>{" "}
+          <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
+        </p>
+        {widgetUrl ? (
+          <iframe
+            title="TWO Discord server preview"
+            src={widgetUrl}
+            width="350"
+            height="500"
+            sandbox="allow-scripts allow-same-origin"
+            loading="lazy"
+            data-testid="join-widget"
+          />
+        ) : (
+          <p class="strap" data-testid="join-widget-fallback">
+            Live server preview is unavailable — the join button above still works.
+          </p>
+        )}
+      </section>
+    </main>
+    <footer>Together We Own · adult gaming community · founded 1998</footer>
+  </Layout>
+);
+
+export const Recovery: FC<{
+  title: string;
+  message: string;
+  retryUrl: string;
+  retryLabel: string;
+  inviteUrl: string;
+}> = ({ title, message, retryUrl, retryLabel, inviteUrl }) => (
+  <Layout title={`${title} — Together We Own`}>
+    <header class="bar">
+      <a class="brand" href="/">TWO</a>
+      <nav>
+        <a class="btn" href="/join">Join with Discord</a>
+      </nav>
+    </header>
+    <main>
+      <section aria-labelledby="recovery-heading">
+        <h1 id="recovery-heading">{title}</h1>
+        <p class="lead">{message}</p>
+        <p>
+          <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
+          <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
+        </p>
+      </section>
+    </main>
+    <footer>Together We Own · adult gaming community · founded 1998</footer>
+  </Layout>
+);
 
 export const Home: FC<{
   session: Session | null;
