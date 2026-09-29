@@ -4,8 +4,8 @@ The Together We Own website, rebuilt for Cloudflare Workers. It replaces
 [two-web](https://github.com/TogetherWeOwn/two-web) (Laravel), which is now in
 maintenance mode: fixes only, no new features.
 
-Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest. Postgres
-(Neon via Hyperdrive) arrives with the data slices. Migration plan: TOG-9671.
+Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest,
+[Drizzle](https://orm.drizzle.team) + Postgres. Migration plan: TOG-9671.
 
 ## What works today
 
@@ -23,6 +23,29 @@ cp .dev.vars.example .dev.vars   # fill in locally; never commit
 npm run dev
 npm run check                    # typecheck + tests
 ```
+
+## Database (Drizzle)
+
+Schema lives in `src/db/`; migrations in `drizzle/`. Until Neon exists (S1),
+local dev and tests run against `agent-testdb` (database `two_web_next`):
+
+```sh
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/two_web_next"
+npm run db:generate   # new migration from schema changes
+npm run db:migrate    # apply to DATABASE_URL
+npm run db:check      # schema-vs-migrations consistency
+```
+
+`test/db.test.ts` does a live round-trip when `DATABASE_URL` is set and skips
+otherwise, so the cold CI run (no test-DB access) stays green.
+
+## Deploy
+
+Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
+gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
+`CLOUDFLARE_ACCOUNT_ID`, followed by a `/health` smoke test against
+https://next.togetherweown.com. There is deliberately no production job:
+production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 
 ## Configuration
 
