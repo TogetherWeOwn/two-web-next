@@ -15,6 +15,7 @@ import {
 } from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
 import { dbPing, hyperdriveQuery } from "./db/ping";
+import { migrateRoster, upsertRosterUser } from "./db/roster";
 import type { Env, Session } from "./env";
 import { Join, Recovery, About, Faq, Home, Rules, type Notice } from "./pages";
 import { registerJoinRoutes } from "./join/route";
@@ -77,6 +78,10 @@ const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 // production. It keeps per-request store isolation without module-global state.
 type EnvWithStore = Env & { SESSION_STORE?: SessionStore };
 
+// Test seam for the roster write: tests inject a Sql double (`{...env, ROSTER_STORE: sql}`).
+// Production bindings never set it.
+type EnvWithRoster = Env & { ROSTER_STORE?: Sql };
+
 // The cookie never carries identity claims. It carries a random token; the row
 // in Postgres is the session. A stolen DB dump yields hashes, not logins, and
 // rotation/revocation are a row delete, not waiting for a signature to expire.
@@ -102,11 +107,49 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   return createPostgresSessionStore(sql);
 }
 
+// Roster persistence for the N6 user-roster write. Same posture as storeFor:
+// tests inject a Sql double through ROSTER_STORE; staging/production use
+// DATABASE_URL with a short-lived per-request client and the runtime DDL; an
+// absent DATABASE_URL means the roster write quietly degrades to null (a
+// no-op upsert) so sign-in stays up instead of 500ing.
+const migratedRosterUrls = new Set<string>();
+
+async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
+  const injected = (c.env as EnvWithRoster).ROSTER_STORE;
+  if (injected) return injected;
+  const url = c.env.DATABASE_URL;
+  if (!url) return null;
+  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  if (!migratedRosterUrls.has(url)) {
+    await migrateRoster(sql);
+    migratedRosterUrls.add(url);
+  }
+  return sql;
+}
+
 async function issueSession(
   c: Context<{ Bindings: Env }>,
   store: SessionStore,
   row: { userId: string; username: string; avatar: string | null; member: boolean; moderator: boolean },
 ): Promise<void> {
+  // N6 (TOG-9898): refresh the durable roster row on every sign-in — the
+  // legacy updateOrCreate on the Discord id. The /join/callback reaches here
+  // through the JoinSessionHooks mount below, and the staging QA seam calls
+  // this directly, so all three sign-in paths share this one write (QA writes
+  // the roster deliberately: W7 profile reads depend on it). Never blocks
+  // sign-in: a roster failure warns and the session still issues. This payload
+  // carries no moderator field — `users` has no such column, and the flag is
+  // recomputed from Discord role IDs into the session row only.
+  try {
+    await upsertRosterUser(await rosterSqlFor(c), {
+      id: row.userId,
+      username: row.username,
+      avatar: row.avatar,
+      member: row.member,
+    });
+  } catch (err) {
+    console.warn("roster upsert failed", { user: row.userId, error: String(err) });
+  }
   const token = newSessionToken();
   await store.create({
     tokenHash: await hashToken(token),
