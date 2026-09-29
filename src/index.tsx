@@ -2,6 +2,7 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
+import { adminApp } from "./admin/routes";
 import { agentEventsRoute } from "./agent-events/route";
 import { readCounts } from "./counts";
 import {
@@ -309,6 +310,10 @@ app.get("/auth/discord/callback", async (c) => {
   });
   return c.redirect(`/?n=${join === "failed" ? "join_failed" : join}`, 302);
 });
+
+// Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard
+// redirects guests to Discord OAuth and 403s signed-in non-moderators.
+app.route("/admin", adminApp());
 
 app.post("/logout", async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;

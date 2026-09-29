@@ -1,0 +1,338 @@
+// Admin input validation (W11). Ports the legacy Filament form rules
+// (EventForm, FeaturedContentForm, EventInput, RecurrenceSchedule) as pure
+// functions so they are unit-testable without a database.
+//
+// Design notes carried over from legacy:
+// - The form speaks LOCAL WALL TIME + IANA zone; storage is a UTC instant.
+//   "20:00 Europe/London" is 19:00Z in July and 20:00Z in December —
+//   resolving without the zone gets one of the two wrong every year.
+// - A wall time inside a spring-forward gap never occurred: refused loudly
+//   (TOG-6803). A wall time carrying its own zone/offset would silently win
+//   over the explicit zone: refused by shape, the parser only accepts naive
+//   input (TOG-6804).
+// - An autumn-overlap (fold) wall time names two instants. A fresh parse
+//   takes the first occurrence; an unchanged edit keeps the exact stored
+//   instant via the hidden *_utc carrier (TOG-6805, see routes).
+
+export type EventStatus = "draft" | "published" | "cancelled" | "past";
+
+export type EventFormInput = {
+  title: string;
+  game: string | null;
+  description: string | null;
+  startsAtUtc: Date;
+  endsAtUtc: Date;
+  timezone: string;
+  location: string | null;
+  capacity: number | null;
+};
+
+export type FeaturedFormInput = {
+  title: string;
+  body: string | null;
+  url: string | null;
+  imageUrl: string | null;
+  imageAlt: string | null;
+  isPublished: boolean;
+  position: number;
+  startsAtUtc: Date | null;
+  endsAtUtc: Date | null;
+};
+
+/** Field errors keyed by field name, in the form's own terms. */
+export type FieldErrors = Record<string, string>;
+
+export class ValidationError extends Error {
+  constructor(readonly fields: FieldErrors) {
+    super(`invalid input: ${Object.keys(fields).join(", ")}`);
+  }
+}
+
+const WALL_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})$/;
+
+/** Whether the string names an IANA zone the runtime knows. */
+export function isKnownTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type WallParts = { y: number; mo: number; d: number; h: number; mi: number };
+
+function parseWall(raw: string): WallParts | null {
+  const m = WALL_RE.exec(raw.trim());
+  if (!m) return null;
+  const [, y, mo, d, h, mi] = m.map(Number);
+  if (mo! < 1 || mo! > 12 || d! < 1 || d! > 31 || h! > 23 || mi! > 59) return null;
+  // Reject impossible calendar dates (e.g. Feb 30) rather than rolling over.
+  const probe = new Date(Date.UTC(y!, mo! - 1, d!, h!, mi!));
+  if (probe.getUTCMonth() !== mo! - 1 || probe.getUTCDate() !== d!) return null;
+  return { y: y!, mo: mo!, d: d!, h: h!, mi: mi! };
+}
+
+const dtf = (tz: string) =>
+  new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+function wallOfInstant(instantMs: number, tz: string): string {
+  const parts: Record<string, string> = {};
+  for (const p of dtf(tz).formatToParts(new Date(instantMs))) {
+    if (p.type !== "literal") parts[p.type] = p.value;
+  }
+  // en-GB can emit hour "24" for midnight; normalise to "00".
+  const hour = parts.hour === "24" ? "00" : parts.hour!;
+  return `${parts.year}-${parts.month}-${parts.day} ${hour}:${parts.minute}`;
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function wallString(p: WallParts): string {
+  return `${p.y}-${pad(p.mo)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}`;
+}
+
+/**
+ * Resolve a naive local wall time in an IANA zone to the UTC instant it names.
+ * Throws on unparseable input, unknown zones, and gap times that never
+ * occurred. Fold-ambiguous times resolve to the first occurrence.
+ */
+export function wallToUtc(raw: string, timezone: string): Date {
+  const parts = parseWall(raw);
+  if (!parts) throw new ValidationError({ wall: `Not a date and time (want YYYY-MM-DD HH:mm): ${raw}` });
+  if (!isKnownTimezone(timezone)) throw new ValidationError({ timezone: `Unknown timezone: ${timezone}` });
+
+  // Iterative offset resolution: guess the wall as UTC, read the zone's
+  // offset at the guess, correct, repeat. Converges in 2-3 passes because
+  // offsets move by whole minutes at most twice a year.
+  let guess = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi);
+  for (let i = 0; i < 4; i++) {
+    const rendered = wallOfInstant(guess, timezone);
+    const rw = parseWall(rendered.replace(" 24:", " 00:"));
+    if (!rw) break;
+    const renderedAsUtc = Date.UTC(rw.y, rw.mo - 1, rw.d, rw.h, rw.mi);
+    const next = guess + (Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi) - renderedAsUtc);
+    if (next === guess) break;
+    guess = next;
+  }
+
+  // Gap check (TOG-6803): a time that never occurred does not round-trip.
+  if (wallOfInstant(guess, timezone) !== wallString(parts)) {
+    throw new ValidationError({
+      wall: `That time never occurred in ${timezone} — clocks skipped forward over it. Pick a time outside the gap.`,
+    });
+  }
+  return new Date(guess);
+}
+
+/** Render a stored UTC instant as wall text in the row's zone (edit form fill). */
+export function utcToWall(instant: Date, timezone: string): string {
+  return wallOfInstant(instant.getTime(), timezone);
+}
+
+const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function ulidRandom(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let out = "";
+  for (const b of bytes) {
+    // Two Crockford chars per byte would be 32 chars; take 16 chars by
+    // folding each byte to one 5-bit symbol. Randomness is all that matters
+    // here — time-ordering lives in the 10-char time part.
+    out += ULID_ALPHABET[b! & 31];
+  }
+  return out;
+}
+
+/** ULID (26-char Crockford base32), matching legacy `Str::ulid()` event keys. */
+export function newEventKey(nowMs: number = Date.now()): string {
+  let time = nowMs;
+  let timePart = "";
+  for (let i = 0; i < 10; i++) {
+    timePart = ULID_ALPHABET[time % 32] + timePart;
+    time = Math.floor(time / 32);
+  }
+  return timePart + ulidRandom().slice(0, 16);
+}
+
+function str(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t === "" ? null : t;
+}
+
+function fail(fields: FieldErrors): never {
+  throw new ValidationError(fields);
+}
+
+/** Parse the event create/edit form. `carriers` holds the hidden *_utc edit-page hints (TOG-6805). */
+export function parseEventForm(
+  data: Record<string, unknown>,
+  carriers?: { startsAtUtc?: string; endsAtUtc?: string },
+): EventFormInput {
+  const fields: FieldErrors = {};
+  const title = str(data.title);
+  if (!title) fields.title = "Give the event a title.";
+  else if (title.length > 100) fields.title = "Keep the title to 100 characters.";
+  const game = str(data.game);
+  if (game && game.length > 100) fields.game = "Keep the game to 100 characters.";
+  const description = str(data.description);
+  if (description && description.length > 1000) fields.description = "Keep the description to 1000 characters.";
+  const timezone = str(data.timezone) ?? "Europe/London";
+  if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
+  const location = str(data.location);
+  if (location && location.length > 255) fields.location = "Keep the location to 255 characters.";
+
+  let capacity: number | null = null;
+  const capRaw = str(data.capacity);
+  if (capRaw !== null) {
+    if (!/^\d+$/.test(capRaw) || Number(capRaw) < 1) fields.capacity = "Capacity is a headcount of 1 or more, or empty for unlimited.";
+    else capacity = Number(capRaw);
+  }
+
+  const startsRaw = str(data.starts_at);
+  const endsRaw = str(data.ends_at);
+  if (!startsRaw) fields.starts_at = "When does it start?";
+  if (!endsRaw) fields.ends_at = "When does it end?";
+
+  let startsAtUtc: Date | null = null;
+  let endsAtUtc: Date | null = null;
+  if (startsRaw && endsRaw && !fields.timezone) {
+    // Untouched fold/gap-ambiguous wall text keeps the exact instant the
+    // form rendered (TOG-6805): the carrier rides in the hidden field, and a
+    // match on minute precision means "no keystroke", so the stored instant
+    // wins over a re-parse that could land on the other side of the fold.
+    try {
+      startsAtUtc = preservedOrParsed(startsRaw, carriers?.startsAtUtc, timezone);
+      endsAtUtc = preservedOrParsed(endsRaw, carriers?.endsAtUtc, timezone);
+    } catch (e) {
+      if (e instanceof ValidationError) Object.assign(fields, e.fields);
+      else throw e;
+    }
+    if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The end is after the start.";
+  }
+  if (Object.keys(fields).length > 0) fail(fields);
+  return {
+    title: title!,
+    game,
+    description,
+    startsAtUtc: startsAtUtc!,
+    endsAtUtc: endsAtUtc!,
+    timezone,
+    location,
+    capacity,
+  };
+}
+
+function preservedOrParsed(wall: string, carrier: string | undefined, timezone: string): Date {
+  if (carrier) {
+    const captured = new Date(carrier);
+    if (!Number.isNaN(captured.getTime())) {
+      // Minute precision: the picker speaks minutes, so seconds would never
+      // match and the carrier would be dead. Seconds survive in the carrier.
+      const submittedMinute = utcToWall(wallToUtcSilent(wall, timezone) ?? captured, timezone).slice(0, 16);
+      const capturedMinute = utcToWall(captured, timezone).slice(0, 16);
+      if (submittedMinute === capturedMinute) return captured;
+    }
+  }
+  return wallToUtc(wall, timezone);
+}
+
+function wallToUtcSilent(wall: string, timezone: string): Date | null {
+  try {
+    return wallToUtc(wall, timezone);
+  } catch {
+    return null;
+  }
+}
+
+function isHttpUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** Parse the featured-content create/edit form (ports FeaturedContentForm rules). */
+export function parseFeaturedForm(data: Record<string, unknown>): FeaturedFormInput {
+  const fields: FieldErrors = {};
+  const title = str(data.title);
+  if (!title) fields.title = "Give it a headline.";
+  else if (title.length > 255) fields.title = "Keep the headline to 255 characters.";
+  const body = str(data.body);
+  const url = str(data.url);
+  if (url && (url.length > 255 || !isHttpUrl(url))) fields.url = "Link is a full http(s) URL, or empty for no link.";
+  const imageUrl = str(data.image_url);
+  if (imageUrl && (imageUrl.length > 255 || !isHttpUrl(imageUrl))) fields.image_url = "Image URL is a full http(s) URL to a real photo.";
+  const imageAlt = str(data.image_alt);
+  // TOG-8707: an image with no description is silent for screen-reader
+  // visitors — the URL and its description arrive together or not at all.
+  if (imageUrl && !imageAlt) fields.image_alt = "Describe the photo in one plain sentence for screen-reader visitors.";
+  if (imageAlt && imageAlt.length > 255) fields.image_alt = "Keep the alt text to 255 characters.";
+
+  let position = 0;
+  const posRaw = str(data.position);
+  if (posRaw !== null) {
+    if (!/^\d+$/.test(posRaw)) fields.position = "Position is 0 or more; lower numbers appear first.";
+    else position = Number(posRaw);
+  }
+
+  const startsRaw = str(data.starts_at);
+  const endsRaw = str(data.ends_at);
+  let startsAtUtc: Date | null = null;
+  let endsAtUtc: Date | null = null;
+  // The show-window is UTC on both sides (legacy labels it "(UTC)").
+  for (const [raw, key] of [[startsRaw, "starts_at"], [endsRaw, "ends_at"]] as const) {
+    if (raw !== null) {
+      const wall = parseWall(raw);
+      if (!wall) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm, UTC).";
+      else if (key === "starts_at") startsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
+      else endsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
+    }
+  }
+  if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The window ends after it starts.";
+
+  if (Object.keys(fields).length > 0) fail(fields);
+  return {
+    title: title!,
+    body,
+    url,
+    imageUrl,
+    imageAlt,
+    isPublished: data.is_published === "on" || data.is_published === true || data.is_published === "true",
+    position,
+    startsAtUtc,
+    endsAtUtc,
+  };
+}
+
+/** Transition guard (ports EventService::transitionTo): cancelled is terminal. */
+export function nextStatus(from: EventStatus, to: "published" | "cancelled"): EventStatus {
+  if (from === "cancelled") {
+    throw new ValidationError({ status: "A cancelled event stays cancelled — Discord was already told." });
+  }
+  if (to === "published" && from !== "draft") {
+    throw new ValidationError({ status: "Only a draft can be published." });
+  }
+  if (to === "cancelled" && from !== "draft" && from !== "published") {
+    throw new ValidationError({ status: "Only a draft or a published event can be cancelled." });
+  }
+  return to;
+}
+
+/** Whether a row in this status is mirrored to Discord (ports EventStatus::isMirroredInDiscord). */
+export function isMirrored(status: EventStatus): boolean {
+  return status === "published" || status === "cancelled";
+}
