@@ -48,7 +48,7 @@ type EnvWithStore = Env & { SESSION_STORE?: SessionStore };
 // connection max, idle sockets close themselves; no binding fails closed.
 const migratedUrls = new Set<string>();
 
-async function sessionStoreFor(c: { env: Env }): Promise<SessionStore | null> {
+export async function sessionStoreFor(c: { env: Env }): Promise<SessionStore | null> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
   const url = c.env.DATABASE_URL;
