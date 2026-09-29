@@ -49,6 +49,7 @@ export function buildSitemapUrls(appUrl: string, events: SitemapEvent[]): Sitema
     { loc: `${base}/about`, changefreq: "monthly", priority: "0.7" },
     { loc: `${base}/faq`, changefreq: "monthly", priority: "0.7" },
     { loc: `${base}/rules`, changefreq: "monthly", priority: "0.7" },
+    { loc: `${base}/privacy`, changefreq: "monthly", priority: "0.7" },
   ];
   for (const e of events) {
     urls.push({
