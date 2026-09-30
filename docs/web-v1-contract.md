@@ -88,8 +88,11 @@ not hide independently readable ranks.
   TTL**, scoped to the selected connection string within the Worker isolate.
   They are bounded single-entry caches of **settled values**, not shared edge
   storage. Concurrent cold callers read independently with their own deadlines;
-  no request-owned pending promise is reused after an invocation ends. Changing
-  database bindings forces a reread.
+  no request-owned pending promise is reused after an invocation ends. A completed
+  fill publishes unless a newer fill has **already published**; starting or
+  abandoning a newer fill cannot prevent a usable completion warming the cache.
+  Older completions cannot replace a newer published snapshot. Changing database
+  bindings forces a reread; a completion never reuses another URL's cached value.
 - Cached snapshots keep their already-evaluated freshness until TTL expiry,
   matching legacy. A warm cache can survive an outage until expiry; there is no
   post-expiry stale fallback.

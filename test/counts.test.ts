@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   constructorError: null as Error | null,
   endError: null as Error | null,
   hung: false,
+  delayMs: 0,
   queries: [] as string[],
   urls: [] as string[],
   options: [] as Record<string, unknown>[],
@@ -24,8 +25,10 @@ vi.mock("postgres", () => ({ default: (url: string, options: Record<string, unkn
     if (state.hung) return new Promise(() => {});
     const live = query.includes("web_v1.live_counts");
     const error = live ? state.liveError : state.ranksError;
+    const rows = (live ? state.live : state.ranks).map((row) => ({ ...row }));
+    if (state.delayMs) await new Promise((resolve) => setTimeout(resolve, state.delayMs));
     if (error) throw error;
-    return live ? state.live : state.ranks;
+    return rows;
   };
   sql.end = async () => {
     state.ends++;
@@ -47,7 +50,7 @@ beforeEach(async () => {
     live: [{ human_member_count: "84", online_count: "12", counts_updated_at: new Date(NOW) }],
     ranks: [{ rank_key: "prospect", rank_label: "Prospect", member_count: "24" }],
     liveError: null, ranksError: null, constructorError: null, endError: null,
-    hung: false, queries: [], urls: [], options: [], ends: 0,
+    hung: false, delayMs: 0, queries: [], urls: [], options: [], ends: 0,
   });
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   counts = await import("../src/counts");
@@ -142,10 +145,59 @@ describe("60-second isolate cache", () => {
     expect(state.queries).toHaveLength(4);
   });
 
+  it.each([false, true])("warms the cache during overlapping arrivals (failed reads: %s)", async (failed) => {
+    state.delayMs = 1000;
+    if (failed) state.liveError = state.ranksError = new Error("fixture unavailable");
+    const replies: Promise<import("../src/counts").Counts>[] = [];
+    for (let i = 0; i < 12; i++) {
+      replies.push(counts.readCounts(env));
+      await vi.advanceTimersByTimeAsync(150);
+    }
+    // Seven cold arrivals precede the first completion; the next five reuse
+    // settled values even while later fills are still pending.
+    expect(state.queries).toHaveLength(14);
+    await vi.advanceTimersByTimeAsync(1000);
+    const results = await Promise.all(replies);
+    expect(results.every((reply) => reply.memberCount === (failed ? null : 84))).toBe(true);
+    expect(state.ends).toBe(14);
+    expect(warn).toHaveBeenCalledTimes(failed ? 14 : 0);
+    await counts.readCounts(env);
+    expect(state.queries).toHaveLength(14);
+  });
+
+  it("publishes an older completion while a newer fill is still pending", async () => {
+    state.delayMs = 1000;
+    const first = counts.readCounts(env);
+    await vi.advanceTimersByTimeAsync(150);
+    state.hung = true;
+    const newer = counts.readCounts(env);
+    await vi.advanceTimersByTimeAsync(850);
+    await expect(first).resolves.toMatchObject({ memberCount: 84 });
+    await expect(counts.readCounts(env)).resolves.toMatchObject({ memberCount: 84 });
+    expect(state.queries).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(1150);
+    await expect(newer).resolves.toEqual(counts.UNAVAILABLE);
+  });
+
   it("does not carry a snapshot between different database URLs", async () => {
     await counts.readCounts(env);
     state.live[0]!.human_member_count = "7";
     expect((await counts.readCounts({ DB: { connectionString: "postgres://fixture.test/other" } } as Env)).memberCount).toBe(7);
+    expect(state.queries).toHaveLength(4);
+  });
+
+  it("does not let an older URL's completion evict a newer published connection", async () => {
+    state.delayMs = 1000;
+    const older = counts.readCounts(env);
+    await vi.advanceTimersByTimeAsync(150);
+    state.delayMs = 0;
+    state.live[0]!.human_member_count = "99";
+    const other = { DB: { connectionString: "postgres://fixture.test/other" } } as Env;
+    await expect(counts.readCounts(other)).resolves.toMatchObject({ memberCount: 99 });
+    await vi.advanceTimersByTimeAsync(850);
+    await expect(older).resolves.toMatchObject({ memberCount: 84 });
+    state.hung = true;
+    await expect(counts.readCounts(other)).resolves.toMatchObject({ memberCount: 99 });
     expect(state.queries).toHaveLength(4);
   });
 

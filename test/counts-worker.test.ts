@@ -17,6 +17,7 @@ describe("counts cache invocation lifetime in workerd", () => {
           export default {
             async fetch(request) {
               const url = new URL(request.url);
+              if (url.pathname === "/stats") return Response.json({ ...stats });
               const env = { DATABASE_URL: "postgres://fixture.test/" + (url.searchParams.get("mode") || "counts") };
               if (url.pathname === "/abandon") {
                 void readCounts(env);
@@ -50,10 +51,12 @@ describe("counts cache invocation lifetime in workerd", () => {
                 stats.queries++;
                 if (url.endsWith("hung")) return new Promise(() => {});
                 const live = parts.join("").includes("web_v1.live_counts");
-                return new Promise(resolve => setTimeout(() => resolve(live
-                  ? [{ human_member_count: "84", online_count: "12", counts_updated_at: new Date().toISOString() }]
-                  : [{ rank_key: "member", rank_label: "Member", member_count: "40" }]
-                ), 1000));
+                return new Promise((resolve, reject) => setTimeout(() => {
+                  if (url.endsWith("failure")) return reject(new Error("fixture unavailable"));
+                  resolve(live
+                    ? [{ human_member_count: "84", online_count: "12", counts_updated_at: new Date().toISOString() }]
+                    : [{ rank_key: "member", rank_label: "Member", member_count: "40" }]);
+                }, 1000));
               };
               sql.end = async () => { stats.ends++; };
               return sql;
@@ -72,6 +75,8 @@ describe("counts cache invocation lifetime in workerd", () => {
   afterAll(async () => { await mf?.dispose(); });
 
   const request = (path: string) => mf.dispatchFetch(`https://counts.example.test${path}`);
+  const stats = async () => (await request("/stats")).json() as Promise<{ queries: number; ends: number }>;
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const fresh = {
     memberCount: 84, onlineCount: 12,
     ranks: [{ key: "member", label: "Member", memberCount: 40 }],
@@ -89,6 +94,42 @@ describe("counts cache invocation lifetime in workerd", () => {
     const cached = await request("/counts");
     expect(cached.status).toBe(200);
     expect(await cached.json()).toEqual({ counts: fresh, queries: 4, ends: 2 });
+  }, 10_000);
+
+  it.each(["overlap", "overlap-failure"])("warms settled %s results while arrivals overlap", async (mode) => {
+    const before = await stats();
+    const path = `/counts?mode=${mode}`;
+    const expected = mode.endsWith("failure") ? { memberCount: null, onlineCount: null, ranks: [] } : fresh;
+    const replies: Promise<void>[] = [];
+    for (let i = 0; i < 12; i++) {
+      replies.push(request(path).then(async (response) => {
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ counts: expected });
+      }));
+      await pause(150); // Node only schedules arrivals; reads/deadlines run in workerd.
+    }
+    await Promise.all(replies);
+    const settled = await stats();
+    // At most seven cold arrivals fit before the first 1000 ms completion;
+    // the remaining visitors reuse it despite other fills still being pending.
+    expect(settled.queries - before.queries).toBeGreaterThan(2);
+    expect(settled.queries - before.queries).toBeLessThanOrEqual(14);
+    expect(settled.ends - before.ends).toBe(settled.queries - before.queries);
+    expect(await (await request(path)).json()).toEqual({ counts: expected, ...settled });
+  }, 10_000);
+
+  it("lets an older success warm the cache when a newer invocation abandons its fill", async () => {
+    const before = await stats();
+    const successful = request("/counts?mode=newer-abandoned");
+    await pause(150);
+    const abandoned = await request("/abandon?mode=newer-abandoned");
+    expect(abandoned.status).toBe(200);
+    expect(await abandoned.json()).toEqual({ queries: before.queries + 4, ends: before.ends });
+    const completed = await successful;
+    expect(completed.status).toBe(200);
+    const settled = { queries: before.queries + 4, ends: before.ends + 2 };
+    expect(await completed.json()).toEqual({ counts: fresh, ...settled });
+    expect(await (await request("/counts?mode=newer-abandoned")).json()).toEqual({ counts: fresh, ...settled });
   }, 10_000);
 
   it("gives a later hung fill its own bounded deadline and caches its degraded result", async () => {

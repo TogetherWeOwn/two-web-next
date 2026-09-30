@@ -53,11 +53,12 @@ function liveCounts(row: Row | undefined): LiveCounts {
 // Cache unavailable results too; there is no post-expiry stale fallback.
 function cachedRead<T>(key: string, fallback: T, read: (sql: postgres.Sql) => Promise<T>) {
   let cache: { url: string; value: T; expiresAt: number } | undefined;
-  let latestFill = 0;
+  let nextFill = 0;
+  let publishedFill = 0;
   return async (url: string | undefined): Promise<T> => {
     if (!url) return fallback;
     if (cache?.url === url && Date.now() < cache.expiresAt) return cache.value;
-    const fill = ++latestFill;
+    const fill = ++nextFill;
     const value = await (async () => {
       let sql: postgres.Sql | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -80,8 +81,12 @@ function cachedRead<T>(key: string, fallback: T, read: (sql: postgres.Sql) => Pr
       console.warn("Counts read unavailable", { key });
       return fallback;
     });
-    // An older slow fill must not replace a newer completed snapshot.
-    if (fill === latestFill) cache = { url, value, expiresAt: Date.now() + COUNTS_CACHE_TTL_MS };
+    // Pending/abandoned fills do not disqualify usable completions. Only an
+    // already-published newer snapshot prevents an older fill replacing it.
+    if (fill > publishedFill) {
+      publishedFill = fill;
+      cache = { url, value, expiresAt: Date.now() + COUNTS_CACHE_TTL_MS };
+    }
     return value;
   };
 }
