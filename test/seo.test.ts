@@ -89,7 +89,7 @@ describe("funnel leaves (DB-free floor)", () => {
 
 describe("homepage degraded fallback", () => {
   it("renders 200 with no member count when the bot DB is down", async () => {
-    expect(await readCounts(env)).toEqual({ memberCount: null, onlineCount: null });
+    expect(await readCounts(env)).toEqual({ memberCount: null, onlineCount: null, ranks: [] });
     const res = await app.request("/", {}, env);
     expect(res.status).toBe(200);
     const html = await res.text();

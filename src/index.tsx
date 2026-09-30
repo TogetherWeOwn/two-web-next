@@ -232,7 +232,7 @@ app.get("/", async (c) => {
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
-  const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
+  const counts = await readCounts(c.env);
   c.header("cache-control", "private, no-store");
   return c.html(
     <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,

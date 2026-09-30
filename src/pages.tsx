@@ -1,5 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
-import type { Counts } from "./counts";
+import type { Counts, Rank } from "./counts";
 import type { Session } from "./env";
 import { canonicalUrl } from "./seo";
 
@@ -153,6 +153,10 @@ export const Recovery: FC<{
   </Layout>
 );
 
+const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map((label) => ({
+  key: label.toLowerCase(), label, memberCount: null,
+}));
+
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
@@ -194,7 +198,7 @@ export const Home: FC<{
         {counts.memberCount != null && (
           <p class="counts" data-testid="member-count">
             <strong>{counts.memberCount}</strong> members
-            {counts.onlineCount != null && (
+            {counts.onlineCount != null && counts.onlineCount > 0 && (
               <>
                 {" · "}<strong>{counts.onlineCount}</strong> online
               </>
@@ -212,7 +216,15 @@ export const Home: FC<{
       </section>
       <section aria-label="Community ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
-        <p>Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.</p>
+        <p>Ranks stack — a Veteran still holds everything below.</p>
+        <dl class="facts rank-stack" data-testid="rank-stack">
+          {(counts.ranks.length ? counts.ranks : FALLBACK_RANKS).map((rank) => (
+            <div class="card" key={rank.key} data-rank={rank.key}>
+              <dt>{rank.label}</dt>
+              <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
+            </div>
+          ))}
+        </dl>
       </section>
     </main>
     <SiteFooter />
