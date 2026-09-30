@@ -30,6 +30,11 @@
   var active = null;
   var debounceTimer = null;
 
+  function cancelDebounce() {
+    if (debounceTimer !== null) clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+
   // Same-origin /events only: view, month, q, past params are the island's
   // vocabulary. Anything else (archive link, sign-in, card links) is a real
   // navigation and passes through.
@@ -53,9 +58,10 @@
 
   // opts.focus: a selector to focus after the swap (grid day jumps land on the card).
   // opts.skeleton: member-started actions show it; a settled search does not.
-  // opts.syncInput: popstate rewrites the box to match the restored URL.
+  // opts.syncInput: explicit navigation rewrites the box unless newer typing began.
   async function load(url, push, opts) {
     opts = opts || {};
+    var inputAtStart = input.value;
     if (active) active.abort();
     var controller = new AbortController();
     active = controller;
@@ -63,7 +69,7 @@
     try {
       var response = await fetch(url.pathname + url.search, {
         method: "GET",
-        headers: { accept: "text/html" },
+        headers: { accept: "text/html", "x-two-island": "events-calendar" },
         signal: controller.signal,
       });
       if (!response.ok) throw new Error("Calendar unavailable");
@@ -104,7 +110,7 @@
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
         if (source) node.textContent = source.textContent;
       });
-      if (opts.syncInput) {
+      if (opts.syncInput && input.value === inputAtStart) {
         var sourceInput = page.querySelector('[data-testid="events-search"]');
         if (sourceInput) input.value = sourceInput.getAttribute("value") || "";
       }
@@ -112,7 +118,7 @@
       var ogUrl = document.querySelector('meta[property="og:url"]');
       if (canonicalLink) canonicalLink.href = canonical.href;
       if (ogUrl) ogUrl.content = canonical.href;
-      if (push) window.history.pushState(null, "", url.pathname + url.search);
+      if (push) window.history.pushState(null, "", url.pathname + url.search + url.hash);
       feedback.textContent = "";
       if (opts.focus) {
         var target = root.querySelector(opts.focus);
@@ -147,28 +153,26 @@
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     var link = event.target.closest("a");
     if (!link || !root.contains(link) || link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
+    cancelDebounce();
 
     // Grid day jump: re-render as the list, then move focus onto the card.
     if (link.hasAttribute("data-cal-jump")) {
       var hash = link.hash;
-      var url = calendarHref("/events");
+      var url = calendarHref(link.href);
       if (!url) return;
-      var current = new URL(window.location.href);
-      if (current.searchParams.get("q")) url.searchParams.set("q", current.searchParams.get("q"));
-      if (current.searchParams.get("past") === "1") url.searchParams.set("past", "1");
       event.preventDefault();
-      load(url, true, { skeleton: true, focus: hash || null });
+      load(url, true, { skeleton: true, syncInput: true, focus: hash || null });
       return;
     }
 
     var target = calendarHref(link.href);
     if (!target) return;
     event.preventDefault();
-    load(target, true, { skeleton: true });
+    load(target, true, { skeleton: true, syncInput: true });
   });
 
   input.addEventListener("input", function () {
-    if (debounceTimer) clearTimeout(debounceTimer);
+    cancelDebounce();
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
       load(searchUrl(input.value), true, {});
@@ -177,14 +181,12 @@
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-    }
+    cancelDebounce();
     load(searchUrl(input.value), true, {});
   });
 
   window.addEventListener("popstate", function () {
+    cancelDebounce();
     var url = calendarHref(window.location.href);
     if (url) load(url, false, { skeleton: true, syncInput: true });
   });

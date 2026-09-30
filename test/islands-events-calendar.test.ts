@@ -178,6 +178,122 @@ const cardKeys = (html: string) => [...html.matchAll(/data-event-key="([^"]+)"/g
 // hono JSX escapes ' as &#39; in rendered HTML — compare copy through it.
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/'/g, "&#39;").replace(/"/g, "&quot;");
 
+const fragmentHeaders = { "x-two-island": EVENTS_CALENDAR_ISLAND };
+
+async function memberAuth(moderator = false, expiresAt = new Date(Date.now() + 3600_000)) {
+  const store = createMemorySessionStore();
+  const token = newSessionToken();
+  const hash = await hashToken(token);
+  await store.create({ tokenHash: hash, userId: "member", username: "member", avatar: null, member: true, moderator, expiresAt });
+  const cookie = (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+    path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+  })).split(";")[0]!;
+  return { store, hash, cookie };
+}
+
+describe("EventsCalendar review regressions", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("keeps the browser cookie valid when an authenticated fragment is cancelled before headers arrive", async () => {
+    const auth = await memberAuth();
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const reached = new Promise<void>((r) => { entered = r; });
+    let calls = 0;
+    const source: DiscordEventsSource = {
+      lastReadFailed: () => false,
+      upcoming: async () => { if (++calls === 1) { entered(); await gate; } return []; },
+    };
+    const src = calendar([eventRow()], [], source, { SESSION_STORE: auth.store });
+    const controller = new AbortController();
+    const headers = { cookie: auth.cookie, ...fragmentHeaders };
+    const first = src.request("/events?view=calendar", { headers, signal: controller.signal });
+    await reached;
+    controller.abort(); // The server may finish, but the browser discards its response/cookie.
+    try {
+      expect(await auth.store.get(auth.hash)).not.toBeNull();
+      const second = await src.request("/events", { headers });
+      expect(await second.text()).not.toContain('data-testid="signin"');
+      expect(second.headers.get("set-cookie")).toBeNull();
+      expect(second.headers.get("cache-control")).toBe("private, no-store");
+    } finally {
+      release();
+      expect((await first).headers.get("set-cookie")).toBeNull();
+    }
+  });
+
+  it.each([false, true])("does not publicly cache any authenticated page or fragment (moderator=%s)", async (moderator) => {
+    const auth = await memberAuth(moderator);
+    const src = calendar([eventRow()], [], okSource(), { SESSION_STORE: auth.store });
+    const fragment = await src.request("/events", { headers: { cookie: auth.cookie, ...fragmentHeaders } });
+    expect(fragment.headers.get("cache-control")).toBe("private, no-store");
+    expect(fragment.headers.get("set-cookie")).toBeNull();
+    const page = await src.request("/events", { headers: { cookie: auth.cookie } });
+    expect(page.headers.get("cache-control")).toBe("private, no-store");
+    expect(page.headers.get("set-cookie")).toContain("__Host-two_session=");
+    expect(await auth.store.get(auth.hash)).toBeNull(); // Full-page rotation remains intact.
+  });
+
+  it("rejects revoked, expired and wrongly signed fragment cookies", async () => {
+    const revoked = await memberAuth();
+    await revoked.store.revoke(revoked.hash);
+    const expired = await memberAuth(false, new Date(0));
+    const wrong = await memberAuth();
+    for (const auth of [revoked, expired, wrong]) {
+      const cookie = auth === wrong ? auth.cookie + "tampered" : auth.cookie;
+      const html = await (await calendar([eventRow()], [], okSource(), { SESSION_STORE: auth.store })
+        .request("/events", { headers: { cookie, ...fragmentHeaders } })).text();
+      expect(html).toContain('data-testid="signin"');
+    }
+  });
+
+  it.each(["VOLLEYBALL", "100%_\\", "  chess  "])("applies the same literal title/description search to transients: %s", async (query) => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const matchingTitle = transient("title", new Date(Date.UTC(2030, 0, 12)), `Night ${query.trim().toLowerCase()}`);
+    const matchingDescription = transient("description", new Date(Date.UTC(2030, 0, 13)), "Other night");
+    matchingDescription.description = `Play ${query.trim().toLowerCase()} with us`;
+    const unrelated = transient("unrelated", new Date(Date.UTC(2030, 0, 14)), "Unrelated night");
+    const src = calendar([], [], okSource([matchingTitle, matchingDescription, unrelated]));
+    const html = await (await src.request("/events?q=" + encodeURIComponent(query))).text();
+    expect(cardKeys(html)).toEqual(["discord-title", "discord-description"]);
+    expect(html).not.toContain("Unrelated night");
+    expect(JSON.parse(String(spy.mock.calls.find((c) => c[0] === "event_search")![1]))).toEqual({
+      event: "event_search", query: normalizeEventSearch(query), results: 2,
+    });
+    const miss = await (await src.request("/events?q=no-match")).text();
+    expect(miss).toContain(EVENTS_EMPTY_SEARCH_TESTID);
+    expect(cardKeys(miss)).toEqual([]);
+    expect(JSON.parse(String(spy.mock.calls.at(-1)![1])).results).toBe(0);
+  });
+
+  it("links upcoming and past persisted titles to detail pages but keeps transients display-only", async () => {
+    const up = eventRow({ eventKey: "up-link" });
+    const past = eventRow({ eventKey: "past-link", startsAt: new Date(0), endsAt: new Date(1) });
+    const html = await (await calendar([up], [past], okSource([transient("display", new Date(Date.UTC(2030, 0, 12)))])).request("/events?past=1")).text();
+    expect(html).toContain('href="/e/up-link"');
+    expect(html).toContain('href="/e/past-link"');
+    expect(html).not.toContain('href="/e/discord-display"');
+  });
+
+  it("gives grid links a real SSR list destination retaining the drawer and card fragment", async () => {
+    const e = eventRow({ eventKey: "grid-link", startsAt: new Date(Date.UTC(2030, 0, 15, 20)) });
+    const src = calendar([e], [], okSource());
+    const grid = await (await src.request("/events?view=calendar&month=2030-01&past=1")).text();
+    expect(grid).toContain('href="/events?past=1#event-grid-link" data-cal-jump');
+    const list = await (await src.request("/events?past=1")).text();
+    expect(list).toContain('id="event-grid-link"');
+  });
+
+  it("suppresses both the visible and live search miss when the read fails", async () => {
+    const html = await (await calendar([], [], failedSource()).request("/events?q=x")).text();
+    expect(html).toContain(EVENTS_EMPTY_ERROR_TESTID);
+    expect(html).not.toContain(EVENTS_EMPTY_SEARCH_TESTID);
+    expect(html).toContain(`data-testid="${EVENTS_SEARCH_STATUS_TESTID}"></p>`);
+    expect(html).not.toContain(eventsSearchMissCopy("x"));
+  });
+});
+
 /* ----------------------------------------------------------- contract pins */
 describe("EventsCalendar contract drift", () => {
   it("pins the read contract: user-driven, single-flight, page URL only", () => {
@@ -265,6 +381,8 @@ describe("EventsCalendar SSR drift", () => {
     const html = await res.text();
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(res.headers.get("vary")).toBe("Cookie, X-Two-Island");
+    expect(res.headers.get("set-cookie")).toBeNull();
     expect(html).toContain(`data-island="${EVENTS_CALENDAR_ISLAND}"`);
     expect(html).toContain('data-view="list"');
     expect(html).toContain(`role="group" aria-label="${EVENTS_VIEW_GROUP_LABEL}"`);
@@ -476,14 +594,14 @@ class Node {
   closest() { return this === inputNode ? formNode : null; }
 }
 
-// Nodes the binder binds to, in zone order: head, miss, content.
+// Nodes the binder binds to, in zone order: head, actions, miss, content.
 let formNode: Node;
 let inputNode: Node;
 
 const LIVE_IDS = ["events-view-status", "events-search-status", "events-past-status", "calendar-month-status"];
 
 function browser(entry = "/events") {
-  const zones = { head: new Node(), miss: new Node(), content: new Node() };
+  const zones = { head: new Node(), actions: new Node(), miss: new Node(), content: new Node() };
   for (const [name, node] of Object.entries(zones)) node.attributes.set("data-cal-zone", name);
   zones.content.childNodes = ["original content"];
   const skeleton = new Node();
@@ -512,7 +630,7 @@ function browser(entry = "/events") {
       if (live && liveNodes[live]) return liveNodes[live];
       return focusables[selector] ?? null;
     },
-    querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? [zones.head, zones.miss, zones.content] : []),
+    querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? [zones.head, zones.actions, zones.miss, zones.content] : []),
     addEventListener: (_type: string, listener: typeof click) => { click = listener; },
     contains: () => true,
   });
@@ -560,10 +678,10 @@ function browser(entry = "/events") {
   function finish(
     i: number,
     page: string,
-    opts: { content?: unknown[]; head?: unknown[]; miss?: unknown[]; view?: string; month?: string; past?: string; statuses?: string[]; input?: string } = {},
+    opts: { content?: unknown[]; head?: unknown[]; actions?: unknown[]; miss?: unknown[]; view?: string; month?: string; past?: string; statuses?: string[]; input?: string } = {},
   ) {
     const src = (name: string, kids: unknown[]) => { const n = new Node(); n.attributes.set("data-cal-zone", name); n.childNodes = kids; return n; };
-    const sourceZones = [src("head", opts.head ?? ["head2"]), src("miss", opts.miss ?? []), src("content", opts.content ?? ["new content"])];
+    const sourceZones = [src("head", opts.head ?? ["head2"]), src("actions", opts.actions ?? []), src("miss", opts.miss ?? []), src("content", opts.content ?? ["new content"])];
     const next = {
       dataset: { view: opts.view ?? "list", month: opts.month ?? "2026-09", past: opts.past ?? "" },
       querySelectorAll: (s: string) => (s === "[data-cal-zone]" ? sourceZones : []),
@@ -596,13 +714,88 @@ function browser(entry = "/events") {
 }
 
 describe("EventsCalendar shipped binder request/state drift", () => {
+  it("adds and removes Clear in a swapped form-actions zone without replacing the focused input", async () => {
+    const src = calendar([eventRow({ title: "Jam" })], [], okSource());
+    const initial = await (await src.request("/events")).text();
+    const searched = await (await src.request("/events?q=jam")).text();
+    const actions = (html: string) => html.match(/<span data-cal-zone="actions">([\s\S]*?)<\/span>/)?.[1];
+    expect(actions(initial)).toBe("");
+    expect(actions(searched)).toContain(`data-testid="${EVENTS_SEARCH_CLEAR_TESTID}"`);
+    const b = browser();
+    const input = b.input;
+    input.focus();
+    input.value = "jam";
+    b.inputEvent();
+    b.fireTimer();
+    b.finish(0, "searched", { input: "jam", actions: [actions(searched)] });
+    await b.settle();
+    expect(b.zones.actions.childNodes).toEqual([actions(searched)]);
+    expect(b.input).toBe(input);
+    expect(input.focused).toBe(true);
+    b.clickLink("/events");
+    b.finish(1, "cleared", { input: "", actions: [] });
+    await b.settle();
+    expect(b.input).toBe(input);
+    expect(input.value).toBe("");
+    expect(input.focused).toBe(true);
+    expect(b.zones.actions.childNodes).toEqual([]);
+    expect(b.history).toEqual(["/events?q=jam", "/events"]);
+  });
+
+  it("cancels pending debounce before a slow Back restoration", async () => {
+    const b = browser("/events?q=old");
+    b.input.value = "new";
+    b.inputEvent();
+    b.location.href = APP_URL + "/events";
+    b.popstate();
+    b.fireTimer();
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.url).toBe("/events");
+    expect(b.requests[0]!.init.signal!.aborted).toBe(false);
+    b.finish(0, "restored", { input: "", content: ["back"] });
+    await b.settle();
+    expect(b.history).toEqual([]);
+    expect(b.input.value).toBe("");
+    expect(b.zones.content.childNodes).toEqual(["back"]);
+  });
+
+  it("cancels pending debounce on explicit anchors and does not overwrite newer typing", async () => {
+    const b = browser("/events?q=old");
+    b.input.value = "pending";
+    b.inputEvent();
+    b.clickLink("/events?past=1");
+    b.fireTimer();
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.init.signal!.aborted).toBe(false);
+    b.input.value = "newer";
+    b.inputEvent();
+    b.finish(0, "drawer", { input: "", past: "1" });
+    await b.settle();
+    expect(b.input.value).toBe("newer");
+    b.fireTimer();
+    expect(b.requests[1]!.url).toBe("/events?q=newer&past=1");
+  });
+
+  it("copies an empty SSR search status over stale miss text on a read error", async () => {
+    const html = await (await calendar([], [], failedSource()).request("/events?q=x")).text();
+    const status = html.match(/data-testid="events-search-status">([^<]*)<\/p>/)![1]!;
+    const b = browser("/events?q=x");
+    b.liveNodes["events-search-status"]!.textContent = eventsSearchMissCopy("x");
+    b.clickLink("/events?q=x");
+    b.finish(0, "error", { input: "x", statuses: ["list", status, "", ""], content: [EVENTS_EMPTY_ERROR_TESTID] });
+    await b.settle();
+    expect(b.liveNodes["events-search-status"]!.textContent).toBe("");
+    expect(b.zones.content.childNodes).toEqual([EVENTS_EMPTY_ERROR_TESTID]);
+  });
+
   it("fires nothing on mount and issues exactly one GET per anchor click with skeleton", async () => {
     const b = browser();
     expect(b.requests).toHaveLength(0);
     expect(binder).not.toMatch(/setInterval|events\.json|\/rsvp/);
     expect(b.clickLink("/events?view=calendar&month=2026-10")).toBe(true);
     expect(b.requests).toHaveLength(1);
-    expect(b.requests[0]).toMatchObject({ url: "/events?view=calendar&month=2026-10", init: { method: "GET", headers: { accept: "text/html" } } });
+    expect(b.requests[0]).toMatchObject({ url: "/events?view=calendar&month=2026-10", init: { method: "GET" } });
+    expect(b.requests[0]!.init.headers).toEqual({ accept: "text/html", ...fragmentHeaders });
     expect(b.skeleton.hidden).toBe(false);
     expect(b.zones.content.hidden).toBe(true);
     b.finish(0, "p1", { view: "calendar", month: "2026-10", content: ["grid"] });
@@ -704,6 +897,7 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     b.finish(0, "p1");
     await b.settle();
     expect(card.focused).toBe(true);
+    expect(b.history).toEqual(["/events#event-ev-7"]);
   });
 
   it("leaves modified clicks, other paths and external URLs to normal navigation", () => {

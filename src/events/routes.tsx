@@ -84,13 +84,13 @@ async function feedResponse(c: Ctx, body: string, headers: Record<string, string
   return new Response(body, { status: 200, headers: { ...headers, etag } });
 }
 
-export function registerEventRoutes(app: App, readSession: SessionReader): void {
+export function registerEventRoutes(app: App, readSession: SessionReader, readFragmentSession: SessionReader): void {
   const unavailable = (c: Ctx) => c.text("Events temporarily unavailable", 503);
 
   app.get("/events", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    const session = await readSession(c);
+    const session = await (c.req.header("x-two-island") === "events-calendar" ? readFragmentSession(c) : readSession(c));
     const now = new Date();
 
     // Resolve the URL state. A search forces the list view (a month grid that
@@ -113,8 +113,11 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
     const persistedDiscordIds = new Set(
       [...localUpcoming, ...localPast].map((e) => e.discordEventId).filter((id): id is string => id !== null),
     );
+    const term = q.trim().toLowerCase();
     const transients = dedupeTransients(
-      (await discord.upcoming(now)).filter((t) => t.endsAt >= now),
+      (await discord.upcoming(now)).filter((t) =>
+        t.endsAt >= now && (term === "" || t.title.toLowerCase().includes(term) || (t.description ?? "").toLowerCase().includes(term)),
+      ),
       persistedDiscordIds,
     );
     const discordFailed = discord.lastReadFailed();
@@ -152,7 +155,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
       }
     }
 
-    c.header("cache-control", session?.moderator ? "private, no-store" : "public, max-age=60");
+    c.header("cache-control", session ? "private, no-store" : "public, max-age=60");
+    c.header("vary", "Cookie, X-Two-Island");
     return c.html(
       <EventsCalendarPage
         state={state}

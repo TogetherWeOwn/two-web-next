@@ -150,7 +150,7 @@ const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; i
   return (
     <li>
       <article id={`event-${rowKey(e)}`} data-event-key={rowKey(e)} data-testid={EVENT_CARD_TESTID} tabindex={-1}>
-        <h3>{rowTitle(e)}</h3>
+        <h3>{transient ? rowTitle(e) : <a href={`/e/${e.eventKey}`}>{rowTitle(e)}</a>}</h3>
         {!transient && e.game ? <p>{e.game}</p> : null}
         {!transient && e.status === "draft" ? <span data-testid={EVENT_DRAFT_TESTID}>Draft</span> : null}
         {!transient && e.status === "cancelled" ? <span data-testid={EVENT_CANCELLED_TESTID}>Cancelled</span> : null}
@@ -291,7 +291,7 @@ const MonthGrid: FC<{ state: CalendarState; weeks: CalendarDay<CalRow>[][]; zone
                   <ul>
                     {day.events.map((e) => (
                       <li>
-                        <a href={`#event-${rowKey(e)}`} data-cal-jump>
+                        <a href={`${calendarUrl({ ...state, view: "list" })}#event-${rowKey(e)}`} data-cal-jump>
                           {wallTimeHm(e.startsAt, rowZone(e, zone))} {gridTitle(rowTitle(e))}
                         </a>
                       </li>
@@ -311,10 +311,10 @@ const MonthGrid: FC<{ state: CalendarState; weeks: CalendarDay<CalRow>[][]; zone
  * The events calendar island (legacy Livewire EventsCalendar): one rowset
  * rendered as list or month grid, every control a real anchor so the page is
  * fully functional without JavaScript; the binder upgrades anchors to
- * fragment swaps. Zones: `head` (toggle + links), `miss` (search-miss block),
- * `content` (empty states / list / grid). Live-status lines, the search form,
- * the skeleton and the feedback line live OUTSIDE the zones — the input must
- * never be re-created mid-typing.
+ * fragment swaps. Zones: `head` (toggle + links), `actions` (Clear control),
+ * `miss` (search-miss block), `content` (empty states / list / grid). Live-status
+ * lines, the search input, skeleton and feedback stay outside swapped zones —
+ * the input must never be re-created mid-typing.
  */
 export const EventsCalendarPage: FC<{
   state: CalendarState;
@@ -364,7 +364,7 @@ export const EventsCalendarPage: FC<{
           {eventsViewStatusCopy(state.view)}
         </p>
         <p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>
-          {searching ? (hasVisibleResults ? eventsSearchHitCopy(state.q) : eventsSearchMissCopy(state.q)) : ""}
+          {searching && emptyState !== "error" ? (hasVisibleResults ? eventsSearchHitCopy(state.q) : eventsSearchMissCopy(state.q)) : ""}
         </p>
         <p role="status" class="sr-only" data-testid={EVENTS_PAST_STATUS_TESTID}>
           {state.past && past.length > 0 ? EVENTS_PAST_STATUS_COPY : ""}
@@ -415,11 +415,13 @@ export const EventsCalendarPage: FC<{
             aria-label={EVENTS_SEARCH_LABEL}
             data-testid={EVENTS_SEARCH_TESTID}
           />
-          {searching ? (
-            <a href={calendarUrl({ ...state, q: "" })} data-testid={EVENTS_SEARCH_CLEAR_TESTID}>
-              {EVENTS_EMPTY_COPY.searchClear}
-            </a>
-          ) : null}
+          <span data-cal-zone="actions">
+            {searching ? (
+              <a href={calendarUrl({ ...state, q: "" })} data-testid={EVENTS_SEARCH_CLEAR_TESTID}>
+                {EVENTS_EMPTY_COPY.searchClear}
+              </a>
+            ) : null}
+          </span>
         </form>
 
         <div data-cal-zone="miss">{searchMiss ? <SearchMiss state={state} /> : null}</div>
