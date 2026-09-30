@@ -42,8 +42,12 @@ export async function writeRsvp(db: Db, eventKey: string, userId: string, status
     // event has ended. Empty for a first answer, which has no row to wait on.
     const [existing] = await tx.select().from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)))
       .for("update");
-    // The event row is locked above, so its columns cannot change under us while we wait;
-    // only the clock moves. Read it once all waits are behind us and judge expiry then.
+    // Blocking maintenance BEFORE the final decision: the global prune can wait on a
+    // contended expired row, and a wait after the clock is read would let an answer slip
+    // in after the event ends. The event row is locked above, so its columns cannot change
+    // under us while we wait; only the clock moves. Read it once all waits — member,
+    // event, RSVP row, prune — are behind us and judge expiry then.
+    await pruneThrottle(tx);
     const now = clock();
     const why = closedWhy(ev, now);
     if (why) return { ok: false, reason: "closed", why } as const;
@@ -81,11 +85,15 @@ export async function withdrawRsvp(db: Db, eventKey: string, userId: string): Pr
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!ev) {
+      await pruneThrottle(tx);
       const verdict = await chargeThrottle(tx, userId);
       return verdict.limited ? ({ limited: true, retryAfter: verdict.retryAfter } as const) : ({ limited: false, deleted: false, status: null } as const);
     }
-    // Take the RSVP row lock first: a wait on a mirror-stamp writer must finish before the
-    // hit is stamped, or the hit could age out of the window while we waited.
+    // Blocking maintenance before the row-lock wait: the global prune can wait on a
+    // contended expired row, and a wait after the hit is stamped would age the accepted
+    // write out of its window. Take the RSVP row lock only after it: a wait on a
+    // mirror-stamp writer must finish before the hit is stamped.
+    await pruneThrottle(tx);
     await tx.select({ id: rsvps.id }).from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId))).for("update");
     const verdict = await chargeThrottle(tx, userId);
     if (verdict.limited) return { limited: true, retryAfter: verdict.retryAfter } as const;
@@ -106,16 +114,21 @@ export type Verdict = { limited: false } | { limited: true; retryAfter: number }
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
+/** Global maintenance: prunes expired hits. Can block on a contended expired row, so it
+ * must run before any accept/charge decision — never between the debit and the write. */
+async function pruneThrottle(tx: Tx): Promise<void> {
+  await tx.execute(sql`delete from web_throttle_hits where at < clock_timestamp() - interval '5 minutes'`);
+}
+
 async function chargeThrottle(tx: Tx, userId: string): Promise<Verdict> {
   const bucket = `rsvp-write:${userId}`;
   const { maxAttempts, decaySeconds } = RSVP_RATE_LIMIT;
   {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${bucket}))`);
-    // Maintenance before acceptance: the global prune can wait on a contended expired row,
-    // and a wait after the hit is stamped would age the accepted write out of its window.
-    // Count and insert only after it, so the window is always judged fresh; refused writes
-    // return before this point and spend nothing.
-    await tx.execute(sql`delete from web_throttle_hits where at < clock_timestamp() - interval '5 minutes'`);
+    // The global prune already ran before the final accept/charge decision (PUT runs it
+    // ahead of the clock read; DELETE runs it ahead of the row lock wait). Counting and
+    // inserting here, so the window is always judged fresh; refused writes return before
+    // this point and spend nothing.
     const rows = (await tx.execute(sql`
       select count(*)::int as n,
         coalesce(ceil(extract(epoch from (min(at) + make_interval(secs => ${decaySeconds}) - clock_timestamp()))), 1)::int as wait

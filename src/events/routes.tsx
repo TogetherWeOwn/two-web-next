@@ -316,11 +316,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, peekSe
     if (!KEY_RE.test(key)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
-    // Policy before budget, as in Laravel: a refused write does not spend an attempt.
-    const ev = await getPublicEvent(db, key);
-    if (!ev) return c.json({ error: "not_found" }, 404);
-    if (ev.status !== "published" || ev.endsAt <= new Date() || !ev.rsvpOpen) return closed(c);
-    // The budget is charged inside writeRsvp, atomically with the accepted write.
+    // Policy, clock and budget are decided inside writeRsvp, after all blocking waits
+    // (member/event/RSVP-row locks and the throttle prune), as in Laravel: a refused
+    // write does not spend an attempt. No pre-lock check here — a stale read could
+    // refuse a write that is open by the time the locks are held.
     const r = await writeRsvp(db, key, who.id, input.status);
     if (!r.ok) {
       if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
