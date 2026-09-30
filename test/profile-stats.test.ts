@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { AccessEntry } from "../src/access-log";
-import { profilesApp } from "../src/profiles/routes";
-import { readMemberStats } from "../src/profiles/stats";
+import { profilesApp, type ProfileDeps } from "../src/profiles/routes";
+import { MEMBER_STATS_BUDGET_MS, memberStatsWithBudget, readMemberStats, readOwnedMemberStats } from "../src/profiles/stats";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 
@@ -31,7 +31,10 @@ function fixture(memberRows: Record<string, unknown>[] = [fullMember], milestone
   return { db: { execute } as unknown as Db, execute };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("readMemberStats (local SQL-result fixtures)", () => {
   it("reads both bot-owned views with a bound member id and newest-first milestones", async () => {
@@ -70,6 +73,53 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
     expect(await readMemberStats(db, MEMBER)).toBeNull();
   });
 
+  it("does not start milestones after a member query outlives the budget", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { db, execute } = fixture();
+    let finish!: (rows: Record<string, unknown>[]) => void;
+    execute.mockReset().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = readMemberStats(db, MEMBER);
+    await vi.advanceTimersByTimeAsync(MEMBER_STATS_BUDGET_MS);
+    expect(await pending).toBeNull();
+    finish([fullMember]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels an owned client's stalled milestone query at the shared deadline", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { db, execute } = fixture();
+    let rejectQuery!: (error: Error) => void;
+    execute.mockReset().mockResolvedValueOnce([fullMember]).mockImplementationOnce(() => new Promise((_, reject) => { rejectQuery = reject; }));
+    const end = vi.fn().mockImplementation(async () => { rejectQuery(new Error("CONNECTION_DESTROYED")); });
+    const owned = { ...db, $client: { end } } as unknown as Db;
+    const pending = memberStatsWithBudget((id, signal) => readOwnedMemberStats(owned, id, signal), MEMBER);
+    await vi.advanceTimersByTimeAsync(MEMBER_STATS_BUDGET_MS - 1);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(end).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toBeNull();
+    expect(end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["success", "no row", "error", "already aborted"])("closes owned clients after %s", async (outcome) => {
+    const { db, execute } = fixture(outcome === "no row" ? [] : [fullMember]);
+    if (outcome === "error") execute.mockReset().mockRejectedValue(new Error("DB down"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const end = vi.fn().mockResolvedValue(undefined);
+    const controller = new AbortController();
+    if (outcome === "already aborted") controller.abort();
+    const pending = readOwnedMemberStats({ ...db, $client: { end } } as unknown as Db, MEMBER, controller.signal);
+    if (outcome === "already aborted") await expect(pending).rejects.toThrow();
+    else expect(await pending).toEqual(outcome === "success" ? expect.objectContaining({ rankKey: "community_regular" }) : null);
+    expect(end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
+    if (outcome === "already aborted") expect(execute).not.toHaveBeenCalled();
+  });
+
   it("normalizes nullable/malformed fields, zero days, former members and bad milestone dates", async () => {
     const { db } = fixture([{ ...fullMember, joined_at: "bad-date", tenure_days: 0, rank_key: "", is_current_member: false }], [
       { milestone: "ignored", occurred_at: "bad-date", detail: null },
@@ -84,12 +134,14 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
   });
 });
 
-async function harness(db: Db) {
+async function harness(db: Db, deps: Pick<ProfileDeps, "stats"> = {}) {
   const sessions = createMemorySessionStore();
   const log: AccessEntry[] = [];
   const app = profilesApp({
+    ...deps,
     sessionStore: sessions,
-    store: createMemoryProfileStore([{ id: MEMBER, username: "alice", avatar: null, bio: "Profile still here", games: [], timezone: null }]),
+    throttle: async () => ({ limited: false }),
+    store: createMemoryProfileStore([{ id: MEMBER, username: "alice", avatar: null, bio: "Profile still here", games: [], timezone: null, rank: "Existing rank", joinedAt: new Date("2024-06-15T00:00:00Z") }]),
     accessLog: async (entry) => {
       if (entry.viewerUserId === MEMBER) return false;
       log.push(entry);
@@ -122,6 +174,76 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(log).toHaveLength(1);
     expect(log[0]).toMatchObject({ subjectUserIds: [MEMBER], viewerUserId: VIEWER, route: "profiles.show" });
+  });
+
+  it.each([
+    { rank: null, joined: null },
+    { rank: "community_regular", joined: null },
+    { rank: null, joined: fullMember.joined_at },
+  ])("preserves existing fields individually for partial stats ($rank / $joined)", async ({ rank, joined }) => {
+    const { db } = fixture([{ ...fullMember, rank_key: rank, joined_at: joined }], []);
+    const { app, cookieFor, bindings } = await harness(db);
+    const res = await app.request(`/members/${MEMBER}`, { headers: { cookie: await cookieFor() } }, bindings);
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    expect(html).toContain('data-testid="profile-stats"');
+    expect(html).toContain(rank ? "Community Regular" : "Existing rank");
+    expect(html).toContain(joined ? "1 Jan 2025" : "Joined June 2024");
+    expect(html.match(/data-testid="profile-rank"/g)).toHaveLength(1);
+    expect(html.match(/data-testid="profile-joined"/g)).toHaveLength(1);
+  });
+
+  it.each(["stalled milestones", "throwing source"])("keeps the page and audit available with a %s", async (failure) => {
+    const { db, execute } = fixture();
+    let signalSeen: AbortSignal | undefined;
+    let queryStarted!: () => void;
+    const started = new Promise<void>((resolve) => { queryStarted = resolve; });
+    const deps = failure === "throwing source" ? { stats: async (_id: string, signal: AbortSignal) => {
+      signalSeen = signal;
+      queryStarted();
+      throw new Error("source down");
+    } } : {};
+    if (failure === "stalled milestones") execute.mockReset().mockResolvedValueOnce([fullMember]).mockImplementationOnce(() => {
+      queryStarted();
+      return new Promise(() => {});
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { app, log, cookieFor, bindings } = await harness(db, deps);
+    const cookie = await cookieFor();
+    vi.useFakeTimers();
+    const pending = app.request(`/members/${MEMBER}`, { headers: { cookie } }, bindings);
+    await started;
+    await vi.advanceTimersByTimeAsync(MEMBER_STATS_BUDGET_MS);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Profile still here");
+    expect(html).not.toContain('data-testid="profile-stats"');
+    expect(log).toHaveLength(1);
+    expect(log[0]?.subjectUserIds).toEqual([MEMBER]);
+    if (signalSeen) expect(signalSeen.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["full stats", "missing view"])("preserves stats and submitted inputs on an invalid plain form with %s", async (outcome) => {
+    const { db, execute } = fixture();
+    if (outcome === "missing view") execute.mockReset().mockRejectedValue(new Error("42P01"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { app, log, cookieFor, bindings } = await harness(db);
+    const res = await app.request(`/members/${MEMBER}`, {
+      method: "POST",
+      headers: { cookie: await cookieFor(MEMBER), "content-type": "application/x-www-form-urlencoded", origin: env.APP_URL },
+      body: new URLSearchParams({ _method: "PATCH", bio: "New <bio>", games_text: "Chess\nGo", timezone: "Invalid/Zone" }),
+    }, bindings);
+    const html = await res.text();
+    expect(res.status).toBe(422);
+    expect(html).toContain("Choose a valid IANA timezone");
+    expect(html).toContain("New &lt;bio&gt;");
+    expect(html).toContain("Chess\nGo");
+    expect(html).toContain('value="Invalid/Zone"');
+    expect(html).toContain(outcome === "full stats" ? "1 Jan 2025" : "Joined June 2024");
+    expect(html.includes('data-testid="profile-stats"')).toBe(outcome === "full stats");
+    expect(log).toHaveLength(0);
   });
 
   it("renders stats on /profile too, without logging the owner as a subject", async () => {

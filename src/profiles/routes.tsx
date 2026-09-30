@@ -18,7 +18,8 @@
 import { getSignedCookie } from "hono/cookie";
 import { type Context, type Next, Hono } from "hono";
 import postgres from "postgres";
-import { dbFor } from "../admin/db";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
@@ -31,7 +32,7 @@ import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { createDbProfileStore, type ProfileStore } from "./store";
 import { validateProfile } from "./validation";
-import { readMemberStats, type MemberStatsSource } from "./stats";
+import { MEMBER_STATS_BUDGET_MS, memberStatsWithBudget, readMemberStats, readOwnedMemberStats, type MemberStatsSource } from "./stats";
 
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
 const SESSION_COOKIE = "__Host-two_session";
@@ -62,6 +63,17 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const db = await dbFor(c);
     return db ? createDbProfileStore(db) : null;
   };
+  const statsFor = (c: Ctx, id: string) => memberStatsWithBudget(deps.stats ?? (async (memberId, signal) => {
+    // Injected fixtures/clients are borrowed, never shut down by this request.
+    const injected = (c.env as EnvWithAdminDb).ADMIN_DB;
+    if (injected) return readMemberStats(injected, memberId, signal);
+    const url = databaseUrl(c.env);
+    if (!url) return null;
+    signal.throwIfAborted();
+    // Also bound server-side execution if the connection disappears mid-query.
+    const client = postgres(url, { ...databaseOptions, connection: { statement_timeout: MEMBER_STATS_BUDGET_MS } });
+    return readOwnedMemberStats(drizzle(client), memberId, signal);
+  }), id);
   const sinkFor = async (c: { env: Env }): Promise<AccessSink | null> => {
     if (deps.accessLog) return deps.accessLog;
     const db = await dbFor(c);
@@ -119,12 +131,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
     // Stats and milestones belong to this same member: the existing declaration
     // covers all three reads, without duplicating subjects or audit rows.
     c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
-    let stats = null;
-    try {
-      stats = deps.stats ? await deps.stats(member.id) : await readMemberStats(await dbFor(c), member.id);
-    } catch {
-      console.warn("Member stats unavailable; hiding the stats block.");
-    }
+    const stats = await statsFor(c, member.id);
     return c.html(<ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
   };
 
@@ -164,6 +171,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
       return c.html(
         <ProfilePage
           member={member}
+          stats={await statsFor(c, member.id)}
           isOwner
           appUrl={c.env.APP_URL}
           errors={result.errors}

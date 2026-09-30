@@ -88,8 +88,8 @@ export const ProfilePage: FC<{
             </span>
           )}
           <h1 id="member-heading" tabindex="-1" data-testid={PROFILE_NAME_TESTID}>{member.username}</h1>
-          {!stats && member.rank ? <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p> : null}
-          {!stats && joined ? <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p> : null}
+          {!stats?.rankKey && member.rank ? <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p> : null}
+          {!stats?.joinedAt && joined ? <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p> : null}
           {member.timezone ? <p>Timezone: {member.timezone}</p> : null}
           {member.bio ? <p>{member.bio}</p> : <p>No bio yet.</p>}
           {member.games.length > 0 ? (
