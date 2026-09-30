@@ -3,24 +3,24 @@
 //
 // Concurrency: both verbs lock the event row (`SELECT ... FOR UPDATE`) inside one
 // transaction, so capacity checks and status flips for one event are serialised — the
-// loser of a race for the last seat re-reads the count after the winner commits and gets
-// `at_capacity`. Same Postgres, same lock as Laravel's lockForUpdate().
-import { and, count, eq, sql } from "drizzle-orm";
+// loser of a race for the last seat re-reads the count after the winner commits and joins
+// the waitlist. Same Postgres, same lock as Laravel's lockForUpdate().
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { RSVP_RATE_LIMIT, RSVP_STATUSES, type RsvpWriteStatus } from "../islands/contracts";
 import { enqueueEventSync } from "./sync";
+import { goingCount, promoteWaitlist, waitlistPosition } from "./waitlist";
 import type { Env } from "../env";
 import type { EventStatus } from "../admin/validation";
 
 export const isRsvpStatus = (v: unknown): v is RsvpWriteStatus => (RSVP_STATUSES as readonly unknown[]).includes(v);
 
-export type RsvpAnswer = { status: RsvpWriteStatus; syncedToDiscordAt: Date | null };
+export type RsvpAnswer = { status: RsvpWriteStatus; syncedToDiscordAt: Date | null; waitlistPosition: number | null };
 export type RsvpWriteResult =
   | { ok: true; created: boolean; answer: RsvpAnswer; mirrored: EventStatus | null; eventKey: string }
   | { ok: false; reason: "not_found" }
   | { ok: false; reason: "closed"; why: "draft" | "cancelled" | "past" | "paused" }
-  | { ok: false; reason: "at_capacity"; capacity: number }
   | { ok: false; reason: "limited"; retryAfter: number };
 
 /** Draft/cancelled/past events and paused ones take no new answers (RsvpPolicy + TOG-8725). */
@@ -51,26 +51,42 @@ export async function writeRsvp(db: Db, eventKey: string, userId: string, status
     const now = clock();
     const why = closedWhy(ev, now);
     if (why) return { ok: false, reason: "closed", why } as const;
-    // Only an answer that newly takes a seat has to fit.
+    // Only an answer that newly takes a seat has to fit. Full events accept a place
+    // in line instead; an existing waiter re-answering keeps both FIFO keys.
     const takesASeat = status === "going" && existing?.status !== "going";
-    if (takesASeat && ev.capacity !== null) {
-      const [tally] = await tx.select({ n: count() }).from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.status, "going")));
-      if (Number(tally?.n ?? 0) >= ev.capacity) return { ok: false, reason: "at_capacity", capacity: ev.capacity } as const;
+    let settledStatus = status;
+    if (takesASeat && ev.capacity !== null && await goingCount(tx, ev.id) >= ev.capacity) {
+      settledStatus = "waitlisted";
     }
-    // Budget is charged only for a write that is accepted: policy and capacity are decided
-    // above under the row lock, the hit and the write commit together below.
+    const releasesASeat = existing?.status === "going" && settledStatus !== "going";
+    // Budget is charged only for an accepted write, including a waitlist answer.
+    // Policy, the hit and the write share the same transaction and event lock.
     const verdict = await chargeThrottle(tx, userId);
     if (verdict.limited) return { ok: false, reason: "limited", retryAfter: verdict.retryAfter } as const;
+    // Joining from an older non-waitlisted answer is a new place, not its old priority.
+    // Recreate both FIFO keys so even equal timestamps cannot jump existing waiters.
+    if (settledStatus === "waitlisted" && existing && existing.status !== "waitlisted") {
+      await tx.delete(rsvps).where(eq(rsvps.id, existing.id));
+    }
     // Any change makes the Discord mirror stale again.
-    const [row] = await tx
+    let [row] = await tx
       .insert(rsvps)
-      .values({ eventId: ev.id, userId, status, syncedToDiscordAt: null })
-      .onConflictDoUpdate({ target: [rsvps.eventId, rsvps.userId], set: { status, syncedToDiscordAt: null, updatedAt: now } })
+      .values({ eventId: ev.id, userId, status: settledStatus, syncedToDiscordAt: null })
+      .onConflictDoUpdate({ target: [rsvps.eventId, rsvps.userId], set: { status: settledStatus, syncedToDiscordAt: null, updatedAt: now } })
       .returning();
+    if (releasesASeat) {
+      await promoteWaitlist(tx, ev, clock);
+      // A former holder who is the only waiter can itself be promoted.
+      [row] = await tx.select().from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)));
+    }
     return {
       ok: true,
       created: !existing,
-      answer: { status: row!.status as RsvpWriteStatus, syncedToDiscordAt: row!.syncedToDiscordAt },
+      answer: {
+        status: row!.status as RsvpWriteStatus,
+        syncedToDiscordAt: row!.syncedToDiscordAt,
+        waitlistPosition: row!.status === "waitlisted" ? await waitlistPosition(tx, ev.id, userId) : null,
+      },
       mirrored: "published",
       eventKey: ev.eventKey,
     } as const;
@@ -98,6 +114,7 @@ export async function withdrawRsvp(db: Db, eventKey: string, userId: string): Pr
     const verdict = await chargeThrottle(tx, userId);
     if (verdict.limited) return { limited: true, retryAfter: verdict.retryAfter } as const;
     const gone = await tx.delete(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId))).returning({ id: rsvps.id });
+    if (gone.length > 0) await promoteWaitlist(tx, ev);
     const mirrorable = ev.status === "published" || ev.status === "cancelled";
     return { limited: false, deleted: gone.length > 0, status: gone.length > 0 && mirrorable ? (ev.status as EventStatus) : null } as const;
   });

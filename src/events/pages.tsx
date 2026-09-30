@@ -512,9 +512,9 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> = ({ e, appUrl, jsonLd }) => (
+export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; waitlistPosition?: number | null }> = ({ e, appUrl, jsonLd, waitlistPosition }) => (
   <Shell title={e.title} canonical={`${appUrl}/e/${e.eventKey}`} description={e.description}>
-    <h1>{e.title}</h1>
+    <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
     <p>
       <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
     </p>
