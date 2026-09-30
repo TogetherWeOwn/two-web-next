@@ -199,8 +199,9 @@ describe("RsvpButton shipped binder", () => {
   it("ignores a stale success body that resolves after a newer response", async () => {
     const b = browser(); let resolveBody!: (body: unknown) => void;
     b.get("rsvp-going")!.click();
-    const response = new Response("{}", { status: 201 });
-    response.json = () => new Promise((resolve) => { resolveBody = resolve; });
+    const response = { ok: true, status: 201,
+      json: () => new Promise<unknown>((resolve) => { resolveBody = resolve; }),
+    } as unknown as Response;
     b.requests[0]!.resolve(response); await b.settle();
     b.get("waitlist-join")!.click(); b.finish(1, 200); await b.settle();
     resolveBody({ data: { status: "going", synced_to_discord_at: null } }); await b.settle();
