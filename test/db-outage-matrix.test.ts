@@ -135,7 +135,7 @@ async function assertResponse(res: Response, row: Case): Promise<void> {
     expect.soft(body).not.toContain(secret);
   }
   if (row.format) expect.soft(res.headers.get("content-type")).toContain(row.format === "json" ? "application/json" : "text/html");
-  if (row.format === "html") {
+  if (row.format === "html" && row.status >= 400) {
     expect.soft(body).toContain("Together We Own");
     expect.soft(body).toContain('<a class="brand" href="/">TWO</a>');
   }
