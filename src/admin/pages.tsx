@@ -5,6 +5,7 @@
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
+import { SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 
@@ -15,27 +16,16 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title} — TWO admin</title>
       <link rel="stylesheet" href="/styles.css" />
-      <style>{`
-        .admin-table { width: 100%; border-collapse: collapse; }
-        .admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
-        .field { margin: 1rem 0; }
-        .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
-        .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
-        .field .hint { color: #6b6257; font-size: .85rem; }
-        .field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
-        .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
-        .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
-        .filters .field { margin: 0; }
-      `}</style>
     </head>
     <body>
+      <SkipLink />
       <header class="bar">
         <a class="brand" href="/admin">TWO admin</a>
-        <nav>
+        <nav aria-label="Administration">
           <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
         </nav>
       </header>
-      <main>{children}</main>
+      <main id="main" tabindex={-1}>{children}</main>
       <footer>Together We Own · moderators only</footer>
     </body>
   </html>
@@ -180,7 +170,7 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           ) : (
             rows.map((r) => (
               <tr key={r.id}>
-                <td>{r.outcome}</td>
+                <td><a href={`/admin/join-attempts/${r.id}`} aria-label={`View join attempt ${r.id}: ${r.outcome}`}>{r.outcome}</a></td>
                 <td>{r.source ?? ""}</td>
                 <td>{r.discordId ?? ""}</td>
                 <td>{r.requestId ?? ""}</td>
@@ -190,6 +180,27 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           )}
         </tbody>
       </table>
+    </section>
+  </Shell>
+);
+
+export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
+  <Shell title={`Join attempt ${row.id}`}>
+    <section>
+      <p><a href="/admin/join-attempts">Back to join attempts</a></p>
+      <h1>Join attempt {row.id}</h1>
+      <p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
+      <h2>Outcome</h2>
+      <dl>
+        <dt>Outcome</dt><dd>{row.outcome}</dd>
+        <dt>Source</dt><dd>{row.source ?? "—"}</dd>
+        <dt>Attempted at (UTC)</dt><dd><time datetime={row.createdAt.toISOString()}>{row.createdAt.toISOString()}</time></dd>
+      </dl>
+      <h2>Trace</h2>
+      <dl>
+        <dt>Request ID</dt><dd>{row.requestId ?? "—"}</dd>
+        <dt>Discord ID</dt><dd>{row.discordId ?? "—"}</dd>
+      </dl>
     </section>
   </Shell>
 );

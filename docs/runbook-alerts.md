@@ -1,5 +1,10 @@
 # Runbook: log-line alerts
 
+For deploy/rollback, `/up` interpretation, queue containment/replay limits,
+Neon/Hyperdrive outages, restore drills and escalation, start with the
+[operations runbook](runbook.md). In particular, `queue.failing` is terminal
+failure evidence, not proof of a successful drain or a replayable dead-letter queue.
+
 The Worker has no mail, Slack or Discord webhook alerting. The platform log
 stream is the pager (ports two-web's `bin/error-log-watch.sh`). Two event
 types are written as ONE single-line JSON object on `console.error`, with

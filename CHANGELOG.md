@@ -12,6 +12,7 @@
 
 - Record each materialized occurrence's creation audit in the same transaction as its event row; retries do not duplicate audit entries.
 - Align removed-diagnostic route tests with the global same-origin guard: trusted POSTs reach 404 routing while unsafe requests without trusted origin evidence remain 403.
+- Keep the accessibility route inventory current after diagnostic removal and the new admin join-attempt detail page, with local success and not-found shell coverage.
 - Join landing links preserve safe return paths and reject whitespace in return destinations; recovery pages share the validated Discord invite fallback and the widget sends no referrer.
 - Refuse admin member-data responses when the access-log INSERT fails; replace Hono's finalized response rather than returning an ignored 503.
 - Isolate member-data test cleanup and failure DDL in disposable test-service schemas; include directly mounted GET and ALL routes in the exposure inventory.
