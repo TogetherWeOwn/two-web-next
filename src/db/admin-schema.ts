@@ -36,6 +36,8 @@ export const events = pgTable(
     capacity: integer("capacity"),
     status: text("status").notNull().default("draft"),
     discordEventId: text("discord_event_id").unique(),
+    discordSyncFailedAt: timestamp("discord_sync_failed_at", { withTimezone: true }),
+    discordSyncFailureCode: text("discord_sync_failure_code"),
     createdBy: text("created_by"),
     // Pause flag (TOG-8725): a published event stays visible while taking no
     // new answers. Default true so every row written by a caller that does
