@@ -106,9 +106,10 @@
   var url = "/events/" + encodeURIComponent(eventKey) + "/rsvp";
 
   var inflight = null;
+  var inflightButton = null;
 
   function clearOutcome() {
-    [TESTID.rateLimited, TESTID.failed, TESTID.sessionExpired, TESTID.full, TESTID.closed, TESTID.syncing, TESTID.synced, TESTID.syncFailed].forEach(function (t) {
+    [TESTID.rateLimited, TESTID.failed, TESTID.sessionExpired, TESTID.closed, TESTID.syncing, TESTID.synced, TESTID.syncFailed].forEach(function (t) {
       var n = root.querySelector('[data-testid="' + t + '"]');
       if (n && n.parentNode) n.parentNode.removeChild(n);
       else if (n && n.remove) n.remove();
@@ -284,7 +285,7 @@
       root.appendChild(pos);
     }
     pos.textContent = waitlistPositionCopy(position === undefined ? null : position);
-    if (!root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]')) {
+    if (root.getAttribute("data-full") !== "true" && root.getAttribute("data-paused") !== "true" && !root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]')) {
       var claim = document.createElement("button");
       claim.setAttribute("type", "button");
       claim.setAttribute("data-testid", TESTID.waitlistClaim);
@@ -310,39 +311,31 @@
   }
 
   function paintWithdrawn() {
+    var wasGoing = !!root.querySelector('[data-testid="' + TESTID.confirmed + '"]');
     var conf = root.querySelector(
       '[data-testid="' + TESTID.confirmed + '"],[data-testid="' + TESTID.waitlistPosition + '"]'
     );
-    // Withdraw/leave drops every answered-state control (claim, leave,
-    // withdraw, full, sync notes); the join controls are restored below.
-    [TESTID.waitlistClaim, TESTID.waitlistLeave, TESTID.withdraw, TESTID.full, TESTID.syncing, TESTID.synced, TESTID.syncFailed].forEach(function (t) {
+    [TESTID.waitlistClaim, TESTID.waitlistLeave, TESTID.withdraw, TESTID.syncing, TESTID.synced, TESTID.syncFailed].forEach(function (t) {
       var n = root.querySelector('[data-testid="' + t + '"]');
       if (n && n.parentNode) n.parentNode.removeChild(n);
-      else if (n && n.remove) n.remove();
     });
-    if (conf && conf.parentNode) {
-      var join = document.createElement("button");
-      join.setAttribute("type", "button");
-      join.setAttribute("data-testid", TESTID.going);
-      join.setAttribute("data-action", "going");
-      join.textContent = COPY.cta;
-      conf.parentNode.replaceChild(join, conf);
-      join.addEventListener("click", function (ev) {
-        onAction("going", join, ev);
-      });
+    // A going withdrawal frees a seat; leaving the line does not. Neither
+    // may reopen a paused event. The server remains the capacity authority.
+    if (wasGoing) root.setAttribute("data-full", "false");
+    if (root.getAttribute("data-paused") === "true") {
+      if (conf && conf.parentNode) conf.parentNode.removeChild(conf);
+      return;
     }
-    // Restore the waitlist join alongside going so both answers stay reachable.
-    if (!root.querySelector('[data-testid="' + TESTID.waitlistJoin + '"]')) {
-      var wl = document.createElement("button");
-      wl.setAttribute("type", "button");
-      wl.setAttribute("data-testid", TESTID.waitlistJoin);
-      wl.setAttribute("data-action", "waitlisted");
-      wl.textContent = COPY.waitlistJoin;
-      root.appendChild(wl);
-      wl.addEventListener("click", function (ev) {
-        onAction("waitlisted", wl, ev);
-      });
-    }
+    var full = root.getAttribute("data-full") === "true";
+    var action = full ? "waitlisted" : "going";
+    var join = document.createElement("button");
+    join.setAttribute("type", "button");
+    join.setAttribute("data-testid", full ? TESTID.waitlistJoin : TESTID.going);
+    join.setAttribute("data-action", action);
+    join.textContent = full ? COPY.waitlistJoin : COPY.cta;
+    if (conf && conf.parentNode) conf.parentNode.replaceChild(join, conf);
+    else root.appendChild(join);
+    join.addEventListener("click", function (ev) { onAction(action, join, ev); });
     focusTestid([TESTID.going, TESTID.waitlistJoin]);
   }
 
@@ -388,9 +381,13 @@
       return;
     }
     clearOutcome();
-    if (inflight) inflight.abort();
+    if (inflight) {
+      inflight.abort();
+      setBusy(false, inflightButton);
+    }
     var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     inflight = controller;
+    inflightButton = button;
     var isWithdraw = action === "withdraw";
     var method = isWithdraw ? "DELETE" : "PUT";
     setBusy(true, button, isWithdraw ? COPY.removing : COPY.saving);
@@ -534,7 +531,10 @@
       }
     ).finally(function () {
       // Keep ownership through body parsing; header arrival is not completion.
-      if (inflight === controller) inflight = null;
+      if (inflight === controller) {
+        inflight = null;
+        inflightButton = null;
+      }
     });
   }
 

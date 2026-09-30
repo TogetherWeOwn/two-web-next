@@ -40,12 +40,17 @@ function node(testid: string, text: string, action?: string) {
   if (action) n.setAttribute("data-action", action);
   return n;
 }
-function browser(state: "open" | "going" | "waitlisted" | "closed" = "open") {
+function browser(state: "open" | "going" | "waitlisted" | "closed" | "full" = "open") {
   const root = new Node();
   root.setAttribute("data-event-key", "raid/one");
   root.setAttribute("data-login-url", "/auth/discord?next=%2Fe%2Fraid%2Fone");
   root.setAttribute("data-capacity", "4");
-  if (state === "open") {
+  root.setAttribute("data-full", state === "full" ? "true" : "false");
+  root.setAttribute("data-paused", "false");
+  if (state === "full") {
+    root.appendChild(node("event-full", "This one's full. Cap is 4."));
+    root.appendChild(node("waitlist-join", "Join the waitlist", "waitlisted"));
+  } else if (state === "open") {
     root.appendChild(node("rsvp-going", "I'm in", "going"));
     root.appendChild(node("waitlist-join", "Join the waitlist", "waitlisted"));
   } else if (state === "going") {
@@ -168,6 +173,39 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-failed")?.textContent).toBe("That RSVP didn't save. Try once more.");
     expect(b.get("rsvp-failed")?.focused).toBe(false); expect(button.disabled).toBe(false);
     expect(b.root.getAttribute("aria-busy")).toBeNull(); expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it("keeps full copy and does not offer a seat claim after joining a full waitlist", async () => {
+    const b = browser("full"); b.get("waitlist-join")!.click(); b.finish(0, 201); await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("waitlist-claim")).toBeNull(); expect(b.get("waitlist-leave")).not.toBeNull();
+  });
+
+  it("a paused holder can leave without reopening joins or claims", async () => {
+    const b = browser("waitlisted"); b.root.setAttribute("data-paused", "true");
+    b.get("waitlist-leave")!.click(); b.finish(0, 204); await b.settle();
+    expect(b.root.querySelectorAll("[data-action]")).toHaveLength(0);
+    expect(b.get("waitlist-position")).toBeNull();
+  });
+
+  it("superseding with a different action restores the first control even if abort is ignored", async () => {
+    const b = browser(); const going = b.get("rsvp-going")!;
+    going.click(); b.get("waitlist-join")!.click();
+    expect(going.disabled).toBe(false); expect(going.textContent).toBe("I'm in");
+    b.finish(1, 500); await b.settle(); b.finish(0, 201); await b.settle();
+    expect(going.disabled).toBe(false); expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it("ignores a stale success body that resolves after a newer response", async () => {
+    const b = browser(); let resolveBody!: (body: unknown) => void;
+    b.get("rsvp-going")!.click();
+    const response = new Response("{}", { status: 201 });
+    response.json = () => new Promise((resolve) => { resolveBody = resolve; });
+    b.requests[0]!.resolve(response); await b.settle();
+    b.get("waitlist-join")!.click(); b.finish(1, 200); await b.settle();
+    resolveBody({ data: { status: "going", synced_to_discord_at: null } }); await b.settle();
+    expect(b.get("rsvp-confirmed")).toBeNull(); expect(b.get("waitlist-position")).not.toBeNull();
+    expect(b.broadcasts).toHaveLength(1);
   });
 
   it("closed SSR has no click action or load-time request", () => {
