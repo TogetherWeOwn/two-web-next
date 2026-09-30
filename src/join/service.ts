@@ -51,7 +51,7 @@ export function sanitizeSource(raw: unknown): string | null {
  * Hostile values leave no trace and the callback keeps the default landing.
  */
 export function safeNext(raw: unknown): string | null {
-  if (typeof raw !== "string" || raw === "") return null;
+  if (typeof raw !== "string" || raw === "" || /\s/.test(raw)) return null;
   if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return null;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
   try {

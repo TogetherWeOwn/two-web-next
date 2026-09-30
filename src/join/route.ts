@@ -16,6 +16,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { authorizeUrl, exchangeCode, fetchUser } from "../discord";
 import type { Env } from "../env";
+import { inviteDestination } from "../invite";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
 import type { SessionStore, Sql } from "../sessions";
 import {
@@ -101,7 +102,7 @@ export type JoinSessionHooks = {
   ) => Promise<void>;
 };
 
-export type JoinPageProps = { inviteUrl: string; widgetUrl: string | null };
+export type JoinPageProps = { inviteUrl: string; widgetUrl: string | null; next?: string | null };
 export type RecoveryProps = {
   title: string;
   message: string;
@@ -127,7 +128,10 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
       typeof guildId === "string" && /^\d{10,25}$/.test(guildId)
         ? `https://discord.com/widget?id=${guildId}&theme=dark`
         : null;
-    return render.joinPage(c, { inviteUrl: c.env.DISCORD_INVITE_URL, widgetUrl });
+    // A safe `?next=` survives onto the one-click link; a hostile one leaves
+    // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
+    const next = safeNext(c.req.query("next"));
+    return render.joinPage(c, { inviteUrl: c.env.DISCORD_INVITE_URL, widgetUrl, next });
   });
 
   app.get("/join/discord", async (c) => {
@@ -167,7 +171,10 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
       deleteCookie(c, JOIN_SOURCE_COOKIE, { path: "/", secure: true });
       deleteCookie(c, JOIN_NEXT_COOKIE, { path: "/", secure: true });
     };
-    const invite = c.env.DISCORD_INVITE_URL;
+    // Sanitized like /discord: a bad DISCORD_INVITE_URL renders the
+    // hardcoded fallback, never a hostile or relative href (legacy
+    // JoinCallbackFailureTest "recovery uses static invite when none is configured").
+    const invite = inviteDestination(c.env.DISCORD_INVITE_URL);
     const recover = (title: string, message: string, status: 200 | 503 = 200) =>
       render.recovery(c, { title, message, retryUrl: "/join/discord", retryLabel: "Try again", inviteUrl: invite }, status);
 
