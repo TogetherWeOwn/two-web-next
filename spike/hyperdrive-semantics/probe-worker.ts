@@ -3,7 +3,10 @@
 import { Hono } from "hono";
 import postgres from "postgres";
 
-type Env = { DB?: { connectionString: string } };
+// Local binding arrives as a plain `vars` string (see wrangler.probe.jsonc:
+// a Hyperdrive binding cannot express the passwordless test container).
+// The `DB` Hyperdrive shape stays as a fallback for direct injection.
+type Env = { TEST_DB_CONNECTION_STRING?: string; DB?: { connectionString: string } };
 type Check = { name: string; pass: boolean; detail: string };
 
 export function isTestDatabase(connectionString: string): boolean {
@@ -21,7 +24,7 @@ export function isTestDatabase(connectionString: string): boolean {
 const app = new Hono<{ Bindings: Env }>();
 
 app.post("/spike-run", async (c) => {
-  const cs = c.env.DB?.connectionString;
+  const cs = c.env.TEST_DB_CONNECTION_STRING ?? c.env.DB?.connectionString;
   // Reject before opening a connection or executing any SQL. Do not print URLs.
   if (!cs || !isTestDatabase(cs)) return c.json({ ok: false, error: "test_database_required" }, 400);
   if (new URL(c.req.url).search) return c.json({ ok: false, error: "query_options_not_supported" }, 400);

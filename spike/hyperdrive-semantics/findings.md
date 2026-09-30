@@ -1,4 +1,4 @@
-# TOG-9680 findings (updated 2026-09-30)
+# TOG-9680 findings (updated 2026-09-30, review-fix leg)
 
 ## Evidence boundary
 
@@ -13,22 +13,28 @@ a complete three-check report or exact Neon branch identity in the supplied
 history. It is not sufficient to certify the original acceptance. Exact Neon
 branch: **not verified**.
 
-## Current heartbeat verification (2026-09-30, board-resume re-verified)
+## Current heartbeat verification (2026-09-30, review-fix leg)
 
-- `vitest run test/hyperdrive-probe.test.ts`: **17/17 PASS** (DB driver mocked).
-  Includes target refusal, fixed driver connection options, and generic error
-  responses; it does not cover successful Worker SQL execution.
+- `npm test` (full repo suite): **192 passed / 41 skipped, 17 files PASS**, 2
+  files skipped. Includes `test/hyperdrive-probe.test.ts` 17/17 (DB mocked)
+  and new `test/worker-runner.test.ts` 7/7 (offline config-boundary +
+  startup-bound regressions).
 - `tsc --noEmit`: **PASS**.
 - `python3 -B spike/hyperdrive-semantics/checks.py`: **3/3 PASS** against
-  agent-testdb, PostgreSQL **17.11**. The second writer now retries under the
-  event lock and executes the capacity-refusal decision; advisory keys are
-  holder-specific and SQL/lock waits are bounded. Schema teardown completed.
-- `bash spike/hyperdrive-semantics/worker-checks.sh`: **FAIL** with Wrangler
-  **4.143.1**, Node **24.21.0**. The DB-free `GET /` readiness request timed out
-  after 3 seconds, before `POST /spike-run` was submitted. No Worker SQL result
-  was obtained. The runner stopped its local Worker in `finally`. Cause of the
-  readiness timeout is not established; it is not a Neon/Hyperdrive failure.
-- Runner syntax checks and `git diff --check`: **PASS**.
+  agent-testdb, PostgreSQL **17.11** (re-verified this leg). The second writer
+  retries under the event lock and executes the capacity-refusal decision;
+  advisory keys are holder-specific and SQL/lock waits are bounded. Schema
+  teardown completed.
+- `bash spike/hyperdrive-semantics/worker-checks.sh`: **NOT RERUN** this leg
+  (prior FAIL stands: DB-free `GET /` readiness timed out with Wrangler
+  **4.143.1**, Node **24.21.0**, before `POST /spike-run`; cause not
+  established, not a Neon/Hyperdrive failure). The runner was reworked since:
+  `unstable_dev` startup is now under a 180 s budget (exit 2) via
+  `runWithWorker`, and the shell wrapper owns the process group with a 600 s
+  TERM/KILL expiry. Startup-bound behavior was verified offline (never-ready
+  startup -> exit 2 in ~300 ms at 300 ms budget; group teardown of a hung
+  child confirmed). No live Worker SQL result obtained; no staging/prod probe.
+- Runner syntax (`node --check`, `bash -n`) and `git diff --check`: **PASS**.
 
 Safety hardening pins the local driver's host, port, database and user; uses an
 explicit empty-password callback (postgres.js otherwise inherits PGPASSWORD);
@@ -37,18 +43,51 @@ libpq PG settings and disables password-file lookup. libpq warns that
 `/dev/null` is not a plain password file; the test completed successfully without
 reading a credential file or substituting credentials.
 
-The full repository test suite was deliberately **not run**: its E2E suite can
-consume an ambient DATABASE_URL and mutate that target. Only the selected mocked
-suite and the test-container-only control were executed.
+## Review-fix leg: [TOG-10342](/TOG/issues/TOG-10342) CHANGES addressed (2026-09-30)
+
+Reviewer verdict on `53984c8`: CHANGES with two findings. Both fixed on the
+same branch; PR #44 left open, not merged.
+
+- **P1** (`wrangler.probe.jsonc`): removed the `hyperdrive` binding with its
+  passwordless `localConnectionString` (deterministically rejected by
+  Miniflare's `HyperdriveSchema`/`V4WorkerOptionsSchema` — reproduced before
+  the fix). The Worker now receives the same pinned test-container target as a
+  plain `vars` string (`TEST_DB_CONNECTION_STRING`), which wrangler's file
+  validator accepts and which Miniflare passes through without a password
+  gate. No credential introduced or substituted. `probe-worker.ts` reads
+  `TEST_DB_CONNECTION_STRING` first, `DB.connectionString` as fallback; the
+  `isTestDatabase` refusal gate is unchanged. `worker-probe.md` realigned to
+  the vars path.
+- **P2** (`worker-checks.mjs`): startup (`unstable_dev`) moved inside a 180 s
+  wall-clock budget in new `spike/hyperdrive-semantics/runner.ts`
+  (`runWithWorker`/`withStartupTimeout`); never-ready startup exits 2 without
+  reaching readiness/cleanup, check failure exits 1 after `worker.stop()`,
+  success exits 0 after `worker.stop()`. The shell wrapper owns the runner's
+  process group (`set -m`) with a 600 s TERM/KILL expiry — the mechanism that
+  actually terminates a hung startup, since a `Promise.race` alone cannot.
+- **Offline regressions** (`test/worker-runner.test.ts`, 7 tests, no
+  Worker/DB/network): config uses `vars` not `hyperdrive`, pins the exact
+  test-container URL with empty password, passes the real boundary validators
+  (wrangler `validateVars` semantics + live `HyperdriveSchema` negative
+  control), and the runner settles exit 2 on never-ready startup with `stop()`
+  verified on success and check failure.
+- Verified this leg: full `npm test` 192 pass / 41 skip; `tsc --noEmit` PASS;
+  direct-Postgres control 3/3 PASS (PG 17.11); `node --check` + `bash -n` +
+  `git diff --check` PASS; process-group teardown of a hung child confirmed.
+  Live Worker leg NOT RERUN (prior pre-SQL readiness FAIL stands; cause
+  unknown, not a Neon failure). Hyperdrive→Neon (a)/(b)/(c) remain NOT
+  VERIFIED; no Neon branch invented; no staging/prod probes; no CI polling.
+
+The full repository test suite was run this leg (`npm test`: 192 passed,
+41 skipped) after confirming no ambient `DATABASE_URL` mutation risk in the
+selected suites; the E2E skips are the suite's own. Python/Node runners strip
+ambient `PG*` settings and pin test-container-only targets.
 
 GitHub company-bot connection attention is pending interaction
-`93c6fbe0-09ca-46cd-bcd6-5cf73f622635`. No commit/push/PR was performed in this
-heartbeat while awaiting that connection; the source patch and this report are
-registered as artifact checkpoints. Source changes are not merged or delivered.
-On resumption: resolve the permitted evidence standard and connection first,
-then repair local Worker readiness, checkpoint/push on the existing execution
-branch, and obtain one exact-head Code Reviewer pass after green CI. No CI was
-polled in this heartbeat.
+`93c6fbe0-09ca-46cd-bcd6-5cf73f622635`. Source changes are not merged or
+delivered. Next: commit/push this branch, then reopen [TOG-10342](/TOG/issues/TOG-10342)
+for the same-card exact-head re-check after green CI (reviewer squash-merges
+on approval). No CI was polled in this heartbeat.
 
 ## Historical control leg: direct Postgres — 3/3 PASS (2026-09-29)
 

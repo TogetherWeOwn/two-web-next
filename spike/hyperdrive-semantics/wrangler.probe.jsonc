@@ -1,5 +1,8 @@
-// Local control leg only. No real Hyperdrive id and no deployed routes.
-// Remote dev/deploy is prohibited. This does not exercise Hyperdrive pooling.
+// Local control leg only. No Hyperdrive binding: Miniflare's HyperdriveSchema
+// requires a password, which the passwordless agent-testdb container cannot
+// satisfy (and no credential may be introduced). The Worker receives the same
+// pinned test-container target as a plain `vars` string instead. Remote
+// dev/deploy is prohibited. This does not exercise Hyperdrive pooling.
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "two-web-next-w1-local-control",
@@ -8,9 +11,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "routes": [],
-  "hyperdrive": [{
-    "binding": "DB",
-    "id": "00000000000000000000000000000000",
-    "localConnectionString": "postgres://agent_test@agent-testdb:5432/agent_test"
-  }]
+  "vars": {
+    "TEST_DB_CONNECTION_STRING": "postgres://agent_test@agent-testdb:5432/agent_test"
+  }
 }
