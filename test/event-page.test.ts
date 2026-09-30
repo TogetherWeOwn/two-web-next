@@ -71,7 +71,7 @@ describe("Event page parity (fixture-only)", () => {
     expect(html).not.toMatch(/data-testid="event-(?:draft|past|cancelled)"|name="robots"/);
     // The global preview-host middleware additionally suppresses indexing here.
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-    const scripts = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/gi)];
+    const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)];
     expect(scripts.every(([, attrs, body]) => attrs!.includes('type="application/ld+json"') || (attrs!.includes('src="') && body === ""))).toBe(true);
     expect(html).not.toMatch(/\son(?:click|keydown)=/);
   });
