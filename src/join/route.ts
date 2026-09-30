@@ -102,7 +102,7 @@ export type JoinSessionHooks = {
   ) => Promise<void>;
 };
 
-export type JoinPageProps = { inviteUrl: string; widgetUrl: string | null; next?: string | null };
+export type JoinPageProps = { inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string };
 export type RecoveryProps = {
   title: string;
   message: string;
@@ -131,7 +131,7 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     // A safe `?next=` survives onto the one-click link; a hostile one leaves
     // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
     const next = safeNext(c.req.query("next"));
-    return render.joinPage(c, { inviteUrl: c.env.DISCORD_INVITE_URL, widgetUrl, next });
+    return render.joinPage(c, { inviteUrl: c.env.DISCORD_INVITE_URL, widgetUrl, next, appUrl: c.env.APP_URL });
   });
 
   app.get("/join/discord", async (c) => {
