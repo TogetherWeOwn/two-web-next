@@ -18,7 +18,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 
 | Legacy route | Next status | Card |
 |---|---|---|
-| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; live counts + featured + upcoming land with data slices | W4 ✅ + W8 📋 (verify: featured rows, upcoming) |
+| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; live counts + rank reads implemented (pending merge); featured + upcoming remain data slices | W4 ✅ + [TOG-10818](/TOG/issues/TOG-10818) (counts/ranks) + W8 📋 (verify: featured rows, upcoming) |
 | `GET /sitemap_index.xml` (home 1.0, join 0.9, events.index 0.8, about/faq/rules/privacy 0.7, published `/e/{key}` 0.6) | ✅ static entries; join + `/e/{key}` rows pending | W4 ✅ + W8 📋 |
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
@@ -154,7 +154,7 @@ go hunting for them.
 | RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |
 | MemberStatsSource / Profiles support (rank, stats, milestones) | pending | W7 📋 |
 | Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell; live data pending | W4 ✅ + W6 🔶 (widget) + W8 📋 (upcoming) |
-| Counts (never-throw degraded empty state) | ✅ seam (`readCounts` → UNAVAILABLE) | W4 ✅ + W8 📋 (wire bot views) |
+| Counts (never-throw degraded empty state) | live/rank view reads + 60 s isolate cache implemented (pending merge); stale numerals hidden per card; [contract](web-v1-contract.md) | W4 ✅ + [TOG-10818](/TOG/issues/TOG-10818) |
 
 ## 12. SEO, shell, content, sessions
 

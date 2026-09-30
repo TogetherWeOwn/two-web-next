@@ -9,8 +9,14 @@ export async function createWebV1Fixture(raw: string) {
   const url = testDatabaseUrl(raw); // Refuse before constructing a client or DDL.
   const pool = postgres(url.href, {
     max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {},
+    connection: { lock_timeout: 2_000, statement_timeout: 5_000 },
   });
-  const sql = await pool.reserve();
+  let sql: postgres.ReservedSql;
+  try { sql = await pool.reserve(); }
+  catch (error) {
+    await pool.end({ timeout: 1 });
+    throw error;
+  }
   let disposed = false;
   const dispose = async () => {
     if (disposed) return;
