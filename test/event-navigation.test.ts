@@ -110,9 +110,37 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(html).toContain("20:00");
     expect(html).toContain("Voice");
     expect(html).toContain(`href="/join?next=%2Fe%2F${key(2)}" data-testid="event-related-join"`);
-    expect(response.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("vary")).toBe("Cookie");
     expect(f.queries).toHaveLength(5); // Event + going aggregate + 3 navigation reads.
+  });
+
+  it.each(["published", "draft", "past"] as const)("preserves %s page states, sharing and landmarks alongside navigation", async (status) => {
+    const f = pageFixture(row(2, { status }));
+    f.env.APP_URL += "/";
+    const response = await f.request({ headers: { cookie: await cookie(f.env, true) } });
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain(`href="/e/${key(1)}" rel="prev" data-testid="event-previous"`);
+    expect(relatedKeys(html)).toEqual([key(3)]);
+    expect(html).toContain('href="#main"');
+    expect(html).toContain('<main id="main" tabindex="-1">');
+    expect(html).toContain('<nav aria-label="Primary">');
+    expect(html.match(/<h1>/g)).toHaveLength(1);
+    expect(html).toContain('data-testid="event-venue">Voice');
+    expect(html).toContain(`rel="canonical" href="https://next.example.test/e/${key(2)}"`);
+    expect(html).toContain(`data-copy-link="https://next.example.test/e/${key(2)}"`);
+    expect(html).toContain('property="og:title" content="Game night 2 — Together We Own"');
+    expect(html).toContain('src="/islands/copy-link.js" defer');
+    expect(html).not.toContain('data-testid="event-join-pitch"');
+    expect(html).not.toContain('data-testid="event-related-join"');
+    if (status !== "published") {
+      expect(html).toContain(`data-testid="event-${status}"`);
+      expect(html).toContain('name="robots" content="noindex, nofollow"');
+    }
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    expect(f.queries).toHaveLength(5);
   });
 
   it.each([true, false])("hides the guest CTA for a signed-in viewer (member=%s) and disables shared caching", async (member) => {

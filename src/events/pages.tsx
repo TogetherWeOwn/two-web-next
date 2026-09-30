@@ -1,5 +1,6 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { Layout } from "../pages";
+import { canonicalUrl } from "../seo";
 import {
   CALENDAR_DAY_TESTID,
   CALENDAR_MONTH_STATUS_TESTID,
@@ -93,21 +94,22 @@ const fmt = (d: Date, tz: string): string => {
   }
 };
 
-const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: string; description?: string | null }>> = ({
+const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: string; description?: string | null; shareTitle?: string }>> = ({
   title,
   canonical,
   robots,
   description,
+  shareTitle,
   children,
 }) => (
-  <Layout title={`${title} — Together We Own`} canonical={canonical} shareTitle={title} shareDescription={description} robots={robots}>
+  <Layout title={`${title} — Together We Own`} canonical={canonical} shareTitle={shareTitle ?? title} shareDescription={description} robots={robots}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a href="/events">Events</a>
       </nav>
     </header>
-    <main>{children}</main>
+    <main id="main" tabindex={-1}>{children}</main>
   </Layout>
 );
 
@@ -516,70 +518,92 @@ export const EventPage: FC<{
   e: PublicEvent;
   neighbors: EventNeighbors;
   related: EventLink[];
-  signedIn: boolean;
   appUrl: string;
   jsonLd: string;
-}> = ({ e, neighbors, related, signedIn, appUrl, jsonLd }) => (
-  <Shell title={e.title} canonical={`${appUrl}/e/${e.eventKey}`} description={e.description}>
-    <h1>{e.title}</h1>
-    <p>
-      <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
-    </p>
-    {e.location ? <p>{e.location}</p> : null}
-    {e.description ? <p>{e.description}</p> : null}
-    <p data-testid="going-count" data-island="going-count" data-event-key={e.eventKey}>
-      {goingCountText(e.goingCount, e.capacity)}
-    </p>
-    <p>
-      <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">Add to calendar (.ics)</a>
-      {" · "}
-      <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
-    </p>
-    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
-    {neighbors.previous || neighbors.next ? (
-      <nav aria-label="More events" data-testid="event-pagination">
-        {neighbors.previous ? (
-          <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
-            ← Previous event: {neighbors.previous.title}
-          </a>
-        ) : null}{" "}
-        {neighbors.next ? (
-          <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
-            Next event: {neighbors.next.title} →
-          </a>
-        ) : null}
-      </nav>
-    ) : null}
-    {related.length > 0 ? (
-      <section aria-label="Related events" data-testid="event-related">
-        <h2>More events you might like</h2>
-        <ul>
-          {related.map((event) => (
-            <li>
-              <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
-                {event.title}{" · "}
-                <time datetime={event.startsAt.toISOString()}>{fmt(event.startsAt, event.timezone)}</time>
-                {event.location ? ` · ${event.location}` : ""}
-              </a>
-            </li>
-          ))}
-        </ul>
-        {!signedIn ? (
-          <>
-            <p>These fill up fast for members. Join the Discord and you&apos;ll hear about the next one before it lands here.</p>
-            <a class="btn" href={`/join?next=${encodeURIComponent(`/e/${e.eventKey}`)}`} data-testid="event-related-join">
-              Join the Discord
+  session?: Session | null;
+}> = ({ e, neighbors, related, appUrl, jsonLd, session }) => {
+  const path = `/e/${e.eventKey}`;
+  const canonical = canonicalUrl(appUrl, path);
+  return (
+    <Shell title={e.title} canonical={canonical} shareTitle={`${e.title} — Together We Own`}
+      description={e.description || "An event at Together We Own."}
+      robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}>
+      {e.status === "draft" ? <p class="notice" data-testid="event-draft">Draft</p> : null}
+      {e.status === "past" ? <p class="notice" data-testid="event-past">Past event</p> : null}
+      {e.status === "cancelled" ? <p class="notice" data-testid="event-cancelled">Cancelled</p> : null}
+      <h1>{e.title}</h1>
+      <p>
+        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
+      </p>
+      {e.location ? <p data-testid="event-venue">{e.location}</p> : null}
+      {e.description ? <p>{e.description}</p> : null}
+      <p data-testid="going-count" data-island="going-count" data-event-key={e.eventKey}>
+        {goingCountText(e.goingCount, e.capacity)}
+      </p>
+      {!session ? (
+        <section data-testid="event-join-pitch" aria-label="Join the community">
+          <p>Game nights get posted here first. Join the Discord and you&apos;ll see them before they land on this page.</p>
+          <a class="btn" data-testid="discord-join" href={`/join?next=${encodeURIComponent(path)}`}>Join the Discord</a>
+        </section>
+      ) : null}
+      <p>
+        <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">Add to calendar (.ics)</a>
+        {" · "}
+        <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
+        {" · "}
+        <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">Copy link</a>
+      </p>
+      <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      <script src="/islands/copy-link.js" defer />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+      {neighbors.previous || neighbors.next ? (
+        <nav aria-label="More events" data-testid="event-pagination">
+          {neighbors.previous ? (
+            <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
+              ← Previous event: {neighbors.previous.title}
             </a>
-          </>
-        ) : null}
-      </section>
-    ) : null}
-  </Shell>
-);
+          ) : null}{" "}
+          {neighbors.next ? (
+            <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
+              Next event: {neighbors.next.title} →
+            </a>
+          ) : null}
+        </nav>
+      ) : null}
+      {related.length > 0 ? (
+        <section aria-label="Related events" data-testid="event-related">
+          <h2>More events you might like</h2>
+          <ul>
+            {related.map((event) => (
+              <li>
+                <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
+                  {event.title}{" · "}
+                  <time datetime={event.startsAt.toISOString()}>{fmt(event.startsAt, event.timezone)}</time>
+                  {event.location ? ` · ${event.location}` : ""}
+                </a>
+              </li>
+            ))}
+          </ul>
+          {!session ? (
+            <>
+              <p>These fill up fast for members. Join the Discord and you&apos;ll hear about the next one before it lands here.</p>
+              <a class="btn" href={`/join?next=${encodeURIComponent(path)}`} data-testid="event-related-join">
+                Join the Discord
+              </a>
+            </>
+          ) : null}
+        </section>
+      ) : null}
+    </Shell>
+  );
+};
 
-export const EventGonePage: FC = () => (
-  <Shell title="Event cancelled" robots="noindex, nofollow">
-    <h1>This event was cancelled</h1>
+export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonLd }) => (
+  <Shell title={e.title} robots="noindex, nofollow">
+    <p class="notice" data-testid="event-cancelled">Cancelled</p>
+    <h1>{e.title}</h1>
+    <p>This event was cancelled</p>
     <p><a href="/events">See upcoming events</a></p>
+    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>
 );

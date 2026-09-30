@@ -1,10 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import type { Env } from "../src/env";
-import { dbPing, hyperdriveQuery, type QueryRunner, type SqlFactory } from "../src/db/ping";
 
 const env: Env = {
-  APP_URL: "https://next.example.test",
+  APP_URL: "https://togetherweown.com",
   DISCORD_CLIENT_ID: "client-id",
   DISCORD_GUILD_ID: "326474832151838730",
   DISCORD_INVITE_URL: "https://discord.gg/invite",
@@ -13,70 +12,47 @@ const env: Env = {
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
 };
 
-// Stub the `postgres` module boundary: production calls makeSql(url, opts)
-// per request (same shape as the W14 agent-events route), so the stub records
-// the connection string and plays back rows/failure.
-function stubMakeSql(rows: unknown[], opts?: { fail?: Error; seen?: string[]; ended?: { n: number } }): SqlFactory {
-  const seen = opts?.seen ?? [];
-  const ended = opts?.ended ?? { n: 0 };
-  return ((url: string, _options?: Record<string, unknown>) => {
-    seen.push(url);
-    return {
-      unsafe: async () => {
-        if (opts?.fail) throw opts.fail;
-        return rows;
-      },
-      end: async () => {
-        ended.n += 1;
-      },
-    };
-  }) as unknown as SqlFactory;
-}
+// In-process requests only: production host/config, but no live database or network.
+const removed = ["/db-ping", "/health", "/healthz"];
 
-describe("dbPing", () => {
-  it("returns version + now from one round-trip", async () => {
-    const run: QueryRunner = async () => ({ rows: [{ version: "PostgreSQL 17", now: "2026-09-29" }] });
-    await expect(dbPing(run)).resolves.toEqual({ ok: true, version: "PostgreSQL 17", now: "2026-09-29" });
+describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])("removed diagnostics on %s", (host) => {
+  it.each([false, true])("matches unknown paths with a configured DB: %s", async (configured) => {
+    const dbRead = vi.fn(() => { throw new Error("removed diagnostics must not read the DB binding"); });
+    const urlRead = vi.fn(() => { throw new Error("removed diagnostics must not read DATABASE_URL"); });
+    const bindings: Env = { ...env, APP_URL: host };
+    if (configured) {
+      Object.defineProperties(bindings, {
+        DB: { get: dbRead },
+        DATABASE_URL: { get: urlRead },
+      });
+    }
+    const headerCases = [
+      { name: "no origin evidence", headers: new Headers(), unsafeStatus: 403 },
+      { name: "bearer without origin evidence", headers: new Headers({ accept: "application/json", authorization: "Bearer fixture-probe" }), unsafeStatus: 403 },
+      { name: "same-origin Origin", headers: new Headers({ origin: host }), unsafeStatus: 404 },
+      { name: "cross-origin Origin", headers: new Headers({ origin: "https://other.example" }), unsafeStatus: 403 },
+      { name: "same-origin fetch metadata", headers: new Headers({ "sec-fetch-site": "same-origin" }), unsafeStatus: 404 },
+      { name: "cross-site fetch metadata", headers: new Headers({ "sec-fetch-site": "cross-site" }), unsafeStatus: 403 },
+    ];
+    for (const method of ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]) {
+      for (const { name, headers, unsafeStatus } of headerCases) {
+        const expectedStatus = ["GET", "HEAD", "OPTIONS"].includes(method) ? 404 : unsafeStatus;
+        const unknown = await app.request(`${host}/not-a-route`, { method, headers }, bindings);
+        const body = await unknown.text();
+        expect(unknown.status, `${method} unknown route: ${name}`).toBe(expectedStatus);
+        for (const path of removed) {
+          const response = await app.request(`${host}${path}`, { method, headers }, bindings);
+          expect(response.status, `${method} ${path}: ${name}`).toBe(expectedStatus);
+          expect(await response.text(), path).toBe(body);
+          expect([...response.headers], path).toEqual([...unknown.headers]);
+        }
+      }
+    }
+    expect(dbRead).not.toHaveBeenCalled();
+    expect(urlRead).not.toHaveBeenCalled();
   });
 
-  it("rejects an unexpected row shape", async () => {
-    const run: QueryRunner = async () => ({ rows: [{}] });
-    await expect(dbPing(run)).rejects.toThrow("unexpected row shape");
-  });
-
-  it("propagates driver errors", async () => {
-    const run: QueryRunner = async () => {
-      throw new Error("connection refused");
-    };
-    await expect(dbPing(run)).rejects.toThrow("connection refused");
-  });
-});
-
-describe("hyperdriveQuery", () => {
-  it("hands the connection string to the driver and ends the client", async () => {
-    const seen: string[] = [];
-    const ended = { n: 0 };
-    const run = hyperdriveQuery("postgres://hyperdrive-stub/db", stubMakeSql([{ one: 1 }], { seen, ended }));
-    await expect(run("SELECT 1")).resolves.toEqual({ rows: [{ one: 1 }] });
-    expect(seen).toEqual(["postgres://hyperdrive-stub/db"]);
-    expect(ended.n).toBe(1);
-  });
-
-  it("ends the client after failure", async () => {
-    const ended = { n: 0 };
-    const run = hyperdriveQuery(
-      "postgres://hyperdrive-stub/db",
-      stubMakeSql([], { fail: new Error("timeout"), ended }),
-    );
-    await expect(run("SELECT 1")).rejects.toThrow("timeout");
-    expect(ended.n).toBe(1);
-  });
-});
-
-describe("GET /db-ping", () => {
-  it("503s without a DB binding (prod-safe: no secrets in body)", async () => {
-    const res = await app.request("/db-ping", {}, env);
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ ok: false, error: "db_unavailable" });
+  it("does not register diagnostic routes for any method", () => {
+    expect(app.routes.filter((route) => removed.includes(route.path))).toEqual([]);
   });
 });

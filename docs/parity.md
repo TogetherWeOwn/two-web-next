@@ -25,7 +25,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`) | `/auth/discord*` live; `/join` path alias pending | W6 🔶 |
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count; prev/next + related implemented (review pending); RsvpButton pending | W8 ✅ (partial) + [TOG-10821](/TOG/issues/TOG-10821) |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; prev/next + related implemented (review pending); RsvpButton pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) + [TOG-10821](/TOG/issues/TOG-10821) |
 | `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
 | `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
 | `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
@@ -45,8 +45,9 @@ Related links prefer the same non-null game, then fill to three by `starts_at, i
 including ongoing events (`ends_at >= now`) and excluding the current event.
 Links are **published-only for every viewer**, per [TOG-10821](/TOG/issues/TOG-10821):
 this deliberately narrows legacy's moderator-draft and `past`-status eligibility.
-Guests get `/join?next=/e/{key}`; authenticated variants are private/no-store with
-`Vary: Cookie`. Three bounded link queries, no per-event RSVP reads.
+Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
+private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
+per-event RSVP reads.
 
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
@@ -55,8 +56,24 @@ Guests get `/join?next=/e/{key}`; authenticated variants are private/no-store wi
 | `GET /discord` (302 `no-store`, configured-or-fallback invite) | ✅ incl. hardcoded fallback | W4 ✅ |
 | `GET /about`, `GET /faq` (static, zero-query) | ✅ | W4 ✅ |
 | `GET /privacy` (versioned `content/privacy-policy-v1.md` from disk, no session/cache/DB) | ❌ missing — no card covered it | **N1** (new: `/privacy` versioned page) |
-| `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ❌ (`/health`, `/healthz` exist, no queue payload) | **N3** (new: `/up` health check) |
+| `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ✅ N3; sole deploy/uptime endpoint, payload unchanged | **N3** + [TOG-10852](/TOG/issues/TOG-10852) |
 | `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-uri` + Reporting API `Reporting-Endpoints`/`Report-To` point at it | W16 📋 (TOG-10107) |
+
+### Diagnostic surface decision ([TOG-10852](/TOG/issues/TOG-10852))
+
+Delete the Next-only `/db-ping`, `/health` and `/healthz` routes in every
+configuration. Legacy exposes only `/up`; retaining a token/flag-protected
+ping would add a credential and an unnecessary public connection/fingerprinting
+surface. Removed paths use the ordinary branded 404 (same body and headers as
+unknown paths), without reading any database binding.
+
+The existing `/up` queue read already exercises the Worker-to-Hyperdrive-to-Postgres
+path: a counted queue proves connectivity; `queue.status: "unknown"` reports an
+unconfigured/unreachable ledger, not database acceptance. Deploy smoke moves from
+`/health` to `/up` and accepts the existing healthy/degraded/unknown envelope,
+including during an outage. It does not turn liveness into a database gate or
+change `/up`'s payload. The direct CLI probe remains non-HTTP and operator-invoked;
+no public version/clock endpoint or redirect alias remains.
 
 ## 3. Machine ingress (`routes/api.php`)
 
@@ -145,6 +162,7 @@ go hunting for them.
 | `secureHeaders`-equivalent (CSP on web+admin+leaves, static anti-framing/sniffing globally) | ✅ global secureHeaders (stricter: no inline/eval — no Livewire to need it) | W3 ✅/W4 ✅ |
 | One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; RSVP writes ✅ (rateLimitExceeded); other human routes as they land | W14 ✅ + W9 ✅ |
 | Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes) | ✅ `src/throttle.ts` + every-POST-throttled audit (`test/throttle.test.ts`) | **N5** ✅ |
+| VerifyCsrfToken on unsafe web methods | Central same-origin guard for POST/PUT/PATCH/DELETE, two exact machine exemptions, mounted-route audit; no CSRF token scheme ([policy](same-origin.md)) | [TOG-10850](/TOG/issues/TOG-10850) |
 | `member-access-log` (arm/flush, fail-closed 503 when enforced) | ✅ `src/access-log.ts` middleware on member routes; admin guard carries the same contract | W7 ✅ + W12 📋 (retention) |
 | TrustHosts (APP_URL host only) / trustProxies (nginx socket) | Workers: platform TLS; host check pending | W16 📋 |
 | Maintenance mode except `/discord` | dropped — Workers deploys are atomic, no maintenance mode; DB-free `/discord` floor preserved | dropped (platform) |
