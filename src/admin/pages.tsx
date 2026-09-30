@@ -180,7 +180,7 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           ) : (
             rows.map((r) => (
               <tr key={r.id}>
-                <td>{r.outcome}</td>
+                <td><a href={`/admin/join-attempts/${r.id}`} aria-label={`View join attempt ${r.id}: ${r.outcome}`}>{r.outcome}</a></td>
                 <td>{r.source ?? ""}</td>
                 <td>{r.discordId ?? ""}</td>
                 <td>{r.requestId ?? ""}</td>
@@ -190,6 +190,27 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           )}
         </tbody>
       </table>
+    </section>
+  </Shell>
+);
+
+export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
+  <Shell title={`Join attempt ${row.id}`}>
+    <section>
+      <p><a href="/admin/join-attempts">Back to join attempts</a></p>
+      <h1>Join attempt {row.id}</h1>
+      <p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
+      <h2>Outcome</h2>
+      <dl>
+        <dt>Outcome</dt><dd>{row.outcome}</dd>
+        <dt>Source</dt><dd>{row.source ?? "—"}</dd>
+        <dt>Attempted at (UTC)</dt><dd><time datetime={row.createdAt.toISOString()}>{row.createdAt.toISOString()}</time></dd>
+      </dl>
+      <h2>Trace</h2>
+      <dl>
+        <dt>Request ID</dt><dd>{row.requestId ?? "—"}</dd>
+        <dt>Discord ID</dt><dd>{row.discordId ?? "—"}</dd>
+      </dl>
     </section>
   </Shell>
 );
