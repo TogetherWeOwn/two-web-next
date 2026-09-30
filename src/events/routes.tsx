@@ -4,12 +4,14 @@
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
-import { NotFoundError, createEvent, getEvent, transitionEvent, updateEvent } from "../admin/store";
+import { NotFoundError, createEvent, getEvent, recordAccess, transitionEvent, updateEvent } from "../admin/store";
+import { memberAccessLog } from "../access-log";
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
+import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
@@ -30,7 +32,7 @@ import {
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -65,7 +67,7 @@ function jsonLd(e: PublicEvent, appUrl: string): string {
     eventStatus: e.status === "cancelled" ? "https://schema.org/EventCancelled" : "https://schema.org/EventScheduled",
     location: { "@type": "VirtualLocation", url: e.location && /^https?:/.test(e.location) ? e.location : appUrl },
     ...(e.description ? { description: e.description } : {}),
-    url: `${appUrl}/e/${e.eventKey}`,
+    url: canonicalUrl(appUrl, `/e/${e.eventKey}`),
   };
   // `<` escaped so a title can never close the script element.
   return JSON.stringify(ld).replace(/</g, "\\u003c");
@@ -252,24 +254,34 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     });
   });
 
-  app.get("/e/:key", async (c) => {
-    const key = c.req.param("key");
+  app.get("/e/:key", memberAccessLog(async (c) => {
+    const db = await dbFor(c);
+    return db ? (entry) => recordAccess(db, entry) : null;
+  }), async (c) => {
+    const key = c.req.param("key") ?? "";
     if (!KEY_RE.test(key)) return c.notFound();
     const db = await dbFor(c);
-    if (!db) return unavailable(c);
+    if (!db) return c.text("Events temporarily unavailable", 503);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
-    if (e.status === "draft") {
-      const session = await readSession(c);
-      if (!session?.moderator) return c.text("Forbidden", 403);
-      c.header("cache-control", "private, no-store");
-    } else if (e.status === "cancelled") {
-      c.header("x-robots-tag", "noindex");
-      return c.html(<EventGonePage />, 410);
-    } else {
-      c.header("cache-control", "public, max-age=60");
+    if (e.status === "cancelled") {
+      c.header("x-robots-tag", "noindex, nofollow");
+      return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
     }
-    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} />);
+    // The guest join pitch depends on the viewer; never share-cache this HTML.
+    c.header("cache-control", "private, no-store");
+    c.header("vary", "Cookie");
+    // The injected reader uses only bindings/cookies; this route additionally
+    // carries the access middleware's request-local variables.
+    const session = await readSession(c as unknown as Ctx);
+    if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
+    if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
+    const attendees = session?.member ? await listGoingAttendees(db, e.id) : [];
+    if (attendees.length > 0 && session) {
+      c.set("viewerId", session.id);
+      c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
+    }
+    return c.html(<EventPage e={e} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
@@ -338,8 +350,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         startsAtUtc: existing.startsAt.toISOString(),
         endsAtUtc: existing.endsAt.toISOString(),
       });
-      const { row, writeBack } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
+      const { row, writeBack, childWriteBacks } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
       if (writeBack) await dispatchWriteBack(c.env, writeBack);
+      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
       return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);

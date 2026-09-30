@@ -1,3 +1,8 @@
+// route-inventory: GET /
+// route-inventory: GET /auth/discord
+// route-inventory: GET /auth/discord/callback
+// route-inventory: POST /logout
+// route-inventory: POST /auth/qa/:identity
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { createMemorySessionStore, type SessionStore } from "../src/sessions";
