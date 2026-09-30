@@ -148,8 +148,9 @@ function tags(html, name) {
     return attrs;
   });
 }
-const xmlText = value => value.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-  .replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+// One pass only: &amp;quot; is the literal &quot;, not a quote.
+export const xmlText = value => value.replace(/&(amp|quot|apos|lt|gt);/g,
+  (_, entity) => ({ amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' })[entity]);
 function absoluteOn(value, origin) {
   try { const url = new URL(value); return url.origin === origin && !url.username && !url.password; }
   catch { return false; }

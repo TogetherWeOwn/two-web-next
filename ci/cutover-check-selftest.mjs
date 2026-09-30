@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { curlRequest, dnsAnswers, NEXT_IDENTITY, ORIGIN_HEADER, parseArgs,
-  runChecks, uncoveredFrozenPaths, URL_CASES } from './cutover-check.mjs';
+  runChecks, uncoveredFrozenPaths, URL_CASES, xmlText } from './cutover-check.mjs';
 
 const exec = promisify(execFile);
 const apex = 'example.test';
@@ -123,6 +123,12 @@ for (const phase of ['before', 'after']) {
 test('freeze mapping rejects newly documented paths instead of silently skipping them', () => {
   assert.deepEqual(uncoveredFrozenPaths(freeze), []);
   assert.deepEqual(uncoveredFrozenPaths(freeze + '\n| `/new-frozen-route` | owner |\n'), ['/new-frozen-route']);
+});
+
+test('sitemap XML entities are decoded exactly once', () => {
+  assert.equal(xmlText('https://example.test/?a=1&amp;b=2'), 'https://example.test/?a=1&b=2');
+  assert.equal(xmlText('&amp;quot;&amp;lt;&amp;apos;'), '&quot;&lt;&apos;');
+  assert.equal(xmlText('&quot;&lt;&gt;&apos;'), '"<>\'');
 });
 
 test('DNS empty-family vs failure, complete failure and empty answers', async () => {
