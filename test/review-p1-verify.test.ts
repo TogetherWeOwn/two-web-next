@@ -21,6 +21,7 @@ function store(): EventStore {
       eventKey: "e1",
       payload: { eventKey: "e1", name: "n", startsAt: "s", endsAt: null, location: "l", description: null },
       mirrored: true,
+      status: "published",
     }),
     recordMirrored: async () => {},
     closeFinished: async () => 0,

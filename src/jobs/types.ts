@@ -32,11 +32,17 @@ export class BotTerminalError extends Error {}
 
 export interface BotClient {
   upsertEvent(p: EventUpsert, idempotencyKey: string): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
+  cancelEvent(p: { eventKey: string }, idempotencyKey: string): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
   postAnnouncement(a: Announcement, idempotencyKey: string): Promise<BotSuccess<{ messageId: string; replayed: boolean }> | BotFailure>;
   assignRole(r: RoleAssignment): Promise<BotSuccess<{ outcome: string }> | BotFailure>;
 }
 
-export type MirroredEvent = { eventKey: string; payload: EventUpsert; mirrored: boolean };
+export type MirroredEvent = {
+  eventKey: string;
+  payload: EventUpsert;
+  status: "draft" | "published" | "cancelled" | "past";
+  mirrored: boolean;
+};
 
 export interface EventStore {
   find(eventKey: string): Promise<MirroredEvent | null>;

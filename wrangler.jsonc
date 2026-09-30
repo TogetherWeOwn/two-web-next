@@ -23,11 +23,6 @@
       { "queue": "two-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
     ]
   },
-  // W8 write-back carrier. Still NOT bound: a producer binding to a queue that does not exist fails
-  // `wrangler deploy`, and the W8 SyncMessage shape differs from W13's QueueMessage above. After the
-  // operator runs `wrangler queues create two-web-next-event-sync`, append
-  //   { "binding": "EVENT_SYNC_QUEUE", "queue": "two-web-next-event-sync" }
-  // to producers. Until then src/events/sync.ts logs each due write-back (never silent, never throws).
   "assets": { "directory": "./public" },
   // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
   // project two-web-next, staging branch (pooled endpoint). Local dev sets

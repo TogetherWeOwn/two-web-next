@@ -36,7 +36,7 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[
   const mirrored: string[] = [];
   return {
     mirrored,
-    find: async () => ({ eventKey: "e1", payload, mirrored: true }),
+    find: async () => ({ eventKey: "e1", payload, status: "published", mirrored: true }),
     recordMirrored: async (_k, id) => void mirrored.push(id),
     closeFinished: async () => 0,
     staleEventKeys: async () => [],
@@ -128,7 +128,7 @@ describe("SyncEventToDiscord", () => {
     await consume({ messages: [m1] }, { bot: noBot, events: store({ find: async () => null }), lock: memLock(), ledger: memLedger() });
     await consume(
       { messages: [m2] },
-      { bot: noBot, events: store({ find: async () => ({ eventKey: "e1", payload, mirrored: false }) }), lock: memLock(), ledger: memLedger() },
+      { bot: noBot, events: store({ find: async () => ({ eventKey: "e1", payload, status: "draft", mirrored: false }) }), lock: memLock(), ledger: memLedger() },
     );
     expect(m1.acked && m2.acked).toBe(true);
   });

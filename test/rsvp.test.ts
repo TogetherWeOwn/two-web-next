@@ -5,11 +5,20 @@ import { randomUUID } from "node:crypto";
 import { serializeSigned } from "hono/utils/cookie";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
+
+// RSVP transaction/race tests isolate dispatch; event-writeback.test.ts proves
+// the real W13 producer, ledger and unique lock with a queue double.
+vi.mock("../src/jobs/worker", () => ({
+  enqueueSyncEvent: async (env: Env, message: QueueMessage) => {
+    await env.SYNC_EVENT_QUEUE!.send(message, { delaySeconds: 10 });
+    return true;
+  },
+}));
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
 import { RSVP_RATE_LIMIT } from "../src/islands/contracts";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
@@ -53,7 +62,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   let client: ReturnType<typeof postgres>;
   let db: MemberDataFixture["db"];
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  const sent: QueueMessage[] = [];
   const env = {
     APP_URL,
     DISCORD_CLIENT_ID: "client-id",
@@ -64,7 +73,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     SESSION_SECRET,
     get ADMIN_DB() { return db; },
     SESSION_STORE: store,
-    EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+    SYNC_EVENT_QUEUE: { send: async (m: QueueMessage) => void sent.push(m) },
   } as unknown as Env;
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 20 });
@@ -172,7 +181,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(await rows(ev.id)).toHaveLength(1);
     expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
     expect(await rows(ev.id)).toHaveLength(0);
-    expect(sent.map((m) => m.action)).toEqual(["event.upsert", "event.upsert", "event.upsert"]);
+    expect(sent.map((m) => m.kind)).toEqual(["sync-event", "sync-event", "sync-event"]);
   });
 
   it("withdraw is quiet without a row or an event, and never touches another member's row", async () => {

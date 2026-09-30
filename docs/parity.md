@@ -36,7 +36,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `PATCH /members/{user}` (owner-only, throttle 30,1, bio/games/timezone validation) | ✅ + `POST _method=PATCH` for the plain form | W7 ✅ |
 | `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | ✅ session-gated, paged, ETag/304, `going_count` | W8 ✅ |
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
-| `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
+| `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (tracked write-back via `SYNC_EVENT_QUEUE`) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | pending | W8 📋 + W11 🔶 |
 | `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, FOR UPDATE capacity races (test/rsvp.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
 
@@ -89,7 +89,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `events:reconcile` every 10 min (close past, materialize series, re-dispatch stale; single-flight) | pending | W13 ⛔ |
 | `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ this card (90 d each, legacy constants) | W13 ⛔ |
 | `web_sessions` expiry cleanup (no legacy equivalent — Laravel GC; rows accumulate without one) | ✅ this card (expiry sweep in the prune pass) | W13 ⛔ |
-| Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | pending | W8 📋 + W13 ⛔ |
+| Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | ✅ admin/JSON edits, publish/cancel and RSVP use W13 `SYNC_EVENT_QUEUE`, ledger, 10 s debounce + unique lock; consumer chooses upsert/cancel from current row. Bot HTTP adapter still pending (no live Discord proof) | [TOG-10815](/TOG/issues/TOG-10815) |
 
 ## 7. Console commands
 

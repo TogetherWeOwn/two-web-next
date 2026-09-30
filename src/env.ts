@@ -2,6 +2,9 @@ import type { QueueMessage } from "./jobs/types";
 
 export type Env = AgentEventsEnv & {
   APP_URL: string;
+  // Event writes use the same W13 queue as scheduled reconciliation. Optional
+  // only for local/test environments without a transport.
+  SYNC_EVENT_QUEUE?: Pick<Queue<QueueMessage>, "send">;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
   DISCORD_INVITE_URL: string;

@@ -1,33 +1,45 @@
 import postgres from "postgres";
-import type { JobsEnv } from "../env";
+import type { Env, JobsEnv } from "../env";
 import { migrate as migrateSessions, type Sql as SessionSql } from "../sessions";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
-import type { BotClient, EventStore } from "./types";
+import type { BotClient, QueueMessage } from "./types";
+import { dispatchSyncEvent } from "./sync-event";
+import { pgEventStore } from "./events";
 
-// The events tables (W8) and the Rust bot client (ADR pending) do not exist yet. Until
-// they do these adapters refuse loudly: a queue message must retry, never be acked as done by a stub.
+// The Rust bot client is a later slice. Refuse loudly rather than ack a stub
+// as success; this slice wires the carrier and current-row event store only.
 const notWired = (what: string) => () => Promise.reject(new Error(`${what} not wired yet`));
-const events: EventStore = {
-  find: notWired("EventStore.find"),
-  recordMirrored: notWired("EventStore.recordMirrored"),
-  closeFinished: notWired("EventStore.closeFinished"),
-  staleEventKeys: notWired("EventStore.staleEventKeys"),
-};
 const bot: BotClient = {
   upsertEvent: notWired("BotClient.upsertEvent"),
+  cancelEvent: notWired("BotClient.cancelEvent"),
   postAnnouncement: notWired("BotClient.postAnnouncement"),
   assignRole: notWired("BotClient.assignRole"),
 };
 
-function sqlFor(env: JobsEnv) {
+function sqlFor(env: Env & { HYPERDRIVE?: Hyperdrive }) {
   // The wrangler hyperdrive binding is `DB` (S1); `HYPERDRIVE` stays as an
   // accepted alias for environments that predate it.
   const url = env.HYPERDRIVE?.connectionString ?? env.DB?.connectionString ?? env.DATABASE_URL;
   if (!url) throw new Error("no database configured (DB/HYPERDRIVE or DATABASE_URL)");
   return postgres(url, { max: 1 });
+}
+
+/** Web after-commit producer, sharing reconciliation's ledger and unique lock. */
+export async function enqueueSyncEvent(env: Env, message: Extract<QueueMessage, { kind: "sync-event" }>): Promise<boolean> {
+  if (!env.SYNC_EVENT_QUEUE) throw new Error("SYNC_EVENT_QUEUE is not bound");
+  // Autocommit: ledger and lock must be visible before the transport accepts.
+  const sql = sqlFor(env);
+  try {
+    return await dispatchSyncEvent(
+      trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(sql)),
+      pgUniqueLock(sql), message.eventKey, message.idempotencyKey,
+    );
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
 }
 
 export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): Promise<void> {
@@ -39,7 +51,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
   // behind an un-cancellable ledger UPDATE (TOG-9895 review).
   const ledgerSql = sqlFor(env);
   try {
-    await consume(batch, { bot, events, lock: pgUniqueLock(sql), ledger: pgQueueLedger(ledgerSql) });
+    await consume(batch, { bot, events: pgEventStore(sql), lock: pgUniqueLock(sql), ledger: pgQueueLedger(ledgerSql) });
   } finally {
     // A wedged ledger statement must not hold the invocation open: force-close
     // past the timeout; the main client closes normally.
@@ -64,8 +76,8 @@ export async function handleScheduled(controller: ScheduledController, env: Jobs
     await runScheduled(controller.cron, pgSingleFlight(sql), {
       // Prune queries use the reserved client (outer max:1 pool would deadlock).
       // Reconcile's dispatch side effects use an independent autocommit pool.
-      reconcile: () => reconcileEvents({
-        events,
+      reconcile: (db) => reconcileEvents({
+        events: pgEventStore(db),
         queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
         lock: pgUniqueLock(dispatchSql),
       }),
