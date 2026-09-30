@@ -2,6 +2,7 @@
 import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
+import { users } from "../db/schema";
 import { EVENTS_PAST_DRAWER_LIMIT, escapeLikeTerm, PAST_EVENTS_PAGE_SIZE } from "../islands/contracts";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
@@ -121,6 +122,21 @@ export async function getViewerRsvp(db: Db, eventId: number, userId: string): Pr
     .from(rsvps)
     .where(and(eq(rsvps.eventId, eventId), eq(rsvps.userId, userId)));
   return row ?? null;
+}
+
+export type EventAttendee = { id: string; name: string };
+
+/** Member-only projection, never part of PublicEvent or the feeds/JSON. */
+export async function listGoingAttendees(db: Db, eventId: number): Promise<EventAttendee[]> {
+  // Legacy answer-time order, not the admin roster's most-recent-update order.
+  // Partial select/join/orderBy: https://orm.drizzle.team/docs/select
+  const rows = await db
+    .select({ id: users.id, name: users.username })
+    .from(rsvps)
+    .innerJoin(users, eq(rsvps.userId, users.id))
+    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "going")))
+    .orderBy(asc(rsvps.createdAt), asc(rsvps.id));
+  return rows.filter((row) => Boolean(row.name));
 }
 
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */

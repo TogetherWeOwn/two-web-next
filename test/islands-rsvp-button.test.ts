@@ -345,9 +345,13 @@ describe("rsvp-button SSR/server drift", () => {
     p.as({ ...viewer, id: "member-two" }); const second = await p.request();
     expect(mount(await second.text())).not.toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
     expect(second.headers.get("cache-control")).toBe("private, no-store");
-    const reads = p.queries.filter((q) => q.sql.includes('from "rsvps"') && !q.sql.includes('group by'));
-    expect(reads.map((q) => q.params)).toEqual([[42, "member-one"], [42, "member-two"]]);
-    expect(reads.every((q) => q.sql.includes('"user_id" ='))).toBe(true);
+    // Viewer-answer reads stay keyed on the session user (they select the
+    // sync stamp); the member-only attendees projection (merged from main)
+    // joins users and reads by event + status, never another member's answer.
+    const viewerReads = p.queries.filter((q) => q.sql.includes('"synced_to_discord_at"'));
+    expect(viewerReads.map((q) => q.params)).toEqual([[42, "member-one"], [42, "member-two"]]);
+    const attendeeReads = p.queries.filter((q) => q.sql.includes('inner join "users"'));
+    expect(attendeeReads.map((q) => q.params)).toEqual([[42, "going"], [42, "going"]]);
   });
 
   it("filled decoy is byte-identical to first-write success without auth, DB, limiter or write service", async () => {

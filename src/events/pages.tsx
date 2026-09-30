@@ -84,7 +84,7 @@ import {
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
 import { googleCalendarUrl } from "./feeds";
-import type { PublicEvent, ViewerRsvp } from "./reads";
+import type { EventAttendee, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 
 const fmt = (d: Date, tz: string): string => {
@@ -516,9 +516,9 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
 );
 
 export const EventPage: FC<{
-  e: PublicEvent; appUrl: string; jsonLd: string; session?: Session | null;
+  e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string; session?: Session | null;
   member?: boolean; answer?: ViewerRsvp | null; returnTo?: string;
-}> = ({ e, appUrl, jsonLd, session, member = false, answer = null, returnTo }) => {
+}> = ({ e, attendees = [], appUrl, jsonLd, session, member = false, answer = null, returnTo }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -551,6 +551,14 @@ export const EventPage: FC<{
         <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">Copy link</a>
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {attendees.length > 0 ? (
+        <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
+          <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
+          <ul>{attendees.map((attendee) => (
+            <li><a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a></li>
+          ))}</ul>
+        </section>
+      ) : null}
       <script src="/islands/copy-link.js" defer />
       <RsvpButton e={e} member={member} answer={answer} returnTo={returnTo ?? path} />
       <script src="/islands/rsvp-button.js" defer />
