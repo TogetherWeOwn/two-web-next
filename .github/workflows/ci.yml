@@ -43,7 +43,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Exercise the exact pre-deploy invocation on the same migrated service.
-      - name: Check
+      - name: Check (types, configuration drift + selftest, tests)
         run: npm run check
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
