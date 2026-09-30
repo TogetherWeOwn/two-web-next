@@ -1,6 +1,7 @@
 // W9: RSVP PUT/DELETE, the shared 12/min budget, the one-429 shape and the FOR UPDATE races.
 // Live against agent-testdb (skipped without DATABASE_URL, like test/events.test.ts). Never point
 // this at anything but a test container.
+import { randomUUID } from "node:crypto";
 import { serializeSigned } from "hono/utils/cookie";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
@@ -105,17 +106,31 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     return { rows: (await rows(eventId)).length, hits: n };
   };
 
-  // Sentinel OUTSIDE the owned schema: a row in the shared database the
-  // suite must never touch. Asserted intact by the last test (proves every
-  // delete, raw throttle statement and lock holder above stayed scoped) and
-  // dropped on teardown. A separate connection without the fixture
-  // search_path reaches it; the fixture pools cannot even see it.
+  // Sentinel OUTSIDE the owned schema: the suite must never create, reuse or
+  // drop the shared fixed name `w9_sentinel_proof`. Setup only snapshots it
+  // (existence + rows via to_regclass, no DDL), the z_sentinel test asserts it
+  // is byte-identical at the end, and teardown never drops it. The proof the
+  // suite DOES own is a per-run UUID table: plain CREATE (no IF NOT EXISTS,
+  // so a collision fails loudly instead of reusing another run's object),
+  // dropped only when this run created it. A separate connection without the
+  // fixture search_path reaches both; the fixture pools cannot even see them.
+  const ownedSentinel = `w9_sentinel_${randomUUID().replaceAll("-", "")}`;
   let sentinelAdmin!: ReturnType<typeof postgres>;
+  let ownedSentinelCreated = false;
+  let fixedExisted = false;
+  let fixedRows: { id: number; note: string | null }[] = [];
+  const fixedExists = async () => {
+    const [r] = (await sentinelAdmin`select to_regclass('public.w9_sentinel_proof') as r`) as unknown as { r: string | null }[];
+    return r!.r !== null;
+  };
   beforeAll(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!);
     sentinelAdmin = postgres(url.href, { max: 1, port: 5432, connect_timeout: 5, password: () => url.password });
-    await sentinelAdmin`create table if not exists w9_sentinel_proof (id int primary key, note text)`;
-    await sentinelAdmin`insert into w9_sentinel_proof values (1, 'untouched') on conflict (id) do nothing`;
+    fixedExisted = await fixedExists();
+    if (fixedExisted) fixedRows = (await sentinelAdmin`select id, note from w9_sentinel_proof order by id`) as unknown as typeof fixedRows;
+    await sentinelAdmin.unsafe(`CREATE TABLE "${ownedSentinel}" (id int primary key, note text)`);
+    ownedSentinelCreated = true;
+    await sentinelAdmin.unsafe(`INSERT INTO "${ownedSentinel}" VALUES (1, 'untouched')`);
   });
 
   beforeEach(async () => {
@@ -125,9 +140,11 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   });
   afterAll(async () => {
     try {
-      await sentinelAdmin`drop table if exists w9_sentinel_proof`;
+      // Only the per-run object this run created; the fixed shared name is
+      // never dropped, even if it exists.
+      if (ownedSentinelCreated) await sentinelAdmin.unsafe(`DROP TABLE "${ownedSentinel}"`);
     } finally {
-      await sentinelAdmin.end();
+      await sentinelAdmin?.end();
       await fixture?.dispose();
     }
   });
@@ -546,25 +563,6 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(n).toBe(0);
     await client`delete from web_throttle_hits where bucket = 'unrelated-expired-hold'`;
   });
-  // Runs last (named z_): after every delete, raw throttle statement and
-  // lock holder in this file, the row outside the owned schema must be
-  // intact — the executable proof that cleanup stayed scoped. The fixture
-  // pools pin search_path to the owned schema (they cannot even resolve a
-  // public-schema table: verified with a negative control), so the only
-  // pool that can reach the sentinel is the unscoped admin one, which the
-  // suite uses solely to plant and read it. Vitest runs its in file order,
-  // so this is the final DB test.
-  it("z_sentinel: the row outside the owned schema survives the whole suite", async () => {
-    const srows = (await sentinelAdmin`select note from w9_sentinel_proof where id = 1`) as unknown as { note: string }[];
-    expect(srows[0]!.note).toBe("untouched");
-    // The suite did its work inside the owned schema: its tables exist there
-    // and the public sentinel table is not one of them.
-    const orows = (await sentinelAdmin`select count(*)::int as n from pg_tables where schemaname = ${fixture.schemaName} and tablename in ('events', 'rsvps', 'web_throttle_hits')`) as unknown as { n: number }[];
-    expect(orows[0]!.n).toBe(3);
-    const prows = (await sentinelAdmin`select count(*)::int as n from pg_tables where schemaname = 'public' and tablename = 'w9_sentinel_proof'`) as unknown as { n: number }[];
-    expect(prows[0]!.n).toBe(1);
-  });
-
   it("the budget hit waits for the RSVP row lock (DELETE and PUT on an existing answer)", async () => {
     for (const verb of ["DELETE", "PUT"] as const) {
       const ev = await seed();
@@ -586,6 +584,32 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       expect((await pending).status).toBeLessThan(300);
       const [hit] = await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
       expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
+    }
+  });
+  // Runs last (named zz_): after every delete, raw throttle statement and
+  // lock holder in this file, the objects outside the owned schema must be
+  // intact — the executable proof that cleanup stayed scoped. Two halves:
+  // (1) the suite's own per-run UUID table is untouched; (2) the shared
+  // fixed name is byte-identical to the no-DDL snapshot from setup — whether
+  // or not it existed — so a pre-seeded unrelated row survives and no
+  // concurrent run's table is dropped. The fixture pools pin search_path to
+  // the owned schema (they cannot even resolve a public-schema table:
+  // verified with a negative control), so the only pool that can reach
+  // either object is the unscoped admin one, which the suite uses solely to
+  // snapshot and read. Vitest runs tests in file order, so this is the final
+  // DB test.
+  it("zz_sentinel: the owned proof and any pre-existing fixed table survive the whole suite", async () => {
+    const orows = (await sentinelAdmin.unsafe(`SELECT note FROM "${ownedSentinel}" WHERE id = 1`)) as unknown as { note: string }[];
+    expect(orows[0]!.note).toBe("untouched");
+    // The suite did its work inside the owned schema: its tables exist there.
+    const srows = (await sentinelAdmin`select count(*)::int as n from pg_tables where schemaname = ${fixture.schemaName} and tablename in ('events', 'rsvps', 'web_throttle_hits')`) as unknown as { n: number }[];
+    expect(srows[0]!.n).toBe(3);
+    // The fixed shared name is exactly as setup found it — never created,
+    // reused or dropped by this suite.
+    expect(await fixedExists()).toBe(fixedExisted);
+    if (fixedExisted) {
+      const now = (await sentinelAdmin`select id, note from w9_sentinel_proof order by id`) as unknown as typeof fixedRows;
+      expect(now).toEqual(fixedRows);
     }
   });
 });
