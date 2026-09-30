@@ -9,11 +9,12 @@
   var heading = root.querySelector("h1");
   if (targets.some(function (n) { return !n; }) || !feedback || !heading) return;
   var active = null;
+  var renderedUrl = window.location.href;
 
-  function archiveUrl(href) {
+  function archiveUrl(href, fromHistory) {
     var url = new URL(href, window.location.href);
     return url.origin === window.location.origin && url.pathname === "/events/past" &&
-      /^(\?page=[1-9]\d*)?$/.test(url.search) && !url.hash ? url : null;
+      (fromHistory || (/^(\?page=[1-9]\d*)?$/.test(url.search) && !url.hash)) ? url : null;
   }
 
   async function load(url, push) {
@@ -45,13 +46,14 @@
       document.querySelector('link[rel="canonical"]').href = canonical.href;
       document.querySelector('meta[property="og:url"]').content = canonical.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search);
+      renderedUrl = url.href;
       feedback.textContent = "";
       heading.focus();
     } catch (error) {
       if (active !== controller || error.name === "AbortError") return;
       feedback.textContent = root.dataset.loadError;
-      // Back/forward already changed the address; a normal SSR load restores consistency.
-      if (!push) window.location.assign(url.href);
+      // A click may have aborted a Back/forward read after the address changed.
+      if (!push || window.location.href !== renderedUrl) window.location.assign(window.location.href);
     } finally {
       if (active === controller) {
         root.removeAttribute("aria-busy");
@@ -70,7 +72,9 @@
     load(url, true);
   });
   window.addEventListener("popstate", function () {
-    var url = archiveUrl(window.location.href);
+    // Entry URLs may include tracking parameters, noncanonical pages or fragments.
+    var url = archiveUrl(window.location.href, true);
     if (url) load(url, false);
+    else window.location.assign(window.location.href);
   });
 })();

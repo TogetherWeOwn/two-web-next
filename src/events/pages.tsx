@@ -82,6 +82,7 @@ import {
 } from "../islands/contracts";
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
+import { googleCalendarUrl } from "./feeds";
 import type { PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
@@ -520,6 +521,11 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> =
     {e.description ? <p>{e.description}</p> : null}
     <p data-testid="going-count" data-island="going-count" data-event-key={e.eventKey}>
       {goingCountText(e.goingCount, e.capacity)}
+    </p>
+    <p>
+      <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">Add to calendar (.ics)</a>
+      {" · "}
+      <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
     </p>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>
