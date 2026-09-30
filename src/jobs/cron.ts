@@ -30,7 +30,9 @@ export async function reconcileEvents(deps: {
   const stale = await deps.events.staleEventKeys();
   let resynced = 0;
   for (const key of stale) {
-    await dispatchSyncEvent(deps.queue, deps.lock, key);
+    // Recover the existing attempted request with its immutable build-time key;
+    // a carrier outage/long retry must not strand the per-event pending slot.
+    await dispatchSyncEvent(deps.queue, deps.lock, key, (await deps.events.pendingSyncKey(key)) ?? undefined);
     resynced++; // Laravel counts stale rows, not accepted dispatches
   }
   if (closed > 0 || resynced > 0) console.info("Event reconcile pass completed.", { closed, resynced });

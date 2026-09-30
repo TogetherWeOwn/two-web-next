@@ -24,6 +24,7 @@ function store(): EventStore {
     completeSync: async () => {},
     failSync: async () => {},
     needsSync: async () => false,
+    pendingSyncKey: async () => null,
     closeFinished: async () => 0,
     staleEventKeys: async () => [],
   };

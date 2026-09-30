@@ -41,6 +41,7 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[
     completeSync: async (_attempt, id) => void mirrored.push(id),
     failSync: async () => {},
     needsSync: async () => false,
+    pendingSyncKey: async () => null,
     closeFinished: async () => 0,
     staleEventKeys: async () => [],
     ...over,

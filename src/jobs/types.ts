@@ -52,6 +52,8 @@ export interface EventStore {
   completeSync(attempt: SyncAttempt, discordEventId: string): Promise<void>;
   failSync(idempotencyKey: string): Promise<void>;
   needsSync(eventKey: string): Promise<boolean>;
+  /** Recover a stranded/long-backoff attempt without changing its request key. */
+  pendingSyncKey(eventKey: string): Promise<string | null>;
   /** Published events past ends_at -> past. Returns rows changed. */
   closeFinished(now: Date): Promise<number>;
   /** Published/cancelled dirty revisions, plus the legacy missing-ID/RSVP backstop. */

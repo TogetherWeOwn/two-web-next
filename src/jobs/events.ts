@@ -1,7 +1,10 @@
 import type postgres from "postgres";
-import type { EventStore, SyncAttempt, TxClient } from "./types";
+import type { EventStore, EventUpsert, SyncAttempt, TxClient } from "./types";
 
-function attemptFrom(row: any): SyncAttempt {
+type AttemptRow = { idempotency_key: string; revision: string | number; mirrored_at: Date; state: SyncAttempt["state"] }
+  & ({ action: "event.upsert"; payload: EventUpsert } | { action: "event.cancel"; payload: { eventKey: string } });
+
+function attemptFrom(row: AttemptRow): SyncAttempt {
   const base = {
     idempotencyKey: row.idempotency_key, eventKey: row.payload.eventKey,
     revision: Number(row.revision), mirroredAt: row.mirrored_at, state: row.state,
@@ -45,11 +48,15 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
             'endsAt', ends_at, 'location', coalesce(location, ''), 'description', description) end,
           ${mirroredAt}
         from events where event_key = ${eventKey} and status in ('published', 'cancelled')
+        and (sync_revision > synced_revision or
+          (status = 'published' and (discord_event_id is null or exists (
+            select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
+          ))))
         on conflict do nothing returning *`;
       if (created) return attemptFrom(created);
-      const eligible = await sql`select id from events where event_key = ${eventKey}
-        and status in ('published', 'cancelled')`;
-      return eligible.length ? { waiting: true } : null;
+      // Clean rows need no further bot call even if redundant jobs were queued
+      // while an older attempt was finishing. Dirty conflicts wait, never ACK.
+      return (await staleKeys(eventKey)).length ? { waiting: true } : null;
     },
     async completeSync(attempt, discordEventId) {
       // Settlement and revision acknowledgement commit together. Only the read
@@ -70,6 +77,11 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
     },
     needsSync: async (eventKey) => (await staleKeys(eventKey)).length > 0,
+    async pendingSyncKey(eventKey) {
+      const [row] = await sql`select a.idempotency_key from event_sync_attempts a join events e on e.id = a.event_id
+        where e.event_key = ${eventKey} and a.state = 'pending'`;
+      return row?.idempotency_key ?? null;
+    },
     async closeFinished(now) {
       const rows = await sql`update events set status = 'past', updated_at = ${now}
         where status = 'published' and ends_at <= ${now} returning id`;

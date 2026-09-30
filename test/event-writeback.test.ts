@@ -312,6 +312,54 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
   });
 
+  it("reconciliation recovers a stranded pending snapshot with its original key", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
+    const bot = botDouble();
+    bot.upsertEvent.mockImplementationOnce(async () => { throw new BotTransportError("response lost"); });
+    await consume({ messages: [delivery(original)] }, deps(bot));
+    await sql`update events set title = 'Newer revision' where event_key = ${eventKey}`;
+    await sql`update job_unique_locks set expires_at = now() - interval '1 second'`;
+    await reconcileEvents({ events: pgEventStore(sql),
+      queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
+    expect(sent[1]!.body.idempotencyKey).toBe(original.idempotencyKey);
+    await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
+    expect(bot.upsertEvent.mock.calls[1]).toEqual([expect.objectContaining({ name: "Game night" }), original.idempotencyKey]);
+    await consume({ messages: [delivery(sent[2]!.body)] }, deps(bot));
+    expect(bot.upsertEvent.mock.calls[2]).toEqual([expect.objectContaining({ name: "Newer revision" }), sent[2]!.body.idempotencyKey]);
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+  });
+
+  it("terminal failure frees the pending snapshot but keeps the event dirty for recovery", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const bot = botDouble();
+    bot.upsertEvent.mockImplementationOnce(async () => { throw new BotTransportError("down"); });
+    const m = delivery(sent[0]!.body, 6);
+    await consume({ messages: [m] }, deps(bot));
+    expect(m.ack).toHaveBeenCalledOnce();
+    expect(await pgEventStore(sql).pendingSyncKey(eventKey)).toBeNull();
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([eventKey]);
+    await reconcileEvents({ events: pgEventStore(sql),
+      queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
+    expect(sent[1]!.body.idempotencyKey).not.toBe(sent[0]!.body.idempotencyKey);
+    await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+  });
+
+  it("redundant queued keys do not send another bot request for a clean revision", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const bot = botDouble();
+    await consume({ messages: [delivery(sent[0]!.body)] }, deps(bot));
+    await enqueueEventSync(env, eventKey, "published");
+    const redundant = delivery(sent[1]!.body);
+    await consume({ messages: [redundant] }, deps(bot));
+    expect(redundant.ack).toHaveBeenCalledOnce();
+    expect(bot.upsertEvent).toHaveBeenCalledOnce();
+  });
+
   it("event and RSVP revisions roll back with their mutations", async () => {
     const id = await seed();
     const before = await sql`select sync_revision from events where id = ${id}`;

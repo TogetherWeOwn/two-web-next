@@ -127,7 +127,7 @@ describe("queue.failing", () => {
   it("sync-event failures name the sync queue and job", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const boom = () => { throw new TypeError("x"); };
-    const store = { find: boom } as unknown as EventStore;
+    const store = { prepareSync: boom, failSync: async () => {} } as unknown as EventStore;
     await consume(
       { messages: [msg({ kind: "sync-event", eventKey: "e1" }, SYNC_EVENT.tries)] },
       { bot: {} as BotClient, events: store, lock, ledger },
