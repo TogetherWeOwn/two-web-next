@@ -5,6 +5,7 @@ import postgres from "postgres";
 import { adminApp } from "./admin/routes";
 import { agentEventsRoute } from "./agent-events/route";
 import { readCounts } from "./counts";
+import { cspReportsRoute } from "./csp-reports";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -35,6 +36,12 @@ const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
+// The violation sink (TOG-10107) both headers point at. Hono renders
+// camelCase keys to kebab-case directives, so `reportUri` emits
+// `report-uri` (legacy byte-parity) and `reportingEndpoints` + `reportTo`
+// emit the newer Reporting API pair.
+const CSP_REPORT_ENDPOINT = "/csp-reports";
+
 app.use(
   "*",
   secureHeaders({
@@ -45,7 +52,10 @@ app.use(
       scriptSrc: ["'self'"],
       frameAncestors: ["'none'"],
       formAction: ["'self'"],
+      reportUri: CSP_REPORT_ENDPOINT,
     },
+    reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
+    reportTo: [{ group: "csp-endpoint", max_age: 10886400, endpoints: [{ url: CSP_REPORT_ENDPOINT }] }],
   }),
 );
 
@@ -323,6 +333,14 @@ app.get("/robots.txt", (c) => {
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildRobots(c.env.APP_URL));
 });
+
+// CSP violation sink (TOG-10107 — ports two-web routes/funnel.php's
+// `POST /csp-reports`). Funnel posture by placement: registered before any
+// session-touching handler and the handler itself reads no session, no
+// cookie, no cache, no database — it answers 204 during an app-DB outage.
+// Deliberately no throttle: throttle reads the database-backed store, like
+// `/discord`. Flood control lives in the handler instead.
+app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsRoute);
 
