@@ -1,3 +1,7 @@
+// route-inventory: ALL /*
+// route-inventory: ALL /admin/*
+// route-inventory: ALL /profile
+// route-inventory: ALL /members/*
 // W15 Pest port: assert exposure on the mounted worker, not only isolated routers.
 // Legacy assertion mapping and intentional port differences: docs/w15-member-data-parity.md.
 import { Hono } from "hono";

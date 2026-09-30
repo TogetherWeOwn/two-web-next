@@ -24,6 +24,7 @@ function store(): EventStore {
     }),
     recordMirrored: async () => {},
     closeFinished: async () => 0,
+    materializeSeries: async () => 0,
     staleEventKeys: async () => [],
   };
 }

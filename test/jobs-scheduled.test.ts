@@ -23,7 +23,7 @@ vi.mock(import("../src/jobs/cron"), async (importOriginal) => {
     ...actual,
     reconcileEvents: (deps: Parameters<typeof actual.reconcileEvents>[0]) => actual.reconcileEvents({
       ...deps,
-      events: { ...deps.events, closeFinished: async () => 0, staleEventKeys: async () => state.keys },
+      events: { ...deps.events, closeFinished: async () => 0, materializeSeries: async () => 0, staleEventKeys: async () => state.keys },
     }),
   };
 });
