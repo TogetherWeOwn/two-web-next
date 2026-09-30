@@ -49,6 +49,17 @@ export async function listJoinAttempts(
     .limit(PAGE);
 }
 
+/** Direct lookup uses the same retention window as the list; only roster members are access-log subjects. */
+export async function getJoinAttempt(db: Db, id: number, now?: Date) {
+  const [row] = await db
+    .select({ attempt: joinAttempts, memberId: users.id })
+    .from(joinAttempts)
+    .leftJoin(users, and(eq(users.id, joinAttempts.discordId), eq(users.member, true)))
+    .where(and(eq(joinAttempts.id, id), gte(joinAttempts.createdAt, windowStart(now))))
+    .limit(1);
+  return row ?? null;
+}
+
 function windowStart(now: Date = new Date()): Date {
   return new Date(now.getTime() - JOIN_RETENTION_DAYS * 86_400_000);
 }

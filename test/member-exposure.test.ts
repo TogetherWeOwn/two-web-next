@@ -13,7 +13,7 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 // Nonempty, exhaustive inventories: a newly registered read needs an exposure
 // case. This cannot quietly become [] == [] when a namespace is renamed.
 const PROFILE_READS = ["/profile", "/members/:user"];
-const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured", "/featured/new", "/featured/:id", "/join-attempts"];
+const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured", "/featured/new", "/featured/:id", "/join-attempts", "/join-attempts/:id"];
 const OTHER_READS = [
   "/", "/discord", "/about", "/faq", "/rules", "/privacy", "/join", "/join/discord", "/join/callback",
   "/sitemap_index.xml", "/robots.txt", "/health", "/healthz", "/db-ping", "/up", "/auth/discord", "/auth/discord/callback",
@@ -86,7 +86,7 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
     for (const pattern of ADMIN_READS) {
       const path = `/admin${pattern === "/" ? "" : pattern.replace(":key", EVENT_KEY).replace(":id", "999999999")}`;
       const res = await request(path, { headers: role === "guest" ? {} : await headers(actor) });
-      const expected = role === "guest" ? 302 : role !== "moderator" ? 403 : pattern === "/featured/:id" ? 404 : 200;
+      const expected = role === "guest" ? 302 : role !== "moderator" ? 403 : ["/featured/:id", "/join-attempts/:id"].includes(pattern) ? 404 : 200;
       expect(res.status, path).toBe(expected);
       const body = await res.text();
       if (role !== "moderator") {
