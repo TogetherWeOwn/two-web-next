@@ -1,3 +1,4 @@
+// route-inventory: GET /admin/join-attempts/:id
 import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";

@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+// route-inventory: POST /api/agent-events
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import app from "../src/index";

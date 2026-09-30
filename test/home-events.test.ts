@@ -37,13 +37,18 @@ function event(id: number, overrides: Partial<typeof events.$inferSelect> = {}):
   };
 }
 
-function fixture(rows: (typeof events.$inferSelect)[] = [], failAt?: "events" | "rsvps", holdAt?: "events" | "rsvps") {
+function fixture(rows: (typeof events.$inferSelect)[] = [], failAt?: "events" | "rsvps", holdAt?: "events" | "rsvps", featured = false) {
   const queries: { sql: string; params: unknown[] }[] = [];
   let started!: () => void;
   let rejectRead!: (err: Error) => void;
   const waitForStall = new Promise<void>((resolve) => { started = resolve; });
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
   const db = drizzle(async (sql, params) => {
+    // Keep this fixture's SQL assertions scoped to the event reader; featured has its own suite.
+    if (sql.includes('from "featured_contents"')) {
+      return { rows: featured ? [[1, "Community news", "Featured body", null, null, null]] : [] };
+    }
+    if (sql.includes("set_config") && params[0] !== `${HOME_EVENTS_DB_TIMEOUT_MS}ms`) return { rows: [] };
     queries.push({ sql, params });
     if (sql.includes("set_config")) return { rows: [] };
     if (failAt && sql.includes(`from "${failAt}"`)) throw new Error("postgres://user:secret@host/db private-member private-session");
@@ -146,6 +151,19 @@ describe("homepage upcoming events", () => {
     for (const privateValue of ["private-creator-id", "discord-event-id", "Private host notes", "user_id", "data-island", "RSVP"]) {
       expect(html).not.toContain(privateValue);
     }
+  });
+
+  it.each([undefined, "events"] as const)("preserves featured content alongside the event list or outage fallback (%s)", async (failAt) => {
+    freezeNow();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const response = await fixture([event(1)], failAt, undefined, true).request();
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('data-testid="featured-content"');
+    expect(html).toContain("Community news");
+    expect(html).toContain("Featured body");
+    expect(html).toContain(failAt ? 'data-state="unavailable"' : 'data-testid="home-events-list"');
+    expect(html).toContain('data-testid="home-events-join"');
   });
 
   it.each(["draft", "cancelled", "past", "ended"])("shows the empty state when only %s events exist", async (status) => {

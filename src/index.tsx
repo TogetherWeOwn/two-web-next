@@ -28,6 +28,7 @@ import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
+import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
@@ -195,9 +196,11 @@ async function issueSession(
   });
 }
 
-async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, rotateToken = true): Promise<Session | null> {
+async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
+  // Anonymous public pages must not depend on session storage or its startup DDL.
+  const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
   if (!row) return null;
   // Abortable calendar fragments validate expiry/revocation but must not delete
@@ -230,7 +233,7 @@ const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_fail
 
 app.get("/", async (c) => {
   // A DB outage must not break the funnel, including session setup. Fail closed to guest.
-  const session = await storeFor(c).then((store) => readSession(c, store)).catch(() => {
+  const session = await readSession(c).catch(() => {
     // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
     console.warn("Home session unavailable; serving as guest.", { exception: "SessionReadFailure" });
     return null;
@@ -240,11 +243,14 @@ app.get("/", async (c) => {
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
   const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
-  const upcomingEvents = await loadHomeUpcoming(() => dbFor(c));
+  const [upcomingEvents, featured] = await Promise.all([
+    loadHomeUpcoming(() => dbFor(c)),
+    dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),
+  ]);
   c.header("cache-control", "private, no-store");
   return c.html(
     <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
-      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} />,
+      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured} />,
   );
 });
 
@@ -475,8 +481,8 @@ app.route("/", profilesApp());
 // W8: public events pages, /events.json and moderator event writes.
 registerEventRoutes(
   app,
-  async (c) => readSession(c, await storeFor(c)),
-  async (c) => readSession(c, await storeFor(c), false),
+  async (c) => readSession(c),
+  async (c) => readSession(c, false),
 );
 
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
