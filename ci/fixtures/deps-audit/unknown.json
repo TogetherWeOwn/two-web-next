@@ -1,0 +1,12 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "fixture-package": {
+      "name": "fixture-package",
+      "severity": "unrated",
+      "range": "<2.0.0",
+      "via": [{ "source": 100001, "severity": "unrated" }]
+    }
+  },
+  "metadata": { "vulnerabilities": { "total": 1 } }
+}

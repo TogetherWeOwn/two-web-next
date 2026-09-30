@@ -1,0 +1,19 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "fixture-package": {
+      "name": "fixture-package",
+      "severity": "high",
+      "isDirect": true,
+      "range": "<2.0.0",
+      "via": [{
+        "source": 100001,
+        "name": "fixture-package",
+        "severity": "high",
+        "url": "https://example.invalid/advisory/100001",
+        "range": "<2.0.0"
+      }]
+    }
+  },
+  "metadata": { "vulnerabilities": { "total": 1 } }
+}

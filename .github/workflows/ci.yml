@@ -37,6 +37,10 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Dependency audit selftest (local fixtures)
+        run: npm run deps:audit:selftest
+      - name: Dependency audit (lockfile, including dev dependencies)
+        run: npm run deps:audit
       - run: npm ci
       - name: Apply migrations
         run: npm run db:migrate

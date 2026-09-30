@@ -10,6 +10,40 @@
 - PR body explains what changed, why, and how it was tested (see the PR template).
 - `check`, `gitleaks` and `pr-lint` are required checks on `main`.
 
+## Dependency security and static analysis
+
+The required `check` job runs `npm run deps:audit:selftest` (offline fixtures)
+and `npm run deps:audit` before installing dependencies. The audit reads
+`package-lock.json`, includes development/optional/peer dependencies, and blocks
+high, critical or unknown severity. Invalid JSON, registry/process failures and
+invalid/expired exceptions also fail closed. Info/low/moderate findings do not
+block. Dependabot owns dependency upgrades; the gate never runs `npm audit fix`.
+
+`ci/deps-audit-allowlist.json` starts empty. A reviewed exception has this shape:
+
+```json
+{
+  "package": "affected-package",
+  "range": "<2.0.0",
+  "severity": "high",
+  "advisoryIds": [100001],
+  "reviewed": "2026-09-30",
+  "expires": "2026-10-07",
+  "reason": "Why this risk is temporarily accepted; tracking issue and mitigation"
+}
+```
+
+Add it to `exceptions` only through a reviewed PR. Match the audit's exact package,
+range, severity and complete numeric advisory ID set (including transitive
+`via` references). New advisories/ranges/severity invalidate the exception.
+Use real UTC dates; the expiry day itself is blocking, even if the exception is
+unused. Unknown severity cannot be exempted. Remove expired exceptions rather
+than silently extending them. Fixture examples are synthetic, not accepted risks.
+
+CodeQL scans JavaScript/TypeScript on every PR, pushes to `main`, and weekly
+(Monday 05:23 UTC). Its workflow needs no application secrets or database access;
+`security-events: write` is scoped to its analysis job for uploading findings.
+
 ## Releases
 
 Releases are automated with [release-please](https://github.com/googleapis/release-please)
