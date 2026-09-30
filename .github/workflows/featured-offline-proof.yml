@@ -31,7 +31,6 @@ jobs:
       PROOF_WORKFLOW_HEAD: ${{ github.sha }}
       PROOF_CHECKOUT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       PROOF_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      PROOF_OUTPUT: ${{ runner.temp }}/featured-output
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,6 +39,8 @@ jobs:
       - name: Credential-free guard selftests (no browser)
         run: node --test ci/featured-proof/run-capture.test.cjs
       - name: Capture unchanged fixtures with pinned container dependency
+        env:
+          PROOF_OUTPUT: ${{ runner.temp }}/featured-output
         run: |
           if [ "$(git rev-parse HEAD)" != "$PROOF_CHECKOUT_HEAD" ]; then
             export PROOF_SETUP_FAILURE='Checkout revision does not match the expected proof head'
@@ -51,6 +52,8 @@ jobs:
           node ci/featured-proof/run-capture.cjs ci/featured-proof/fixtures "$PROOF_OUTPUT"
       - name: Preserve setup failures without claiming browser proof
         if: always()
+        env:
+          PROOF_OUTPUT: ${{ runner.temp }}/featured-output
         run: |
           if [ ! -f "$PROOF_OUTPUT/report.json" ]; then
             mkdir -p "$PROOF_OUTPUT"
