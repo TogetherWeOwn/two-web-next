@@ -183,7 +183,9 @@ export async function updateEvent(
   input: EventFormInput,
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
+    // FOR UPDATE serialises concurrent parent edits so the child shift below
+    // always sees the committed old times (no double-shift).
+    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
     const [row] = await tx
       .update(events)
@@ -213,7 +215,7 @@ export async function updateEvent(
       });
     }
     const childWriteBacks = row.recurrenceFrequency
-      ? await shiftFutureChildren(tx, row, locked.startsAt, locked.endsAt)
+      ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
       : [];
     const status = toEventStatus(row.status);
     return { row, writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null, childWriteBacks };
@@ -228,6 +230,7 @@ export async function updateEvent(
  */
 async function shiftFutureChildren(
   tx: Writer,
+  actor: Actor,
   parent: EventRow,
   oldStartsAt: Date,
   oldEndsAt: Date,
@@ -238,17 +241,31 @@ async function shiftFutureChildren(
   const children = await tx
     .select()
     .from(events)
-    .where(and(eq(events.parentEventId, parent.id), gt(events.startsAt, new Date())));
+    .where(and(eq(events.parentEventId, parent.id), gt(events.startsAt, new Date())))
+    .for("update");
   const owed: NonNullable<WriteBack>[] = [];
   for (const child of children) {
-    await tx
+    const [moved] = await tx
       .update(events)
       .set({
         startsAt: new Date(child.startsAt.getTime() + startDelta),
         endsAt: new Date(child.endsAt.getTime() + endDelta),
         updatedAt: new Date(),
       })
-      .where(eq(events.id, child.id));
+      .where(eq(events.id, child.id))
+      .returning();
+    if (!moved) throw new Error("child reschedule returned no row");
+    const changes = dirty(child as Record<string, unknown>, moved as unknown as Record<string, unknown>);
+    if (Object.keys(changes).length > 0) {
+      await tx.insert(activityLog).values({
+        logName: "default",
+        description: `updated event ${moved.title}`,
+        subjectType: "Event",
+        subjectId: moved.eventKey,
+        causerId: actor.id,
+        properties: changes,
+      });
+    }
     const status = toEventStatus(child.status);
     if (isMirrored(status)) owed.push({ eventKey: child.eventKey, status });
   }
