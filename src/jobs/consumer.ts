@@ -1,8 +1,22 @@
+import { alertQueueFailing } from "../alerts";
+import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
 type Msg = { body: unknown; attempts: number; ack(): void; retry(o?: { delaySeconds?: number }): void };
+
+// Legacy identity of each job, for the queue.failing alert line (ports Queue::failing fields).
+const JOBS = {
+  "sync-event": { queue: "two-sync-event", job: "SyncEventToDiscord", tries: SYNC_EVENT.tries },
+  announcement: { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
+  "role-assign": { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
+} as const;
+
+function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: string) {
+  const j = JOBS[kind];
+  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception });
+}
 
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
 export async function consume(
@@ -30,6 +44,10 @@ export async function consume(
       // Unexpected: let the platform redeliver with the same message (same idempotency key).
       if (jobId) await deps.ledger.released(jobId, new Date()).catch(ledgerWarn("released"));
       console.error("job threw; will redeliver", body.kind, e instanceof Error ? e.message : e);
+      // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
+      if (m.attempts >= JOBS[body.kind].tries) {
+        alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
+      }
       m.retry();
       continue;
     }
@@ -43,6 +61,7 @@ export async function consume(
     }
     if ("failed" in outcome) {
       console.error("job failed", body.kind, outcome.failed);
+      alertFailing(body.kind, m.attempts, outcome.failed);
       if (jobId) await deps.ledger.failed(jobId, body.kind, key, outcome.failed).catch(ledgerWarn("failed"));
     } else if (jobId) {
       await deps.ledger.dequeued(jobId).catch(ledgerWarn("dequeued"));

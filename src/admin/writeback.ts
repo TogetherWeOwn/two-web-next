@@ -1,14 +1,14 @@
-// Event write-back dispatch seam (W11).
+// Event write-back dispatch seam (W11 → W8).
 //
-// Publish/cancel (and edits to mirrored rows) must reach the Discord bot.
-// The queue that carries them lands with W8; until then this seam logs the
-// due write-back so a transition without a carrier is visible, never silent.
-// Routes call it synchronously after a successful store transition —
-// `vitest` `vi.mock`s this module to pin the dispatch at the route level.
+// Publish/cancel (and edits to mirrored rows) reach the Discord bot through
+// the event-sync queue (src/events/sync.ts). Routes call this after a
+// successful store transition; `vitest` `vi.mock`s this module to pin the
+// dispatch at the route level.
 
 import type { Env } from "../env";
+import { enqueueEventSync } from "../events/sync";
 import type { WriteBack } from "./store";
 
-export function dispatchWriteBack(_env: Env, wb: NonNullable<WriteBack>): void {
-  console.info("event write-back due", { eventKey: wb.eventKey, status: wb.status });
+export async function dispatchWriteBack(env: Env, wb: NonNullable<WriteBack>): Promise<void> {
+  await enqueueEventSync(env, wb.eventKey, wb.status);
 }

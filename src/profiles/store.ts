@@ -10,6 +10,8 @@ export type MemberView = {
   bio: string | null;
   games: string[];
   timezone: string | null;
+  joinedAt?: Date | null;
+  rank?: string | null;
 };
 
 export type ProfileStore = {
@@ -28,6 +30,7 @@ export function createDbProfileStore(db: Db): ProfileStore {
           bio: profiles.bio,
           games: profiles.games,
           timezone: profiles.timezone,
+          joinedAt: users.createdAt,
         })
         .from(users)
         .leftJoin(profiles, eq(profiles.userId, users.id))

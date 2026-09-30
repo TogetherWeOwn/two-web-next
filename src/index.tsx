@@ -5,6 +5,7 @@ import postgres from "postgres";
 import { adminApp } from "./admin/routes";
 import { agentEventsRoute } from "./agent-events/route";
 import { readCounts } from "./counts";
+import { cspReportsRoute } from "./csp-reports";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -23,11 +24,14 @@ import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from ".
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
+import { registerEventRoutes } from "./events/routes";
+import { sitemapEvents } from "./events/reads";
+import { dbFor } from "./admin/db";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
-import { buildRobots, buildSitemapUrls, renderSitemap } from "./seo";
+import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
 
 const SESSION_COOKIE = "__Host-two_session";
@@ -36,6 +40,12 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
+
+// The violation sink (TOG-10107): report-uri is the legacy fallback;
+// the CSP report-to directive selects the modern Reporting-Endpoints group.
+// Omit the deprecated Report-To header: unlike Reporting-Endpoints, it
+// requires absolute HTTPS URLs, not this same-origin relative destination.
+const CSP_REPORT_ENDPOINT = "/csp-reports";
 
 app.use(
   "*",
@@ -47,7 +57,10 @@ app.use(
       scriptSrc: ["'self'"],
       frameAncestors: ["'none'"],
       formAction: ["'self'"],
+      reportUri: CSP_REPORT_ENDPOINT,
+      reportTo: "csp-endpoint",
     },
+    reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
   }),
 );
 
@@ -312,10 +325,13 @@ registerJoinRoutes(app, { storeFor, issueSession }, {
 // events only. No DB binding yet, so the static entries ship now; the W8 events slice adds the
 // published /e/{key} rows (drafts 403 / cancelled 410 stay out of the index).
 // W6 adds /join (changefreq monthly, priority 0.9 — same as legacy).
-app.get("/sitemap_index.xml", (c) => {
+app.get("/sitemap_index.xml", async (c) => {
   c.header("content-type", "application/xml; charset=UTF-8");
   c.header("cache-control", "public, max-age=3600");
-  return c.body(renderSitemap(buildSitemapUrls(c.env.APP_URL, [])));
+  // Published events only; a DB outage degrades to the static entries, never a 500.
+  const db = await dbFor(c).catch(() => null);
+  const rows = db ? await sitemapEvents(db).catch(() => []) : [];
+  return c.body(renderSitemap(buildSitemapUrls(c.env.APP_URL, crawlableEvents(rows))));
 });
 
 // robots.txt is dynamic, not a static file in public/ (TOG-7071): the Sitemap line names this
@@ -325,6 +341,14 @@ app.get("/robots.txt", (c) => {
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildRobots(c.env.APP_URL));
 });
+
+// CSP violation sink (TOG-10107 — ports two-web routes/funnel.php's
+// `POST /csp-reports`). Funnel posture by placement: registered before any
+// session-touching handler and the handler itself reads no session, no
+// cookie, no cache, no database — it answers 204 during an app-DB outage.
+// Deliberately no throttle: throttle reads the database-backed store, like
+// `/discord`. Flood control lives in the handler instead.
+app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsRoute);
 
@@ -435,6 +459,9 @@ app.route("/admin", adminApp());
 // Member journeys (W7): /profile, /members/:user. Gate + member-access-log are
 // scoped to those paths inside profilesApp; see src/profiles/routes.tsx.
 app.route("/", profilesApp());
+
+// W8: public events pages, /events.json and moderator event writes.
+registerEventRoutes(app, async (c) => readSession(c, await storeFor(c)));
 
 app.post("/logout", async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
