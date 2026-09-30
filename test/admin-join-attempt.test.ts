@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { JOIN_RETENTION_DAYS } from "../src/admin/reads";
@@ -110,7 +110,31 @@ describe.skipIf(!process.env.DATABASE_URL)("join attempt detail (isolated agent-
     expect((await read(row.id)).status).toBe(200);
   });
 
-  it.each([null, "unmapped-discord-id", OUTSIDER.userId, MODERATOR.userId])("does not invent a member subject or log a self read for %s", async (discordId) => {
+  it("keeps the retained attempt's audit subject when membership changes", async () => {
+    const row = await attempt();
+    expect((await read(row.id)).status).toBe(200);
+    await fixture.db.update(users).set({ member: false }).where(eq(users.id, SUBJECT.userId));
+    expect((await read(row.id)).status).toBe(200);
+    const entries = await logs();
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      expect(entry).toMatchObject({
+        resource: "join_attempts", action: "view", route: "admin.join-attempts.show",
+        subjectUserIds: [SUBJECT.userId], subjectCount: 1,
+      });
+    }
+    expect(await fixture.db.select().from(joinAttempts)).toEqual([row]);
+  });
+
+  it("logs a mapped identity regardless of its current membership flag", async () => {
+    const row = await attempt({ outcome: "denied", discordId: OUTSIDER.userId });
+    expect((await read(row.id)).status).toBe(200);
+    expect(await logs()).toMatchObject([{
+      resource: "join_attempts", action: "view", subjectUserIds: [OUTSIDER.userId], subjectCount: 1,
+    }]);
+  });
+
+  it.each([null, "unmapped-discord-id", MODERATOR.userId])("does not invent a member subject or log a self read for %s", async (discordId) => {
     const row = await attempt({ outcome: "degraded", discordId });
     const res = await read(row.id);
     expect(res.status).toBe(200);
@@ -130,8 +154,9 @@ describe.skipIf(!process.env.DATABASE_URL)("join attempt detail (isolated agent-
     expect(html).not.toContain("<img");
   });
 
-  it("fails closed when the real access-log insert fails, without releasing trace fields", async () => {
+  it.each([true, false])("fails closed when the real access-log insert fails with current member=%s, without releasing trace fields", async (member) => {
     const row = await attempt();
+    await fixture.db.update(users).set({ member }).where(eq(users.id, SUBJECT.userId));
     vi.spyOn(console, "error").mockImplementation(() => {});
     await fixture.db.execute(sql`ALTER TABLE member_data_access_logs RENAME TO unavailable_access_logs`);
     try {
