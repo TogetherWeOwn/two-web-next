@@ -63,6 +63,54 @@ describe("every registered write route is body-limited", () => {
   );
 });
 
+describe("parser and error compatibility", () => {
+  it("preserves raw JSON bytes and advertised length after counting", async () => {
+    const api = new Hono<{ Bindings: Env }>();
+    api.post("/x", requestBodyLimit("agent"), async (c) => c.json({ text: await c.req.text(), length: c.req.header("content-length") }));
+    const body = '{ "description": "Unicode 😀", "op": "create" }';
+    const length = String(encoder.encode(body).byteLength);
+    const response = await api.request("/x", { method: "POST", body, headers: { "content-length": length } });
+    expect(await response.json()).toEqual({ text: body, length });
+  });
+
+  it.each([false, true])("keeps form parsing and duplicate trap values intact (multipart: %s)", async (multipart) => {
+    const form = new Hono<{ Bindings: Env }>();
+    form.post("/x", requestBodyLimit("form"), async (c) => c.json(await c.req.parseBody({ all: true })));
+    const body = multipart ? new FormData() : new URLSearchParams();
+    body.append("bio", "😀 bio");
+    body.append("website", "");
+    body.append("website", "filled");
+    const response = await form.request("/x", { method: "POST", body });
+    expect(await response.json()).toEqual({ bio: "😀 bio", website: ["", "filled"] });
+  });
+
+  it("uses the static branded error for browsers and JSON for API paths", async () => {
+    const api = new Hono<{ Bindings: Env }>();
+    api.post("/api/x", requestBodyLimit("action"), (c) => c.body(null, 204));
+    const body = "private-request-marker".repeat(300);
+    const json = await api.request("/api/x", { method: "POST", body });
+    expect(json.status).toBe(413);
+    expect(await json.json()).toEqual(ERROR);
+    const html = await fixture("action").request("/x", { method: "POST", body, headers: { accept: "text/html" } });
+    expect(html.status).toBe(413);
+    const page = await html.text();
+    expect(page).toContain("That request is too large");
+    expect(page).not.toMatch(/private-request-marker|stack|PayloadTooLargeError|4096/);
+  });
+
+  it("refuses an advertised overflow without reading the upload", async () => {
+    const pull = vi.fn();
+    const cancel = vi.fn();
+    const body = new ReadableStream({ pull, cancel }, { highWaterMark: 0 });
+    const response = await fixture("action").request(new Request("http://localhost/x", {
+      method: "POST", body, duplex: "half", headers: { "content-length": String(BODY_LIMIT_BYTES.action + 1) },
+    } as RequestInit));
+    expect(response.status).toBe(413);
+    expect(pull).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
 function fixture(kind: keyof typeof BODY_LIMIT_BYTES) {
   const app = new Hono<{ Bindings: Env }>();
   app.post("/x", requestBodyLimit(kind), async (c) => c.json({ bytes: (await c.req.arrayBuffer()).byteLength }));
