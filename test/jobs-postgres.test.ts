@@ -73,7 +73,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     const one = postgres(process.env.DATABASE_URL!, { max: 1, connection: { search_path: schema } });
     try {
       await migrate(one as unknown as Parameters<typeof migrate>[0]);
-      const ledgerMigration = readFileSync(new URL("../drizzle/1007_queue-ledger.sql", import.meta.url), "utf8");
+      const ledgerMigration = readFileSync("drizzle/1007_queue-ledger.sql", "utf8");
       for (const statement of ledgerMigration.split("--> statement-breakpoint")) {
         if (statement.trim()) await one.unsafe(statement);
       }
