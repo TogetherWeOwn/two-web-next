@@ -3,7 +3,8 @@
 import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { memberAccessLog, type AccessDecl, type AccessSink } from "../src/access-log";
+import { enforceOn, memberAccessLog, type AccessDecl, type AccessSink } from "../src/access-log";
+import { enforceEnabled } from "../src/admin/guard";
 import { adminApp } from "../src/admin/routes";
 import { recordAccess } from "../src/admin/store";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
@@ -34,6 +35,25 @@ function router(sink: () => Promise<AccessSink | null>) {
 }
 
 describe("access-log flush lifecycle", () => {
+  it.each([
+    [undefined, true], ["", true], [" true ", true], ["garbage", true],
+    [" false ", false], ["FALSE", false], ["0", false], [" No ", false],
+  ])("profile/admin enforcement agree for %s => %s", (flag, expected) => {
+    const bindings = { ...env, MEMBER_ACCESS_LOG_ENFORCE: flag };
+    expect(enforceOn(bindings)).toBe(expected);
+    expect(enforceEnabled(bindings)).toBe(expected);
+  });
+
+  it("arming a later request inherits nothing from unarmed/error requests", async () => {
+    const write = vi.fn(async (_entry: Parameters<AccessSink>[0]) => true);
+    const app = router(async () => write);
+    for (const path of ["/read", "/unarmed", "/error", "/read"]) await app.request(path, {}, env);
+    expect(write).toHaveBeenCalledTimes(2);
+    for (const [entry] of write.mock.calls) {
+      expect(entry).toMatchObject({ viewerDiscordId: MEMBER.userId, subjectUserIds: [SUBJECT.userId], route: "test.member" });
+    }
+  });
+
   it("does not release the response until the access-log write completes", async () => {
     let entered!: () => void;
     const sinkEntered = new Promise<void>((resolve) => { entered = resolve; });
