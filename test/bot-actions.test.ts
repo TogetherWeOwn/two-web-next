@@ -157,6 +157,32 @@ describe("event.upsert", () => {
     ).toThrow(InvalidActionRequestError);
   });
 
+  it("refuses instants that serialize to the same whole second", () => {
+    // The wire carries whole seconds: .100Z and .900Z of the same second are
+    // the zero-length event the constructor promises to refuse.
+    expect(() =>
+      eventUpsertPayload({
+        eventKey: "k",
+        name: "Name",
+        startsAt: new Date("2026-09-01T18:00:00.100Z"),
+        endsAt: new Date("2026-09-01T18:00:00.900Z"),
+        location: "here",
+        description: null,
+      }),
+    ).toThrow(InvalidActionRequestError);
+    // A full second apart still serializes to distinct timestamps.
+    const body = eventUpsertPayload({
+      eventKey: "k",
+      name: "Name",
+      startsAt: new Date("2026-09-01T18:00:00.900Z"),
+      endsAt: new Date("2026-09-01T18:00:01.100Z"),
+      location: "here",
+      description: null,
+    });
+    expect(body.starts_at).toBe("2026-09-01T18:00:00Z");
+    expect(body.ends_at).toBe("2026-09-01T18:00:01Z");
+  });
+
   it("accepts a name and a description exactly on the limit", () => {
     const body = eventUpsertPayload({
       eventKey: "k",

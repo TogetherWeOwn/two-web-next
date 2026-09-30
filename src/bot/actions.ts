@@ -87,6 +87,13 @@ export type EventUpsert = {
 
 const toZulu = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 
+// The wire carries whole seconds, so ordering is judged at whole-second
+// precision: sub-second instants inside the same second would otherwise be
+// accepted here and serialized as a zero-length event Discord refuses.
+// Truncation (floor), never rounding — rounding could push endsAt up a whole
+// second past what the caller approved.
+const toWholeSeconds = (d: Date): number => Math.floor(d.getTime() / 1000);
+
 export function eventUpsertPayload(e: EventUpsert): ActionPayload {
   if (blank(e.eventKey)) {
     throw new InvalidActionRequestError("An event.upsert needs an event_key: it is how the bot finds the event to update.");
@@ -107,8 +114,10 @@ export function eventUpsertPayload(e: EventUpsert): ActionPayload {
       "An event.upsert needs a location. The bot takes exactly one of channel_key or location, and this client only ever sends location.",
     );
   }
-  // Strictly after: Discord refuses a zero-length event.
-  if (!(e.endsAt.getTime() > e.startsAt.getTime())) {
+  // Strictly after at the precision the wire carries: Discord refuses a
+  // zero-length event, and two instants inside the same second serialize
+  // to equal timestamps.
+  if (!(toWholeSeconds(e.endsAt) > toWholeSeconds(e.startsAt))) {
     throw new InvalidActionRequestError("An event must end after it starts.");
   }
   const payload: ActionPayload = {

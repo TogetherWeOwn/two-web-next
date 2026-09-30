@@ -214,4 +214,67 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     // Only the unthrottled misses wrote rows (3 near + 2 far).
     expect((await audits("unauthenticated")) - unauthBefore).toBe(5);
   });
+
+  // Exact-head review regressions (TOG-10475 CHANGES): the shield admits
+  // before the body is canonicalized, prunes its own stale counters, and
+  // bounds its lock wait. Each test below pins one of those properties.
+  const deepBody = () => {
+    const body: Record<string, unknown> = { op: "create", idempotency_key: key() };
+    let cur = body;
+    for (let i = 0; i < 500; i++) { const nxt: Record<string, unknown> = {}; cur.nest = nxt; cur = nxt; }
+    return body;
+  };
+
+  it("refuses a spent bucket without digesting a deeply nested body", async () => {
+    const ip = "127.0.0.31";
+    const spend = () => call({ op: "create", idempotency_key: key() }, null, 2, ip);
+    expect((await spend()).status).toBe(401);
+    expect((await spend()).status).toBe(401);
+    // 500 levels recurse past the digest bound if canonicalization runs
+    // first (RangeError, answered 500). The spent bucket refuses first: 429
+    // with the shared envelope, digest never invoked.
+    const refused = await call(deepBody(), null, 2, ip);
+    expect(refused.status).toBe(429);
+    expect(refused.body.reason).toBe("rate_limited");
+    expect(refused.headers?.["Retry-After"]).toBeTruthy();
+  });
+
+  it("refuses an admitted over-deep body with 422 payload_too_deep, never 500", async () => {
+    const r = await call(deepBody(), null, 60, "127.0.0.32");
+    expect(r.status).toBe(422);
+    expect(r.body.reason).toBe("payload_too_deep");
+  });
+
+  it("prunes stale shield counters on denied-only traffic", async () => {
+    await sql`INSERT INTO agent_event_hits (bucket, at) VALUES ('shield:stale-probe', now() - interval '10 minutes'), ('shield:stale-probe', now() - interval '6 minutes')`;
+    // Anonymous: denied at auth, so this pass never reaches the inner rate
+    // limiter — the only other runtime pruner.
+    const r = await call({ op: "create", idempotency_key: key() }, null, 60, "127.0.0.33");
+    expect(r.status).toBe(401);
+    expect(r.body.reason).toBe("unauthenticated");
+    expect((await sql`SELECT count(*)::int AS n FROM agent_event_hits WHERE at < now() - interval '5 minutes'`)[0]!.n as number).toBe(0);
+  });
+
+  it("bounds the shield lock wait under contention", async () => {
+    const busyBefore = await audits("operation_busy");
+    const token = `sh-cont-${schemaName}`;
+    const holder = postgres(process.env.DATABASE_URL!, { max: 1, connection: { search_path: schemaName }, onnotice: () => {} });
+    try {
+      // Hold the exact advisory lock the shield takes: `agent-event-hits:`
+      // + its `shield:<credential-hash>` bucket.
+      await holder.unsafe("BEGIN");
+      await holder`SELECT pg_advisory_xact_lock(hashtextextended(${"agent-event-hits:shield:" + await sha256Hex(token)}, 0))`;
+      const start = Date.now();
+      const r = await handleAgentEvent(sql, { ...cfg(60), lockWaitMs: 50 }, { op: "create", idempotency_key: key() }, token);
+      const elapsed = Date.now() - start;
+      // Retryable 503 audited as load — not a hung connection waiting on the holder.
+      expect(r.status).toBe(503);
+      expect(r.body.reason).toBe("operation_busy");
+      expect(elapsed).toBeLessThan(4000);
+      expect((await audits("operation_busy")) - busyBefore).toBe(1);
+    } finally {
+      await holder.unsafe("ROLLBACK");
+      await holder.end();
+    }
+  });
 });
