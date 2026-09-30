@@ -82,7 +82,10 @@ describe("homepage", () => {
     expect(html).toContain("Sign in with Discord");
     expect(html).toContain('href="/auth/discord"');
     expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
-    expect(res.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("permissions-policy")).toBe("camera=(), microphone=(), geolocation=()");
   });
 
   it("without DATABASE_URL every view is a guest: sessions cannot persist and fail closed", async () => {

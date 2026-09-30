@@ -10,11 +10,26 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
-import { RSVP_HONEY_FIELD, rsvpHoneyFilled, rsvpTrapTripped } from "../islands/contracts";
+import { discordEventsSource } from "./discord-transients";
+import {
+  RSVP_HONEY_FIELD,
+  rsvpHoneyFilled,
+  rsvpTrapTripped,
+  calendarEmptyState,
+  calendarSearching,
+  dedupeTransients,
+  eventSearchLogEntry,
+  mergeCalendarRows,
+  parseCalendarMonth,
+  parseCalendarView,
+  wallMonth,
+  calendarZone,
+  currentCalendarMonth,
+} from "../islands/contracts";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
-import { EventGonePage, EventPage, EventsPage, PastEventsPage } from "./pages";
+import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listFeed, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -75,26 +90,97 @@ async function feedResponse(c: Ctx, body: string, headers: Record<string, string
   return new Response(body, { status: 200, headers: { ...headers, etag } });
 }
 
-export function registerEventRoutes(app: App, readSession: SessionReader, peekSession: SessionReader = readSession): void {
+export function registerEventRoutes(app: App, readSession: SessionReader, readFragmentSession: SessionReader): void {
   const unavailable = (c: Ctx) => c.text("Events temporarily unavailable", 503);
 
   app.get("/events", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    const rawQ = c.req.query("q");
-    const q = matchQuery(rawQ);
-    if (q === null) {
-      c.header("cache-control", "public, max-age=60");
-      return c.html(<EventsPage rows={await listUpcoming(db)} appUrl={c.env.APP_URL} />);
+    const session = await (c.req.header("x-two-island") === "events-calendar" ? readFragmentSession(c) : readSession(c));
+    const now = new Date();
+
+    // Resolve the URL state. A search forces the list view (a month grid that
+    // may not contain the matches reads as "no results"); an unknown view
+    // keeps the current one, which for a fresh URL means the default list.
+    const q = c.req.query("q") ?? "";
+    const match = matchQuery(q);
+    const searching = match !== null;
+    const view = searching ? "list" : (parseCalendarView(c.req.query("view")) ?? "list");
+    const past = c.req.query("past") === "1";
+
+    const opts = { includeDrafts: session?.moderator ?? false, search: match };
+    const localUpcoming = await listUpcoming(db, now, opts);
+    const localPast = await listCalendarPast(db, now, opts);
+
+    // One resolve per request: the rows and the failure flag MUST come from the
+    // same source instance (legacy render() comment) or every error reads as
+    // "never scheduled". Transients are re-checked against the local clock —
+    // a just-ended event cannot linger if the collector goes dark.
+    const discord = discordEventsSource(c.env);
+    const discordRows = await discord.upcoming(now);
+    // Probe only candidate identities, without search/draft/time/pagination
+    // predicates. A filtered canonical row must never become a stale transient.
+    const persistedIds = await persistedDiscordIds(db, discordRows.map((t) => t.discordId));
+    const term = (match ?? "").toLowerCase();
+    const transients = dedupeTransients(discordRows, persistedIds).filter((t) =>
+      (t.endsAt === null || t.endsAt >= now) &&
+      (term === "" || t.title.toLowerCase().includes(term) || (t.description ?? "").toLowerCase().includes(term)),
+    );
+    const discordFailed = discord.lastReadFailed();
+    const upcoming = mergeCalendarRows(localUpcoming, transients);
+
+    const zone = calendarZone([
+      ...localUpcoming.map((e) => e.timezone),
+      ...localPast.map((e) => e.timezone),
+    ]);
+    // No month given: open on the first upcoming event's host-zone month, else
+    // this month. An unparseable month is a page, never a 500.
+    const month =
+      parseCalendarMonth(c.req.query("month")) ??
+      (upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
+      currentCalendarMonth(now);
+
+    const state = { view, month, q, past };
+    const emptyState = calendarEmptyState({
+      searching,
+      upcomingEmpty: upcoming.length === 0,
+      pastEmpty: localPast.length === 0,
+      readFailed: discordFailed,
+    });
+
+    // One structured line per rendered search: normalized query + visible
+    // count, no identity (legacy EventSearchLogger, TOG-8400). Fail-open.
+    if (searching) {
+      const visibleCount = upcoming.length + localPast.length;
+      await recordSearch(db, q, visibleCount);
+      const entry = eventSearchLogEntry(match ?? "", visibleCount);
+      if (entry) {
+        try {
+          console.info("event_search", JSON.stringify(entry));
+        } catch {
+          /* a down logger is an unrecorded search, never a broken page */
+        }
+      }
     }
-    // Searching: matching past events show without opening the archive (a hidden match reads as
-    // "no results"). Count = what the guest sees; the past list caps at one page, exact at zero.
-    const [rows, past] = await Promise.all([listUpcoming(db, new Date(), q), listPast(db, 1, new Date(), q)]);
-    await recordSearch(db, rawQ, rows.length + past.rows.length);
-    // Never shared-cached: a cache hit would skip the log write.
-    c.header("cache-control", "private, no-store");
-    c.header("x-robots-tag", "noindex, follow");
-    return c.html(<EventsPage rows={rows} pastRows={past.rows} q={q} appUrl={c.env.APP_URL} />);
+
+    // Search analytics must run per request, not only on shared-cache misses.
+    c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
+    if (searching) c.header("x-robots-tag", "noindex, follow");
+    c.header("vary", "Cookie, X-Two-Island");
+    return c.html(
+      <EventsCalendarPage
+        state={state}
+        upcoming={upcoming}
+        past={localPast}
+        zone={zone}
+        now={now}
+        emptyState={emptyState}
+        discordFailed={discordFailed}
+        member={session?.member ?? false}
+        inviteUrl={c.env.DISCORD_INVITE_URL}
+        appUrl={c.env.APP_URL}
+      />,
+    );
   });
 
   app.get("/events/past", async (c) => {
@@ -108,7 +194,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, peekSe
 
   app.get("/events.json", async (c) => {
     // Non-rotating: concurrent writes with one cookie must all authenticate.
-    const session = await peekSession(c);
+    const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
@@ -191,7 +277,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, peekSe
     const origin = c.req.header("origin");
     if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     // Non-rotating: concurrent writes with one cookie must all authenticate.
-    const session = await peekSession(c);
+    const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
     if (!session.moderator) return c.json({ error: "forbidden" }, 403);
     return session;
@@ -293,7 +379,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, peekSe
     const origin = c.req.header("origin");
     if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     // Non-rotating: concurrent writes with one cookie must all authenticate.
-    const session = await peekSession(c);
+    const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
     if (!session.member) return c.json({ error: "forbidden" }, 403);
     return session;

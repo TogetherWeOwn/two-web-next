@@ -118,7 +118,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
     if (!member) return c.notFound();
     const viewer = c.get("viewer");
     c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
-    return c.html(<ProfilePage member={member} isOwner={viewer.id === member.id} />);
+    return c.html(<ProfilePage member={member} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
   };
 
   app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));
@@ -162,6 +162,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
         <ProfilePage
           member={member}
           isOwner
+          appUrl={c.env.APP_URL}
           errors={result.errors}
           values={{
             bio: typeof input.bio === "string" ? input.bio : "",

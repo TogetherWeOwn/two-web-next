@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
-import { Layout } from "./pages";
+import { Layout, SiteFooter } from "./pages";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
 // errors/*.blade.php views (TOG-5626/TOG-6788). Database-free by construction:
@@ -31,7 +31,7 @@ const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?
         {children}
       </section>
     </main>
-    <footer>Together We Own · adult gaming community · founded 1998</footer>
+    <SiteFooter />
   </Layout>
 );
 
