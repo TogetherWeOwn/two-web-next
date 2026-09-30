@@ -23,20 +23,20 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`) | `/auth/discord*` live; `/join` path alias pending | W6 🔶 |
-| `GET /events` (EventsCalendar full-page) | contract pinned, page pending | W8 📋 + W10 slice 3 ⛔ |
-| `GET /events/past` (archive, 20/page) | contract pinned, page pending | W8 📋 + W10 slice 4 ⛔ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | pending | W8 📋 |
-| `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | pending | W9 📋 |
-| `GET /events.rss` (published upcoming, ETag/304, atom self-link) | pending | W9 📋 |
-| `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | pending | W9 📋 |
+| `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
+| `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count; RsvpButton/prev-next/related pending | W8 ✅ (partial) |
+| `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
+| `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
+| `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
 | `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | ✅ same-app flow (`identify`+`guilds.join`, auto-join, role recompute) | W5 ✅ |
 | `GET /auth/qa/{identity}` (staging-only, header token) | ✅ as `POST /auth/qa/:identity` — **deliberate divergence**: GET login is CSRF-able; POST + byte-identical 404s | W5 ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; throttle pending | W5 ✅ + N5 (new card, throttle) |
 | `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block (bot DB) pending | W7 ✅ |
 | `PATCH /members/{user}` (owner-only, throttle 30,1, bio/games/timezone validation) | ✅ + `POST _method=PATCH` for the plain form | W7 ✅ |
-| `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | contract pinned (`EVENTS_JSON_URL`, row shape), route pending | W8 📋 |
-| `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | pending | W8 📋 (public) + W11 🔶 (admin loop) |
-| `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | pending | W8 📋 + W11 🔶 |
+| `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | ✅ session-gated, paged, ETag/304, `going_count` | W8 ✅ |
+| `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
+| `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | pending | W8 📋 + W11 🔶 |
 | `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | contract pinned, routes pending | W9 📋 + W10 slice 2 ⛔ |
 
@@ -48,7 +48,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /about`, `GET /faq` (static, zero-query) | ✅ | W4 ✅ |
 | `GET /privacy` (versioned `content/privacy-policy-v1.md` from disk, no session/cache/DB) | ❌ missing — no card covered it | **N1** (new: `/privacy` versioned page) |
 | `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ❌ (`/health`, `/healthz` exist, no queue payload) | **N3** (new: `/up` health check) |
-| `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ❌ missing | W16 📋 (CSP/header parity scope) |
+| `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-uri` + Reporting API `Reporting-Endpoints`/`Report-To` point at it | W16 📋 (TOG-10107) |
 
 ## 3. Machine ingress (`routes/api.php`)
 
@@ -148,7 +148,7 @@ go hunting for them.
 |---|---|---|
 | EventService (capacity/waitlist under lock, series create/materialize, sync-after-commit) | pending | W8 📋 + W11 🔶 + W13 ⛔ |
 | InternalActionClient + signer (sole bot speaker; `addMember` sync-only, never queued) | ✅ signer byte-parity; client pending | W14 ✅ + W13 ⛔ |
-| EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | pending | W8 📋 (JSON-LD) + W9 📋 (feeds) |
+| EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | ✅ | W8 ✅ (JSON-LD) + W9 ✅ (feeds) |
 | RsvpRateLimit / AgentEventRateLimit | pending / ✅ | W9 📋 / W14 ✅ |
 | SafeRedirect (guarded `next`), SpamTrap (honeypot + 1000 ms floor) | pending | W6 🔶 / W7 📋 + W9 📋 |
 | RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |

@@ -30,6 +30,11 @@ export type Env = AgentEventsEnv & {
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
   MEMBER_ACCESS_LOG_ENFORCE?: string;
+  // CSP violation sink (TOG-10107): fraction of valid reports (0.0–1.0)
+  // written to the log. Unset or unparseable falls back to 1.0 (log
+  // everything); out-of-range values clamp. Lower it if report volume ever
+  // outweighs the signal.
+  CSP_REPORT_SAMPLE_RATE?: string;
 };
 
 // Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.
