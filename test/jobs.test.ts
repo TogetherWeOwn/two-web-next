@@ -2,11 +2,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { CALL_INTERNAL_ACTION, PRUNE_CRON, RECONCILE_CRON, SYNC_EVENT } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
-import { reconcileEvents, runScheduled } from "../src/jobs/cron";
+import { reconcileEvents, runScheduled, type SingleFlight } from "../src/jobs/cron";
 import { trackingQueue } from "../src/jobs/ledger";
 import { dispatchSyncEvent, uniqueKey } from "../src/jobs/sync-event";
 import { BotTransportError } from "../src/jobs/types";
-import type { BotClient, BotFailure, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
+import type { BotClient, BotFailure, EventStore, QueueLedger, TxClient, UniqueLock } from "../src/jobs/types";
 
 const payload = { eventKey: "e1", name: "n", startsAt: "s", endsAt: null, location: "l", description: null };
 const fail = (o: Partial<BotFailure>): BotFailure => ({
@@ -375,8 +375,10 @@ describe("cron", () => {
 
   it("routes by cron and rejects unknown expressions", async () => {
     const ran: string[] = [];
-    const flight = async (name: string, fn: () => Promise<void>) => (ran.push(name), await fn(), true);
-    const jobs = { reconcile: async () => void ran.push("r"), prune: async () => void ran.push("p") };
+    // The flight hands the body its reserved transaction client; the fake
+    // stands in with a dummy the memory jobs ignore.
+    const flight: SingleFlight = async (name, fn) => (ran.push(name), await fn({} as TxClient), true);
+    const jobs = { reconcile: async (_db: unknown) => void ran.push("r"), prune: async (_db: unknown) => void ran.push("p") };
     await runScheduled(RECONCILE_CRON, flight, jobs);
     await runScheduled(PRUNE_CRON, flight, jobs);
     expect(ran).toEqual(["events:reconcile", "r", "model:prune", "p"]);

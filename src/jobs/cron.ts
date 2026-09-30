@@ -7,10 +7,16 @@ import {
   RECONCILE_CRON,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
-import type { EventStore, PruneStores, UniqueLock } from "./types";
+import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
 
-/** Advisory-lock runner: re-expresses onOneServer + withoutOverlapping. Returns false when skipped. */
-export type SingleFlight = (name: string, fn: () => Promise<void>) => Promise<boolean>;
+/**
+ * Advisory-lock runner: re-expresses onOneServer + withoutOverlapping.
+ * Returns false when skipped. The body receives the reserved transaction
+ * client and MUST run all its queries on it: the pool is `max: 1`, so a
+ * body query on the outer pool waits for the connection the flight itself
+ * holds and hangs until the worker limit kills it.
+ */
+export type SingleFlight = (name: string, fn: (db: TxClient) => Promise<void>) => Promise<boolean>;
 
 /** Ports events:reconcile. Close finished first so the sync pass cannot resurrect an ended event. */
 export async function reconcileEvents(deps: {
@@ -64,9 +70,9 @@ export async function pruneModelTables(stores: PruneStores, now: Date = new Date
 export async function runScheduled(
   cron: string,
   flight: SingleFlight,
-  jobs: { reconcile: () => Promise<unknown>; prune: () => Promise<unknown> },
+  jobs: { reconcile: (db: TxClient) => Promise<unknown>; prune: (db: TxClient) => Promise<unknown> },
 ): Promise<boolean> {
-  if (cron === RECONCILE_CRON) return flight("events:reconcile", async () => void (await jobs.reconcile()));
-  if (cron === PRUNE_CRON) return flight("model:prune", async () => void (await jobs.prune()));
+  if (cron === RECONCILE_CRON) return flight("events:reconcile", async (db) => void (await jobs.reconcile(db)));
+  if (cron === PRUNE_CRON) return flight("model:prune", async (db) => void (await jobs.prune(db)));
   throw new Error(`unknown cron trigger: ${cron}`);
 }

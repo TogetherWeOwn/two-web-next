@@ -1,11 +1,17 @@
 import type postgres from "postgres";
 import { createPostgresSessionStore, type Sql as SessionSql } from "../sessions";
 import type { SingleFlight, } from "./cron";
-import type { AgePrunedTable, PruneStores, QueueLedger, UniqueLock } from "./types";
+import type { AgePrunedTable, PruneStores, QueueLedger, TxClient, UniqueLock } from "./types";
 
 type Sql = ReturnType<typeof postgres>;
 
-/** Transaction-scoped advisory lock: released on commit/rollback/disconnect, so a crashed run never wedges the job. */
+/**
+ * Transaction-scoped advisory lock: released on commit/rollback/disconnect,
+ * so a crashed run never wedges the job. The body runs INSIDE the reserved
+ * transaction on that same connection (`fn(tx)`): the pool is `max: 1`, so a
+ * body query on the outer pool would wait for the connection this transaction
+ * holds and hang until the worker limit kills it.
+ */
 export function pgSingleFlight(sql: Sql): SingleFlight {
   return async (name, fn) => {
     let ran = false;
@@ -13,7 +19,7 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
       const [row] = await tx`select pg_try_advisory_xact_lock(hashtextextended(${name}, 0)) as got`;
       if (!row?.got) return; // another invocation holds it: skip, cheap when idle
       ran = true;
-      await fn();
+      await fn(tx as unknown as TxClient);
     });
     return ran;
   };
@@ -25,7 +31,7 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
  * (`occurred_at`/`created_at < cutoff`), cutoff-exact rows survive. Sessions
  * sweep by expiry (`expires_at <= now`, matching what reads can see).
  */
-export function pgPruneStores(sql: Sql): PruneStores {
+export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // Table names cannot be parameterized in postgres.js tagged templates, so
   // each age-pruned table gets its own static statement (same MassPrunable
   // shape as legacy: `... where <age column> < ${cutoff}`).
@@ -55,7 +61,7 @@ export function pgPruneStores(sql: Sql): PruneStores {
 }
 
 /** ShouldBeUnique lock with TTL (Cache::lock equivalent). Atomic: one upsert that only wins over expired rows. */
-export function pgUniqueLock(sql: Sql): UniqueLock {
+export function pgUniqueLock(sql: TxClient | Sql): UniqueLock {
   return {
     async acquire(key, ttlSeconds) {
       const rows = await sql`
@@ -77,7 +83,7 @@ export function pgUniqueLock(sql: Sql): UniqueLock {
  * port — the rows `pgQueueDepth` counts for GET /up. Dispatch writes through
  * `trackingQueue`; the consumer calls the rest.
  */
-export function pgQueueLedger(sql: Sql): QueueLedger {
+export function pgQueueLedger(sql: Sql | postgres.TransactionSql): QueueLedger {
   return {
     async enqueued({ jobId, kind, key, availableAt }) {
       // One row per accepted transport message. `job_id` is the primary key
@@ -109,12 +115,15 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
       await sql`delete from queue_jobs where job_id = ${jobId}::uuid`;
     },
     async failed(jobId, kind, key, reason) {
-      await sql.begin(async (tx) => {
+      const record = async (tx: postgres.TransactionSql) => {
         await tx`
           insert into queue_failed_jobs (job_id, kind, key, reason)
           values (${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)})`;
         await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
-      });
+      };
+      // Scheduled dispatch already owns a transaction; consumer calls own one.
+      if ("begin" in sql) await sql.begin(record);
+      else await sql.savepoint(record);
     },
   };
 }

@@ -1,5 +1,6 @@
 import postgres from "postgres";
 import type { JobsEnv } from "../env";
+import { migrate as migrateSessions, type Sql as SessionSql } from "../sessions";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
@@ -50,13 +51,22 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
 export async function handleScheduled(controller: ScheduledController, env: JobsEnv): Promise<void> {
   const sql = sqlFor(env);
   try {
-    const lock = pgUniqueLock(sql);
-    const ledger = pgQueueLedger(sql);
+    // web_sessions is runtime-DDL-only (no drizzle migration owns it); only
+    // the web path runs migrate(). A prune before any web traffic would fail
+    // the whole pass on a missing table, so ensure it here too (no-op when
+    // already migrated). Outside the flight: DDL must not run inside the
+    // advisory-lock transaction.
+    await migrateSessions(sql as unknown as SessionSql);
     await runScheduled(controller.cron, pgSingleFlight(sql), {
-      // The tracking wrapper writes the `queue_jobs` row on dispatch, so /up sees
-      // every re-dispatched stale event the moment it is queued.
-      reconcile: () => reconcileEvents({ events, queue: trackingQueue(env.SYNC_EVENT_QUEUE, ledger), lock }),
-      prune: () => pruneModelTables(pgPruneStores(sql)),
+      // Every store, ledger and lock bind to the flight's reserved transaction
+      // client: the pool is max: 1, so touching the outer pool from inside
+      // the flight would queue for the connection the flight itself holds.
+      reconcile: (db) => reconcileEvents({
+        events,
+        queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(db as postgres.TransactionSql)),
+        lock: pgUniqueLock(db),
+      }),
+      prune: (db) => pruneModelTables(pgPruneStores(db)),
     });
   } finally {
     await sql.end({ timeout: 1 });

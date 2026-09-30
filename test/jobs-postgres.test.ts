@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
+import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
 
 // Real Postgres (agent-testdb locally, a service container in CI). Skipped when DATABASE_URL is unset.
 // Only run-owned tables are created (`job_unique_locks` is created by the
@@ -53,6 +55,54 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     expect(await flight(own("b"), async () => {})).toBe(true);
     release();
     await a;
+  });
+
+  it("flight body queries run on the reserved tx (no max:1 deadlock)", async () => {
+    // Production shape: one connection, flight holding it in a transaction.
+    // A body query on the outer pool would queue for that connection forever;
+    // bodies must run on the client the flight hands them. Times out instead
+    // of hanging the suite if the deadlock regresses. Self-sufficient tables:
+    // neither member_data_access_logs nor web_sessions can be assumed present
+    // (CI migrates the drizzle chain, but web_sessions is runtime-DDL-only).
+    const schema = `flight_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const admin = postgres(process.env.DATABASE_URL!, { max: 1 });
+    await admin.unsafe(`CREATE SCHEMA ${schema}`);
+    await admin.unsafe(`CREATE TABLE ${schema}.member_data_access_logs (id bigserial primary key, occurred_at timestamptz not null)`);
+    await admin.unsafe(`CREATE TABLE ${schema}.job_unique_locks (key text primary key, expires_at timestamptz not null)`);
+    const { migrate } = await import("../src/sessions");
+    const one = postgres(process.env.DATABASE_URL!, { max: 1, connection: { search_path: schema } });
+    try {
+      await migrate(one as unknown as Parameters<typeof migrate>[0]);
+      const ledgerMigration = readFileSync(new URL("../drizzle/1007_queue-ledger.sql", import.meta.url), "utf8");
+      for (const statement of ledgerMigration.split("--> statement-breakpoint")) {
+        if (statement.trim()) await one.unsafe(statement);
+      }
+      const flight = pgSingleFlight(one);
+      const ran = await Promise.race([
+        flight(`prune-${Date.now()}`, async (db) => {
+          const stores = pgPruneStores(db);
+          const lock = pgUniqueLock(db);
+          expect(await stores.accessLog.pruneOlderThan(new Date(0))).toBeGreaterThanOrEqual(0);
+          expect(await stores.sessions.sweepExpired(new Date())).toBeGreaterThanOrEqual(0);
+          expect(await lock.acquire(`prune-tx-${Date.now()}`, 60)).toBe(true);
+          // Reconcile's tracking queue must also use this reserved connection.
+          const ledger = pgQueueLedger(db as postgres.TransactionSql);
+          const jobId = randomUUID();
+          await ledger.enqueued({ jobId, kind: "sync-event", key: "tx", availableAt: new Date() });
+          const tx = db as postgres.TransactionSql;
+          expect(await tx`select job_id from queue_jobs where job_id = ${jobId}::uuid`).toHaveLength(1);
+          await ledger.failed(jobId, "sync-event", "tx", "test failure");
+          expect(await tx`select job_id from queue_jobs where job_id = ${jobId}::uuid`).toHaveLength(0);
+          expect(await tx`select job_id from queue_failed_jobs where job_id = ${jobId}::uuid`).toHaveLength(1);
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("deadlock: body stalled on max:1 pool")), 15_000)),
+      ]);
+      expect(ran).toBe(true);
+    } finally {
+      await one.end({ timeout: 5 });
+      await admin.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      await admin.end();
+    }
   });
 
   it("unique lock: one winner, expiry frees it, release frees it", async () => {

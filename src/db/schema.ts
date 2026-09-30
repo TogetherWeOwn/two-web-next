@@ -52,23 +52,6 @@ export const webThrottleHits = pgTable(
   (t) => [index("web_throttle_hits_bucket_at_idx").on(t.bucket, t.at)],
 );
 
-// W13: guest search trail for the events calendar (ports two-web EventSearchLog,
-// TOG-8400). Privacy-shaped like legacy: normalized query + result count only —
-// no user id, session or IP. Retention pruning (model:prune) is the only delete
-// path; the read path never needs rows older than the window.
-export const eventSearchLogs = pgTable(
-  "event_search_logs",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    normalizedQuery: text("normalized_query").notNull(),
-    resultCount: integer("result_count").notNull(),
-    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [index("event_search_logs_occurred_at_idx").on(t.occurredAt)],
-);
-
-export type EventSearchLog = typeof eventSearchLogs.$inferSelect;
-
 // W14: scoped machine ingress for agent-originated events (ports two-web TOG-5510 Gate 2).
 // Tables mirror two-web's agent_event_* migration; `agent_events` is the minimal proof-event
 // table these five operations act on until the events slice lands.

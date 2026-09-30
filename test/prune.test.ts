@@ -23,7 +23,7 @@ import { createMemorySessionStore, type SessionStore } from "../src/sessions";
 import agentEvents from "../drizzle/0001_agent-events.sql?raw";
 import joinMigration from "../drizzle/1000_join-attempts-throttle.sql?raw";
 import adminSlice from "../drizzle/1001_admin-slice.sql?raw";
-import searchLogMigration from "../drizzle/1006_event-search-log.sql?raw";
+import searchLogMigration from "../drizzle/1005_event-search-logs.sql?raw";
 
 const DAY = 86_400_000;
 
@@ -121,11 +121,15 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
   });
 
   it("single-flight skip: the prune job does not run when the lock is held", async () => {
-    const prune = vi.fn(async () => {});
+    const prune = vi.fn(async (_db: unknown) => {});
+    const tx = {};
     expect(await runScheduled(PRUNE_CRON, async () => false, { reconcile: prune, prune })).toBe(false);
     expect(prune).not.toHaveBeenCalled();
-    expect(await runScheduled(PRUNE_CRON, async (_name, fn) => (await fn(), true), { reconcile: prune, prune })).toBe(true);
+    // The flight hands the body its reserved transaction client; the body
+    // must receive it (the max:1 deadlock fix pins work to that client).
+    expect(await runScheduled(PRUNE_CRON, async (_name, fn) => (await fn(tx as never), true), { reconcile: prune, prune })).toBe(true);
     expect(prune).toHaveBeenCalledTimes(1);
+    expect(prune).toHaveBeenCalledWith(tx);
   });
 });
 
