@@ -36,7 +36,7 @@ route-level 403/410 for `/e/{key}` land with W8; `crawlableEvents` in
 | `.ics` / `.rss` feeds | W9 |
 | `/profile`, `/members/{user}` | W7 |
 | `/admin/*` | W11–W12 |
-| `/healthz`, `/up` | deploy health (this repo serves `/healthz` since W3) |
+| `/up` | deploy/uptime health (N3); Next-only `/health`, `/healthz`, `/db-ping` removed ([TOG-10852](/TOG/issues/TOG-10852)), ordinary 404 rather than redirect aliases |
 
 Note: legacy `/join*` is the one-click OAuth journey; this repo's equivalent
 `/auth/discord*` shipped in W3 with the same `identify` + `guilds.join`
@@ -84,9 +84,11 @@ audits separately pin middleware multiplicity. Hono does not register automatic
 HEAD handling or static-asset bindings as separate routes here.
 
 Auth classes are **reviewed policy labels** in `test/helpers/route-inventory.ts`,
-not proof inferred from handler bodies. Removing a scoped member/admin middleware
-changes the mounted classification; changing inline authorization still requires
-the existing role/owner/bearer/QA behavioral tests. `public-draft-moderator` means
+not proof inferred from handler bodies. Removing every `ALL` registration at a
+scoped member/admin gate changes the mounted classification. Removing just one
+stacked handler (for example, the member gate but not the access logger) is not
+detected here; the exposure inventory pins multiplicity, and the existing
+role/owner/bearer/QA behavioral tests prove authorization. `public-draft-moderator` means
 public records are public, drafts require a moderator; `member-decoy` means genuine
 RSVP writes require membership but honeypot decoys intentionally bypass auth.
 `oauth-state` is an OAuth callback's signed state, not an existing login session.
@@ -112,7 +114,6 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /auth/discord` | public | app: current equivalent of legacy `/auth/discord/redirect` |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
-| `GET /db-ping` | public | db-ping: next-only binding diagnostic, not a legacy URL |
 | `GET /discord` | public | seo: invite redirect |
 | `GET /e/:key` | public-draft-moderator | events: legacy `/e/{event}` |
 | `GET /events` | public | events: calendar |
@@ -122,8 +123,6 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /events/:file{.+\.ics}` | public-draft-moderator | event-feeds: legacy `/events/{event}.ics` |
 | `GET /events/past` | public | events: archive |
 | `GET /faq` | public | seo: frozen funnel leaf |
-| `GET /health` | public | app: next-only health alias |
-| `GET /healthz` | public | member-exposure: structural inventory only; behavioral test follow-up |
 | `GET /join` | public | join: landing page |
 | `GET /join/callback` | oauth-state | join: one-click callback |
 | `GET /join/discord` | public | join: OAuth start |
@@ -153,11 +152,10 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
 | `PUT /events/:key/rsvp` | member-decoy | rsvp: owner answer + decoy |
 
-Behavioral gap: `/healthz` is only pinned by the existing structural exposure
-inventory, not an HTTP request test. Follow-up [TOG-10852](/TOG/issues/TOG-10852)
-already owns removal of this diagnostic alias and production-config 404 tests;
-no new health-alias behavior test is added in this guard slice. That change must
-also remove its snapshot row and reference when it lands.
+The diagnostic aliases were removed by [TOG-10852](/TOG/issues/TOG-10852).
+`test/db-ping.test.ts` proves they match unknown paths: ordinary 404s, or the
+global same-origin 403 for untrusted unsafe requests. These are in-process
+production/staging-host configurations; no live database or network is used.
 
 ### Updating the inventory
 

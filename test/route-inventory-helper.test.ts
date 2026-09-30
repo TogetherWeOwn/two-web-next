@@ -55,6 +55,37 @@ describe("route inventory diagnostics", () => {
     ]);
   });
 
+  it.each([
+    ["GET", "/files/:name{[^ ]+}", "/files/report.txt"],
+    ["VERSION-CONTROL", "/documents/:id", "/documents/123"],
+    ["X1_!+", "/documents/:id", "/documents/123"],
+  ])("preserves exact fields and references for mounted %s %s", async (method, path, url) => {
+    const app = new Hono();
+    app.on(method, path, (c) => c.text("ok"));
+    app.on(method, path, (c) => c.text("stacked"));
+    expect((await app.request(url, { method })).status).toBe(200);
+    const expected = [{ method, path, auth: "public" }];
+    expect(routeInventory(app)).toEqual(expected);
+    const tests = { "test/endpoint.test.ts": `// route-inventory: ${method} ${path}\r\n` };
+    const docs = { "docs/url-freeze.md": `| \`${method} ${path}\` | mapped |` };
+    expect(() => assertRouteReferences(expected, tests, docs)).not.toThrow();
+    expect(() => assertRouteReferences([], tests, docs)).toThrow(`Stale test reference: ${method} ${path}`);
+    expect(() => assertRouteReferences(expected, tests, {})).toThrow(`Missing parity/URL entry: ${method} ${path}`);
+    expect(() => assertRouteReferences(expected, {}, docs)).toThrow(`Missing test reference: ${method} ${path}`);
+  });
+
+  it("does not treat a truncated whitespace-containing pattern as an exact reference", () => {
+    const inventory = [{ method: "GET", path: "/files/:name{[^ ]+}", auth: "public" }];
+    expect(() => assertRouteReferences(inventory,
+      { "test/endpoint.test.ts": "// route-inventory: GET /files/:name{[^" },
+      { "docs/parity.md": "`GET /files/:name{[^`" }))
+      .toThrow("Missing test reference: GET /files/:name{[^ ]+}");
+    expect(() => assertRouteReferences(inventory,
+      { "test/endpoint.test.ts": "// route-inventory: GET /files/:name{[^ ]+}" },
+      { "docs/parity.md": "`GET /files/:name{[^`" }))
+      .toThrow("Missing parity/URL entry: GET /files/:name{[^ ]+}");
+  });
+
   it("requires explicit method/pattern references, not URL substrings or another verb", () => {
     const docs = { "docs/parity.md": "| `GET /known` | mapped |" };
     for (const source of ["app.request('/known')", "// route-inventory: POST /known", "// route-inventory: GET /known-extra"]) {

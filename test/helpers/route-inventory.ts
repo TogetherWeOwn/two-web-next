@@ -12,9 +12,9 @@ type Router = { routes: { method: string; path: string }[] };
 // owner, bearer and QA tests prove enforcement. Scoped ALL registrations are
 // included: they are middleware on some paths and the RSVP 405 handler on another.
 export function routeInventory(router: Router): RouteInventoryEntry[] {
-  const registrations = new Set(router.routes.map(key));
-  return [...registrations].sort().map((name) => {
-    const [method, path] = name.split(" ") as [string, string];
+  const registrations = new Map(router.routes.map((route) => [key(route), route]));
+  return [...registrations.keys()].sort().map((name) => {
+    const { method, path } = registrations.get(name)!;
     let auth = "public";
     if (path === "/*") auth = "middleware";
     else if ((path === "/admin" || path.startsWith("/admin/")) && registrations.has("ALL /admin/*")) auth = "moderator";
@@ -38,10 +38,11 @@ export function assertRouteReferences(
   tests: Record<string, string>,
   docs: Record<string, string>,
 ) {
+  // Hono uppercases method tokens; patterns can contain spaces inside regexes.
   const referenced = new Set(Object.values(tests).flatMap((source) =>
-    [...source.matchAll(/^\/\/ route-inventory: ([A-Z]+ \/[^\r\n ]*)\r?$/gm)].map((match) => match[1]!)));
+    [...source.matchAll(/^\/\/ route-inventory: ([!#$%&'*+.^_`|~0-9A-Z-]+ \/[^\r\n]*)\r?$/gm)].map((match) => match[1]!)));
   const documented = new Set(Object.values(docs).flatMap((source) =>
-    [...source.matchAll(/`([A-Z]+ \/[^`\r\n ]*)`/g)].map((match) => match[1]!)));
+    [...source.matchAll(/`([!#$%&'*+.^_`|~0-9A-Z-]+ \/[^`\r\n]*)`/g)].map((match) => match[1]!)));
   const problems: string[] = [];
   for (const route of inventory) {
     const name = key(route);
