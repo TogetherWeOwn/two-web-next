@@ -1,9 +1,15 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { Layout } from "../pages";
 import {
-  PAST_EVENTS_COPY, PAST_EVENTS_EMPTY_TESTID, PAST_EVENTS_ISLAND,
-  PAST_EVENTS_LIST_TESTID, PAST_EVENTS_OUT_OF_RANGE_TESTID, PAST_EVENTS_TESTID,
-  goingCountText, pastEventsOutOfRangeCopy, pastEventsUrl,
+  PAST_EVENTS_COPY,
+  PAST_EVENTS_EMPTY_TESTID,
+  PAST_EVENTS_ISLAND,
+  PAST_EVENTS_LIST_TESTID,
+  PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_TESTID,
+  goingCountText,
+  pastEventsOutOfRangeCopy,
+  pastEventsUrl,
 } from "../islands/contracts";
 import type { PublicEvent } from "./reads";
 
