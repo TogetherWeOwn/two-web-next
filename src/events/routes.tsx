@@ -8,8 +8,21 @@ import { NotFoundError, createEvent, getEvent, transitionEvent, updateEvent } fr
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
-import { EventGonePage, EventPage, EventsPage, PastEventsPage } from "./pages";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getPublicEvent, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
+import { discordEventsSource } from "./discord-transients";
+import {
+  calendarEmptyState,
+  calendarSearching,
+  dedupeTransients,
+  eventSearchLogEntry,
+  mergeCalendarRows,
+  parseCalendarMonth,
+  parseCalendarView,
+  wallMonth,
+  calendarZone,
+  currentCalendarMonth,
+} from "../islands/contracts";
+import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getPublicEvent, listCalendarPast, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -61,8 +74,83 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
   app.get("/events", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    c.header("cache-control", "public, max-age=60");
-    return c.html(<EventsPage rows={await listUpcoming(db)} appUrl={c.env.APP_URL} />);
+    const session = await readSession(c);
+    const now = new Date();
+
+    // Resolve the URL state. A search forces the list view (a month grid that
+    // may not contain the matches reads as "no results"); an unknown view
+    // keeps the current one, which for a fresh URL means the default list.
+    const q = c.req.query("q") ?? "";
+    const searching = q.trim() !== "";
+    const view = searching ? "list" : (parseCalendarView(c.req.query("view")) ?? "list");
+    const past = c.req.query("past") === "1";
+
+    const opts = { includeDrafts: session?.moderator ?? false, search: q };
+    const localUpcoming = await listUpcoming(db, now, opts);
+    const localPast = await listCalendarPast(db, now, opts);
+
+    // One resolve per request: the rows and the failure flag MUST come from the
+    // same source instance (legacy render() comment) or every error reads as
+    // "never scheduled". Transients are re-checked against the local clock —
+    // a just-ended event cannot linger if the collector goes dark.
+    const discord = discordEventsSource(c.env);
+    const persistedDiscordIds = new Set(
+      [...localUpcoming, ...localPast].map((e) => e.discordEventId).filter((id): id is string => id !== null),
+    );
+    const transients = dedupeTransients(
+      (await discord.upcoming(now)).filter((t) => t.endsAt >= now),
+      persistedDiscordIds,
+    );
+    const discordFailed = discord.lastReadFailed();
+    const upcoming = mergeCalendarRows(localUpcoming, transients);
+
+    const zone = calendarZone([
+      ...localUpcoming.map((e) => e.timezone),
+      ...localPast.map((e) => e.timezone),
+    ]);
+    // No month given: open on the first upcoming event's host-zone month, else
+    // this month. An unparseable month is a page, never a 500.
+    const month =
+      parseCalendarMonth(c.req.query("month")) ??
+      (upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
+      currentCalendarMonth(now);
+
+    const state = { view, month, q, past };
+    const emptyState = calendarEmptyState({
+      searching,
+      upcomingEmpty: upcoming.length === 0,
+      pastEmpty: localPast.length === 0,
+      readFailed: discordFailed,
+    });
+
+    // One structured line per rendered search: normalized query + visible
+    // count, no identity (legacy EventSearchLogger, TOG-8400). Fail-open.
+    if (searching) {
+      const entry = eventSearchLogEntry(q, upcoming.length + (past || searching ? localPast.length : 0));
+      if (entry) {
+        try {
+          console.info("event_search", JSON.stringify(entry));
+        } catch {
+          /* a down logger is an unrecorded search, never a broken page */
+        }
+      }
+    }
+
+    c.header("cache-control", session?.moderator ? "private, no-store" : "public, max-age=60");
+    return c.html(
+      <EventsCalendarPage
+        state={state}
+        upcoming={upcoming}
+        past={localPast}
+        zone={zone}
+        now={now}
+        emptyState={emptyState}
+        discordFailed={discordFailed}
+        member={session?.member ?? false}
+        inviteUrl={c.env.DISCORD_INVITE_URL}
+        appUrl={c.env.APP_URL}
+      />,
+    );
   });
 
   app.get("/events/past", async (c) => {
