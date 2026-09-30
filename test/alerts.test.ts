@@ -6,7 +6,7 @@ import { registerErrorHandlers } from "../src/errors";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
 import { BotTerminalError } from "../src/jobs/types";
-import type { BotClient, EventStore, UniqueLock } from "../src/jobs/types";
+import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
 class BoomError extends Error {}
 
@@ -92,6 +92,7 @@ describe("app wiring", () => {
 describe("queue.failing", () => {
   const lock: UniqueLock = { acquire: async () => true, release: async () => {} };
   const events = {} as EventStore;
+  const ledger = { released: async () => {}, dequeued: async () => {}, failed: async () => {} } as unknown as QueueLedger;
   const msg = (body: unknown, attempts: number) => ({ body, attempts, ack() {}, retry() {} });
   const ann = { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } };
   const failingLines = (spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] =>
@@ -100,7 +101,7 @@ describe("queue.failing", () => {
   it("logs connection/queue/job/attempts/exception on a terminal failure", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const bot = { postAnnouncement: async () => { throw new BotTerminalError("missing secret"); } } as unknown as BotClient;
-    await consume({ messages: [msg(ann, 2)] }, { bot, events, lock });
+    await consume({ messages: [msg(ann, 2)] }, { bot, events, lock, ledger });
     expect(failingLines(spy)).toEqual([
       {
         level: "critical",
@@ -117,9 +118,9 @@ describe("queue.failing", () => {
   it("a redeliverable throw alerts only on the final attempt", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const bot = { postAnnouncement: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
-    await consume({ messages: [msg(ann, CALL_INTERNAL_ACTION.tries - 1)] }, { bot, events, lock });
+    await consume({ messages: [msg(ann, CALL_INTERNAL_ACTION.tries - 1)] }, { bot, events, lock, ledger });
     expect(failingLines(spy)).toHaveLength(0);
-    await consume({ messages: [msg(ann, CALL_INTERNAL_ACTION.tries)] }, { bot, events, lock });
+    await consume({ messages: [msg(ann, CALL_INTERNAL_ACTION.tries)] }, { bot, events, lock, ledger });
     expect(failingLines(spy)).toMatchObject([{ attempts: CALL_INTERNAL_ACTION.tries, exception: "TypeError" }]);
   });
 
@@ -129,7 +130,7 @@ describe("queue.failing", () => {
     const store = { find: boom } as unknown as EventStore;
     await consume(
       { messages: [msg({ kind: "sync-event", eventKey: "e1" }, SYNC_EVENT.tries)] },
-      { bot: {} as BotClient, events: store, lock },
+      { bot: {} as BotClient, events: store, lock, ledger },
     );
     expect(failingLines(spy)).toMatchObject([{ queue: "two-sync-event", job: "SyncEventToDiscord" }]);
   });

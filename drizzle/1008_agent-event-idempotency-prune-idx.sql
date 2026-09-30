@@ -1,0 +1,1 @@
+CREATE INDEX "agent_event_idempotency_created_at_idx" ON "agent_event_idempotency_keys" USING btree ("created_at");

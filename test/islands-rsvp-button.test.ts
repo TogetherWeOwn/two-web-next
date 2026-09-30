@@ -295,7 +295,7 @@ describe("rsvp-button SSR/server drift", () => {
     const res = await p.request(); const html = mount(await res.text());
     expect(res.status).toBe(code); expect(html).toContain(`role="status" data-testid="${RSVP_CLOSED_TESTID}">${copy}`);
     expect(html).not.toContain("data-action");
-    if (status === "cancelled") expect(res.headers.get("x-robots-tag")).toBe("noindex");
+    if (status === "cancelled") expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
   });
 
   it("preserves draft authorization", async () => {

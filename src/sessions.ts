@@ -28,6 +28,8 @@ export type SessionStore = {
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<boolean>;
   revoke: (tokenHash: string) => Promise<void>;
+  /** Expiry GC (W13 model:prune): delete rows reads can no longer see. Returns rows removed. */
+  sweepExpired: (now: Date) => Promise<number>;
 };
 
 /**
@@ -115,6 +117,13 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       await sql`update web_sessions set revoked_at = now()
         where token_hash = ${tokenHash} and revoked_at is null`;
     },
+    async sweepExpired(now) {
+      // `<=`: reads require expires_at > now(), so a row expiring exactly at
+      // `now` is already invisible. Idempotent: a second pass matches nothing.
+      const rows = await sql<Record<string, unknown>[]>`delete from web_sessions
+        where expires_at <= ${now} returning 1`;
+      return rows.length;
+    },
   };
 }
 
@@ -145,6 +154,17 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async revoke(hash) {
       rows.delete(hash);
+    },
+    async sweepExpired(now) {
+      const t = now.getTime();
+      let n = 0;
+      for (const [k, r] of rows) {
+        if (r.expiresAt <= t) {
+          rows.delete(k);
+          n++;
+        }
+      }
+      return n;
     },
   };
 }

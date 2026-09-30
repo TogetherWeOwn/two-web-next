@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CALL_INTERNAL_ACTION, PRUNE_CRON, RECONCILE_CRON, SYNC_EVENT } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
-import { reconcileEvents, runScheduled } from "../src/jobs/cron";
+import { reconcileEvents, runScheduled, type SingleFlight } from "../src/jobs/cron";
+import { trackingQueue } from "../src/jobs/ledger";
 import { dispatchSyncEvent, uniqueKey } from "../src/jobs/sync-event";
 import { BotTransportError } from "../src/jobs/types";
-import type { BotClient, BotFailure, EventStore, UniqueLock } from "../src/jobs/types";
+import type { BotClient, BotFailure, EventStore, QueueLedger, TxClient, UniqueLock } from "../src/jobs/types";
 
 const payload = { eventKey: "e1", name: "n", startsAt: "s", endsAt: null, location: "l", description: null };
 const fail = (o: Partial<BotFailure>): BotFailure => ({
@@ -18,6 +19,17 @@ function memLock(): UniqueLock & { held: Set<string> } {
     held,
     acquire: async (k) => (held.has(k) ? false : (held.add(k), true)),
     release: async (k) => void held.delete(k),
+  };
+}
+function memLedger(): QueueLedger & { rows: Map<string, { state: string; availableAt?: Date; reason?: string }> } {
+  const rows = new Map<string, { state: string; availableAt?: Date; reason?: string }>();
+  return {
+    rows,
+    enqueued: async (j) => void rows.set(j.jobId, { state: "pending", availableAt: j.availableAt }),
+    reserved: async (id) => void rows.set(id, { ...rows.get(id), state: "reserved" } as never),
+    released: async (id, at) => void rows.set(id, { ...rows.get(id), state: "released", availableAt: at } as never),
+    dequeued: async (id) => void rows.delete(id),
+    failed: async (id, _kind, _key, reason) => void rows.set(id, { state: "failed", reason }),
   };
 }
 function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[] } {
@@ -70,13 +82,13 @@ describe("SyncEventToDiscord", () => {
     const lock = memLock();
     for (const [attempt, delay] of [[1, 10], [2, 60], [3, 300], [4, 900], [5, 3600]] as const) {
       const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, attempt);
-      await consume({ messages: [m] }, { bot, events: store(), lock });
+      await consume({ messages: [m] }, { bot, events: store(), lock, ledger: memLedger() });
       expect(m.retried).toBe(delay);
       expect(m.acked).toBe(false);
     }
     const last = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, 6);
     lock.held.add(uniqueKey("e1"));
-    await consume({ messages: [last] }, { bot, events: store(), lock });
+    await consume({ messages: [last] }, { bot, events: store(), lock, ledger: memLedger() });
     expect(last.acked).toBe(true);
     expect(lock.held.has(uniqueKey("e1"))).toBe(false); // lock freed on terminal outcome
   });
@@ -85,11 +97,11 @@ describe("SyncEventToDiscord", () => {
     let answer: BotFailure = fail({ retryAfterSeconds: 42 });
     const bot = { upsertEvent: async () => answer } as unknown as BotClient;
     const a = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, 1);
-    await consume({ messages: [a] }, { bot, events: store(), lock: memLock() });
+    await consume({ messages: [a] }, { bot, events: store(), lock: memLock(), ledger: memLedger() });
     expect(a.retried).toBe(42);
     answer = fail({ retryable: false, code: "action_not_allowed" });
     const b = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, 1);
-    await consume({ messages: [b] }, { bot, events: store(), lock: memLock() });
+    await consume({ messages: [b] }, { bot, events: store(), lock: memLock(), ledger: memLedger() });
     expect(b.acked).toBe(true);
     expect(b.retried).toBeUndefined();
   });
@@ -105,7 +117,7 @@ describe("SyncEventToDiscord", () => {
     } as unknown as BotClient;
     const s = store();
     const body = { kind: "sync-event", eventKey: "e1", idempotencyKey: "same-key" };
-    await consume({ messages: [msg(body), msg(body, 2)] }, { bot, events: s, lock: memLock() });
+    await consume({ messages: [msg(body), msg(body, 2)] }, { bot, events: s, lock: memLock(), ledger: memLedger() });
     expect(created).toBe(1);
     expect(s.mirrored).toEqual(["discord-1", "discord-1"]);
   });
@@ -113,10 +125,10 @@ describe("SyncEventToDiscord", () => {
   it("drops deleted and unmirrored events without calling the bot", async () => {
     const m1 = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" });
     const m2 = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" });
-    await consume({ messages: [m1] }, { bot: noBot, events: store({ find: async () => null }), lock: memLock() });
+    await consume({ messages: [m1] }, { bot: noBot, events: store({ find: async () => null }), lock: memLock(), ledger: memLedger() });
     await consume(
       { messages: [m2] },
-      { bot: noBot, events: store({ find: async () => ({ eventKey: "e1", payload, mirrored: false }) }), lock: memLock() },
+      { bot: noBot, events: store({ find: async () => ({ eventKey: "e1", payload, mirrored: false }) }), lock: memLock(), ledger: memLedger() },
     );
     expect(m1.acked && m2.acked).toBe(true);
   });
@@ -128,11 +140,11 @@ describe("CallInternalAction", () => {
     const bot = { postAnnouncement: async () => fail({}) } as unknown as BotClient;
     for (const [attempt, delay] of [[1, 5], [2, 15], [3, 60], [4, 180]] as const) {
       const m = msg(ann, attempt);
-      await consume({ messages: [m] }, { bot, events: store(), lock: memLock() });
+      await consume({ messages: [m] }, { bot, events: store(), lock: memLock(), ledger: memLedger() });
       expect(m.retried).toBe(delay);
     }
     const last = msg(ann, 5);
-    await consume({ messages: [last] }, { bot, events: store(), lock: memLock() });
+    await consume({ messages: [last] }, { bot, events: store(), lock: memLock(), ledger: memLedger() });
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
   });
@@ -146,7 +158,7 @@ describe("CallInternalAction", () => {
         return { ok: true, requestId: null, messageId: "m1", replayed };
       },
     } as unknown as BotClient;
-    await consume({ messages: [msg(ann), msg(ann, 2)] }, { bot, events: store(), lock: memLock() });
+    await consume({ messages: [msg(ann), msg(ann, 2)] }, { bot, events: store(), lock: memLock(), ledger: memLedger() });
     expect(seen.get("k")).toBe(2);
   });
 
@@ -154,9 +166,193 @@ describe("CallInternalAction", () => {
     let called = 0;
     const bot = { assignRole: async () => (called++, { ok: true, requestId: null, outcome: "already_held" }) } as unknown as BotClient;
     const m = msg({ kind: "role-assign", idempotencyKey: null, action: { userId: "u", roleKey: "r" } });
-    await consume({ messages: [m] }, { bot, events: store(), lock: memLock() });
+    await consume({ messages: [m] }, { bot, events: store(), lock: memLock(), ledger: memLedger() });
     expect(called).toBe(1);
     expect(m.acked).toBe(true);
+  });
+});
+
+describe("queue ledger (N3)", () => {
+  it("tracks reserved -> dequeued on done, and reserved -> failed on terminal failure", async () => {
+    const bot = { upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }) } as unknown as BotClient;
+    const ledger = memLedger();
+    await consume(
+      { messages: [msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" })] },
+      { bot, events: store(), lock: memLock(), ledger },
+    );
+    expect(ledger.rows.has("j1")).toBe(false); // dequeued on terminal success
+
+    const bad = { postAnnouncement: async () => fail({ retryable: false, code: "action_not_allowed" }) } as unknown as BotClient;
+    const ledger2 = memLedger();
+    ledger2.rows.set("j2", { state: "pending" });
+    await consume(
+      { messages: [msg({ kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" }, jobId: "j2" })] },
+      { bot: bad, events: store(), lock: memLock(), ledger: ledger2 },
+    );
+    expect(ledger2.rows.get("j2")?.state).toBe("failed");
+    expect(ledger2.rows.get("j2")?.reason).toContain("announcement.post");
+  });
+
+  it("releases back to pending with the retry's availability on a retry outcome", async () => {
+    const bot = { upsertEvent: async () => fail({ retryAfterSeconds: 42 }) } as unknown as BotClient;
+    const ledger = memLedger();
+    const before = Date.now();
+    await consume(
+      { messages: [msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" }, 1)] },
+      { bot, events: store(), lock: memLock(), ledger },
+    );
+    const row = ledger.rows.get("j1");
+    expect(row?.state).toBe("released");
+    expect(row?.availableAt!.getTime()).toBeGreaterThanOrEqual(before + 42_000);
+  });
+
+  it("tracks nothing for messages without a jobId (pre-ledger messages in flight)", async () => {
+    const bot = { upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }) } as unknown as BotClient;
+    const ledger = memLedger();
+    const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" });
+    await consume({ messages: [m] }, { bot, events: store(), lock: memLock(), ledger });
+    expect(m.acked).toBe(true);
+    expect(ledger.rows.size).toBe(0);
+  });
+
+  it("a ledger outage never blocks ack/retry", async () => {
+    const bot = { upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }) } as unknown as BotClient;
+    const dead: QueueLedger = {
+      enqueued: async () => Promise.reject(new Error("db down")),
+      reserved: async () => Promise.reject(new Error("db down")),
+      released: async () => Promise.reject(new Error("db down")),
+      dequeued: async () => Promise.reject(new Error("db down")),
+      failed: async () => Promise.reject(new Error("db down")),
+    };
+    const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" });
+    await consume({ messages: [m] }, { bot, events: store(), lock: memLock(), ledger: dead });
+    expect(m.acked).toBe(true);
+  });
+
+  it("a hung ledger never stalls handling or the rest of the batch", async () => {
+    // A row-lock-wedged `reserved()` neither resolves nor rejects, so `.catch`
+    // alone cannot rescue processing. The bounded ledger path must time out so
+    // the handler still runs and every message still reaches ack/retry.
+    vi.useFakeTimers();
+    try {
+      const hung: QueueLedger = {
+        enqueued: async () => {},
+        reserved: () => new Promise<void>(() => {}),
+        released: async () => {},
+        dequeued: async () => {},
+        failed: async () => {},
+      };
+      const bot = { upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }) } as unknown as BotClient;
+      const m1 = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" });
+      const m2 = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j2" });
+      const p = consume({ messages: [m1, m2] }, { bot, events: store(), lock: memLock(), ledger: hung });
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(m1.acked).toBe(true);
+      expect(m2.acked).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an exhausted throw acks and frees the sync lock instead of retrying", async () => {
+    // At the tries cap an unexpected throw is terminal: the row is already
+    // moved to failed, so requeueing would run the job again with no live
+    // depth accounting (and stack duplicate failure rows).
+    const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
+    const lock = memLock();
+    lock.held.add(uniqueKey("e1"));
+    const ledger = memLedger();
+    const last = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" }, SYNC_EVENT.tries);
+    await consume({ messages: [last] }, { bot, events: store(), lock, ledger });
+    expect(last.acked).toBe(true);
+    expect(last.retried).toBeUndefined();
+    expect(lock.held.has(uniqueKey("e1"))).toBe(false);
+    expect(ledger.rows.get("j1")?.state).toBe("failed");
+    expect(ledger.rows.get("j1")?.reason).toBe("TypeError");
+  });
+
+  it("an exhausted throw acks and continues the batch when lock cleanup rejects", async () => {
+    // TOG-9895 review: a rejecting lock.release used to propagate out of
+    // consume() and skip every later ack (firstAck=0, secondAck=0, whole
+    // batch lost). Cleanup is best-effort — the lock row self-heals via TTL.
+    const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
+    const lock: UniqueLock = {
+      acquire: async () => true,
+      release: async (key) => {
+        if (key === uniqueKey("e1")) throw new Error("lock DELETE failed");
+      },
+    };
+    const ledger = memLedger();
+    const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" }, SYNC_EVENT.tries);
+    const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" }, 1);
+    await consume({ messages: [first, second] }, { bot, events: store(), lock, ledger });
+    expect(first.acked).toBe(true);
+    expect(first.retried).toBeUndefined();
+    expect(second.retried).toBe("now");
+    expect(second.acked).toBe(false);
+    expect(ledger.rows.get("j1")?.state).toBe("failed");
+  });
+
+  it("an exhausted throw acks and continues the batch when lock cleanup hangs", async () => {
+    // A hung release must not hold the batch open either: the bounded cleanup
+    // times out, the terminal ack lands, and the rest of the batch runs.
+    vi.useFakeTimers();
+    try {
+      const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
+      let unblock!: () => void;
+      const hung = new Promise<void>((r) => { unblock = r; });
+      const lock: UniqueLock = {
+        acquire: async () => true,
+        release: async (key) => {
+          if (key === uniqueKey("e1")) await hung;
+        },
+      };
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" }, SYNC_EVENT.tries);
+      const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" }, 1);
+      const p = consume({ messages: [first, second] }, { bot, events: store(), lock, ledger: memLedger() });
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(first.acked).toBe(true);
+      expect(second.retried).toBe("now");
+      unblock();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a nonterminal throw still releases and retries", async () => {
+    const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
+    const ledger = memLedger();
+    ledger.rows.set("j1", { state: "pending" });
+    const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" }, 1);
+    await consume({ messages: [m] }, { bot, events: store(), lock: memLock(), ledger });
+    expect(m.acked).toBe(false);
+    expect(m.retried).toBe("now");
+    expect(ledger.rows.get("j1")?.state).toBe("released");
+  });
+});
+
+describe("trackingQueue", () => {
+  it("mints a jobId, writes the ledger row with the debounce delay, then sends", async () => {
+    const sent: { body: any; o: any }[] = [];
+    const ledger = memLedger();
+    const now = new Date("2026-09-30T12:00:00Z");
+    const q = trackingQueue({ send: async (body: unknown, o?: { delaySeconds?: number }) => void sent.push({ body, o }) }, ledger, () => now);
+    await q.send({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, { delaySeconds: 10 });
+    const jobId = sent[0]!.body.jobId as string;
+    expect(jobId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(ledger.rows.get(jobId)?.availableAt).toEqual(new Date(now.getTime() + 10_000));
+  });
+
+  it("deletes the ledger row when the send throws", async () => {
+    const ledger = memLedger();
+    const q = trackingQueue(
+      { send: async () => Promise.reject(new Error("queue down")) },
+      ledger,
+    );
+    await expect(q.send({ kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } })).rejects.toThrow("queue down");
+    expect(ledger.rows.size).toBe(0);
   });
 });
 
@@ -179,8 +375,10 @@ describe("cron", () => {
 
   it("routes by cron and rejects unknown expressions", async () => {
     const ran: string[] = [];
-    const flight = async (name: string, fn: () => Promise<void>) => (ran.push(name), await fn(), true);
-    const jobs = { reconcile: async () => void ran.push("r"), prune: async () => void ran.push("p") };
+    // The flight hands the body its reserved transaction client; the fake
+    // stands in with a dummy the memory jobs ignore.
+    const flight: SingleFlight = async (name, fn) => (ran.push(name), await fn({} as TxClient), true);
+    const jobs = { reconcile: async (_db: unknown) => void ran.push("r"), prune: async (_db: unknown) => void ran.push("p") };
     await runScheduled(RECONCILE_CRON, flight, jobs);
     await runScheduled(PRUNE_CRON, flight, jobs);
     expect(ran).toEqual(["events:reconcile", "r", "model:prune", "p"]);

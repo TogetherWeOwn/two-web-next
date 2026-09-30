@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createMemberDataFixture, testDatabaseUrl } from "./helpers/member-data-db";
+import { createJobsFixture } from "./helpers/jobs-db";
 
 // Refusal must precede even constructing a driver, not just its first query.
 vi.mock("postgres", () => ({ default: vi.fn(() => { throw new Error("unexpected DB connection"); }) }));
@@ -31,6 +32,7 @@ it.each([
   try {
     expect(() => testDatabaseUrl(raw, {})).toThrow("refusing before connecting");
     await expect(createMemberDataFixture(raw)).rejects.toThrow("refusing before connecting");
+    await expect(createJobsFixture(raw)).rejects.toThrow("refusing before connecting");
     expect(postgres).not.toHaveBeenCalled();
     try { testDatabaseUrl(raw, {}); } catch (error) { expect(String(error)).not.toContain(raw); }
   } finally { vi.unstubAllEnvs(); }
