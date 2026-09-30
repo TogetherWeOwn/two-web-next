@@ -59,6 +59,27 @@ export interface UniqueLock {
 }
 
 export type QueueMessage =
-  | { kind: "sync-event"; eventKey: string; idempotencyKey: string }
-  | { kind: "announcement"; idempotencyKey: string; action: Announcement }
-  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment };
+  | { kind: "sync-event"; eventKey: string; idempotencyKey: string; jobId?: string }
+  | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
+  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string };
+
+/**
+ * N3 (TOG-9895): the countable side of the queue. Cloudflare Queues carries the
+ * messages but has no depth API, so dispatch and consume mirror every message's
+ * lifecycle into Postgres (`queue_jobs`/`queue_failed_jobs`) — the same
+ * `jobs`/`failed_jobs` pair the legacy `queue:check-depth` probe counted.
+ * Every method is best-effort from the caller's side: a ledger outage must not
+ * stall job processing (the /up probe reports `unknown` for the same outage).
+ */
+export interface QueueLedger {
+  /** A message was accepted by the queue. `availableAt` includes the debounce delay. */
+  enqueued(job: { jobId: string; kind: string; key: string | null; availableAt: Date }): Promise<void>;
+  /** A consumer picked the message up. */
+  reserved(jobId: string): Promise<void>;
+  /** The message went back to the queue (retry outcome or redelivery). */
+  released(jobId: string, availableAt: Date): Promise<void>;
+  /** Terminal success: remove the row. */
+  dequeued(jobId: string): Promise<void>;
+  /** Terminal failure: move the row into `queue_failed_jobs` (legacy `failed_jobs`). */
+  failed(jobId: string, kind: string, key: string | null, reason: string): Promise<void>;
+}

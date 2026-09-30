@@ -2,7 +2,8 @@ import postgres from "postgres";
 import type { JobsEnv } from "../env";
 import { pruneAccessLog, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
-import { pgSingleFlight, pgUniqueLock } from "./postgres";
+import { trackingQueue } from "./ledger";
+import { pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
 import type { AccessLogStore, BotClient, EventStore } from "./types";
 
 // The events/access-log tables (W8/W7) and the Rust bot client (ADR pending) do not exist yet. Until
@@ -22,15 +23,17 @@ const bot: BotClient = {
 };
 
 function sqlFor(env: JobsEnv) {
-  const url = env.HYPERDRIVE?.connectionString ?? env.DATABASE_URL;
-  if (!url) throw new Error("no database configured (HYPERDRIVE or DATABASE_URL)");
+  // The wrangler hyperdrive binding is `DB` (S1); `HYPERDRIVE` stays as an
+  // accepted alias for environments that predate it.
+  const url = env.HYPERDRIVE?.connectionString ?? env.DB?.connectionString ?? env.DATABASE_URL;
+  if (!url) throw new Error("no database configured (DB/HYPERDRIVE or DATABASE_URL)");
   return postgres(url, { max: 1 });
 }
 
 export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): Promise<void> {
   const sql = sqlFor(env);
   try {
-    await consume(batch, { bot, events, lock: pgUniqueLock(sql) });
+    await consume(batch, { bot, events, lock: pgUniqueLock(sql), ledger: pgQueueLedger(sql) });
   } finally {
     await sql.end({ timeout: 1 });
   }
@@ -40,8 +43,11 @@ export async function handleScheduled(controller: ScheduledController, env: Jobs
   const sql = sqlFor(env);
   try {
     const lock = pgUniqueLock(sql);
+    const ledger = pgQueueLedger(sql);
     await runScheduled(controller.cron, pgSingleFlight(sql), {
-      reconcile: () => reconcileEvents({ events, queue: env.SYNC_EVENT_QUEUE, lock }),
+      // The tracking wrapper writes the `queue_jobs` row on dispatch, so /up sees
+      // every re-dispatched stale event the moment it is queued.
+      reconcile: () => reconcileEvents({ events, queue: trackingQueue(env.SYNC_EVENT_QUEUE, ledger), lock }),
       prune: () => pruneAccessLog(accessLog),
     });
   } finally {

@@ -166,3 +166,33 @@ export const jobUniqueLocks = pgTable("job_unique_locks", {
   key: text("key").primaryKey(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
+
+// N3 (TOG-9895): the countable queue ledger behind GET /up. Cloudflare Queues holds the
+// messages but exposes no depth API on the binding, so dispatch and consume keep this
+// ledger in step — the same `jobs`/`failed_jobs` pair the legacy `queue:check-depth`
+// probe counted. `available_at`/`reserved_at`/`created_at` carry the exact legacy
+// bucket semantics (pending/delayed/reserved/oldest-pending-age).
+export const queueJobs = pgTable(
+  "queue_jobs",
+  {
+    jobId: uuid("job_id").primaryKey(),
+    kind: text("kind").notNull(),
+    // Dedupe key for sync-event (`uniqueKey(eventKey)`); null for internal-action jobs.
+    // A re-dispatch upserts the stale row in place instead of doubling the count.
+    key: text("key"),
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull(),
+    reservedAt: timestamp("reserved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("queue_jobs_key_unique").on(t.key)],
+);
+
+// Terminal failures, mirroring legacy `failed_jobs`: reported by /up, never thresholded.
+export const queueFailedJobs = pgTable("queue_failed_jobs", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  jobId: uuid("job_id").notNull(),
+  kind: text("kind").notNull(),
+  key: text("key"),
+  reason: text("reason").notNull(),
+  failedAt: timestamp("failed_at", { withTimezone: true }).notNull().defaultNow(),
+});

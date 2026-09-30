@@ -50,6 +50,13 @@
       "when": 1790725495112,
       "tag": "1004_job-unique-locks",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790726372640,
+      "tag": "1005_queue-ledger",
+      "breakpoints": true
     }
   ]
 }
