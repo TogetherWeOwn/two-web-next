@@ -228,8 +228,8 @@ binding/DB recovery to the Director and authorized custodian; never credential-h
 ## Queue containment, drain and failed-job replay
 
 **Current implementation gate:** [src/jobs/worker.ts](../src/jobs/worker.ts)
-uses `notWired` EventStore/BotClient adapters. The configured W13 consumers
-cannot currently perform successful event/bot work. Do not resume delivery or
+uses a real event store but a `notWired` BotClient adapter. The configured W13
+consumers cannot currently perform successful live bot work. Do not resume delivery or
 replay real messages until the Director has accepted a reviewed adapter fix and
 local acceptance evidence. Queue depth falling under these stubs can mean retry
 exhaustion and terminal acknowledgement, not successful draining.

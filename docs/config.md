@@ -95,12 +95,6 @@ Failure/default details are implemented in [`src/index.tsx`](../src/index.tsx),
 
 These names are deliberately **not** extra rows in the marked inventory:
 
-- **Unbound event write-back carrier:** `EVENT_SYNC_QUEUE` is an optional
-  `SyncQueue` extension in [`src/events/sync.ts`](../src/events/sync.ts), present
-  only in Wrangler comments, not an actual binding. It uses a different message
-  shape from `SYNC_EVENT_QUEUE`. Missing binding warns; send failures log without
-  throwing. If it becomes a deployed binding, add it to `src/env.ts` and the
-  checked inventory in the same change.
 - **Local Hyperdrive tooling:**
   `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB` is a Wrangler process
   variable, not a Worker `Env` property. It overrides the local Hyperdrive
