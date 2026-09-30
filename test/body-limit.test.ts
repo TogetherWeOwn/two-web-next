@@ -46,8 +46,9 @@ describe("every registered write route is body-limited", () => {
           member: true, moderator: true, expiresAt: new Date(Date.now() + 3600_000),
         });
         const env = {
-          APP_URL: "https://next.example.test", SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
-          SESSION_STORE: store,
+          // Enables the QA seam for this in-process boundary fixture only.
+          APP_URL: "https://next.togetherweown.com", QA_AUTH_TOKEN: "test-only-qa-token",
+          SESSION_SECRET: "test-session-secret-at-least-32-bytes-long", SESSION_STORE: store,
         } as unknown as Env;
         const cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, { path: "/", secure: true })).split(";")[0]!;
         const response = await app.request(path, {

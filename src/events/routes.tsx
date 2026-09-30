@@ -300,7 +300,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
 
   const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
 
-  app.post("/events", requestBodyLimit("json"), throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("json"), async (c) => {
     const who = await moderator(c);
     if (who instanceof Response) return who;
     const db = await dbFor(c);
@@ -314,7 +314,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  app.patch("/events/:key", requestBodyLimit("json"), throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("json"), async (c) => {
     const who = await moderator(c);
     if (who instanceof Response) return who;
     const db = await dbFor(c);
@@ -353,7 +353,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   for (const action of ["publish", "cancel"] as const) {
-    app.post(`/events/:key/${action}`, requestBodyLimit("action"), throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
       const who = await moderator(c);
       if (who instanceof Response) return who;
       const db = await dbFor(c);

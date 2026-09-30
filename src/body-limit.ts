@@ -28,11 +28,17 @@ export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings:
     // Retain the source reader so overflow cancels the upload. Hono's own
     // reader is locked inside bodyLimit and cannot be cancelled by onError.
     const reader = c.req.raw.body.getReader();
+    let readFailed = false;
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
-        const chunk = await reader.read();
-        if (chunk.done) controller.close();
-        else controller.enqueue(chunk.value);
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) controller.close();
+          else controller.enqueue(chunk.value);
+        } catch (err) {
+          readFailed = true;
+          controller.error(err);
+        }
       },
       cancel: (reason) => reader.cancel(reason),
     }, { highWaterMark: 0 });
@@ -50,14 +56,20 @@ export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings:
         return payloadTooLarge(c);
       },
     });
+    let refused: Response | void;
     try {
-      return await limit(c, async () => {
-        if (length !== undefined) c.req.raw.headers.set("content-length", length);
-        await next();
-      });
+      // Buffering is separate from downstream execution: only a failed source
+      // read is a bad upload, never a route/store exception.
+      refused = await limit(c, async () => {});
+    } catch (err) {
+      if (!readFailed) throw err;
+      return c.text("Bad request", 400);
     } finally {
       reader.releaseLock();
     }
+    if (refused) return refused;
+    if (length !== undefined) c.req.raw.headers.set("content-length", length);
+    return next();
   };
   (middleware as unknown as Record<symbol, BodyClass>)[LIMITED] = kind;
   return middleware;

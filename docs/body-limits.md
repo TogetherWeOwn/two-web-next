@@ -6,6 +6,11 @@ bytes even with an understated or invalid `Content-Length`, and cancels the
 source upload on overflow. An advertised over-budget length is rejected without
 reading the body. Existing authentication, field validation and throttles remain
 in place; authenticated-only route groups may reject a guest before the limiter.
+Shared throttles run before buffering: oversized attempts consume admission
+budget and an exhausted bucket returns 429 without pulling the upload. The QA
+environment gate runs first, so a disabled seam always returns 404 without reads
+or throttle queries. Source-read failures return a static 400; downstream route
+and store exceptions still reach their existing handlers.
 
 ## Classes and derivation
 

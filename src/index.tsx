@@ -487,7 +487,7 @@ registerEventRoutes(
   async (c) => readSession(c, await storeFor(c), false),
 );
 
-app.post("/logout", requestBodyLimit("action"), throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
   // the origin check below refuses one anyway.
   const origin = c.req.header("origin");
@@ -501,8 +501,10 @@ app.post("/logout", requestBodyLimit("action"), throttle("logout", WRITE_THROTTL
 
 // Staging-only QA seam. 404 everywhere that is not the staging host with
 // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post("/auth/qa/:identity", requestBodyLimit("action"), throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), async (c) => {
+app.post("/auth/qa/:identity", async (c, next) => {
   if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
+  await next();
+}, throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
   const fixture = QA_IDENTITIES[c.req.param("identity") ?? ""];
