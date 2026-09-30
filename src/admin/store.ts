@@ -13,9 +13,10 @@
 // Hyperdrive FOR UPDATE semantics proof. The queue dispatch + reconcile
 // backstop arrive with W8/W13; `writeBackDue` marks what they must carry.
 
-import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
 import type { Db } from "../db/index";
-import { activityLog, events, featuredContents, memberDataAccessLogs } from "../db/admin-schema";
+import { activityLog, events, featuredContents, memberDataAccessLogs, rsvps } from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
 import { isMirrored, newEventKey, nextStatus } from "./validation";
@@ -328,17 +329,29 @@ export class NotFoundError extends Error {
   }
 }
 
-export async function listEvents(
-  db: Db,
-  opts: { q?: string; status?: string; order?: "asc" | "desc" },
-): Promise<EventRow[]> {
+/** Fetch one extra row so pagination needs no separate count query. */
+export async function listEvents(db: Db, params: EventListParams): Promise<EventRow[]> {
+  const opts = parseEventListQuery(params);
   const conds = [];
   if (opts.q) conds.push(ilike(events.title, `%${opts.q}%`));
   if (opts.status) conds.push(eq(events.status, opts.status));
-  const where = conds.length === 1 ? conds[0] : conds.length > 1 ? and(...conds) : undefined;
-  const order = opts.order === "asc" ? asc(events.startsAt) : desc(events.startsAt);
-  if (where) return db.select().from(events).where(where).orderBy(order);
-  return db.select().from(events).orderBy(order);
+  if (opts.series === "parent") conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
+  if (opts.series === "child") conds.push(isNotNull(events.parentEventId));
+  if (opts.series === "standalone") conds.push(and(isNull(events.parentEventId), isNull(events.recurrenceFrequency)));
+  if (opts.fill === "unlimited") conds.push(isNull(events.capacity));
+  if (opts.fill === "full" || opts.fill === "has_seats") {
+    // Only Going occupies a seat: Maybe and Waitlist never make an event full.
+    const going = db.select({ count: sql<number>`count(*)` }).from(rsvps)
+      .where(and(eq(rsvps.eventId, events.id), eq(rsvps.status, "going")));
+    conds.push(isNotNull(events.capacity));
+    conds.push(opts.fill === "full" ? sql`(${going}) >= ${events.capacity}` : sql`(${going}) < ${events.capacity}`);
+  }
+  // Pick real column objects, never an identifier interpolated from the URL.
+  const column = opts.sort === "title" ? events.title : opts.sort === "status" ? events.status : events.startsAt;
+  const order = opts.order === "asc" ? asc(column) : desc(column);
+  return db.select().from(events).where(and(...conds))
+    .orderBy(order, asc(events.id))
+    .limit(EVENT_PAGE_SIZE + 1).offset((opts.page - 1) * EVENT_PAGE_SIZE);
 }
 
 export async function getEvent(db: Db, eventKey: string): Promise<EventRow | null> {
