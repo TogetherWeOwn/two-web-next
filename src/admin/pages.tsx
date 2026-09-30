@@ -5,6 +5,7 @@
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
+import { currentlyVisible, FeaturedContentItem, FeaturedStatusBadge } from "../featured";
 import type { EventRow, FeaturedRow } from "./store";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 
@@ -15,18 +16,7 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title} — TWO admin</title>
       <link rel="stylesheet" href="/styles.css" />
-      <style>{`
-        .admin-table { width: 100%; border-collapse: collapse; }
-        .admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
-        .field { margin: 1rem 0; }
-        .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
-        .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
-        .field .hint { color: #6b6257; font-size: .85rem; }
-        .field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
-        .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
-        .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
-        .filters .field { margin: 0; }
-      `}</style>
+      <link rel="stylesheet" href="/admin.css" />
     </head>
     <body>
       <header class="bar">
@@ -402,7 +392,7 @@ export const EventFormPage: FC<{
   );
 };
 
-export const FeaturedPage: FC<{ rows: FeaturedRow[] }> = ({ rows }) => (
+export const FeaturedPage: FC<{ rows: FeaturedRow[]; now?: Date }> = ({ rows, now = new Date() }) => (
   <Shell title="Featured content">
     <section>
       <h1>Featured content</h1>
@@ -413,7 +403,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[] }> = ({ rows }) => (
         <thead>
           <tr>
             <th>Title</th>
-            <th>Published</th>
+            <th>Status</th>
             <th>Position</th>
             <th>Window (UTC)</th>
           </tr>
@@ -431,7 +421,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[] }> = ({ rows }) => (
                 <td>
                   <a href={`/admin/featured/${r.id}`}>{r.title}</a>
                 </td>
-                <td data-testid={`featured-published-${r.id}`}>{r.isPublished ? "yes" : "no"}</td>
+                <td data-testid={`featured-status-${r.id}`}><FeaturedStatusBadge row={r} now={now} /></td>
                 <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
                 <td>
                   {r.startsAt ? r.startsAt.toISOString() : "—"} → {r.endsAt ? r.endsAt.toISOString() : "—"}
@@ -450,13 +440,26 @@ export const FeaturedFormPage: FC<{
   row?: FeaturedRow;
   values: Record<string, unknown>;
   errors: Record<string, string>;
-}> = ({ mode, row, values, errors }) => {
+  now?: Date;
+}> = ({ mode, row, values, errors, now = new Date() }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked = values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
       <section>
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
+        {mode === "edit" && row ? (
+          <section aria-labelledby="featured-preview-heading" data-testid="featured-preview">
+            <h2 id="featured-preview-heading">Homepage preview</h2>
+            <p>Last saved content, checked at <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to refresh this preview.</p>
+            <p>Status: <FeaturedStatusBadge row={row} now={now} /></p>
+            {currentlyVisible(row, now) ? (
+              <FeaturedContentItem row={row} now={now} />
+            ) : (
+              <p data-testid="featured-preview-hidden">This slot is not currently visible on the homepage.</p>
+            )}
+          </section>
+        ) : null}
         {Object.keys(errors).length > 0 ? (
           <p class="notice" role="alert" data-testid="form-errors">
             Check the highlighted fields and try again.

@@ -1,0 +1,14 @@
+.admin-table { width: 100%; border-collapse: collapse; }
+.admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
+.field { margin: 1rem 0; }
+.field label { display: block; font-weight: 700; margin-bottom: .25rem; }
+.field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
+.field .hint { color: #6b6257; font-size: .85rem; }
+.field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
+.actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
+.filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
+.filters .field { margin: 0; }
+.featured-status { display: inline-block; padding: .1rem .5rem; border: 1px solid currentColor; border-radius: .25rem; font-size: .85rem; font-weight: 700; }
+.featured-status-live { color: #166534; }
+.featured-status-scheduled { color: #1e40af; }
+.featured-status-expired, .featured-status-unpublished { color: var(--muted); }
