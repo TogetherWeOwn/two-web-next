@@ -52,6 +52,32 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])("
     expect(urlRead).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, "https://cross-origin.example.test", "null"])("keeps unsafe requests with untrusted Origin %s behind the global guard", async (origin) => {
+    const dbRead = vi.fn(() => { throw new Error("refused requests must not read the DB binding"); });
+    const urlRead = vi.fn(() => { throw new Error("refused requests must not read DATABASE_URL"); });
+    const bindings: Env = { ...env, APP_URL: host };
+    Object.defineProperties(bindings, {
+      DB: { get: dbRead },
+      DATABASE_URL: { get: urlRead },
+    });
+    const headers = new Headers({ accept: "application/json", authorization: "Bearer fixture-probe" });
+    if (origin !== undefined) headers.set("origin", origin);
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      const unknown = await app.request(`${host}/not-a-route`, { method, headers }, bindings);
+      const body = await unknown.text();
+      expect(unknown.status).toBe(403);
+      expect(JSON.parse(body)).toEqual({ error: "cross_origin" });
+      for (const path of removed) {
+        const response = await app.request(`${host}${path}`, { method, headers }, bindings);
+        expect(response.status, `${method} ${path}`).toBe(403);
+        expect(await response.text(), path).toBe(body);
+        expect([...response.headers], path).toEqual([...unknown.headers]);
+      }
+    }
+    expect(dbRead).not.toHaveBeenCalled();
+    expect(urlRead).not.toHaveBeenCalled();
+  });
+
   it("does not register diagnostic routes for any method", () => {
     expect(app.routes.filter((route) => removed.includes(route.path))).toEqual([]);
   });
