@@ -178,9 +178,30 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect((await req("/e/not-a-ulid")).status).toBe(404);
   });
 
-  it("past archive lists ended events and pages 20 at a time", async () => {
-    const res = await req("/events/past");
-    expect(res.status).toBe(200);
-    expect(await res.text()).toContain("Past events");
+  it("past archive pages twenty newest-first eligible rows with a stable tie-break and correct page count", async () => {
+    await db.insert(events).values(Array.from({ length: 25 }, (_, i) => ({
+      eventKey: `archive-${i + 1}`, title: `Past game ${i + 1}`, status: i < 23 ? "past" : "published",
+      startsAt: new Date(Date.UTC(2020, 0, Math.min(i + 1, 24))),
+      endsAt: new Date(Date.UTC(2020, 0, Math.min(i + 1, 24), 1)),
+    })));
+    await db.insert(events).values(["draft", "cancelled", "published"].map((status) => ({
+      eventKey: `excluded-${status}`, title: "Not in the archive", status,
+      startsAt: new Date("2099-01-01T00:00:00Z"), endsAt: new Date("2099-01-01T01:00:00Z"),
+    })));
+    const keys = (html: string) => [...html.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);
+    const first = await req("/events/past");
+    expect(first.status).toBe(200);
+    const html = await first.text();
+    expect(keys(html)).toEqual(Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`));
+    expect(html).toContain('data-total-pages="2"');
+    expect(html).not.toContain("excluded-");
+    expect(html).not.toMatch(/data-island="rsvp-button"|<button|<form/);
+    const second = await (await req("/events/past?page=2")).text();
+    expect(keys(second)).toEqual(["archive-5", "archive-4", "archive-3", "archive-2", "archive-1"]);
+    expect(second).not.toContain(">Older</a>");
+    const outside = await (await req("/events/past?page=3")).text();
+    expect(keys(outside)).toEqual([]);
+    expect(outside).toContain('role="status" data-testid="past-events-out-of-range"');
+    expect(outside).toContain("There are 2 pages.");
   });
 });

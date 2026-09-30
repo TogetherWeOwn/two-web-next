@@ -1,6 +1,16 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { Layout } from "../pages";
-import { goingCountText } from "../islands/contracts";
+import {
+  PAST_EVENTS_COPY,
+  PAST_EVENTS_EMPTY_TESTID,
+  PAST_EVENTS_ISLAND,
+  PAST_EVENTS_LIST_TESTID,
+  PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_TESTID,
+  goingCountText,
+  pastEventsOutOfRangeCopy,
+  pastEventsUrl,
+} from "../islands/contracts";
 import { googleCalendarUrl, webcalUrl } from "./feeds";
 import type { PublicEvent } from "./reads";
 
@@ -55,14 +65,33 @@ export const EventsPage: FC<{ rows: PublicEvent[]; appUrl: string }> = ({ rows, 
   </Shell>
 );
 
-export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; appUrl: string }> = ({ rows, page, hasMore, appUrl }) => (
-  <Shell title="Past events" canonical={`${appUrl}/events/past${page > 1 ? `?page=${page}` : ""}`} robots="noindex, follow">
-    <h1>Past events</h1>
-    {rows.length === 0 ? <p>No past events yet.</p> : <ul>{rows.map((e) => <Card e={e} />)}</ul>}
-    <p>
-      {page > 1 ? <a href={page === 2 ? "/events/past" : `/events/past?page=${page - 1}`}>Newer</a> : null}{" "}
-      {hasMore ? <a href={`/events/past?page=${page + 1}`}>Older</a> : null}
-    </p>
+export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string }> = ({ rows, page, hasMore, totalPages, appUrl }) => (
+  <Shell title="Past events" canonical={`${appUrl}${pastEventsUrl(page)}`} robots="noindex, follow">
+    <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
+      <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
+      <div data-archive-state>
+        {rows.length === 0 ? (
+          totalPages === 0 ? (
+            <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
+              <p>{PAST_EVENTS_COPY.empty}</p>
+              <p><a href="/join">{PAST_EVENTS_COPY.join}</a></p>
+            </div>
+          ) : (
+            <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>{pastEventsOutOfRangeCopy(page, totalPages)}</p>
+          )
+        ) : null}
+      </div>
+      <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{rows.map((e) => <Card e={e} />)}</ul>
+      <nav aria-label="Past event pages" data-archive-pager>
+        {page > 1 && totalPages > 0 ? (
+          <a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages))}>Newer</a>
+        ) : null}{" "}
+        {hasMore ? <a data-archive-page href={pastEventsUrl(page + 1)}>Older</a> : null}
+      </nav>
+      <p><a href="/events">Back to upcoming events</a></p>
+      <p role="status" data-archive-feedback></p>
+    </section>
+    <script src="/islands/past-events.js" defer />
   </Shell>
 );
 

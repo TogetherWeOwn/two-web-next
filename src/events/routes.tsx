@@ -85,9 +85,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const { rows, hasMore } = await listPast(db, page);
+    const { rows, hasMore, totalPages } = await listPast(db, page);
     c.header("cache-control", "public, max-age=300");
-    return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} appUrl={c.env.APP_URL} />);
+    return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} totalPages={totalPages} appUrl={c.env.APP_URL} />);
   });
 
   app.get("/events.json", async (c) => {
