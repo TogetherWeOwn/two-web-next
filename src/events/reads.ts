@@ -1,12 +1,13 @@
 // Public event reads (W8). Published-only unless the caller is a moderator.
-import { and, asc, count, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
+import { EVENTS_PAST_DRAWER_LIMIT, escapeLikeTerm, PAST_EVENTS_PAGE_SIZE } from "../islands/contracts";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
 
-export const PAGE_SIZE = 20;
-export const JSON_DEFAULT_LIMIT = 20;
+export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
+export const JSON_DEFAULT_LIMIT = PAST_EVENTS_PAGE_SIZE;
 export const JSON_MAX_LIMIT = 100;
 
 async function withGoing(db: Db, rows: (typeof events.$inferSelect)[]): Promise<PublicEvent[]> {
@@ -20,26 +21,87 @@ async function withGoing(db: Db, rows: (typeof events.$inferSelect)[]): Promise<
   return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
 }
 
-/** Upcoming = published and not yet ended, soonest first. */
-export async function listUpcoming(db: Db, now = new Date()): Promise<PublicEvent[]> {
+/** Title/description substring match; SQL wildcards in the query match themselves. */
+export function searchCondition(q: string | null): SQL | undefined {
+  if (!q) return undefined;
+  const term = `%${escapeLikeTerm(q)}%`;
+  return or(ilike(events.title, term), ilike(events.description, term));
+}
+
+/**
+ * The EventsCalendar visibility clause (legacy `visible()`): drafts are
+ * invisible to non-moderators — inside a search too, so a member searching a
+ * draft's title learns nothing — and a non-blank search narrows title OR
+ * description via a bound, wildcard-escaped ilike. Cancelled rows stay listed
+ * (somebody RSVP'd to them); the draft filter is the only status gate.
+ */
+export interface CalendarReadOpts {
+  includeDrafts?: boolean;
+  search?: string | null;
+}
+
+function calendarVisible(opts: CalendarReadOpts): SQL | undefined {
+  const clauses: SQL[] = [];
+  if (!opts.includeDrafts) clauses.push(sql`${events.status} != 'draft'`);
+  const condition = searchCondition(opts.search?.trim() ?? null);
+  if (condition) clauses.push(condition);
+  return clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : and(...clauses);
+}
+
+/** Upcoming = visible and not yet ended, soonest first (legacy `upcoming()`). */
+export async function listUpcoming(db: Db, now = new Date(), opts: CalendarReadOpts = {}): Promise<PublicEvent[]> {
   const rows = await db
     .select()
     .from(events)
-    .where(and(eq(events.status, "published"), gte(events.endsAt, now)))
+    .where(and(calendarVisible(opts), gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
   return withGoing(db, rows);
 }
 
-/** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
-export async function listPast(db: Db, page: number, now = new Date()): Promise<{ rows: PublicEvent[]; hasMore: boolean }> {
+/** Identity wins over display eligibility: hidden, renamed and paginated rows still suppress Discord copies. */
+export async function persistedDiscordIds(db: Db, candidates: string[]): Promise<Set<string>> {
+  if (candidates.length === 0) return new Set();
+  const rows = await db
+    .select({ discordEventId: events.discordEventId })
+    .from(events)
+    .where(inArray(events.discordEventId, candidates));
+  return new Set(rows.map((r) => r.discordEventId).filter((id): id is string => id !== null));
+}
+
+/**
+ * The past drawer (legacy `past()`): visible rows that have ended, most recent
+ * first, capped at twenty — the same cap the search-log count reads as "20".
+ */
+export async function listCalendarPast(
+  db: Db,
+  now = new Date(),
+  opts: CalendarReadOpts = {},
+): Promise<PublicEvent[]> {
   const rows = await db
     .select()
     .from(events)
-    .where(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))))
-    .orderBy(desc(events.startsAt))
+    .where(and(calendarVisible(opts), lt(events.endsAt, now)))
+    .orderBy(desc(events.startsAt), desc(events.id))
+    .limit(EVENTS_PAST_DRAWER_LIMIT);
+  return withGoing(db, rows);
+}
+
+/** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
+export async function listPast(db: Db, page: number, now = new Date(), q: string | null = null): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number }> {
+  const archived = and(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))), searchCondition(q));
+  const [total] = await db.select({ n: count() }).from(events).where(archived);
+  const rows = await db
+    .select()
+    .from(events)
+    .where(archived)
+    .orderBy(desc(events.startsAt), desc(events.id))
     .limit(PAGE_SIZE + 1)
     .offset((Math.max(1, page) - 1) * PAGE_SIZE);
-  return { rows: await withGoing(db, rows.slice(0, PAGE_SIZE)), hasMore: rows.length > PAGE_SIZE };
+  return {
+    rows: await withGoing(db, rows.slice(0, PAGE_SIZE)),
+    hasMore: rows.length > PAGE_SIZE,
+    totalPages: Math.ceil(Number(total?.n ?? 0) / PAGE_SIZE),
+  };
 }
 
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {

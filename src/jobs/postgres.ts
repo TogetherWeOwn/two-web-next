@@ -36,6 +36,19 @@ export function pgUniqueLock(sql: Sql): UniqueLock {
 }
 
 /**
+ * A same-key row that can no longer belong to a live transport message: never
+ * picked up (`reserved_at` null) and available for longer than any legitimate
+ * delivery lag. The only writer that can observe a key's staleness is the next
+ * dispatch of that key, so `enqueued` sweeps these before inserting. Live rows
+ * are never matched: a delayed/retrying message has a future `available_at`,
+ * a message being handled has `reserved_at` set, and every redelivery refreshes
+ * one of the two. The bound is deliberately generous (hours vs. the seconds a
+ * real delivery takes) — an orphan lingers visibly a while rather than risk a
+ * live row.
+ */
+export const LEDGER_ORPHAN_GRACE_SECONDS = 3600;
+
+/**
  * N3 (TOG-9895): the Postgres side of the queue ledger. Cloudflare Queues is the
  * transport and exposes no depth API, so this ledger is the `jobs` table of the
  * port — the rows `pgQueueDepth` counts for GET /up. Dispatch writes through
@@ -44,19 +57,25 @@ export function pgUniqueLock(sql: Sql): UniqueLock {
 export function pgQueueLedger(sql: Sql): QueueLedger {
   return {
     async enqueued({ jobId, kind, key, availableAt }) {
-      // Upsert on the dedupe key: a row orphaned by a post-insert send failure is
-      // refreshed in place rather than counted twice. `created_at` is deliberately
-      // not in the update list — the wait is continuous, so the oldest-pending-age
-      // clock keeps running from the first dispatch.
+      // One row per accepted transport message. `job_id` is the primary key
+      // (minted per dispatch), so each live message keeps its own transitions
+      // even when a retry delay (up to 3600s) outlives the 300s uniqueness
+      // window and a second dispatch of the same event key lands while the
+      // first message is still delayed or reserved. (An earlier key-upsert
+      // collapsed that case to one row and lost the first message.)
+      if (key !== null) {
+        // Proven-orphan sweep for this key (see LEDGER_ORPHAN_GRACE_SECONDS).
+        // Hygiene only: its failure must never block the dispatch itself.
+        const staleBefore = new Date(Date.now() - LEDGER_ORPHAN_GRACE_SECONDS * 1000);
+        await sql`
+          delete from queue_jobs
+          where key = ${key} and reserved_at is null and available_at < ${staleBefore}`.catch((e: unknown) =>
+          console.warn("queue ledger orphan sweep failed", e instanceof Error ? e.message : e),
+        );
+      }
       await sql`
         insert into queue_jobs (job_id, kind, key, available_at)
-        values (${jobId}::uuid, ${kind}, ${key}, ${availableAt})
-        on conflict (key) do update set
-          job_id = excluded.job_id,
-          kind = excluded.kind,
-          available_at = excluded.available_at,
-          reserved_at = null
-        where queue_jobs.reserved_at is null`; // never clobber a job a consumer is running
+        values (${jobId}::uuid, ${kind}, ${key}, ${availableAt})`;
     },
     async reserved(jobId) {
       await sql`update queue_jobs set reserved_at = now() where job_id = ${jobId}::uuid`;

@@ -8,10 +8,14 @@ import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () => {
   const sql = postgres(process.env.DATABASE_URL!, { max: 4 });
   beforeAll(async () => {
-    await sql`create table if not exists queue_jobs (
+    // Fresh shape per run: one row per accepted jobId (no key-unique — a
+    // retry delay outlives the uniqueness window, so a second live dispatch
+    // of the same key must not clobber the first row).
+    await sql`drop table if exists queue_jobs`;
+    await sql`create table queue_jobs (
       job_id uuid primary key,
       kind text not null,
-      key text unique,
+      key text,
       available_at timestamptz not null,
       reserved_at timestamptz,
       created_at timestamptz not null default now()
@@ -78,20 +82,64 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () =
     expect((await pgQueueDepth(sql)).total).toBe(0);
   });
 
-  it("re-dispatch upserts the same key instead of double-counting", async () => {
+  it("two live dispatches of the same key keep one row each", async () => {
+    // A retry delay (up to 3600s) outlives the 300s uniqueness lock, so a
+    // second dispatch can land while the first message is still live
+    // (delayed or reserved). Each accepted message gets its own row: the
+    // earlier message's transitions must keep matching afterwards.
     await sql`delete from queue_jobs`;
     const ledger = pgQueueLedger(sql);
     const first = crypto.randomUUID(), second = crypto.randomUUID();
     await ledger.enqueued({ jobId: first, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
-    await ledger.enqueued({ jobId: second, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
+    await ledger.enqueued({ jobId: second, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() + 3_600_000) });
     const depth = await pgQueueDepth(sql);
     expect(depth.pending).toBe(1);
-    expect(depth.total).toBe(1);
-    // The row tracks the new dispatch: the old jobId is released, the new one is live.
-    await ledger.dequeued(first);
-    expect((await pgQueueDepth(sql)).total).toBe(1);
+    expect(depth.delayed).toBe(1);
+    expect(depth.total).toBe(2);
+    // The first row still tracks the first message: completing the second must
+    // not disturb it, and completing the first removes exactly its row.
     await ledger.dequeued(second);
+    expect((await pgQueueDepth(sql)).total).toBe(1);
+    await ledger.dequeued(first);
     expect((await pgQueueDepth(sql)).total).toBe(0);
+  });
+
+  it("a second dispatch keeps a reserved first row", async () => {
+    await sql`delete from queue_jobs`;
+    const ledger = pgQueueLedger(sql);
+    const first = crypto.randomUUID(), second = crypto.randomUUID();
+    await ledger.enqueued({ jobId: first, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
+    await ledger.reserved(first);
+    await ledger.enqueued({ jobId: second, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
+    const depth = await pgQueueDepth(sql);
+    expect(depth.total).toBe(2);
+    expect(depth.reserved).toBe(1);
+    // Reserved rows survive the orphan sweep: the first row is still reserved.
+    const rows = await sql`select job_id from queue_jobs`;
+    expect(rows.map((r) => String((r as { job_id: unknown }).job_id)).sort()).toEqual([first, second].sort());
+  });
+
+  it("a stale same-key orphan is swept by the next dispatch, a fresh row is not", async () => {
+    await sql`delete from queue_jobs`;
+    const ledger = pgQueueLedger(sql);
+    const orphan = crypto.randomUUID();
+    // Orphaned by a post-insert send failure hours ago: unreserved, long available.
+    await ledger.enqueued({
+      jobId: orphan, kind: "sync-event", key: "sync-event:e1",
+      availableAt: new Date(Date.now() - 2 * 3600_000),
+    });
+    const next = crypto.randomUUID();
+    await ledger.enqueued({ jobId: next, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
+    expect((await pgQueueDepth(sql)).total).toBe(1);
+    const rows = await sql`select job_id from queue_jobs`;
+    expect(String((rows[0] as { job_id: unknown }).job_id)).toBe(next);
+
+    // A recent same-key row is not an orphan: it survives the next dispatch.
+    const fresh = crypto.randomUUID(), third = crypto.randomUUID();
+    await sql`delete from queue_jobs`;
+    await ledger.enqueued({ jobId: fresh, kind: "sync-event", key: "sync-event:e2", availableAt: new Date(Date.now() - 1000) });
+    await ledger.enqueued({ jobId: third, kind: "sync-event", key: "sync-event:e2", availableAt: new Date(Date.now() - 1000) });
+    expect((await pgQueueDepth(sql)).total).toBe(2);
   });
 
   it("empty ledger reports zeros and a null oldest age", async () => {

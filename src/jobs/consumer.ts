@@ -54,17 +54,26 @@ export async function consume(
           ? await handleSyncEvent(body, m.attempts, deps)
           : await handleCallInternalAction(body, m.attempts, deps.bot);
     } catch (e) {
-      // Unexpected: let the platform redeliver with the same message (same idempotency key).
-      console.error("job threw; will redeliver", body.kind, e instanceof Error ? e.message : e);
+      // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
+      // redeliverable throw goes back on the queue with the same message (same
+      // idempotency key); an exhausted throw is terminal, like a failed outcome.
+      console.error("job threw", body.kind, e instanceof Error ? e.message : e);
       // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
       if (m.attempts >= JOBS[body.kind].tries) {
         alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
-        // Out of tries: a terminal failure, not a phantom pending row.
+        // Out of tries: a terminal failure, not a phantom pending row — and not
+        // a retry either. The job already spent its tries (the transport's
+        // max_retries is only a backstop above this cap), so ack it and free
+        // the sync lock instead of requeueing a message the ledger just buried
+        // (which would run again with no live depth accounting and stack up
+        // duplicate failure rows).
         if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, e instanceof Error ? e.constructor.name : "threw"));
-      } else if (jobId) {
-        await bounded("released", deps.ledger.released(jobId, new Date()));
+        if (body.kind === "sync-event") await deps.lock.release(uniqueKey(body.eventKey));
+        m.ack();
+      } else {
+        if (jobId) await bounded("released", deps.ledger.released(jobId, new Date()));
+        m.retry();
       }
-      m.retry();
       continue;
     }
     if ("retryInSeconds" in outcome) {

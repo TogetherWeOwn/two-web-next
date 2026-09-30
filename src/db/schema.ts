@@ -172,20 +172,22 @@ export const jobUniqueLocks = pgTable("job_unique_locks", {
 // ledger in step — the same `jobs`/`failed_jobs` pair the legacy `queue:check-depth`
 // probe counted. `available_at`/`reserved_at`/`created_at` carry the exact legacy
 // bucket semantics (pending/delayed/reserved/oldest-pending-age).
-export const queueJobs = pgTable(
-  "queue_jobs",
-  {
-    jobId: uuid("job_id").primaryKey(),
-    kind: text("kind").notNull(),
-    // Dedupe key for sync-event (`uniqueKey(eventKey)`); null for internal-action jobs.
-    // A re-dispatch upserts the stale row in place instead of doubling the count.
-    key: text("key"),
-    availableAt: timestamp("available_at", { withTimezone: true }).notNull(),
-    reservedAt: timestamp("reserved_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [unique("queue_jobs_key_unique").on(t.key)],
-);
+//
+// One row per accepted transport message (keyed by the minted jobId, never the
+// event key): a retry delay (up to 3600s) outlives the 300s uniqueness lock, so
+// a re-dispatch while an earlier message is still live must not clobber that
+// row — an upsert on the event key loses the first message's transitions and
+// undercounts depth. `key` stays as a diagnostic tag (which event the row
+// belongs to); dedupe of same-key dispatches is the unique lock's job, not the
+// ledger's.
+export const queueJobs = pgTable("queue_jobs", {
+  jobId: uuid("job_id").primaryKey(),
+  kind: text("kind").notNull(),
+  key: text("key"),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull(),
+  reservedAt: timestamp("reserved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 // Terminal failures, mirroring legacy `failed_jobs`: reported by /up, never thresholded.
 export const queueFailedJobs = pgTable("queue_failed_jobs", {

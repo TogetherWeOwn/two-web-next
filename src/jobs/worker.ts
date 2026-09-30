@@ -32,9 +32,18 @@ function sqlFor(env: JobsEnv) {
 
 export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): Promise<void> {
   const sql = sqlFor(env);
+  // Best-effort ledger I/O gets its own connection. A ledger statement wedged
+  // on a row/table lock holds only this client, so the consumer's bounded (2s)
+  // ledger timers can expire while lock/handler traffic proceeds on `sql` and
+  // every message still reaches ack/retry. Sharing one max:1 pool stalled ack
+  // behind an un-cancellable ledger UPDATE (TOG-9895 review).
+  const ledgerSql = sqlFor(env);
   try {
-    await consume(batch, { bot, events, lock: pgUniqueLock(sql), ledger: pgQueueLedger(sql) });
+    await consume(batch, { bot, events, lock: pgUniqueLock(sql), ledger: pgQueueLedger(ledgerSql) });
   } finally {
+    // A wedged ledger statement must not hold the invocation open: force-close
+    // past the timeout; the main client closes normally.
+    await ledgerSql.end({ timeout: 1 }).catch(() => {});
     await sql.end({ timeout: 1 });
   }
 }

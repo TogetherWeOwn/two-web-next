@@ -54,8 +54,15 @@
     {
       "idx": 7,
       "version": "7",
-      "when": 1790726372640,
-      "tag": "1005_queue-ledger",
+      "when": 1790728475173,
+      "tag": "1005_event-search-logs",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790752156036,
+      "tag": "1006_queue-ledger",
       "breakpoints": true
     }
   ]

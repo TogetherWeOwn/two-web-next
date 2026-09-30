@@ -20,6 +20,7 @@ import { dbPing, hyperdriveQuery } from "./db/ping";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
+import { inviteDestination } from "./invite";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
@@ -27,6 +28,7 @@ import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
+import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
@@ -47,49 +49,54 @@ const app = new Hono<{ Bindings: Env }>();
 // requires absolute HTTPS URLs, not this same-origin relative destination.
 const CSP_REPORT_ENDPOINT = "/csp-reports";
 
-app.use(
-  "*",
-  secureHeaders({
-    contentSecurityPolicy: {
-      defaultSrc: ["'self'"],
-      imgSrc: ["'self'", "https://cdn.discordapp.com"],
-      styleSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      frameAncestors: ["'none'"],
-      formAction: ["'self'"],
-      reportUri: CSP_REPORT_ENDPOINT,
-      reportTo: "csp-endpoint",
-    },
-    reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
-  }),
-);
+// The four static headers (fonts byte-identical to SECURITY_HEADERS in
+// src/headers.ts — the tested copy; the parity test pins both sides so drift
+// fails the build). X-Frame-Options is DENY: nothing frames this site
+// (TOG-5469). Registered globally, not on a route group: the DB-free funnel
+// leaves and the mounted admin/profile sub-apps inherit it from the outer
+// dispatch. The CSP shape + report sink belong to the CSP-report slice
+// (TOG-10107) and are configured above; the staging X-Robots-Tag lives in
+// the robotsTag middleware below. Strict-Transport-Security is explicitly
+// disabled here (strictTransportSecurity: false below): the edge owns it
+// (TOG-8729) — Hono defaults it on, and emitting it from the app would pin
+// local dev machines to HTTPS. The absence is pinned in test/seo-headers.
+// One ALL /* registration (the exposure inventory in
+// test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
+// plus the staging X-Robots-Tag composed into a single wrapper. Mounted
+// sub-apps inherit both from this outer dispatch.
+const staticSecurityHeaders = secureHeaders({
+  // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
+  // machines to HTTPS, so the Hono default is explicitly off.
+  strictTransportSecurity: false,
+  contentSecurityPolicy: {
+    defaultSrc: ["'self'"],
+    imgSrc: ["'self'", "https://cdn.discordapp.com"],
+    styleSrc: ["'self'"],
+    scriptSrc: ["'self'"],
+    frameAncestors: ["'none'"],
+    formAction: ["'self'"],
+    reportUri: CSP_REPORT_ENDPOINT,
+    reportTo: "csp-endpoint",
+  },
+  xContentTypeOptions: SECURITY_HEADERS["X-Content-Type-Options"],
+  referrerPolicy: SECURITY_HEADERS["Referrer-Policy"],
+  xFrameOptions: SECURITY_HEADERS["X-Frame-Options"],
+  permissionsPolicy: {
+    camera: [],
+    microphone: [],
+    geolocation: [],
+  },
+  reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
+});
 
-// The last resort, hardcoded on purpose (ports two-web DiscordInviteController::FALLBACK_INVITE).
-// The WEB-HOMEPAGE campaign code: never expires, unlimited uses, so the join button has an invite
-// that cannot rot and web arrivals attribute to the website. An invite code is not a secret: it is
-// a public join link that grants nothing but membership of a server anyone can ask to join.
-export const FALLBACK_INVITE = "https://discord.gg/4GwEDNRTtx";
+app.use("*", async (c, next) => {
+  await staticSecurityHeaders(c, next);
+  await robotsTag(c, async () => {});
+});
 
-const DISCORD_HOSTS = new Set(["discord.gg", "discord.com"]);
-
-function landsInDiscord(url: string): boolean {
-  let parts: URL;
-  try {
-    parts = new URL(url);
-  } catch {
-    return false;
-  }
-  return parts.protocol === "https:" && DISCORD_HOSTS.has(parts.hostname.toLowerCase());
-}
-
-// The configured invite if usable, the hardcoded one otherwise. Never throws: a member clicking
-// the join link is the single most valuable request this site serves, and an error page is worse
-// than an invite one rotation out of date.
-function inviteDestination(configured: string): string {
-  if (landsInDiscord(configured)) return configured;
-  console.error("services.discord.invite_url is unusable; serving the hardcoded fallback invite.");
-  return FALLBACK_INVITE;
-}
+// The Discord invite floor lives in ./invite so the join journey's recovery
+// page can share it (same file the /discord redirect uses).
+export { FALLBACK_INVITE, inviteDestination } from "./invite";
 
 const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 
@@ -189,11 +196,16 @@ async function issueSession(
   });
 }
 
-async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore): Promise<Session | null> {
+async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, rotateToken = true): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
   const row = await store.get(await hashToken(token));
   if (!row) return null;
+  // Abortable calendar fragments validate expiry/revocation but must not delete
+  // the browser's current token: an aborted response cannot deliver a replacement.
+  if (!rotateToken) {
+    return { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator };
+  }
   // Rotation: every authenticated page view mints a fresh token and deletes
   // the old row in the same statement. A replayed cookie finds no row: guest.
   const replacement = newSessionToken();
@@ -280,7 +292,7 @@ export function rulesLastUpdated(raw: string | undefined): { iso: string; label:
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules lastUpdated={stamp?.iso ?? null} />);
+  return c.html(<Rules lastUpdated={stamp} />);
 });
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
@@ -304,7 +316,7 @@ app.get("/privacy", (c) => {
 registerJoinRoutes(app, { storeFor, issueSession }, {
   joinPage: (c, props) => {
     c.header("cache-control", "public, max-age=3600");
-    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} />);
+    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} />);
   },
   recovery: (c, props, status = 200) => {
     c.header("cache-control", "no-store, private");
@@ -470,7 +482,11 @@ app.route("/admin", adminApp());
 app.route("/", profilesApp());
 
 // W8: public events pages, /events.json and moderator event writes.
-registerEventRoutes(app, async (c) => readSession(c, await storeFor(c)));
+registerEventRoutes(
+  app,
+  async (c) => readSession(c, await storeFor(c)),
+  async (c) => readSession(c, await storeFor(c), false),
+);
 
 app.post("/logout", async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;

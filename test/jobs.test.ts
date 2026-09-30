@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CALL_INTERNAL_ACTION, PRUNE_CRON, RECONCILE_CRON, SYNC_EVENT } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import { reconcileEvents, runScheduled } from "../src/jobs/cron";
@@ -227,6 +227,60 @@ describe("queue ledger (N3)", () => {
     const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" });
     await consume({ messages: [m] }, { bot, events: store(), lock: memLock(), ledger: dead });
     expect(m.acked).toBe(true);
+  });
+
+  it("a hung ledger never stalls handling or the rest of the batch", async () => {
+    // A row-lock-wedged `reserved()` neither resolves nor rejects, so `.catch`
+    // alone cannot rescue processing. The bounded ledger path must time out so
+    // the handler still runs and every message still reaches ack/retry.
+    vi.useFakeTimers();
+    try {
+      const hung: QueueLedger = {
+        enqueued: async () => {},
+        reserved: () => new Promise<void>(() => {}),
+        released: async () => {},
+        dequeued: async () => {},
+        failed: async () => {},
+      };
+      const bot = { upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }) } as unknown as BotClient;
+      const m1 = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" });
+      const m2 = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j2" });
+      const p = consume({ messages: [m1, m2] }, { bot, events: store(), lock: memLock(), ledger: hung });
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(m1.acked).toBe(true);
+      expect(m2.acked).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an exhausted throw acks and frees the sync lock instead of retrying", async () => {
+    // At the tries cap an unexpected throw is terminal: the row is already
+    // moved to failed, so requeueing would run the job again with no live
+    // depth accounting (and stack duplicate failure rows).
+    const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
+    const lock = memLock();
+    lock.held.add(uniqueKey("e1"));
+    const ledger = memLedger();
+    const last = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" }, SYNC_EVENT.tries);
+    await consume({ messages: [last] }, { bot, events: store(), lock, ledger });
+    expect(last.acked).toBe(true);
+    expect(last.retried).toBeUndefined();
+    expect(lock.held.has(uniqueKey("e1"))).toBe(false);
+    expect(ledger.rows.get("j1")?.state).toBe("failed");
+    expect(ledger.rows.get("j1")?.reason).toBe("TypeError");
+  });
+
+  it("a nonterminal throw still releases and retries", async () => {
+    const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
+    const ledger = memLedger();
+    ledger.rows.set("j1", { state: "pending" });
+    const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" }, 1);
+    await consume({ messages: [m] }, { bot, events: store(), lock: memLock(), ledger });
+    expect(m.acked).toBe(false);
+    expect(m.retried).toBe("now");
+    expect(ledger.rows.get("j1")?.state).toBe("released");
   });
 });
 

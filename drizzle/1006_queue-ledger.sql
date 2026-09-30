@@ -13,6 +13,5 @@ CREATE TABLE "queue_jobs" (
 	"key" text,
 	"available_at" timestamp with time zone NOT NULL,
 	"reserved_at" timestamp with time zone,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "queue_jobs_key_unique" UNIQUE("key")
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
