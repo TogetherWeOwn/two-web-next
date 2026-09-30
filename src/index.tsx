@@ -37,6 +37,7 @@ import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
+import { sameOrigin } from "./same-origin";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -62,10 +63,10 @@ const CSP_REPORT_ENDPOINT = "/csp-reports";
 // disabled here (strictTransportSecurity: false below): the edge owns it
 // (TOG-8729) — Hono defaults it on, and emitting it from the app would pin
 // local dev machines to HTTPS. The absence is pinned in test/seo-headers.
-// One ALL /* registration (the exposure inventory in
+// One security-header wrapper (the exposure inventory in
 // test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
-// plus the staging X-Robots-Tag composed into a single wrapper. Mounted
-// sub-apps inherit both from this outer dispatch.
+// plus the staging X-Robots-Tag. Mounted sub-apps inherit both from this
+// outer dispatch, including refusals from the same-origin guard.
 const staticSecurityHeaders = secureHeaders({
   // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
   // machines to HTTPS, so the Hono default is explicitly off.
@@ -95,6 +96,9 @@ app.use("*", async (c, next) => {
   await staticSecurityHeaders(c, next);
   await robotsTag(c, async () => {});
 });
+
+// Before throttles, session rotation, body parsing, or any mounted handler.
+app.use("*", sameOrigin);
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
@@ -488,10 +492,6 @@ registerEventRoutes(
 );
 
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-  // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
-  // the origin check below refuses one anyway.
-  const origin = c.req.header("origin");
-  if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
   const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (token) await store.revoke(await hashToken(token)).catch(() => {});

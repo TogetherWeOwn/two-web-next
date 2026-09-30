@@ -32,7 +32,7 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
     // The event-page access logger is a second GET handler on the same route.
     "GET /e/:key",
-    "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
+    "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
   ].sort());
 }
 
