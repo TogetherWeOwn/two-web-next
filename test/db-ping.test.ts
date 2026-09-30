@@ -26,16 +26,23 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])("
         DATABASE_URL: { get: urlRead },
       });
     }
-    for (const method of ["GET", "HEAD", "POST"]) {
-      for (const headers of [new Headers(), new Headers({ accept: "application/json", authorization: "Bearer fixture-probe" })]) {
-        // Reach route matching rather than the global unsafe-request refusal.
-        if (method === "POST") headers.set("origin", host);
+    const headerCases = [
+      { name: "no origin evidence", headers: new Headers(), unsafeStatus: 403 },
+      { name: "bearer without origin evidence", headers: new Headers({ accept: "application/json", authorization: "Bearer fixture-probe" }), unsafeStatus: 403 },
+      { name: "same-origin Origin", headers: new Headers({ origin: host }), unsafeStatus: 404 },
+      { name: "cross-origin Origin", headers: new Headers({ origin: "https://other.example" }), unsafeStatus: 403 },
+      { name: "same-origin fetch metadata", headers: new Headers({ "sec-fetch-site": "same-origin" }), unsafeStatus: 404 },
+      { name: "cross-site fetch metadata", headers: new Headers({ "sec-fetch-site": "cross-site" }), unsafeStatus: 403 },
+    ];
+    for (const method of ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]) {
+      for (const { name, headers, unsafeStatus } of headerCases) {
+        const expectedStatus = ["GET", "HEAD", "OPTIONS"].includes(method) ? 404 : unsafeStatus;
         const unknown = await app.request(`${host}/not-a-route`, { method, headers }, bindings);
         const body = await unknown.text();
-        expect(unknown.status).toBe(404);
+        expect(unknown.status, `${method} unknown route: ${name}`).toBe(expectedStatus);
         for (const path of removed) {
           const response = await app.request(`${host}${path}`, { method, headers }, bindings);
-          expect(response.status, `${method} ${path}`).toBe(404);
+          expect(response.status, `${method} ${path}: ${name}`).toBe(expectedStatus);
           expect(await response.text(), path).toBe(body);
           expect([...response.headers], path).toEqual([...unknown.headers]);
         }
