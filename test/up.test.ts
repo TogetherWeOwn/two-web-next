@@ -1,3 +1,4 @@
+// route-inventory: GET /up
 import { describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import type { Env } from "../src/env";

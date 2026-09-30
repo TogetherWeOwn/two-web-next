@@ -237,6 +237,24 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(sent.map((m) => m.action)).toEqual(["event.upsert", "event.upsert"]);
   });
 
+  it("a JSON parent time/capacity edit promotes FIFO and dispatches shifted child write-backs", async () => {
+    const ev = await fullWithLine();
+    await db.update(events).set({ recurrenceFrequency: "weekly", recurrenceCount: 2 }).where(eq(events.id, ev.id));
+    const child = await seed({ parentEventId: ev.id, recurrenceIndex: 2,
+      startsAt: new Date("2099-01-08T20:00:00Z"), endsAt: new Date("2099-01-08T22:00:00Z") });
+    const res = await request(`/events/${ev.eventKey}`, "moderator", "PATCH", {
+      capacity: 3, starts_at: "2099-01-02T20:00", ends_at: "2099-01-02T22:00",
+    }, true);
+    expect(res.status).toBe(200);
+    expect((await answer(res)).going_count).toBe(3);
+    expect((await rows(ev.id)).map((r) => r.status)).toEqual(["going", "going", "going"]);
+    const [shifted] = await db.select().from(events).where(eq(events.id, child.id));
+    expect(shifted!.startsAt.toISOString()).toBe("2099-01-09T20:00:00.000Z");
+    expect(shifted!.endsAt.toISOString()).toBe("2099-01-09T22:00:00.000Z");
+    expect(shifted!.capacity).toBe(1);
+    expect(sent.map((m) => [m.eventKey, m.action])).toEqual([[ev.eventKey, "event.upsert"], [child.eventKey, "event.upsert"]]);
+  });
+
   it.each(["json", "admin"])("%s refuses a cap below Going with a field error and no mutation", async (surface) => {
     const ev = await seed({ capacity: 2 });
     await put(ev.eventKey, "a");
@@ -292,8 +310,9 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect((await rows(ev.id)).every((r) => r.status === "waitlisted" && r.syncedToDiscordAt !== null)).toBe(true);
   });
 
-  it("exposes only the viewer's position to page/JSON, with private caching and position-sensitive ETags", async () => {
+  it("exposes only the viewer's position beside Going attendees, with private caching and position-sensitive ETags", async () => {
     const ev = await fullWithLine();
+    await client`insert into users (id, username) values ('holder', 'Current holder'), ('waiter-1', 'First waiter'), ('waiter-2', 'Second waiter')`;
     const first = await request("/events.json", "waiter-1");
     const data = await collection(first);
     expect(data.find((e) => e.event_key === ev.eventKey)!.waitlist_position).toBe(1);
@@ -304,14 +323,28 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     const page = await request(`/e/${ev.eventKey}`, "waiter-2");
     expect(page.headers.get("cache-control")).toBe("private, no-store");
     expect(page.headers.get("vary")).toBe("Cookie");
-    expect(await page.text()).toContain('data-waitlist-position="2"');
+    const memberHtml = await page.text();
+    expect(memberHtml).toContain('data-waitlist-position="2"');
+    expect(memberHtml).toContain('href="/members/holder">Current holder</a>');
+    expect(memberHtml).not.toContain("First waiter");
+    expect(memberHtml).not.toContain("Second waiter");
+    expect(memberHtml).not.toContain('data-testid="event-join-pitch"');
     const guest = await request(`/e/${ev.eventKey}`, null);
-    expect(guest.headers.get("cache-control")).toBe("public, max-age=60");
-    expect(await guest.text()).toContain('data-waitlist-position=""');
+    expect(guest.headers.get("cache-control")).toBe("private, no-store");
+    expect(guest.headers.get("vary")).toBe("Cookie");
+    const guestHtml = await guest.text();
+    expect(guestHtml).toContain('data-waitlist-position=""');
+    expect(guestHtml).toContain('data-testid="event-join-pitch"');
+    expect(guestHtml).not.toContain("Current holder");
+    expect(guestHtml).not.toContain('data-testid="event-attendees"');
     await withdraw(ev.eventKey, "holder");
     const refresh = await request("/events.json", "waiter-2", "GET", undefined, false, { "if-none-match": second.headers.get("etag")! });
     expect(refresh.status).toBe(200);
     expect((await collection(refresh))[0]!.waitlist_position).toBe(1);
+    const promotedHtml = await (await request(`/e/${ev.eventKey}`, "waiter-2")).text();
+    expect(promotedHtml).toContain('data-waitlist-position="1"');
+    expect(promotedHtml).toContain('href="/members/waiter-1">First waiter</a>');
+    expect(promotedHtml).not.toContain("Current holder");
   });
 
   async function waiterBlockedBy(pid: number): Promise<number> {

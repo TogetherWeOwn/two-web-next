@@ -1,3 +1,11 @@
+// route-inventory: GET /events
+// route-inventory: GET /events/past
+// route-inventory: GET /events.json
+// route-inventory: GET /e/:key
+// route-inventory: POST /events
+// route-inventory: PATCH /events/:key
+// route-inventory: POST /events/:key/publish
+// route-inventory: POST /events/:key/cancel
 // W8: events sync carrier (unit, no DB) + public pages / JSON / moderator round-trips
 // (agent-testdb; skipped without DATABASE_URL like test/admin.test.ts).
 import { serializeSigned } from "hono/utils/cookie";
@@ -115,7 +123,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
 
   it("CRUD + publish/cancel round-trip with write-back enqueued and ULID route keys", async () => {
     expect((await write("POST", "/events", MEMBER, payload)).status).toBe(403);
-    expect((await req("/events", { method: "POST", body: "{}" })).status).toBe(401);
+    expect((await req("/events", { method: "POST", headers: { origin: APP_URL }, body: "{}" })).status).toBe(401);
 
     const created = await write("POST", "/events", MOD, payload);
     expect(created.status).toBe(201);

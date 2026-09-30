@@ -1,3 +1,9 @@
+// route-inventory: GET /discord
+// route-inventory: GET /about
+// route-inventory: GET /faq
+// route-inventory: GET /rules
+// route-inventory: GET /robots.txt
+// route-inventory: GET /sitemap_index.xml
 import { describe, expect, it } from "vitest";
 import app, { FALLBACK_INVITE } from "../src/index";
 import { readCounts } from "../src/counts";

@@ -18,21 +18,21 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 
 | Legacy route | Next status | Card |
 |---|---|---|
-| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; live counts + featured + upcoming land with data slices | W4 ✅ + W8 📋 (verify: featured rows, upcoming) |
+| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; featured rows use legacy `[start, end)` windows, position/id order and no cap; upcoming pending | W4 ✅ + [TOG-10819](/TOG/issues/TOG-10819) (featured; `test/featured.test.ts`) + W8 📋 (upcoming) |
 | `GET /sitemap_index.xml` (home 1.0, join 0.9, events.index 0.8, about/faq/rules/privacy 0.7, published `/e/{key}` 0.6) | ✅ static entries; join + `/e/{key}` rows pending | W4 ✅ + W8 📋 |
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`) | `/auth/discord*` live; `/join` path alias pending | W6 🔶 |
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count; RsvpButton/prev-next/related pending | W8 ✅ (partial) |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links implemented in this slice (pending merge); RsvpButton/prev-next/related pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) + [TOG-10823](/TOG/issues/TOG-10823) |
 | `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
 | `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
 | `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
 | `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | ✅ same-app flow (`identify`+`guilds.join`, auto-join, role recompute) | W5 ✅ |
 | `GET /auth/qa/{identity}` (staging-only, header token) | ✅ as `POST /auth/qa/:identity` — **deliberate divergence**: GET login is CSRF-able; POST + byte-identical 404s | W5 ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; throttle pending | W5 ✅ + N5 (new card, throttle) |
-| `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block (bot DB) pending | W7 ✅ |
+| `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block reads bot-owned `web_v1` views, hides on no row/missing views/DB failure, covered by the same profile access-log subject | W7 ✅ |
 | `PATCH /members/{user}` (owner-only, throttle 30,1, bio/games/timezone validation) | ✅ + `POST _method=PATCH` for the plain form | W7 ✅ |
 | `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | ✅ session-gated, paged, ETag/304, `going_count` | W8 ✅ |
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
@@ -47,8 +47,24 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /discord` (302 `no-store`, configured-or-fallback invite) | ✅ incl. hardcoded fallback | W4 ✅ |
 | `GET /about`, `GET /faq` (static, zero-query) | ✅ | W4 ✅ |
 | `GET /privacy` (versioned `content/privacy-policy-v1.md` from disk, no session/cache/DB) | ❌ missing — no card covered it | **N1** (new: `/privacy` versioned page) |
-| `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ❌ (`/health`, `/healthz` exist, no queue payload) | **N3** (new: `/up` health check) |
+| `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ✅ N3; sole deploy/uptime endpoint, payload unchanged | **N3** + [TOG-10852](/TOG/issues/TOG-10852) |
 | `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-uri` + Reporting API `Reporting-Endpoints`/`Report-To` point at it | W16 📋 (TOG-10107) |
+
+### Diagnostic surface decision ([TOG-10852](/TOG/issues/TOG-10852))
+
+Delete the Next-only `/db-ping`, `/health` and `/healthz` routes in every
+configuration. Legacy exposes only `/up`; retaining a token/flag-protected
+ping would add a credential and an unnecessary public connection/fingerprinting
+surface. Removed paths use the ordinary branded 404 (same body and headers as
+unknown paths), without reading any database binding.
+
+The existing `/up` queue read already exercises the Worker-to-Hyperdrive-to-Postgres
+path: a counted queue proves connectivity; `queue.status: "unknown"` reports an
+unconfigured/unreachable ledger, not database acceptance. Deploy smoke moves from
+`/health` to `/up` and accepts the existing healthy/degraded/unknown envelope,
+including during an outage. It does not turn liveness into a database gate or
+change `/up`'s payload. The direct CLI probe remains non-HTTP and operator-invoked;
+no public version/clock endpoint or redirect alias remains.
 
 ## 3. Machine ingress (`routes/api.php`)
 
@@ -137,6 +153,7 @@ go hunting for them.
 | `secureHeaders`-equivalent (CSP on web+admin+leaves, static anti-framing/sniffing globally) | ✅ global secureHeaders (stricter: no inline/eval — no Livewire to need it) | W3 ✅/W4 ✅ |
 | One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; RSVP writes ✅ (rateLimitExceeded); other human routes as they land | W14 ✅ + W9 ✅ |
 | Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes) | ✅ `src/throttle.ts` + every-POST-throttled audit (`test/throttle.test.ts`) | **N5** ✅ |
+| VerifyCsrfToken on unsafe web methods | Central same-origin guard for POST/PUT/PATCH/DELETE, two exact machine exemptions, mounted-route audit; no CSRF token scheme ([policy](same-origin.md)) | [TOG-10850](/TOG/issues/TOG-10850) |
 | `member-access-log` (arm/flush, fail-closed 503 when enforced) | ✅ `src/access-log.ts` middleware on member routes; admin guard carries the same contract | W7 ✅ + W12 📋 (retention) |
 | TrustHosts (APP_URL host only) / trustProxies (nginx socket) | Workers: platform TLS; host check pending | W16 📋 |
 | Maintenance mode except `/discord` | dropped — Workers deploys are atomic, no maintenance mode; DB-free `/discord` floor preserved | dropped (platform) |
@@ -152,7 +169,7 @@ go hunting for them.
 | RsvpRateLimit / AgentEventRateLimit | ✅ / ✅ | W9 ✅ / W14 ✅ |
 | SafeRedirect (guarded `next`), SpamTrap (honeypot + 1000 ms floor) | pending | W6 🔶 / W7 📋 + W9 📋 |
 | RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |
-| MemberStatsSource / Profiles support (rank, stats, milestones) | pending | W7 📋 |
+| MemberStatsSource / Profiles support (rank, stats, milestones) | ✅ `src/profiles/stats.ts`: never-throw read of `web_v1.members` + `web_v1.member_milestones`; member-gated profile block, local fixture coverage | W7 ✅ |
 | Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell; live data pending | W4 ✅ + W6 🔶 (widget) + W8 📋 (upcoming) |
 | Counts (never-throw degraded empty state) | ✅ seam (`readCounts` → UNAVAILABLE) | W4 ✅ + W8 📋 (wire bot views) |
 
@@ -163,7 +180,7 @@ go hunting for them.
 - Every accepted RSVP write settles the line under the event-row lock, so a new Going request cannot bypass an existing head and a stale-view explicit Waitlisted answer can immediately take a vacant seat. Withdrawal, a Going downgrade, and admin/JSON event edits also settle available seats within that transaction. Capacity increases promote N heads; removing the cap promotes all. Paused, cancelled, draft and ended events do not promote. Promoted rows reset their Discord mirror stamps; the caller queues one event write-back after commit.
 - Member budget/expiry decisions follow all own-row, promotion-row and prune waits. Limited writes do not change answers or promote anyone; accepted writes spend one fresh hit regardless of automatic promotion.
 - Capacity below the current Going count is an admin form field error / JSON 422. JSON numeric capacities and title-only PATCH defaults retain the finite cap; malformed capacities cannot erase it.
-- The shared position helper supplies RSVP JSON, viewer-specific `/events.json` rows and `/e/{key}`'s `data-waitlist-position` carrier. Personalized pages are private/no-store with `Vary: Cookie`; guest pages remain public. RsvpButton UI states remain the W10 slice 2 deliverable.
+- The shared position helper supplies RSVP JSON, viewer-specific `/events.json` rows and `/e/{key}`'s `data-waitlist-position` carrier alongside member-only Going attendees. All event pages are private/no-store with `Vary: Cookie` because the guest join pitch depends on the viewer; guests receive no position or attendee identities. Parent time/capacity edits preserve recurrence child write-backs while promoting FIFO. RsvpButton UI states remain the W10 slice 2 deliverable.
 - Proof: `test/rsvp-waitlist.test.ts` ports service/HTTP WaitlistTest cases and forces a concurrent withdraw + Going race on an owned disposable Postgres schema, proving the existing head keeps the freed seat and capacity is never exceeded. Tests use only agent-testdb or CI Postgres, never staging/production.
 
 ## 12. SEO, shell, content, sessions

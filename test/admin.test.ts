@@ -1,3 +1,18 @@
+// route-inventory: GET /admin
+// route-inventory: GET /admin/events
+// route-inventory: GET /admin/events/new
+// route-inventory: GET /admin/events/:key
+// route-inventory: GET /admin/featured
+// route-inventory: GET /admin/featured/new
+// route-inventory: GET /admin/featured/:id
+// route-inventory: POST /admin/events
+// route-inventory: POST /admin/events/:key
+// route-inventory: POST /admin/events/:key/publish
+// route-inventory: POST /admin/events/:key/cancel
+// route-inventory: POST /admin/featured
+// route-inventory: POST /admin/featured/:id
+// route-inventory: POST /admin/featured/:id/delete
+// Canonical mounted paths; these tests also exercise adminApp at its child root.
 // Admin pt1 tests (W11 M9): 403-pins + CRUD round-trips.
 //
 // Two layers, same seams as the site (src/index.tsx, test/app.test.ts):
@@ -11,6 +26,7 @@
 // The live suite truncates only the tables this slice owns, in FK-safe order.
 
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
@@ -18,6 +34,7 @@ import { dispatchWriteBack } from "../src/admin/writeback";
 import { activityLog, events, featuredContents, memberDataAccessLogs } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
+import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
@@ -103,7 +120,9 @@ describe("admin guard pins (memory store, no DB)", () => {
   it("403s a forged-origin POST even for a moderator", async () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store, MOD);
-    const res = await adminApp(store).request("/events", {
+    // Same-origin is an outer-app concern, not part of panel authorization.
+    const mounted = new Hono<{ Bindings: Env }>().use("*", sameOrigin).route("/admin", adminApp(store));
+    const res = await mounted.request("/admin/events", {
       method: "POST",
       headers: { cookie, origin: "https://evil.test" },
       body: new URLSearchParams({ title: "x" }),
