@@ -126,18 +126,20 @@ const eventLinkColumns = {
 };
 
 /** Published links only, even for moderators. Equal starts use id as the legacy tiebreak. */
-export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id" | "startsAt">): Promise<EventNeighbors> {
+export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id">): Promise<EventNeighbors> {
+  // Compare the stored timestamp: a JS Date loses PostgreSQL's microseconds.
+  const anchorStartsAt = db.select({ startsAt: events.startsAt }).from(events).where(eq(events.id, event.id));
   const [previous, next] = await Promise.all([
     db.select(eventLinkColumns).from(events)
-      .where(and(eq(events.status, "published"), or(
-        lt(events.startsAt, event.startsAt),
-        and(eq(events.startsAt, event.startsAt), lt(events.id, event.id)),
+      .where(and(eq(events.status, "published"), ne(events.id, event.id), or(
+        lt(events.startsAt, anchorStartsAt),
+        and(eq(events.startsAt, anchorStartsAt), lt(events.id, event.id)),
       )))
       .orderBy(desc(events.startsAt), desc(events.id)).limit(1),
     db.select(eventLinkColumns).from(events)
-      .where(and(eq(events.status, "published"), or(
-        gt(events.startsAt, event.startsAt),
-        and(eq(events.startsAt, event.startsAt), gt(events.id, event.id)),
+      .where(and(eq(events.status, "published"), ne(events.id, event.id), or(
+        gt(events.startsAt, anchorStartsAt),
+        and(eq(events.startsAt, anchorStartsAt), gt(events.id, event.id)),
       )))
       .orderBy(asc(events.startsAt), asc(events.id)).limit(1),
   ]);

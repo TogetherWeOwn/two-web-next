@@ -75,6 +75,11 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(f.queries[0]!.sql).toContain('order by "events"."starts_at" desc, "events"."id" desc');
     expect(f.queries[1]!.sql).toMatch(/"starts_at" > .*"starts_at" = .*"id" >/);
     expect(f.queries[1]!.sql).toContain('order by "events"."starts_at" asc, "events"."id" asc');
+    for (const q of f.queries.slice(0, 2)) {
+      expect(q.sql).toContain('"events"."id" <>');
+      expect(q.sql).toContain('(select "starts_at" from "events" where "events"."id" =');
+      expect(q.params).not.toContain(NOW.toISOString());
+    }
     expect(f.queries.slice(0, 2).map((q) => q.params.at(-1))).toEqual([1, 1]);
     const related = f.queries[2]!;
     expect(related.sql).toContain('"events"."id" <>');
@@ -183,6 +188,35 @@ describe.skipIf(!process.env.DATABASE_URL)("event navigation eligibility (isolat
     const [current] = await seed([row(1)]);
     expect(await getEventNeighbors(fixture.db, current!)).toEqual({ previous: null, next: null });
     expect(await listRelatedEvents(fixture.db, current!, NOW)).toEqual([]);
+  });
+
+  it("never links a lone event to itself when PostgreSQL stores microseconds", async () => {
+    await seed([row(2)]);
+    await fixture.client`update events set starts_at = '2030-01-10T20:00:00.123456Z'::timestamptz where id = 2`;
+    const [current] = await fixture.db.select().from(events);
+    expect(current!.startsAt.toISOString()).toBe("2030-01-10T20:00:00.123Z");
+    expect(await getEventNeighbors(fixture.db, current!)).toEqual({ previous: null, next: null });
+  });
+
+  it("uses id tiebreaks for equal microsecond starts, including the first/last boundaries", async () => {
+    await seed([row(1), row(2), row(3)]);
+    await fixture.client`update events set starts_at = '2030-01-10T20:00:00.123456Z'::timestamptz`;
+    const current = await fixture.db.select().from(events).orderBy(events.id);
+    expect(await getEventNeighbors(fixture.db, current[0]!)).toMatchObject({ previous: null, next: { id: 2 } });
+    expect(await getEventNeighbors(fixture.db, current[1]!)).toMatchObject({ previous: { id: 1 }, next: { id: 3 } });
+    expect(await getEventNeighbors(fixture.db, current[2]!)).toMatchObject({ previous: { id: 2 }, next: null });
+  });
+
+  it("orders distinct microsecond starts within one millisecond before id", async () => {
+    await seed([row(3), row(2), row(1), row(4, { status: "draft" }), row(5, { status: "cancelled" })]);
+    await fixture.client`update events set starts_at = case id
+      when 3 then '2030-01-10T20:00:00.123100Z'::timestamptz
+      when 2 then '2030-01-10T20:00:00.123456Z'::timestamptz
+      when 1 then '2030-01-10T20:00:00.123900Z'::timestamptz
+      else '2030-01-10T20:00:00.123500Z'::timestamptz end`;
+    const current = await fixture.db.select().from(events);
+    expect(new Set(current.map((e) => e.startsAt.toISOString())).size).toBe(1);
+    expect(await getEventNeighbors(fixture.db, current.find((e) => e.id === 2)!)).toMatchObject({ previous: { id: 3 }, next: { id: 1 } });
   });
 
   it("prioritizes three same-game events over nearer other games, with stable chronological ordering", async () => {
