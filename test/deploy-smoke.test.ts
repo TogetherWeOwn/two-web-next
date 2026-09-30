@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -29,12 +29,16 @@ printf '%s' "$SMOKE_CODE"
 exit "$SMOKE_CURL_EXIT"
 `, { mode: 0o700 });
     writeFileSync(join(scratch, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    const result = spawnSync("bash", ["-e", "-c", block!.replace(/^          /gm, "")], {
+    symlinkSync(process.execPath, join(scratch, "node"));
+    const bash = spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" });
+    expect(bash.status).toBe(0);
+    // Only Node and our fakes are on PATH: system jq must not be required.
+    const result = spawnSync(bash.stdout.trim(), ["-e", "-c", block!.replace(/^          /gm, "")], {
       encoding: "utf8",
       timeout: 5000,
       env: {
         ...process.env,
-        PATH: `${scratch}:${process.env.PATH}`,
+        PATH: scratch,
         RUNNER_TEMP: scratch,
         SMOKE_BODY: body,
         SMOKE_CODE: code,
@@ -42,7 +46,7 @@ exit "$SMOKE_CURL_EXIT"
       },
     });
     expect(result.error).toBeUndefined();
-    return { status: result.status, output: result.stdout, attempts: readFileSync(join(scratch, "attempts"), "utf8").length };
+    return { status: result.status, output: result.stdout + result.stderr, attempts: readFileSync(join(scratch, "attempts"), "utf8").length };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -63,6 +67,10 @@ describe("deploy smoke /up (offline)", () => {
 
   it.each([
     ['{"ok":true}', "200", "0"],
+    ["null", "200", "0"],
+    ['{"status":"healthy","queue":null}', "200", "0"],
+    ['{"status":"unknown","queue":{"status":"healthy"}}', "200", "0"],
+    ['{"status":"healthy","queue":{"status":"unknown"}} trailing', "200", "0"],
     ["<html>not JSON</html>", "200", "0"],
     ['{"status":"healthy"}', "200", "0"],
     ['{"status":"healthy","queue":{"status":"unexpected"}}', "200", "0"],
