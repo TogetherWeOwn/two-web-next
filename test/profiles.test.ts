@@ -290,7 +290,7 @@ describe("PATCH /members/:user (memory doubles)", () => {
     const cookie = await cookieFor(sessions, ALICE);
     let last!: Response;
     for (let i = 0; i < PROFILE_WRITE_THROTTLE_PER_MINUTE + 1; i++) {
-      last = await app.request(`/members/${ALICE.userId}`, form(cookie, { bio: `b${i}`, games_text: "" }), env);
+      last = await app.request(`/members/${ALICE.userId}`, form(cookie, { bio: `b${i}`, games_text: "" }, { accept: "application/json" }), env);
     }
     expect(last.status).toBe(429);
     expect(last.headers.get("retry-after")).toBe("17");

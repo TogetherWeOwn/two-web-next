@@ -364,7 +364,7 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     for (let i = 0; i < 10; i++) {
       expect((await app.request("/join/discord", {}, e)).status).toBe(302);
     }
-    const limited = await app.request("/join/discord", {}, e);
+    const limited = await app.request("/join/discord", { headers: { accept: "application/json" } }, e);
     expect(limited.status).toBe(429);
     expect(limited.headers.get("Retry-After")).toMatch(/^\d+$/);
     expect(await limited.json()).toMatchObject({ reason: "rate_limited" });
