@@ -38,11 +38,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Seeded admin properties (10s budget, local fixtures)
+        run: timeout 10s npm run test:admin-properties
       - name: Apply migrations
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Exercise the exact pre-deploy invocation on the same migrated service.
+      - name: Configuration drift check + selftest
+        run: npm run config:check
       - name: Check (typecheck + coverage gate)
         run: npm run typecheck && npm run test:coverage
         env:

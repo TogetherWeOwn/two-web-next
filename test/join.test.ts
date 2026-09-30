@@ -1,4 +1,7 @@
 /// <reference types="vite/client" />
+// route-inventory: GET /join
+// route-inventory: GET /join/discord
+// route-inventory: GET /join/callback
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
 import app from "../src/index";

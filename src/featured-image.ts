@@ -24,7 +24,12 @@ export function featuredImageSrc(raw: string, appUrl: string): string | null {
   try {
     const image = new URL(raw, appUrl);
     const site = new URL(appUrl);
-    if (image.origin === site.origin) return `${image.pathname}${image.search}${image.hash}`;
+    if (image.origin === site.origin) {
+      // A pathname starting with `//` is same-origin for CSP but renders as a
+      // protocol-relative URL: suppress it like any other blocked image.
+      if (image.pathname.startsWith("//")) return null;
+      return `${image.pathname}${image.search}${image.hash}`;
+    }
     return image.href;
   } catch {
     return null;

@@ -91,6 +91,7 @@ describe("featured homepage fallback (local fixtures)", () => {
     ["https://next.example.test/photo.jpg?a=1#frag", "/photo.jpg?a=1#frag"],
     ["https://cdn.discordapp.com/attachments/photo.jpg", "https://cdn.discordapp.com/attachments/photo.jpg"],
     ["https://images.example.test/photo.jpg", null],
+    ["https://next.example.test//evil.test/photo.jpg", null],
   ])("renders a 'self'-safe src for %s", (url, src) => {
     expect(featuredImageSrc(url, env.APP_URL)).toBe(src);
   });

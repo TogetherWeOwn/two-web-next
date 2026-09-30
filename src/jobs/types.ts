@@ -44,6 +44,8 @@ export interface EventStore {
   recordMirrored(eventKey: string, discordEventId: string, mirroredAt: Date): Promise<void>;
   /** Published events past ends_at -> past. Returns rows changed. */
   closeFinished(now: Date): Promise<number>;
+  /** Top up every live series (draft/published parent). Returns rows created; idempotent. */
+  materializeSeries(): Promise<number>;
   /** Published, and discord_event_id null or any RSVP unsynced. */
   staleEventKeys(): Promise<string[]>;
 }

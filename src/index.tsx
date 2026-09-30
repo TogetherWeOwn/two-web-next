@@ -196,9 +196,11 @@ async function issueSession(
   });
 }
 
-async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, rotateToken = true): Promise<Session | null> {
+async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
+  // Anonymous public pages must not depend on session storage or its startup DDL.
+  const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
   if (!row) return null;
   // Abortable calendar fragments validate expiry/revocation but must not delete
@@ -231,7 +233,7 @@ const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_fail
 
 app.get("/", async (c) => {
   // Optional homepage data must not take down the funnel during a DB outage.
-  const session = await storeFor(c).then((store) => readSession(c, store)).catch(() => null);
+  const session = await readSession(c).catch(() => null);
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
@@ -471,8 +473,8 @@ app.route("/", profilesApp());
 // W8: public events pages, /events.json and moderator event writes.
 registerEventRoutes(
   app,
-  async (c) => readSession(c, await storeFor(c)),
-  async (c) => readSession(c, await storeFor(c), false),
+  async (c) => readSession(c),
+  async (c) => readSession(c, false),
 );
 
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
