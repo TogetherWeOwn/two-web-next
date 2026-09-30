@@ -1,0 +1,16 @@
+// Local control leg only. No real Hyperdrive id and no deployed routes.
+// Remote dev/deploy is prohibited. This does not exercise Hyperdrive pooling.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "two-web-next-w1-local-control",
+  "main": "./probe-worker.ts",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [],
+  "hyperdrive": [{
+    "binding": "DB",
+    "id": "00000000000000000000000000000000",
+    "localConnectionString": "postgres://agent_test@agent-testdb:5432/agent_test"
+  }]
+}

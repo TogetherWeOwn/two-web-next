@@ -6,12 +6,9 @@ Checks (mirroring two-web shapes, see schema.sql header for file:line sources):
   (b) pg_advisory_lock single-flight: xact-scoped mutual exclusion + session lock round-trip
   (c) jsonb containment over member_data_access_logs shape uses the GIN index
 
-Target: a throwaway schema on agent-testdb (Postgres 17) or, once S1 lands, the
-Neon staging branch URL. Never production. Usage:
-
-    DATABASE_URL="host=agent-testdb port=5432 user=agent_test dbname=agent_test" python3 checks.py
-    # Neon leg (after TOG-9679 delivers the branch):
-    DATABASE_URL="<neon-staging-branch-url>" python3 checks.py --schema w1_spike_neon
+Target: a unique throwaway schema on agent-testdb only. Never staging or
+production. This is a direct-Postgres control, NOT a Hyperdrive verification.
+Usage: python3 spike/hyperdrive-semantics/checks.py
 
 Exit 0 + "RESULT: PASS" only when all three checks pass. Prints versions for the report.
 """
@@ -19,22 +16,41 @@ import argparse
 import json
 import os
 import sys
+import uuid
 
 import psycopg2
 import psycopg2.errors
+from psycopg2.extensions import parse_dsn
 
-SCHEMA = "w1_spike"
+SCHEMA = "w1_spike_" + uuid.uuid4().hex
+TEST_DSN = {"host": "agent-testdb", "port": "5432", "user": "agent_test", "dbname": "agent_test"}
+
+
+def is_test_database(url):
+    try:
+        options = parse_dsn(url)
+    except psycopg2.Error:
+        return False
+    if options.get("password") == "":
+        options.pop("password")
+    return options == TEST_DSN
 
 
 def connect(url):
-    return psycopg2.connect(url, connect_timeout=10)
+    if not is_test_database(url):
+        raise ValueError("test_database_required")
+    # libpq can route via PGHOSTADDR despite an explicit host. Never inherit
+    # routing, credentials, service files, or SQL options from the environment.
+    for key in list(os.environ):
+        if key.startswith("PG"):
+            del os.environ[key]
+    return psycopg2.connect(
+        **TEST_DSN, password="", passfile="/dev/null", sslmode="disable",
+        connect_timeout=10, options="-c statement_timeout=5000 -c lock_timeout=2000",
+    )
 
 
 def setup(conn):
-    with conn.cursor() as cur:
-        cur.execute(f"DROP SCHEMA IF EXISTS {SCHEMA} CASCADE")
-        cur.execute(f"CREATE SCHEMA {SCHEMA}")
-    conn.commit()
     schema_sql = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
     with open(schema_sql, "rb") as f:
         sql = f.read().decode().replace(':"spike_schema"', SCHEMA)
@@ -80,16 +96,23 @@ def check_for_update(url):
         )
         t1.commit()
 
+        c2.execute(f"SELECT capacity FROM {SCHEMA}.spike_events WHERE id = %s FOR UPDATE", (event_id,))
+        capacity = c2.fetchone()[0]
         c2.execute(
             f"SELECT count(*) FROM {SCHEMA}.spike_rsvps WHERE event_id = %s AND status = 'going'",
             (event_id,),
         )
         going = c2.fetchone()[0]
+        refused = capacity is not None and going >= capacity
+        if not refused:
+            c2.execute(
+                f"INSERT INTO {SCHEMA}.spike_rsvps (event_id, user_id, status) VALUES (%s, 22, 'going')",
+                (event_id,),
+            )
         t2.commit()
-        if going != 1:
-            return False, f"expected going=1 after T1 commit, saw {going}"
-        # capacity=1 and going=1: the app's takesASeat check would now refuse T2 (EventAtCapacity).
-        return True, "T2 blocked on row lock (lock_timeout 55P03); post-commit going=1, capacity=1 refuses second seat"
+        if going != 1 or not refused:
+            return False, f"expected second seat refusal at going=1/capacity=1, saw going={going} refused={refused}"
+        return True, "T2 blocked on row lock (lock_timeout 55P03); retry under FOR UPDATE refuses second seat"
     finally:
         t1.close()
         t2.close()
@@ -97,7 +120,6 @@ def check_for_update(url):
 
 def check_advisory(url):
     """(b) xact-scoped single-flight excludes a concurrent txn; session lock round-trips."""
-    lock_key = 96801357  # arbitrary 32-bit spike key, schema-local meaning only
     c1 = connect(url)
     c2 = connect(url)
     try:
@@ -106,6 +128,8 @@ def check_advisory(url):
         # Transaction-scoped variant: the Hyperdrive-safe pattern (pooler returns +
         # RESETs connections, so session scope cannot be relied on; see findings.md).
         a.execute("BEGIN")
+        a.execute("SELECT pg_backend_pid()")
+        lock_key = a.fetchone()[0]  # database-wide key unique to this live holder
         a.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
         b.execute("BEGIN")
         b.execute("SELECT pg_try_advisory_xact_lock(%s)", (lock_key,))
@@ -175,16 +199,15 @@ def check_gin(url, rows=2000):
 
 
 def main():
-    global SCHEMA
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--schema", default=SCHEMA)
-    ap.add_argument("--keep", action="store_true", help="leave the spike schema behind")
-    args = ap.parse_args()
-    SCHEMA = args.schema
+    argparse.ArgumentParser().parse_args()
     url = os.environ.get("DATABASE_URL", "host=agent-testdb port=5432 user=agent_test dbname=agent_test")
-
     admin = connect(url)
+    created = False
     try:
+        with admin.cursor() as cur:
+            cur.execute(f"CREATE SCHEMA {SCHEMA}")
+        admin.commit()
+        created = True
         with admin.cursor() as cur:
             cur.execute("SELECT version()")
             print("postgres:", cur.fetchone()[0])
@@ -195,14 +218,19 @@ def main():
                          ("(c) jsonb+GIN", check_gin)]:
             try:
                 ok, detail = fn(url)
-            except Exception as e:  # fail loudly, never half-pass
-                ok, detail = False, f"{type(e).__name__}: {e}"
+            except Exception as e:  # fail loudly without printing connection details
+                if isinstance(e, psycopg2.OperationalError) or getattr(e, "pgcode", "") == "42501":
+                    raise
+                ok, detail = False, type(e).__name__
             results.append((name, ok, detail))
             print(f"{name}: {'PASS' if ok else 'FAIL'} — {detail}")
-        if not args.keep:
-            teardown(admin)
     finally:
-        admin.close()
+        try:
+            admin.rollback()
+            if created:
+                teardown(admin)
+        finally:
+            admin.close()
 
     passed = sum(1 for _, ok, _ in results if ok)
     print(f"RESULT: {'PASS' if passed == 3 else 'FAIL'} ({passed}/3)")
