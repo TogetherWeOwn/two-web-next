@@ -23,16 +23,38 @@ export function normalizeQuery(raw: string | null | undefined): string | null {
   return [...n].slice(0, MAX_QUERY_LENGTH).join("");
 }
 
-/** Never throws. Logs the error class only (a driver message can carry the DSN). */
-export async function recordSearch(db: Db, raw: string | null | undefined, resultCount: number): Promise<void> {
+/** Write deadline: logging must never hold the response (a locked table would wait forever). */
+export const LOG_WRITE_DEADLINE_MS = 500;
+
+/** Never throws, never waits past the deadline. Logs the error class only (a driver message can carry the DSN). */
+export async function recordSearch(
+  db: Db,
+  raw: string | null | undefined,
+  resultCount: number,
+  deadlineMs = LOG_WRITE_DEADLINE_MS,
+): Promise<void> {
   const normalized = normalizeQuery(raw);
   if (normalized === null) return;
+  const warn = (exception: string) =>
+    console.warn("Event search unavailable for logging; serving results without recording.", { exception });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const write = (async () => {
+    try {
+      await db.insert(eventSearchLogs).values({ normalizedQuery: normalized, resultCount: Math.max(0, resultCount) });
+    } catch (err) {
+      warn(err instanceof Error ? err.constructor.name : typeof err);
+    }
+  })();
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      warn("LogWriteDeadline");
+      resolve();
+    }, deadlineMs);
+  });
   try {
-    await db.insert(eventSearchLogs).values({ normalizedQuery: normalized, resultCount: Math.max(0, resultCount) });
-  } catch (err) {
-    console.warn("Event search unavailable for logging; serving results without recording.", {
-      exception: err instanceof Error ? err.constructor.name : typeof err,
-    });
+    await Promise.race([write, deadline]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

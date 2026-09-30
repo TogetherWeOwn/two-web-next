@@ -57,6 +57,16 @@ describe("recordSearch is fail-open", () => {
     warn.mockRestore();
   });
 
+  it("returns at the deadline when the write never settles", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const hung = { insert: () => ({ values: () => new Promise<void>(() => {}) }) } as unknown as Db;
+    const t0 = Date.now();
+    await expect(recordSearch(hung, "helldiv", 1, 30)).resolves.toBeUndefined();
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(JSON.stringify(warn.mock.calls)).toContain("LogWriteDeadline");
+    warn.mockRestore();
+  });
+
   it("writes nothing for a blank query", async () => {
     const values = vi.fn();
     await recordSearch({ insert: () => ({ values }) } as unknown as Db, "  ", 0);
