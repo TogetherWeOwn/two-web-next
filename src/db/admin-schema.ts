@@ -161,10 +161,27 @@ export const rsvps = pgTable(
     userId: text("user_id").notNull(),
     // going | maybe | not_going | waitlisted (src/islands/contracts.ts RSVP_STATUSES).
     status: text("status").notNull(),
+    // Null until the Discord mirror has caught up with this answer. Every write resets it
+    // (W9); the mirror job stamps it (RsvpResource contract: null = "saved, syncing").
+    syncedToDiscordAt: timestamp("synced_to_discord_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique("rsvps_event_user_unique").on(t.eventId, t.userId), index("rsvps_user_id_idx").on(t.userId)],
+);
+
+// One rendered /events?q= search: normalized query + visible result count only.
+// No user id, session or IP by design (legacy EventSearchLog, TOG-8400); pruned
+// at 90 d by the W13 cron.
+export const eventSearchLogs = pgTable(
+  "event_search_logs",
+  {
+    id: serial("id").primaryKey(),
+    normalizedQuery: text("normalized_query").notNull(),
+    resultCount: integer("result_count").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("event_search_logs_zero_idx").on(t.resultCount, t.normalizedQuery), index("event_search_logs_occurred_at_idx").on(t.occurredAt)],
 );
 
 export type Event = typeof events.$inferSelect;

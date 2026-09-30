@@ -2,6 +2,8 @@
 //
 // One endpoint, five typed operations, one admitted caller. Checks run in an order that spends
 // nothing before the request has earned it:
+//   0. the outer route shield admits the hit — before auth, and before the body is even
+//      canonicalized, so a spent bucket is 429 without touching the payload;
 //   1. feature enabled, envelope parses, credential identifies a grant;
 //   2. op is one of five, grant live, grant is the admitted caller on the admitted guild;
 //   3. the idempotency store answers replays for free (before rate limits);
@@ -22,6 +24,11 @@ export type IngressConfig = {
   readsPerMinute: number;
   serviceMutatingPerMinute: number;
   serviceReadsPerMinute: number;
+  // The outer route shield (two-web TOG-8402, config `agent-events.route_per_minute`):
+  // every hit per credential per minute, counted before auth, the grant lookup
+  // and the audit write. A flood guard above the inner budgets' sum, not the
+  // allowance — the bot's normal burst never sees it.
+  routePerMinute: number;
   lockWaitMs: number;
 };
 
@@ -34,6 +41,7 @@ export const DEFAULT_CONFIG: IngressConfig = {
   readsPerMinute: 30,
   serviceMutatingPerMinute: 60,
   serviceReadsPerMinute: 300,
+  routePerMinute: 60,
   lockWaitMs: 5000,
 };
 
@@ -57,9 +65,18 @@ export function ulid(now = Date.now()): string {
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-function sortRecursive(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(sortRecursive);
-  if (isPlainObject(v)) return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortRecursive(v[k])]));
+// Nesting bound for the payload digest: comfortably above every real agent
+// event body (3 levels), far below stack exhaustion (~10k frames in a Worker).
+export const MAX_DIGEST_DEPTH = 100;
+export class PayloadTooDeepError extends Error {}
+
+function sortRecursive(v: unknown, depth = 0): unknown {
+  // Untrusted nesting is bounded: without this, an admitted deeply nested
+  // body recurses until the worker throws RangeError (answered 500). Past the
+  // bound the digest refuses with a typed error the caller answers 422.
+  if (depth > MAX_DIGEST_DEPTH) throw new PayloadTooDeepError(`The request body nests deeper than ${MAX_DIGEST_DEPTH} levels.`);
+  if (Array.isArray(v)) return v.map((e) => sortRecursive(e, depth + 1));
+  if (isPlainObject(v)) return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortRecursive(v[k], depth + 1)]));
   return v;
 }
 
@@ -130,10 +147,46 @@ export function validateFields(raw: unknown): { ok: true; fields: Fields } | { o
   return { ok: true, fields: { title: title!, game, description, starts_at: startsAt!, ends_at: endsAt!, timezone: timezone!, location: location!, capacity } };
 }
 
-export async function handleAgentEvent(sql: Sql, cfg: IngressConfig, body: unknown, credential: string | null): Promise<Answer> {
+/** One 429 shape for every throttle on this ingress (two-web TOG-6788). */
+export function throttleEnvelope(retryAfterSeconds: number): Answer {
+  const retry = Math.max(1, retryAfterSeconds);
+  return {
+    status: 429,
+    body: { reason: "rate_limited", message: `Too many requests. Try again in ${retry} seconds.`, retry_after: retry },
+    headers: { "Retry-After": String(retry) },
+  };
+}
+
+export async function handleAgentEvent(
+  sql: Sql,
+  cfg: IngressConfig,
+  body: unknown,
+  credential: string | null,
+  clientIp: string | null = null,
+): Promise<Answer> {
   const requestId = ulid();
   const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
-  const dig = await digest(isPlainObject(body) ? body : {});
+
+  // The outer shield (two-web TOG-8402): every hit per credential per minute,
+  // counted before auth, the grant lookup and the audit write — ahead of the
+  // enabled check, as the route middleware fires before the controller runs,
+  // and ahead of payload canonicalization, so a spent bucket is refused
+  // without ever running the recursive digest over untrusted JSON. A presented
+  // credential buckets on its own hash (one guess never spends another's);
+  // anonymous hits bucket per IP. Refused hits write nothing.
+  const shieldKey = credential ? await sha256Hex(credential) : `ip:${clientIp ?? "unknown"}`;
+  const shielded = await shield(sql, cfg, shieldKey, requestId);
+  if (shielded) return shielded;
+  let dig: string;
+  try {
+    dig = await digest(isPlainObject(body) ? body : {});
+  } catch (err) {
+    if (err instanceof PayloadTooDeepError) {
+      await audit(sql, null, "unknown", null, null, "unhashable", requestId, "denied", "payload_too_deep");
+      return { status: 422, body: { reason: "payload_too_deep", message: err.message, request_id: requestId } };
+    }
+    throw err;
+  }
 
   const rawOp = doc.op;
   const rawKey = doc.idempotency_key;
@@ -231,6 +284,45 @@ async function replayAnswer(sql: Tx, grant: Grant, op: string, replay: Row, dig:
   return { status: replay.status, body: { ...(replay.body as Record<string, unknown>), replayed: true, request_id: requestId } };
 }
 
+// The outer shield's counter (two-web TOG-8402): one bucket per credential
+// hash (or anonymous IP), counted before auth. Returns the 429 envelope when
+// the budget is spent — audited by nobody, since the hit never reached auth —
+// and records the hit otherwise.
+//
+// Two properties the exact-head review pinned down:
+// - The advisory lock waits at most lockWaitMs (SET LOCAL lock_timeout, as in
+//   the operation transaction). Contention is a 503 operation_busy audited as
+//   an error — a retryable answer, never a hung connection.
+// - Stale counters are pruned here, on every shield pass, capped per pass so a
+//   long-idle table cannot stall admission. The candidate select is SKIP LOCKED
+//   so expired rows held by unrelated transactions are left for a later pass
+//   instead of turning a fresh credential's admission into a 503. Denied-only
+//   and replay-only periods still run this transaction, so expiry no longer
+//   depends on a successful authenticated operation reaching the inner rate
+//   limiter.
+async function shield(sql: Sql, cfg: IngressConfig, shieldKey: string, requestId: string): Promise<Answer | null> {
+  const bucket = `shield:${shieldKey}`;
+  try {
+    return await sql.begin(async (tx) => {
+      await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-hits:${bucket}`}, 0))`;
+      await tx`WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM agent_event_hits USING candidates WHERE agent_event_hits.id = candidates.id`;
+      const [r] = await tx`SELECT count(*)::int AS n, coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - now()))), 1)::int AS wait
+                           FROM agent_event_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
+      if (r!.n >= cfg.routePerMinute) return throttleEnvelope(Math.max(1, r!.wait));
+      await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
+      return null;
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === "55P03") {
+      // Contention, not a decision. Audited as an error so a run of these reads as load.
+      await audit(sql, null, "unknown", null, null, null, requestId, "error", "operation_busy");
+      return { status: 503, body: { reason: "operation_busy", message: "The ingress is busy admitting requests. Retry with the same idempotency key.", request_id: requestId } };
+    }
+    throw err;
+  }
+}
+
 async function rateLimit(sql: Sql, cfg: IngressConfig, grant: Grant, op: Op): Promise<Answer | null> {
   const read = op === "read";
   const buckets: [string, number][] = [
@@ -247,16 +339,14 @@ async function rateLimit(sql: Sql, cfg: IngressConfig, grant: Grant, op: Op): Pr
                            FROM agent_event_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
       if (r!.n >= max) retry = Math.max(retry, Math.max(1, r!.wait));
     }
-    if (retry > 0) {
-      return { status: 429, body: { reason: "rate_limited", message: `Too many requests. Try again in ${retry} seconds.`, retry_after: retry }, headers: { "Retry-After": String(retry) } };
-    }
+    if (retry > 0) return throttleEnvelope(retry);
     for (const [bucket] of buckets) await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
     await tx`DELETE FROM agent_event_hits WHERE at < now() - interval '5 minutes'`;
     return null;
   });
 }
 
-async function audit(sql: Tx, grant: Grant | null, operation: string, eventKey: string | null, key: string | null, dig: string, requestId: string, result: string, reason: string | null): Promise<void> {
+async function audit(sql: Tx, grant: Grant | null, operation: string, eventKey: string | null, key: string | null, dig: string | null, requestId: string, result: string, reason: string | null): Promise<void> {
   await sql`INSERT INTO agent_event_audits (grant_id, operation, event_key, idempotency_key, payload_digest, request_id, result, reason_code)
             VALUES (${grant?.id ?? null}, ${operation.slice(0, 32)}, ${eventKey}, ${key}, ${dig}, ${requestId}, ${result}, ${reason})`;
 }
@@ -295,7 +385,10 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
 
   if (op === "read") {
     const [{ n }] = await tx`SELECT count(*)::int AS n FROM agent_events WHERE agent_grant_id = ${grant.id}` as [{ n: number }];
-    const receipts = await tx`SELECT operation, result, reason_code, request_id, created_at FROM agent_event_audits WHERE grant_id = ${grant.id} AND event_key = ${ek} ORDER BY id LIMIT 50`;
+    // The bounded window (two-web AgentEventReceiptWindowTest): the latest 50,
+    // oldest first. Newest-first then reversed — LIMIT applies before the flip.
+    const newest = await tx`SELECT operation, result, reason_code, request_id, created_at FROM agent_event_audits WHERE grant_id = ${grant.id} AND event_key = ${ek} ORDER BY id DESC LIMIT 50`;
+    const receipts = [...newest].reverse();
     return done(200, {
       event: proofFields(event),
       local: { status: event.status, synced_to_discord: false },

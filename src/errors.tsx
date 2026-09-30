@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
-import { Layout } from "./pages";
+import { Layout, SiteFooter } from "./pages";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
 // errors/*.blade.php views (TOG-5626/TOG-6788). Database-free by construction:
@@ -31,7 +31,7 @@ const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?
         {children}
       </section>
     </main>
-    <footer>Together We Own · adult gaming community · founded 1998</footer>
+    <SiteFooter />
   </Layout>
 );
 
@@ -114,7 +114,7 @@ export function internalErrorHandler(err: unknown, c: Context): Response | Promi
 // One 429 shape for every throttle (ports ThrottleEnvelope::render): JSON
 // callers get the {reason, message, retry_after} envelope, browsers get the
 // branded page — both with the Retry-After header. Default 60 s, min 1 s.
-// No throttle calls it yet; W9 (TOG-9688) will wire it.
+// Wired by the RSVP writes (src/events/routes.tsx, W9).
 export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promise<Response> {
   const parsed = Math.floor(retryAfter);
   const n = Number.isFinite(parsed) ? Math.max(1, parsed) : 60;
