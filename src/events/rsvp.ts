@@ -24,22 +24,29 @@ export type RsvpWriteResult =
   | { ok: false; reason: "limited"; retryAfter: number };
 
 /** Draft/cancelled/past events and paused ones take no new answers (RsvpPolicy + TOG-8725). */
+function closedWhy(ev: { status: string; endsAt: Date; rsvpOpen: boolean }, now: Date): "draft" | "cancelled" | "past" | "paused" | null {
+  if (ev.status !== "published") return ev.status === "cancelled" ? "cancelled" : ev.status === "draft" ? "draft" : "past";
+  if (ev.endsAt <= now) return "past";
+  if (!ev.rsvpOpen) return "paused";
+  return null;
+}
 export async function writeRsvp(db: Db, eventKey: string, userId: string, status: RsvpWriteStatus, clock: () => Date = () => new Date()): Promise<RsvpWriteResult> {
   return db.transaction(async (tx) => {
-    // Member lock first, then the event row lock (withdraw only takes the row lock, so the
-    // order cannot deadlock). Both waits are behind us before the clock is read.
+    // Member lock first, then the event row lock (withdraw takes the same order, so the
+    // order cannot deadlock).
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!ev) return { ok: false, reason: "not_found" } as const;
-    // Read the clock only once both locks are held: a wait must not let an answer slip in
-    // after the event has ended.
-    const now = clock();
-    if (ev.status !== "published") return { ok: false, reason: "closed", why: ev.status === "cancelled" ? "cancelled" : ev.status === "draft" ? "draft" : "past" } as const;
-    if (ev.endsAt <= now) return { ok: false, reason: "closed", why: "past" } as const;
-    if (!ev.rsvpOpen) return { ok: false, reason: "closed", why: "paused" } as const;
-
+    // The RSVP row lock comes before any accept/charge decision: a wait on a mirror-stamp
+    // writer must finish before the clock is read, or an answer could slip in after the
+    // event has ended. Empty for a first answer, which has no row to wait on.
     const [existing] = await tx.select().from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)))
-      .for("update"); // wait out any mirror-stamp writer before the budget is stamped
+      .for("update");
+    // The event row is locked above, so its columns cannot change under us while we wait;
+    // only the clock moves. Read it once all waits are behind us and judge expiry then.
+    const now = clock();
+    const why = closedWhy(ev, now);
+    if (why) return { ok: false, reason: "closed", why } as const;
     // Only an answer that newly takes a seat has to fit.
     const takesASeat = status === "going" && existing?.status !== "going";
     if (takesASeat && ev.capacity !== null) {
@@ -104,6 +111,11 @@ async function chargeThrottle(tx: Tx, userId: string): Promise<Verdict> {
   const { maxAttempts, decaySeconds } = RSVP_RATE_LIMIT;
   {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${bucket}))`);
+    // Maintenance before acceptance: the global prune can wait on a contended expired row,
+    // and a wait after the hit is stamped would age the accepted write out of its window.
+    // Count and insert only after it, so the window is always judged fresh; refused writes
+    // return before this point and spend nothing.
+    await tx.execute(sql`delete from web_throttle_hits where at < clock_timestamp() - interval '5 minutes'`);
     const rows = (await tx.execute(sql`
       select count(*)::int as n,
         coalesce(ceil(extract(epoch from (min(at) + make_interval(secs => ${decaySeconds}) - clock_timestamp()))), 1)::int as wait
@@ -111,7 +123,6 @@ async function chargeThrottle(tx: Tx, userId: string): Promise<Verdict> {
     const r = rows[0];
     if (r && r.n >= maxAttempts) return { limited: true, retryAfter: Math.max(1, r.wait) } as const;
     await tx.execute(sql`insert into web_throttle_hits (bucket, at) values (${bucket}, clock_timestamp())`);
-    await tx.execute(sql`delete from web_throttle_hits where at < clock_timestamp() - interval '5 minutes'`);
     return { limited: false } as const;
   }
 }

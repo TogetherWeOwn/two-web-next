@@ -327,6 +327,63 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const n = nr!.n;
     expect(n).toBe(12);
   });
+  // Poll pg_stat_activity until the pending request visibly waits on the lock pattern.
+  const waitForLock = async (pattern: string): Promise<boolean> => {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      const [w] = (await client`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query like ${pattern}`) as unknown as [{ n: number }];
+      if (w!.n > 0) return true;
+      if (Date.now() > deadline) return false;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+
+  it("expiry is judged after the RSVP-row wait: an existing answer queued behind a stamp writer is refused once the event ends", async () => {
+    const ev = await seed();
+    const who = "expire-rowlock";
+    expect((await put(ev.key, who, "going")).status).toBe(201);
+    await client`delete from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
+    await client`update events set ends_at = clock_timestamp() + interval '3 seconds' where id = ${ev.id}`;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = client.begin(async (tx) => {
+      await tx`update rsvps set synced_to_discord_at = clock_timestamp() where event_id = ${ev.id} and user_id = ${who}`;
+      await held;
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const pending = put(ev.key, who, "maybe");
+    expect(await waitForLock('%from "rsvps"%for update%')).toBe(true);
+    // Let the event end while the write is still queued behind the row lock.
+    await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
+    release();
+    await holder;
+    expect((await pending).status).toBe(403);
+    expect((await rows(ev.id)).map((r) => r.status)).toEqual(["going"]);
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`) as unknown as [{ n: number }];
+    expect(n).toBe(0);
+  });
+  it("the global prune runs before the hit is stamped: a write queued behind prune keeps a fresh budget", async () => {
+    const ev = await seed();
+    const who = "prune-rowlock";
+    await client`insert into web_throttle_hits (bucket, at) values ('unrelated-expired-bucket', clock_timestamp() - interval '10 minutes')`;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select * from web_throttle_hits where bucket = 'unrelated-expired-bucket' for update`;
+      await held;
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const pending = put(ev.key, who, "going");
+    expect(await waitForLock("%delete from web_throttle_hits%")).toBe(true);
+    await new Promise((r) => setTimeout(r, 2000));
+    const [tr] = await client`select clock_timestamp() as t`;
+    release();
+    await holder;
+    expect((await pending).status).toBe(201);
+    const [hit] = await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
+    expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
+    await client`delete from web_throttle_hits where bucket = 'unrelated-expired-bucket'`;
+  });
   it("the budget hit waits for the RSVP row lock (DELETE and PUT on an existing answer)", async () => {
     for (const verb of ["DELETE", "PUT"] as const) {
       const ev = await seed();
