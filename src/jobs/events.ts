@@ -1,4 +1,8 @@
 import type postgres from "postgres";
+import { and, inArray, isNotNull } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import * as schema from "../db/schema";
+import { materializeMissingInstances } from "../admin/store";
 import type { EventStore, EventUpsert, SyncAttempt, TxClient } from "./types";
 
 type AttemptRow = { idempotency_key: string; revision: string | number; mirrored_at: Date; state: SyncAttempt["state"] }
@@ -86,6 +90,17 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
       const rows = await sql`update events set status = 'past', updated_at = ${now}
         where status = 'published' and ends_at <= ${now} returning id`;
       return rows.length;
+    },
+    async materializeSeries() {
+      // Reconciliation owns the transaction/advisory lock. Do not begin a
+      // nested transaction on its reserved postgres.js client.
+      const db = drizzle(sql as postgres.Sql, { schema });
+      const parents = await db.select().from(schema.events).where(and(
+        isNotNull(schema.events.recurrenceFrequency), inArray(schema.events.status, ["draft", "published"]),
+      ));
+      let created = 0;
+      for (const parent of parents) created += await materializeMissingInstances(db, parent);
+      return created;
     },
     staleEventKeys: () => staleKeys(null),
   };

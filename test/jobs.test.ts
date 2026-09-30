@@ -43,6 +43,7 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[
     needsSync: async () => false,
     pendingSyncKey: async () => null,
     closeFinished: async () => 0,
+    materializeSeries: async () => 0,
     staleEventKeys: async () => [],
     ...over,
   };
@@ -373,7 +374,7 @@ describe("cron", () => {
       lock: memLock(),
     });
     expect(order).toEqual(["close", "stale"]);
-    expect(r).toEqual({ closed: 2, resynced: 2 });
+    expect(r).toEqual({ closed: 2, materialized: 0, resynced: 2 });
     expect(sent).toHaveLength(2);
   });
 

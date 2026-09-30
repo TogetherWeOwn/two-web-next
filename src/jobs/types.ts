@@ -56,6 +56,8 @@ export interface EventStore {
   pendingSyncKey(eventKey: string): Promise<string | null>;
   /** Published events past ends_at -> past. Returns rows changed. */
   closeFinished(now: Date): Promise<number>;
+  /** Top up every live series (draft/published parent). Returns rows created; idempotent. */
+  materializeSeries(): Promise<number>;
   /** Published/cancelled dirty revisions, plus the legacy missing-ID/RSVP backstop. */
   staleEventKeys(): Promise<string[]>;
 }
