@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { auditCases, auditDatabaseUrl, assertNoViolations, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { auditCases, auditDatabaseUrl, assertNoViolations, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 
 const coverage = {
   "/": { cases: [{ path: "/" }] },
@@ -43,6 +43,12 @@ test("refuse staging, production and ambiguous database configuration before con
     "postgres://postgres:ci@localhost/postgres",
     "invalid",
   ]) assert.throws(() => auditDatabaseUrl(raw), /refusing before connecting/);
+});
+
+test("audit artifacts omit Wrangler's synthetic session and DB configuration values", () => {
+  const log = 'env.SESSION_SECRET ("synthetic-value")\nenv.A11Y_DATABASE_URL ("fixture-url")\nenv.APP_URL ("https://127.0.0.1:1234")\nGET /up 200';
+  assert.equal(redactAuditLog(log), 'env.SESSION_SECRET: [redacted]\nenv.A11Y_DATABASE_URL: [redacted]\nenv.APP_URL ("https://127.0.0.1:1234")\nGET /up 200');
+  assert.equal(redactAuditLog("startup failed"), "startup failed");
 });
 
 test("the required CI job runs after a non-green audit and rejects every non-success result", async () => {

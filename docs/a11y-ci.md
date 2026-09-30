@@ -54,7 +54,8 @@ missing detection or permissive gate fails the job. Policy tests in
 
 `artifacts/a11y/report.json` contains each case's status, viewport, violations,
 passes and incomplete checks. `summary.md` is the evidence table; numbered PNGs
-show the scanned state; `wrangler.log` records local responses. Incomplete checks
+show the scanned state; `wrangler.log` records local responses with synthetic
+session-secret and database configuration values redacted. Incomplete checks
 are retained for inspection, not mislabeled as violations or manual passes.
 
 This gate proves **automated axe coverage**, not full WCAG certification.

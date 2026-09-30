@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium, request as apiRequest } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
-import { assertNoViolations, auditCases, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { assertNoViolations, auditCases, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 
 const output = resolve("artifacts/a11y");
 const scratch = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "two-a11y-"));
@@ -166,6 +166,6 @@ try {
     process.exitCode = 1;
   }
   await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));
-  await writeFile(join(output, "wrangler.log"), serverLog);
+  await writeFile(join(output, "wrangler.log"), redactAuditLog(serverLog));
   await writeFile(join(output, "summary.md"), `# WCAG 2.2 AA automated audit\n\nSource: ${report.sourceRevision}. Axe: ${report.axeVersion || "NOT VERIFIED"}.\n\nEnvironment: ${report.environment}. No production/staging database or external calls.\n\nTags: ${WCAG_AA_TAGS.join(", ")}. No allowlist or rule exclusions.\n\n| Case | Status | Verdict |\n|---|---|---|\n${report.pages.map((page) => `| ${page.label} | ${page.status} | ${page.verdict} |`).join("\n")}\n\nSentinel: ${report.sentinel || "NOT VERIFIED"}\n\nCleanup: ${report.cleanup || "NOT VERIFIED"}\n\nFailures: ${report.failures.length}\n${report.failures.map((failure) => `- ${failure}`).join("\n")}\n\nIncomplete axe checks are in report.json; automated scanning is not a manual screen-reader certification.\n`);
 }

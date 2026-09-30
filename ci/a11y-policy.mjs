@@ -30,6 +30,10 @@ export function auditDatabaseUrl(raw, githubActions = false) {
   return url;
 }
 
+export function redactAuditLog(log) {
+  return log.replace(/(env\.(?:SESSION_SECRET|A11Y_DATABASE_URL))[^\r\n]*/g, "$1: [redacted]");
+}
+
 // No broad rule exclusions: every WCAG AA violation fails, including minor impacts.
 export function assertNoViolations(results, label) {
   if (results.violations.length) {
