@@ -5,6 +5,7 @@
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
+import { SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 
@@ -15,27 +16,16 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title} — TWO admin</title>
       <link rel="stylesheet" href="/styles.css" />
-      <style>{`
-        .admin-table { width: 100%; border-collapse: collapse; }
-        .admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
-        .field { margin: 1rem 0; }
-        .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
-        .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
-        .field .hint { color: #6b6257; font-size: .85rem; }
-        .field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
-        .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
-        .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
-        .filters .field { margin: 0; }
-      `}</style>
     </head>
     <body>
+      <SkipLink />
       <header class="bar">
         <a class="brand" href="/admin">TWO admin</a>
-        <nav>
+        <nav aria-label="Administration">
           <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
         </nav>
       </header>
-      <main>{children}</main>
+      <main id="main" tabindex={-1}>{children}</main>
       <footer>Together We Own · moderators only</footer>
     </body>
   </html>
@@ -384,6 +374,29 @@ export const EventFormPage: FC<{
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
           </Field>
+          {mode === "new" ? (
+            <fieldset>
+              <legend>Repeat</legend>
+              <Field name="recurrence_frequency" label="Repeats" errors={errors} hint="Empty = a one-off event. Weeks keep the same wall time in the zone above across clock changes.">
+                {(id) => (
+                  <select id={id} name="recurrence_frequency">
+                    <option value="" selected={val(values, "recurrence_frequency") === ""}>Does not repeat</option>
+                    <option value="weekly" selected={val(values, "recurrence_frequency") === "weekly"}>Weekly</option>
+                  </select>
+                )}
+              </Field>
+              <Field name="recurrence_count" label="Occurrences (including the first, max 52)" errors={errors}>
+                {(id) => <input id={id} name="recurrence_count" type="text" inputmode="numeric" value={val(values, "recurrence_count")} />}
+              </Field>
+              <Field name="recurrence_ends_on" label="Repeat until (YYYY-MM-DD)" errors={errors}>
+                {(id) => <input id={id} name="recurrence_ends_on" type="text" value={val(values, "recurrence_ends_on")} />}
+              </Field>
+            </fieldset>
+          ) : row?.recurrenceFrequency ? (
+            <p class="hint" data-testid="series-info">
+              Part of a {row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.
+            </p>
+          ) : null}
           <div class="actions">
             <button type="submit" class="btn" data-testid="save-event">
               {mode === "new" ? "Create draft" : "Save"}
@@ -515,7 +528,7 @@ export const FeaturedFormPage: FC<{
           <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
             {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
-          <Field name="image_url" label="Image URL" errors={errors}>
+          <Field name="image_url" label="Image URL" errors={errors} hint="Full URL on this site or https://cdn.discordapp.com. Other image hosts are blocked by the site's security policy.">
             {(id) => <input id={id} name="image_url" type="url" value={val(values, "image_url")} />}
           </Field>
           <Field

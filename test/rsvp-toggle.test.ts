@@ -1,3 +1,7 @@
+// route-inventory: POST /events/:key/rsvp-pause
+// route-inventory: POST /events/:key/rsvp-reopen
+// route-inventory: POST /admin/events/:key/rsvp-pause
+// route-inventory: POST /admin/events/:key/rsvp-reopen
 // Moderator pause/reopen uses the member RSVP lock and the existing sync seam.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
