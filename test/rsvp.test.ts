@@ -327,4 +327,27 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const n = nr!.n;
     expect(n).toBe(12);
   });
+  it("the budget hit waits for the RSVP row lock (DELETE and PUT on an existing answer)", async () => {
+    for (const verb of ["DELETE", "PUT"] as const) {
+      const ev = await seed();
+      const who = `rowlock-${verb}`;
+      expect((await put(ev.key, who, "going")).status).toBe(201);
+      await client`delete from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      const holder = client.begin(async (tx) => {
+        await tx`select id from rsvps where event_id = ${ev.id} and user_id = ${who} for update`;
+        await held;
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      const pending = verb === "DELETE" ? call("DELETE", ev.key, who) : put(ev.key, who, "maybe");
+      await new Promise((r) => setTimeout(r, 1200));
+      const [tr] = await client`select clock_timestamp() as t`;
+      release();
+      await holder;
+      expect((await pending).status).toBeLessThan(300);
+      const [hit] = await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
+      expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
+    }
+  });
 });

@@ -38,7 +38,8 @@ export async function writeRsvp(db: Db, eventKey: string, userId: string, status
     if (ev.endsAt <= now) return { ok: false, reason: "closed", why: "past" } as const;
     if (!ev.rsvpOpen) return { ok: false, reason: "closed", why: "paused" } as const;
 
-    const [existing] = await tx.select().from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)));
+    const [existing] = await tx.select().from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)))
+      .for("update"); // wait out any mirror-stamp writer before the budget is stamped
     // Only an answer that newly takes a seat has to fit.
     const takesASeat = status === "going" && existing?.status !== "going";
     if (takesASeat && ev.capacity !== null) {
@@ -72,9 +73,15 @@ export async function withdrawRsvp(db: Db, eventKey: string, userId: string): Pr
     // committed together with the delete, after both waits.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
+    if (!ev) {
+      const verdict = await chargeThrottle(tx, userId);
+      return verdict.limited ? ({ limited: true, retryAfter: verdict.retryAfter } as const) : ({ limited: false, deleted: false, status: null } as const);
+    }
+    // Take the RSVP row lock first: a wait on a mirror-stamp writer must finish before the
+    // hit is stamped, or the hit could age out of the window while we waited.
+    await tx.select({ id: rsvps.id }).from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId))).for("update");
     const verdict = await chargeThrottle(tx, userId);
     if (verdict.limited) return { limited: true, retryAfter: verdict.retryAfter } as const;
-    if (!ev) return { limited: false, deleted: false, status: null } as const;
     const gone = await tx.delete(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId))).returning({ id: rsvps.id });
     const mirrorable = ev.status === "published" || ev.status === "cancelled";
     return { limited: false, deleted: gone.length > 0, status: gone.length > 0 && mirrorable ? (ev.status as EventStatus) : null } as const;
