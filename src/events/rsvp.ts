@@ -26,10 +26,13 @@ export type RsvpWriteResult =
 /** Draft/cancelled/past events and paused ones take no new answers (RsvpPolicy + TOG-8725). */
 export async function writeRsvp(db: Db, eventKey: string, userId: string, status: RsvpWriteStatus, clock: () => Date = () => new Date()): Promise<RsvpWriteResult> {
   return db.transaction(async (tx) => {
+    // Member lock first, then the event row lock (withdraw only takes the row lock, so the
+    // order cannot deadlock). Both waits are behind us before the clock is read.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!ev) return { ok: false, reason: "not_found" } as const;
-    // Read the clock only once the row lock is held: a wait behind a lock holder must not
-    // let an answer slip in after the event has ended.
+    // Read the clock only once both locks are held: a wait must not let an answer slip in
+    // after the event has ended.
     const now = clock();
     if (ev.status !== "published") return { ok: false, reason: "closed", why: ev.status === "cancelled" ? "cancelled" : ev.status === "draft" ? "draft" : "past" } as const;
     if (ev.endsAt <= now) return { ok: false, reason: "closed", why: "past" } as const;
@@ -94,12 +97,12 @@ async function chargeThrottle(tx: Tx, userId: string): Promise<Verdict> {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${bucket}))`);
     const rows = (await tx.execute(sql`
       select count(*)::int as n,
-        coalesce(ceil(extract(epoch from (min(at) + make_interval(secs => ${decaySeconds}) - now()))), 1)::int as wait
-      from web_throttle_hits where bucket = ${bucket} and at > now() - make_interval(secs => ${decaySeconds})`)) as unknown as { n: number; wait: number }[];
+        coalesce(ceil(extract(epoch from (min(at) + make_interval(secs => ${decaySeconds}) - clock_timestamp()))), 1)::int as wait
+      from web_throttle_hits where bucket = ${bucket} and at > clock_timestamp() - make_interval(secs => ${decaySeconds})`)) as unknown as { n: number; wait: number }[];
     const r = rows[0];
     if (r && r.n >= maxAttempts) return { limited: true, retryAfter: Math.max(1, r.wait) } as const;
-    await tx.execute(sql`insert into web_throttle_hits (bucket) values (${bucket})`);
-    await tx.execute(sql`delete from web_throttle_hits where at < now() - interval '5 minutes'`);
+    await tx.execute(sql`insert into web_throttle_hits (bucket, at) values (${bucket}, clock_timestamp())`);
+    await tx.execute(sql`delete from web_throttle_hits where at < clock_timestamp() - interval '5 minutes'`);
     return { limited: false } as const;
   }
 }

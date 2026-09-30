@@ -269,4 +269,40 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect((await pending).status).toBe(403);
     expect(await rows(ev.id)).toHaveLength(0);
   });
+  it("expiry is also judged after the member lock wait", async () => {
+    const ev = await seed({ endsAt: new Date(Date.now() + 1500) });
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext('rsvp-write:late2'))`;
+      await held;
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const pending = put(ev.key, "late2", "going");
+    await new Promise((r) => setTimeout(r, 1800));
+    release();
+    await holder;
+    expect((await pending).status).toBe(403);
+    expect(await rows(ev.id)).toHaveLength(0);
+  });
+
+  it("the budget hit is stamped after the lock wait, not at transaction start", async () => {
+    const ev = await seed();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select id from events where id = ${ev.id} for update`;
+      await held;
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const pending = put(ev.key, "stamp", "going");
+    await new Promise((r) => setTimeout(r, 1500));
+    const [tr] = await client`select clock_timestamp() as t`;
+    const t = tr!.t;
+    release();
+    await holder;
+    expect((await pending).status).toBe(201);
+    const [hit] = await client`select at from web_throttle_hits where bucket = 'rsvp-write:stamp'`;
+    expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(t).getTime());
+  });
 });
