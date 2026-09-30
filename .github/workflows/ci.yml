@@ -38,6 +38,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Seeded admin properties (10s budget, local fixtures)
+        run: timeout 10s npm run test:admin-properties
       - name: Apply migrations
         run: npm run db:migrate
         env:
