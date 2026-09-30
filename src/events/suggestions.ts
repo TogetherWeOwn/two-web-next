@@ -21,7 +21,7 @@ export async function notFoundSuggestions(env: Env, now = new Date()): Promise<S
     try {
       const db = await dbFor({ env });
       if (!db) return [];
-      return await db.transaction(async (tx) => {
+      const suggestions = await db.transaction(async (tx) => {
         await tx.execute(
           sql`select set_config('lock_timeout', ${`${DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${DB_TIMEOUT_MS}ms`}, true)`,
         );
@@ -34,6 +34,9 @@ export async function notFoundSuggestions(env: Env, now = new Date()): Promise<S
           .orderBy(asc(events.startsAt), asc(events.id))
           .limit(3);
       });
+      // PostgreSQL infinity timestamps decode to invalid Dates; keep them out
+      // of the renderer so optional recovery links cannot turn a 404 into 500.
+      return suggestions.filter((event) => Number.isFinite(event.startsAt.getTime()));
     } catch {
       return [];
     }

@@ -119,6 +119,36 @@ describe("404 optional event lookup", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each([
+    ["infinity", false], ["-infinity", false],
+    ["infinity", true], ["-infinity", true],
+  ] as const)("discards %s start dates and preserves 404 recovery (finite sibling: %s)", async (start, includeValid) => {
+    const db = drizzle(async (sql) => ({ rows: sql.includes('from "events"') ? [
+      ["nonfinite", "Nonfinite event", start, null],
+      ...(includeValid ? [[event.key, event.title, event.startsAt.toISOString(), event.location]] : []),
+    ] : [] }));
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db) });
+    const sessions = sessionTrap();
+    const res = await app.request("/lost", { headers: { cookie: "__Host-two_session=existing-token" } },
+      { ...baseEnv, ADMIN_DB: db as unknown as Db, SESSION_STORE: sessions.store } as EnvWithAdminDb);
+    const html = await res.text();
+    expect(res.status).toBe(404);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(html).toContain('content="noindex, nofollow"');
+    expect(html).toContain('action="/events" method="get" role="search"');
+    expect(html).not.toContain("Nonfinite event");
+    if (includeValid) {
+      expect(html).toContain('href="/e/game-night"');
+      expect(html).toContain('datetime="2026-10-01T18:00:00.000Z"');
+      expect(html).not.toContain('data-testid="error-events-empty"');
+    } else {
+      expect(html).not.toContain('data-testid="error-event-suggestion"');
+      expect(html).toContain('data-testid="error-events-empty"');
+    }
+    expect(sessions.accessed).not.toHaveBeenCalled();
+  });
+
   it("DB failure keeps a session-free 404 and the search form without leaking the error", async () => {
     const db = { transaction: vi.fn().mockRejectedValue(new Error("private database failure")) } as unknown as Db;
     const sessions = sessionTrap();
