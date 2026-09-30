@@ -47,18 +47,17 @@ suite below.
 
 Totals after this slice: **48 test files, 745 passed, 10 skipped**.
 
-## Application gaps found — routed, not fixed here
+## Application gaps found — separate application fix
 
-This PR is test/fixture/docs only by contract; both rows below need
-application code and are owned by the follow-up card
-`689bf6f8-4bbf-4073-9318-90d2cfb2fa45` ("two-web-next: add ended-draft publish
-refusal and occupied-seat capacity floor (legacy events parity)"; events domain
-owner, created from this audit with the full evidence):
+The original acceptance-port PR (#52) remains test/fixture/docs only by
+contract. [TOG-10813](/TOG/issues/TOG-10813) supplies the application guards and
+`test/event-mutation-invariants.test.ts` in a separate PR. These are single-event
+contracts; the series and grant variants below remain deferred, not implied passes.
 
-| Row | Gap | Evidence |
+| Row | Disposition | Evidence |
 |---|---|---|
-| A1 | Publishing an already-ended draft is not refused | Legacy `Feature/Events/EndedDraftPublicationTest.php` refuses with "An event that has already ended cannot be published. Update its dates first." (lines 28, 43), rechecks under the lock (35), allows publish up to the strict boundary (49) and still allows cancellation of an ended draft (61). Next chain `src/events/routes.tsx:354` → `src/admin/store.ts:139` → `src/admin/validation.ts:324`: `nextStatus` never consults `ends_at` vs now. |
-| A2 | Edit cannot floor capacity at occupied seats | Legacy `Feature/Events/EventCapacityFloorTest.php` refuses with "Capacity cannot be lower than the number of members already going." (line 45), allows floor/increase/unlimited (59), recounts on a stale form (110). Next `src/admin/store.ts:92` writes any `capacity >= 1`; the seat-blind form floor (`src/admin/validation.ts:201`) is the only guard. |
+| A1 | Ported: ended-draft publish refusal | Legacy `Feature/Events/EndedDraftPublicationTest.php` at `2eaefb8d` (28, 35, 43, 49, 61). `transitionEvent` locks the persisted event before checking the clock, refuses only `ends_at < now` with the exact legacy message in `fields.ends_at`, and leaves ended-draft cancellation legal. `test/event-mutation-invariants.test.ts`: JSON/admin POST refusal, no row/audit/announcement mutation, ongoing/equality controls, clock-after-lock and concurrent persisted-date edit regressions. |
+| A2 | Adapted: occupied-seat floor | Legacy `Feature/Events/EventCapacityFloorTest.php` at `2eaefb8d` (45, 59, 110). `updateEvent` shares RSVP's event `FOR UPDATE` lock, counts only `going`, and rejects a finite capacity below that count before any field/audit write. The message includes the occupied seat count. `test/event-mutation-invariants.test.ts`: JSON/admin refusal from finite/unlimited, equal/increase/unlimited controls, maybe/not-going/waitlisted excluded, stale-form recount and concurrent-seat commit regression. Numeric JSON capacity is parsed as finite; title-only PATCH preserves it. Waitlist promotion is still A3, not this fix. |
 
 The series-child variant (`Integration/EndedDraftSeriesPublicationTest.php`)
 and the agent-grant shrink row (`EventCapacityFloorTest` line 82) follow the
@@ -82,8 +81,8 @@ series (W13) and agent-events grants respectively — see defers below.
 | Legacy test file | Disposition and Next proof |
 |---|---|
 | `Feature/Events/EventTimezoneTest.php` | **Ported (G1):** both DST sides, round-trip, UTC zone, IANA/offset/impossible-date rejection, gap + shoulders, autumn fold → second occurrence, with the fold-carrier rule of TOG-6805 (G2) in `test/event-time-validation.test.ts`. Page-render display is the W10 islands drift net (`test/islands-events-calendar.test.ts`). |
-| `Feature/Events/EventCapacityFloorTest.php` | **Adapted (G2):** form floor rows in `test/event-time-validation.test.ts` (1+ / large / empty / unlimited accept; zero/negative/non-numeric refuse). **Gap (A2):** occupied-seat floor on edit → follow-up card. |
-| `Feature/Events/EndedDraftPublicationTest.php` | **Gap (A1):** routed to the follow-up card (id above); cancelled-terminal and draft-only-publish guards are ported in `test/event-time-validation.test.ts` ("status transition guard"). |
+| `Feature/Events/EventCapacityFloorTest.php` | **Adapted (G2/A2):** form floor in `test/event-time-validation.test.ts`; occupied-seat floor, stale/concurrent recount and JSON numeric capacity in `test/event-mutation-invariants.test.ts` ([TOG-10813](/TOG/issues/TOG-10813)). Agent-grant shrink and waitlist promotion remain deferred. |
+| `Feature/Events/EndedDraftPublicationTest.php` | **Ported (A1, single-event):** refusal, strict end boundary, ended-draft cancel, persisted-date and post-lock clock tests in `test/event-mutation-invariants.test.ts`; status-only guards in `test/event-time-validation.test.ts`. Series-child publish remains deferred. |
 | `Feature/Events/FeedExpiryValidatorTest.php` | **Ported (G4):** `test/event-feeds.test.ts` "drops an expired event… no write" (clock-only fake `Date`, both feeds, ETag rotation, per-event ICS still 200). |
 | `Feature/Events/HotPathIndexTest.php` | **Adapted (G5):** index presence in `test/schema-hot-path.test.ts`; EXPLAIN half deferred (A6). |
 | `Feature/Events/EventsFeedTest.php`, `EventIcsTest.php`, `EventRssTest.php`, `EventGoogleCalendarTest.php`, `EventEtagTest.php` | **Ported:** byte fixtures + route policy in `test/event-feeds.test.ts` (11 tests): ICS folding/escaping/CANCELLED, RSS escaping + description omission, guid stability across rename, DST pubDate, multibyte round-trip, webcal swap, sessionless ETag/304, drafts never exposed, cancelled excluded from RSS but in ICS. |
@@ -127,3 +126,18 @@ DATABASE_URL=...two_web_next_tog10789 npm test       # 48 files, 745 passed, 10 
 
 Legacy inventory: `gh api repos/TogetherWeOwn/two-web/git/trees/<sha>?recursive=1`
 at `2eaefb8d` (214 test files; 141 Feature / 42 Unit / 18 Browser / 4 Integration).
+
+### A1/A2 application verification ([TOG-10813](/TOG/issues/TOG-10813))
+
+- `test/event-mutation-invariants.test.ts`: **23 tests** (8 credential-free
+  containment/parser rows, 15 live mutation/lock rows).
+- `DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next_tog10813 npx vitest run test/event-mutation-invariants.test.ts test/event-time-validation.test.ts test/rsvp.test.ts`:
+  **3 files, 69 passed, zero skipped**; `npm run typecheck` and `git diff --check` clean.
+- The fixture validates the test URL before creating a driver, migrates only its
+  UUID-owned schema, and disposes that schema. No production/staging probes.
+- Lock behavior follows the existing RSVP implementation and installed
+  Drizzle 0.45.3 `PgSelect.for` API. Sources:
+  [Postgres row locking](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE),
+  [Drizzle count/filter queries](https://orm.drizzle.team/docs/select#aggregations).
+- These checks prove only A1/A2's mapped single-event behavior; they do not
+  prove series cascade, grant-owned edits, waitlist promotion, or production readiness.

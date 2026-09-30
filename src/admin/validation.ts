@@ -196,7 +196,8 @@ export function parseEventForm(
   if (location && location.length > 255) fields.location = "Keep the location to 255 characters.";
 
   let capacity: number | null = null;
-  const capRaw = str(data.capacity);
+  // JSON writes (and PATCH's stored fallback) carry numbers; HTML carries strings.
+  const capRaw = typeof data.capacity === "number" ? String(data.capacity) : str(data.capacity);
   if (capRaw !== null) {
     if (!/^\d+$/.test(capRaw) || Number(capRaw) < 1) fields.capacity = "Capacity is a headcount of 1 or more, or empty for unlimited.";
     else capacity = Number(capRaw);

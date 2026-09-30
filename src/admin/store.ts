@@ -6,18 +6,16 @@
 // - spatie LogsActivity dirty-only audit on both resources (M7).
 // - AccessRecorder one-row-per-request access log (M5).
 //
-// Concurrency: every state change runs in one transaction behind a
-// row-equivalent serialisation. Drizzle/postgres-js has no FOR UPDATE builder
-// in 0.45, so the transition re-reads inside the transaction and aborts on a
-// concurrent change (optimistic guard on updated_at); W1/W13 own the
-// Hyperdrive FOR UPDATE semantics proof. The queue dispatch + reconcile
-// backstop arrive with W8/W13; `writeBackDue` marks what they must carry.
+// Event edits/transitions lock the event row in their transaction, sharing
+// RSVP's FOR UPDATE boundary so seat counts and status checks stay current.
+// The queue dispatch + reconcile backstop arrive with W8/W13; `writeBackDue`
+// marks what they must carry.
 
-import { and, asc, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
-import { activityLog, events, featuredContents, memberDataAccessLogs } from "../db/admin-schema";
+import { activityLog, events, featuredContents, memberDataAccessLogs, rsvps } from "../db/admin-schema";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
-import { isMirrored, newEventKey, nextStatus } from "./validation";
+import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
 
 export type Actor = { id: string; username: string };
 
@@ -96,8 +94,16 @@ export async function updateEvent(
   input: EventFormInput,
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
+    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
+    if (input.capacity !== null) {
+      // Only going takes a seat; maybe/waitlisted do not raise the edit floor.
+      const [tally] = await tx.select({ n: count() }).from(rsvps).where(and(eq(rsvps.eventId, locked.id), eq(rsvps.status, "going")));
+      const occupied = tally?.n ?? 0;
+      if (input.capacity < occupied) {
+        throw new ValidationError({ capacity: `Capacity cannot be lower than the number of members already going (${occupied}).` });
+      }
+    }
     const [row] = await tx
       .update(events)
       .set({
@@ -143,10 +149,15 @@ export async function transitionEvent(
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
+    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
     const from = toEventStatus(locked.status);
     const target = nextStatus(from, to);
+    // Judge persisted dates only after the lock wait. Equality is still legal
+    // for publication (legacy's strict isPast boundary); cancellation is exempt.
+    if (to === "published" && locked.endsAt.getTime() < Date.now()) {
+      throw new ValidationError({ ends_at: "An event that has already ended cannot be published. Update its dates first." });
+    }
     if (from === target) return { row: locked, writeBack: null };
     const [row] = await tx
       .update(events)
