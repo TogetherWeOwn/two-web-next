@@ -69,6 +69,16 @@ describe("featured create/edit image validation (local fixtures)", () => {
       expect(updateFeatured).not.toHaveBeenCalled();
     });
 
+    it.each(["localdomain", "localhost.localdomain", "cdn.localhost.localdomain", "alt", "images.alt", "cdn.images.alt"])(`${path} rejects configured reserved namespace %s without writing`, async (host) => {
+      const res = await post(path, `https://${host}/photo.png`, { ...env, FEATURED_IMAGE_HOSTS: host });
+      expect(res.status).toBe(422);
+      const html = await res.text();
+      expect(html).toContain("HTTPS on an approved public host");
+      expect(html).toContain('name="image_url"');
+      expect(createFeatured).not.toHaveBeenCalled();
+      expect(updateFeatured).not.toHaveBeenCalled();
+    });
+
     it(`${path} passes configured hosts to validation, not just the CSP`, async () => {
       const url = "https://images.unsplash.com/photo.png";
       expect((await post(path, url)).status).toBe(303);

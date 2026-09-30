@@ -74,7 +74,8 @@ production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 Featured images must be full HTTPS URLs (255 characters maximum), with alt text,
 no credentials, and no non-default port. IP literals (including alternate IPv4
 spellings and IPv6), single-label hosts, localhost and private/reserved DNS
-suffixes are rejected. `FEATURED_IMAGE_HOSTS` accepts hostnames only, not schemes,
+suffixes (including `.localdomain` and `.alt` and their descendants) are rejected,
+even when configured. `FEATURED_IMAGE_HOSTS` accepts hostnames only, not schemes,
 paths, ports or wildcards; invalid entries are ignored, never inserted into CSP.
 Hosts match exactly, not their subdomains. The Discord CDN is always permitted
 for avatars and featured images; add other hosts only after approving the host
