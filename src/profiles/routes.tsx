@@ -22,6 +22,7 @@ import { dbFor } from "../admin/db";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
+import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
@@ -130,11 +131,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const viewer = c.get("viewer");
     const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(() => ({ limited: false }) as Verdict);
     if (verdict.limited) {
-      return c.json(
-        { reason: "rate_limited", message: "Too many profile updates. Try again shortly.", retry_after: verdict.retryAfter },
-        429,
-        { "Retry-After": String(verdict.retryAfter) },
-      );
+      return rateLimitExceeded(c, verdict.retryAfter);
     }
     // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
     if (!SNOWFLAKE.test(id) || viewer.id !== id) return c.text("Forbidden", 403);

@@ -15,6 +15,7 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { authorizeUrl, exchangeCode, fetchUser } from "../discord";
+import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { inviteDestination } from "../invite";
@@ -82,11 +83,7 @@ async function throttled(c: Ctx): Promise<Response | null> {
     JOIN_THROTTLE_PER_MINUTE,
   );
   if (!verdict.limited) return null;
-  return c.json(
-    { reason: "rate_limited", message: "Too many join attempts. Try again shortly.", retry_after: verdict.retryAfter },
-    429,
-    { "Retry-After": String(verdict.retryAfter) },
-  );
+  return rateLimitExceeded(c, verdict.retryAfter);
 }
 
 // Session + issue helpers live in the main app module (the join router is

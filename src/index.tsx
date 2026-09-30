@@ -31,6 +31,7 @@ import { dbFor } from "./admin/db";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
+import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
@@ -389,6 +390,8 @@ app.get("/auth/discord", async (c) => {
 });
 
 app.get("/auth/discord/callback", async (c) => {
+  const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
+  if (limited) return limited;
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
   deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
   const code = c.req.query("code");
@@ -447,7 +450,7 @@ registerEventRoutes(
   async (c) => readSession(c, await storeFor(c), false),
 );
 
-app.post("/logout", async (c) => {
+app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
   // the origin check below refuses one anyway.
   const origin = c.req.header("origin");
@@ -461,7 +464,7 @@ app.post("/logout", async (c) => {
 
 // Staging-only QA seam. 404 everywhere that is not the staging host with
 // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post("/auth/qa/:identity", async (c) => {
+app.post("/auth/qa/:identity", throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), async (c) => {
   if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);

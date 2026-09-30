@@ -10,6 +10,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
+import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
   RSVP_HONEY_FIELD,
@@ -298,7 +299,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
 
   const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
 
-  app.post("/events", async (c) => {
+  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const who = await moderator(c);
     if (who instanceof Response) return who;
     const db = await dbFor(c);
@@ -312,7 +313,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  app.patch("/events/:key", async (c) => {
+  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const who = await moderator(c);
     if (who instanceof Response) return who;
     const db = await dbFor(c);
@@ -351,7 +352,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   for (const action of ["publish", "cancel"] as const) {
-    app.post(`/events/:key/${action}`, async (c) => {
+    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
       const who = await moderator(c);
       if (who instanceof Response) return who;
       const db = await dbFor(c);
