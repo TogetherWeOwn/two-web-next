@@ -50,8 +50,60 @@ otherwise, so the cold CI run (no test-DB access) stays green.
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
 `CLOUDFLARE_ACCOUNT_ID`, followed by a `/health` smoke test against
-https://next.togetherweown.com. There is deliberately no production job:
-production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
+https://next.togetherweown.com. That workflow remains staging-only.
+
+### Production (manual, disabled until cutover)
+
+`.github/workflows/deploy-production.yml` accepts only `workflow_dispatch` on
+`main`; it never deploys on push, PR or release. Before the deploy job can start,
+`ci/production-deploy-gate.mjs` requires the repository variable
+`PRODUCTION_DEPLOY_ENABLED` to be exactly `true`, verifies the live GitHub
+Environment `production` has nonempty required reviewers with self-review
+prevented, and rejects the placeholder Hyperdrive id. Missing protection, failed
+API access, unset/false flag or any other ref fails closed. The deploy job uses
+that Environment, checks the gate again after approval, and deploys the dispatch
+SHA with `wrangler deploy --env production`. It does not create resources or run
+migrations/tests on production. Its `/health` smoke is DB-free liveness only,
+not a database-readiness or cutover proof.
+
+`env.production` is a **cutover template**, not a live deployment:
+
+- Worker: `two-web-next-production`; workers.dev and preview URLs disabled.
+- Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
+  apex **placeholder target**. Defining it does not flip DNS; deploying would
+  claim that custom domain, so do not deploy before W16 authorization.
+- Hyperdrive `DB`: all-zero id `00000000000000000000000000000000` is an inert
+  dry-run placeholder, never the staging Hyperdrive. Provision the separately
+  named `two-web-next-production` Hyperdrive and replace the id in a reviewed
+  cutover PR.
+- Queues: `two-web-next-production-sync-event` and
+  `two-web-next-production-internal-action` are reserved, unprovisioned names;
+  provision both separately from staging before cutover. Producers and consumers
+  use these names; crons match staging (every ten minutes, midnight UTC).
+- Vars are explicit because environment bindings/vars do not inherit. Register
+  the production Discord callback; provision secrets for the production Worker
+  separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
+
+Before enabling the flag, the authorized provisioning actor must configure the
+live `production` Environment's required reviewers, prevent self-review and
+main-only deployment policy, install environment-scoped Cloudflare credentials,
+and complete resource/secret provisioning and W16 authorization. Keep the flag
+unset/false until then. GitHub YAML alone does **not** install review protection.
+A failed protection lookup must be resolved with the existing credential's
+provisioning owner, not by removing the check or substituting credentials.
+
+CI runs these offline checks with no production credentials or database access:
+
+```sh
+node --test ci/production-deploy-gate.test.mjs
+npx wrangler deploy --dry-run --env production --outdir dist-production
+```
+
+The selftest proves disabled flags fail before API access, non-main/non-manual
+requests fail, missing/unprotected Environments fail, and the Hyperdrive sentinel
+blocks live deployment. No production deploy, DNS flip or W16 rehearsal is
+performed by adding this template. Actual production rollout and tested rollback
+remain W16 work (plan TOG-9671).
 
 ## Configuration
 

@@ -41,5 +41,36 @@
     "DISCORD_GUILD_ID": "326474832151838730",
     // WEB-HOMEPAGE campaign invite (never expires, unlimited); the fallback when auto-join fails.
     "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
+  },
+  "env": {
+    "production": {
+      "name": "two-web-next-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      // Cutover target only, NOT a DNS change or authorization to claim the apex.
+      "routes": [{ "pattern": "togetherweown.com", "custom_domain": true }],
+      "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
+      // Provision these separate queues at cutover; never reuse staging queues.
+      "queues": {
+        "producers": [
+          { "queue": "two-web-next-production-sync-event", "binding": "SYNC_EVENT_QUEUE" },
+          { "queue": "two-web-next-production-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
+        ],
+        "consumers": [
+          { "queue": "two-web-next-production-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
+          { "queue": "two-web-next-production-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+        ]
+      },
+      // PLACEHOLDER: replace with the separately provisioned production Hyperdrive
+      // id in a reviewed cutover PR. The manual workflow refuses this sentinel.
+      "hyperdrive": [{ "binding": "DB", "id": "00000000000000000000000000000000" }],
+      // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
+      "vars": {
+        "APP_URL": "https://togetherweown.com",
+        "DISCORD_CLIENT_ID": "1539711683898118154",
+        "DISCORD_GUILD_ID": "326474832151838730",
+        "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
+      }
+    }
   }
 }
