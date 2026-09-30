@@ -42,24 +42,49 @@ export function readEnvKeys(envFile, configFile) {
   }
 }
 
-export function readWranglerKeys(text) {
+export function readWranglerConfig(text) {
   // Keep quoted strings intact (including URLs and commas) while removing JSONC
   // comments and trailing commas. JSON.parse still rejects malformed input.
   const stringsOrComments = /"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
   const stringsOrTrailingCommas = /"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g;
   const json = text.replace(stringsOrComments, (match) => match.startsWith('"') ? match : " ")
     .replace(stringsOrTrailingCommas, (match) => match === "," ? "" : match);
-  const config = JSON.parse(json);
+  return JSON.parse(json);
+}
+
+export function readWranglerKeys(text) {
+  const config = readWranglerConfig(text);
   const keys = new Set();
-  function visit(value) {
-    if (!value || typeof value !== "object") return;
-    if (typeof value.binding === "string") keys.add(value.binding);
-    if (value.vars && typeof value.vars === "object") {
-      for (const key of Object.keys(value.vars)) keys.add(key);
+  // Inspect declaration paths, not arbitrary JSON (vars can contain objects).
+  // Durable Objects/email/rate limits use `name`, unlike most bindings:
+  // https://developers.cloudflare.com/workers/wrangler/configuration/#bindings
+  const arrayBindings = [
+    "kv_namespaces", "r2_buckets", "d1_databases", "vectorize", "hyperdrive",
+    "services", "analytics_engine_datasets", "mtls_certificates",
+    "dispatch_namespaces", "pipelines", "secrets_store_secrets", "workflows",
+    "ai_search_namespaces", "ai_search", "agent_memory", "artifacts",
+    "unsafe_hello_world", "flagship", "worker_loaders", "vpc_services", "vpc_networks",
+  ];
+  const singleBindings = ["assets", "browser", "ai", "images", "media", "stream", "version_metadata"];
+  function add(entries, field) {
+    for (const entry of entries ?? []) {
+      if (typeof entry?.[field] === "string") keys.add(entry[field]);
     }
-    for (const child of Object.values(value)) visit(child);
   }
-  visit(config);
+  function visitEnvironment(value) {
+    if (!value || typeof value !== "object") return;
+    for (const key of Object.keys(value.vars ?? {})) keys.add(key);
+    for (const section of arrayBindings) add(value[section], "binding");
+    for (const section of singleBindings) add([value[section]], "binding");
+    add(value.queues?.producers, "binding");
+    add(value.durable_objects?.bindings, "name");
+    add(value.send_email, "name");
+    add(value.ratelimits, "name");
+    add(value.logfwdr?.bindings, "name");
+    add(value.unsafe?.bindings, "name");
+  }
+  visitEnvironment(config);
+  for (const environment of Object.values(config.env ?? {})) visitEnvironment(environment);
   return keys;
 }
 
@@ -103,7 +128,8 @@ export function checkKeys(env, wrangler, docs) {
 
 export function checkConfigDocs() {
   const env = readEnvKeys(resolve(root, "src/env.ts"), resolve(root, "tsconfig.json"));
-  const wrangler = readWranglerKeys(readFileSync(resolve(root, "wrangler.jsonc"), "utf8"));
+  const wrangler = new Set(["wrangler.jsonc", "wrangler.local.jsonc"].flatMap((file) =>
+    [...readWranglerKeys(readFileSync(resolve(root, file), "utf8"))]));
   const docs = readDocKeys(readFileSync(resolve(root, "docs/config.md"), "utf8"));
   const errors = checkKeys(env, wrangler, docs);
   if (errors.length) throw new Error(errors.join("\n"));

@@ -18,8 +18,9 @@ JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration;
   Homepage member counts currently show an unavailable state, not live statistics.
 - Discord sign-in (`identify` + `guilds.join`) and the join journey, including
   fallback invite and join-attempt audit. The OAuth access token is used once,
-  never stored. Signed OAuth-state cookies and DB-backed sessions store only
-  token hashes; authenticated views rotate tokens and logout revokes them.
+  never stored. OAuth-state and session cookies contain signed random values;
+  only persisted session tokens are hashed. Authenticated views rotate session
+  tokens and logout revokes them.
 - Moderator status is recomputed at login from Discord snowflake role IDs (not
   names); missing configuration or failed lookups fail closed. The QA sign-in
   seam requires the exact staging `APP_URL` configuration and is disabled
@@ -77,11 +78,22 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-For local development, keep Hyperdrive local as well as the explicit URL:
+For local development, use the separate test-only configuration, which omits
+Hyperdrive and selects the explicit `DATABASE_URL` from `.dev.vars`:
 
 ```sh
-CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB="$DATABASE_URL" npm run dev
+npm run dev -- --config wrangler.local.jsonc --local
 ```
+
+Keep `.dev.vars` on the passwordless test URL above. The checked-in local config
+uses `APP_URL=http://localhost:8787`, local Queue names and no remote bindings;
+set public Discord IDs only for an authorized test application/guild. Do not
+use real guild sign-in as a test fixture. `/db-ping` returns 503 without `DB`;
+use the SQL suites for database verification. This exercises direct Postgres,
+not Hyperdrive pooling. Miniflare requires a nonempty password for a Hyperdrive
+local connection string, so the passwordless authorized URL cannot be used as
+that override. **Do not invent a password or substitute credentials.** Never
+deploy the local config.
 
 Do not use remote development for tests. Many SQL suites skip if `DATABASE_URL`
 is unset, but that is not full database verification; some existing tests also

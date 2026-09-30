@@ -36,14 +36,14 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 <!-- config-docs:start -->
 | Name | Kind | Environments | Default | Failure behaviour |
 | --- | --- | --- | --- | --- |
-| `APP_URL` | Public var, required | dev/staging/prod | Wrangler: `https://next.togetherweown.com`; no code fallback | Used for callback/canonical URLs and exact Origin checks. Bad configuration can break those paths; invalid/nonproduction origins are noindexed. Not a request-host allowlist. |
-| `DISCORD_CLIENT_ID` | Public var, required | dev/staging/prod | Wrangler: configured Owen application ID; no code fallback | Missing/wrong ID breaks OAuth exchange: ordinary login redirects with `signin_failed`; join shows recovery (503). |
-| `DISCORD_GUILD_ID` | Public var, required | dev/staging/prod | Wrangler: configured TWO guild ID (production guild, even on the staging web host) | Invalid snowflake hides the join widget; auto-join/lookup failures deny member/moderator status without blocking ordinary sign-in. Scheduled-event reads degrade. |
-| `DISCORD_INVITE_URL` | Public var, required | dev/staging/prod | Wrangler and invite helper: configured WEB-HOMEPAGE campaign invite | `/discord` and join recovery reject non-HTTPS/non-Discord URLs, warn and use the built-in invite. Other rendered links use the raw setting; validation is not universal. |
+| `APP_URL` | Public var, required | dev/staging/prod | Main Wrangler: `https://next.togetherweown.com`; local config: `http://localhost:8787`; no code fallback | Used for callback/canonical URLs and exact Origin checks. Bad configuration can break those paths; invalid/nonproduction origins are noindexed. Not a request-host allowlist. |
+| `DISCORD_CLIENT_ID` | Public var, required | dev/staging/prod | Main Wrangler: configured Owen application ID; local config: blank; no code fallback | Missing/wrong ID breaks OAuth exchange: ordinary login redirects with `signin_failed`; join shows recovery (503). |
+| `DISCORD_GUILD_ID` | Public var, required | dev/staging/prod | Main Wrangler: configured TWO guild ID (production guild, even on the staging web host); local config: blank | Invalid snowflake hides the join widget; auto-join/lookup failures deny member/moderator status without blocking ordinary sign-in. Scheduled-event reads degrade. |
+| `DISCORD_INVITE_URL` | Public var, required | dev/staging/prod | Main Wrangler and invite helper: configured WEB-HOMEPAGE campaign invite; local config: blank (helper uses fallback) | `/discord` and join recovery reject non-HTTPS/non-Discord URLs, warn and use the built-in invite. Other rendered links use the raw setting; validation is not universal. |
 | `RULES_LAST_UPDATED` | Optional public var (`YYYY-MM-DD`) | dev/staging/prod | Unset; no stamp | Empty hides the stamp; invalid syntax/month/day range warns and hides it. Checks day 1–31, not month-specific calendar validity. |
-| `DB` | Optional Hyperdrive binding | dev: local test override; staging/prod: provisioned database binding | Wrangler: configured `DB` Hyperdrive binding | Web falls back to this when the explicit URL is empty/absent. Missing both sources yields guest-only nonpersistent sessions and unavailable DB features. Connection failures do not retry another source. `/db-ping` requires this binding (503 if absent). |
+| `DB` | Optional Hyperdrive binding | dev: omitted in local config; staging/prod: provisioned database binding | Main Wrangler: configured `DB` Hyperdrive binding; local config: unbound | Web falls back to this when the explicit URL is empty/absent. Missing both sources yields guest-only nonpersistent sessions and unavailable DB features. Connection failures do not retry another source. `/db-ping` requires this binding (503 if absent). |
 | `DISCORD_CLIENT_SECRET` | Secret, required | dev/staging/prod | None | Missing/invalid OAuth credentials fail exchange; ordinary login redirects with `signin_failed`, join shows recovery (503). |
-| `DISCORD_BOT_TOKEN` | Secret, required | dev/staging/prod | None | Must belong to the client application. Failed auto-join/role lookup denies member/moderator status but ordinary login continues; join offers invite recovery, calendar reads return an error/empty state. |
+| `DISCORD_BOT_TOKEN` | Secret, required | dev/staging/prod | None | Must belong to the client application; the bot must be in the target guild with Create Instant Invite permission for auto-join. Failed auto-join/role lookup denies member/moderator status but ordinary login continues; join offers invite recovery, calendar reads return an error/empty state. |
 | `SESSION_SECRET` | Secret, required | dev/staging/prod | None; local example recommends 32+ random bytes | Invalid signatures become guest/failed OAuth state. No runtime presence/strength check or graceful configuration fallback; missing configuration can break signing. |
 | `DATABASE_URL` | Optional connection string; treat credential-bearing URLs as secrets | dev: test database; staging/prod: optional explicit override, normally use `DB` | None in runtime; local example uses the test container | Normal web selection is explicit URL then `DB`. No source means guest-only sessions, no-op roster persistence and unavailable DB-backed features. Generic human throttles use only this URL and allow requests when missing or failing. Jobs and `/up` use different precedence (below). |
 | `DISCORD_MODERATOR_ROLE_IDS` | Optional public var (comma-separated snowflakes) | dev/staging/prod | Blank; no moderators | Only trimmed 10–25 digit role IDs survive parsing. Blank/invalid allowlist or lookup failure gives `moderator=false`; sign-in continues. |
@@ -56,8 +56,8 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `AGENT_EVENTS_GUILD_ID` | Optional admitted guild var | dev/staging: staging guild; prod: no production grant implied | Code: staging guild `1545644954272137297` when absent/empty | A grant for another guild is denied with 403. Independent of web `DISCORD_GUILD_ID`. |
 | `AGENT_EVENTS_PRODUCTION_GUILD_ID` | Optional production-audience identifier var | dev/staging/prod | Code: production guild `326474832151838730` when absent/empty | Labels denied production-audience grants `production_guild`; does not enable production ingress. |
 | `AGENT_EVENTS_ROUTE_PER_MINUTE` | Optional positive-integer var | dev/staging/prod | `60` | Invalid/nonpositive values use 60; outer shield over budget returns 429 with Retry-After. |
-| `SYNC_EVENT_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Wrangler: `two-sync-event` | Scheduler uses this for tracked reconciliation sends; no in-memory production fallback. Missing/failing queue prevents sends. Bot/event adapters remain reject-all stubs, not live parity. |
-| `INTERNAL_ACTION_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Wrangler: `two-internal-action` | Declared/configured but no consumer reads this producer property in current source; both configured queue consumers share the Worker dispatch path. No application-side default. |
+| `SYNC_EVENT_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-sync-event`; local config: `two-sync-event-local` | Scheduler uses this for tracked reconciliation sends; no in-memory production fallback. Missing/failing queue prevents sends. Bot/event adapters remain reject-all stubs, not live parity. |
+| `INTERNAL_ACTION_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-internal-action`; local config: `two-internal-action-local` | Declared/configured but no consumer reads this producer property in current source; both configured queue consumers share the Worker dispatch path. No application-side default. |
 | `HYPERDRIVE` | Optional Hyperdrive legacy alias (`JobsEnv`) | dev/staging/prod | Unbound in Wrangler | Jobs prefer this over `DB`, then the explicit URL. With no usable database source, job DB selection throws. No retry fallback after a connection error. |
 <!-- config-docs:end -->
 
@@ -104,9 +104,13 @@ These names are deliberately **not** extra rows in the marked inventory:
   checked inventory in the same change.
 - **Local Hyperdrive tooling:**
   `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB` is a Wrangler process
-  variable, not a Worker `Env` property. For dev, set it only to the authorized
-  test database as shown in the README. It overrides the local Hyperdrive
-  connection, not the remote binding. Official reference:
+  variable, not a Worker `Env` property. It overrides the local Hyperdrive
+  connection, not the remote binding. Miniflare requires a nonempty password,
+  so our authorized passwordless test URL does not work with this override.
+  Use [`wrangler.local.jsonc`](../wrangler.local.jsonc) and the explicit
+  `DATABASE_URL` as shown in the README instead; do not substitute credentials.
+  The local config has no Hyperdrive/remote bindings and uses local Queue names.
+  Official reference:
   [Hyperdrive local development](https://developers.cloudflare.com/hyperdrive/configuration/local-development/).
 - **Probe-only configuration:**
   [`spike/hyperdrive-semantics/wrangler.probe.jsonc`](../spike/hyperdrive-semantics/wrangler.probe.jsonc)
@@ -141,8 +145,10 @@ npm run config:check
 
 [`ci/check-config-docs.mjs`](../ci/check-config-docs.mjs) uses the locked
 TypeScript 7 native API to resolve `Env` and `JobsEnv` properties (including
-intersections/inheritance) and parses the actual JSONC Wrangler vars/bindings,
-including named-environment overrides if added. It rejects:
+intersections/inheritance) and parses the actual JSONC Wrangler vars/bindings
+from `wrangler.jsonc` and `wrangler.local.jsonc`, including named-environment
+overrides if added. Binding declarations include name-based Durable Objects,
+email and rate limits; nested JSON var data is not a declaration. It rejects:
 
 - Missing documentation for any required **or optional** property.
 - A marked-table key no longer present in `Env`/`JobsEnv`.
