@@ -1,6 +1,7 @@
 // Test-only entry: never referenced by the deployment config.
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import { auditDatabaseUrl } from "./a11y-policy.mjs";
 import app from "../src/index";
 import { maintenanceHandler, notFoundHandler, rateLimitExceeded } from "../src/errors";
 import { adminSchema, schema } from "../src/db/index";
@@ -15,11 +16,10 @@ export const routes = app.routes.map(({ method, path }) => ({ method, path }));
 export { coverage } from "./a11y-cases.mjs";
 
 export default {
-  async fetch(request: Request, env: Env & { A11Y_DATABASE_URL: string; A11Y_SCHEMA: string }, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env & { A11Y_DATABASE_URL: string; A11Y_SCHEMA: string; A11Y_CI: string }, ctx: ExecutionContext) {
     globalThis.fetch = async () => { throw new Error("Outbound HTTP is disabled in the local audit worker"); };
     if (!/^w15_[a-f0-9]{32}$/.test(env.A11Y_SCHEMA)) throw new Error("Invalid isolated fixture schema");
-    const url = new URL(env.A11Y_DATABASE_URL);
-    if (!["agent-testdb", "localhost"].includes(url.hostname)) throw new Error("Audit worker refuses non-test database");
+    const url = auditDatabaseUrl(env.A11Y_DATABASE_URL, env.A11Y_CI === "true");
     const options = { max: 1, password: () => url.password, connect_timeout: 5, connection: { search_path: env.A11Y_SCHEMA }, onnotice: () => {} };
     const client = postgres(url.href, options);
     const sessionClient = postgres(url.href, options);

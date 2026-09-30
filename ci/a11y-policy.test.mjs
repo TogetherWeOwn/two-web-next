@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { auditCases, assertNoViolations, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { auditCases, auditDatabaseUrl, assertNoViolations, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 
 const coverage = {
   "/": { cases: [{ path: "/" }] },
@@ -26,6 +26,21 @@ test("removed routes and unexplained exclusions fail", () => {
   assert.throws(() => auditCases(routes.slice(1), coverage), /stale=\//);
   assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { skip: true } }), /exclusion reason/);
   assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { cases: [] } }), /No audit cases/);
+});
+
+test("refuse staging, production and ambiguous database configuration before connecting", () => {
+  assert.equal(auditDatabaseUrl("postgres://agent_test@agent-testdb:5432/two_web_next").hostname, "agent-testdb");
+  assert.equal(auditDatabaseUrl("postgres://postgres:ci@localhost:5432/postgres", true).hostname, "localhost");
+  for (const raw of [
+    "postgres://agent_test@staging.example/two_web_next",
+    "postgres://agent_test@production.example/two_web_next",
+    "postgres://agent_test@agent-testdb/other_database",
+    "postgres://agent_test:unexpected@agent-testdb/two_web_next",
+    "postgres://agent_test@agent-testdb:5433/two_web_next",
+    "postgres://agent_test@agent-testdb/two_web_next?host=production.example",
+    "postgres://postgres:ci@localhost/postgres",
+    "invalid",
+  ]) assert.throws(() => auditDatabaseUrl(raw), /refusing before connecting/);
 });
 
 test("WCAG 2.0, 2.1 and 2.2 A/AA are included, and even minor violations fail", () => {

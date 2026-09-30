@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { auditDatabaseUrl } from "./a11y-policy.mjs";
 import { createMemberDataFixture } from "../test/helpers/member-data-db";
 import { cookieFor, env, MODERATOR, seed, SUBJECT } from "../test/helpers/member-data";
 import { events, featuredContents } from "../src/db/admin-schema";
@@ -7,8 +8,8 @@ import { createPostgresSessionStore, migrate, type Sql } from "../src/sessions";
 export async function fixtures(raw: string) {
   // The existing validator refuses staging/production BEFORE connecting; all
   // migrations, seeds, sessions and access logs stay inside a fresh owned schema.
+  const url = auditDatabaseUrl(raw, process.env.CI === "true" && process.env.GITHUB_ACTIONS === "true");
   const fixture = await createMemberDataFixture(raw);
-  const url = new URL(raw);
   // Drizzle replaces timestamp serializers on its client. Raw session SQL
   // keeps a separate client so Date parameters still serialize normally.
   const sessionClient = postgres(url.href, { max: 1, password: () => url.password, connect_timeout: 5, connection: { search_path: fixture.schemaName } });

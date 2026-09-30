@@ -19,6 +19,17 @@ export function auditCases(routes, coverage) {
   });
 }
 
+export function auditDatabaseUrl(raw, githubActions = false) {
+  const refuse = () => { throw new Error("Accessibility fixtures require agent-testdb/two_web_next or the GitHub CI service; refusing before connecting"); };
+  let url;
+  try { url = new URL(raw); } catch { return refuse(); }
+  if (!["postgres:", "postgresql:"].includes(url.protocol) || url.search || url.hash || (url.port && url.port !== "5432")) return refuse();
+  const local = url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "" && url.pathname === "/two_web_next";
+  const ci = githubActions && url.hostname === "localhost" && url.username === "postgres" && url.password === "ci" && url.pathname === "/postgres";
+  if (!local && !ci) return refuse();
+  return url;
+}
+
 // No broad rule exclusions: every WCAG AA violation fails, including minor impacts.
 export function assertNoViolations(results, label) {
   if (results.violations.length) {
