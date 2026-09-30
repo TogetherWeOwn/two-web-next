@@ -31,6 +31,7 @@ import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { createDbProfileStore, type ProfileStore } from "./store";
 import { validateProfile } from "./validation";
+import { readMemberStats, type MemberStatsSource } from "./stats";
 
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
 const SESSION_COOKIE = "__Host-two_session";
@@ -41,6 +42,7 @@ type Verdict = Awaited<ReturnType<typeof checkJoinThrottle>>;
 export type ProfileDeps = {
   sessionStore?: SessionStore;
   store?: ProfileStore;
+  stats?: MemberStatsSource;
   accessLog?: AccessSink;
   /** bucket → verdict. Default: web_throttle_hits via the web DB; no DB allows. */
   throttle?: (bucket: string) => Promise<Verdict>;
@@ -114,8 +116,16 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const member = await store.find(id);
     if (!member) return c.notFound();
     const viewer = c.get("viewer");
+    // Stats and milestones belong to this same member: the existing declaration
+    // covers all three reads, without duplicating subjects or audit rows.
     c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
-    return c.html(<ProfilePage member={member} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
+    let stats = null;
+    try {
+      stats = deps.stats ? await deps.stats(member.id) : await readMemberStats(await dbFor(c), member.id);
+    } catch {
+      console.warn("Member stats unavailable; hiding the stats block.");
+    }
+    return c.html(<ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
   };
 
   app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));
