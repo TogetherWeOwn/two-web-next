@@ -110,6 +110,19 @@ export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent |
   return (await withGoing(db, [row]))[0] ?? null;
 }
 
+/** Viewer answer for the RSVP island (TOG-9839 slice 2): the caller's own row
+ * only — keyed on the session user, never another member's. Null when the
+ * viewer has not answered. Position is always derived client-side as the
+ * fallback copy: there is no position column and no waitlist-count query. */
+export type ViewerRsvp = { status: string; syncedToDiscordAt: Date | null };
+export async function getViewerRsvp(db: Db, eventId: number, userId: string): Promise<ViewerRsvp | null> {
+  const [row] = await db
+    .select({ status: rsvps.status, syncedToDiscordAt: rsvps.syncedToDiscordAt })
+    .from(rsvps)
+    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.userId, userId)));
+  return row ?? null;
+}
+
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */
 export async function listJson(
   db: Db,
