@@ -21,12 +21,15 @@ export function testDatabaseUrl(raw: string, runner = process.env): URL {
   return url;
 }
 
-export async function createMemberDataFixture(raw: string) {
+export async function createMemberDataFixture(raw: string, opts: { max?: number } = {}) {
   const url = testDatabaseUrl(raw); // Must run before postgres() or any DDL.
   const schemaName = `w15_${randomUUID().replaceAll("-", "")}`;
   // postgres.js treats password: "" as absent and falls back to PGPASSWORD.
   // A callback pins the authorized empty test password without that fallback.
-  const options = { max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
+  // max stays 1 unless the caller runs lock holders + racing requests on the
+  // same pool (W9 RSVP race tests hold a transaction open while the app pool
+  // serves concurrent writes through the same scoped client).
+  const options = { max: opts.max ?? 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
   const admin = postgres(url.href, options);
   const client = postgres(url.href, { ...options, connection: { search_path: schemaName } });
   const db: Db = drizzle(client, { schema: { ...schema, ...adminSchema } });
@@ -64,7 +67,10 @@ export async function createMemberDataFixture(raw: string) {
     await db.delete(events);
     await db.delete(users);
   };
-  return { db, schemaName, reset, dispose };
+  // client is the same schema-scoped pool behind db (search_path pinned to the
+  // owned schema): raw SQL and lock holders through it resolve unqualified
+  // names inside the fixture, never in the caller's tables.
+  return { db, client, schemaName, reset, dispose };
 }
 
 export type MemberDataFixture = Awaited<ReturnType<typeof createMemberDataFixture>>;

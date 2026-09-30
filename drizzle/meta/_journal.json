@@ -61,8 +61,15 @@
     {
       "idx": 8,
       "version": "7",
-      "when": 1790752156036,
-      "tag": "1006_queue-ledger",
+      "when": 1790728480412,
+      "tag": "1006_rsvp-synced-at",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790762321401,
+      "tag": "1007_queue-ledger",
       "breakpoints": true
     }
   ]

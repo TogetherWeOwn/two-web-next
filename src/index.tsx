@@ -17,6 +17,7 @@ import {
 } from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
 import { dbPing, hyperdriveQuery } from "./db/ping";
+import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
@@ -31,6 +32,7 @@ import { dbFor } from "./admin/db";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
+import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
@@ -117,16 +119,12 @@ const migratedUrls = new Set<string>();
 async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
-  const url = c.env.DATABASE_URL;
-  // No DB binding: sessions cannot persist (a fresh memory store per request
-  // fails closed to guest). This is the transitional state until the
-  // Hyperdrive binding lands (W1/S1); staging sets DATABASE_URL meanwhile.
+  const url = databaseUrl(c.env);
+  // No DB configuration: a fresh memory store per request fails closed to guest.
   if (!url) return createMemorySessionStore();
-  // Short-lived per-request client, one pooled connection max. Never ended
-  // while the store holds it (ending here would hand the store a dead client);
-  // idle sockets close themselves via idle_timeout. The W1 Hyperdrive spike
-  // owns production pooling; Hyperdrive will use this same Sql surface.
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
+  // Keep it alive while the store uses it; idle_timeout closes idle sockets.
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedUrls.has(url)) {
     await migrate(sql);
     migratedUrls.add(url);
@@ -134,19 +132,17 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   return createPostgresSessionStore(sql);
 }
 
-// Roster persistence for the N6 user-roster write. Same posture as storeFor:
-// tests inject a Sql double through ROSTER_STORE; staging/production use
-// DATABASE_URL with a short-lived per-request client and the runtime DDL; an
-// absent DATABASE_URL means the roster write quietly degrades to null (a
-// no-op upsert) so sign-in stays up instead of 500ing.
+// Roster persistence shares storeFor's DB selection so signed-in profiles
+// read the same users sign-in writes. Tests may inject ROSTER_STORE; no DB
+// configuration means a no-op upsert so DB-free sign-in tests still work.
 const migratedRosterUrls = new Set<string>();
 
 async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
   if (injected) return injected;
-  const url = c.env.DATABASE_URL;
+  const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedRosterUrls.has(url)) {
     await migrateRoster(sql);
     migratedRosterUrls.add(url);
@@ -430,6 +426,8 @@ app.get("/auth/discord", async (c) => {
 });
 
 app.get("/auth/discord/callback", async (c) => {
+  const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
+  if (limited) return limited;
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
   deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
   const code = c.req.query("code");
@@ -488,7 +486,7 @@ registerEventRoutes(
   async (c) => readSession(c, await storeFor(c), false),
 );
 
-app.post("/logout", async (c) => {
+app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
   // the origin check below refuses one anyway.
   const origin = c.req.header("origin");
@@ -502,7 +500,7 @@ app.post("/logout", async (c) => {
 
 // Staging-only QA seam. 404 everywhere that is not the staging host with
 // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post("/auth/qa/:identity", async (c) => {
+app.post("/auth/qa/:identity", throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), async (c) => {
   if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);

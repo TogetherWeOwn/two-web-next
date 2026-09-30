@@ -15,7 +15,9 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { authorizeUrl, exchangeCode, fetchUser } from "../discord";
+import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
+import { databaseOptions, databaseUrl } from "../db/connection";
 import { inviteDestination } from "../invite";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
 import type { SessionStore, Sql } from "../sessions";
@@ -49,19 +51,17 @@ export type EnvWithJoin = Env & { JOIN_DEPS?: JoinRouteDeps };
 type Ctx = Context<{ Bindings: Env }>;
 
 // Postgres access for the journey. Same posture as sessions (`storeFor` in the
-// app module): tests inject a client through JOIN_DEPS; staging/production use
-// DATABASE_URL with a short-lived per-request client and the runtime DDL. An
-// absent DATABASE_URL means the journey's persistence (throttle + attempts)
-// quietly degrades — null store, throttle allows, attempts no-op — so the
-// funnel stays up instead of 500ing.
+// app module): tests inject a client through JOIN_DEPS; runtime uses the
+// explicit DATABASE_URL or the Hyperdrive DB binding. With neither, throttle
+// and attempts degrade to no-ops so the DB-free funnel stays up.
 const migratedJoinUrls = new Set<string>();
 
 async function joinStore(c: Ctx): Promise<Sql | null> {
   const deps = (c.env as EnvWithJoin).JOIN_DEPS;
   if (deps?.store) return deps.store();
-  const url = c.env.DATABASE_URL;
+  const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedJoinUrls.has(url)) {
     await migrateJoin(sql);
     migratedJoinUrls.add(url);
@@ -83,11 +83,7 @@ async function throttled(c: Ctx): Promise<Response | null> {
     JOIN_THROTTLE_PER_MINUTE,
   );
   if (!verdict.limited) return null;
-  return c.json(
-    { reason: "rate_limited", message: "Too many join attempts. Try again shortly.", retry_after: verdict.retryAfter },
-    429,
-    { "Retry-After": String(verdict.retryAfter) },
-  );
+  return rateLimitExceeded(c, verdict.retryAfter);
 }
 
 // Session + issue helpers live in the main app module (the join router is

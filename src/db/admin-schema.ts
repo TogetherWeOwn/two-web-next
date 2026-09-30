@@ -161,6 +161,9 @@ export const rsvps = pgTable(
     userId: text("user_id").notNull(),
     // going | maybe | not_going | waitlisted (src/islands/contracts.ts RSVP_STATUSES).
     status: text("status").notNull(),
+    // Null until the Discord mirror has caught up with this answer. Every write resets it
+    // (W9); the mirror job stamps it (RsvpResource contract: null = "saved, syncing").
+    syncedToDiscordAt: timestamp("synced_to_discord_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
