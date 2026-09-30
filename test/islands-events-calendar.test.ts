@@ -621,16 +621,22 @@ describe("EventsCalendar SSR drift", () => {
     expect(cardKeys(html)).toEqual([local.eventKey]);
   });
 
-  it("preserves main's persisted search analytics, no-store and NUL sanitization", async () => {
+  it.each([
+    [APP_URL, APP_URL, "noindex, nofollow"],
+    ["https://togetherweown.com", "https://togetherweown.com", "noindex, follow"],
+    ["https://togetherweown.com", APP_URL, "noindex, nofollow"],
+    [APP_URL, "https://togetherweown.com", "noindex, nofollow"],
+  ])("preserves search analytics, no-store and NUL sanitization with APP_URL=%s on %s", async (appUrl, servingUrl, robotsTag) => {
     vi.spyOn(console, "info").mockImplementation(() => {});
-    const src = calendar([eventRow({ title: "Chess  night" })], [], okSource());
-    const res = await src.request("/events?q=%20CHESS%20%20night%20");
+    const src = calendar([eventRow({ title: "Chess  night" })], [], okSource(), { APP_URL: appUrl });
+    const res = await src.request(`${servingUrl}/events?q=%20CHESS%20%20night%20`);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
-    expect(res.headers.get("x-robots-tag")).toBe("noindex, follow");
+    // Non-apex config or serving hosts keep the middleware's staging posture.
+    expect(res.headers.get("x-robots-tag")).toBe(robotsTag);
     expect(await res.text()).toContain("Chess  night");
     expect(src.logs).toEqual([{ normalizedQuery: "chess night", resultCount: 1 }]);
-    await src.request("/events?q=%00");
-    await src.request("/events?q=Chess%00%20%20night");
+    await src.request(`${servingUrl}/events?q=%00`);
+    await src.request(`${servingUrl}/events?q=Chess%00%20%20night`);
     expect(src.logs).toEqual([
       { normalizedQuery: "chess night", resultCount: 1 },
       { normalizedQuery: "chess night", resultCount: 1 },
