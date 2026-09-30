@@ -350,8 +350,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         startsAtUtc: existing.startsAt.toISOString(),
         endsAtUtc: existing.endsAt.toISOString(),
       });
-      const { row, writeBack } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
+      const { row, writeBack, childWriteBacks } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
       if (writeBack) await dispatchWriteBack(c.env, writeBack);
+      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
       return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);
