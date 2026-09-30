@@ -6,7 +6,7 @@ import app from "../src/index";
 import { eventSearchLogs, events } from "../src/db/admin-schema";
 import { createDb, type Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { normalizeQuery, recordSearch, topZeroResultSearches } from "../src/events/search-log";
+import { matchQuery, normalizeQuery, recordSearch, topZeroResultSearches } from "../src/events/search-log";
 import { searchCondition } from "../src/events/reads";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
 
@@ -18,6 +18,17 @@ describe("normalizeQuery (legacy EventSearchLogger::normalize)", () => {
     ["hell\t\n divers", "hell divers"],
     ["ÉCHECS", "échecs"],
   ])("%j -> %j", (raw, want) => expect(normalizeQuery(raw)).toBe(want));
+
+  it("strips NUL before matching or logging", () => {
+    expect(normalizeQuery("\u0000")).toBeNull();
+    expect(normalizeQuery("a\u0000b")).toBe("ab");
+    expect(matchQuery("\u0000")).toBeNull();
+    expect(matchQuery(" a\u0000b ")).toBe("ab");
+  });
+
+  it("matching keeps internal whitespace and case; only logging normalizes", () => {
+    expect(matchQuery("  Chess  night ")).toBe("Chess  night");
+  });
 
   it("blank input is not a search", () => {
     expect(normalizeQuery("   ")).toBeNull();
@@ -117,6 +128,16 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     expect(rows.map((r) => [r.normalizedQuery, r.resultCount])).toEqual([["helldiv", 1], ["chess", 1]]);
     // Row shape carries no member identifier at all.
     expect(Object.keys(rows[0]!).sort()).toEqual(["id", "normalizedQuery", "occurredAt", "resultCount"]);
+  });
+
+  it("matches an exact title with doubled spaces, logs the collapsed form once; NUL does not 500", async () => {
+    await db.insert(events).values({ eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD", title: "Chess  night", startsAt: new Date(Date.now() + 72 * hour), endsAt: new Date(Date.now() + 74 * hour), status: "published" });
+    const html = await (await req("/events?q=Chess%20%20night")).text();
+    expect(html).toContain("Chess  night");
+    expect((await req("/events?q=%00")).status).toBe(200);
+    expect((await req("/events?q=a%00b")).status).toBe(200);
+    const rows = await db.select().from(eventSearchLogs).orderBy(eventSearchLogs.id);
+    expect(rows.map((r) => r.normalizedQuery)).toEqual(["chess night", "ab"]);
   });
 
   it("treats % and _ literally and writes no row for blank or absent q", async () => {

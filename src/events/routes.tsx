@@ -8,9 +8,10 @@ import { NotFoundError, createEvent, getEvent, transitionEvent, updateEvent } fr
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
-import { normalizeQuery, recordSearch } from "./search-log";
+import { matchQuery, recordSearch } from "./search-log";
 import { EventGonePage, EventPage, EventsPage, PastEventsPage } from "./pages";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getPublicEvent, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
+import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listFeed, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -56,13 +57,29 @@ async function etagFor(body: string): Promise<string> {
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }
 
+async function sha256Etag(body: string): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+  return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
+}
+
+/** Strong validator over the bytes; 304 on a matching If-None-Match. Sessionless: sets no cookie. */
+async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
+  const etag = await sha256Etag(body);
+  const inm = c.req.header("if-none-match");
+  if (inm && inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag)) {
+    return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
+  }
+  return new Response(body, { status: 200, headers: { ...headers, etag } });
+}
+
 export function registerEventRoutes(app: App, readSession: SessionReader): void {
   const unavailable = (c: Ctx) => c.text("Events temporarily unavailable", 503);
 
   app.get("/events", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    const q = normalizeQuery(c.req.query("q"));
+    const rawQ = c.req.query("q");
+    const q = matchQuery(rawQ);
     if (q === null) {
       c.header("cache-control", "public, max-age=60");
       return c.html(<EventsPage rows={await listUpcoming(db)} appUrl={c.env.APP_URL} />);
@@ -70,7 +87,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
     // Searching: matching past events show without opening the archive (a hidden match reads as
     // "no results"). Count = what the guest sees; the past list caps at one page, exact at zero.
     const [rows, past] = await Promise.all([listUpcoming(db, new Date(), q), listPast(db, 1, new Date(), q)]);
-    await recordSearch(db, q, rows.length + past.rows.length);
+    await recordSearch(db, rawQ, rows.length + past.rows.length);
     // Never shared-cached: a cache hit would skip the log write.
     c.header("cache-control", "private, no-store");
     c.header("x-robots-tag", "noindex, follow");
@@ -101,6 +118,47 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
     c.header("etag", etag);
     if (c.req.header("if-none-match") === etag) return c.body(null, 304);
     return c.body(body, 200, { "content-type": "application/json; charset=UTF-8" });
+  });
+
+  app.get("/events.rss", async (c) => {
+    const db = await dbFor(c);
+    if (!db) return unavailable(c);
+    const rows = await listFeed(db, ["published"]);
+    const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
+    return feedResponse(c, eventsRss(rows, c.env.APP_URL, rows.length ? built : new Date()), {
+      "content-type": "application/rss+xml; charset=utf-8",
+      "cache-control": "max-age=300, public",
+    });
+  });
+
+  app.get("/events.ics", async (c) => {
+    const db = await dbFor(c);
+    if (!db) return unavailable(c);
+    const rows = await listFeed(db, ["published", "cancelled"]);
+    return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL), {
+      "content-type": "text/calendar; charset=utf-8",
+      "content-disposition": 'inline; filename="events.ics"',
+      "cache-control": "max-age=300, public",
+    });
+  });
+
+  // Same view policy as /e/:key: drafts are moderator-only; cancelled/past download fine.
+  app.get("/events/:file{.+\\.ics}", async (c) => {
+    const key = c.req.param("file").slice(0, -4);
+    if (!KEY_RE.test(key)) return c.notFound();
+    const db = await dbFor(c);
+    if (!db) return unavailable(c);
+    const e = await getEventRow(db, key);
+    if (!e) return c.notFound();
+    if (e.status === "draft") {
+      const session = await readSession(c);
+      if (!session?.moderator) return c.text("Forbidden", 403);
+    }
+    return feedResponse(c, eventIcs(e, c.env.APP_URL), {
+      "content-type": "text/calendar; charset=utf-8",
+      "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
+      "cache-control": "max-age=300, private",
+    });
   });
 
   app.get("/e/:key", async (c) => {

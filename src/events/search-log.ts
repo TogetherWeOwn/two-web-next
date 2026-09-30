@@ -7,9 +7,18 @@ import { eventSearchLogs } from "../db/admin-schema";
 
 export const MAX_QUERY_LENGTH = 255;
 
-/** Collapse whitespace runs, lowercase, cap at 255 chars. null = blank = not a search. */
+/** NUL is rejected by PostgreSQL text parameters; drop it before matching or logging. */
+const stripNul = (raw: string | null | undefined): string => (raw ?? "").replace(/\u0000/g, "");
+
+/** Matching input: trimmed original text (no collapse/lowercase, as legacy). null = blank = not a search. */
+export function matchQuery(raw: string | null | undefined): string | null {
+  const t = stripNul(raw).trim();
+  return t === "" ? null : t;
+}
+
+/** Analytics form: collapse whitespace runs, lowercase, cap at 255 chars. null = blank. */
 export function normalizeQuery(raw: string | null | undefined): string | null {
-  const n = (raw ?? "").trim().replace(/\s+/gu, " ").toLowerCase();
+  const n = stripNul(raw).trim().replace(/\s+/gu, " ").toLowerCase();
   if (n === "") return null;
   return [...n].slice(0, MAX_QUERY_LENGTH).join("");
 }

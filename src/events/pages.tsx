@@ -1,6 +1,7 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { Layout } from "../pages";
 import { goingCountText } from "../islands/contracts";
+import { googleCalendarUrl, webcalUrl } from "./feeds";
 import type { PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
@@ -63,7 +64,11 @@ export const EventsPage: FC<{ rows: PublicEvent[]; pastRows?: PublicEvent[]; q?:
         <ul>{pastRows.map((e) => <Card e={e} />)}</ul>
       </section>
     ) : null}
-    <p><a href="/events/past">Past events</a></p>
+    <p>
+      <a href={webcalUrl(appUrl)} data-testid="events-subscribe">Subscribe</a>
+      {" · "}
+      <a href="/events/past">Past events</a>
+    </p>
   </Shell>
 );
 
@@ -88,6 +93,11 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> =
     {e.description ? <p>{e.description}</p> : null}
     <p data-testid="going-count" data-island="going-count" data-event-key={e.eventKey}>
       {goingCountText(e.goingCount, e.capacity)}
+    </p>
+    <p>
+      <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">Add to calendar (.ics)</a>
+      {" · "}
+      <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
     </p>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>
