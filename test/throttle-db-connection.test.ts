@@ -62,7 +62,7 @@ describe("throttle runtime connection wiring", () => {
 
 describe("pause/reopen exhausted budgets with DB binding only", () => {
   it("counts JSON writes through the binding and refuses request 31 on both actions", async () => {
-    const headers = { accept: "application/json", "cf-connecting-ip": "192.0.2.17" };
+    const headers = { origin: bindingEnv.APP_URL, accept: "application/json", "cf-connecting-ip": "192.0.2.17" };
     for (let i = 0; i < 30; i++) {
       const action = i % 2 ? "rsvp-reopen" : "rsvp-pause";
       expect((await app.request(`/events/abc/${action}`, { method: "POST", headers }, bindingEnv)).status).toBe(401);

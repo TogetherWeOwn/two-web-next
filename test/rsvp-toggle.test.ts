@@ -35,7 +35,8 @@ const paths = ["/events/abc/rsvp-pause", "/events/abc/rsvp-reopen", "/admin/even
 describe("RSVP toggle guards (no database)", () => {
   it("keeps guest, member and origin conventions on both route families", async () => {
     for (const path of paths) {
-      const guest = await app.request(path, { method: "POST" }, baseEnv);
+      const guest = await app.request(path, { method: "POST", headers: { origin: APP_URL } }, baseEnv);
+      expect((await app.request(path, { method: "POST" }, baseEnv)).status, path).toBe(403);
       expect(guest.status, path).toBe(path.startsWith("/admin/") ? 302 : 401);
       if (path.startsWith("/admin/")) expect(guest.headers.get("location")).toBe("/auth/discord");
       expect((await app.request(path, { method: "POST", headers: { cookie: await cookie(false), origin: APP_URL } }, baseEnv)).status, path).toBe(403);

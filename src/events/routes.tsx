@@ -273,10 +273,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
-  // Same origin rule as /logout: SameSite=Lax already blocks cross-site sends.
   async function moderator(c: Ctx): Promise<Session | Response> {
-    const origin = c.req.header("origin");
-    if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     // Non-rotating: concurrent writes with one cookie must all authenticate.
     const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
@@ -380,8 +377,6 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   const closed = (c: Ctx, why: string) => c.json({ reason: "event_not_open", why, message: "This event is not taking RSVPs." }, 403);
 
   async function member(c: Ctx): Promise<Session | Response> {
-    const origin = c.req.header("origin");
-    if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     // Non-rotating: concurrent writes with one cookie must all authenticate.
     const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);

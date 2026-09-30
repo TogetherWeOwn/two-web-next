@@ -99,7 +99,7 @@ describe("budgets on the legacy paths", () => {
     const { sql } = fakeStore();
     const e = { APP_URL: "https://next.example.test", THROTTLE_STORE: async () => sql } as unknown as EnvWithThrottle;
     const actions = ["publish", "cancel", "rsvp-pause", "rsvp-reopen"];
-    const init = { method: "POST", headers: { accept: "application/json" } };
+    const init = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
     for (let i = 0; i < 30; i++) {
       expect((await app.request(`/events/abc/${actions[i % actions.length]}`, init, e)).status).toBe(401);
     }
@@ -115,7 +115,7 @@ describe("budgets on the legacy paths", () => {
       SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
       THROTTLE_STORE: async () => sql,
     } as unknown as EnvWithThrottle;
-    const json = { method: "POST", headers: { accept: "application/json" } };
+    const json = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
     for (let i = 0; i < 30; i++) expect((await app.request("/logout", json, e)).status).toBe(303);
     expect((await app.request("/logout", json, e)).status).toBe(429);
     for (let i = 0; i < 10; i++) expect((await app.request("/auth/qa/x", json, e)).status).not.toBe(429);
