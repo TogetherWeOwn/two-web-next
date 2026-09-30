@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
-import { Layout } from "../pages";
+import { JoinResultBanner, Layout } from "../pages";
+import type { JoinResult } from "../return-journey";
 import {
   MEMBER_PROFILE_ISLAND,
   MOUNT_ATTR,
@@ -24,9 +25,10 @@ import type { MemberView } from "./store";
 export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
+  joinResult?: JoinResult | null;
   errors?: Record<string, string>;
   values?: { bio: string; games_text: string; timezone: string };
-}> = ({ member, isOwner, errors, values }) => {
+}> = ({ member, isOwner, joinResult, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const form = values ?? { bio: member.bio ?? "", games_text: member.games.join("\n"), timezone: member.timezone ?? "" };
@@ -39,6 +41,7 @@ export const ProfilePage: FC<{
         </nav>
       </header>
       <main>
+        {joinResult ? <JoinResultBanner result={joinResult} /> : null}
         <section aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
           {img ? (
             <img data-testid={PROFILE_AVATAR_TESTID} src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" />

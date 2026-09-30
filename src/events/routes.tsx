@@ -17,6 +17,13 @@ type App = Hono<{ Bindings: Env }>;
 export type SessionReader = (c: Ctx) => Promise<Session | null>;
 
 const KEY_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+const SESSION_COOKIE_NAME = "__Host-two_session";
+
+// Cheap presence check before paying a store read + token rotation on public
+// pages: the cookie's name tells us whether a session *might* exist. The
+// session itself is still only trusted from the store row.
+const hasSessionCookie = (c: Ctx): boolean =>
+  Boolean(c.req.header("cookie")?.includes(`${SESSION_COOKIE_NAME}=`));
 
 export function eventJson(e: PublicEvent) {
   return {
@@ -77,17 +84,26 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
   app.get("/events", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    c.header("cache-control", "public, max-age=60");
-    return c.html(<EventsPage rows={await listUpcoming(db)} appUrl={c.env.APP_URL} />);
+    // Session only when a session cookie actually arrived: a guest stays on
+    // the shared public page (edge-cacheable), a signed-in visitor gets the
+    // member view — and their page is never shared.
+    const authed = hasSessionCookie(c);
+    const session = authed ? await readSession(c) : null;
+    c.header("cache-control", authed ? "private, no-store" : "public, max-age=60");
+    return c.html(<EventsPage rows={await listUpcoming(db)} appUrl={c.env.APP_URL} session={session} />);
   });
 
   app.get("/events/past", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
+    // Same guest/member split as /events: the archive cards carry the log-in
+    // link for guests only.
+    const authed = hasSessionCookie(c);
+    const session = authed ? await readSession(c) : null;
     const { rows, hasMore, totalPages } = await listPast(db, page);
-    c.header("cache-control", "public, max-age=300");
-    return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} totalPages={totalPages} appUrl={c.env.APP_URL} />);
+    c.header("cache-control", authed ? "private, no-store" : "public, max-age=300");
+    return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} totalPages={totalPages} appUrl={c.env.APP_URL} session={session} />);
   });
 
   app.get("/events.json", async (c) => {
@@ -155,17 +171,20 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
     if (!db) return unavailable(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
+    // One session read serves both the draft gate and the page's member/
+    // guest CTA split; guests skip the store entirely.
+    const authed = hasSessionCookie(c);
+    const session = authed ? await readSession(c) : null;
     if (e.status === "draft") {
-      const session = await readSession(c);
       if (!session?.moderator) return c.text("Forbidden", 403);
       c.header("cache-control", "private, no-store");
     } else if (e.status === "cancelled") {
       c.header("x-robots-tag", "noindex");
       return c.html(<EventGonePage />, 410);
     } else {
-      c.header("cache-control", "public, max-age=60");
+      c.header("cache-control", authed ? "private, no-store" : "public, max-age=60");
     }
-    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} />);
+    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------

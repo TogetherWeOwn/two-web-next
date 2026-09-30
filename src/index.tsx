@@ -31,6 +31,7 @@ import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
+import { consumeLoginReturn, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 
 const SESSION_COOKIE = "__Host-two_session";
@@ -201,9 +202,11 @@ app.get("/", async (c) => {
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
   const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
+  // One-shot join confirmation (legacy join_result flash): first render consumes it.
+  const joinResult = await takeJoinResult(c);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,
+    <Home session={session} notice={notice} joinResult={joinResult} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,
   );
 });
 
@@ -278,9 +281,15 @@ app.get("/privacy", (c) => {
 // synchronous bot add. JoinAttempt rows land in Postgres when DATABASE_URL is
 // set; without it the journey degrades to no persistence (never a 500).
 registerJoinRoutes(app, { storeFor, issueSession }, {
-  joinPage: (c, props) => {
-    c.header("cache-control", "public, max-age=3600");
-    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} />);
+  joinPage: async (c, props) => {
+    // Carrying the join-result flash makes the response viewer-specific:
+    // the static page keeps its shared-cache TTL only when there is nothing
+    // to consume (otherwise a guest could read another member's banner).
+    const joinResult = await takeJoinResult(c);
+    c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=3600");
+    return c.html(
+      <Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} joinResult={joinResult} />,
+    );
   },
   recovery: (c, props, status = 200) => {
     c.header("cache-control", "no-store, private");
@@ -349,6 +358,9 @@ app.get("/db-ping", async (c) => {
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
+  // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
+  // OAuth round trip in a signed cookie; a hostile value leaves no trace.
+  await rememberLoginNext(c, c.req.query("next"));
   await setSignedCookie(c, STATE_COOKIE, state, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -362,6 +374,9 @@ app.get("/auth/discord", async (c) => {
 app.get("/auth/discord/callback", async (c) => {
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
   deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
+  // Consume the return journey on every terminal path — success, denial and
+  // failure all clear it (legacy forget on login_next + url.intended).
+  const returnTo = await consumeLoginReturn(c);
   const code = c.req.query("code");
   const state = c.req.query("state");
   if (!code || !state || !expected || state !== expected) return c.redirect("/?n=signin_failed", 302);
@@ -400,7 +415,9 @@ app.get("/auth/discord/callback", async (c) => {
     member: join !== "failed",
     moderator,
   });
-  return c.redirect(`/?n=${join === "failed" ? "join_failed" : join}`, 302);
+  // The remembered destination wins over the default landing notice —
+  // explicit next, then the gate-recorded intended page (legacy precedence).
+  return c.redirect(returnTo ?? `/?n=${join === "failed" ? "join_failed" : join}`, 302);
 });
 
 // Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard

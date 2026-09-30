@@ -24,6 +24,7 @@ import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
 import type { Env } from "../env";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
+import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
 import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
@@ -83,7 +84,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
       if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     }
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    if (!token) return c.redirect("/auth/discord", 302);
+    // Guest: record where they were headed (legacy url.intended), then into
+    // the site OAuth flow — the callback returns them here after sign-in.
+    if (!token) return bounceToLogin(c);
     let viewer: Viewer | null = null;
     try {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
@@ -94,8 +97,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
       console.error("profiles could not resolve the session; refusing.", { error: String(err) });
       return c.text("Profiles temporarily unavailable", 503);
     }
-    // A cookie whose row is gone (revoked/expired/rotated) is a guest.
-    if (!viewer) return c.redirect("/auth/discord", 302);
+    // A cookie whose row is gone (revoked/expired/rotated) is a guest — same
+    // intended-page bounce so the round trip lands them back here.
+    if (!viewer) return bounceToLogin(c);
     if (!viewer.member) return c.text("Forbidden", 403);
     c.set("viewerId", viewer.id);
     c.set("viewer", viewer);
@@ -118,7 +122,10 @@ export function profilesApp(deps: ProfileDeps = {}) {
     if (!member) return c.notFound();
     const viewer = c.get("viewer");
     c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
-    return c.html(<ProfilePage member={member} isOwner={viewer.id === member.id} />);
+    // One-shot join confirmation: a member who just completed the join sees the
+    // added/already-member banner (and the reinvite action) on their landing.
+    const joinResult = await takeJoinResult(c);
+    return c.html(<ProfilePage member={member} isOwner={viewer.id === member.id} joinResult={joinResult} />);
   };
 
   app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));

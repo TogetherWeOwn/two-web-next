@@ -1,6 +1,7 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Counts } from "./counts";
 import type { Session } from "./env";
+import type { JoinResult } from "./return-journey";
 
 const SITE_NAME = "Together We Own";
 
@@ -55,10 +56,30 @@ const NOTICES: Record<Exclude<Notice, null>, string> = {
 
 const JOIN_HREF = "/join";
 
-export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null }> = ({
+// One-shot join confirmation (legacy join_result flash → data-testid="join-result",
+// JoinResultCopyTest/AlreadyMemberReinviteTest). A member who was already in the
+// guild gets the reinvite action — /discord resolves to the live invite — never
+// the bare homepage "Open Discord".
+export const JoinResultBanner: FC<{ result: JoinResult }> = ({ result }) => (
+  <p class="notice" role="status" data-testid="join-result">
+    {result === "added" ? (
+      <>You are in. Finish Discord's rules screening before you can post.</>
+    ) : (
+      <>
+        You are already in the server.{" "}
+        <a href="/discord" data-testid="reinvite-link">
+          Rejoin with the Discord invite
+        </a>
+      </>
+    )}
+  </p>
+);
+
+export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null; joinResult?: JoinResult | null }> = ({
   inviteUrl,
   widgetUrl,
   next,
+  joinResult,
 }) => (
   <Layout title="Join — Together We Own" canonical={undefined}>
     <header class="bar">
@@ -68,6 +89,7 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
       </nav>
     </header>
     <main>
+      {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <section aria-labelledby="join-heading">
         <h1 id="join-heading">Join Together We Own</h1>
         <p class="lead">
@@ -137,10 +159,11 @@ export const Recovery: FC<{
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
+  joinResult?: JoinResult | null;
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
-}> = ({ session, notice, inviteUrl, appUrl, counts }) => (
+}> = ({ session, notice, joinResult, inviteUrl, appUrl, counts }) => (
   <Layout
     title="Together We Own — adult gaming community"
     canonical={`${appUrl}/`}
@@ -160,7 +183,17 @@ export const Home: FC<{
       </nav>
     </header>
     <main>
-      {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
+      {/*
+        The flashed join confirmation takes the notice slot: both carry the same
+        event, and the banner is the richer of the two (reinvite action, exact
+        confirmation copy). A bare ?n= still renders its notice when no flash is
+        pending.
+      */}
+      {joinResult ? (
+        <JoinResultBanner result={joinResult} />
+      ) : (
+        notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>
+      )}
       <section class="hero">
         <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
         <h1>We spent most of our life private. Now you can just turn up.</h1>

@@ -1,4 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
+import type { Session } from "../env";
 import { Layout } from "../pages";
 import {
   PAST_EVENTS_COPY,
@@ -40,7 +41,10 @@ const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: 
   </Layout>
 );
 
-const Card: FC<{ e: PublicEvent }> = ({ e }) => (
+// Legacy partials/event-card-anon: a signed-out visitor gets a log-in link on
+// the card itself, carrying the page they were on as ?next=. A member sees the
+// card plain (RSVP itself is the island's job, not this port's).
+const Card: FC<{ e: PublicEvent; session: Session | null; returnTo: string }> = ({ e, session, returnTo }) => (
   <li data-testid="event-card" data-event-key={e.eventKey}>
     <h2>
       <a href={`/e/${e.eventKey}`}>{e.title}</a>
@@ -50,13 +54,20 @@ const Card: FC<{ e: PublicEvent }> = ({ e }) => (
       {e.game ? ` · ${e.game}` : ""}
     </p>
     <p>{goingCountText(e.goingCount, e.capacity)}</p>
+    {!session ? (
+      <p>
+        <a href={`/auth/discord?next=${encodeURIComponent(returnTo)}`} data-testid="events-login">
+          Log in with Discord
+        </a>
+      </p>
+    ) : null}
   </li>
 );
 
-export const EventsPage: FC<{ rows: PublicEvent[]; appUrl: string }> = ({ rows, appUrl }) => (
+export const EventsPage: FC<{ rows: PublicEvent[]; appUrl: string; session: Session | null }> = ({ rows, appUrl, session }) => (
   <Shell title="Events" canonical={`${appUrl}/events`}>
     <h1>Upcoming events</h1>
-    {rows.length === 0 ? <p data-testid="events-empty">Nothing scheduled right now.</p> : <ul>{rows.map((e) => <Card e={e} />)}</ul>}
+    {rows.length === 0 ? <p data-testid="events-empty">Nothing scheduled right now.</p> : <ul>{rows.map((e) => <Card e={e} session={session} returnTo="/events" />)}</ul>}
     <p>
       <a href={webcalUrl(appUrl)} data-testid="events-subscribe">Subscribe</a>
       {" · "}
@@ -65,7 +76,7 @@ export const EventsPage: FC<{ rows: PublicEvent[]; appUrl: string }> = ({ rows, 
   </Shell>
 );
 
-export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string }> = ({ rows, page, hasMore, totalPages, appUrl }) => (
+export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string; session: Session | null }> = ({ rows, page, hasMore, totalPages, appUrl, session }) => (
   <Shell title="Past events" canonical={`${appUrl}${pastEventsUrl(page)}`} robots="noindex, follow">
     <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
       <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
@@ -81,7 +92,7 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
           )
         ) : null}
       </div>
-      <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{rows.map((e) => <Card e={e} />)}</ul>
+      <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{rows.map((e) => <Card e={e} session={session} returnTo={pastEventsUrl(page)} />)}</ul>
       <nav aria-label="Past event pages" data-archive-pager>
         {page > 1 && totalPages > 0 ? (
           <a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages))}>Newer</a>
@@ -95,7 +106,7 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> = ({ e, appUrl, jsonLd }) => (
+export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; session: Session | null }> = ({ e, appUrl, jsonLd, session }) => (
   <Shell title={e.title} canonical={`${appUrl}/e/${e.eventKey}`} description={e.description}>
     <h1>{e.title}</h1>
     <p>
@@ -111,6 +122,22 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> =
       {" · "}
       <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
     </p>
+    {/*
+      Legacy show.blade.php pitch (data-testid="event-join-pitch"), verbatim
+      copy. Everyone who is not a guild member — guests and signed-in
+      non-members alike — gets the join CTA carrying this page as ?next= so
+      the journey lands them back here.
+    */}
+    {!session?.member ? (
+      <section data-testid="event-join-pitch">
+        <p>Game nights get posted here first. Join the Discord and you'll see them before they land on this page.</p>
+        <p>
+          <a class="btn" href={`/join?next=${encodeURIComponent(`/e/${e.eventKey}`)}`} data-testid="discord-join">
+            Join the Discord
+          </a>
+        </p>
+      </section>
+    ) : null}
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>
 );
