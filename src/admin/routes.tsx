@@ -43,6 +43,7 @@ import {
   updateEvent,
   updateFeatured,
 } from "./store";
+import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
@@ -112,7 +113,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
     const db = await dbFor(c);
     const funnel = db ? await joinFunnelStats(db) : undefined;
-    return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} />);
+    // Normalized queries + counts only; a failing or blocked read resolves
+    // undefined itself, so the widget is omitted — the dashboard never waits.
+    const zeroSearches = db ? await topZeroResultSearches(db) : undefined;
+    return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />);
   });
 
   admin.get("/join-attempts", async (c) => {

@@ -8,6 +8,7 @@ import { NotFoundError, createEvent, getEvent, transitionEvent, updateEvent } fr
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
+import { matchQuery, recordSearch } from "./search-log";
 import { EventGonePage, EventPage, EventsPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listFeed, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
@@ -77,8 +78,20 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
   app.get("/events", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    c.header("cache-control", "public, max-age=60");
-    return c.html(<EventsPage rows={await listUpcoming(db)} appUrl={c.env.APP_URL} />);
+    const rawQ = c.req.query("q");
+    const q = matchQuery(rawQ);
+    if (q === null) {
+      c.header("cache-control", "public, max-age=60");
+      return c.html(<EventsPage rows={await listUpcoming(db)} appUrl={c.env.APP_URL} />);
+    }
+    // Searching: matching past events show without opening the archive (a hidden match reads as
+    // "no results"). Count = what the guest sees; the past list caps at one page, exact at zero.
+    const [rows, past] = await Promise.all([listUpcoming(db, new Date(), q), listPast(db, 1, new Date(), q)]);
+    await recordSearch(db, rawQ, rows.length + past.rows.length);
+    // Never shared-cached: a cache hit would skip the log write.
+    c.header("cache-control", "private, no-store");
+    c.header("x-robots-tag", "noindex, follow");
+    return c.html(<EventsPage rows={rows} pastRows={past.rows} q={q} appUrl={c.env.APP_URL} />);
   });
 
   app.get("/events/past", async (c) => {
