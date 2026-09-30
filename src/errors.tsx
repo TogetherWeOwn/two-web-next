@@ -3,6 +3,7 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
 import { Layout, SiteFooter } from "./pages";
+import { requestRoute } from "./request-log";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
 // errors/*.blade.php views (TOG-5626/TOG-6788). Database-free by construction:
@@ -104,8 +105,7 @@ export function notFoundHandler(c: Context): Response | Promise<Response> {
 }
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
-  console.error("unhandled error:", err);
-  alertRequestError(err, { method: c.req.method, route: c.req.routePath || c.req.path });
+  alertRequestError(err, { method: c.req.method, route: requestRoute(c), requestId: c.get("requestId") });
   c.header("cache-control", "no-store, private");
   c.status(500);
   return c.html(<InternalErrorPage />);

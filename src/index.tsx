@@ -37,6 +37,7 @@ import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
+import { requestLog } from "./request-log";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -91,10 +92,10 @@ const staticSecurityHeaders = secureHeaders({
   reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
 });
 
-app.use("*", async (c, next) => {
+app.use("*", (c, next) => requestLog(c, async () => {
   await staticSecurityHeaders(c, next);
   await robotsTag(c, async () => {});
-});
+}));
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).

@@ -84,10 +84,14 @@ export interface UniqueLock {
   release(key: string): Promise<void>;
 }
 
-export type QueueMessage =
+/** Originating web request, not the bot response ID or a deduplication key. */
+type QueueCorrelation = { requestId?: string };
+
+export type QueueMessage = QueueCorrelation & (
   | { kind: "sync-event"; eventKey: string; idempotencyKey: string; jobId?: string }
   | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
-  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string };
+  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
+);
 
 /**
  * N3 (TOG-9895): the countable side of the queue. Cloudflare Queues carries the
