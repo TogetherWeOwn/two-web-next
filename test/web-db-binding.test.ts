@@ -48,6 +48,16 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
   let env: Env;
   const upcomingKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
+  const request = async (path: string, init: RequestInit = {}, bindings = env) => {
+    try {
+      return await app.request(path, init, bindings);
+    } finally {
+      // Request-scoped clients must not exhaust CI's 100-connection service
+      // while exercising 30 rapid writes. Persistence must survive closure.
+      await Promise.all(state.clients.splice(0).map((client) => client.end()));
+    }
+  };
+
   beforeAll(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!).href;
     fixture = await createMemberDataFixture(url);
@@ -69,7 +79,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
   });
 
   const login = async (identity = "qa-member", bindings = env) => {
-    const res = await app.request(`/auth/qa/${identity}`, {
+    const res = await request(`/auth/qa/${identity}`, {
       method: "POST", headers: { "X-TWO-QA-Auth": baseEnv.QA_AUTH_TOKEN! },
     }, bindings);
     expect(res.status).toBe(204);
@@ -78,7 +88,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
 
   it("serves event list, calendar, RSS and past routes through DB alone", async () => {
     for (const path of ["/events", "/events?view=calendar", "/events.rss", "/events/past"]) {
-      const res = await app.request(path, {}, env);
+      const res = await request(path, {}, env);
       expect(res.status, path).toBe(200);
       const body = await res.text();
       expect(body).not.toContain("Events temporarily unavailable");
@@ -90,31 +100,31 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     const cookie = await login();
     const [user] = await fixture.client`SELECT id, username, member FROM users WHERE id = ${memberId}`;
     expect(user).toMatchObject({ id: memberId, username: "QA Member", member: true });
-    const profile = await app.request("/profile", { headers: { cookie } }, env);
+    const profile = await request("/profile", { headers: { cookie } }, env);
     expect(profile.status).toBe(200);
     expect(await profile.text()).toContain("QA Member");
-    const home = await app.request("/", { headers: { cookie } }, env);
+    const home = await request("/", { headers: { cookie } }, env);
     expect(home.status).toBe(200);
     const rotated = cookieFrom(home);
     expect(rotated).not.toBe(cookie);
-    expect((await app.request("/profile", { headers: { cookie } }, env)).status).toBe(302);
-    expect((await app.request("/profile", { headers: { cookie: rotated } }, env)).status).toBe(200);
-    expect((await app.request("/logout", { method: "POST", headers: { cookie: rotated, origin: env.APP_URL } }, env)).status).toBe(303);
-    expect((await app.request("/profile", { headers: { cookie: rotated } }, env)).status).toBe(302);
+    expect((await request("/profile", { headers: { cookie } }, env)).status).toBe(302);
+    expect((await request("/profile", { headers: { cookie: rotated } }, env)).status).toBe(200);
+    expect((await request("/logout", { method: "POST", headers: { cookie: rotated, origin: env.APP_URL } }, env)).status).toBe(303);
+    expect((await request("/profile", { headers: { cookie: rotated } }, env)).status).toBe(302);
   });
 
   it("resolves admin sessions without granting members moderator access", async () => {
     const member = await login();
-    expect((await app.request("/admin", { headers: { cookie: member } }, env)).status).toBe(403);
+    expect((await request("/admin", { headers: { cookie: member } }, env)).status).toBe(403);
     const moderator = await login("qa-moderator");
-    expect((await app.request("/admin", { headers: { cookie: moderator } }, env)).status).toBe(200);
+    expect((await request("/admin", { headers: { cookie: moderator } }, env)).status).toBe(200);
   });
 
   it("enforces profile writes at 30/min through the binding", async () => {
     const cookie = await login();
     // Isolate this budget from other requests and the wall-clock minute boundary.
     await fixture.client`DELETE FROM web_throttle_hits`;
-    const write = () => app.request(`/members/${memberId}`, {
+    const write = () => request(`/members/${memberId}`, {
       method: "PATCH", headers: { cookie, origin: env.APP_URL, "content-type": "application/json" },
       body: JSON.stringify({ bio: "Binding bio", games: ["Chess"], timezone: "UTC" }),
     }, env);
@@ -130,9 +140,9 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     // Join's existing minute bucket gets an injected clock, not an injected store.
     const bindings = { ...env, JOIN_DEPS: { now: () => 60_000 } } as Env;
     for (let i = 0; i < 10; i++) {
-      expect((await app.request("/join/discord", {}, bindings)).status).toBe(302);
+      expect((await request("/join/discord", {}, bindings)).status).toBe(302);
     }
-    expect((await app.request("/join/discord", {}, bindings)).status).toBe(429);
+    expect((await request("/join/discord", {}, bindings)).status).toBe(429);
   });
 
   it("keeps explicit configuration ahead of the binding in all login/profile factories", async () => {
@@ -140,7 +150,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     const explicit = { ...env, DATABASE_URL: env.DB!.connectionString,
       DB: { connectionString: "postgres://unused.invalid/db" } };
     const cookie = await login("qa-member", explicit);
-    expect((await app.request("/profile", { headers: { cookie } }, explicit)).status).toBe(200);
+    expect((await request("/profile", { headers: { cookie } }, explicit)).status).toBe(200);
     expect(state.urls.length).toBeGreaterThan(0);
     expect(state.urls.every((url) => url === explicit.DATABASE_URL)).toBe(true);
   });
