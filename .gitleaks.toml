@@ -16,3 +16,8 @@ regexes = ['''508654771276873729''']
 description = "Synthetic event-key fixtures (ULID-shaped, not credentials) in the event search tests"
 targetRules = ["generic-api-key"]
 regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FA[A-D]''']
+
+[[allowlists]]
+description = "Two synthetic ULID event keys in binding-only DB regression fixtures, not credentials"
+targetRules = ["generic-api-key"]
+regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FAV''', '''01ARZ3NDEKTSV4RRFFQ69G5FAW''']

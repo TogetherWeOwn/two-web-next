@@ -23,6 +23,7 @@ import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
 import type { Env } from "../env";
+import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
 import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
@@ -40,7 +41,7 @@ export type ProfileDeps = {
   sessionStore?: SessionStore;
   store?: ProfileStore;
   accessLog?: AccessSink;
-  /** bucket → verdict. Default: web_throttle_hits via DATABASE_URL; no DB allows. */
+  /** bucket → verdict. Default: web_throttle_hits via the web DB; no DB allows. */
   throttle?: (bucket: string) => Promise<Verdict>;
 };
 
@@ -65,9 +66,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
   };
   const throttle = async (c: { env: Env }, bucket: string): Promise<Verdict> => {
     if (deps.throttle) return deps.throttle(bucket);
-    const url = c.env.DATABASE_URL;
+    const url = databaseUrl(c.env);
     if (!url) return { limited: false };
-    const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+    const sql = postgres(url, databaseOptions) as unknown as Sql;
     if (!migratedThrottle.has(url)) {
       await migrateJoin(sql);
       migratedThrottle.add(url);
