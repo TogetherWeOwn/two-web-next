@@ -150,7 +150,7 @@ class Node {
   focus() { this.focused = true; }
 }
 
-function browser() {
+function browser(entry = "/events/past") {
   const selectors = ["[data-archive-state]", "[data-archive-list]", "[data-archive-pager]"];
   const targets = selectors.map(() => new Node());
   targets[1]!.childNodes = ["original cards"];
@@ -171,7 +171,7 @@ function browser() {
   });
   const history: string[] = [];
   const reloads: string[] = [];
-  const location = { href: `${APP_URL}/events/past`, origin: APP_URL, assign: (href: string) => reloads.push(href) };
+  const location = { href: new URL(entry, APP_URL).href, origin: APP_URL, assign: (href: string) => reloads.push(href) };
   const requests: { url: string; init: RequestInit; resolve: (r: { ok: boolean; text: () => Promise<string> }) => void; reject: (e: Error) => void }[] = [];
   const parsedPages = new Map<string, { querySelector: (selector: string) => unknown }>();
   runInNewContext(binder, {
@@ -278,6 +278,77 @@ describe("PastEvents shipped binder request/state drift", () => {
     expect(b.turn(2, {}, "/events")).toBe(false);
     expect(b.turn(2, {}, "https://elsewhere.example/events/past?page=2")).toBe(false);
     expect(b.requests).toHaveLength(0);
+  });
+
+  it.each([
+    "/events/past?utm_source=discord",
+    "/events/past?page=01",
+    "/events/past#archive",
+    "/events/past?page=0",
+    "/events/past?page=invalid",
+  ])("restores cards and canonical on Back to the server-valid entry %s", async (entry) => {
+    const b = browser(entry);
+    b.turn(2);
+    b.finish(0, 2, "", "page two cards");
+    await b.settle();
+    b.location.href = new URL(entry, APP_URL).href;
+    b.popstate();
+    expect(b.requests).toHaveLength(2);
+    const url = new URL(entry, APP_URL);
+    expect(b.requests[1]!.url).toBe(url.pathname + url.search);
+    b.finish(1, 1, "", "page one cards");
+    await b.settle();
+    expect(b.targets[1]!.childNodes).toEqual(["page one cards"]);
+    expect(b.root.dataset.page).toBe("1");
+    expect(b.canonical.href).toBe(`${APP_URL}/events/past`);
+    expect(b.og.content).toBe(b.canonical.href);
+    expect(b.location.href).toBe(url.href);
+    expect(b.history).toEqual(["/events/past?page=2"]);
+  });
+
+  it("reloads the current address when a failed click supersedes a pending Back read", async () => {
+    const b = browser();
+    b.turn(2);
+    b.finish(0, 2, "", "page two cards");
+    await b.settle();
+    b.location.href = `${APP_URL}/events/past`;
+    b.popstate();
+    b.turn(3);
+    expect(b.requests[1]!.init.signal!.aborted).toBe(true);
+    b.requests[2]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.reloads).toEqual([`${APP_URL}/events/past`]);
+    expect(b.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.root.attributes.has("aria-busy")).toBe(false);
+    b.finish(1, 1, "", "late page one cards");
+    await b.settle();
+    expect(b.targets[1]!.childNodes).toEqual(["page two cards"]);
+    expect(b.canonical.href).toBe(`${APP_URL}/events/past?page=2`);
+    expect(b.location.href).toBe(`${APP_URL}/events/past`);
+    expect(b.history).toEqual(["/events/past?page=2"]);
+  });
+
+  it("keeps inline retry when a failed click follows a completed page turn or Back read", async () => {
+    const b = browser();
+    b.turn(2);
+    b.finish(0, 2, "", "page two cards");
+    await b.settle();
+    b.turn(3);
+    b.requests[1]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.reloads).toEqual([]);
+    expect(b.location.href).toBe(`${APP_URL}/events/past?page=2`);
+    b.location.href = `${APP_URL}/events/past`;
+    b.popstate();
+    b.finish(2, 1, "", "page one cards");
+    await b.settle();
+    b.turn(2);
+    b.requests[3]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.reloads).toEqual([]);
+    expect(b.targets[1]!.childNodes).toEqual(["page one cards"]);
+    expect(b.location.href).toBe(`${APP_URL}/events/past`);
+    expect(b.canonical.href).toBe(b.location.href);
   });
 
   it("handles back/forward without a second history entry and reloads SSR on history-read failure", async () => {
