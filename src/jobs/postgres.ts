@@ -60,14 +60,18 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   };
 }
 
-/** ShouldBeUnique lock with TTL (Cache::lock equivalent). Atomic: one upsert that only wins over expired rows. */
+/**
+ * ShouldBeUnique TTL uses acquisition time, not transaction-start `now()`.
+ * https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT
+ * Atomic: one upsert that only wins over expired rows.
+ */
 export function pgUniqueLock(sql: TxClient | Sql): UniqueLock {
   return {
     async acquire(key, ttlSeconds) {
       const rows = await sql`
-        insert into job_unique_locks (key, expires_at) values (${key}, now() + make_interval(secs => ${ttlSeconds}))
-        on conflict (key) do update set expires_at = excluded.expires_at
-          where job_unique_locks.expires_at < now()
+        insert into job_unique_locks (key, expires_at) values (${key}, clock_timestamp() + make_interval(secs => ${ttlSeconds}))
+        on conflict (key) do update set expires_at = clock_timestamp() + make_interval(secs => ${ttlSeconds})
+          where job_unique_locks.expires_at < clock_timestamp()
         returning key`;
       return rows.length > 0;
     },
@@ -83,7 +87,7 @@ export function pgUniqueLock(sql: TxClient | Sql): UniqueLock {
  * port — the rows `pgQueueDepth` counts for GET /up. Dispatch writes through
  * `trackingQueue`; the consumer calls the rest.
  */
-export function pgQueueLedger(sql: Sql | postgres.TransactionSql): QueueLedger {
+export function pgQueueLedger(sql: Sql): QueueLedger {
   return {
     async enqueued({ jobId, kind, key, availableAt }) {
       // One row per accepted transport message. `job_id` is the primary key
@@ -115,15 +119,12 @@ export function pgQueueLedger(sql: Sql | postgres.TransactionSql): QueueLedger {
       await sql`delete from queue_jobs where job_id = ${jobId}::uuid`;
     },
     async failed(jobId, kind, key, reason) {
-      const record = async (tx: postgres.TransactionSql) => {
+      await sql.begin(async (tx) => {
         await tx`
           insert into queue_failed_jobs (job_id, kind, key, reason)
           values (${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)})`;
         await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
-      };
-      // Scheduled dispatch already owns a transaction; consumer calls own one.
-      if ("begin" in sql) await sql.begin(record);
-      else await sql.savepoint(record);
+      });
     },
   };
 }

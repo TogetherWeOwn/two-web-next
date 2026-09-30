@@ -50,6 +50,10 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
 
 export async function handleScheduled(controller: ScheduledController, env: JobsEnv): Promise<void> {
   const sql = sqlFor(env);
+  // Dispatch commits its ledger row and uniqueness lock before the external
+  // queue send. A later reconciliation rollback must not erase accepted jobs,
+  // and an early consumer must see and settle the committed rows.
+  const dispatchSql = sqlFor(env);
   try {
     // web_sessions is runtime-DDL-only (no drizzle migration owns it); only
     // the web path runs migrate(). A prune before any web traffic would fail
@@ -58,17 +62,17 @@ export async function handleScheduled(controller: ScheduledController, env: Jobs
     // advisory-lock transaction.
     await migrateSessions(sql as unknown as SessionSql);
     await runScheduled(controller.cron, pgSingleFlight(sql), {
-      // Every store, ledger and lock bind to the flight's reserved transaction
-      // client: the pool is max: 1, so touching the outer pool from inside
-      // the flight would queue for the connection the flight itself holds.
-      reconcile: (db) => reconcileEvents({
+      // Prune queries use the reserved client (outer max:1 pool would deadlock).
+      // Reconcile's dispatch side effects use an independent autocommit pool.
+      reconcile: () => reconcileEvents({
         events,
-        queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(db as postgres.TransactionSql)),
-        lock: pgUniqueLock(db),
+        queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
+        lock: pgUniqueLock(dispatchSql),
       }),
       prune: (db) => pruneModelTables(pgPruneStores(db)),
     });
   } finally {
+    await dispatchSql.end({ timeout: 1 }).catch(() => {});
     await sql.end({ timeout: 1 });
   }
 }

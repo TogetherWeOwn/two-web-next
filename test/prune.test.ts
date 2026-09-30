@@ -1,13 +1,11 @@
-/// <reference types="vite/client" />
 // W13 model:prune (TOG-10100): daily retention sweep over JoinAttempt +
 // AgentEventIdempotencyKey + EventSearchLog (90-day windows, legacy
 // constants) plus the web_sessions expiry cleanup (no legacy equivalent).
 // Runs inside the existing prune cron under the advisory-lock single-flight.
 //
-// Same layering as the other suites: memory fakes always run in CI; live
-// round-trips run against agent-testdb in a throwaway schema and skip
-// without DATABASE_URL. Never point this at anything but agent-testdb.
-import postgres from "postgres";
+// Memory fakes always run; live round-trips use a guarded disposable schema
+// on agent-testdb or the explicitly allowed GitHub CI Postgres service.
+import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   EVENT_SEARCH_LOG_RETENTION_DAYS,
@@ -20,10 +18,7 @@ import { pruneModelTables, runScheduled } from "../src/jobs/cron";
 import { pgPruneStores } from "../src/jobs/postgres";
 import type { PruneStores } from "../src/jobs/types";
 import { createMemorySessionStore, type SessionStore } from "../src/sessions";
-import agentEvents from "../drizzle/0001_agent-events.sql?raw";
-import joinMigration from "../drizzle/1000_join-attempts-throttle.sql?raw";
-import adminSlice from "../drizzle/1001_admin-slice.sql?raw";
-import searchLogMigration from "../drizzle/1005_event-search-logs.sql?raw";
+import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 const DAY = 86_400_000;
 
@@ -133,33 +128,19 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
   });
 });
 
-// Live against agent-testdb in a throwaway schema. Skipped when DATABASE_URL is
-// unset (CI has no test-DB access). Never point this at anything but agent-testdb.
-describe.skipIf(!process.env.DATABASE_URL)("model:prune (agent-testdb)", () => {
-  const schemaName = `w13_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+// The shared fixture validates testDatabaseUrl() before constructing a driver,
+// pins credentials/port, and migrates only its owned schema (no public writes).
+describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => {
+  let fixture: JobsFixture | undefined;
   let sql: postgres.Sql;
-  let admin: postgres.Sql;
 
   beforeAll(async () => {
-    admin = postgres(process.env.DATABASE_URL!, { max: 1 });
-    await admin.unsafe(`CREATE SCHEMA ${schemaName}`);
-    sql = postgres(process.env.DATABASE_URL!, { max: 4, connection: { search_path: schemaName }, onnotice: () => {} });
-    // Canonical migration SQL is the source of truth. drizzle qualifies FK
-    // targets with "public"; strip it so the throwaway schema owns them.
-    const strip = (s: string) => s.replaceAll('"public".', "");
-    for (const file of [agentEvents, joinMigration, adminSlice, searchLogMigration]) {
-      for (const stmt of strip(file).split("--> statement-breakpoint")) {
-        if (stmt.trim()) await sql.unsafe(stmt);
-      }
-    }
+    fixture = await createJobsFixture(process.env.DATABASE_URL!, { max: 4 });
+    sql = fixture.client;
     const { migrate } = await import("../src/sessions");
     await migrate(sql as unknown as Parameters<typeof migrate>[0]);
   });
-  afterAll(async () => {
-    await sql?.end();
-    await admin?.unsafe(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
-    await admin?.end();
-  });
+  afterAll(async () => { await fixture?.dispose(); });
 
   it("prunes each table by age, sweeps expired sessions, and re-runs clean", async () => {
     const now = new Date();
@@ -172,7 +153,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (agent-testdb)", () => {
     await sql`insert into join_attempts (outcome, source, request_id, discord_id, created_at)
       values ('added','site','r1','10',${old}),('added','site','r2','11',${edge}),('denied','site','r3','12',${fresh})`;
     const [grant] = await sql<{ id: string }[]>`insert into agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
-      values ('a','co','g',${`h-${schemaName}`}) returning id`;
+      values ('a','co','g',${`h-${fixture!.schemaName}`}) returning id`;
     await sql`insert into agent_event_idempotency_keys (grant_id, key, payload_digest, status, body, created_at)
       values (${grant!.id},'k-old','d',200,'{}',${old}),(${grant!.id},'k-edge','d',200,'{}',${edge}),(${grant!.id},'k-fresh','d',200,'{}',${fresh})`;
     await sql`insert into event_search_logs (normalized_query, result_count, occurred_at)

@@ -12,9 +12,10 @@ import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
 /**
  * Advisory-lock runner: re-expresses onOneServer + withoutOverlapping.
  * Returns false when skipped. The body receives the reserved transaction
- * client and MUST run all its queries on it: the pool is `max: 1`, so a
- * body query on the outer pool waits for the connection the flight itself
- * holds and hangs until the worker limit kills it.
+ * client for transaction-local queries: the pool is `max: 1`, so a body
+ * query on the outer pool waits for the connection the flight itself holds.
+ * Dispatch side effects that must commit before an external queue send use
+ * an independent client, never this transaction or its outer pool.
  */
 export type SingleFlight = (name: string, fn: (db: TxClient) => Promise<void>) => Promise<boolean>;
 
