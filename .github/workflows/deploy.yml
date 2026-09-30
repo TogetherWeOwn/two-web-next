@@ -59,17 +59,17 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Smoke test /health
+      - name: Smoke test /up
+        # /up is always 200: degraded/unknown queue health must not fail a deploy.
         run: |
           for i in 1 2 3 4 5 6; do
-            code=$(curl -s -o /tmp/health.json -w "%{http_code}" https://next.togetherweown.com/health) || code="000"
-            if [ "$code" = "200" ] && grep -q '"ok":true' /tmp/health.json; then
-              echo "smoke ok (attempt $i): $(cat /tmp/health.json)"
+            code=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/up.json" -w "%{http_code}" https://next.togetherweown.com/up) || code="000"
+            if [ "$code" = "200" ] && jq -e '(.status == "healthy" or .status == "degraded") and (.queue.status == "healthy" or .queue.status == "degraded" or .queue.status == "unknown")' "$RUNNER_TEMP/up.json" >/dev/null; then
+              echo "smoke ok (attempt $i)"
               exit 0
             fi
             echo "attempt $i: HTTP $code, retrying in 10s..."
             sleep 10
           done
-          echo "::error::staging /health did not return 200 {\"ok\":true} after deploy"
-          cat /tmp/health.json || true
+          echo "::error::staging /up did not return 200 with the expected health envelope after deploy"
           exit 1

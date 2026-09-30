@@ -16,7 +16,6 @@ import {
   type Sql,
 } from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
-import { dbPing, hyperdriveQuery } from "./db/ping";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -360,9 +359,6 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsRoute);
 
-app.get("/health", (c) => c.json({ ok: true }));
-app.get("/healthz", (c) => c.json({ ok: true }));
-
 // `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
 // ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
 // stack). No session, cookie or auth on this path, and the queue read can never
@@ -399,19 +395,6 @@ app.get("/up", async (c) => {
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);
-
-// Shared-Postgres acceptance ping (S1: TOG-9679): proves the Neon staging
-// branch serves this Worker through Hyperdrive. 503s without the binding or
-// on any DB error, with no internals in the body.
-app.get("/db-ping", async (c) => {
-  if (!c.env.DB) return c.json({ ok: false, error: "db_unavailable" }, 503);
-  try {
-    return c.json(await dbPing(hyperdriveQuery(c.env.DB.connectionString)));
-  } catch (err) {
-    console.warn("db-ping failed", { error: String(err) });
-    return c.json({ ok: false, error: "db_unavailable" }, 503);
-  }
-});
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
