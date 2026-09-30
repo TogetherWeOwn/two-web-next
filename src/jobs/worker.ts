@@ -12,6 +12,7 @@ const events: EventStore = {
   find: notWired("EventStore.find"),
   recordMirrored: notWired("EventStore.recordMirrored"),
   closeFinished: notWired("EventStore.closeFinished"),
+  materializeSeries: notWired("EventStore.materializeSeries"),
   staleEventKeys: notWired("EventStore.staleEventKeys"),
 };
 const accessLog: AccessLogStore = { pruneOlderThan: notWired("AccessLogStore.pruneOlderThan") };

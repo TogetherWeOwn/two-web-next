@@ -13,9 +13,10 @@
 // Hyperdrive FOR UPDATE semantics proof. The queue dispatch + reconcile
 // backstop arrive with W8/W13; `writeBackDue` marks what they must carry.
 
-import { and, asc, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { activityLog, events, featuredContents, memberDataAccessLogs } from "../db/admin-schema";
+import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
 import { isMirrored, newEventKey, nextStatus } from "./validation";
 
@@ -59,26 +60,45 @@ function toEventStatus(raw: string): EventStatus {
   throw new Error(`unknown event status: ${raw}`);
 }
 
-export async function createEvent(db: Db, actor: Actor, input: EventFormInput): Promise<{ row: EventRow; writeBack: WriteBack }> {
+export async function createEvent(
+  db: Db,
+  actor: Actor,
+  input: EventFormInput,
+  recurrence: RecurrenceInput | null = null,
+): Promise<{ row: EventRow; writeBack: WriteBack }> {
   // Create-as-draft, always: the form never owns the status, and a draft is
-  // never mirrored, so the write-back is a no-op by construction.
-  const [row] = await db
-    .insert(events)
-    .values({
-      eventKey: newEventKey(),
-      title: input.title,
-      game: input.game,
-      description: input.description,
-      startsAt: input.startsAtUtc,
-      endsAt: input.endsAtUtc,
-      timezone: input.timezone,
-      location: input.location,
-      capacity: input.capacity,
-      status: "draft",
-      createdBy: actor.id,
-    })
-    .returning();
-  if (!row) throw new Error("event insert returned no row");
+  // never mirrored, so the write-back is a no-op by construction. A series is
+  // one transaction (no half-series): the parent (index 1) and every
+  // occurrence its rule names, all drafts.
+  const row = await db.transaction(async (tx) => {
+    const [parent] = await tx
+      .insert(events)
+      .values({
+        eventKey: newEventKey(),
+        title: input.title,
+        game: input.game,
+        description: input.description,
+        startsAt: input.startsAtUtc,
+        endsAt: input.endsAtUtc,
+        timezone: input.timezone,
+        location: input.location,
+        capacity: input.capacity,
+        status: "draft",
+        createdBy: actor.id,
+        ...(recurrence
+          ? {
+              recurrenceFrequency: recurrence.frequency,
+              recurrenceCount: recurrence.count,
+              recurrenceEndsOn: recurrence.endsOn,
+              recurrenceIndex: 1,
+            }
+          : {}),
+      })
+      .returning();
+    if (!parent) throw new Error("event insert returned no row");
+    if (recurrence) await materializeMissingInstances(tx, parent);
+    return parent;
+  });
   await audit(db, {
     subjectType: "Event",
     subjectId: row.eventKey,
@@ -89,12 +109,79 @@ export async function createEvent(db: Db, actor: Actor, input: EventFormInput): 
   return { row, writeBack: null };
 }
 
+type Writer = Pick<Db, "select" | "insert" | "update">;
+
+/**
+ * Create every occurrence the parent's rule names that has no row yet (index 1
+ * is the parent itself, so it starts at 2). Ports
+ * EventService::materializeMissingInstances.
+ *
+ * Idempotent by the (parent, index) pairs already in the table: a re-run
+ * creates only what is missing and never touches an existing row, including one
+ * a moderator cancelled to skip a week. Children start as drafts even under a
+ * published parent, so extending a live series never announces a meeting a
+ * moderator has not seen; a draft has no Discord write-back, so there is
+ * nothing to enqueue here and the sync pass picks the row up once published.
+ *
+ * @returns how many rows were created
+ */
+export async function materializeMissingInstances(db: Writer, parent: EventRow): Promise<number> {
+  if (parent.recurrenceFrequency !== "weekly") return 0;
+  const wanted = occurrences(
+    parent.startsAt,
+    parent.endsAt,
+    parent.timezone,
+    parent.recurrenceFrequency,
+    parent.recurrenceCount,
+    parent.recurrenceEndsOn,
+  );
+  const existing = new Set(
+    (await db.select({ i: events.recurrenceIndex }).from(events).where(eq(events.parentEventId, parent.id))).map((r) => r.i),
+  );
+  let created = 0;
+  for (const [index, when] of wanted) {
+    if (index === 1 || existing.has(index)) continue;
+    await db.insert(events).values({
+      eventKey: newEventKey(),
+      title: parent.title,
+      game: parent.game,
+      description: parent.description,
+      startsAt: when.startsAt,
+      endsAt: when.endsAt,
+      timezone: parent.timezone,
+      location: parent.location,
+      capacity: parent.capacity,
+      status: "draft",
+      createdBy: parent.createdBy,
+      parentEventId: parent.id,
+      recurrenceIndex: index,
+    });
+    created++;
+  }
+  return created;
+}
+
+/**
+ * The events:reconcile pass: top up every live series (draft or published
+ * parent). A cancelled series stays cancelled and a finished one finished.
+ * Serialised by the cron single-flight, so two passes never race the insert.
+ */
+export async function materializeRecurringSeries(db: Db): Promise<number> {
+  const parents = await db
+    .select()
+    .from(events)
+    .where(and(isNotNull(events.recurrenceFrequency), inArray(events.status, ["draft", "published"])));
+  let created = 0;
+  for (const parent of parents) created += await materializeMissingInstances(db, parent);
+  return created;
+}
+
 export async function updateEvent(
   db: Db,
   actor: Actor,
   eventKey: string,
   input: EventFormInput,
-): Promise<{ row: EventRow; writeBack: WriteBack }> {
+): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   return db.transaction(async (tx) => {
     const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
     if (!locked) throw new NotFoundError("event");
@@ -125,9 +212,47 @@ export async function updateEvent(
         properties: changes,
       });
     }
+    const childWriteBacks = row.recurrenceFrequency
+      ? await shiftFutureChildren(tx, row, locked.startsAt, locked.endsAt)
+      : [];
     const status = toEventStatus(row.status);
-    return { row, writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null };
+    return { row, writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null, childWriteBacks };
   });
+}
+
+/**
+ * A parent whose times moved reprograms the future: children not yet started
+ * shift by the same absolute delta (seconds, not wall arithmetic: DST-proof),
+ * so the series stays weekly around the edit. Started or finished instances
+ * keep their times. Returns the write-backs the shifted mirrored children owe.
+ */
+async function shiftFutureChildren(
+  tx: Writer,
+  parent: EventRow,
+  oldStartsAt: Date,
+  oldEndsAt: Date,
+): Promise<NonNullable<WriteBack>[]> {
+  const startDelta = parent.startsAt.getTime() - oldStartsAt.getTime();
+  const endDelta = parent.endsAt.getTime() - oldEndsAt.getTime();
+  if (startDelta === 0 && endDelta === 0) return [];
+  const children = await tx
+    .select()
+    .from(events)
+    .where(and(eq(events.parentEventId, parent.id), gt(events.startsAt, new Date())));
+  const owed: NonNullable<WriteBack>[] = [];
+  for (const child of children) {
+    await tx
+      .update(events)
+      .set({
+        startsAt: new Date(child.startsAt.getTime() + startDelta),
+        endsAt: new Date(child.endsAt.getTime() + endDelta),
+        updatedAt: new Date(),
+      })
+      .where(eq(events.id, child.id));
+    const status = toEventStatus(child.status);
+    if (isMirrored(status)) owed.push({ eventKey: child.eventKey, status });
+  }
+  return owed;
 }
 
 /**
