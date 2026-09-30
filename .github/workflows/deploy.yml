@@ -24,6 +24,15 @@ jobs:
     environment:
       name: staging
       url: https://next.togetherweown.com
+    # Match CI's disposable SQL target; never run tests on the staging binding.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@v7
@@ -31,7 +40,13 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Apply test migrations
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - run: npm run check
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Ensure queues exist
         # Idempotent: "already exists" is fine; a real permission error surfaces at deploy.
         run: |
