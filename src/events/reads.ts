@@ -1,5 +1,5 @@
 // Public event reads (W8). Published-only unless the caller is a moderator.
-import { and, asc, count, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 
@@ -20,22 +20,29 @@ async function withGoing(db: Db, rows: (typeof events.$inferSelect)[]): Promise<
   return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
 }
 
+/** Title/description substring match; `%`, `_` and `\\` in the query match themselves. */
+export function searchCondition(q: string | null): SQL | undefined {
+  if (!q) return undefined;
+  const term = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+  return or(ilike(events.title, term), ilike(events.description, term));
+}
+
 /** Upcoming = published and not yet ended, soonest first. */
-export async function listUpcoming(db: Db, now = new Date()): Promise<PublicEvent[]> {
+export async function listUpcoming(db: Db, now = new Date(), q: string | null = null): Promise<PublicEvent[]> {
   const rows = await db
     .select()
     .from(events)
-    .where(and(eq(events.status, "published"), gte(events.endsAt, now)))
+    .where(and(eq(events.status, "published"), gte(events.endsAt, now), searchCondition(q)))
     .orderBy(asc(events.startsAt));
   return withGoing(db, rows);
 }
 
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
-export async function listPast(db: Db, page: number, now = new Date()): Promise<{ rows: PublicEvent[]; hasMore: boolean }> {
+export async function listPast(db: Db, page: number, now = new Date(), q: string | null = null): Promise<{ rows: PublicEvent[]; hasMore: boolean }> {
   const rows = await db
     .select()
     .from(events)
-    .where(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))))
+    .where(and(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))), searchCondition(q)))
     .orderBy(desc(events.startsAt))
     .limit(PAGE_SIZE + 1)
     .offset((Math.max(1, page) - 1) * PAGE_SIZE);

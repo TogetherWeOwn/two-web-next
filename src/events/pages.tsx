@@ -42,10 +42,27 @@ const Card: FC<{ e: PublicEvent }> = ({ e }) => (
   </li>
 );
 
-export const EventsPage: FC<{ rows: PublicEvent[]; appUrl: string }> = ({ rows, appUrl }) => (
+export const EventsPage: FC<{ rows: PublicEvent[]; pastRows?: PublicEvent[]; q?: string; appUrl: string }> = ({ rows, pastRows = [], q, appUrl }) => (
   <Shell title="Events" canonical={`${appUrl}/events`}>
     <h1>Upcoming events</h1>
-    {rows.length === 0 ? <p data-testid="events-empty">Nothing scheduled right now.</p> : <ul>{rows.map((e) => <Card e={e} />)}</ul>}
+    <form method="get" action="/events" role="search">
+      <input type="search" name="q" value={q ?? ""} maxlength={255} aria-label="Search events" />
+      <button type="submit">Search</button>
+      {q ? <a href="/events">Clear</a> : null}
+    </form>
+    {q && rows.length + pastRows.length === 0 ? (
+      <p data-testid="events-no-results">No events match “{q}”.</p>
+    ) : rows.length === 0 && !q ? (
+      <p data-testid="events-empty">Nothing scheduled right now.</p>
+    ) : (
+      <ul>{rows.map((e) => <Card e={e} />)}</ul>
+    )}
+    {pastRows.length > 0 ? (
+      <section data-testid="events-past-matches">
+        <h2>Past events</h2>
+        <ul>{pastRows.map((e) => <Card e={e} />)}</ul>
+      </section>
+    ) : null}
     <p><a href="/events/past">Past events</a></p>
   </Shell>
 );

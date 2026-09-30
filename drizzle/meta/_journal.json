@@ -50,6 +50,13 @@
       "when": 1790725495112,
       "tag": "1004_job-unique-locks",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790728475173,
+      "tag": "1005_event-search-logs",
+      "breakpoints": true
     }
   ]
 }
