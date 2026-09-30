@@ -324,7 +324,7 @@ describe("security headers per route class", () => {
   });
 
   it("sets the four headers on every response class: HTML, redirect, JSON, XML, text, 404", async () => {
-    for (const path of ["/", "/about", "/join", "/discord", "/sitemap_index.xml", "/robots.txt", "/health", "/definitely-not-here"]) {
+    for (const path of ["/", "/about", "/join", "/discord", "/sitemap_index.xml", "/robots.txt", "/up", "/definitely-not-here"]) {
       const res = await app.request(path, {}, env);
       for (const [header, value] of Object.entries(SECURITY_HEADERS)) {
         expect(res.headers.get(header), `${path} ${header}`).toBe(value);
@@ -378,14 +378,14 @@ describe("security headers per route class", () => {
     const prod = await app.request("https://togetherweown.com/", {}, apex);
     expect(prod.headers.get("X-Robots-Tag")).toBeNull();
     // JSON stays untagged even on a preview host.
-    const json = await app.request("https://preview.example.test/health", {}, apex);
+    const json = await app.request("https://preview.example.test/up", {}, apex);
     expect(json.headers.get("X-Robots-Tag")).toBeNull();
   });
 
   it("never emits Strict-Transport-Security from the app: the edge owns HSTS (TOG-8729)", async () => {
     // Hono defaults strictTransportSecurity on; src/index.tsx explicitly
     // disables it, so a local dev server can never pin a machine to HTTPS.
-    for (const path of ["/", "/about", "/health"]) {
+    for (const path of ["/", "/about", "/up"]) {
       const res = await app.request(path, {}, env);
       expect(res.headers.get("Strict-Transport-Security"), path).toBeNull();
     }

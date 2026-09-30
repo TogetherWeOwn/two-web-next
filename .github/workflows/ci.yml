@@ -43,10 +43,23 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Exercise the exact pre-deploy invocation on the same migrated service.
-      - name: Check
-        run: npm run check
+      - name: Check (typecheck + coverage gate)
+        run: npm run typecheck && npm run test:coverage
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
+        run: npm run test:cutover
+      - name: Coverage job summary
+        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report
+        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
       - name: Neon backup selftest (stubbed, no secrets)
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check

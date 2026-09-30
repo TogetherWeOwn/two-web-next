@@ -115,7 +115,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
 
   it("CRUD + publish/cancel round-trip with write-back enqueued and ULID route keys", async () => {
     expect((await write("POST", "/events", MEMBER, payload)).status).toBe(403);
-    expect((await req("/events", { method: "POST", body: "{}" })).status).toBe(401);
+    expect((await req("/events", { method: "POST", headers: { origin: APP_URL }, body: "{}" })).status).toBe(401);
 
     const created = await write("POST", "/events", MOD, payload);
     expect(created.status).toBe(201);

@@ -16,7 +16,6 @@ import {
   type Sql,
 } from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
-import { dbPing, hyperdriveQuery } from "./db/ping";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -37,6 +36,7 @@ import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
+import { sameOrigin } from "./same-origin";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -62,10 +62,10 @@ const CSP_REPORT_ENDPOINT = "/csp-reports";
 // disabled here (strictTransportSecurity: false below): the edge owns it
 // (TOG-8729) — Hono defaults it on, and emitting it from the app would pin
 // local dev machines to HTTPS. The absence is pinned in test/seo-headers.
-// One ALL /* registration (the exposure inventory in
+// One security-header wrapper (the exposure inventory in
 // test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
-// plus the staging X-Robots-Tag composed into a single wrapper. Mounted
-// sub-apps inherit both from this outer dispatch.
+// plus the staging X-Robots-Tag. Mounted sub-apps inherit both from this
+// outer dispatch, including refusals from the same-origin guard.
 const staticSecurityHeaders = secureHeaders({
   // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
   // machines to HTTPS, so the Hono default is explicitly off.
@@ -95,6 +95,9 @@ app.use("*", async (c, next) => {
   await staticSecurityHeaders(c, next);
   await robotsTag(c, async () => {});
 });
+
+// Before throttles, session rotation, body parsing, or any mounted handler.
+app.use("*", sameOrigin);
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
@@ -360,9 +363,6 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsRoute);
 
-app.get("/health", (c) => c.json({ ok: true }));
-app.get("/healthz", (c) => c.json({ ok: true }));
-
 // `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
 // ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
 // stack). No session, cookie or auth on this path, and the queue read can never
@@ -401,19 +401,6 @@ app.get("/up", async (c) => {
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);
-
-// Shared-Postgres acceptance ping (S1: TOG-9679): proves the Neon staging
-// branch serves this Worker through Hyperdrive. 503s without the binding or
-// on any DB error, with no internals in the body.
-app.get("/db-ping", async (c) => {
-  if (!c.env.DB) return c.json({ ok: false, error: "db_unavailable" }, 503);
-  try {
-    return c.json(await dbPing(hyperdriveQuery(c.env.DB.connectionString)));
-  } catch (err) {
-    console.warn("db-ping failed", { error: String(err) });
-    return c.json({ ok: false, error: "db_unavailable" }, 503);
-  }
-});
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
@@ -489,10 +476,6 @@ registerEventRoutes(
 );
 
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-  // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
-  // the origin check below refuses one anyway.
-  const origin = c.req.header("origin");
-  if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
   const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (token) await store.revoke(await hashToken(token)).catch(() => {});
