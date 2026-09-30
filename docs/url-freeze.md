@@ -153,6 +153,12 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
 | `PUT /events/:key/rsvp` | member-decoy | rsvp: owner answer + decoy |
 
+Behavioral gap: `/healthz` is only pinned by the existing structural exposure
+inventory, not an HTTP request test. Follow-up [TOG-10852](/TOG/issues/TOG-10852)
+already owns removal of this diagnostic alias and production-config 404 tests;
+no new health-alias behavior test is added in this guard slice. That change must
+also remove its snapshot row and reference when it lands.
+
 ### Updating the inventory
 
 1. Review the added/removed method, exact Hono pattern and auth policy. Keep
