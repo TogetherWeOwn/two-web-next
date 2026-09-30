@@ -15,11 +15,26 @@ it("permits only the test container, or the exact service URL inside GitHub CI",
 });
 
 it.each([
+  ["wrong CI user", "postgres://arbitrary:ci@localhost:5432/postgres"],
+  ["wrong CI password", "postgres://postgres:sentinel-secret@localhost:5432/postgres"],
+  ["wrong CI port", "postgres://postgres:ci@localhost:5433/postgres"],
+])("refuses %s even inside GitHub CI before driver construction", async (_label, raw) => {
+  vi.stubEnv("CI", "true");
+  vi.stubEnv("GITHUB_ACTIONS", "true");
+  try {
+    await expect(createMemberDataFixture(raw)).rejects.toThrow("refusing before connecting");
+    expect(postgres).not.toHaveBeenCalled();
+  } finally { vi.unstubAllEnvs(); }
+});
+
+it.each([
   ["production host", "postgres://agent_test@production.example.test/postgres"],
   ["staging host", "postgres://agent_test@staging.example.test/postgres"],
   ["wrong principal", "postgres://postgres@agent-testdb/postgres"],
   ["unexpected password", "postgres://agent_test:sentinel-secret@agent-testdb/postgres"],
   ["wrong port", "postgres://agent_test@agent-testdb:5433/postgres"],
+  ["homepage unexpected password", "postgres://agent_test:sentinel-secret@agent-testdb/two_web_next"],
+  ["homepage wrong port", "postgres://agent_test@agent-testdb:5433/two_web_next"],
   ["driver override query", "postgres://agent_test@agent-testdb/postgres?host=production.example.test"],
   ["schema override query", "postgres://agent_test@agent-testdb/postgres?options=-csearch_path=public"],
   ["fragment", "postgres://agent_test@agent-testdb/postgres#public"],
@@ -52,7 +67,13 @@ it("pins the empty test password and port instead of inheriting libpq credential
 
 it.each([
   {}, { CI: "true" }, { GITHUB_ACTIONS: "true" }, { CI: "false", GITHUB_ACTIONS: "true" },
-])("does not enable the CI service from partial runner flags %j", (runner) => {
-  expect(() => testDatabaseUrl("postgres://postgres:ci@localhost:5432/postgres", runner)).toThrow("refusing before connecting");
-  expect(postgres).not.toHaveBeenCalled();
+])("does not enable the CI service from partial runner flags %j", async (runner) => {
+  vi.stubEnv("CI", runner.CI ?? "");
+  vi.stubEnv("GITHUB_ACTIONS", runner.GITHUB_ACTIONS ?? "");
+  try {
+    const raw = "postgres://postgres:ci@localhost:5432/postgres";
+    expect(() => testDatabaseUrl(raw, runner)).toThrow("refusing before connecting");
+    await expect(createMemberDataFixture(raw)).rejects.toThrow("refusing before connecting");
+    expect(postgres).not.toHaveBeenCalled();
+  } finally { vi.unstubAllEnvs(); }
 });
