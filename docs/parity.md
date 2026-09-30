@@ -18,7 +18,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 
 | Legacy route | Next status | Card |
 |---|---|---|
-| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; live counts + featured + upcoming land with data slices | W4 ✅ + W8 📋 (verify: featured rows, upcoming) |
+| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; featured rows use legacy `[start, end)` windows, position/id order and no cap; upcoming pending | W4 ✅ + [TOG-10819](/TOG/issues/TOG-10819) (featured; `test/featured.test.ts`) + W8 📋 (upcoming) |
 | `GET /sitemap_index.xml` (home 1.0, join 0.9, events.index 0.8, about/faq/rules/privacy 0.7, published `/e/{key}` 0.6) | ✅ static entries; join + `/e/{key}` rows pending | W4 ✅ + W8 📋 |
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |

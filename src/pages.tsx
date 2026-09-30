@@ -1,5 +1,6 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Counts } from "./counts";
+import type { VisibleFeatured } from "./featured";
 import type { Session } from "./env";
 import { canonicalUrl } from "./seo";
 
@@ -159,7 +160,8 @@ export const Home: FC<{
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
-}> = ({ session, notice, inviteUrl, appUrl, counts }) => (
+  featured: VisibleFeatured[];
+}> = ({ session, notice, inviteUrl, appUrl, counts, featured }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -202,6 +204,31 @@ export const Home: FC<{
           </p>
         )}
       </section>
+      {featured.length > 0 ? (
+        <section aria-labelledby="featured-heading" data-testid="featured-content">
+          <h2 id="featured-heading">From the community team</h2>
+          <div class="facts">
+            {featured.map((item) => (
+              <article class="card" data-testid="featured-item" key={item.id}>
+                <h3>{item.url ? <a href={item.url}>{item.title}</a> : item.title}</h3>
+                {item.body ? <p>{item.body}</p> : null}
+                {item.imageUrl ? (
+                  <img
+                    class="featured-image"
+                    src={item.imageUrl}
+                    alt={item.imageAlt?.trim() || item.title}
+                    width="640"
+                    height="360"
+                    loading="lazy"
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                  />
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <section>
         <h2>No application. No interview.</h2>
         <p>Show up a few times. Play. Become a Member. The ladder records trust and time, not grind.</p>
