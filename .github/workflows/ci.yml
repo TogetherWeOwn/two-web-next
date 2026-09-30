@@ -38,13 +38,13 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
       - name: Apply migrations
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      - name: Test
-        run: npm test
+      # Exercise the exact pre-deploy invocation on the same migrated service.
+      - name: Check
+        run: npm run check
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Neon backup selftest (stubbed, no secrets)

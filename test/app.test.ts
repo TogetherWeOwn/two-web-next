@@ -174,18 +174,32 @@ describe("Discord sign-in", () => {
 });
 
 describe("DB-backed sessions and rotation", () => {
-  it("the cookie carries a random token, not identity claims", async () => {
+  it.each([0x60, 0x70])("the cookie carries a random token, not identity claims (%i)", async (secondByte) => {
     const { env: e } = isolated();
     mockDiscord();
     const { state, cookie } = await startSignIn(e);
-    const res = await signIn(e, state, cookie);
-    const raw = res.headers.getSetCookie().find((c) => c.startsWith("__Host-two_session="))!;
-    const value = decodeURIComponent(raw.split(";")[0]!.split("=")[1]!);
-    // hono signs `token.signature`; the bearer part is a random `two_` token.
-    const [bearer] = value.split(".");
-    expect(bearer).toMatch(/^two_[A-Za-z0-9_-]{43}$/);
-    expect(bearer).not.toContain("Rick");
-    expect(bearer).not.toContain("42");
+    // Random base64url can contain "42" by chance. Pin two entropy inputs
+    // (the first encodes to "42…") and prove the entire bearer comes from them.
+    const bytes = new Uint8Array(32);
+    bytes.set([0xe3, secondByte]);
+    const entropy = vi.spyOn(crypto, "getRandomValues").mockImplementationOnce((array) => {
+      if (!(array instanceof Uint8Array) || array.length !== 32) throw new Error("expected 32-byte session entropy");
+      array.set(bytes);
+      return array;
+    });
+    try {
+      const res = await signIn(e, state, cookie);
+      const raw = res.headers.getSetCookie().find((c) => c.startsWith("__Host-two_session="))!;
+      const value = decodeURIComponent(raw.split(";")[0]!.split("=")[1]!);
+      // hono signs `token.signature`; the bearer part is a random `two_` token.
+      const [bearer] = value.split(".");
+      expect(entropy).toHaveBeenCalledOnce();
+      expect(bearer).toMatch(/^two_[A-Za-z0-9_-]{43}$/);
+      expect(bearer).toBe(`two_${Buffer.from(bytes).toString("base64url")}`);
+      expect(bearer).not.toContain("Rick");
+    } finally {
+      entropy.mockRestore();
+    }
   });
 
   it("rotates the session id on every authenticated view; the old cookie becomes a guest", async () => {
