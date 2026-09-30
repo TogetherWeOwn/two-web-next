@@ -36,19 +36,6 @@ export function pgUniqueLock(sql: Sql): UniqueLock {
 }
 
 /**
- * A same-key row that can no longer belong to a live transport message: never
- * picked up (`reserved_at` null) and available for longer than any legitimate
- * delivery lag. The only writer that can observe a key's staleness is the next
- * dispatch of that key, so `enqueued` sweeps these before inserting. Live rows
- * are never matched: a delayed/retrying message has a future `available_at`,
- * a message being handled has `reserved_at` set, and every redelivery refreshes
- * one of the two. The bound is deliberately generous (hours vs. the seconds a
- * real delivery takes) — an orphan lingers visibly a while rather than risk a
- * live row.
- */
-export const LEDGER_ORPHAN_GRACE_SECONDS = 3600;
-
-/**
  * N3 (TOG-9895): the Postgres side of the queue ledger. Cloudflare Queues is the
  * transport and exposes no depth API, so this ledger is the `jobs` table of the
  * port — the rows `pgQueueDepth` counts for GET /up. Dispatch writes through
@@ -63,16 +50,13 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
       // window and a second dispatch of the same event key lands while the
       // first message is still delayed or reserved. (An earlier key-upsert
       // collapsed that case to one row and lost the first message.)
-      if (key !== null) {
-        // Proven-orphan sweep for this key (see LEDGER_ORPHAN_GRACE_SECONDS).
-        // Hygiene only: its failure must never block the dispatch itself.
-        const staleBefore = new Date(Date.now() - LEDGER_ORPHAN_GRACE_SECONDS * 1000);
-        await sql`
-          delete from queue_jobs
-          where key = ${key} and reserved_at is null and available_at < ${staleBefore}`.catch((e: unknown) =>
-          console.warn("queue ledger orphan sweep failed", e instanceof Error ? e.message : e),
-        );
-      }
+      //
+      // No sweep: an age test cannot tell a transport-paused backlog from an
+      // orphan — a compensating-delete row and a still-queued message look
+      // identical in this table (no pickup receipt exists on the ledger side).
+      // Deleting by age undercounts live depth (TOG-9895 review: 21 accepted
+      // reported 20/healthy). Stale rows, if any, stay visible as backlog
+      // until the consumer settles them; /up reports, never deletes.
       await sql`
         insert into queue_jobs (job_id, kind, key, available_at)
         values (${jobId}::uuid, ${kind}, ${key}, ${availableAt})`;

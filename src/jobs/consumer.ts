@@ -5,6 +5,11 @@ import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
 const LEDGER_TIMEOUT_MS = 2000;
+// The unique-lock cleanup shares the ledger's posture: it must never hold the
+// batch open. A rejecting or hung `release` previously propagated out of
+// consume() and skipped every later ack (TOG-9895 review: firstAck=0,
+// secondAck=0, whole batch lost).
+const LOCK_TIMEOUT_MS = 2000;
 
 type Msg = { body: unknown; attempts: number; ack(): void; retry(o?: { delaySeconds?: number }): void };
 
@@ -45,6 +50,24 @@ export async function consume(
       });
       return Promise.race([op.catch(ledgerWarn(what)), timeout]).finally(() => clearTimeout(t));
     };
+    // Lock cleanup is best-effort like the ledger: warn and continue on a
+    // rejecting or hung release so the terminal ack still lands and the rest
+    // of the batch still runs. A stuck lock row self-heals via its TTL
+    // (pgUniqueLock expires rows); the message must not be held hostage.
+    const releaseLock = (key: string) => {
+      let t: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<void>((r) => {
+        t = setTimeout(() => {
+          console.warn("queue lock release timed out", key);
+          r();
+        }, LOCK_TIMEOUT_MS);
+      });
+      return Promise.race([
+        deps.lock.release(key).catch((e: unknown) =>
+          console.warn("queue lock release failed", key, e instanceof Error ? e.message : e)),
+        timeout,
+      ]).finally(() => clearTimeout(t));
+    };
     if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
 
     let outcome: Outcome;
@@ -68,7 +91,7 @@ export async function consume(
         // (which would run again with no live depth accounting and stack up
         // duplicate failure rows).
         if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, e instanceof Error ? e.constructor.name : "threw"));
-        if (body.kind === "sync-event") await deps.lock.release(uniqueKey(body.eventKey));
+        if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
         m.ack();
       } else {
         if (jobId) await bounded("released", deps.ledger.released(jobId, new Date()));
@@ -89,7 +112,7 @@ export async function consume(
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
     }
-    if (body.kind === "sync-event") await deps.lock.release(uniqueKey(body.eventKey));
+    if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
     m.ack();
   }
 }

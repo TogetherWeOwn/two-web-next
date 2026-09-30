@@ -272,6 +272,55 @@ describe("queue ledger (N3)", () => {
     expect(ledger.rows.get("j1")?.reason).toBe("TypeError");
   });
 
+  it("an exhausted throw acks and continues the batch when lock cleanup rejects", async () => {
+    // TOG-9895 review: a rejecting lock.release used to propagate out of
+    // consume() and skip every later ack (firstAck=0, secondAck=0, whole
+    // batch lost). Cleanup is best-effort — the lock row self-heals via TTL.
+    const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
+    const lock: UniqueLock = {
+      acquire: async () => true,
+      release: async (key) => {
+        if (key === uniqueKey("e1")) throw new Error("lock DELETE failed");
+      },
+    };
+    const ledger = memLedger();
+    const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" }, SYNC_EVENT.tries);
+    const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" }, 1);
+    await consume({ messages: [first, second] }, { bot, events: store(), lock, ledger });
+    expect(first.acked).toBe(true);
+    expect(first.retried).toBeUndefined();
+    expect(second.retried).toBe("now");
+    expect(second.acked).toBe(false);
+    expect(ledger.rows.get("j1")?.state).toBe("failed");
+  });
+
+  it("an exhausted throw acks and continues the batch when lock cleanup hangs", async () => {
+    // A hung release must not hold the batch open either: the bounded cleanup
+    // times out, the terminal ack lands, and the rest of the batch runs.
+    vi.useFakeTimers();
+    try {
+      const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
+      let unblock!: () => void;
+      const hung = new Promise<void>((r) => { unblock = r; });
+      const lock: UniqueLock = {
+        acquire: async () => true,
+        release: async (key) => {
+          if (key === uniqueKey("e1")) await hung;
+        },
+      };
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" }, SYNC_EVENT.tries);
+      const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" }, 1);
+      const p = consume({ messages: [first, second] }, { bot, events: store(), lock, ledger: memLedger() });
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(first.acked).toBe(true);
+      expect(second.retried).toBe("now");
+      unblock();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a nonterminal throw still releases and retries", async () => {
     const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
     const ledger = memLedger();

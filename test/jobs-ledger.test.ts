@@ -1,40 +1,25 @@
-import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 
-// Real Postgres (agent-testdb locally, a service container in CI). Skipped when DATABASE_URL is unset.
+// Real Postgres in an isolated schema, never the caller's tables (TOG-9895
+// review: this suite used to `drop table queue_jobs` on the shared database,
+// erasing live ledger history). A disposable schema owns the ledger tables;
+// the fixture is dropped at the end. Skipped when DATABASE_URL is unset.
+import { createLedgerFixture } from "./helpers/queue-ledger-fixture";
 // N3 (TOG-9895): proves the ledger's bucket semantics are the legacy `jobs`/`failed_jobs`
 // ones that GET /up counts — pending/delayed/reserved/total/failed/oldest-pending-age.
 describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () => {
-  const sql = postgres(process.env.DATABASE_URL!, { max: 4 });
+  let fixture: Awaited<ReturnType<typeof createLedgerFixture>>;
+  let sql: Awaited<ReturnType<typeof createLedgerFixture>>["sql"];
   beforeAll(async () => {
-    // Fresh shape per run: one row per accepted jobId (no key-unique — a
-    // retry delay outlives the uniqueness window, so a second live dispatch
-    // of the same key must not clobber the first row).
-    await sql`drop table if exists queue_jobs`;
-    await sql`create table queue_jobs (
-      job_id uuid primary key,
-      kind text not null,
-      key text,
-      available_at timestamptz not null,
-      reserved_at timestamptz,
-      created_at timestamptz not null default now()
-    )`;
-    await sql`create table if not exists queue_failed_jobs (
-      id bigserial primary key,
-      job_id uuid not null,
-      kind text not null,
-      key text,
-      reason text not null,
-      failed_at timestamptz not null default now()
-    )`;
-    await sql`delete from queue_jobs`;
-    await sql`delete from queue_failed_jobs`;
+    fixture = await createLedgerFixture(process.env.DATABASE_URL!);
+    sql = fixture.sql;
+  });
+  beforeEach(async () => {
+    await fixture.reset();
   });
   afterAll(async () => {
-    await sql`delete from queue_jobs`;
-    await sql`delete from queue_failed_jobs`;
-    await sql.end({ timeout: 1 });
+    await fixture.dispose();
   });
 
   it("counts the buckets exactly as QueueHealth::measure did", async () => {
@@ -67,7 +52,6 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () =
   });
 
   it("released moves a reserved row back to the right availability bucket", async () => {
-    await sql`delete from queue_jobs`;
     const ledger = pgQueueLedger(sql);
     const id = crypto.randomUUID();
     await ledger.enqueued({ jobId: id, kind: "sync-event", key: `sync-event:${id}`, availableAt: new Date(Date.now() - 1000) });
@@ -87,7 +71,6 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () =
     // second dispatch can land while the first message is still live
     // (delayed or reserved). Each accepted message gets its own row: the
     // earlier message's transitions must keep matching afterwards.
-    await sql`delete from queue_jobs`;
     const ledger = pgQueueLedger(sql);
     const first = crypto.randomUUID(), second = crypto.randomUUID();
     await ledger.enqueued({ jobId: first, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
@@ -105,7 +88,6 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () =
   });
 
   it("a second dispatch keeps a reserved first row", async () => {
-    await sql`delete from queue_jobs`;
     const ledger = pgQueueLedger(sql);
     const first = crypto.randomUUID(), second = crypto.randomUUID();
     await ledger.enqueued({ jobId: first, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
@@ -114,42 +96,45 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () =
     const depth = await pgQueueDepth(sql);
     expect(depth.total).toBe(2);
     expect(depth.reserved).toBe(1);
-    // Reserved rows survive the orphan sweep: the first row is still reserved.
+    // Both rows are still present: the insert never deletes same-key rows.
     const rows = await sql`select job_id from queue_jobs`;
     expect(rows.map((r) => String((r as { job_id: unknown }).job_id)).sort()).toEqual([first, second].sort());
   });
 
-  it("a stale same-key orphan is swept by the next dispatch, a fresh row is not", async () => {
-    await sql`delete from queue_jobs`;
+  it("old same-key rows are never deleted: a transport-paused backlog stays counted", async () => {
+    // Regression guard for the removed age-only sweep: 20 accepted jobs older
+    // than an hour are a live backlog while the transport is paused, not
+    // orphans — a 21st dispatch must keep all 21 rows (TOG-9895 review proof).
     const ledger = pgQueueLedger(sql);
-    const orphan = crypto.randomUUID();
-    // Orphaned by a post-insert send failure hours ago: unreserved, long available.
-    await ledger.enqueued({
-      jobId: orphan, kind: "sync-event", key: "sync-event:e1",
-      availableAt: new Date(Date.now() - 2 * 3600_000),
-    });
+    for (let i = 0; i < 20; i++) {
+      await ledger.enqueued({
+        jobId: crypto.randomUUID(), kind: "sync-event", key: `sync-event:e${i}`,
+        availableAt: new Date(Date.now() - 2 * 3600_000),
+      });
+    }
     const next = crypto.randomUUID();
-    await ledger.enqueued({ jobId: next, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
-    expect((await pgQueueDepth(sql)).total).toBe(1);
-    const rows = await sql`select job_id from queue_jobs`;
-    expect(String((rows[0] as { job_id: unknown }).job_id)).toBe(next);
+    await ledger.enqueued({ jobId: next, kind: "sync-event", key: "sync-event:e0", availableAt: new Date(Date.now() - 1000) });
+    const depth = await pgQueueDepth(sql);
+    expect(depth.total).toBe(21);
+    expect(depth.pending).toBe(21);
 
-    // A recent same-key row is not an orphan: it survives the next dispatch.
+    // Same-key dispatches never disturb each other either.
+    await fixture.reset();
     const fresh = crypto.randomUUID(), third = crypto.randomUUID();
-    await sql`delete from queue_jobs`;
     await ledger.enqueued({ jobId: fresh, kind: "sync-event", key: "sync-event:e2", availableAt: new Date(Date.now() - 1000) });
     await ledger.enqueued({ jobId: third, kind: "sync-event", key: "sync-event:e2", availableAt: new Date(Date.now() - 1000) });
     expect((await pgQueueDepth(sql)).total).toBe(2);
   });
 
   it("empty ledger reports zeros and a null oldest age", async () => {
-    await sql`delete from queue_jobs`;
+    // beforeEach reset: the schema is empty, so failed is 0 here (legacy
+    // failed_jobs accumulates only within one database, never across runs).
     const depth = await pgQueueDepth(sql);
     expect(depth.pending).toBe(0);
     expect(depth.delayed).toBe(0);
     expect(depth.reserved).toBe(0);
     expect(depth.total).toBe(0);
-    expect(depth.failed).toBe(1); // the failure recorded above accumulates, like legacy failed_jobs
+    expect(depth.failed).toBe(0);
     expect(depth.oldestPendingAgeSeconds).toBeNull();
   });
 });
