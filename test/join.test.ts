@@ -151,6 +151,12 @@ describe("safeNext (legacy SafeRedirect::safe)", () => {
     expect(safeNext("")).toBeNull();
     expect(safeNext(null)).toBeNull();
   });
+
+  it.each(["/events\n", "/events\r", "/events\t", "/events next", ["/events"], 42])(
+    "rejects whitespace/control characters and non-string input: %j", (next) => {
+      expect(safeNext(next)).toBeNull();
+    },
+  );
 });
 
 describe("finishJoin (synchronous tail: one bot attempt owns the token)", () => {
@@ -228,6 +234,16 @@ describe("GET /join (database-free leaf)", () => {
     expect(html).toContain('data-testid="join-oneclick"');
     expect(html).toContain("https://discord.gg/invite");
     expect(html).toContain("https://discord.com/widget?id=326474832151838730");
+  });
+
+  it("renders without consulting session or journey persistence", async () => {
+    const journey = vi.fn(async () => { throw new Error("test store must not be reached"); });
+    const sessions = { create: vi.fn(), get: vi.fn(), rotate: vi.fn(), revoke: vi.fn() };
+    const { env: e } = isolated({ store: journey });
+    const res = await app.request("/join", {}, { ...e, SESSION_STORE: sessions } as Env);
+    expect(res.status).toBe(200);
+    expect(journey).not.toHaveBeenCalled();
+    for (const method of Object.values(sessions)) expect(method).not.toHaveBeenCalled();
   });
 
   it("stays 200 with a copy fallback when no valid guild id is configured", async () => {

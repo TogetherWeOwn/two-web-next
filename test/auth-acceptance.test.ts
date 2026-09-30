@@ -3,6 +3,7 @@ import app from "../src/index";
 import type { Env } from "../src/env";
 import { QA_HEADER, QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, hashToken, type SessionStore } from "../src/sessions";
+import { isModerator, parseModeratorRoleIds } from "../src/roles";
 
 // W15: legacy Auth/* and SessionCookieFlagsTest (file mapping in docs/w15-auth-tests.md).
 // Fixtures are synthetic. These tests never read a deployment binding or contact Discord.
@@ -112,6 +113,20 @@ describe("W15 Discord login and callback boundaries", () => {
     const res = await signIn(e);
     expect(res.headers.get("location")).toBe("/?n=join_failed");
     expect(await store.get(await hashToken(bearer(res)))).toMatchObject({ member: false, moderator: false });
+  });
+});
+
+describe("W15 moderator role configuration", () => {
+  it.each([undefined, "", "SySOp", "123", "not-a-snowflake"])("fails closed for %s", (raw) => {
+    expect(parseModeratorRoleIds(raw)).toEqual([]);
+    expect(isModerator(["508654771276873729"], parseModeratorRoleIds(raw))).toBe(false);
+  });
+
+  it("parses multiple snowflakes with padding and a trailing comma, never granting by role name", () => {
+    const ids = parseModeratorRoleIds(" 508654771276873729, 1078757544169848933, SySOp, ");
+    expect(ids).toEqual(["508654771276873729", "1078757544169848933"]);
+    expect(isModerator(["1078757544169848933"], ids)).toBe(true);
+    expect(isModerator(["SySOp"], ids)).toBe(false);
   });
 });
 

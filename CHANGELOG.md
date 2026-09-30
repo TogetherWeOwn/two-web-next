@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Legacy auth, session, join and QA-login acceptance mapping with explicit parity gaps; Hono, Miniflare/workerd and test-container Postgres regression coverage.
+
+### Fixed
+
+- Join landing links preserve safe return paths and reject whitespace in return destinations; recovery pages share the validated Discord invite fallback and the widget sends no referrer.
+
 ## [0.2.0](https://github.com/TogetherWeOwn/two-web-next/compare/v0.1.0...v0.2.0) (2026-09-29)
 
 
