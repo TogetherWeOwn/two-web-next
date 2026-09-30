@@ -1,5 +1,5 @@
 // Public event reads (W8). Published-only unless the caller is a moderator.
-import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { EVENTS_PAST_DRAWER_LIMIT, escapeLikeTerm, PAST_EVENTS_PAGE_SIZE } from "../islands/contracts";
@@ -108,6 +108,53 @@ export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent |
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
   if (!row) return null;
   return (await withGoing(db, [row]))[0] ?? null;
+}
+
+export type EventLink = Pick<PublicEvent, "id" | "eventKey" | "title" | "startsAt" | "timezone" | "location">;
+export interface EventNeighbors {
+  previous: EventLink | null;
+  next: EventLink | null;
+}
+
+const eventLinkColumns = {
+  id: events.id,
+  eventKey: events.eventKey,
+  title: events.title,
+  startsAt: events.startsAt,
+  timezone: events.timezone,
+  location: events.location,
+};
+
+/** Published links only, even for moderators. Equal starts use id as the legacy tiebreak. */
+export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id" | "startsAt">): Promise<EventNeighbors> {
+  const [previous, next] = await Promise.all([
+    db.select(eventLinkColumns).from(events)
+      .where(and(eq(events.status, "published"), or(
+        lt(events.startsAt, event.startsAt),
+        and(eq(events.startsAt, event.startsAt), lt(events.id, event.id)),
+      )))
+      .orderBy(desc(events.startsAt), desc(events.id)).limit(1),
+    db.select(eventLinkColumns).from(events)
+      .where(and(eq(events.status, "published"), or(
+        gt(events.startsAt, event.startsAt),
+        and(eq(events.startsAt, event.startsAt), gt(events.id, event.id)),
+      )))
+      .orderBy(asc(events.startsAt), asc(events.id)).limit(1),
+  ]);
+  return { previous: previous[0] ?? null, next: next[0] ?? null };
+}
+
+/** Same game first, then nearest upcoming siblings; one query, no RSVP aggregates. */
+export async function listRelatedEvents(
+  db: Db,
+  event: Pick<PublicEvent, "id" | "game">,
+  now = new Date(),
+): Promise<EventLink[]> {
+  const sameGame = event.game === null ? [] : [sql`case when ${events.game} = ${event.game} then 0 else 1 end`];
+  return db.select(eventLinkColumns).from(events)
+    .where(and(eq(events.status, "published"), ne(events.id, event.id), gte(events.endsAt, now)))
+    .orderBy(...sameGame, asc(events.startsAt), asc(events.id))
+    .limit(3);
 }
 
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */

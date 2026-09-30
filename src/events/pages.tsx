@@ -83,7 +83,7 @@ import {
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
 import { googleCalendarUrl } from "./feeds";
-import type { PublicEvent } from "./reads";
+import type { EventLink, EventNeighbors, PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
   try {
@@ -512,7 +512,14 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> = ({ e, appUrl, jsonLd }) => (
+export const EventPage: FC<{
+  e: PublicEvent;
+  neighbors: EventNeighbors;
+  related: EventLink[];
+  signedIn: boolean;
+  appUrl: string;
+  jsonLd: string;
+}> = ({ e, neighbors, related, signedIn, appUrl, jsonLd }) => (
   <Shell title={e.title} canonical={`${appUrl}/e/${e.eventKey}`} description={e.description}>
     <h1>{e.title}</h1>
     <p>
@@ -529,6 +536,44 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> =
       <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
     </p>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+    {neighbors.previous || neighbors.next ? (
+      <nav aria-label="More events" data-testid="event-pagination">
+        {neighbors.previous ? (
+          <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
+            ← Previous event: {neighbors.previous.title}
+          </a>
+        ) : null}{" "}
+        {neighbors.next ? (
+          <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
+            Next event: {neighbors.next.title} →
+          </a>
+        ) : null}
+      </nav>
+    ) : null}
+    {related.length > 0 ? (
+      <section aria-label="Related events" data-testid="event-related">
+        <h2>More events you might like</h2>
+        <ul>
+          {related.map((event) => (
+            <li>
+              <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
+                {event.title}{" · "}
+                <time datetime={event.startsAt.toISOString()}>{fmt(event.startsAt, event.timezone)}</time>
+                {event.location ? ` · ${event.location}` : ""}
+              </a>
+            </li>
+          ))}
+        </ul>
+        {!signedIn ? (
+          <>
+            <p>These fill up fast for members. Join the Discord and you&apos;ll hear about the next one before it lands here.</p>
+            <a class="btn" href={`/join?next=${encodeURIComponent(`/e/${e.eventKey}`)}`} data-testid="event-related-join">
+              Join the Discord
+            </a>
+          </>
+        ) : null}
+      </section>
+    ) : null}
   </Shell>
 );
 

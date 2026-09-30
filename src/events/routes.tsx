@@ -30,7 +30,7 @@ import {
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -259,17 +259,20 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
-    if (e.status === "draft") {
-      const session = await readSession(c);
-      if (!session?.moderator) return c.text("Forbidden", 403);
-      c.header("cache-control", "private, no-store");
-    } else if (e.status === "cancelled") {
+    if (e.status === "cancelled") {
       c.header("x-robots-tag", "noindex");
       return c.html(<EventGonePage />, 410);
-    } else {
-      c.header("cache-control", "public, max-age=60");
     }
-    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} />);
+    const session = await readSession(c);
+    if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
+    // The guest join pitch is personalized; never share a signed-in response.
+    c.header("cache-control", session || e.status === "draft" ? "private, no-store" : "public, max-age=60");
+    c.header("vary", "Cookie");
+    const [neighbors, related] = await Promise.all([
+      getEventNeighbors(db, e),
+      listRelatedEvents(db, e),
+    ]);
+    return c.html(<EventPage e={e} neighbors={neighbors} related={related} signedIn={session !== null} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
