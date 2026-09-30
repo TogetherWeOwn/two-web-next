@@ -172,7 +172,7 @@ export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
   app.notFound(async (c) => {
     // run_worker_first admits every request through TrustHosts before a
     // static lookup. ASSETS.fetch never re-enters the user Worker.
-    if (c.env.ASSETS && (c.req.method === "GET" || c.req.method === "HEAD")) {
+    if (c.env?.ASSETS && (c.req.method === "GET" || c.req.method === "HEAD")) {
       const asset = await c.env.ASSETS.fetch(c.req.raw);
       if (asset.status !== 404) return asset;
     }
