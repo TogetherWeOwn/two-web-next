@@ -112,10 +112,11 @@ export function shouldSampleReport(rate: number, random: () => number = Math.ran
 export type CappedBody = { text: string; truncated: boolean; bytes: number };
 
 /**
- * Read the request body without buffering past the cap. A `content-length`
- * over the cap short-circuits before the stream is touched at all; otherwise
- * the stream is consumed up to cap + 1 bytes and then cancelled, so an
- * oversized body is never fully read and never parsed.
+ * Retain at most the cap in chunks. A `content-length` over the cap
+ * short-circuits before the stream is touched at all; otherwise cancel on
+ * the first chunk that crosses the cap, without retaining or parsing it.
+ * Reads are chunk-granular: that final chunk can exceed the remaining cap,
+ * and `bytes` counts all bytes observed, not just the retained prefix.
  */
 export async function readCappedBody(req: Request, cap: number = MAX_CSP_REPORT_BYTES): Promise<CappedBody> {
   const declared = req.headers.get("content-length");

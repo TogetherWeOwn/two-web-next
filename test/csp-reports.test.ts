@@ -124,26 +124,65 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     expect(warn).toHaveBeenCalledWith("csp.report.dropped_oversize", { bytes: MAX_CSP_REPORT_BYTES + 1 });
   });
 
-  it("never reads past the cap: a lying content-length still short-circuits", async () => {
-    // A stream with no declared length is cancelled once the cap is crossed —
-    // the sink never buffers the whole body.
+  it("cancels on the first over-cap chunk despite a lying content-length", async () => {
     let pulls = 0;
+    const cancel = vi.fn();
     const stream = new ReadableStream({
       pull(controller) {
         pulls += 1;
         controller.enqueue(new TextEncoder().encode("y".repeat(1024)));
       },
-    });
+      cancel,
+    }, { highWaterMark: 0 });
     const req = new Request("https://next.example.test/csp-reports", {
       method: "POST",
       body: stream,
+      headers: { "content-length": "1" },
       duplex: "half",
     } as RequestInit);
     const capped = await readCappedBody(req);
-    expect(capped.truncated).toBe(true);
-    expect(capped.text).toBe("");
-    // 8 × 1 KB chunks cross the 8 KB cap; the 9th pull never happens.
-    expect(pulls).toBeLessThanOrEqual(9);
+    expect(capped).toEqual({ text: "", truncated: true, bytes: 9 * 1024 });
+    // Eight chunks fit exactly; the ninth detects overflow, then no more pulls.
+    expect(pulls).toBe(9);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("discards a single large overflow chunk and never pulls the next chunk", async () => {
+    let pulls = 0;
+    const cancel = vi.fn();
+    const stream = new ReadableStream({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array(64 * 1024));
+      },
+      cancel,
+    }, { highWaterMark: 0 });
+    const req = new Request("https://next.example.test/csp-reports", {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit);
+    expect(await readCappedBody(req)).toEqual({ text: "", truncated: true, bytes: 64 * 1024 });
+    expect(pulls).toBe(1);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("does not pull a body whose declared length exceeds the cap", async () => {
+    const pull = vi.fn();
+    const stream = new ReadableStream({ pull }, { highWaterMark: 0 });
+    const req = new Request("https://next.example.test/csp-reports", {
+      method: "POST", body: stream, duplex: "half",
+      headers: { "content-length": String(MAX_CSP_REPORT_BYTES + 1) },
+    } as RequestInit);
+    expect(await readCappedBody(req)).toEqual({
+      text: "", truncated: true, bytes: MAX_CSP_REPORT_BYTES + 1,
+    });
+    expect(pull).not.toHaveBeenCalled();
+    await req.body?.cancel();
+  });
+
+  it("accepts a body exactly at the cap", async () => {
+    const body = "x".repeat(MAX_CSP_REPORT_BYTES);
+    const req = new Request("https://next.example.test/csp-reports", { method: "POST", body });
+    expect(await readCappedBody(req)).toEqual({ text: body, truncated: false, bytes: MAX_CSP_REPORT_BYTES });
   });
 
   it("touches no session, cookie, or database — 204 with the app DB down", async () => {
@@ -189,11 +228,17 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it("points the CSP report-uri and report-to at the sink", async () => {
-    const res = await app.request("/", {}, env);
-    expect(res.headers.get("content-security-policy")).toContain("report-uri /csp-reports");
-    expect(res.headers.get("reporting-endpoints")).toContain('csp-endpoint="/csp-reports"');
-    expect(res.headers.get("report-to")).toContain("/csp-reports");
+  it("selects the Reporting API endpoint in the CSP and keeps report-uri fallback", async () => {
+    const res = await app.request("/about", {}, env);
+    const directives = res.headers.get("content-security-policy")?.split("; ");
+    expect(directives).toContain("report-uri /csp-reports");
+    expect(directives).toContain("report-to csp-endpoint");
+    expect(res.headers.get("reporting-endpoints")).toBe('csp-endpoint="/csp-reports"');
+  });
+
+  it("omits the legacy Report-To header instead of advertising an invalid relative URL", async () => {
+    const res = await app.request("/about", {}, env);
+    expect(res.headers.get("report-to")).toBeNull();
   });
 });
 

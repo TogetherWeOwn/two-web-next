@@ -36,10 +36,10 @@ const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
-// The violation sink (TOG-10107) both headers point at. Hono renders
-// camelCase keys to kebab-case directives, so `reportUri` emits
-// `report-uri` (legacy byte-parity) and `reportingEndpoints` + `reportTo`
-// emit the newer Reporting API pair.
+// The violation sink (TOG-10107): report-uri is the legacy fallback;
+// the CSP report-to directive selects the modern Reporting-Endpoints group.
+// Omit the deprecated Report-To header: unlike Reporting-Endpoints, it
+// requires absolute HTTPS URLs, not this same-origin relative destination.
 const CSP_REPORT_ENDPOINT = "/csp-reports";
 
 app.use(
@@ -53,9 +53,9 @@ app.use(
       frameAncestors: ["'none'"],
       formAction: ["'self'"],
       reportUri: CSP_REPORT_ENDPOINT,
+      reportTo: "csp-endpoint",
     },
     reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
-    reportTo: [{ group: "csp-endpoint", max_age: 10886400, endpoints: [{ url: CSP_REPORT_ENDPOINT }] }],
   }),
 );
 
