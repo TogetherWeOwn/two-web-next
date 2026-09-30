@@ -16,7 +16,7 @@ const PROFILE_READS = ["/profile", "/members/:user"];
 const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured", "/featured/new", "/featured/:id", "/join-attempts"];
 const OTHER_READS = [
   "/", "/discord", "/about", "/faq", "/rules", "/privacy", "/join", "/join/discord", "/join/callback",
-  "/sitemap_index.xml", "/robots.txt", "/health", "/healthz", "/db-ping", "/up", "/auth/discord", "/auth/discord/callback",
+  "/sitemap_index.xml", "/robots.txt", "/up", "/auth/discord", "/auth/discord/callback",
   "/events", "/events/past", "/events.json", "/e/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) => router.routes
@@ -30,7 +30,7 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     // ALL includes middleware as well as handlers. Pin their multiplicity;
     // filtering wildcards or deduplicating would hide added ALL endpoints.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
-    "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
+    "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
   ].sort());
 }
 
