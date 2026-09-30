@@ -19,6 +19,7 @@ import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord
 import { dbPing, hyperdriveQuery } from "./db/ping";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
+import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { inviteDestination } from "./invite";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
@@ -36,6 +37,7 @@ import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { consumeLoginReturn, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
+import { upBody } from "./up";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -369,6 +371,40 @@ app.post("/api/agent-events", agentEventsRoute);
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/healthz", (c) => c.json({ ok: true }));
+
+// `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
+// ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
+// stack). No session, cookie or auth on this path, and the queue read can never
+// sink the endpoint: a backlog answers 200 `degraded`, an unreachable or
+// unconfigured ledger 200 `unknown` — `curl -f` must keep passing through the
+// outage it reports on. `no-store` so a monitor never reads a stale 200.
+// Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
+// set it (same pattern as SESSION_STORE/ROSTER_STORE above).
+type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
+
+app.get("/up", async (c) => {
+  const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
+  // The queue ledger lives in the same Postgres as the rest of the W13 backend:
+  // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
+  const url = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
+  let sql: EnvWithDepth["QUEUE_DEPTH_STORE"] | null = injected ?? null;
+  try {
+    c.header("cache-control", "no-store");
+    // Client construction can throw (malformed URL); that is `unknown`, never a 500.
+    if (!sql && url) {
+      try {
+        sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 });
+      } catch (err) {
+        console.warn("Health check could not build the queue client.", { exception: err instanceof Error ? err.name : typeof err });
+      }
+    }
+    const client = sql;
+    return c.json(await upBody(client ? () => pgQueueDepth(client) : null));
+  } finally {
+    // Per-request client; an injected double owns its own lifecycle.
+    if (sql && !injected) await sql.end({ timeout: 1 }).catch(() => {});
+  }
+});
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);

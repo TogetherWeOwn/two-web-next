@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import type { SingleFlight, } from "./cron";
-import type { UniqueLock } from "./types";
+import type { QueueLedger, UniqueLock } from "./types";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -32,5 +32,91 @@ export function pgUniqueLock(sql: Sql): UniqueLock {
     async release(key) {
       await sql`delete from job_unique_locks where key = ${key}`;
     },
+  };
+}
+
+/**
+ * N3 (TOG-9895): the Postgres side of the queue ledger. Cloudflare Queues is the
+ * transport and exposes no depth API, so this ledger is the `jobs` table of the
+ * port — the rows `pgQueueDepth` counts for GET /up. Dispatch writes through
+ * `trackingQueue`; the consumer calls the rest.
+ */
+export function pgQueueLedger(sql: Sql): QueueLedger {
+  return {
+    async enqueued({ jobId, kind, key, availableAt }) {
+      // One row per accepted transport message. `job_id` is the primary key
+      // (minted per dispatch), so each live message keeps its own transitions
+      // even when a retry delay (up to 3600s) outlives the 300s uniqueness
+      // window and a second dispatch of the same event key lands while the
+      // first message is still delayed or reserved. (An earlier key-upsert
+      // collapsed that case to one row and lost the first message.)
+      //
+      // No sweep: an age test cannot tell a transport-paused backlog from an
+      // orphan — a compensating-delete row and a still-queued message look
+      // identical in this table (no pickup receipt exists on the ledger side).
+      // Deleting by age undercounts live depth (TOG-9895 review: 21 accepted
+      // reported 20/healthy). Stale rows, if any, stay visible as backlog
+      // until the consumer settles them; /up reports, never deletes.
+      await sql`
+        insert into queue_jobs (job_id, kind, key, available_at)
+        values (${jobId}::uuid, ${kind}, ${key}, ${availableAt})`;
+    },
+    async reserved(jobId) {
+      await sql`update queue_jobs set reserved_at = now() where job_id = ${jobId}::uuid`;
+    },
+    async released(jobId, availableAt) {
+      await sql`
+        update queue_jobs set reserved_at = null, available_at = ${availableAt}
+        where job_id = ${jobId}::uuid`;
+    },
+    async dequeued(jobId) {
+      await sql`delete from queue_jobs where job_id = ${jobId}::uuid`;
+    },
+    async failed(jobId, kind, key, reason) {
+      await sql.begin(async (tx) => {
+        await tx`
+          insert into queue_failed_jobs (job_id, kind, key, reason)
+          values (${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)})`;
+        await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
+      });
+    },
+  };
+}
+
+/** The one counted shape: pending/delayed/reserved/total/failed + oldest pending age. */
+export type QueueDepth = {
+  pending: number;
+  delayed: number;
+  reserved: number;
+  total: number;
+  failed: number;
+  oldestPendingAgeSeconds: number | null;
+};
+
+/**
+ * Ports QueueHealth::measure() onto the ledger: one round-trip, the same bucket
+ * semantics (pending = available now and unclaimed; delayed = not yet available,
+ * counted even when claimed, same as legacy). Throws on driver/table error — the
+ * caller maps that to `queue.status: unknown`, never a 500.
+ */
+export async function pgQueueDepth(sql: Sql): Promise<QueueDepth> {
+  const [row] = await sql`
+    select
+      count(*) filter (where available_at <= now() and reserved_at is null)::int as pending,
+      count(*) filter (where available_at > now())::int as delayed,
+      count(*) filter (where reserved_at is not null)::int as reserved,
+      count(*)::int as total,
+      (select count(*)::int from queue_failed_jobs) as failed,
+      extract(epoch from now() - (min(created_at) filter (where available_at <= now() and reserved_at is null)))::int
+        as oldest_pending_age_seconds
+    from queue_jobs`;
+  if (!row) throw new Error("queue depth query returned no row");
+  return {
+    pending: row.pending,
+    delayed: row.delayed,
+    reserved: row.reserved,
+    total: row.total,
+    failed: row.failed,
+    oldestPendingAgeSeconds: row.oldest_pending_age_seconds,
   };
 }
