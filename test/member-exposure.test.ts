@@ -34,6 +34,8 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     // ALL includes middleware as well as handlers. Pin their multiplicity;
     // filtering wildcards or deduplicating would hide added ALL endpoints.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
+    // The event-page access logger is a second GET handler on the same route.
+    "GET /e/:key",
     "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
   ].sort());
 }
