@@ -2,11 +2,12 @@
 import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
+import { PAST_EVENTS_PAGE_SIZE } from "../islands/contracts";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
 
-export const PAGE_SIZE = 20;
-export const JSON_DEFAULT_LIMIT = 20;
+export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
+export const JSON_DEFAULT_LIMIT = PAST_EVENTS_PAGE_SIZE;
 export const JSON_MAX_LIMIT = 100;
 
 async function withGoing(db: Db, rows: (typeof events.$inferSelect)[]): Promise<PublicEvent[]> {
@@ -38,15 +39,21 @@ export async function listUpcoming(db: Db, now = new Date(), q: string | null = 
 }
 
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
-export async function listPast(db: Db, page: number, now = new Date(), q: string | null = null): Promise<{ rows: PublicEvent[]; hasMore: boolean }> {
+export async function listPast(db: Db, page: number, now = new Date(), q: string | null = null): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number }> {
+  const archived = and(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))), searchCondition(q));
+  const [total] = await db.select({ n: count() }).from(events).where(archived);
   const rows = await db
     .select()
     .from(events)
-    .where(and(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))), searchCondition(q)))
-    .orderBy(desc(events.startsAt))
+    .where(archived)
+    .orderBy(desc(events.startsAt), desc(events.id))
     .limit(PAGE_SIZE + 1)
     .offset((Math.max(1, page) - 1) * PAGE_SIZE);
-  return { rows: await withGoing(db, rows.slice(0, PAGE_SIZE)), hasMore: rows.length > PAGE_SIZE };
+  return {
+    rows: await withGoing(db, rows.slice(0, PAGE_SIZE)),
+    hasMore: rows.length > PAGE_SIZE,
+    totalPages: Math.ceil(Number(total?.n ?? 0) / PAGE_SIZE),
+  };
 }
 
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {
