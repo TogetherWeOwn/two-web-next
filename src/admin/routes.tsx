@@ -48,6 +48,7 @@ import {
 import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { getJoinAttempt, joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
+import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
 import { AdminDashboard, ErrorPage, EventFormPage, EventsPage, FeaturedFormPage, FeaturedPage, JoinAttemptPage, JoinAttemptsPage } from "./pages";
@@ -180,15 +181,31 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
     let input;
+    let recurrence;
     try {
-      input = parseEventForm(values);
+      // Both parsers run so one submit reports every field error; the event
+      // rules own starts/timezone errors, the recurrence rules own theirs.
+      const errors: Record<string, string> = {};
+      try {
+        input = parseEventForm(values);
+      } catch (err) {
+        if (!(err instanceof ValidationError)) throw err;
+        Object.assign(errors, err.fields);
+      }
+      try {
+        recurrence = parseRecurrenceForm(values);
+      } catch (err) {
+        if (!(err instanceof ValidationError)) throw err;
+        Object.assign(errors, err.fields);
+      }
+      if (Object.keys(errors).length > 0) throw new ValidationError(errors);
     } catch (err) {
       if (err instanceof ValidationError) {
         return formError(c, err, (errors, v) => c.html(<EventFormPage mode="new" values={v} errors={errors} />), values);
       }
       throw err;
     }
-    const { row } = await createEvent(db, c.get("adminActor"), input);
+    const { row } = await createEvent(db, c.get("adminActor"), input!, recurrence ?? null);
     return c.redirect(`/admin/events/${row.eventKey}`, 303);
   });
 
@@ -244,8 +261,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       throw err;
     }
     try {
-      const { row, writeBack } = await updateEvent(db, c.get("adminActor"), key, input);
+      const { row, writeBack, childWriteBacks } = await updateEvent(db, c.get("adminActor"), key, input);
       if (writeBack) await dispatchWriteBack(c.env, writeBack);
+      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
       return c.redirect(`/admin/events/${row.eventKey}`, 303);
     } catch (err) {
       if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
