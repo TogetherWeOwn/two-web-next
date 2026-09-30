@@ -15,10 +15,10 @@ branch: **not verified**.
 
 ## Current heartbeat verification (2026-09-30, review-fix leg)
 
-- `npm test` (full repo suite): **192 passed / 41 skipped, 17 files PASS**, 2
+- `npm test` (full repo suite): **194 passed / 41 skipped, 17 files PASS**, 2
   files skipped. Includes `test/hyperdrive-probe.test.ts` 17/17 (DB mocked)
-  and new `test/worker-runner.test.ts` 7/7 (offline config-boundary +
-  startup-bound regressions).
+  and new `test/worker-runner.test.ts` 9/9 (offline config-boundary +
+  startup-bound + wrapper-teardown regressions).
 - `tsc --noEmit`: **PASS**.
 - `python3 -B spike/hyperdrive-semantics/checks.py`: **3/3 PASS** against
   agent-testdb, PostgreSQL **17.11** (re-verified this leg). The second writer
@@ -30,10 +30,13 @@ branch: **not verified**.
   **4.143.1**, Node **24.21.0**, before `POST /spike-run`; cause not
   established, not a Neon/Hyperdrive failure). The runner was reworked since:
   `unstable_dev` startup is now under a 180 s budget (exit 2) via
-  `runWithWorker`, and the shell wrapper owns the process group with a 600 s
-  TERM/KILL expiry. Startup-bound behavior was verified offline (never-ready
-  startup -> exit 2 in ~300 ms at 300 ms budget; group teardown of a hung
-  child confirmed). No live Worker SQL result obtained; no staging/prod probe.
+  `runWithWorker`, and the shell wrapper owns the process group, TERM/KILLing
+  survivors on any runner exit (status preserved), on interruption (143), and
+  on a 600 s expiry. Startup-bound behavior was verified offline (never-ready
+  startup -> exit 2 in ~300 ms at 300 ms budget; nonzero-exit child reaping
+  and SIGTERM-interruption teardown confirmed via `test/worker-runner.test.ts`
+  with inert fakes; old-wrapper leak reproduced as negative control). No live
+  Worker SQL result obtained; no staging/prod probe.
 - Runner syntax (`node --check`, `bash -n`) and `git diff --check`: **PASS**.
 
 Safety hardening pins the local driver's host, port, database and user; uses an
@@ -63,22 +66,26 @@ same branch; PR #44 left open, not merged.
   (`runWithWorker`/`withStartupTimeout`); never-ready startup exits 2 without
   reaching readiness/cleanup, check failure exits 1 after `worker.stop()`,
   success exits 0 after `worker.stop()`. The shell wrapper owns the runner's
-  process group (`set -m`) with a 600 s TERM/KILL expiry — the mechanism that
-  actually terminates a hung startup, since a `Promise.race` alone cannot.
-- **Offline regressions** (`test/worker-runner.test.ts`, 7 tests, no
+  process group (`set -m`) and reaps survivors on any runner exit (exit status
+  preserved), on interruption (exit 143), and on a 600 s expiry — the mechanism
+  that actually terminates a hung startup, since a `Promise.race` alone cannot.
+- **Offline regressions** (`test/worker-runner.test.ts`, 9 tests, no
   Worker/DB/network): config uses `vars` not `hyperdrive`, pins the exact
   test-container URL with empty password, passes the real boundary validators
   (wrangler `validateVars` semantics + live `HyperdriveSchema` negative
-  control), and the runner settles exit 2 on never-ready startup with `stop()`
-  verified on success and check failure.
-- Verified this leg: full `npm test` 192 pass / 41 skip; `tsc --noEmit` PASS;
+  control), the runner settles exit 2 on never-ready startup with `stop()`
+  verified on success and check failure, and the shell wrapper reaps group
+  children on nonzero runner exit and on interruption (exit 143) with inert
+  fakes (old-wrapper leak reproduced as negative control).
+- Verified this leg: full `npm test` 194 pass / 41 skip; `tsc --noEmit` PASS;
   direct-Postgres control 3/3 PASS (PG 17.11); `node --check` + `bash -n` +
-  `git diff --check` PASS; process-group teardown of a hung child confirmed.
+  `git diff --check` PASS; process-group teardown on nonzero runner exit and
+  on interruption confirmed (old-wrapper leak reproduced as negative control).
   Live Worker leg NOT RERUN (prior pre-SQL readiness FAIL stands; cause
   unknown, not a Neon failure). Hyperdrive→Neon (a)/(b)/(c) remain NOT
   VERIFIED; no Neon branch invented; no staging/prod probes; no CI polling.
 
-The full repository test suite was run this leg (`npm test`: 192 passed,
+The full repository test suite was run this leg (`npm test`: 194 passed,
 41 skipped) after confirming no ambient `DATABASE_URL` mutation risk in the
 selected suites; the E2E skips are the suite's own. Python/Node runners strip
 ambient `PG*` settings and pin test-container-only targets.

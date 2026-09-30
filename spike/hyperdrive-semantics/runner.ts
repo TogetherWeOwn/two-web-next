@@ -3,8 +3,9 @@
 // A Promise.race alone cannot terminate a hung unstable_dev/workerd startup:
 // the underlying dev process keeps running after the race settles. So startup
 // has two bounds: this module fails fast under a wall-clock budget with a
-// distinct exit code, and worker-checks.sh owns the runner's process group and
-// TERM/KILLs it, so a never-ready startup cannot be orphaned.
+// distinct exit code, and worker-checks.sh owns the runner's process group,
+// reaping survivors on any runner exit (status preserved), on interruption,
+// and on a 600 s expiry, so a never-ready startup cannot be orphaned.
 //
 // Plain TypeScript only (no enums/namespaces): worker-checks.mjs runs under
 // plain node, which strips types. No Cloudflare credentials, no remote targets.

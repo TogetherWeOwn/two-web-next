@@ -3,8 +3,9 @@
 // Startup (unstable_dev -> workerd readiness) is bounded by runWithWorker's
 // wall-clock budget: a never-ready startup exits 2 without reaching the
 // readiness/cleanup block. The shell wrapper owns this process's group and
-// TERM/KILLs it on expiry, so a hung startup cannot be orphaned: a
-// Promise.race alone would leave the dev process running.
+// reaps survivors on any runner exit, on interruption, and on expiry, so a
+// hung startup cannot be orphaned: a Promise.race alone would leave the dev
+// process running.
 // Check failures exit 1 after worker.stop(); success exits 0.
 import assert from "node:assert/strict";
 import { createServer } from "node:net";

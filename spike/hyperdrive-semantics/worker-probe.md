@@ -29,7 +29,9 @@ bash spike/hyperdrive-semantics/worker-checks.sh
 
 The runner bounds `unstable_dev` startup under a 180 s wall-clock budget (exit
 2 on a never-ready startup) and the shell wrapper owns the runner's process
-group, TERM/KILLing it on a 600 s expiry so a hung startup cannot be orphaned.
+group: it TERM/KILLs survivors whenever the runner exits (preserving its exit
+status), on shell interruption (exit 143), and on a 600 s expiry, so a hung
+startup cannot be orphaned.
 On a ready Worker it verifies a DB-free readiness response, invokes
 `POST /spike-run`, asserts three passing checks, and always stops its local
 Worker. The checks are:
