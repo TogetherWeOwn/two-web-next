@@ -10,6 +10,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
+import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
@@ -65,7 +66,7 @@ function jsonLd(e: PublicEvent, appUrl: string): string {
     eventStatus: e.status === "cancelled" ? "https://schema.org/EventCancelled" : "https://schema.org/EventScheduled",
     location: { "@type": "VirtualLocation", url: e.location && /^https?:/.test(e.location) ? e.location : appUrl },
     ...(e.description ? { description: e.description } : {}),
-    url: `${appUrl}/e/${e.eventKey}`,
+    url: canonicalUrl(appUrl, `/e/${e.eventKey}`),
   };
   // `<` escaped so a title can never close the script element.
   return JSON.stringify(ld).replace(/</g, "\\u003c");
@@ -259,24 +260,20 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
-    if (e.status === "draft") {
-      const session = await readSession(c);
-      if (!session?.moderator) return c.text("Forbidden", 403);
-      c.header("cache-control", "private, no-store");
-    } else if (e.status === "cancelled") {
-      c.header("x-robots-tag", "noindex");
-      return c.html(<EventGonePage />, 410);
-    } else {
-      c.header("cache-control", "public, max-age=60");
+    if (e.status === "cancelled") {
+      c.header("x-robots-tag", "noindex, nofollow");
+      return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
     }
-    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} />);
+    // The guest join pitch depends on the viewer; never share-cache this HTML.
+    c.header("cache-control", "private, no-store");
+    const session = await readSession(c);
+    if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
+    if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
+    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
-  // Same origin rule as /logout: SameSite=Lax already blocks cross-site sends.
   async function moderator(c: Ctx): Promise<Session | Response> {
-    const origin = c.req.header("origin");
-    if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     // Non-rotating: concurrent writes with one cookie must all authenticate.
     const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
@@ -381,8 +378,6 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   const closed = (c: Ctx) => c.json({ reason: "event_not_open", message: "This event is not taking RSVPs." }, 403);
 
   async function member(c: Ctx): Promise<Session | Response> {
-    const origin = c.req.header("origin");
-    if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     // Non-rotating: concurrent writes with one cookie must all authenticate.
     const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
