@@ -84,7 +84,7 @@ import {
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
 import { googleCalendarUrl } from "./feeds";
-import type { PublicEvent } from "./reads";
+import type { EventAttendee, PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
   try {
@@ -514,7 +514,7 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; session?: Session | null }> = ({ e, appUrl, jsonLd, session }) => {
+export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string; session?: Session | null }> = ({ e, attendees = [], appUrl, jsonLd, session }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -547,6 +547,14 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; ses
         <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">Copy link</a>
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {attendees.length > 0 ? (
+        <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
+          <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
+          <ul>{attendees.map((attendee) => (
+            <li><a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a></li>
+          ))}</ul>
+        </section>
+      ) : null}
       <script src="/islands/copy-link.js" defer />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
     </Shell>
