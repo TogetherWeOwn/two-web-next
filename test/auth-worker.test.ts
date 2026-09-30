@@ -111,11 +111,11 @@ describe("W15 auth/join in Miniflare", () => {
   });
 
   it("uses POST-only QA fixtures and byte-identical failure responses in the runtime", async () => {
-    const headers = { [QA_HEADER]: "test-only-qa-token" };
+    const headers = { origin: STAGING_APP_URL, [QA_HEADER]: "test-only-qa-token" };
     const get = await request("/auth/qa/qa-member", { headers });
     expect(get.status).toBe(404);
     expect(get.headers.getSetCookie()).toHaveLength(0);
-    const bad = await request("/auth/qa/qa-member", { method: "POST" });
+    const bad = await request("/auth/qa/qa-member", { method: "POST", headers: { origin: STAGING_APP_URL } });
     const unknown = await request("/auth/qa/unknown", { method: "POST", headers });
     expect(bad.status).toBe(404);
     expect(unknown.status).toBe(404);
