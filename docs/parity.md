@@ -38,7 +38,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | pending | W8 📋 + W11 🔶 |
-| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, FOR UPDATE capacity races (test/rsvp.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
+| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, full-event waitlisting + FIFO promotion under FOR UPDATE (test/rsvp.test.ts, test/rsvp-waitlist.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
 
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
@@ -146,7 +146,7 @@ go hunting for them.
 
 | Legacy | Next status | Card |
 |---|---|---|
-| EventService (capacity/waitlist under lock, series create/materialize, sync-after-commit) | pending | W8 📋 + W11 🔶 + W13 ⛔ |
+| EventService (capacity/waitlist under lock, series create/materialize, sync-after-commit) | ✅ capacity floor + FIFO waitlists/promotions under the event `FOR UPDATE` lock; series pending | [TOG-10816](/TOG/issues/TOG-10816) + W11 🔶 + W13 ⛔ |
 | InternalActionClient + signer (sole bot speaker; `addMember` sync-only, never queued) | ✅ signer byte-parity; client pending | W14 ✅ + W13 ⛔ |
 | EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | ✅ | W8 ✅ (JSON-LD) + W9 ✅ (feeds) |
 | RsvpRateLimit / AgentEventRateLimit | ✅ / ✅ | W9 ✅ / W14 ✅ |
@@ -155,6 +155,15 @@ go hunting for them.
 | MemberStatsSource / Profiles support (rank, stats, milestones) | pending | W7 📋 |
 | Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell; live data pending | W4 ✅ + W6 🔶 (widget) + W8 📋 (upcoming) |
 | Counts (never-throw degraded empty state) | ✅ seam (`readCounts` → UNAVAILABLE) | W4 ✅ + W8 📋 (wire bot views) |
+
+### Waitlist service contract ([TOG-10816](/TOG/issues/TOG-10816))
+
+- Full-event `going` writes return 201/200 with `status: waitlisted` and one-based `waitlist_position`; they take no seat and spend the same shared per-member 12/min budget. **Requested divergence:** the frozen legacy service refuses full-event `going` with 409 and accepts an explicit `waitlisted` answer; Next automatically joins the line.
+- FIFO uses `(created_at, id)` in Postgres, including exact sub-millisecond timestamps. Existing waiters retain priority on re-answer; an older non-waitlisted answer joining the line gets fresh FIFO keys.
+- Withdrawal, a Going downgrade, and admin/JSON event edits settle available seats within the same event-row lock/transaction. Capacity increases promote N heads; removing the cap promotes all. Paused, cancelled, draft and ended events do not promote. Promoted rows reset their Discord mirror stamps; the caller queues one event write-back after commit.
+- Capacity below the current Going count is an admin form field error / JSON 422. JSON numeric capacities and title-only PATCH defaults retain the finite cap; malformed capacities cannot erase it.
+- The shared position helper supplies RSVP JSON, viewer-specific `/events.json` rows and `/e/{key}`'s `data-waitlist-position` carrier. Personalized pages are private/no-store with `Vary: Cookie`; guest pages remain public. RsvpButton UI states remain the W10 slice 2 deliverable.
+- Proof: `test/rsvp-waitlist.test.ts` ports service/HTTP WaitlistTest cases and forces a concurrent withdraw + Going race on an owned disposable Postgres schema, proving the existing head keeps the freed seat and capacity is never exceeded. Tests use only agent-testdb or CI Postgres, never staging/production.
 
 ## 12. SEO, shell, content, sessions
 

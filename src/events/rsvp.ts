@@ -71,7 +71,7 @@ export async function writeRsvp(db: Db, eventKey: string, userId: string, status
     // Any change makes the Discord mirror stale again.
     let [row] = await tx
       .insert(rsvps)
-      .values({ eventId: ev.id, userId, status: settledStatus, syncedToDiscordAt: null })
+      .values({ eventId: ev.id, userId, status: settledStatus, syncedToDiscordAt: null, createdAt: now, updatedAt: now })
       .onConflictDoUpdate({ target: [rsvps.eventId, rsvps.userId], set: { status: settledStatus, syncedToDiscordAt: null, updatedAt: now } })
       .returning();
     if (releasesASeat) {

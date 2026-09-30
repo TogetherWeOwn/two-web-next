@@ -164,11 +164,11 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const ev = await seed();
     const first = await put(ev.key, "u1", "going");
     expect(first.status).toBe(201);
-    expect(await first.json()).toEqual({ data: { status: "going", synced_to_discord_at: null } });
+    expect(await first.json()).toEqual({ data: { status: "going", synced_to_discord_at: null, waitlist_position: null } });
     await db.update(rsvps).set({ syncedToDiscordAt: new Date() });
     const again = await put(ev.key, "u1", "maybe");
     expect(again.status).toBe(200);
-    expect(await again.json()).toEqual({ data: { status: "maybe", synced_to_discord_at: null } });
+    expect(await again.json()).toEqual({ data: { status: "maybe", synced_to_discord_at: null, waitlist_position: null } });
     expect(await rows(ev.id)).toHaveLength(1);
     expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
     expect(await rows(ev.id)).toHaveLength(0);
@@ -349,14 +349,13 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect((await rows(ev.id)).length).toBeLessThanOrEqual(1);
   });
 
-  it("capacity race: 14 members chase 3 seats, exactly 3 win and the rest get the 409 shape", async () => {
+  it("capacity race: 14 members chase 3 seats, exactly 3 go and the rest are waitlisted", async () => {
     const ev = await seed({ capacity: 3 });
     const res = await Promise.all(Array.from({ length: 14 }, (_, i) => put(ev.key, `racer-${i}`, "going")));
-    const codes = res.map((r) => r.status).sort();
-    expect(codes.filter((c) => c === 201)).toHaveLength(3);
-    expect(codes.filter((c) => c === 409)).toHaveLength(11);
-    const loser = res.find((r) => r.status === 409)!;
-    expect(await loser.json()).toEqual({ reason: "event_at_capacity", message: "This event is full.", event_key: ev.key, capacity: 3 });
+    expect(res.every((r) => r.status === 201)).toBe(true);
+    const answers = await Promise.all(res.map(async (r) => await r.json() as { data: { status: string } }));
+    expect(answers.filter((a) => a.data.status === "going")).toHaveLength(3);
+    expect(answers.filter((a) => a.data.status === "waitlisted")).toHaveLength(11);
     expect((await rows(ev.id)).filter((r) => r.status === "going")).toHaveLength(3);
   });
 
@@ -364,8 +363,8 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const ev = await seed({ capacity: 1 });
     expect((await put(ev.key, "u1", "going")).status).toBe(201);
     expect((await put(ev.key, "u1", "going")).status).toBe(200);
-    expect((await put(ev.key, "u2", "going")).status).toBe(409);
-    expect((await put(ev.key, "u2", "maybe")).status).toBe(201);
+    expect((await put(ev.key, "u2", "going")).status).toBe(201);
+    expect((await put(ev.key, "u2", "maybe")).status).toBe(200);
     expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
     expect((await put(ev.key, "u2", "going")).status).toBe(200);
   });
@@ -401,11 +400,15 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(codes).toEqual([200, 200, 201]);
   });
 
-  it("refused writes (event full) spend no budget: a waitlist answer still goes through after 12 refusals", async () => {
+  it("full-event writes accept waitlisting and spend the shared budget, with stable position", async () => {
     const ev = await seed({ capacity: 1 });
     expect((await put(ev.key, "holder", "going")).status).toBe(201);
-    for (let i = 0; i < RSVP_RATE_LIMIT.maxAttempts; i++) expect((await put(ev.key, "u-full", "going")).status).toBe(409);
-    expect((await put(ev.key, "u-full", "waitlisted")).status).toBe(201);
+    for (let i = 0; i < RSVP_RATE_LIMIT.maxAttempts; i++) {
+      const res = await put(ev.key, "u-full", "going");
+      expect(res.status).toBe(i === 0 ? 201 : 200);
+      expect(await res.json()).toEqual({ data: { status: "waitlisted", synced_to_discord_at: null, waitlist_position: 1 } });
+    }
+    expect((await put(ev.key, "u-full", "waitlisted")).status).toBe(429);
   });
 
   it("expiry is judged after the row lock: an answer queued behind a lock holder is refused once the event ends", async () => {
