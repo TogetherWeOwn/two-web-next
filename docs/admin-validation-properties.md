@@ -23,7 +23,7 @@ env -u DATABASE_URL -u REDIS_URL npm run check
 
 Every fast-check assertion uses seed **10849** and **100 runs**. Important boundary
 and failing inputs are explicit examples, not left to random chance. The suite
-contains 21 tests / 22 property assertions. Vitest prints the seed, shrink path
+contains 25 tests / 26 property assertions. Vitest prints the seed, shrink path
 and counterexample on failure. CI runs the suite under a whole-process `timeout
 10s` before migrations, and the ordinary `check` also discovers the file. The
 first passing local run on Node 24.21.0 / Vitest 5.0.2 took **1.58 s**.
@@ -58,6 +58,22 @@ repository: `app/Support/EventInput.php`, `app/Rules/NoControlCharacters.php`,
 `app/Rules/IanaTimeZone.php`, `app/Http/Requests/StoreEventRequest.php`, and
 `app/Filament/Resources/Events/Schemas/EventForm.php`. Capacity's upper bound comes
 from Next `src/db/admin-schema.ts` (`integer("capacity")`), not a new product limit.
+
+## Independent review regressions
+
+[TOG-10928](/TOG/issues/TOG-10928) found two regressions on the first head.
+Four added properties reproduced both before the fixes (21 passed / 4 failed).
+They keep seed **10849**, with explicit examples and shrinkable inputs:
+
+| Defect | Failing seed / path / counterexample | Fix |
+| --- | --- | --- |
+| Whitespace deletion manufactures an emoji ZWJ sequence | 10849 / `0:0:0` / `["\t", false]`: `👩‍` + tab + `💻` accepted in title, description and location | Check forbidden Cc separately, but match emoji sequences on the original text; pin LF before and tab after ZWJ and generate tab/LF/CR on either side |
+| Three-digit Intl years falsely produce a gap error | 10849 / `0:0` / `[100]`: `0100-07-15 20:00` UTC rejected; explicit `0999` example also fails | Pad rendered and parsed-wall years to four digits; generate years 0100–0999 and assert the exact UTC instant, rendered wall and edit carrier |
+
+After fixes: `timeout 10s npm run test:admin-properties` passes 25 tests in
+**2.13 s**; `npm run check` passes typecheck and **620 tests**, with **150 SQL
+skips** because database bindings were deliberately unset. Only local fixtures
+were used; no staging or production service was contacted.
 
 ## Evidence limits
 

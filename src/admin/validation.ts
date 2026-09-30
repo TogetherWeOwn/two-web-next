@@ -91,7 +91,7 @@ function wallOfInstant(instantMs: number, tz: string): string {
   }
   // en-GB can emit hour "24" for midnight; normalise to "00".
   const hour = parts.hour === "24" ? "00" : parts.hour!;
-  return `${parts.year}-${parts.month}-${parts.day} ${hour}:${parts.minute}`;
+  return `${parts.year!.padStart(4, "0")}-${parts.month}-${parts.day} ${hour}:${parts.minute}`;
 }
 
 function pad(n: number): string {
@@ -99,7 +99,7 @@ function pad(n: number): string {
 }
 
 function wallString(p: WallParts): string {
-  return `${p.y}-${pad(p.mo)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}`;
+  return `${String(p.y).padStart(4, "0")}-${pad(p.mo)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}`;
 }
 
 /**
@@ -181,7 +181,8 @@ function fail(fields: FieldErrors): never {
 function containsControlCharacters(value: string): boolean {
   const stripped = value.replace(/[\t\n\r]/g, "");
   if (/\p{Cc}/u.test(stripped)) return true;
-  const withoutEmojiJoiners = stripped.replace(
+  // Match the original text: removing whitespace can manufacture an emoji.
+  const withoutEmojiJoiners = value.replace(
     /(?:\p{Extended_Pictographic}[\u{FE00}-\u{FE0F}\p{Mn}\p{Me}\p{Sk}\u{E0020}-\u{E007F}]*\u{200D})+\p{Extended_Pictographic}[\u{FE00}-\u{FE0F}\p{Mn}\p{Me}\p{Sk}\u{E0020}-\u{E007F}]*/gu,
     "",
   );

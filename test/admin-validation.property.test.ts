@@ -63,6 +63,18 @@ describe("seeded admin event validation properties", () => {
     }), OPTIONS);
   });
 
+  it("round-trips four-digit wall years when Intl renders fewer than four digits", () => {
+    fc.assert(fc.property(fc.integer({ min: 100, max: 999 }), (year) => {
+      const wall = `${String(year).padStart(4, "0")}-07-15 20:00`;
+      const resolved = wallToUtc(wall, "UTC");
+      expect(resolved.toISOString()).toBe(wall.replace(" ", "T") + ":00.000Z");
+      expect(utcToWall(resolved, "UTC")).toBe(wall);
+      expect(parseEventForm({
+        ...FORM, starts_at: wall, ends_at: wall.replace("20:00", "22:00"),
+      }, { startsAtUtc: resolved.toISOString() }).startsAtUtc.getTime()).toBe(resolved.getTime());
+    }), { ...OPTIONS, examples: [[999], [100]] });
+  });
+
   it("rejects unknown zones and offset-bearing wall input", () => {
     fc.assert(fc.property(fc.nat(), fc.constantFrom("Z", "+01:00", "-05:00", " Europe/London"), (n, offset) => {
       expect(isKnownTimezone(`Not/AZone_${n}`)).toBe(false);
@@ -116,6 +128,13 @@ describe("seeded admin event validation properties", () => {
         const value = position === "start" ? char + text : position === "end" ? text + char : text + char + "plain";
         expectFieldError(() => parseEventForm({ ...FORM, [field]: value }), field);
       }), { ...OPTIONS, examples: [["safe", String.fromCodePoint(0xfeff), "start"], ["safe", String.fromCodePoint(0x200d), "middle"], ["safe", "\0", "end"]] });
+    });
+
+    it(`${field}: rejects emoji joiners separated from pictographs by whitespace`, () => {
+      fc.assert(fc.property(fc.constantFrom("\t", "\n", "\r"), fc.boolean(), (whitespace, beforeJoiner) => {
+        const text = beforeJoiner ? `👩${whitespace}‍💻` : `👩‍${whitespace}💻`;
+        expectFieldError(() => parseEventForm({ ...FORM, [field]: text }), field);
+      }), { ...OPTIONS, examples: [["\n", true], ["\t", false]] });
     });
 
     it(`${field}: accepts visible Unicode, emoji joiners and multiline whitespace`, () => {
