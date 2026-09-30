@@ -28,6 +28,7 @@ import { getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
+import { databaseUnavailable } from "../errors";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import {
   createMemorySessionStore,
@@ -127,8 +128,8 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       // Signed in, not a moderator: 403, not a login loop (TOG-54).
       if (row?.moderator) actor = { id: row.userId, username: row.username };
     } catch (err) {
-      console.error("admin guard could not resolve the session; refusing.", { error: String(err) });
-      return c.text("Admin temporarily unavailable", 503);
+      console.error("admin guard could not resolve the session; refusing.", { exception: err instanceof Error ? err.name : "unknown" });
+      return databaseUnavailable(c);
     }
     if (!actor) return c.text("Forbidden", 403);
     c.set("adminActor", actor);
@@ -170,7 +171,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       if (enforceEnabled(c.env)) {
         // The handler already finalized its response. Returning a new response
         // here is ignored by Hono's compose; replace it before it leaves.
-        c.res = c.text("Member data is temporarily unavailable.", 503);
+        c.res = await databaseUnavailable(c);
         c.header("cache-control", "private, no-store");
       }
     }

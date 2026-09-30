@@ -4,6 +4,8 @@ import { isDatabaseUnavailable } from "../src/db/errors";
 import { internalErrorHandler } from "../src/errors";
 import app from "../src/index";
 import { createMemorySessionStore } from "../src/sessions";
+import { profilesApp } from "../src/profiles/routes";
+import { createMemoryProfileStore } from "../src/profiles/store";
 import { cookieFor, env, MEMBER } from "./helpers/member-data";
 
 const refused = () => Object.assign(new Error("private connection details"), { code: "ECONNREFUSED" });
@@ -60,6 +62,44 @@ describe("narrow database outage classification", () => {
   });
 });
 
+describe("profile failures after a successful session and data read", () => {
+  async function fixture() {
+    const sessions = createMemorySessionStore();
+    const cookie = await cookieFor(sessions, MEMBER);
+    const store = createMemoryProfileStore([
+      { id: MEMBER.userId, username: MEMBER.username, avatar: null, bio: "private profile fixture", games: [], timezone: null },
+    ]);
+    const profile = profilesApp({
+      sessionStore: sessions, store, throttle: async () => ({ limited: false }),
+      accessLog: async () => { throw refused(); },
+    });
+    return { cookie, store, profile };
+  }
+  it.each(["text/html", "application/json"])("refuses an unaudited read with a negotiated %s 503, never the finalized profile", async (accept) => {
+    const { cookie, profile } = await fixture();
+    const res = await profile.request("/profile", { headers: { cookie, accept } }, env);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("content-type")).toContain(accept);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    const body = await res.text();
+    expect(body).not.toContain("private profile fixture");
+    if (accept === "text/html") expect(body).toContain("Together We Own");
+    else expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
+  });
+  it.each(["text/html", "application/json"])("classifies a save outage after a successful lookup for %s", async (accept) => {
+    const { cookie, store, profile } = await fixture();
+    vi.spyOn(store, "save").mockRejectedValue(refused());
+    const res = await profile.request(`/members/${MEMBER.userId}`, {
+      method: "PATCH", headers: { cookie, accept, origin: env.APP_URL, "content-type": "application/json" },
+      body: JSON.stringify({ bio: "new fixture", games: [] }),
+    }, env);
+    expect(store.save).toHaveBeenCalledOnce();
+    expect(res.status).toBe(503);
+    expect(res.headers.get("content-type")).toContain(accept);
+    expect(await res.text()).not.toContain("private profile fixture");
+  });
+});
+
 describe("public session failure boundaries", () => {
   async function fixture() {
     const store = createMemorySessionStore();
@@ -74,6 +114,16 @@ describe("public session failure boundaries", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).not.toContain(MEMBER.username);
     expect(rotate).not.toHaveBeenCalled();
+    expect(res.headers.getSetCookie()).toEqual([]);
+  });
+  it("keeps the invite floor when the DB fails during rotation after a successful session lookup", async () => {
+    const { store, cookie, bindings } = await fixture();
+    vi.spyOn(store, "rotate").mockRejectedValue(refused());
+    const res = await app.request("/", { headers: { cookie } }, bindings);
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain(MEMBER.username);
+    expect(body).toContain('href="/discord" data-testid="discord-join"');
     expect(res.headers.getSetCookie()).toEqual([]);
   });
   it("does not swallow a home programming error", async () => {

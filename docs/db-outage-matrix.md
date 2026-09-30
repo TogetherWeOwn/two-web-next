@@ -42,5 +42,29 @@ callback may fail closed with branded 503 during app-DB loss: the database-free
 `/join` page and `/discord` invite floor remain available. This does not pretend
 that losing app persistence is equivalent to a bot-counts outage.
 
+## Runtime response boundaries
+
+`src/db/errors.ts` recognizes structured transport/connection/shutdown codes,
+including causes wrapped by Drizzle. It never classifies by message text, and
+SQL syntax/constraint failures and ordinary programming errors retain 500.
+The shared error boundary and profile-save/ingress catches use this classifier;
+existing session and mandatory-audit guards retain their fail-closed policy.
+The 503 envelope is branded HTML for browsers and sanitized JSON for JSON
+callers (always JSON for ingress), private/no-store and varied on Accept.
+Post-handler audit failure replaces the finalized response: protected data is
+not served if its mandatory record cannot be written.
+
+Home renders as guest when its session dependency is unavailable, keeps a
+DB-free `/discord` invite CTA, and omits unavailable counts. It never extracts
+identity from a signed bearer cookie. Same-origin logout still attempts row
+revocation and clears the browser cookie with a 303 when the DB is down,
+including migration failure. **Cookie deletion is not proof of server-side
+revocation**: a copied bearer can remain valid until revocation/expiry once the
+DB recovers. Cross-origin logout remains forbidden without clearing cookies.
+
+`test/db-outage-responses.test.ts` supplements the real-socket matrix with
+classification negative controls, guest-home and logout security regressions,
+and failures after successful profile reads (save and mandatory audit).
+
 These tests verify in-process HTTP behavior. They do not claim staging,
 production, deployed Hyperdrive, real Discord or real OAuth acceptance.

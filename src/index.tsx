@@ -212,7 +212,10 @@ async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, r
       ...row,
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
     })
-    .catch(() => false);
+    .catch((err) => {
+      if (isDatabaseUnavailable(err)) throw err;
+      return false;
+    });
   if (!rotated) return null;
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
     path: "/",

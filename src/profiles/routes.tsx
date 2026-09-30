@@ -22,7 +22,8 @@ import { dbFor } from "../admin/db";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
-import { rateLimitExceeded } from "../errors";
+import { databaseUnavailable, rateLimitExceeded } from "../errors";
+import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
@@ -93,8 +94,8 @@ export function profilesApp(deps: ProfileDeps = {}) {
       const row = await sessions.get(await hashToken(token));
       if (row) viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
     } catch (err) {
-      console.error("profiles could not resolve the session; refusing.", { error: String(err) });
-      return c.text("Profiles temporarily unavailable", 503);
+      console.error("profiles could not resolve the session; refusing.", { exception: err instanceof Error ? err.name : "unknown" });
+      return databaseUnavailable(c);
     }
     // A cookie whose row is gone (revoked/expired/rotated) is a guest.
     if (!viewer) return c.redirect("/auth/discord", 302);
@@ -115,7 +116,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
   const render = async (c: Ctx, id: string, routeName: string) => {
     if (!SNOWFLAKE.test(id)) return c.notFound();
     const store = await storeFor(c);
-    if (!store) return c.text("Profiles temporarily unavailable", 503);
+    if (!store) return databaseUnavailable(c);
     const member = await store.find(id);
     if (!member) return c.notFound();
     const viewer = c.get("viewer");
@@ -136,7 +137,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
     // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
     if (!SNOWFLAKE.test(id) || viewer.id !== id) return c.text("Forbidden", 403);
     const store = await storeFor(c);
-    if (!store) return c.text("Profiles temporarily unavailable", 503);
+    if (!store) return databaseUnavailable(c);
     const member = await store.find(id);
     if (!member) return c.notFound();
 
@@ -178,6 +179,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
       if (!trapped) await store.save(id, result.attrs);
     } catch (err) {
       console.error("profile save failed", { exception: (err as Error)?.constructor?.name });
+      if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
       return c.text("Could not save your profile.", 500);
     }
     if ((c.req.header("accept") ?? "").includes("application/json")) {
