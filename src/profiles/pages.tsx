@@ -21,17 +21,30 @@ import {
 } from "../islands/contracts";
 import type { MemberView } from "./store";
 
+// Share tags (TOG-6793): the canonical is always the shareable member URL,
+// so /profile and /members/{user} never present as duplicates. The
+// description stays generic on purpose — the only member data in the tags is
+// the name already in the title. Guests are bounced to login before any
+// profile HTML renders, so no tags can leak to them.
+export const PROFILE_SHARE_DESCRIPTION = "A member of Together We Own.";
+
 export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
+  appUrl: string;
   errors?: Record<string, string>;
   values?: { bio: string; games_text: string; timezone: string };
-}> = ({ member, isOwner, errors, values }) => {
+}> = ({ member, isOwner, appUrl, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const form = values ?? { bio: member.bio ?? "", games_text: member.games.join("\n"), timezone: member.timezone ?? "" };
   return (
-    <Layout title={`${member.username} — Together We Own`} robots="noindex, nofollow">
+    <Layout
+      title={`${member.username} — Member profile`}
+      canonical={`${appUrl}/members/${member.id}`}
+      shareDescription={PROFILE_SHARE_DESCRIPTION}
+      robots="noindex, nofollow"
+    >
       <header class="bar">
         <a class="brand" href="/">TWO</a>
         <nav>

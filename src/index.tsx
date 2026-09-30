@@ -27,6 +27,7 @@ import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
+import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
@@ -46,22 +47,45 @@ const app = new Hono<{ Bindings: Env }>();
 // requires absolute HTTPS URLs, not this same-origin relative destination.
 const CSP_REPORT_ENDPOINT = "/csp-reports";
 
-app.use(
-  "*",
-  secureHeaders({
-    contentSecurityPolicy: {
-      defaultSrc: ["'self'"],
-      imgSrc: ["'self'", "https://cdn.discordapp.com"],
-      styleSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      frameAncestors: ["'none'"],
-      formAction: ["'self'"],
-      reportUri: CSP_REPORT_ENDPOINT,
-      reportTo: "csp-endpoint",
-    },
-    reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
-  }),
-);
+// The four static headers (fonts byte-identical to SECURITY_HEADERS in
+// src/headers.ts — the tested copy; the parity test pins both sides so drift
+// fails the build). X-Frame-Options is DENY: nothing frames this site
+// (TOG-5469). Registered globally, not on a route group: the DB-free funnel
+// leaves and the mounted admin/profile sub-apps inherit it from the outer
+// dispatch. The CSP shape + report sink belong to the CSP-report slice
+// (TOG-10107) and are configured above; the staging X-Robots-Tag lives in
+// the robotsTag middleware below. Strict-Transport-Security is deliberately
+// absent: the edge owns it (TOG-8729).
+// One ALL /* registration (the exposure inventory in
+// test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
+// plus the staging X-Robots-Tag composed into a single wrapper. Mounted
+// sub-apps inherit both from this outer dispatch.
+const staticSecurityHeaders = secureHeaders({
+  contentSecurityPolicy: {
+    defaultSrc: ["'self'"],
+    imgSrc: ["'self'", "https://cdn.discordapp.com"],
+    styleSrc: ["'self'"],
+    scriptSrc: ["'self'"],
+    frameAncestors: ["'none'"],
+    formAction: ["'self'"],
+    reportUri: CSP_REPORT_ENDPOINT,
+    reportTo: "csp-endpoint",
+  },
+  xContentTypeOptions: SECURITY_HEADERS["X-Content-Type-Options"],
+  referrerPolicy: SECURITY_HEADERS["Referrer-Policy"],
+  xFrameOptions: SECURITY_HEADERS["X-Frame-Options"],
+  permissionsPolicy: {
+    camera: [],
+    microphone: [],
+    geolocation: [],
+  },
+  reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
+});
+
+app.use("*", async (c, next) => {
+  await staticSecurityHeaders(c, next);
+  await robotsTag(c, async () => {});
+});
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
@@ -256,7 +280,7 @@ export function rulesLastUpdated(raw: string | undefined): { iso: string; label:
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules lastUpdated={stamp?.iso ?? null} />);
+  return c.html(<Rules lastUpdated={stamp} />);
 });
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
@@ -280,7 +304,7 @@ app.get("/privacy", (c) => {
 registerJoinRoutes(app, { storeFor, issueSession }, {
   joinPage: (c, props) => {
     c.header("cache-control", "public, max-age=3600");
-    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} />);
+    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} />);
   },
   recovery: (c, props, status = 200) => {
     c.header("cache-control", "no-store, private");
