@@ -30,7 +30,7 @@ import {
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -364,7 +364,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
           ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
           : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
         if (writeBack) await dispatchWriteBack(c.env, writeBack);
-        return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
+        return c.json({ data: eventJson(await withGoingCount(db, row)) });
       } catch (err) {
         if (err instanceof ValidationError) return invalid(c, err);
         if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);

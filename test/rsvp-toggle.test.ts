@@ -74,21 +74,25 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP pause/reopen (isolated agent-te
     sent.length = 0;
     const pause = await request(`${path}/rsvp-pause`);
     expect(pause.status).toBe(200);
-    expect(await pause.json()).toMatchObject({ data: { event_key: row.eventKey, status: "published", rsvp_open: false } });
+    expect(await pause.json()).toMatchObject({ data: { event_key: row.eventKey, status: "published", rsvp_open: false, going_count: 1 } });
     const paused = await request(`${path}/rsvp`, "PUT", false, { status: "maybe" });
     expect(paused.status).toBe(403);
     expect(await paused.json()).toMatchObject({ reason: "event_not_open", why: "paused" });
     expect((await fixture.db.select().from(rsvps)).map((r) => r.status)).toEqual(["going"]);
     const [beforeRepeat] = await fixture.db.select().from(events);
-    expect((await request(`${path}/rsvp-pause`)).status).toBe(200);
+    const repeatPause = await request(`${path}/rsvp-pause`);
+    expect(repeatPause.status).toBe(200);
+    expect(await repeatPause.json()).toMatchObject({ data: { rsvp_open: false, going_count: 1 } });
     const [afterRepeat] = await fixture.db.select().from(events);
     expect(afterRepeat!.updatedAt).toEqual(beforeRepeat!.updatedAt);
     expect(sent).toHaveLength(1);
     expect(await audits()).toHaveLength(1);
     const reopen = await request(`${path}/rsvp-reopen`);
     expect(reopen.status).toBe(200);
-    expect(await reopen.json()).toMatchObject({ data: { rsvp_open: true, status: "published" } });
-    expect((await request(`${path}/rsvp-reopen`)).status).toBe(200);
+    expect(await reopen.json()).toMatchObject({ data: { rsvp_open: true, status: "published", going_count: 1 } });
+    const repeatReopen = await request(`${path}/rsvp-reopen`);
+    expect(repeatReopen.status).toBe(200);
+    expect(await repeatReopen.json()).toMatchObject({ data: { rsvp_open: true, going_count: 1 } });
     expect(sent).toHaveLength(2);
     expect(sent.every((m) => m.eventKey === row.eventKey && m.action === "event.upsert")).toBe(true);
     expect(sent[0]!.idempotencyKey).not.toBe(sent[1]!.idempotencyKey);
@@ -96,6 +100,29 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP pause/reopen (isolated agent-te
       { rsvpOpen: { before: true, after: false } }, { rsvpOpen: { before: false, after: true } },
     ]);
     expect((await request(`${path}/rsvp`, "PUT", false, { status: "maybe" })).status).toBe(200);
+  });
+
+  it("counts only this event's going answers, including zero, on changed and no-op responses", async () => {
+    const row = await seed();
+    const other = await seed();
+    await fixture.db.insert(rsvps).values([
+      ...["maybe", "not_going", "waitlisted"].map((status) => ({ eventId: row.id, userId: status, status })),
+      { eventId: other.id, userId: "other-going", status: "going" },
+    ]);
+    for (const action of ["rsvp-pause", "rsvp-pause", "rsvp-reopen", "rsvp-reopen"]) {
+      const res = await request(`/events/${row.eventKey}/${action}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ data: { going_count: 0 } });
+    }
+    await fixture.db.insert(rsvps).values([
+      { eventId: row.id, userId: "going-1", status: "going" },
+      { eventId: row.id, userId: "going-2", status: "going" },
+    ]);
+    for (const action of ["rsvp-pause", "rsvp-pause", "rsvp-reopen", "rsvp-reopen"]) {
+      const res = await request(`/events/${row.eventKey}/${action}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ data: { going_count: 2 } });
+    }
   });
 
   it("refuses draft, cancelled, past and clock-ended events, including already-satisfied targets", async () => {

@@ -104,10 +104,14 @@ export async function listPast(db: Db, page: number, now = new Date(), q: string
   };
 }
 
+export async function withGoingCount(db: Db, row: typeof events.$inferSelect): Promise<PublicEvent> {
+  return (await withGoing(db, [row]))[0]!;
+}
+
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
   if (!row) return null;
-  return (await withGoing(db, [row]))[0] ?? null;
+  return withGoingCount(db, row);
 }
 
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */
