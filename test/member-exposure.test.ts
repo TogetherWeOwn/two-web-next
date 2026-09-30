@@ -34,12 +34,12 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     ...ADMIN_READS.map((path) => `GET /admin${path === "/" ? "" : path}`),
     // ALL includes middleware as well as handlers. Pin their multiplicity;
     // filtering wildcards or deduplicating would hide added ALL endpoints.
-    // The two global ALL /* registrations are the composed security/robots
-    // headers and the strict per-environment trustHosts guard (W16).
+    // The three global ALL /* registrations are the composed security/robots
+    // headers, strict per-environment trustHosts guard and same-origin guard.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
     // The event-page access logger is a second GET handler on the same route.
     "GET /e/:key",
-    "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
+    "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
   ].sort());
 }
 

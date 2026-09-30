@@ -91,7 +91,7 @@ describe("unit: host matching", () => {
 });
 
 describe("middleware: foreign Host refused before routing", () => {
-  it.each(["/", "/about", "/health", "/sitemap_index.xml", "/robots.txt", "/auth/discord", "/join/discord"])(
+  it.each(["/", "/about", "/up", "/sitemap_index.xml", "/robots.txt", "/auth/discord", "/join/discord"])(
     "%s with a foreign Host answers the branded 404 and never names the host",
     async (path) => {
       const res = await app.request(`${base.APP_URL}${path}`, { headers: evilHeaders }, base);
@@ -123,19 +123,19 @@ describe("middleware: foreign Host refused before routing", () => {
 
   it("lookalike and parent hosts refused; case/port variants of the real host accepted", async () => {
     for (const bad of ["sub.next.example.test", "example.test", "next.example.test.evil.com", "next.example.test."]) {
-      const res = await app.request(`${base.APP_URL}/health`, { headers: { host: bad } }, base);
+      const res = await app.request(`${base.APP_URL}/up`, { headers: { host: bad } }, base);
       expect(res.status).toBe(404);
     }
     for (const good of ["next.example.test", "NEXT.EXAMPLE.TEST", "next.example.test:8443"]) {
-      const res = await app.request(`${base.APP_URL}/health`, { headers: { host: good } }, base);
+      const res = await app.request(`${base.APP_URL}/up`, { headers: { host: good } }, base);
       expect(res.status).toBe(200);
     }
   });
 
   it("an absolute request URL to a foreign host is refused; to the trusted host it passes", async () => {
-    const bad = await app.request("https://evil.example.test/health", {}, base);
+    const bad = await app.request("https://evil.example.test/up", {}, base);
     expect(bad.status).toBe(404);
-    const good = await app.request("https://next.example.test/health", {}, base);
+    const good = await app.request("https://next.example.test/up", {}, base);
     expect(good.status).toBe(200);
   });
 
@@ -152,19 +152,19 @@ describe("middleware: foreign Host refused before routing", () => {
 
 describe("middleware: per-env allowlist", () => {
   it("each environment accepts its own host", async () => {
-    expect((await app.request(`${staging().APP_URL}/health`, { headers: { host: "next.togetherweown.com" } }, staging())).status).toBe(200);
-    expect((await app.request(`${production.APP_URL}/health`, { headers: { host: "togetherweown.com" } }, production)).status).toBe(200);
-    expect((await app.request(`${base.APP_URL}/health`, { headers: { host: "next.example.test" } }, base)).status).toBe(200);
+    expect((await app.request(`${staging().APP_URL}/up`, { headers: { host: "next.togetherweown.com" } }, staging())).status).toBe(200);
+    expect((await app.request(`${production.APP_URL}/up`, { headers: { host: "togetherweown.com" } }, production)).status).toBe(200);
+    expect((await app.request(`${base.APP_URL}/up`, { headers: { host: "next.example.test" } }, base)).status).toBe(200);
   });
 
   it("staging never accepts the production host and vice versa (not a global list)", async () => {
-    expect((await app.request(`${staging().APP_URL}/health`, { headers: { host: "togetherweown.com" } }, staging())).status).toBe(404);
-    expect((await app.request(`${production.APP_URL}/health`, { headers: { host: "next.togetherweown.com" } }, production)).status).toBe(404);
+    expect((await app.request(`${staging().APP_URL}/up`, { headers: { host: "togetherweown.com" } }, staging())).status).toBe(404);
+    expect((await app.request(`${production.APP_URL}/up`, { headers: { host: "next.togetherweown.com" } }, production)).status).toBe(404);
   });
 
   it("a foreign host is refused in every environment", async () => {
     for (const e of [base, staging(), production]) {
-      const res = await app.request(`${e.APP_URL}/health`, { headers: evilHeaders }, e);
+      const res = await app.request(`${e.APP_URL}/up`, { headers: evilHeaders }, e);
       expect(res.status).toBe(404);
     }
   });
@@ -172,9 +172,9 @@ describe("middleware: per-env allowlist", () => {
 
 describe("review regressions: fail closed at the Worker boundary", () => {
   it.each(["localhost", "127.0.0.1", "[::1]"])("production refuses loopback %s", async (host) => {
-    const header = await app.request("https://togetherweown.com/health", { headers: { host } }, production);
+    const header = await app.request("https://togetherweown.com/up", { headers: { host } }, production);
     expect(header.status).toBe(404);
-    const url = await app.request(`http://${host}/health`, {}, production);
+    const url = await app.request(`http://${host}/up`, {}, production);
     expect(url.status).toBe(404);
   });
 
@@ -185,7 +185,7 @@ describe("review regressions: fail closed at the Worker boundary", () => {
     "next.example.test/path", "user@next.example.test", "next.example.test:443:8443",
   ])("a present malformed Host %j is not absent or trusted", async (host) => {
     expect(isTrustedHost(base.APP_URL, [host, "next.example.test"])).toBe(false);
-    const res = await app.request(`${base.APP_URL}/health`, { headers: { host } }, base);
+    const res = await app.request(`${base.APP_URL}/up`, { headers: { host } }, base);
     expect(res.status).toBe(404);
     expect(res.headers.get("cache-control")).toBe("no-store, private");
   });
@@ -193,7 +193,7 @@ describe("review regressions: fail closed at the Worker boundary", () => {
   it("a duplicate Host merged into one field is refused", async () => {
     const headers = new Headers({ host: "next.example.test:443" });
     headers.append("host", "evil.example.test");
-    expect((await app.request(`${base.APP_URL}/health`, { headers }, base)).status).toBe(404);
+    expect((await app.request(`${base.APP_URL}/up`, { headers }, base)).status).toBe(404);
   });
 
   it("invalid APP_URL never permits absent or loopback signals", () => {
@@ -207,22 +207,22 @@ describe("review regressions: fail closed at the Worker boundary", () => {
   it("loopback works only when it is the configured development host", async () => {
     for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
       const env = { ...base, APP_URL: `http://${host}:8787` };
-      expect((await app.request(`${env.APP_URL}/health`, { headers: { host: `${host}:8787` } }, env)).status).toBe(200);
-      expect((await app.request(`${base.APP_URL}/health`, {}, env)).status).toBe(404);
+      expect((await app.request(`${env.APP_URL}/up`, { headers: { host: `${host}:8787` } }, env)).status).toBe(200);
+      expect((await app.request(`${base.APP_URL}/up`, {}, env)).status).toBe(404);
     }
   });
 
   it("configured IPv6 is normalized on both sides, not rejected by bracket mismatch", async () => {
     const env = { ...base, APP_URL: "https://[2001:db8::1]" };
     expect(trustedHost(env.APP_URL)).toBe("2001:db8::1");
-    expect((await app.request(`${env.APP_URL}/health`, {
+    expect((await app.request(`${env.APP_URL}/up`, {
       headers: { host: "[2001:0db8:0:0:0:0:0:1]:443" },
     }, env)).status).toBe(200);
-    expect((await app.request("https://[2001:db8::2]/health", {}, env)).status).toBe(404);
+    expect((await app.request("https://[2001:db8::2]/up", {}, env)).status).toBe(404);
   });
 
   it("the URL authority must be trusted even when Host is absent or trusted", async () => {
-    const res = await app.request("https://evil.example.test/health", {
+    const res = await app.request("https://evil.example.test/up", {
       headers: { host: "next.example.test" },
     }, base);
     expect(res.status).toBe(404);

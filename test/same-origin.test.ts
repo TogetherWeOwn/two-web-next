@@ -25,9 +25,11 @@ function assertGuarded(router: typeof app) {
   expect(guards).toHaveLength(1);
   expect(guards[0]).toMatchObject({ method: "ALL", path: "/*" });
   const guardIndex = router.routes.indexOf(guards[0]!);
-  // Only the security-header wrapper may precede it, never a handler.
-  expect(guardIndex).toBe(1);
+  // Only the security-header wrapper and TrustHosts may precede it.
+  // Pin both registrations: do not filter away an extra wildcard handler.
+  expect(guardIndex).toBe(2);
   expect(router.routes[0]).toMatchObject({ method: "ALL", path: "/*" });
+  expect(router.routes[1]).toMatchObject({ method: "ALL", path: "/*" });
   const unsafe = router.routes.filter((r) => UNSAFE_METHODS.some((m) => m === r.method));
   expect(unsafe.length).toBeGreaterThan(0);
   for (const exemption of SAME_ORIGIN_EXEMPTIONS) {
@@ -65,6 +67,13 @@ describe("mounted route same-origin audit", () => {
     expect(() => assertGuarded(unguarded)).toThrow();
   });
 
+  it("detects an extra ALL wildcard registered before the guard", () => {
+    const unguarded = new Hono<{ Bindings: Env }>();
+    unguarded.all("*", (c) => c.text("unsafe"));
+    unguarded.route("/", app);
+    expect(() => assertGuarded(unguarded)).toThrow();
+  });
+
   it.each(guarded)("refuses cross-origin $method $path with the one envelope before sessions", async ({ method, path }) => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store, MODERATOR);
@@ -89,10 +98,10 @@ describe("mounted route same-origin audit", () => {
   it("keeps machine ingress and CSP sink independent of Origin", async () => {
     const cases: HeadersInit[] = [{}, { origin: "https://evil.test" }];
     for (const headers of cases) {
-      const ingress = await app.request("/api/agent-events", { method: "POST", headers }, env);
+      const ingress = await app.request(new URL("/api/agent-events", env.APP_URL), { method: "POST", headers }, env);
       expect(ingress.status).toBe(404); // Disabled machine ingress, not a CSRF denial.
       expect(await ingress.json()).toMatchObject({ reason: "ingress_disabled" });
-      const csp = await app.request("/csp-reports", { method: "POST", headers }, env);
+      const csp = await app.request(new URL("/csp-reports", env.APP_URL), { method: "POST", headers }, env);
       expect(csp.status).toBe(204);
     }
   });
