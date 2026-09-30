@@ -67,6 +67,28 @@ production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 | `DATABASE_URL` | var (dev) / Hyperdrive binding (staging/prod) | Local/dev: agent-testdb. Without it sessions cannot persist (per-request memory store, fails closed to guest). |
 | `DISCORD_MODERATOR_ROLE_IDS` | var | Snowflake IDs, comma-separated, never names. Blank = nobody is a moderator (safe default). |
 | `QA_AUTH_TOKEN` | secret (staging only) | Enables `POST /auth/qa/:identity`. Unset everywhere else; the route 404s without it. |
+| `BOT_ENDPOINT_URL` | secret (staging bot) | Base URL of the staging bot's internal-actions endpoint. The smoke refuses to run without an explicit target. |
+| `BOT_SHARED_SECRET` | secret | HMAC secret the staging bot holds for our key id. Env only; never printed or logged. |
+| `BOT_KEY_ID` | var | Which shared secret signs the smoke (lets the bot rotate per caller). |
+| `BOT_PRODUCTION_URL` | var | Production bot host. The smoke refuses to run when the target matches it. |
+
+## Pre-flip probes (W16 rehearsal)
+
+Ports of legacy `discord:check-moderators` and `bot:internal-action-smoke`
+(`docs/parity.md` §7). Neither ever targets production — the role probe is
+network-free (it checks resolved config) and the smoke refuses the host named
+by `BOT_PRODUCTION_URL`.
+
+```sh
+npm run check:moderators -- --require-configured   # deploy-time role-config gate
+npm run smoke:internal-action -- \
+  --discord-id=<snowflake> --role-key=<key> --channel-key=<throwaway>
+```
+
+The deploy workflow runs the role probe with `--require-configured` before
+`wrangler deploy`. The live smoke runs manually via the `staging-smoke`
+workflow (it posts a real announcement to a throwaway channel and creates a
+real staging event). Both are fixture-tested in `check` without secrets.
 
 ## Contributing
 

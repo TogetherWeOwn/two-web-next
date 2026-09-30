@@ -12,3 +12,11 @@ DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next
 DISCORD_MODERATOR_ROLE_IDS=
 # Staging-only QA seam. Unset everywhere else: the route 404s without it.
 QA_AUTH_TOKEN=
+# W16 pre-flip probes (TOG-10112). Values only — never commit the real ones.
+# The role probe reads DISCORD_MODERATOR_ROLE_IDS above. The staging smoke
+# signs with BOT_SHARED_SECRET against the staging bot only and refuses the
+# host named by BOT_PRODUCTION_URL. In CI these stay unset (fixture selftest).
+BOT_ENDPOINT_URL=
+BOT_SHARED_SECRET=
+BOT_KEY_ID=
+BOT_PRODUCTION_URL=

@@ -1,0 +1,64 @@
+name: staging-smoke
+
+# W16 cutover rehearsal: live-against-staging QA for the bot's internal
+# actions (TOG-10112). Manual only (`workflow_dispatch`) — it posts a REAL
+# announcement to a throwaway channel and creates a REAL staging event, so it
+# never runs on a schedule and never against production.
+#
+# Setup (operator, once): the `staging` environment holds BOT_ENDPOINT_URL
+# (staging bot), BOT_SHARED_SECRET, BOT_KEY_ID and BOT_PRODUCTION_URL; the
+# run inputs name the throwaway channel, role key and QA user. The CLI itself
+# refuses the production host named by BOT_PRODUCTION_URL.
+
+on:
+  workflow_dispatch:
+    inputs:
+      discord_id:
+        description: "QA user snowflake to assign the role to"
+        required: true
+        type: string
+      role_key:
+        description: "A key from the bot role allowlist, not a role ID"
+        required: true
+        type: string
+      channel_key:
+        description: "A THROWAWAY channel key — a real announcement gets posted"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-smoke
+  cancel-in-progress: false
+
+jobs:
+  internal-action-smoke:
+    name: internal-action-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: staging
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Moderator role-config probe (pre-smoke gate)
+        run: npm run check:moderators -- --require-configured
+        env:
+          DISCORD_MODERATOR_ROLE_IDS: ${{ secrets.DISCORD_MODERATOR_ROLE_IDS }}
+      - name: Internal-action smoke against the staging bot
+        run: >-
+          npm run smoke:internal-action --
+          --discord-id="${{ inputs.discord_id }}"
+          --role-key="${{ inputs.role_key }}"
+          --channel-key="${{ inputs.channel_key }}"
+        env:
+          BOT_ENDPOINT_URL: ${{ secrets.BOT_ENDPOINT_URL }}
+          BOT_SHARED_SECRET: ${{ secrets.BOT_SHARED_SECRET }}
+          BOT_KEY_ID: ${{ secrets.BOT_KEY_ID }}
+          BOT_PRODUCTION_URL: ${{ secrets.BOT_PRODUCTION_URL }}

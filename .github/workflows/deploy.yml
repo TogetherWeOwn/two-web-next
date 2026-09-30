@@ -44,6 +44,13 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Moderator role-config probe (deploy-time gate)
+        # TOG-10112: fails the deploy loudly when the staging grant is blank
+        # or misconfigured. A wrong list silently disables the admin panel,
+        # which is exactly what this gate exists to catch.
+        run: npm run check:moderators -- --require-configured
+        env:
+          DISCORD_MODERATOR_ROLE_IDS: ${{ secrets.DISCORD_MODERATOR_ROLE_IDS }}
       - name: Smoke test /health
         run: |
           for i in 1 2 3 4 5 6; do

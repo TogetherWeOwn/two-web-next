@@ -51,5 +51,17 @@ jobs:
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
         run: bash ci/check-migration-numbers.sh
+      - name: Pre-flip probe selftests (fixtures, no secrets)
+        run: |
+          npm run check:moderators
+          DISCORD_MODERATOR_ROLE_IDS=508654771276873729 npm run check:moderators -- --require-configured
+          if DISCORD_MODERATOR_ROLE_IDS=SySOp npm run check:moderators -- --require-configured; then
+            echo "::error::role probe accepted a role name; expected exit 1"
+            exit 1
+          fi
+          if npm run smoke:internal-action 2>/dev/null; then
+            echo "::error::smoke CLI ran without options; expected exit 2"
+            exit 1
+          fi
       - name: Build (wrangler dry run)
         run: npx wrangler deploy --dry-run --outdir dist
