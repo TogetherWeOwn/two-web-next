@@ -49,7 +49,8 @@ export function validateMap(map) {
 
 function projection(table, side) {
   const keys = table.keys.map((f, i) => `(${f[side]})::text COLLATE "C" AS k${i}`);
-  const values = table.columns.map((f) => `(${f[side]})`);
+  // Keep SQL NULL distinct from JSON null with a discriminator per field.
+  const values = table.columns.map((f) => `jsonb_build_array((${f[side]}) IS NULL, (${f[side]}))`);
   const where = table[side].where ? ` WHERE ${table[side].where}` : '';
   // JSONB renders object properties deterministically and preserves numeric and
   // timestamp precision in Postgres; never round-trip values through JS types.
@@ -65,6 +66,17 @@ export function compareKeys(a, b) {
   return 0;
 }
 
+function canonicalJsonbText(payload) {
+  // Postgres JSONB prints numbers as exact decimals (including exponent inputs).
+  // Strip insignificant scale lexically, never via JS Number/JSON.parse. Match
+  // whole strings first so quoted numbers and escaped quotes remain untouched.
+  return payload.replace(/"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?/g, (token) => {
+    if (token.startsWith('"') || !token.includes('.')) return token;
+    const value = token.replace(/0+$/, '').replace(/\.$/, '');
+    return value === '-0' ? '0' : value;
+  });
+}
+
 async function* rows(tx, table, side, batchSize) {
   await tx.unsafe(`DECLARE verification_rows NO SCROLL CURSOR FOR ${projection(table, side)}`);
   let previous;
@@ -77,7 +89,7 @@ async function* rows(tx, table, side, batchSize) {
         if (key.some((part) => part === null)) fail('null_key');
         if (previous && compareKeys(previous, key) >= 0) fail('duplicate_or_unordered_key');
         previous = key;
-        yield { key, hash: createHash('sha256').update(row.payload).digest('hex') };
+        yield { key, hash: createHash('sha256').update(canonicalJsonbText(row.payload)).digest('hex') };
       }
     }
   } finally {
@@ -205,7 +217,13 @@ export async function main(args = process.argv.slice(2), env = process.env) {
       const url = new URL(raw);
       if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname ||
           !url.username || url.pathname.length < 2) fail('invalid_connection_environment');
-      return postgres(raw, { max: 1, prepare: false, connect_timeout: 10, onnotice: () => {},
+      // postgres.js supports SCRAM but not SCRAM-SHA-256-PLUS. Never silently
+      // discard a required channel binding; optional libpq settings are not GUCs.
+      const binding = url.searchParams.getAll('channel_binding');
+      if (binding.includes('require')) fail('unsupported_channel_binding_required');
+      if (binding.some((value) => !['prefer', 'disable'].includes(value))) fail('invalid_channel_binding');
+      url.searchParams.delete('channel_binding');
+      return postgres(url.href, { max: 1, prepare: false, connect_timeout: 10, onnotice: () => {},
         host: url.hostname, port: Number(url.port || 5432), user: decodeURIComponent(url.username),
         database: decodeURIComponent(url.pathname.slice(1)), password: () => decodeURIComponent(url.password) });
     };

@@ -37,9 +37,13 @@ Legacy naive timestamps are interpreted as UTC (`AT TIME ZONE 'UTC'`), matching
 legacy's application timezone. Already timezone-aware event instants are not
 reinterpreted. Dates convert to midnight naive timestamps for recurrence ends.
 JSON converts to JSONB so object member order is irrelevant, but array order and
-null versus absent values remain significant. Values are serialized in Postgres,
-not JS: bigint IDs and microsecond timestamps are not rounded by the driver.
-Report key parts are strings, including numeric IDs.
+null versus absent values remain significant. Each compared field carries an
+SQL-null discriminator: SQL NULL and the JSON literal `null` are not equal.
+Values are serialized in Postgres, not JS: bigint IDs and microsecond timestamps
+are not rounded by the driver. Numeric scale is normalized lexically in JSONB's
+exact decimal output, including nested objects/arrays; `1.0` and `1` compare equal
+without rounding long integers or fractional digits. Quoted numbers and escaped
+strings are never normalized. Report key parts are strings, including numeric IDs.
 
 Legacy numeric user references resolve through `users.discord_id`; event references
 resolve through `events.event_key`. LEFT JOINs retain orphan records. Missing
@@ -87,8 +91,12 @@ certifies only its configured tables/columns, not omitted fields or domains.
 ### Retention selection
 
 Use one explicit `--cutoff` UTC instant **shared with the importer**, normally the
-import anchor minus 90 days. The baseline selects `>= cutoff` on both sides for
-join attempts, search logs and idempotency keys; cutoff-exact rows survive.
+import anchor minus 90 days. The baseline selects `timestamp IS NULL OR timestamp
+>= cutoff` on both sides for join attempts, search logs and idempotency keys;
+cutoff-exact and unknown-age rows survive. A NULL timestamp is not evidence of
+expiry: missing unknown-age records must be reported, not silently discarded.
+Importers must preserve them or define a reviewed, deterministic disposition in
+the finalized map (including how Next's NOT NULL columns are populated).
 Reported counts are the **selected rows after filters**, not whole-table totals.
 No historical query text is renormalized.
 
@@ -106,6 +114,20 @@ Environment: `LEGACY_DATABASE_URL`, `DATABASE_URL`. Explicit DSN user, host,
 database, port (or 5432) and password are pinned; an empty password does not fall
 back to inherited libpq credentials. Driver notices/errors are suppressed and
 replaced by stable error codes so SQL values and secrets cannot leak.
+
+The pinned `postgres.js` driver supports SCRAM-SHA-256 but **not channel-bound
+SCRAM-SHA-256-PLUS**. A DSN requiring `channel_binding=require` (as some Neon
+connection strings do) fails closed with exit 2 and
+`unsupported_channel_binding_required` before connecting. Do not remove a
+required binding to get a passing report; that policy requires a compatible
+driver in a separately reviewed change. `channel_binding=prefer` and `disable`
+are optional libpq client settings, not Postgres startup GUCs: the verifier
+consumes them rather than forwarding them to the server. Invalid settings fail
+with `invalid_channel_binding`. The verifier preserves all other URL options,
+including `sslmode`; it does not fall back after a connection/security failure.
+Use only a provisioned, policy-approved driver-compatible URL. For verified TLS,
+`sslmode=verify-full` is supported; `sslmode=require` in this driver encrypts but
+does not validate the server certificate. No real Neon connection was tested here.
 
 ```sh
 # Both env URLs must already be provisioned for the authorized environment.
@@ -152,7 +174,8 @@ SQL's external side effects; use least-privilege read-only DB roles.
 
 Postgres cursors stream sorted projections in batches, compared by UTF-8 byte
 order matching `COLLATE "C"`. SHA-256 is computed internally over canonical
-Postgres JSONB-array text. Row counts and complete missing/extra/mismatch totals
+Postgres JSONB-array text with SQL-null discriminators and normalized numeric
+scale. Row counts and complete missing/extra/mismatch totals
 are accumulated across the whole selection. Each diff type emits at most
 `--detail-limit` keys per table; `detailsTruncated` signals omitted samples.
 Memory is bounded by two batches plus the bounded key samples (the DB may sort
@@ -187,6 +210,8 @@ legacy DDL and canonical Next migrations, uses raw driver pools separate from
 Drizzle serializers, and removes only its own schemas/scratch files. It tests
 exit 0, missing/extra/changed rows exit 1, simultaneous diffs at equal row counts,
 batch boundaries, sample truncation, opaque bigint/composite/unicode keys,
-microseconds, JSON canonicalization, duplicate/NULL keys, read-only enforcement,
-redacted errors and baseline-map query compatibility. CI runs this same test on
+microseconds, SQL NULL versus JSON null, nested numeric-scale canonicalization,
+unknown-age retention rows, required/optional channel-binding DSNs, duplicate/NULL
+keys, read-only enforcement, redacted errors and baseline-map query compatibility.
+CI runs this same test on
 its service container; no real member records are present.

@@ -22,8 +22,8 @@ export function defaultTableMap({ legacySchema = 'public', nextSchema = 'public'
   const id = () => [field('id', 'l.id::text', 'n.id::text')];
   const times = () => [timestamp('created_at'), timestamp('updated_at')];
   const retained = (name, time, keys, columns) => table(name, keys, columns, {
-    legacy: { from: `${legacy}."${name}" l`, where: `(l.${time} AT TIME ZONE 'UTC') >= ${cutoffSql}` },
-    next: { from: `${next}."${name}" n`, where: `n.${time} >= ${cutoffSql}` },
+    legacy: { from: `${legacy}."${name}" l`, where: `(l.${time} IS NULL OR (l.${time} AT TIME ZONE 'UTC') >= ${cutoffSql})` },
+    next: { from: `${next}."${name}" n`, where: `(n.${time} IS NULL OR n.${time} >= ${cutoffSql})` },
   });
   return [
     table('users', [field('discord_id', 'l.discord_id', 'n.id')],

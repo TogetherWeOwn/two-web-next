@@ -58,6 +58,25 @@ it("CLI rejects missing env/URL arguments without printing a connection string o
   expect(spawnSync(process.execPath, [script, "--help"], { encoding: "utf8", env: {} }).status).toBe(0);
 });
 
+it("CLI rejects required/invalid channel binding before connecting, without leaking DSNs", () => {
+  for (const side of ["LEGACY_DATABASE_URL", "DATABASE_URL"]) {
+    for (const query of ["channel_binding=require", "channel_binding=prefer&channel_binding=require",
+      "channel_binding=require&channel_binding=disable", "channel_binding=invalid"]) {
+      const raw = `postgres://private-user:private-password@unreachable.example.test/data?sslmode=verify-full&${query}`;
+      const run = spawnSync(process.execPath, [script, "--cutoff", cutoff], {
+        encoding: "utf8", timeout: 5000,
+        env: { LEGACY_DATABASE_URL: "postgres://agent_test@agent-testdb/two_web_next",
+          DATABASE_URL: "postgres://agent_test@agent-testdb/two_web_next", [side]: raw },
+      });
+      expect(run.status).toBe(2);
+      expect(run.stderr.trim()).toBe(`Verification failed: ${query.endsWith("invalid") ? "invalid_channel_binding" : "unsupported_channel_binding_required"}`);
+      expect(run.stdout).toBe("");
+      expect(run.stderr).not.toContain("private-");
+      expect(run.stderr).not.toContain("example.test");
+    }
+  }
+});
+
 it("markdown escapes keys as data and never includes member payloads", () => {
   const report: VerificationReport = { version: 1, ok: false, batchSize: 1, detailLimit: 1, tables: [{
     table: "samples", keyColumns: ["id"], comparedColumns: ["bio"], legacyCount: 1, nextCount: 0,
@@ -97,6 +116,8 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     });
     await admin.unsafe(`CREATE TABLE "${sourceSchema}".samples (id bigint, part text, label text, properties json, instant timestamp)`);
     await admin.unsafe(`CREATE TABLE "${destination.schemaName}".samples (id bigint, part text, label text, properties jsonb, instant timestamptz)`);
+    await admin.unsafe(`CREATE TABLE "${sourceSchema}".retention_samples (id bigint, created_at timestamp, occurred_at timestamp)`);
+    await admin.unsafe(`CREATE TABLE "${destination.schemaName}".retention_samples (id bigint, created_at timestamptz, occurred_at timestamptz)`);
     map = fixtureMap(sourceSchema, destination.schemaName);
     scratch = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "verify-fixture-"));
   }, 30000);
@@ -109,7 +130,8 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     } finally { await admin?.end(); }
   });
   beforeEach(async () => {
-    await admin.unsafe(`TRUNCATE "${sourceSchema}".samples, "${destination.schemaName}".samples`);
+    await admin.unsafe(`TRUNCATE "${sourceSchema}".samples, "${destination.schemaName}".samples,
+      "${sourceSchema}".retention_samples, "${destination.schemaName}".retention_samples`);
     await admin.unsafe(`INSERT INTO "${sourceSchema}".samples VALUES
       (1, 'a', 'MEMBER-FIELD-SENTINEL', '{"b":2,"a":1}', '2026-01-01 02:03:04.123456'),
       (1, 'bc', NULL, 'null', NULL), (2, 'c', 'UNCHANGED', '{"nested":{"z":0,"a":1}}', NULL),
@@ -118,12 +140,12 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     await admin.unsafe(`INSERT INTO "${destination.schemaName}".samples
       SELECT id, part, lower(label), properties::jsonb, instant AT TIME ZONE 'UTC' FROM "${sourceSchema}".samples`);
   });
-  const runCli = async (tableMap = map, args: string[] = []) => {
+  const runCli = async (tableMap = map, args: string[] = [], connectionUrl = databaseUrl!) => {
     const path = join(scratch, "map.json");
     await writeFile(path, JSON.stringify(tableMap));
     return spawnSync(process.execPath, [script, "--map", path, "--batch-size", "2", ...args], {
       encoding: "utf8", timeout: 30000,
-      env: { LEGACY_DATABASE_URL: databaseUrl!, DATABASE_URL: databaseUrl!, PGPASSWORD: "must-not-inherit" },
+      env: { LEGACY_DATABASE_URL: connectionUrl, DATABASE_URL: connectionUrl, PGPASSWORD: "must-not-inherit" },
     });
   };
   it("identical rows exit 0 across batches and emit JSON plus markdown without fields", async () => {
@@ -170,6 +192,62 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     await admin.unsafe(`UPDATE "${destination.schemaName}".samples SET properties='{"integer":9007199254740992}' WHERE id=9007199254740993`);
     const report = await verify({ legacy, next, map, batchSize: 2 });
     expect(report.tables[0]!.mismatchKeys).toEqual([["1", "a"], ["9007199254740993", "large"]]);
+  });
+  it.each(["legacy", "next"])("SQL NULL versus JSON null on %s exits 1, while identical SQL NULLs match", async (side) => {
+    await admin.unsafe(`UPDATE "${sourceSchema}".samples SET properties=NULL WHERE id=1 AND part='bc'`);
+    await admin.unsafe(`UPDATE "${destination.schemaName}".samples SET properties=NULL WHERE id=1 AND part='bc'`);
+    expect((await runCli()).status).toBe(0);
+    const schema = side === "legacy" ? sourceSchema : destination.schemaName;
+    await admin.unsafe(`UPDATE "${schema}".samples SET properties='null' WHERE id=1 AND part='bc'`);
+    const jsonPath = join(scratch, "null-diff.json");
+    const run = await runCli(map, ["--json", jsonPath]);
+    expect(run.status, run.stderr).toBe(1);
+    expect(JSON.parse(await readFile(jsonPath, "utf8")).tables[0].mismatchKeys).toEqual([["1", "bc"]]);
+    expect(run.stdout).not.toContain("member-field-sentinel");
+  });
+  it("canonicalizes nested JSON numeric scale without rounding integers, decimals or quoted numbers", async () => {
+    const left = String.raw`{"number":1.000,"nested":[1e3,9007199254740993.000,0.00000000000000000000000000000000000000012300,-0.00,{"x":-123.4500}],"string":"1.00 \\\"9007199254740993.000\\\""}`;
+    const right = String.raw`{"number":1,"nested":[1000,9007199254740993,0.000000000000000000000000000000000000000123,0,{"x":-123.45}],"string":"1.00 \\\"9007199254740993.000\\\""}`;
+    await admin.unsafe(`UPDATE "${sourceSchema}".samples SET properties=$1::text::json WHERE id=2`, [left]);
+    await admin.unsafe(`UPDATE "${destination.schemaName}".samples SET properties=$1::text::jsonb WHERE id=2`, [right]);
+    expect((await admin`SELECT ${left}::text::jsonb = ${right}::text::jsonb AS equal`)[0]!.equal).toBe(true);
+    expect((await runCli()).status).toBe(0);
+    for (const changed of [right.replace("9007199254740993,", "9007199254740992,"),
+      right.replace("000123,", "000124,"), right.replace("1.00 ", "1.0 ")]) {
+      await admin.unsafe(`UPDATE "${destination.schemaName}".samples SET properties=$1::text::jsonb WHERE id=2`, [changed]);
+      const report = await verify({ legacy, next, map, batchSize: 1 });
+      expect(report.tables[0]!.mismatchKeys).toEqual([["2", "c"]]);
+    }
+  });
+  it.each(["prefer", "disable"])("optional channel_binding=%s is not sent as a startup GUC", async (binding) => {
+    const url = new URL(databaseUrl!);
+    url.searchParams.set("channel_binding", binding);
+    const run = await runCli(map, [], url.href);
+    expect(run.status, run.stderr).toBe(0);
+  });
+  it.each(["join_attempts", "event_search_logs", "agent_event_idempotency_keys"])("%s retention retains unknown-age rows on both sides", async (name) => {
+    const baseline = defaultTableMap({ legacySchema: sourceSchema, nextSchema: destination.schemaName, cutoff });
+    const table = baseline.find((t) => t.name === name)!;
+    const time = name === "event_search_logs" ? "occurred_at" : "created_at";
+    const retentionMap: TableMapping[] = [{ ...table, mappingGaps: [],
+      legacy: { ...table.legacy, from: `"${sourceSchema}".retention_samples l` },
+      next: { ...table.next, from: `"${destination.schemaName}".retention_samples n` },
+      columns: table.columns.filter((f) => f.name === time),
+    }];
+    await admin.unsafe(`INSERT INTO "${sourceSchema}".retention_samples (id, ${time}) VALUES
+      (1,NULL),(2,'2026-07-02'),(3,'2026-07-01'),(4,'2026-09-01')`);
+    await admin.unsafe(`INSERT INTO "${destination.schemaName}".retention_samples (id, ${time}) VALUES
+      (2,'2026-07-02+00'),(3,'2026-06-01+00'),(4,'2026-09-01+00'),(5,NULL)`);
+    const jsonPath = join(scratch, "retention-diff.json");
+    const run = await runCli(retentionMap, ["--json", jsonPath]);
+    expect(run.status, run.stderr).toBe(1);
+    expect(JSON.parse(await readFile(jsonPath, "utf8")).tables[0]).toMatchObject({
+      legacyCount: 3, nextCount: 3, missingCount: 1, extraCount: 1, mismatchCount: 0,
+      missingKeys: [["1"]], extraKeys: [["5"]],
+    });
+    await admin.unsafe(`INSERT INTO "${destination.schemaName}".retention_samples (id) VALUES(1)`);
+    await admin.unsafe(`INSERT INTO "${sourceSchema}".retention_samples (id) VALUES(5)`);
+    expect((await runCli(retentionMap)).status).toBe(0);
   });
   it.each(["null", "duplicate"])("%s keys fail loudly instead of certifying a lossy projection", async (kind) => {
     await admin.unsafe(`INSERT INTO "${sourceSchema}".samples VALUES (${kind === "null" ? "NULL" : "1"},'a','x','{}',NULL)`);
