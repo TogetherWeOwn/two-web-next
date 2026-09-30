@@ -36,7 +36,8 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 <!-- config-docs:start -->
 | Name | Kind | Environments | Default | Failure behaviour |
 | --- | --- | --- | --- | --- |
-| `APP_URL` | Public var, required | dev/staging/prod | Main Wrangler: `https://next.togetherweown.com`; local config: `http://localhost:8787`; no code fallback | Used for callback/canonical URLs and exact Origin checks. Bad configuration can break those paths; invalid/nonproduction origins are noindexed. Not a request-host allowlist. |
+| `APP_URL` | Public var, required | dev/staging/prod | Main Wrangler: `https://next.togetherweown.com`; local config: `http://localhost:8787`; no code fallback | Used for callback/canonical URLs, exact Origin checks, and the TrustHosts request-host allowlist: only this hostname is admitted, others get the branded DB-free 404. Bad configuration can break those paths; invalid/nonproduction origins are noindexed. |
+| `ASSETS` | Optional Fetcher binding | dev/staging/prod | Main Wrangler: `ASSETS` bound to `./public` with `run_worker_first`; local config: directory only, unbound | Static requests pass the Worker host guard before any asset lookup (`run_worker_first`). The guarded 404 fallback serves admitted GET/HEAD misses from `ASSETS`; refused hosts get the branded DB-free 404 with no asset read. Where unbound, the fallback skips the lookup and keeps the branded 404. |
 | `DISCORD_CLIENT_ID` | Public var, required | dev/staging/prod | Main Wrangler: configured Owen application ID; local config: blank; no code fallback | Missing/wrong ID breaks OAuth exchange: ordinary login redirects with `signin_failed`; join shows recovery (503). |
 | `DISCORD_GUILD_ID` | Public var, required | dev/staging/prod | Main Wrangler: configured TWO guild ID (production guild, even on the staging web host); local config: blank | Invalid snowflake hides the join widget; auto-join/lookup failures deny member/moderator status without blocking ordinary sign-in. Scheduled-event reads degrade. |
 | `DISCORD_INVITE_URL` | Public var, required | dev/staging/prod | Main Wrangler and invite helper: configured WEB-HOMEPAGE campaign invite; local config: blank (helper uses fallback) | `/discord` and join recovery reject non-HTTPS/non-Discord URLs, warn and use the built-in invite. Other rendered links use the raw setting; validation is not universal. |
@@ -132,8 +133,9 @@ These names are deliberately **not** extra rows in the marked inventory:
   have no default and must not be used as test credentials. Their procedures
   are outside this reference.
 
-Wrangler serves `public/` through `assets.directory` with no explicit named
-assets binding. Queue consumer names, cron expressions, the Hyperdrive resource
+Wrangler serves `public/` through `assets.directory` with the named `ASSETS`
+binding and `run_worker_first`, so static requests pass the Worker host guard
+before any asset lookup. Queue consumer names, cron expressions, the Hyperdrive resource
 ID and route configuration are deployment metadata, not additional `Env` keys.
 
 ## Drift check and selftest
