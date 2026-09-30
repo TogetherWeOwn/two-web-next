@@ -48,8 +48,23 @@ export interface EventStore {
   staleEventKeys(): Promise<string[]>;
 }
 
-export interface AccessLogStore {
+/** One age-pruned table (Laravel MassPrunable): mass delete older than cutoff, returns rows removed. */
+export interface AgePrunedTable {
   pruneOlderThan(cutoff: Date): Promise<number>;
+}
+
+/** web_sessions expiry sweep: delete rows reads can no longer see (expires_at <= now). */
+export interface SessionSweeper {
+  sweepExpired(now: Date): Promise<number>;
+}
+
+/** Every table the daily model:prune pass owns (routes/console.php ×3 + web_sessions GC). */
+export interface PruneStores {
+  accessLog: AgePrunedTable;
+  joinAttempts: AgePrunedTable;
+  idempotencyKeys: AgePrunedTable;
+  searchLog: AgePrunedTable;
+  sessions: SessionSweeper;
 }
 
 /** ShouldBeUnique: acquire returns false while another holder's lock is live. */

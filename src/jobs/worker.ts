@@ -1,12 +1,12 @@
 import postgres from "postgres";
 import type { JobsEnv } from "../env";
-import { pruneAccessLog, reconcileEvents, runScheduled } from "./cron";
+import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
-import { pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
-import type { AccessLogStore, BotClient, EventStore } from "./types";
+import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
+import type { BotClient, EventStore } from "./types";
 
-// The events/access-log tables (W8/W7) and the Rust bot client (ADR pending) do not exist yet. Until
+// The events tables (W8) and the Rust bot client (ADR pending) do not exist yet. Until
 // they do these adapters refuse loudly: a queue message must retry, never be acked as done by a stub.
 const notWired = (what: string) => () => Promise.reject(new Error(`${what} not wired yet`));
 const events: EventStore = {
@@ -15,7 +15,6 @@ const events: EventStore = {
   closeFinished: notWired("EventStore.closeFinished"),
   staleEventKeys: notWired("EventStore.staleEventKeys"),
 };
-const accessLog: AccessLogStore = { pruneOlderThan: notWired("AccessLogStore.pruneOlderThan") };
 const bot: BotClient = {
   upsertEvent: notWired("BotClient.upsertEvent"),
   postAnnouncement: notWired("BotClient.postAnnouncement"),
@@ -57,7 +56,7 @@ export async function handleScheduled(controller: ScheduledController, env: Jobs
       // The tracking wrapper writes the `queue_jobs` row on dispatch, so /up sees
       // every re-dispatched stale event the moment it is queued.
       reconcile: () => reconcileEvents({ events, queue: trackingQueue(env.SYNC_EVENT_QUEUE, ledger), lock }),
-      prune: () => pruneAccessLog(accessLog),
+      prune: () => pruneModelTables(pgPruneStores(sql)),
     });
   } finally {
     await sql.end({ timeout: 1 });

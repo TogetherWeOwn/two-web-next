@@ -1,6 +1,7 @@
 import type postgres from "postgres";
+import { createPostgresSessionStore, type Sql as SessionSql } from "../sessions";
 import type { SingleFlight, } from "./cron";
-import type { QueueLedger, UniqueLock } from "./types";
+import type { AgePrunedTable, PruneStores, QueueLedger, UniqueLock } from "./types";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -15,6 +16,41 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
       await fn();
     });
     return ran;
+  };
+}
+
+/**
+ * Postgres prune stores (W13 model:prune). Every delete is age-only, the
+ * Laravel MassPrunable shape: strictly older than the cutoff goes
+ * (`occurred_at`/`created_at < cutoff`), cutoff-exact rows survive. Sessions
+ * sweep by expiry (`expires_at <= now`, matching what reads can see).
+ */
+export function pgPruneStores(sql: Sql): PruneStores {
+  // Table names cannot be parameterized in postgres.js tagged templates, so
+  // each age-pruned table gets its own static statement (same MassPrunable
+  // shape as legacy: `... where <age column> < ${cutoff}`).
+  const accessLog: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (await sql`delete from member_data_access_logs where occurred_at < ${cutoff} returning 1`).length,
+  };
+  const joinAttempts: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (await sql`delete from join_attempts where created_at < ${cutoff} returning 1`).length,
+  };
+  const idempotencyKeys: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (await sql`delete from agent_event_idempotency_keys where created_at < ${cutoff} returning 1`).length,
+  };
+  const searchLog: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (await sql`delete from event_search_logs where occurred_at < ${cutoff} returning 1`).length,
+  };
+  return {
+    accessLog,
+    joinAttempts,
+    idempotencyKeys,
+    searchLog,
+    sessions: createPostgresSessionStore(sql as unknown as SessionSql),
   };
 }
 
