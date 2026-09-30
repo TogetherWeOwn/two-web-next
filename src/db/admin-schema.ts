@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -8,9 +8,9 @@ import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text
 // Column-for-column notes where the port differs deliberately:
 // - events.status is text (legacy cast to the EventStatus enum in PHP; the
 //   transition guard lives in src/admin/validation.ts nextStatus()).
-// - activity_log is the spatie shape minus the event/batch columns the legacy
-//   app added but the admin rebuild never reads; subject/causer are stored as
-//   type+id string pairs (nullableMorphs) rather than separate tables.
+// - activity_log retains the spatie event/batch/causer columns for cutover
+//   evidence even though the admin rebuild does not read them; subject/causer
+//   are type+id string pairs (nullableMorphs) rather than separate tables.
 // - created_by / viewer_user_id are plain text (Discord snowflakes), NOT
 //   foreign keys to users: main's login flow never maintains the users
 //   roster, so an FK would reject every admin write with 23503. The W-auth
@@ -135,14 +135,17 @@ export const activityLog = pgTable(
   "activity_log",
   {
     id: serial("id").primaryKey(),
-    logName: text("log_name").notNull().default("default"),
+    logName: text("log_name").default("default"),
     description: text("description").notNull(),
     subjectType: text("subject_type"),
     subjectId: text("subject_id"),
+    causerType: text("causer_type"),
     causerId: text("causer_id"),
+    event: text("event"),
+    batchUuid: uuid("batch_uuid"),
     properties: jsonb("properties").$type<Record<string, { before: unknown; after: unknown }>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [index("activity_log_log_name_idx").on(t.logName)],
 );

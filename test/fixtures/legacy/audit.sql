@@ -88,7 +88,7 @@ CREATE TABLE legacy.agent_event_idempotency_keys (
 );
 INSERT INTO legacy.agent_event_idempotency_keys VALUES
   (94001, '22222222-2222-4222-8222-222222222222', 'synthetic-recent', repeat('c', 64),
-   201, '{"event_key":"01K5SYNTHETIC00000000000001"}', '01K5SYNTHETIC00000000000001',
+   201, '{"event_key":"01K5SYNTHETIC0000000000001"}', '01K5SYNTHETIC0000000000001',
    '2026-09-29 00:00:00.123456', '2026-09-29 00:00:00.234567'),
   (94002, '22222222-2222-4222-8222-222222222222', 'synthetic-old', repeat('d', 64),
    200, '{"ok":true}', NULL, '2026-01-01 00:00:00', '2026-01-01 00:00:00');
@@ -110,7 +110,7 @@ CREATE TABLE legacy.agent_event_audits (
 CREATE INDEX ON legacy.agent_event_audits (grant_id, created_at);
 CREATE INDEX ON legacy.agent_event_audits (event_key);
 INSERT INTO legacy.agent_event_audits VALUES
-  (95001, '22222222-2222-4222-8222-222222222222', 'create', '01K5SYNTHETIC00000000000001',
+  (95001, '22222222-2222-4222-8222-222222222222', 'create', '01K5SYNTHETIC0000000000001',
    'synthetic-recent', repeat('c', 64), 'synthetic-request', 'accepted', NULL,
    '100000000000000003', '2026-09-29 00:00:00.123456', '2026-09-29 00:00:00.234567'),
   (95002, NULL, 'create', NULL, NULL, NULL, 'synthetic-denial', 'denied',

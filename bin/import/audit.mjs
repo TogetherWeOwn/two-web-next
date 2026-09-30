@@ -20,7 +20,8 @@ export function databaseConfig(env) {
     if (!env[name]) throw new Error('missing_database_configuration');
     try {
       const url = new URL(env[name]);
-      if (!['postgres:', 'postgresql:'].includes(url.protocol)) throw new Error();
+      if (!['postgres:', 'postgresql:'].includes(url.protocol) ||
+          !url.hostname || !url.username || url.pathname.length < 2) throw new Error();
     } catch {
       throw new Error('invalid_database_configuration');
     }
@@ -44,6 +45,147 @@ export function safeFailure(error) {
   return `Audit import failed${code}; no row data or connection details logged.`;
 }
 
+export function validateGrant(row) {
+  if (!/^[a-f0-9]{64}$/.test(row.verifier_hash)) throw new Error('invalid_grant_digest');
+}
+
+// Pinned to src/jobs/constants.ts by a test: this tool does not change retention.
+export const IDEMPOTENCY_RETENTION_DAYS = 90;
+const PAGE_SIZE = 500;
+const TABLES = [
+  {
+    name: 'member_data_access_logs',
+    columns: ['id', 'viewer_discord_id', 'viewer_user_id', 'resource', 'action',
+      'subject_user_ids', 'subject_count', 'route', 'occurred_at'],
+    timestamps: ['occurred_at'], json: ['subject_user_ids'], text: ['viewer_user_id'],
+  },
+  {
+    name: 'activity_log',
+    columns: ['id', 'log_name', 'description', 'subject_type', 'subject_id',
+      'causer_type', 'causer_id', 'properties', 'created_at', 'updated_at', 'event', 'batch_uuid'],
+    timestamps: ['created_at', 'updated_at'], json: ['properties'], text: ['subject_id', 'causer_id'],
+  },
+  {
+    name: 'agent_event_grants',
+    columns: ['id', 'agent_id', 'company_id', 'guild_id', 'verifier_hash',
+      'expires_at', 'disabled_at', 'max_events', 'created_at', 'updated_at'],
+    timestamps: ['expires_at', 'disabled_at', 'created_at', 'updated_at'], json: [], text: [],
+  },
+  {
+    name: 'agent_event_audits',
+    columns: ['id', 'grant_id', 'operation', 'event_key', 'idempotency_key',
+      'payload_digest', 'request_id', 'result', 'reason_code', 'discord_event_id', 'created_at', 'updated_at'],
+    timestamps: ['created_at', 'updated_at'], json: [], text: [],
+  },
+  {
+    name: 'agent_event_idempotency_keys',
+    columns: ['id', 'grant_id', 'key', 'payload_digest', 'status', 'body',
+      'event_key', 'created_at', 'updated_at'],
+    timestamps: ['created_at', 'updated_at'], json: ['body'], text: [],
+  },
+];
+
+function identifier(value) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(value)) throw new Error('invalid_identifier');
+  return `"${value}"`;
+}
+
+function tableName(schema, name) {
+  return `${identifier(schema)}.${identifier(name)}`;
+}
+
+export async function importAudit({ legacy, target, legacySchema = 'public', targetSchema = 'public',
+  dryRun = true, enableGrants = false, now = new Date() }) {
+  identifier(legacySchema);
+  identifier(targetSchema);
+  const at = now.toISOString();
+  const cutoff = new Date(now.getTime() - IDEMPOTENCY_RETENTION_DAYS * 86400000).toISOString();
+  const counts = {};
+  // One frozen source snapshot and one atomic destination transaction. A dry run
+  // is genuinely read-only, not an INSERT followed by a rollback (which can
+  // still advance sequences or invoke triggers).
+  await legacy.begin('isolation level repeatable read read only', async (source) => {
+    await source`SET LOCAL TIME ZONE 'UTC'`;
+    await target.begin(dryRun ? 'isolation level repeatable read read only' : '', async (dest) => {
+      await dest`SET LOCAL TIME ZONE 'UTC'`;
+      if (!dryRun) {
+        // Also protects sequence alignment against concurrent default-id INSERTs.
+        const names = TABLES.map((t) => tableName(targetSchema, t.name)).join(', ');
+        await dest.unsafe(`LOCK TABLE ${names} IN SHARE ROW EXCLUSIVE MODE`);
+      }
+      for (const table of TABLES) {
+        const from = tableName(legacySchema, table.name);
+        const to = tableName(targetSchema, table.name);
+        const count = { read: 0, inserted: 0, would_insert: 0, existing: 0, expired: 0, updated: 0 };
+        counts[table.name] = count;
+        // text casts avoid JS integer rounding and millisecond Date truncation.
+        const select = table.columns.map((col) => {
+          const id = identifier(col);
+          if (table.timestamps.includes(col)) return `(${id} AT TIME ZONE 'UTC')::text AS ${id}`;
+          if (col === 'id' || table.json.includes(col) || table.text.includes(col)) return `${id}::text AS ${id}`;
+          return id;
+        }).join(', ');
+        let cursor = null;
+        while (true) {
+          const rows = await source.unsafe(
+            `SELECT ${select} FROM ${from} ${cursor === null ? '' : 'WHERE id > $1'} ORDER BY id LIMIT ${PAGE_SIZE}`,
+            cursor === null ? [] : [cursor],
+          );
+          if (!rows.length) break;
+          for (const row of rows) {
+            count.read++;
+            if (table.name === 'agent_event_idempotency_keys' &&
+                (row.created_at === null || new Date(row.created_at).getTime() < new Date(cutoff).getTime())) {
+              count.expired++;
+              continue;
+            }
+            if (table.name === 'agent_event_grants') {
+              validateGrant(row);
+              if (!enableGrants && row.disabled_at === null) row.disabled_at = at;
+            }
+            const isReplay = table.name === 'agent_event_idempotency_keys';
+            const existing = await dest.unsafe(
+              `SELECT id::text FROM ${to} WHERE id = $1${isReplay ? ' OR (grant_id = $2 AND key = $3)' : ''}`,
+              isReplay ? [row.id, row.grant_id, row.key] : [row.id],
+            );
+            if (existing.length) {
+              count.existing++;
+              continue;
+            }
+            if (dryRun) {
+              count.would_insert++;
+              continue;
+            }
+            const columns = table.columns.map(identifier).join(', ');
+            const values = table.columns.map((col, i) => `$${i + 1}${table.json.includes(col) ? '::jsonb' : ''}`).join(', ');
+            // Only known identifiers enter SQL text; all row values are parameters.
+            const inserted = await dest.unsafe(
+              `INSERT INTO ${to} (${columns}) VALUES (${values}) ON CONFLICT (id) DO NOTHING RETURNING id`,
+              table.columns.map((col) => row[col]),
+            );
+            count.inserted += inserted.length;
+            count.existing += inserted.length ? 0 : 1;
+          }
+          cursor = rows[rows.length - 1].id;
+        }
+      }
+      if (!dryRun) {
+        for (const table of TABLES.filter((t) => t.name !== 'agent_event_grants')) {
+          const name = tableName(targetSchema, table.name);
+          const [sequence] = await dest`SELECT pg_get_serial_sequence(${name}, 'id') AS name`;
+          if (!sequence.name) throw new Error('missing_import_sequence');
+          // setval is the sole non-row write. Never lower an already-used sequence;
+          // no audit UPDATE/DELETE or trigger bypass is needed for explicit IDs.
+          await dest.unsafe(`SELECT setval($1::regclass,
+            GREATEST((SELECT COALESCE(MAX(id), 1) FROM ${name}),
+              (SELECT last_value FROM ${sequence.name})), true)`, [sequence.name]);
+        }
+      }
+    });
+  });
+  return { mode: dryRun ? 'dry-run' : 'apply', grants_enabled: enableGrants, tables: counts };
+}
+
 export async function main(args = process.argv.slice(2), env = process.env) {
   let legacy;
   let target;
@@ -55,9 +197,14 @@ export async function main(args = process.argv.slice(2), env = process.env) {
       return 0;
     }
     const schemas = databaseConfig(env);
-    const connectionOptions = { max: 1, onnotice: () => {} };
-    legacy = postgres(env.LEGACY_DATABASE_URL, connectionOptions);
-    target = postgres(env.DATABASE_URL, connectionOptions);
+    const connectionOptions = (url) => ({
+      max: 1, connect_timeout: 10, onnotice: () => {},
+      // Pin even an empty URL password: postgres.js otherwise falls back to
+      // inherited PGPASSWORD. No alternative credential may be substituted.
+      password: () => decodeURIComponent(new URL(url).password),
+    });
+    legacy = postgres(env.LEGACY_DATABASE_URL, connectionOptions(env.LEGACY_DATABASE_URL));
+    target = postgres(env.DATABASE_URL, connectionOptions(env.DATABASE_URL));
     const result = await importAudit({ legacy, target, ...schemas, ...options });
     console.log(JSON.stringify(result));
     return 0;
@@ -65,7 +212,7 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     console.error(safeFailure(error));
     return 1;
   } finally {
-    await Promise.all([legacy?.end({ timeout: 5 }), target?.end({ timeout: 5 })]);
+    await Promise.allSettled([legacy?.end({ timeout: 5 }), target?.end({ timeout: 5 })]);
   }
 }
 

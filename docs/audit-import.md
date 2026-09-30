@@ -22,7 +22,10 @@ It is an operator cutover tool, not a scheduled job or a Workers endpoint.
   bearer credential, and does not hash a raw credential as a fallback.
 - Existing records are never updated or deleted. Preserved primary keys are the
   identity of historical audit evidence, not a license to overwrite Next data.
-  Users referenced by member-data logs must have been imported first.
+  Historical member/subject/causer references retain their legacy internal IDs
+  (text where Next uses text, unchanged JSON for subject arrays). They are **not**
+  remapped to Discord snowflakes or joined to Next users. The viewer's independent
+  `viewer_discord_id` remains the stable identity for investigation.
 - Stop live writers before applying at cutover. Review id collisions before the
   import; an existing ID is skipped, not replaced. Do not point a fixture test at
   a production or staging URL. This change ships tooling only; it does not run
@@ -41,6 +44,63 @@ node bin/import/audit.mjs --apply --enable-grants # only after admission review
 The default schemas are `public`. `LEGACY_DATABASE_SCHEMA` and `DATABASE_SCHEMA`
 can select separate schemas for a synthetic fixture in one test database.
 Schema identifiers are validated and quoted, never interpolated as SQL text.
+
+## Mapping, counts and retention
+
+Apply the canonical Drizzle migrations before import. Migration
+`1009_legacy-audit-evidence.sql` adds the previously omitted legacy audit fields:
+activity `causer_type`, `event`, `batch_uuid`; grant `max_events` and `updated_at`;
+replay `updated_at`; audit `discord_event_id` and `updated_at`. It also permits
+legacy null activity `log_name`/`updated_at`. No historical values are fabricated.
+`max_events` is retained as evidence only: Next ingress continues to enforce its
+existing one-event quota, and this migration does not widen grant authority.
+
+Legacy Laravel timestamps are UTC wall times (`config/app.php` at the pinned
+legacy revision). The tool interprets them as UTC and transfers text to Postgres,
+not JS Dates, preserving microseconds. Numeric primary keys are read as text to
+avoid JS rounding. Null legacy `created_at` or a log ID outside Next's current
+integer range fails the destination constraint and rolls back; resolve such an
+incompatible source with the migration owner rather than substituting today's
+timestamp or changing an ID.
+
+Counts are emitted once, only after a successful snapshot/transaction: `read`,
+`inserted`, `would_insert`, `existing`, `expired`, `updated` (always zero), for each
+table. Historical IDs identify append-only rows. Replay entries additionally
+skip an existing `(grant_id, key)` natural key. Other uniqueness/FK errors abort
+and roll back the full destination import; no errors are swallowed.
+
+Only replay keys at or after `now - 90 days` are eligible, matching
+`src/jobs/constants.ts` and the current prune comparison (`created_at < cutoff`).
+The exact boundary is included; null creation times are not inside a retention
+window and are counted as expired. No retention rules are changed for any table.
+Older audit evidence is retained; the normal retention job remains responsible
+for its policy. Re-running with `--enable-grants` never changes an already-imported
+grant, so choose the intended admission policy before the first apply.
+
+Apply holds destination writer locks for the import transaction; pause writers
+and budget downtime for the volume. After inserts, the tool advances owned serial
+sequences to at least the existing maximum without lowering them. The principal
+needs SELECT/INSERT, table-lock permissions and the corresponding sequence
+SELECT/UPDATE privileges. Sequence advancement is not transactional in Postgres;
+a failed commit can leave an ID gap, never rewritten audit rows. Dry run uses
+read-only transactions and does not insert-then-rollback or touch sequences.
+
+## Fixture verification
+
+```sh
+# Explicit test-only URL: never use an inherited DATABASE_URL for this suite.
+AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \\
+  npm exec vitest run test/import-audit.test.ts test/import-audit-db.test.ts
+npm run check
+```
+
+The DB suite rejects all hosts except agent-testdb (empty-password `agent_test`,
+database `two_web_next`) and the GitHub Actions Postgres service defined in
+`.github/workflows/ci.yml`. It migrates a disposable Next schema and creates a
+unique `legacy_audit_*` schema from the fixture's `legacy` DDL, so parallel agent
+runs cannot truncate another card's tables. Cleanup drops only those schemas.
+Without the explicit test URL, DB tests skip and credential-free CLI tests run.
+CI supplies the disposable service URL explicitly and runs the fixture suite.
 
 ## Append-only triggers
 

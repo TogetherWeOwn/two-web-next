@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, URL } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { IDEMPOTENCY_KEY_RETENTION_DAYS } from '../src/jobs/constants';
 
 // The operator CLI is standalone JS, not part of the Workers TypeScript bundle.
 // @ts-expect-error Standalone import tooling has no declaration file.
-import { databaseConfig, parseOptions, safeFailure } from '../bin/import/audit.mjs';
+import { databaseConfig, parseOptions, safeFailure, validateGrant, IDEMPOTENCY_RETENTION_DAYS } from '../bin/import/audit.mjs';
 
 const cli = fileURLToPath(new URL('../bin/import/audit.mjs', import.meta.url));
 
@@ -14,6 +15,14 @@ describe('audit import CLI (no credentials required)', () => {
     expect(parseOptions(['--apply', '--enable-grants'])).toEqual({
       dryRun: false, enableGrants: true, help: false,
     });
+  });
+
+  it('pins retention to the existing policy and refuses raw verifier material', () => {
+    expect(IDEMPOTENCY_RETENTION_DAYS).toBe(IDEMPOTENCY_KEY_RETENTION_DAYS);
+    expect(() => validateGrant({ verifier_hash: 'a'.repeat(64) })).not.toThrow();
+    for (const verifier_hash of ['synthetic-bearer', 'x'.repeat(64), null, 'a'.repeat(63)]) {
+      expect(() => validateGrant({ verifier_hash })).toThrow('invalid_grant_digest');
+    }
   });
 
   it('rejects unknown/credential arguments and contradictory modes', () => {
