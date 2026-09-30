@@ -1,10 +1,17 @@
 import type postgres from "postgres";
+import { createPostgresSessionStore, type Sql as SessionSql } from "../sessions";
 import type { SingleFlight, } from "./cron";
-import type { QueueLedger, UniqueLock } from "./types";
+import type { AgePrunedTable, PruneStores, QueueLedger, TxClient, UniqueLock } from "./types";
 
 type Sql = ReturnType<typeof postgres>;
 
-/** Transaction-scoped advisory lock: released on commit/rollback/disconnect, so a crashed run never wedges the job. */
+/**
+ * Transaction-scoped advisory lock: released on commit/rollback/disconnect,
+ * so a crashed run never wedges the job. The body runs INSIDE the reserved
+ * transaction on that same connection (`fn(tx)`): the pool is `max: 1`, so a
+ * body query on the outer pool would wait for the connection this transaction
+ * holds and hang until the worker limit kills it.
+ */
 export function pgSingleFlight(sql: Sql): SingleFlight {
   return async (name, fn) => {
     let ran = false;
@@ -12,20 +19,59 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
       const [row] = await tx`select pg_try_advisory_xact_lock(hashtextextended(${name}, 0)) as got`;
       if (!row?.got) return; // another invocation holds it: skip, cheap when idle
       ran = true;
-      await fn();
+      await fn(tx as unknown as TxClient);
     });
     return ran;
   };
 }
 
-/** ShouldBeUnique lock with TTL (Cache::lock equivalent). Atomic: one upsert that only wins over expired rows. */
-export function pgUniqueLock(sql: Sql): UniqueLock {
+/**
+ * Postgres prune stores (W13 model:prune). Every delete is age-only, the
+ * Laravel MassPrunable shape: strictly older than the cutoff goes
+ * (`occurred_at`/`created_at < cutoff`), cutoff-exact rows survive. Sessions
+ * sweep by expiry (`expires_at <= now`, matching what reads can see).
+ */
+export function pgPruneStores(sql: TxClient | Sql): PruneStores {
+  // Table names cannot be parameterized in postgres.js tagged templates, so
+  // each age-pruned table gets its own static statement (same MassPrunable
+  // shape as legacy: `... where <age column> < ${cutoff}`).
+  const accessLog: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (await sql`delete from member_data_access_logs where occurred_at < ${cutoff} returning 1`).length,
+  };
+  const joinAttempts: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (await sql`delete from join_attempts where created_at < ${cutoff} returning 1`).length,
+  };
+  const idempotencyKeys: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (await sql`delete from agent_event_idempotency_keys where created_at < ${cutoff} returning 1`).length,
+  };
+  const searchLog: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (await sql`delete from event_search_logs where occurred_at < ${cutoff} returning 1`).length,
+  };
+  return {
+    accessLog,
+    joinAttempts,
+    idempotencyKeys,
+    searchLog,
+    sessions: createPostgresSessionStore(sql as unknown as SessionSql),
+  };
+}
+
+/**
+ * ShouldBeUnique TTL uses acquisition time, not transaction-start `now()`.
+ * https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT
+ * Atomic: one upsert that only wins over expired rows.
+ */
+export function pgUniqueLock(sql: TxClient | Sql): UniqueLock {
   return {
     async acquire(key, ttlSeconds) {
       const rows = await sql`
-        insert into job_unique_locks (key, expires_at) values (${key}, now() + make_interval(secs => ${ttlSeconds}))
-        on conflict (key) do update set expires_at = excluded.expires_at
-          where job_unique_locks.expires_at < now()
+        insert into job_unique_locks (key, expires_at) values (${key}, clock_timestamp() + make_interval(secs => ${ttlSeconds}))
+        on conflict (key) do update set expires_at = clock_timestamp() + make_interval(secs => ${ttlSeconds})
+          where job_unique_locks.expires_at < clock_timestamp()
         returning key`;
       return rows.length > 0;
     },

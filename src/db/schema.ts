@@ -86,7 +86,12 @@ export const agentEventIdempotencyKeys = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   // The replay store is unique on (grant, key); rows are never deleted by the request path.
-  (t) => [unique("agent_event_idempotency_grant_key").on(t.grantId, t.key)],
+  (t) => [
+    unique("agent_event_idempotency_grant_key").on(t.grantId, t.key),
+    // Retention prune (W13 model:prune) deletes by age; without this the daily
+    // mass delete scans.
+    index("agent_event_idempotency_created_at_idx").on(t.createdAt),
+  ],
 );
 
 export const agentEventAudits = pgTable(
