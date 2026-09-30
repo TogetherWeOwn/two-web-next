@@ -1,3 +1,6 @@
+// route-inventory: PUT /events/:key/rsvp
+// route-inventory: DELETE /events/:key/rsvp
+// route-inventory: ALL /events/:key/rsvp
 // W9: RSVP PUT/DELETE, the shared 12/min budget, the one-429 shape and the FOR UPDATE races.
 // Live against agent-testdb (skipped without DATABASE_URL, like test/events.test.ts). Never point
 // this at anything but a test container.

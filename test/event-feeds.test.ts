@@ -1,3 +1,6 @@
+// route-inventory: GET /events.ics
+// route-inventory: GET /events.rss
+// route-inventory: GET /events/:file{.+\.ics}
 // W9 calendar feeds: byte-level fixtures pinned to two-web's EventIcs/EventRss/EventGoogleCalendar
 // output, plus route tests (agent-testdb; skipped without DATABASE_URL).
 import { beforeEach, describe, expect, it } from "vitest";

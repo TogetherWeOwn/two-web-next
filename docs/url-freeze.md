@@ -73,3 +73,99 @@ Discord credentials).
   (HTML) vs `/events/{key}.ics`. Never content-negotiate.
 - `robots.txt` is a route, never a static file in `public/` (TOG-7071).
 - Staging advertises its own host in sitemap/robots via `APP_URL`.
+
+## Current mounted registration inventory
+
+Guard: `test/route-inventory.test.ts`; snapshot: `test/fixtures/route-inventory.json`.
+This table records the current Worker, not an assertion that every legacy parity
+feature is finished. It includes `ALL` middleware and the RSVP 405 fallback.
+Stacked handlers at the same method/path are one entry; the exposure and throttle
+audits separately pin middleware multiplicity. Hono does not register automatic
+HEAD handling or static-asset bindings as separate routes here.
+
+Auth classes are **reviewed policy labels** in `test/helpers/route-inventory.ts`,
+not proof inferred from handler bodies. Removing a scoped member/admin middleware
+changes the mounted classification; changing inline authorization still requires
+the existing role/owner/bearer/QA behavioral tests. `public-draft-moderator` means
+public records are public, drafts require a moderator; `member-decoy` means genuine
+RSVP writes require membership but honeypot decoys intentionally bypass auth.
+`oauth-state` is an OAuth callback's signed state, not an existing login session.
+Public routes may read optional sessions; this does not promise zero DB queries.
+
+| Registered method + Hono pattern | Auth class | Test reference / mapping |
+|---|---|---|
+| `ALL /*` | middleware | member-exposure: global security headers |
+| `ALL /admin/*` | moderator | member-exposure: mounted admin gate |
+| `ALL /events/:key/rsvp` | public | rsvp: 405 fallback, not a public read |
+| `ALL /members/*` | member | member-exposure: gate + access log |
+| `ALL /profile` | member | member-exposure: gate + access log |
+| `DELETE /events/:key/rsvp` | member-decoy | rsvp: owner withdrawal + decoy |
+| `GET /` | public | app: home / optional session |
+| `GET /about` | public | seo: frozen funnel leaf |
+| `GET /admin` | moderator | admin: dashboard |
+| `GET /admin/events` | moderator | admin: event table |
+| `GET /admin/events/:key` | moderator | admin: edit form |
+| `GET /admin/events/new` | moderator | admin: create form |
+| `GET /admin/featured` | moderator | admin: featured table |
+| `GET /admin/featured/:id` | moderator | admin: edit form |
+| `GET /admin/featured/new` | moderator | admin: create form |
+| `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
+| `GET /auth/discord` | public | app: current equivalent of legacy `/auth/discord/redirect` |
+| `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
+| `GET /db-ping` | public | db-ping: next-only binding diagnostic, not a legacy URL |
+| `GET /discord` | public | seo: invite redirect |
+| `GET /e/:key` | public-draft-moderator | events: legacy `/e/{event}` |
+| `GET /events` | public | events: calendar |
+| `GET /events.ics` | public | event-feeds: subscription |
+| `GET /events.json` | session | events: authenticated JSON |
+| `GET /events.rss` | public | event-feeds: RSS |
+| `GET /events/:file{.+\.ics}` | public-draft-moderator | event-feeds: legacy `/events/{event}.ics` |
+| `GET /events/past` | public | events: archive |
+| `GET /faq` | public | seo: frozen funnel leaf |
+| `GET /health` | public | app: next-only health alias |
+| `GET /healthz` | public | member-exposure: structural inventory only; behavioral test follow-up |
+| `GET /join` | public | join: landing page |
+| `GET /join/callback` | oauth-state | join: one-click callback |
+| `GET /join/discord` | public | join: OAuth start |
+| `GET /members/:user` | member | profiles: legacy `/members/{user}` |
+| `GET /privacy` | public | privacy: versioned policy |
+| `GET /profile` | member | profiles: current member |
+| `GET /robots.txt` | public | seo: frozen robots |
+| `GET /rules` | public | seo: frozen funnel leaf |
+| `GET /sitemap_index.xml` | public | seo: frozen sitemap |
+| `GET /up` | public | up: always-200 queue health |
+| `PATCH /events/:key` | moderator | events: JSON update |
+| `PATCH /members/:user` | member-owner | profiles: self-only edit |
+| `POST /admin/events` | moderator | admin: draft create |
+| `POST /admin/events/:key` | moderator | admin: update |
+| `POST /admin/events/:key/cancel` | moderator | admin: cancel |
+| `POST /admin/events/:key/publish` | moderator | admin: publish |
+| `POST /admin/featured` | moderator | admin: featured create |
+| `POST /admin/featured/:id` | moderator | admin: featured update |
+| `POST /admin/featured/:id/delete` | moderator | admin: featured delete |
+| `POST /api/agent-events` | machine-bearer | agent-events: W14 machine ingress |
+| `POST /auth/qa/:identity` | staging-token | app: deliberate POST divergence from legacy GET |
+| `POST /csp-reports` | public | csp-reports: no-store violation sink |
+| `POST /events` | moderator | events: draft create |
+| `POST /events/:key/cancel` | moderator | events: cancel |
+| `POST /events/:key/publish` | moderator | events: publish |
+| `POST /logout` | public | app: optional session revoke + origin check |
+| `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
+| `PUT /events/:key/rsvp` | member-decoy | rsvp: owner answer + decoy |
+
+### Updating the inventory
+
+1. Review the added/removed method, exact Hono pattern and auth policy. Keep
+   scoped `ALL` registrations and the RSVP fallback; do not hide them by filtering.
+2. Update the snapshot and the auth classifier if the reviewed policy changes.
+3. Add `// route-inventory: METHOD /pattern` to the existing owning `.test.ts`
+   file. Use the canonical mounted path even when a test requests a concrete key
+   or a child router. The guard excludes its own test files and JSON fixtures;
+   arbitrary URL substrings, method mismatches and prose are not references.
+4. Add an exact backticked method/pattern row here or in `docs/parity.md` with
+   its mapping or intentional divergence. Remove obsolete test-reference comments
+   on route deletion. If no behavioral test exists, file the gap separately;
+   a reference is not an assertion of executed behavioral coverage.
+5. Run `env -u DATABASE_URL npm run check` for fixtures only, or set
+   `DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next` for the
+   authorized disposable test DB. Never run tests against staging or production.

@@ -1,3 +1,4 @@
+// route-inventory: GET /admin/join-attempts
 // Admin pt2 tests (W12): M6 roster, M8 join viewer + funnel stats, remaining
 // M9 net (403 pins on the new routes, read-only guarantees, publish/cancel
 // parity with the W8 status machine).

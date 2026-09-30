@@ -1,3 +1,4 @@
+// route-inventory: GET /db-ping
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
 import type { Env } from "../src/env";
