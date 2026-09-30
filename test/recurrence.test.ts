@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDb } from "../src/db/index";
-import { events } from "../src/db/admin-schema";
+import { activityLog, events } from "../src/db/admin-schema";
 import { createEvent, materializeMissingInstances, materializeRecurringSeries, transitionEvent } from "../src/admin/store";
 import { MAX_OCCURRENCES, occurrences, parseRecurrenceForm } from "../src/admin/recurrence";
 import { ValidationError, utcToWall, wallToUtc } from "../src/admin/validation";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 // Fixtures mirror legacy tests/Unit/Events/RecurrenceScheduleTest.php (two-web main).
 const starts = wallToUtc("2026-10-04 20:00", "Europe/London");
@@ -90,8 +90,12 @@ describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb
   const db = createDb(process.env.DATABASE_URL!);
   const actor = { id: "recurrence-test", username: "mod" };
   const input = { title: "Sunday Squad", game: null, description: null, startsAtUtc: starts, endsAtUtc: ends, timezone: "Europe/London", location: null, capacity: null };
-  beforeEach(async () => void (await db.delete(events)));
-  afterEach(async () => void (await db.delete(events)));
+  const cleanup = async () => {
+    await db.delete(events);
+    await db.delete(activityLog);
+  };
+  beforeEach(cleanup);
+  afterEach(cleanup);
 
   it("creates the parent plus missing occurrences as drafts, and re-running creates nothing", async () => {
     const { row } = await createEvent(db, actor, input, { frequency: "weekly", count: 4, endsOn: null });
@@ -99,9 +103,24 @@ describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb
     expect(rows.map((r) => r.recurrenceIndex)).toEqual([1, 2, 3, 4]);
     expect(rows.every((r) => r.status === "draft")).toBe(true);
     expect(rows.slice(1).every((r) => r.parentEventId === row.id)).toBe(true);
+    const audits = await db.select().from(activityLog);
+    expect(audits).toHaveLength(4);
+    for (const event of rows) {
+      const audit = audits.find((a) => a.subjectId === event.eventKey);
+      expect(audit).toMatchObject({ subjectType: "Event", causerId: actor.id, description: `created event ${event.title}` });
+      expect(audit!.properties).toMatchObject({
+        eventKey: { before: null, after: event.eventKey },
+        startsAt: { before: null, after: event.startsAt.toISOString() },
+        endsAt: { before: null, after: event.endsAt.toISOString() },
+        recurrenceIndex: { before: null, after: event.recurrenceIndex },
+        status: { before: null, after: "draft" },
+      });
+      expect(audit!.properties).not.toHaveProperty("discordEventId");
+    }
     expect(await materializeMissingInstances(db, row)).toBe(0);
     expect(await materializeRecurringSeries(db)).toBe(0);
     expect(await db.select().from(events)).toHaveLength(4);
+    expect(await db.select().from(activityLog)).toEqual(audits);
   });
 
   it("reconcile tops up a missing index and never resurrects a cancelled skipped week", async () => {
@@ -109,10 +128,42 @@ describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb
     const [third] = await db.select().from(events).where(eq(events.recurrenceIndex, 3));
     await transitionEvent(db, actor, third!.eventKey, "cancelled");
     await db.delete(events).where(eq(events.recurrenceIndex, 4));
+    const auditsBefore = await db.select().from(activityLog);
     expect(await materializeRecurringSeries(db)).toBe(1);
     const rows = await db.select().from(events).orderBy(events.recurrenceIndex);
     expect(rows.map((r) => [r.recurrenceIndex, r.status])).toEqual([[1, "draft"], [2, "draft"], [3, "cancelled"], [4, "draft"]]);
     expect(row.recurrenceFrequency).toBe("weekly");
+    const auditsAfter = await db.select().from(activityLog);
+    expect(auditsAfter).toHaveLength(auditsBefore.length + 1);
+    expect(auditsAfter.find((a) => a.subjectId === rows[3]!.eventKey)).toMatchObject({
+      subjectType: "Event",
+      causerId: null,
+      description: "created event Sunday Squad",
+      properties: { recurrenceIndex: { before: null, after: 4 }, parentEventId: { before: null, after: row.id } },
+    });
+    expect(await materializeRecurringSeries(db)).toBe(0);
+    expect(await db.select().from(activityLog)).toEqual(auditsAfter);
+  });
+
+  it("rolls back series creation and reconcile inserts when a child audit fails", async () => {
+    // Reject the last audit after earlier children were inserted to prove that
+    // neither path can commit an occurrence without its creation audit.
+    await db.execute(sql`alter table activity_log add constraint recurrence_test_audit_failure
+      check ((properties->'recurrenceIndex'->>'after')::integer is distinct from 4)`);
+    try {
+      await expect(createEvent(db, actor, input, { frequency: "weekly", count: 4, endsOn: null })).rejects.toThrow();
+      expect(await db.select().from(events)).toHaveLength(0);
+      expect(await db.select().from(activityLog)).toHaveLength(0);
+
+      const { row } = await createEvent(db, actor, input, { frequency: "weekly", count: 1, endsOn: null });
+      await db.update(events).set({ recurrenceCount: 4 }).where(eq(events.id, row.id));
+      const audits = await db.select().from(activityLog);
+      await expect(materializeRecurringSeries(db)).rejects.toThrow();
+      expect(await db.select().from(events)).toHaveLength(1);
+      expect(await db.select().from(activityLog)).toEqual(audits);
+    } finally {
+      await db.execute(sql`alter table activity_log drop constraint recurrence_test_audit_failure`);
+    }
   });
 
   it("does not grow a cancelled series", async () => {

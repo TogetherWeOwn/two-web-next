@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Weekly event series with timezone-aware recurrence input and idempotent occurrence materialization during event reconciliation.
+
+### Fixed
+
+- Record each materialized occurrence's creation audit in the same transaction as its event row; retries do not duplicate audit entries.
+
 ## [0.2.0](https://github.com/TogetherWeOwn/two-web-next/compare/v0.1.0...v0.2.0) (2026-09-29)
 
 

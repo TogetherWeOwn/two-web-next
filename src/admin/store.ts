@@ -42,8 +42,8 @@ function dirty<T extends Record<string, unknown>>(before: T, after: Partial<T>):
 }
 
 async function audit(
-  db: Db,
-  opts: { subjectType: string; subjectId: string; causerId: string; description: string; properties: Record<string, { before: unknown; after: unknown }> },
+  db: Pick<Db, "insert">,
+  opts: { subjectType: string; subjectId: string; causerId: string | null; description: string; properties: Record<string, { before: unknown; after: unknown }> },
 ): Promise<void> {
   await db.insert(activityLog).values({
     logName: "default",
@@ -96,15 +96,15 @@ export async function createEvent(
       })
       .returning();
     if (!parent) throw new Error("event insert returned no row");
-    if (recurrence) await materializeMissingInstances(tx, parent);
+    if (recurrence) await materializeMissingInstances(tx, parent, actor.id);
+    await audit(tx, {
+      subjectType: "Event",
+      subjectId: parent.eventKey,
+      causerId: actor.id,
+      description: `created event ${parent.title}`,
+      properties: dirty({} as Record<string, unknown>, parent),
+    });
     return parent;
-  });
-  await audit(db, {
-    subjectType: "Event",
-    subjectId: row.eventKey,
-    causerId: actor.id,
-    description: `created event ${row.title}`,
-    properties: dirty({} as Record<string, unknown>, { ...row, discordEventId: undefined }),
   });
   return { row, writeBack: null };
 }
@@ -123,9 +123,12 @@ type Writer = Pick<Db, "select" | "insert" | "update">;
  * moderator has not seen; a draft has no Discord write-back, so there is
  * nothing to enqueue here and the sync pass picks the row up once published.
  *
+ * Run inside the caller's transaction so an occurrence and its creation audit
+ * commit together. Cron has no moderator causer; create passes the actor id.
+ *
  * @returns how many rows were created
  */
-export async function materializeMissingInstances(db: Writer, parent: EventRow): Promise<number> {
+export async function materializeMissingInstances(db: Writer, parent: EventRow, causerId: string | null = null): Promise<number> {
   if (parent.recurrenceFrequency !== "weekly") return 0;
   const wanted = occurrences(
     parent.startsAt,
@@ -141,20 +144,31 @@ export async function materializeMissingInstances(db: Writer, parent: EventRow):
   let created = 0;
   for (const [index, when] of wanted) {
     if (index === 1 || existing.has(index)) continue;
-    await db.insert(events).values({
-      eventKey: newEventKey(),
-      title: parent.title,
-      game: parent.game,
-      description: parent.description,
-      startsAt: when.startsAt,
-      endsAt: when.endsAt,
-      timezone: parent.timezone,
-      location: parent.location,
-      capacity: parent.capacity,
-      status: "draft",
-      createdBy: parent.createdBy,
-      parentEventId: parent.id,
-      recurrenceIndex: index,
+    const [child] = await db
+      .insert(events)
+      .values({
+        eventKey: newEventKey(),
+        title: parent.title,
+        game: parent.game,
+        description: parent.description,
+        startsAt: when.startsAt,
+        endsAt: when.endsAt,
+        timezone: parent.timezone,
+        location: parent.location,
+        capacity: parent.capacity,
+        status: "draft",
+        createdBy: parent.createdBy,
+        parentEventId: parent.id,
+        recurrenceIndex: index,
+      })
+      .returning();
+    if (!child) throw new Error("child event insert returned no row");
+    await audit(db, {
+      subjectType: "Event",
+      subjectId: child.eventKey,
+      causerId,
+      description: `created event ${child.title}`,
+      properties: dirty({} as Record<string, unknown>, child),
     });
     created++;
   }
@@ -172,7 +186,7 @@ export async function materializeRecurringSeries(db: Db): Promise<number> {
     .from(events)
     .where(and(isNotNull(events.recurrenceFrequency), inArray(events.status, ["draft", "published"])));
   let created = 0;
-  for (const parent of parents) created += await materializeMissingInstances(db, parent);
+  for (const parent of parents) created += await db.transaction((tx) => materializeMissingInstances(tx, parent));
   return created;
 }
 
