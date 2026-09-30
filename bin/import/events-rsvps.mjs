@@ -171,15 +171,26 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   try {
     const options = parseArgs(args);
     if (!env.LEGACY_DATABASE_URL || !env.DATABASE_URL) throw new Error("Import URLs are unset.");
-    const connectionOptions = { max: 1, prepare: false, fetch_types: false, connect_timeout: 10, onnotice: () => {} };
-    legacy = postgres(env.LEGACY_DATABASE_URL, connectionOptions);
-    target = postgres(env.DATABASE_URL, connectionOptions);
+    const connect = (raw) => {
+      const url = new URL(raw);
+      if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname || !url.username || url.pathname.length < 2) {
+        throw new Error("Expected a complete PostgreSQL URL from env.");
+      }
+      return postgres(raw, {
+        max: 1, prepare: false, fetch_types: false, connect_timeout: 10, onnotice: () => {},
+        // Never fall back to inherited PGUSER/PGPASSWORD/PGDATABASE credentials.
+        username: decodeURIComponent(url.username), database: decodeURIComponent(url.pathname.slice(1)),
+        password: () => decodeURIComponent(url.password),
+      });
+    };
+    legacy = connect(env.LEGACY_DATABASE_URL);
+    target = connect(env.DATABASE_URL);
     const report = await importEventsRsvps(legacy, target, options);
     console.log(JSON.stringify(report));
     return reportExitCode(report);
   } catch {
     // Driver errors can carry URLs, SQL parameters, or member data. Never echo them.
-    console.error("events-rsvps: import failed; verify flags, env URLs, schema, source validity and database access. No batch committed.");
+    console.error("events-rsvps: import failed; verify flags, env URLs, schema, source validity and database access. Outcome unconfirmed; inspect destination before retry.");
     return 1;
   } finally {
     await Promise.all([legacy, target].filter(Boolean).map((sql) => sql.end({ timeout: 2 }).catch(() => {})));

@@ -43,7 +43,9 @@ member identifiers, or raw database errors. Orphan RSVPs are counted by reason
 and skipped, never silently dropped. Missing creators are reported and mapped
 to null, matching the nullable creator FK. Exit 2 means the report contains
 orphans/missing creators (valid rows are still committed with `--apply`); exit 1
-means validation/connection/database failure, with no committed batch; exit 0
+means validation/connection/database failure. Transactional failures roll back;
+a lost commit acknowledgement has an unconfirmed outcome, so inspect the
+destination before retrying. Exit 0
 means a complete import/dry-run without unresolved references. Correct the user
 import and re-run to recover missing members.
 
