@@ -197,4 +197,43 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     expect(report.tables.every((t) => t.legacyCount === 0 && t.nextCount === 0 && t.mismatchCount === 0)).toBe(true);
     expect(renderMarkdown(report)).toContain("Incomplete mapping");
   });
+  it("baseline natural keys remap users, event parents, RSVPs and audit subjects without losing instants", async () => {
+    const l = `"${sourceSchema}"`;
+    const n = `"${destination.schemaName}"`;
+    await admin.unsafe(`
+      INSERT INTO ${l}.users VALUES(1,'42','synthetic',NULL,NULL,false,'2026-09-01 01:02:03.123456','2026-09-01 01:02:03.123456');
+      INSERT INTO ${n}.users VALUES('42','synthetic',NULL,true,'2026-09-01 01:02:03.123456+00','2026-09-01 01:02:03.123456+00');
+      INSERT INTO ${l}.profiles VALUES(11,1,'private-bio','["game-b","game-a"]','UTC','2026-09-01 01:02:03','2026-09-01 01:02:03');
+      INSERT INTO ${n}.profiles VALUES('42','private-bio','["game-b","game-a"]','UTC','2026-09-01 01:02:03+00','2026-09-01 01:02:03+00');
+      INSERT INTO ${l}.events(id,event_key,title,starts_at,ends_at,created_by,parent_event_id,recurrence_ends_on,created_at,updated_at)
+        VALUES(10,'parent','synthetic-parent','2026-09-01 01:02:03.123456+00','2026-09-01 02:02:03+00',1,NULL,'2026-09-30','2026-09-01','2026-09-01'),
+              (20,'child','synthetic-child','2026-09-02 01:02:03+00','2026-09-02 02:02:03+00',1,10,NULL,'2026-09-01','2026-09-01');
+      INSERT INTO ${n}.events(id,event_key,title,starts_at,ends_at,created_by,parent_event_id,recurrence_ends_on,created_at,updated_at)
+        VALUES(100,'parent','synthetic-parent','2026-09-01 01:02:03.123456+00','2026-09-01 02:02:03+00','42',NULL,'2026-09-30','2026-09-01+00','2026-09-01+00'),
+              (200,'child','synthetic-child','2026-09-02 01:02:03+00','2026-09-02 02:02:03+00','42',100,NULL,'2026-09-01+00','2026-09-01+00');
+      INSERT INTO ${l}.rsvps VALUES(12,20,1,'waitlisted','2026-09-01 01:02:03.123456','2026-09-01','2026-09-01');
+      INSERT INTO ${n}.rsvps(id,event_id,user_id,status,synced_to_discord_at,created_at,updated_at)
+        VALUES(120,200,'42','waitlisted','2026-09-01 01:02:03.123456+00','2026-09-01+00','2026-09-01+00');
+      INSERT INTO ${l}.member_data_access_logs VALUES(1,'42',1,'Users','read','[1]',1,'admin.users','2026-09-01');
+      INSERT INTO ${n}.member_data_access_logs VALUES(1,'42','42','Users','read','["42"]',1,'admin.users','2026-09-01+00');
+      INSERT INTO ${l}.join_attempts VALUES(1,'joined',NULL,NULL,'42','2026-07-02','2026-07-02'),(2,'joined',NULL,NULL,'42','2026-07-01','2026-07-01');
+      INSERT INTO ${n}.join_attempts(id,outcome,discord_id,created_at) VALUES(1,'joined','42','2026-07-02+00'),(2,'denied','42','2026-07-01+00');
+      INSERT INTO ${l}.event_search_logs VALUES(1,'private query',2,'2026-07-02'),(2,'ignored old',0,'2026-07-01');
+      INSERT INTO ${n}.event_search_logs VALUES(1,'private query',2,'2026-07-02+00'),(2,'old mismatch ignored',1,'2026-07-01+00');
+    `);
+    const baseline = defaultTableMap({ legacySchema: sourceSchema, nextSchema: destination.schemaName, cutoff });
+    const report = await verify({ legacy, next, map: baseline, batchSize: 1 });
+    expect(report.tables.filter((t) => t.missingCount || t.extraCount || t.mismatchCount)).toEqual([]);
+    expect(report.tables.find((t) => t.table === "events")!.legacyCount).toBe(2);
+    expect(report.tables.find((t) => t.table === "join_attempts")!.legacyCount).toBe(1);
+    expect(report.tables.find((t) => t.table === "event_search_logs")!.nextCount).toBe(1);
+    expect(report.ok).toBe(false); // Explicit gaps still prevent cutover certification.
+    expect(JSON.stringify(report)).not.toContain("private-bio");
+    // Changing only a remapped relationship must fail the row hash.
+    await admin.unsafe(`UPDATE ${n}.events SET parent_event_id=NULL WHERE id=200`);
+    await admin.unsafe(`UPDATE ${n}.member_data_access_logs SET subject_user_ids='["43"]' WHERE id=1`);
+    const changed = await verify({ legacy, next, map: baseline, batchSize: 1 });
+    expect(changed.tables.find((t) => t.table === "events")!.mismatchKeys).toEqual([["child"]]);
+    expect(changed.tables.find((t) => t.table === "member_data_access_logs")!.mismatchKeys).toEqual([["1"]]);
+  });
 });

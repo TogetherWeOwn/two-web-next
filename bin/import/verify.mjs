@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { defaultTableMap } from './verify-map.mjs';
 
@@ -178,7 +179,8 @@ function parseArgs(args) {
     if (!name || !args[i + 1] || args[i + 1].startsWith('--')) fail('invalid_arguments');
     options[name] = ['batchSize', 'detailLimit'].includes(name) ? Number(args[++i]) : args[++i];
   }
-  if (options.jsonPath && options.jsonPath === options.markdownPath) fail('duplicate_output_path');
+  if (options.jsonPath && options.markdownPath &&
+      resolve(options.jsonPath) === resolve(options.markdownPath)) fail('duplicate_output_path');
   quoteIdentifier(options.legacySchema);
   quoteIdentifier(options.nextSchema);
   return options;
