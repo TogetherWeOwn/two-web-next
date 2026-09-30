@@ -25,7 +25,17 @@ const worker = await unstable_dev("spike/hyperdrive-semantics/probe-worker.ts", 
   experimental: { forceLocal: true, watch: false, disableExperimentalWarning: true },
 });
 try {
-  const ready = await worker.fetch("/", { signal: AbortSignal.timeout(3000) });
+  // workerd cold boot can exceed a single short timeout; retry readiness.
+  let ready;
+  for (let attempt = 1; attempt <= 12; attempt++) {
+    try {
+      ready = await worker.fetch("/", { signal: AbortSignal.timeout(5000) });
+      break;
+    } catch (err) {
+      if (attempt === 12) throw err;
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
   assert.equal(ready.status, 404, "Local Worker did not answer the DB-free readiness check");
   const response = await worker.fetch("/spike-run", {
     method: "POST", signal: AbortSignal.timeout(30000),
