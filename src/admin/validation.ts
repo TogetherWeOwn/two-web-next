@@ -14,6 +14,8 @@
 //   takes the first occurrence; an unchanged edit keeps the exact stored
 //   instant via the hidden *_utc carrier (TOG-6805, see routes).
 
+import { featuredImageAllowed } from "../featured-image";
+
 export type EventStatus = "draft" | "published" | "cancelled" | "past";
 
 export type EventFormInput = {
@@ -266,7 +268,7 @@ function isHttpUrl(raw: string): boolean {
 }
 
 /** Parse the featured-content create/edit form (ports FeaturedContentForm rules). */
-export function parseFeaturedForm(data: Record<string, unknown>): FeaturedFormInput {
+export function parseFeaturedForm(data: Record<string, unknown>, appUrl: string): FeaturedFormInput {
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give it a headline.";
@@ -275,7 +277,9 @@ export function parseFeaturedForm(data: Record<string, unknown>): FeaturedFormIn
   const url = str(data.url);
   if (url && (url.length > 255 || !isHttpUrl(url))) fields.url = "Link is a full http(s) URL, or empty for no link.";
   const imageUrl = str(data.image_url);
-  if (imageUrl && (imageUrl.length > 255 || !isHttpUrl(imageUrl))) fields.image_url = "Image URL is a full http(s) URL to a real photo.";
+  if (imageUrl && (imageUrl.length > 255 || !isHttpUrl(imageUrl) || !featuredImageAllowed(imageUrl, appUrl))) {
+    fields.image_url = "Use a full image URL on this site or https://cdn.discordapp.com; other hosts are blocked by the site's security policy.";
+  }
   const imageAlt = str(data.image_alt);
   // TOG-8707: an image with no description is silent for screen-reader
   // visitors — the URL and its description arrive together or not at all.
