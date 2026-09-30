@@ -10,7 +10,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
-import { RSVP_HONEY_FIELD } from "../islands/contracts";
+import { RSVP_HONEY_FIELD, rsvpHoneyFilled, rsvpTrapTripped } from "../islands/contracts";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
@@ -303,8 +303,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, peekSe
     c.header("cache-control", "private, no-store");
     const input = await body(c);
     // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
-    // without touching limiter, auth or DB, and logs nothing.
-    if (typeof input[RSVP_HONEY_FIELD] === "string" && input[RSVP_HONEY_FIELD] !== "") {
+    // without touching limiter, auth or DB, and logs nothing. Present non-string
+    // values count as filled (fail-closed); absent/empty inputs are genuine.
+    if (rsvpTrapTripped(input)) {
       return c.json(rsvpBody({ status: isRsvpStatus(input.status) ? input.status : "going", syncedToDiscordAt: null }), 201);
     }
     const who = await member(c);
@@ -333,8 +334,11 @@ export function registerEventRoutes(app: App, readSession: SessionReader, peekSe
 
   app.delete("/events/:key/rsvp", async (c) => {
     c.header("cache-control", "private, no-store");
-    const honey = c.req.query(RSVP_HONEY_FIELD) ?? (await body(c).catch(() => ({} as Record<string, unknown>)))[RSVP_HONEY_FIELD];
-    if (typeof honey === "string" && honey !== "") return c.body(null, 204);
+    // Both sources are evaluated independently: an empty query value must not mask
+    // a filled body decoy, and a non-string body value trips like a filled string.
+    const queryHoney = c.req.query(RSVP_HONEY_FIELD);
+    const bodyHoney = (await body(c).catch(() => ({} as Record<string, unknown>)))[RSVP_HONEY_FIELD];
+    if (rsvpHoneyFilled(queryHoney) || rsvpHoneyFilled(bodyHoney)) return c.body(null, 204);
     const who = await member(c);
     if (who instanceof Response) return who;
     const db = await dbFor(c);

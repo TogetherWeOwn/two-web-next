@@ -10,10 +10,12 @@ import app from "../src/index";
 import * as adminSchema from "../src/db/admin-schema";
 import * as baseSchema from "../src/db/schema";
 import { events, rsvps } from "../src/db/admin-schema";
+import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import type { SyncMessage } from "../src/events/sync";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
 import { RSVP_RATE_LIMIT } from "../src/islands/contracts";
+import { testDatabaseUrl } from "./helpers/member-data-db";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -32,9 +34,32 @@ async function cookieFor(store: SessionStore, userId: string): Promise<string> {
   return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
 }
 
+// Static containment pin: the guard this file wires below refuses non-test
+// URLs before any driver exists. Always runs, needs no database.
+describe("rsvp test containment", () => {
+  it("refuses a non-test DATABASE_URL before driver construction", () => {
+    expect(() => testDatabaseUrl("postgres://agent_test@staging.example.test/some_db", {})).toThrow(
+      "refusing before connecting",
+    );
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
-  const client = postgres(process.env.DATABASE_URL!, { max: 20 });
-  const db = drizzle(client, { schema: { ...baseSchema, ...adminSchema } });
+  // Executable guard: a non-test DATABASE_URL throws before any driver is
+  // constructed, so the whole-table deletes below can never reach staging or
+  // production. Empty stays empty so the suite still skips cleanly without
+  // DATABASE_URL (the describe body runs at collection even when skipped).
+  // postgres.js treats password: "" as absent and falls back to PGPASSWORD,
+  // so the authorized empty test password is pinned via callback, and the
+  // port is pinned against PGPORT the same way.
+  const rawUrl = process.env.DATABASE_URL ?? "";
+  const url = rawUrl ? testDatabaseUrl(rawUrl) : null;
+  const client = url
+    ? postgres(url.href, { max: 20, port: 5432, connect_timeout: 5, password: () => url.password })
+    : (null as unknown as ReturnType<typeof postgres>);
+  const db = url
+    ? drizzle(client, { schema: { ...baseSchema, ...adminSchema } })
+    : (null as unknown as Db);
   const store = createMemorySessionStore();
   const sent: SyncMessage[] = [];
   const env = {
@@ -86,7 +111,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     await db.delete(events);
     sent.length = 0;
   });
-  afterAll(async () => void (await client.end()));
+  afterAll(async () => void (await client?.end()));
 
   it("guest 401, foreign origin 403, bad status 422, other verbs 405, someone else's user_id 403", async () => {
     const ev = await seed();
@@ -156,6 +181,48 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
     expect(n).toBe(0);
     expect((await app.request(`/events/${ev.key}/rsvp?website=x`, { method: "DELETE" }, env)).status).toBe(204);
+  });
+
+  it("honeypot fail-closed: a present non-string PUT decoy writes no row and spends no hit", async () => {
+    const ev = await seed();
+    const real = await (await put(ev.key, "u1", "going")).text();
+    await db.delete(rsvps);
+    await client`delete from web_throttle_hits`;
+    const decoy = await put(ev.key, null, "going", { website: true });
+    expect(decoy.status).toBe(201);
+    expect(await decoy.text()).toBe(real);
+    expect(await rows(ev.id)).toHaveLength(0);
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    expect(n).toBe(0);
+  });
+
+  it("honeypot: an empty DELETE query cannot mask a filled body decoy (row kept, no hit)", async () => {
+    const ev = await seed();
+    expect((await put(ev.key, "u1", "going")).status).toBe(201);
+    await client`delete from web_throttle_hits`;
+    const res = await app.request(
+      `/events/${ev.key}/rsvp?website=`,
+      {
+        method: "DELETE",
+        headers: { cookie: await cookieFor(store, "u1"), origin: APP_URL, accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify({ website: "spam" }),
+      },
+      env,
+    );
+    expect(res.status).toBe(204);
+    expect(await rows(ev.id)).toHaveLength(1);
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    expect(n).toBe(0);
+  });
+
+  it("honeypot: absent/empty inputs stay genuine (PUT writes, DELETE removes + charges)", async () => {
+    const ev = await seed();
+    expect((await put(ev.key, "u1", "going", { website: "" })).status).toBe(201);
+    expect(await rows(ev.id)).toHaveLength(1);
+    expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
+    expect(await rows(ev.id)).toHaveLength(0);
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    expect(n).toBe(2);
   });
 
   it("the 13th write inside a minute is the one 429 shape with Retry-After, for either verb", async () => {

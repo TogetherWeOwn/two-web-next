@@ -413,6 +413,21 @@ export const RSVP_RATE_LIMIT = { maxAttempts: 12, decaySeconds: 60 } as const;
 export const RSVP_HONEY_FIELD = "website";
 export const RSVP_MIN_FILL_MS = 1000;
 
+/**
+ * Trap verdict: true when the honeypot value is filled. A present non-string
+ * value counts as filled (fail-closed); absent/empty inputs are genuine
+ * clicks and never trip. Honeypot half of profileTrapTripped, without the
+ * profile form's opened-at floor (the RSVP click island carries no trap).
+ */
+export function rsvpHoneyFilled(value: unknown): boolean {
+  return typeof value === "string" ? value !== "" : value !== undefined && value !== null;
+}
+
+/** True when a PUT body carries a filled honeypot and the write must be swallowed. */
+export function rsvpTrapTripped(input: Record<string, unknown>): boolean {
+  return rsvpHoneyFilled(input[RSVP_HONEY_FIELD]);
+}
+
 /* ------------------------------------------------------------ member-profile
  * Legacy: app/Livewire/MemberProfile.php + member-profile.blade.php +
  * MemberProfileTest.php (TOG-8137 session-first ordering, TOG-6957 focus
