@@ -8,10 +8,9 @@ export type Env = AgentEventsEnv & {
   // Optional: surfaces the "Last updated" stamp on /rules (YYYY-MM-DD). Empty or unparseable
   // hides the stamp instead of 500ing (ports two-web TOG-7323).
   RULES_LAST_UPDATED?: string;
-  // S1 (TOG-9679): Hyperdrive → Neon shared Postgres for the /db-ping
-  // acceptance probe. Optional until the operator provisions Hyperdrive;
-  // /db-ping 503s without it. Same shape as AGENT_DB below: at cutover the
-  // operator may point both bindings at one Hyperdrive config id.
+  // Hyperdrive → shared Postgres for web DB reads, sessions, roster writes,
+  // and /db-ping. DATABASE_URL overrides it for local/dev use. Same shape as
+  // AGENT_DB below; the ingress binding remains independent.
   DB?: { connectionString: string };
   // Secrets (wrangler secret put). The bot token must belong to the same Discord application as
   // DISCORD_CLIENT_ID: Discord only lets an application's own bot add a member with that
@@ -19,13 +18,10 @@ export type Env = AgentEventsEnv & {
   DISCORD_CLIENT_SECRET: string;
   DISCORD_BOT_TOKEN: string;
   SESSION_SECRET: string;
-  // Optional. `DATABASE_URL` (agent-testdb locally; absent in unit tests, which
-  // use the memory store) and the Hyperdrive binding (S1/W1) share the Sql
-  // surface in `db.ts`. `QA_AUTH_TOKEN` enables the staging-only QA seam; it is
-  // unset everywhere else and the route 404s without it. The admin slice (W11)
-  // reads Postgres through the same var in dev/staging and fails closed
-  // without it; `MEMBER_ACCESS_LOG_ENFORCE` defaults to true when unset
-  // (a log write failure refuses the read; set "false" to degrade instead).
+  // Optional explicit Postgres URL (agent-testdb locally); web DB consumers
+  // use DB.connectionString when absent. `QA_AUTH_TOKEN` enables the staging-only
+  // QA seam; unset elsewhere, the route 404s. `MEMBER_ACCESS_LOG_ENFORCE`
+  // defaults to true (a log write failure refuses the read; "false" degrades).
   DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;

@@ -17,6 +17,7 @@ import {
 } from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
 import { dbPing, hyperdriveQuery } from "./db/ping";
+import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import type { Env, Session } from "./env";
 import { inviteDestination } from "./invite";
@@ -115,16 +116,12 @@ const migratedUrls = new Set<string>();
 async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
-  const url = c.env.DATABASE_URL;
-  // No DB binding: sessions cannot persist (a fresh memory store per request
-  // fails closed to guest). This is the transitional state until the
-  // Hyperdrive binding lands (W1/S1); staging sets DATABASE_URL meanwhile.
+  const url = databaseUrl(c.env);
+  // No DB configuration: a fresh memory store per request fails closed to guest.
   if (!url) return createMemorySessionStore();
-  // Short-lived per-request client, one pooled connection max. Never ended
-  // while the store holds it (ending here would hand the store a dead client);
-  // idle sockets close themselves via idle_timeout. The W1 Hyperdrive spike
-  // owns production pooling; Hyperdrive will use this same Sql surface.
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
+  // Keep it alive while the store uses it; idle_timeout closes idle sockets.
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedUrls.has(url)) {
     await migrate(sql);
     migratedUrls.add(url);
@@ -132,19 +129,17 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   return createPostgresSessionStore(sql);
 }
 
-// Roster persistence for the N6 user-roster write. Same posture as storeFor:
-// tests inject a Sql double through ROSTER_STORE; staging/production use
-// DATABASE_URL with a short-lived per-request client and the runtime DDL; an
-// absent DATABASE_URL means the roster write quietly degrades to null (a
-// no-op upsert) so sign-in stays up instead of 500ing.
+// Roster persistence shares storeFor's DB selection so signed-in profiles
+// read the same users sign-in writes. Tests may inject ROSTER_STORE; no DB
+// configuration means a no-op upsert so DB-free sign-in tests still work.
 const migratedRosterUrls = new Set<string>();
 
 async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
   if (injected) return injected;
-  const url = c.env.DATABASE_URL;
+  const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedRosterUrls.has(url)) {
     await migrateRoster(sql);
     migratedRosterUrls.add(url);
