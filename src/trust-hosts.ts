@@ -1,85 +1,69 @@
-// TrustHosts re-expression (W16: TOG-10110). Ports two-web's
-// App\Http\Middleware\TrustHosts (APP_URL host only) to Workers.
+// TrustHosts re-expression (W16: TOG-10110). Only the environment's APP_URL
+// hostname is trusted. X-Forwarded-Host is deliberately ignored: it is
+// client-controlled, and absolute URLs always come from APP_URL.
 //
-// Legacy behaviour: only the APP_URL host is trusted; anything else raises
-// before routing. Workers terminate TLS at the edge, so there is no
-// trustProxies/nginx layer to port — and `X-Forwarded-Host` is deliberately
-// ignored (it is client-controlled; honouring it is the classic poisoning
-// vector). The allowlist is per-environment by construction: it is derived
-// from that environment's APP_URL, so staging trusts the staging host,
-// production trusts the production host, and nothing else in either.
+// Both the request URL and any supplied Host must match. A missing Host
+// header is safe only when the URL is trusted; a present malformed Host is
+// never treated as missing. Development uses a loopback APP_URL, not a
+// runtime exemption. An invalid APP_URL fails closed for every request.
 //
-// Refusal shape: the branded DB-free 404 (same page an unknown path gets),
-// never a bare 400/421 — a scanner learns nothing about which hosts are
-// valid, matching Laravel's production rendering of an untrusted host as a
-// 404. The refused host is warn-logged server-side (structured field, never
-// interpolated) so misconfigurations surface in the tail during the W16
-// shadow run. Refused responses carry `no-store, private` from the 404
-// handler, so a poisoned Host can never settle into a shared cache.
-//
-// Two allowances, both documented and safe:
-// - Absent Host header: only synthetic traffic (Vitest's `app.request`, edge
-//   probes) has none — Workers always set Host on real requests. Allowed so
-//   the existing suite needs no churn; a missing host cannot poison anything
-//   because no absolute URL is ever derived from it (all come from APP_URL).
-// - Loopback (`localhost`, `127.0.0.1`, `::1`): `wrangler dev` and Vitest
-//   serve loopback. Not routable, so not a poisoning vector for others.
-//
-// Mounted once on the main app in src/index.tsx, after secureHeaders (so a
-// refusal still leaves with the hardened headers) and before every route.
-// Sub-app factories (admin, profiles) carry no copy: in production all
-// traffic enters through the main app's fetch.
+// Mounted after secureHeaders and before routes, including the ASSETS
+// fallback. Wrangler must use run_worker_first so assets cannot bypass it.
+// Refusals use the branded DB-free 404, never echo the host, and carry
+// no-store, private so an untrusted Host cannot settle into a shared cache.
 
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
 import { notFoundHandler } from "./errors";
 
-const LOOPBACKS = new Set(["localhost", "127.0.0.1", "::1"]);
-
-/** Lowercase hostname without port/brackets; null when absent or empty. */
+/** Parse a single host authority; never truncate a malformed or joined value. */
 export function normalizeHost(raw: string | null | undefined): string | null {
-  const v = raw?.trim().toLowerCase();
-  if (!v) return null;
-  if (v.startsWith("[")) {
-    const end = v.indexOf("]");
-    if (end === -1) return null;
-    return v.slice(1, end) || null;
+  if (raw == null) return null;
+  const value = raw.toLowerCase();
+  const match = value.startsWith("[")
+    ? /^\[([0-9a-f:.]+)\](?::([0-9]+))?$/.exec(value)
+    : /^([a-z0-9.-]+)(?::([0-9]+))?$/.exec(value);
+  if (!match) return null;
+  if (match[2] !== undefined && Number(match[2]) > 65535) return null;
+  if (value.startsWith("[")) {
+    try {
+      // URL validates and canonicalizes IPv6; strip brackets on both sides
+      // of the comparison (URL.hostname retains them).
+      return new URL(`http://${value}`).hostname.slice(1, -1);
+    } catch {
+      return null;
+    }
   }
-  const colon = v.indexOf(":");
-  const host = colon === -1 ? v : v.slice(0, colon);
-  return host || null;
+  const hostname = match[1];
+  if (!hostname) return null;
+  if (hostname.length > 253 || hostname.split(".").some((label) =>
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) return null;
+  return hostname;
 }
 
-/** The one trusted hostname for this environment, from APP_URL. Null when misconfigured. */
+/** The trusted hostname for this environment; null when misconfigured. */
 export function trustedHost(appUrl: string): string | null {
   try {
-    const h = new URL(appUrl).hostname.toLowerCase();
-    return h === "" ? null : h;
+    const url = new URL(appUrl);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return null;
+    return normalizeHost(url.host);
   } catch {
     return null;
   }
 }
 
-/**
- * True when the request may proceed. Exact match only — subdomains,
- * parents, suffix-lookalikes and trailing-dot FQDN forms are all refused,
- * same as the legacy exact APP_URL allowlist.
- *
- * `hosts` carries every host signal on the request (the Host header and the
- * request URL's own hostname — in production the edge keeps them in
- * agreement; in tests either may be synthetic). One untrusted value refuses
- * the request.
- */
+/** Exact match only, with at least one valid authority and no untrusted signal. */
 export function isTrustedHost(appUrl: string, hosts: Array<string | null | undefined>): boolean {
   const trusted = trustedHost(appUrl);
-  for (const h of hosts) {
-    const n = normalizeHost(h);
-    if (n === null) continue; // absent Host: synthetic traffic only (see above)
-    if (LOOPBACKS.has(n)) continue;
-    if (trusted === null) return false; // misconfigured APP_URL fails closed
-    if (n !== trusted) return false;
+  if (trusted === null) return false;
+  let seen = false;
+  for (const host of hosts) {
+    if (host == null) continue;
+    const normalized = normalizeHost(host);
+    if (normalized === null || normalized !== trusted) return false;
+    seen = true;
   }
-  return true;
+  return seen;
 }
 
 /** Refuse foreign Host values before routing. */
@@ -87,12 +71,12 @@ export function trustHosts() {
   return async (c: Context<{ Bindings: Env }>, next: Next) => {
     let urlHost: string | null = null;
     try {
-      urlHost = new URL(c.req.url).hostname;
+      urlHost = new URL(c.req.url).host;
     } catch {
-      urlHost = null;
+      // An invalid request URL is refused, even with a trusted Host header.
     }
-    if (!isTrustedHost(c.env.APP_URL, [c.req.header("host"), urlHost])) {
-      console.warn("refusing request with untrusted host", { host: c.req.header("host") });
+    if (urlHost === null || !isTrustedHost(c.env.APP_URL, [c.req.header("host"), urlHost])) {
+      console.warn("refusing request with untrusted host");
       return notFoundHandler(c);
     }
     await next();

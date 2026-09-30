@@ -169,6 +169,14 @@ export function maintenanceHandler(inviteUrl: string): (c: Context) => Response 
 }
 
 export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
-  app.notFound((c) => notFoundHandler(c));
+  app.notFound(async (c) => {
+    // run_worker_first admits every request through TrustHosts before a
+    // static lookup. ASSETS.fetch never re-enters the user Worker.
+    if (c.env.ASSETS && (c.req.method === "GET" || c.req.method === "HEAD")) {
+      const asset = await c.env.ASSETS.fetch(c.req.raw);
+      if (asset.status !== 404) return asset;
+    }
+    return notFoundHandler(c);
+  });
   app.onError((err, c) => internalErrorHandler(err, c));
 }
