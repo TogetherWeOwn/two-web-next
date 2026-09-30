@@ -262,7 +262,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
-    const session = await readFragmentSession(c);
+    const session = await readSession(c);
     c.header("vary", "Cookie");
     if (e.status === "draft") {
       if (!session?.moderator) return c.text("Forbidden", 403);

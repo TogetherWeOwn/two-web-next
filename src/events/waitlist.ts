@@ -29,6 +29,15 @@ export async function waitlistPosition(db: Pick<Db, "execute">, eventId: number,
   return (await waitlistPositions(db, [eventId], userId)).get(eventId) ?? null;
 }
 
+/** RSVP verbs must finish every promotion-row wait before checking expiry/debiting
+ * the member budget. Lock the current line behind the event lock; accepted writes
+ * can then settle any heads (including a new caller row) without another writer wait. */
+export async function lockWaitlist(tx: Tx, eventId: number): Promise<void> {
+  await tx.select({ id: rsvps.id }).from(rsvps)
+    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "waitlisted")))
+    .orderBy(asc(rsvps.createdAt), asc(rsvps.id)).for("update");
+}
+
 /** Settle FIFO heads inside the caller's transaction and event-row lock, never after commit.
  * A paused/closed event freezes the line. Reset mirror stamps; the caller queues the event
  * write-back after commit, covering both its own write and every promoted answer. */

@@ -8,6 +8,7 @@ import { adminApp } from "../src/admin/routes";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import type { SyncMessage } from "../src/events/sync";
+import { writeRsvp } from "../src/events/rsvp";
 import { CAPACITY_BELOW_GOING, waitlistPosition } from "../src/events/waitlist";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
@@ -112,6 +113,47 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(hit!.n).toBe(2);
   });
 
+  it("a stale-view explicit waitlist answer takes a vacant seat before a newcomer", async () => {
+    const ev = await seed();
+    await put(ev.eventKey, "holder");
+    await withdraw(ev.eventKey, "holder");
+    const head = await put(ev.eventKey, "head", "waitlisted");
+    expect(head.status).toBe(201);
+    expect((await answer(head)).status).toBe("going");
+    const newcomer = await put(ev.eventKey, "newcomer");
+    expect(newcomer.status).toBe(201);
+    expect((await answer(newcomer)).status).toBe("waitlisted");
+    expect((await rows(ev.id)).map((r) => [r.userId, r.status])).toEqual([["head", "going"], ["newcomer", "waitlisted"]]);
+    const [hit] = await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:head'`;
+    expect(hit!.n).toBe(1);
+  });
+
+  it("a Going newcomer cannot bypass an accepted queue left beside a vacancy", async () => {
+    const ev = await seed();
+    await db.insert(rsvps).values({ eventId: ev.id, userId: "head", status: "waitlisted", syncedToDiscordAt: new Date() });
+    const newcomer = await put(ev.eventKey, "newcomer");
+    expect((await answer(newcomer)).status).toBe("waitlisted");
+    const line = await rows(ev.id);
+    expect(line.map((r) => [r.userId, r.status])).toEqual([["head", "going"], ["newcomer", "waitlisted"]]);
+    expect(line[0]!.syncedToDiscordAt).toBeNull();
+    expect(sent.map((m) => m.action)).toEqual(["event.upsert"]);
+  });
+
+  it.each(["new", "older-maybe"])("%s waiter uses the DB clock rather than a skewed/truncated Worker clock", async (kind) => {
+    const ev = await seed();
+    await put(ev.eventKey, "holder");
+    if (kind === "older-maybe") await put(ev.eventKey, "later", "maybe");
+    // Keep the database's microseconds, then make the injected Worker clock earlier
+    // within that millisecond. A Date-based fresh FIFO key would jump this head.
+    const [time] = await client`insert into rsvps (event_id, user_id, status, created_at)
+      values (${ev.id}, 'head', 'waitlisted', date_trunc('milliseconds', clock_timestamp()) + interval '456 microseconds')
+      returning created_at`;
+    const workerTime = new Date(time!.created_at);
+    await writeRsvp(db, ev.eventKey, "later", "going", () => workerTime);
+    expect(await waitlistPosition(db, ev.id, "head")).toBe(1);
+    expect(await waitlistPosition(db, ev.id, "later")).toBe(2);
+  });
+
   it("withdraw promotes the FIFO head in its commit, clears its mirror stamp and queues write-back", async () => {
     const ev = await fullWithLine();
     const before = await rows(ev.id);
@@ -196,7 +238,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
   });
 
   it.each(["json", "admin"])("%s refuses a cap below Going with a field error and no mutation", async (surface) => {
-    const ev = await seed({ capacity: 3 });
+    const ev = await seed({ capacity: 2 });
     await put(ev.eventKey, "a");
     await put(ev.eventKey, "b");
     await put(ev.eventKey, "maybe", "maybe");
@@ -208,7 +250,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     if (surface === "json") expect(await res.json()).toEqual({ error: "invalid", fields: { capacity: CAPACITY_BELOW_GOING } });
     else expect(await res.text()).toContain(CAPACITY_BELOW_GOING);
     const [stored] = await db.select().from(events).where(eq(events.id, ev.id));
-    expect(stored!.capacity).toBe(3);
+    expect(stored!.capacity).toBe(2);
     expect(await rows(ev.id)).toHaveLength(5);
     expect(sent).toHaveLength(0);
     // Exactly the going count is legal; non-seat statuses do not inflate the floor.
@@ -282,6 +324,103 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     } while (Date.now() < deadline);
     throw new Error(`No blocked waiter for backend ${pid}`);
   }
+
+  it.each(["withdraw", "downgrade"])("%s stamps its one budget debit after a promotion-row wait", async (verb) => {
+    const ev = await fullWithLine();
+    await client`delete from web_throttle_hits where bucket = 'rsvp-write:holder'`;
+    let release!: () => void;
+    let ready!: (pid: number) => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const acquired = new Promise<number>((resolve) => { ready = resolve; });
+    const holder = client.begin(async (tx) => {
+      await tx`select id from rsvps where event_id = ${ev.id} and user_id = 'waiter-1' for update`;
+      const [backend] = await tx`select pg_backend_pid() as pid`;
+      ready(Number(backend!.pid));
+      await gate;
+    });
+    let pending: Promise<Response> | undefined;
+    let releasedAt!: Date;
+    try {
+      const pid = await acquired;
+      pending = verb === "withdraw" ? withdraw(ev.eventKey, "holder") : put(ev.eventKey, "holder", "maybe");
+      await waiterBlockedBy(pid);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const [time] = await client`select clock_timestamp() as t`;
+      releasedAt = new Date(time!.t);
+    } finally {
+      release();
+      await holder;
+      await pending;
+    }
+    expect((await pending!).status).toBe(verb === "withdraw" ? 204 : 200);
+    const hits = await client`select at from web_throttle_hits where bucket = 'rsvp-write:holder'`;
+    expect(hits).toHaveLength(1);
+    expect(new Date(hits[0]!.at).getTime()).toBeGreaterThanOrEqual(releasedAt.getTime());
+    expect((await rows(ev.id)).find((r) => r.userId === "waiter-1")!.status).toBe("going");
+  });
+
+  it("PUT judges expiry after the promotion-row wait without charging or mutating", async () => {
+    const ev = await fullWithLine();
+    await client`delete from web_throttle_hits where bucket = 'rsvp-write:holder'`;
+    let release!: () => void;
+    let ready!: (pid: number) => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const acquired = new Promise<number>((resolve) => { ready = resolve; });
+    const holder = client.begin(async (tx) => {
+      await tx`select id from rsvps where event_id = ${ev.id} and user_id = 'waiter-1' for update`;
+      const [backend] = await tx`select pg_backend_pid() as pid`;
+      ready(Number(backend!.pid));
+      await gate;
+    });
+    let pending: ReturnType<typeof writeRsvp> | undefined;
+    let expired = false;
+    try {
+      const pid = await acquired;
+      pending = writeRsvp(db, ev.eventKey, "holder", "maybe", () => expired ? ev.endsAt : new Date());
+      await waiterBlockedBy(pid);
+      expired = true;
+    } finally {
+      release();
+      await holder;
+      await pending;
+    }
+    expect(await pending!).toEqual({ ok: false, reason: "closed", why: "past" });
+    expect((await rows(ev.id)).map((r) => r.status)).toEqual(["going", "waitlisted", "waitlisted"]);
+    const hits = await client`select at from web_throttle_hits where bucket = 'rsvp-write:holder'`;
+    expect(hits).toHaveLength(0);
+  });
+
+  it.each(["going", "waitlisted", "maybe"])("a limited %s write does not settle an existing queue", async (status) => {
+    const ev = await seed();
+    await db.insert(rsvps).values({ eventId: ev.id, userId: "head", status: "waitlisted", syncedToDiscordAt: new Date() });
+    await client`insert into web_throttle_hits (bucket, at) select 'rsvp-write:limited', clock_timestamp() from generate_series(1, 12)`;
+    const before = await rows(ev.id);
+    expect((await put(ev.eventKey, "limited", status)).status).toBe(429);
+    expect(await rows(ev.id)).toEqual(before);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("ordinary draft navigation rotates and renews the moderator's session", async () => {
+    const ev = await seed({ status: "draft" });
+    let now = Date.now();
+    const sessions = createMemorySessionStore(() => now);
+    const token = newSessionToken();
+    const tokenHash = await hashToken(token);
+    await sessions.create({ tokenHash, userId: "moderator", username: "moderator", avatar: null,
+      member: true, moderator: true, expiresAt: new Date(now + 1000) });
+    const cookie = (await serializeSigned("__Host-two_session", token, SESSION_SECRET,
+      { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+    const res = await app.request(`/e/${ev.eventKey}`, { headers: { cookie } }, { ...env, SESSION_STORE: sessions });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const replacement = res.headers.get("set-cookie")!;
+    expect(replacement).toContain("__Host-two_session=");
+    expect(replacement.split(";")[0]).not.toBe(cookie);
+    expect(await sessions.get(tokenHash)).toBeNull();
+    now += 1100;
+    const again = await app.request(`/e/${ev.eventKey}`, { headers: { cookie: replacement.split(";")[0]! } }, { ...env, SESSION_STORE: sessions });
+    expect(again.status).toBe(200);
+  });
 
   it("concurrent withdraw + Going cannot steal the head's freed seat or over-allocate", async () => {
     const ev = await fullWithLine();
