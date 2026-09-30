@@ -29,7 +29,7 @@ function isolated() {
   return { store, env: { ...env, SESSION_STORE: store } as Env };
 }
 const qaLogin = (e: Env, identity = "qa-member", headers: Record<string, string> = {}) =>
-  app.request(`/auth/qa/${identity}`, { method: "POST", headers: { [QA_HEADER]: env.QA_AUTH_TOKEN!, ...headers } }, e);
+  app.request(`/auth/qa/${identity}`, { method: "POST", headers: { origin: new URL(e.APP_URL).origin, [QA_HEADER]: env.QA_AUTH_TOKEN!, ...headers } }, e);
 
 function mockDiscord(failAt?: "exchange" | "user" | "join", globalName: string | null = "Display Name") {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -209,7 +209,7 @@ describe("W15 session lifetime, rotation and logout", () => {
 
   it("guest logout is idempotent", async () => {
     const { env: e } = isolated();
-    for (let i = 0; i < 2; i++) expect((await app.request("/logout", { method: "POST" }, e)).status).toBe(303);
+    for (let i = 0; i < 2; i++) expect((await app.request("/logout", { method: "POST", headers: { origin: e.APP_URL } }, e)).status).toBe(303);
   });
 });
 
@@ -239,7 +239,7 @@ describe("W15 staging-only QA login (deliberate POST divergence)", () => {
     const { env: e } = isolated();
     const fetch = mockDiscord();
     const responses = await Promise.all([
-      app.request("/auth/qa/qa-member", { method: "POST" }, e),
+      app.request("/auth/qa/qa-member", { method: "POST", headers: { origin: e.APP_URL } }, e),
       qaLogin(e, "qa-member", { [QA_HEADER]: "wrong-test-token" }),
       qaLogin(e, "not-a-fixture"),
     ]);

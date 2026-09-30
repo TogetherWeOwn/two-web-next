@@ -42,15 +42,42 @@ npm run db:migrate    # apply to DATABASE_URL
 npm run db:check      # schema-vs-migrations consistency
 ```
 
-`test/db.test.ts` does a live round-trip when `DATABASE_URL` is set and skips
-otherwise, so the cold CI run (no test-DB access) stays green.
+Always supply the test URL for full-suite runs. Most live suites skip when
+`DATABASE_URL` is unset, but `test/review-p1-verify.test.ts` falls back to
+agent-testdb's `postgres` database, so an unset URL is not an offline run.
+Tests must use agent-testdb or disposable CI service containers, never
+production or staging databases. Legacy suites clear shared tables: do not
+run concurrent suites against the same test database.
+
+## Coverage ratchet
+
+```sh
+DATABASE_URL="postgres://agent_test@agent-testdb:5432/two_web_next" npm run test:coverage
+node ci/coverage-summary.mjs
+```
+
+Apply migrations to that test database first. Coverage includes every
+`src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
+area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`) live in
+`vitest.config.ts`. The baseline uses the full suite with the test database;
+without it, skipped live suites may put coverage below the floors. CI's
+required `check` job runs typecheck and the coverage gate against its
+Postgres service, writes a job summary with the ten least-covered files,
+and uploads HTML, LCOV and JSON reports for 14 days, including on failure.
+
+When intentionally raising a floor, re-measure with the same locked provider
+and Node 24 against the test database, leave a one-percentage-point margin
+(rounded down to one decimal place), and include the summary in the PR.
+Never lower a floor simply to make a regression pass.
 
 ## Deploy
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ACCOUNT_ID`, followed by a `/health` smoke test against
-https://next.togetherweown.com. There is deliberately no production job:
+`CLOUDFLARE_ACCOUNT_ID`, followed by a `/up` smoke test against
+https://next.togetherweown.com. The smoke checks HTTP 200 and the expected health
+envelope for liveness, not database readiness: degraded or unknown queue health
+does not fail deployment. There is deliberately no production job:
 production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 
 ## Configuration
