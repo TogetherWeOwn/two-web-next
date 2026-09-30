@@ -1,13 +1,13 @@
-import { and, eq, ilike } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { EVENT_PAGE_SIZE, eventListUrl, parseEventListQuery } from "../src/admin/event-list";
 import { adminApp } from "../src/admin/routes";
 import { listEvents, type EventRow } from "../src/admin/store";
 import { events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -71,23 +71,22 @@ describe("admin event list query and guard (no DB)", () => {
   });
 });
 
-describe.skipIf(!process.env.DATABASE_URL)("admin event list (test Postgres only)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
-  const liveEnv = { ...env, ADMIN_DB: db } as Env;
+describe.skipIf(!process.env.DATABASE_URL)("admin event list (isolated agent-testdb / CI fixture)", () => {
+  let fixture: MemberDataFixture;
   const store = createMemorySessionStore();
   let cookie: string;
   let fixtures: Record<string, EventRow>;
-  const app = () => adminApp({ sessionStore: store, db });
-  const clean = async () => {
-    await db.delete(memberDataAccessLogs).where(eq(memberDataAccessLogs.viewerDiscordId, viewer));
-    await db.delete(events).where(ilike(events.eventKey, "list-test-%"));
-  };
+  const app = () => adminApp({ sessionStore: store, db: fixture.db });
+  const bindings = () => ({ ...env, ADMIN_DB: fixture.db }) as Env;
   const keys = (rows: EventRow[]) => rows.map((r) => r.eventKey);
-  const request = (query = "") => app().request(`/events${query}`, { headers: { cookie } }, liveEnv);
-  const list = (params: Parameters<typeof listEvents>[1]) => listEvents(db, { q: "List fixture", ...params });
+  const request = (query = "") => app().request(`/events${query}`, { headers: { cookie } }, bindings());
+  const list = (params: Parameters<typeof listEvents>[1]) => listEvents(fixture.db, { q: "List fixture", ...params });
+
+  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); });
+  afterAll(() => fixture?.dispose());
 
   beforeEach(async () => {
-    await clean();
+    await fixture.reset();
     cookie = await cookieFor(store, true);
     fixtures = {};
     for (const [key, title, status, day, capacity] of [
@@ -98,7 +97,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (test Postgres only
       ["empty", "D empty", "published", 4, 3],
       ["unlimited", "E unlimited", "draft", 6, null],
     ] as const) {
-      const [row] = await db.insert(events).values({
+      const [row] = await fixture.db.insert(events).values({
         eventKey: `list-test-${key}`, title: `List fixture ${title}`, status, capacity,
         startsAt: new Date(`2026-11-0${day}T20:00:00Z`), endsAt: new Date(`2026-11-0${day}T22:00:00Z`),
         recurrenceFrequency: key === "parent" ? "weekly" : null,
@@ -112,13 +111,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (test Postgres only
       ["overfull", ["going", "going"]],
       ["unlimited", ["going", "going", "going"]],
     ] as const) {
-      await db.insert(rsvps).values(statuses.map((status, i) => ({
+      await fixture.db.insert(rsvps).values(statuses.map((status, i) => ({
         eventId: fixtures[key]!.id, userId: `list-test-member-${i}`, status,
       })));
     }
   });
-  afterEach(clean);
-
   it.each([
     ["parent", ["parent"]], ["child", ["child"]],
     ["standalone", ["empty", "overfull", "standalone", "unlimited"]],
@@ -153,7 +150,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (test Postgres only
 
   it.each(["title; DROP TABLE events--", "__proto__", "constructor", "game"])("ignores invalid sort %s instead of interpolating SQL", async (sort) => {
     expect(keys(await list({ sort }))).toEqual(keys(await list({})));
-    expect(await db.select().from(events).where(ilike(events.eventKey, "list-test-%"))).toHaveLength(6);
+    expect(await fixture.db.select().from(events)).toHaveLength(6);
   });
 
   it("renders selected filters, accessible sort toggles, no delete/bulk, and page-resetting sort links", async () => {
@@ -177,7 +174,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (test Postgres only
   });
 
   it("paginates after filtering/sorting, carries all query values and logs only displayed rows", async () => {
-    await db.insert(events).values(Array.from({ length: EVENT_PAGE_SIZE + 2 }, (_, i) => ({
+    await fixture.db.insert(events).values(Array.from({ length: EVENT_PAGE_SIZE + 2 }, (_, i) => ({
       eventKey: `list-test-page-${i}`, title: `Page fixture & nights ${String(i).padStart(2, "0")}`,
       status: "published", capacity: 4,
       startsAt: new Date("2026-12-01T20:00:00Z"), endsAt: new Date("2026-12-01T22:00:00Z"),
@@ -197,14 +194,14 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (test Postgres only
     expect([...rowKeys(first), ...rowKeys(second)]).toHaveLength(new Set([...rowKeys(first), ...rowKeys(second)]).size);
     const sortLink = second.match(/href="([^"]+)" aria-label="Sort by title descending"/)![1]!.replaceAll("&amp;", "&");
     expect(new URL(sortLink, env.APP_URL).searchParams.has("page")).toBe(false);
-    const [log] = await db.select().from(memberDataAccessLogs)
+    const [log] = await fixture.db.select().from(memberDataAccessLogs)
       .where(and(eq(memberDataAccessLogs.viewerDiscordId, viewer), eq(memberDataAccessLogs.subjectCount, EVENT_PAGE_SIZE)));
     expect(log!.subjectUserIds.sort()).toEqual(rowKeys(first).sort());
     expect(log!.subjectUserIds).not.toContain("list-test-page-25");
   });
 
   it("breaks equal sort values by id so pages do not repeat rows", async () => {
-    const inserted = await db.insert(events).values(Array.from({ length: EVENT_PAGE_SIZE + 1 }, (_, i) => ({
+    const inserted = await fixture.db.insert(events).values(Array.from({ length: EVENT_PAGE_SIZE + 1 }, (_, i) => ({
       eventKey: `list-test-tie-${i}`, title: "Tie fixture", status: "draft",
       startsAt: new Date("2026-12-01T20:00:00Z"), endsAt: new Date("2026-12-01T22:00:00Z"),
     }))).returning();
