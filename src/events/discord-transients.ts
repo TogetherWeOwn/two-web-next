@@ -40,16 +40,17 @@ type GuildScheduledEvent = {
 function toTransient(row: GuildScheduledEvent): DiscordTransient | null {
   const startsAt = new Date(row.scheduled_start_time);
   if (Number.isNaN(startsAt.getTime())) return null;
-  const ends = row.scheduled_end_time ? new Date(row.scheduled_end_time) : null;
+  const ends = row.scheduled_end_time == null ? null : new Date(row.scheduled_end_time);
+  if (ends && Number.isNaN(ends.getTime())) return null;
   return {
     discordId: row.id,
+    status: row.status === 2 ? "active" : "scheduled",
     title: row.name,
     description: row.description ?? null,
     location: row.entity_metadata?.location ?? null,
     startsAt,
-    // An event with no scheduled end reads as ending at its start: the caller's
-    // endsAt >= now boundary still applies and nothing lingers forever.
-    endsAt: ends && !Number.isNaN(ends.getTime()) ? ends : startsAt,
+    // Preserve no-end voice/stage events; Discord's live status is their boundary.
+    endsAt: ends,
   };
 }
 

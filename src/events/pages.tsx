@@ -159,8 +159,7 @@ const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; i
         ) : null}
         <p>
           <time datetime={e.startsAt.toISOString()}>{cardTimeLabel(e.startsAt, tz)}</time>
-          {" · "}
-          <span>{wallTimeHm(e.endsAt, tz)}</span>
+          {e.endsAt ? <>{" · "}<span>{wallTimeHm(e.endsAt, tz)}</span></> : null}
           {" "}
           <span>{tz}</span>
           {rowLocation(e) ? (

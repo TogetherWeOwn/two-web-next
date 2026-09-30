@@ -383,11 +383,13 @@ export function gridTitle(title: string): string {
 export interface DiscordTransient {
   /** Discord scheduled-event id; also the dedupe key against discord_event_id. */
   discordId: string;
+  status: "scheduled" | "active";
   title: string;
   description: string | null;
   location: string | null;
   startsAt: Date;
-  endsAt: Date;
+  /** Voice/stage events can remain scheduled/active without an announced end. */
+  endsAt: Date | null;
 }
 
 /** Transient card anchor key: "discord-<id>" so grid jumps land on its card. */

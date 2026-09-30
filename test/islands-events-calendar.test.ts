@@ -13,7 +13,7 @@ import app from "../src/index";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import type { DiscordEventsSource } from "../src/events/discord-transients";
+import { liveDiscordEventsSource, type DiscordEventsSource } from "../src/events/discord-transients";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
   CALENDAR_DAY_TESTID,
@@ -104,7 +104,7 @@ function eventRow(over: Partial<typeof events.$inferSelect> = {}): typeof events
 
 function transient(id: string, start: Date, title = `Discord raid ${id}`): DiscordTransient {
   return {
-    discordId: id, title, description: null, location: null,
+    discordId: id, status: "scheduled", title, description: null, location: null,
     startsAt: start, endsAt: new Date(start.getTime() + 3600_000),
   };
 }
@@ -136,6 +136,10 @@ function calendar(
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
     if (sql.includes('from "rsvps"')) return { rows: [] };
+    // Identity probes ignore search, visibility and the past drawer's limit.
+    if (sql.startsWith('select "discord_event_id" from "events"')) {
+      return { rows: [...up, ...past].filter((r) => params.includes(r.discordEventId)).map((r) => [r.discordEventId]) };
+    }
     let rows = /"ends_at" </.test(sql) ? past : up;
     // The fake honors the draft clause: guest reads carry it, moderator reads don't.
     if (sql.includes("'draft'")) rows = rows.filter((r) => r.status !== "draft");
@@ -146,6 +150,7 @@ function calendar(
       const term = bound.slice(1, -1).replace(/\\(.)/g, "$1").toLowerCase();
       rows = rows.filter((r) => r.title.toLowerCase().includes(term) || (r.description ?? "").toLowerCase().includes(term));
     }
+    if (sql.includes("limit")) rows = rows.slice(0, Number(params.at(-1)));
     return { rows: rows.map(encode) };
   });
   const env = { ...baseEnv, ...extraEnv, ADMIN_DB: db as unknown as Db, DISCORD_EVENTS: source } as unknown as Env;
@@ -291,6 +296,64 @@ describe("EventsCalendar review regressions", () => {
     expect(html).not.toContain(EVENTS_EMPTY_SEARCH_TESTID);
     expect(html).toContain(`data-testid="${EVENTS_SEARCH_STATUS_TESTID}"></p>`);
     expect(html).not.toContain(eventsSearchMissCopy("x"));
+  });
+});
+
+describe("EventsCalendar second-review regressions", () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it.each(["title", "description", "draft", "past-limit"])("suppresses persisted identities independently of %s eligibility", async (variant) => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    const start = new Date(Date.UTC(2030, 0, 12));
+    const canonical = eventRow({ eventKey: "canonical", title: "Go tournament", discordEventId: "same-id", startsAt: start });
+    const stale = transient("same-id", start, "Chess tournament");
+    if (variant === "description") { stale.title = "Other night"; stale.description = "Chess tournament"; }
+    if (variant === "draft") { canonical.status = "draft"; canonical.title = "Chess draft"; }
+    const past = variant === "past-limit"
+      ? [...Array.from({ length: EVENTS_PAST_DRAWER_LIMIT }, () => eventRow({ title: "Chess archive", startsAt: new Date(0), endsAt: new Date(1) })),
+        { ...canonical, title: "Chess canonical", startsAt: new Date(0), endsAt: new Date(1) }]
+      : [];
+    const src = calendar(variant === "past-limit" ? [] : [canonical], past, okSource([stale]));
+    const html = await (await src.request("/events?q=chess")).text();
+    expect(cardKeys(html)).not.toContain("discord-same-id");
+    expect(cardKeys(html)).not.toContain("canonical");
+    expect(cardKeys(html)).toHaveLength(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
+    if (variant !== "past-limit") expect(html).toContain(EVENTS_EMPTY_SEARCH_TESTID);
+    expect(JSON.parse(String(log.mock.calls.find((c) => c[0] === "event_search")![1])).results)
+      .toBe(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
+    const probe = src.queries.find((q) => q.sql.startsWith('select "discord_event_id" from "events"'))!;
+    expect(probe.params).toEqual(["same-id"]);
+    expect(probe.sql).not.toMatch(/ilike|draft|ends_at|limit/);
+    expect(src.queries.some((q) => q.params.includes("%chess%"))).toBe(true);
+  });
+
+  it.each([
+    [1, -3600_000, null, true], // Scheduled voice/stage events can have no end even after their nominal start.
+    [2, -3600_000, null, true], // ACTIVE with no scheduled end must stay visible.
+    [1, 3600_000, null, true],
+    [2, -3600_000, 3600_000, true],
+    [2, -3600_000, -1, false], // Explicit elapsed ends remain authoritative.
+    [3, -3600_000, null, false], // Completed/cancelled rows never become transients.
+    [4, 3600_000, null, false],
+  ])("resolves live Discord status=%s start=%s end=%s visibility=%s", async (status, startOffset, endOffset, visible) => {
+    const now = Date.now();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([{
+      id: "voice", name: "Voice game night", status,
+      scheduled_start_time: new Date(now + startOffset).toISOString(),
+      scheduled_end_time: endOffset === null ? null : new Date(now + endOffset).toISOString(),
+    }]), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const source = liveDiscordEventsSource(baseEnv);
+    const html = await (await calendar([], [], source).request("/events")).text();
+    expect(cardKeys(html)).toEqual(visible ? ["discord-voice"] : []);
+    expect(html.includes(EVENTS_EMPTY_NEVER_TESTID)).toBe(!visible);
+    expect(source.lastReadFailed()).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(html).not.toContain('href="/e/discord-voice"');
+    if (visible && endOffset === null) {
+      const [row] = await source.upcoming();
+      expect(row).toMatchObject({ endsAt: null, status: status === 2 ? "active" : "scheduled" });
+    }
   });
 });
 
@@ -740,6 +803,53 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     expect(input.focused).toBe(true);
     expect(b.zones.actions.childNodes).toEqual([]);
     expect(b.history).toEqual(["/events?q=jam", "/events"]);
+  });
+
+  it("SSR-restores the current address when failed Clear supersedes Back", async () => {
+    const b = browser("/events?q=old");
+    b.input.value = "old";
+    b.zones.content.childNodes = ["old search results"];
+    b.location.href = APP_URL + "/events";
+    b.popstate();
+    b.clickLink("/events");
+    expect(b.requests[0]!.init.signal!.aborted).toBe(true);
+    b.requests[1]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.reloads).toEqual([APP_URL + "/events"]);
+    expect(b.history).toEqual([]);
+    b.finish(0, "late Back", { input: "", content: ["all events"] });
+    await b.settle();
+    expect(b.zones.content.childNodes).toEqual(["old search results"]); // A late aborted response cannot commit.
+    expect(b.reloads).toHaveLength(1);
+  });
+
+  it("retains the committed render URL after successful search when failed navigation supersedes Back", async () => {
+    const b = browser();
+    b.input.value = "old";
+    b.submit();
+    b.finish(0, "/events?q=old", { input: "old", content: ["search results"] });
+    await b.settle();
+    b.location.href = APP_URL + "/events";
+    b.popstate();
+    b.clickLink("/events?past=1");
+    b.requests[2]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.reloads).toEqual([APP_URL + "/events"]); // Restore Back's address, not the failed destination.
+    expect(b.history).toEqual(["/events?q=old"]);
+  });
+
+  it("keeps last-good content on failure after a successful Back commit", async () => {
+    const b = browser("/events?q=old");
+    b.location.href = APP_URL + "/events";
+    b.popstate();
+    b.finish(0, "/events", { content: ["all events"] });
+    await b.settle();
+    b.clickLink("/events?past=1");
+    b.requests[1]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.reloads).toEqual([]);
+    expect(b.zones.content.childNodes).toEqual(["all events"]);
+    expect(b.feedback.textContent).toBe(EVENTS_CALENDAR_FETCH_FAILED);
   });
 
   it("cancels pending debounce before a slow Back restoration", async () => {

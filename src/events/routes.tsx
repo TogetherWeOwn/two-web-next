@@ -23,7 +23,7 @@ import {
 } from "../islands/contracts";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -110,15 +110,14 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // "never scheduled". Transients are re-checked against the local clock —
     // a just-ended event cannot linger if the collector goes dark.
     const discord = discordEventsSource(c.env);
-    const persistedDiscordIds = new Set(
-      [...localUpcoming, ...localPast].map((e) => e.discordEventId).filter((id): id is string => id !== null),
-    );
+    const discordRows = await discord.upcoming(now);
+    // Probe only candidate identities, without search/draft/time/pagination
+    // predicates. A filtered canonical row must never become a stale transient.
+    const persistedIds = await persistedDiscordIds(db, discordRows.map((t) => t.discordId));
     const term = q.trim().toLowerCase();
-    const transients = dedupeTransients(
-      (await discord.upcoming(now)).filter((t) =>
-        t.endsAt >= now && (term === "" || t.title.toLowerCase().includes(term) || (t.description ?? "").toLowerCase().includes(term)),
-      ),
-      persistedDiscordIds,
+    const transients = dedupeTransients(discordRows, persistedIds).filter((t) =>
+      (t.endsAt === null || t.endsAt >= now) &&
+      (term === "" || t.title.toLowerCase().includes(term) || (t.description ?? "").toLowerCase().includes(term)),
     );
     const discordFailed = discord.lastReadFailed();
     const upcoming = mergeCalendarRows(localUpcoming, transients);

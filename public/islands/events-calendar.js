@@ -29,6 +29,13 @@
   var DEBOUNCE_MS = 300;
   var active = null;
   var debounceTimer = null;
+  // Back changes the address before its fetch commits. Replacing that request
+  // must not lose the obligation to reconcile the address with the rendered page.
+  var renderedAddress = pageAddress(new URL(window.location.href));
+
+  function pageAddress(url) {
+    return url.pathname + url.search;
+  }
 
   function cancelDebounce() {
     if (debounceTimer !== null) clearTimeout(debounceTimer);
@@ -119,6 +126,7 @@
       if (canonicalLink) canonicalLink.href = canonical.href;
       if (ogUrl) ogUrl.content = canonical.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search + url.hash);
+      renderedAddress = pageAddress(url);
       feedback.textContent = "";
       if (opts.focus) {
         var target = root.querySelector(opts.focus);
@@ -127,8 +135,11 @@
     } catch (error) {
       if (active !== controller || error.name === "AbortError") return;
       feedback.textContent = root.dataset.loadError;
-      // Back/forward already changed the address; a normal SSR load restores consistency.
-      if (!push) window.location.assign(url.href);
+      // Preserve last-good content for ordinary failed actions. If Back/forward
+      // changed the address (even before a superseding push), SSR restores it.
+      if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
+        window.location.assign(window.location.href);
+      }
     } finally {
       if (active === controller) {
         setLoading(false);

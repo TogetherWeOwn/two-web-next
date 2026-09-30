@@ -54,6 +54,16 @@ export async function listUpcoming(db: Db, now = new Date(), opts: CalendarReadO
   return withGoing(db, rows);
 }
 
+/** Identity wins over display eligibility: hidden, renamed and paginated rows still suppress Discord copies. */
+export async function persistedDiscordIds(db: Db, candidates: string[]): Promise<Set<string>> {
+  if (candidates.length === 0) return new Set();
+  const rows = await db
+    .select({ discordEventId: events.discordEventId })
+    .from(events)
+    .where(inArray(events.discordEventId, candidates));
+  return new Set(rows.map((r) => r.discordEventId).filter((id): id is string => id !== null));
+}
+
 /**
  * The past drawer (legacy `past()`): visible rows that have ended, most recent
  * first, capped at twenty — the same cap the search-log count reads as "20".
