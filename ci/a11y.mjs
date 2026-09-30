@@ -86,7 +86,7 @@ try {
   const deadline = Date.now() + 60000;
   let ready = false;
   while (Date.now() < deadline && server.exitCode === null) {
-    try { ready = (await readiness.get(`${origin}/health`, { timeout: 1000 })).ok(); } catch {}
+    try { ready = (await readiness.get(`${origin}/up`, { timeout: 1000 })).ok(); } catch {}
     if (ready) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }

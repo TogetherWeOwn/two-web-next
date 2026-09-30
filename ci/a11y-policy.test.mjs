@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { auditCases, auditDatabaseUrl, assertNoViolations, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 
 const coverage = {
@@ -41,6 +43,20 @@ test("refuse staging, production and ambiguous database configuration before con
     "postgres://postgres:ci@localhost/postgres",
     "invalid",
   ]) assert.throws(() => auditDatabaseUrl(raw), /refusing before connecting/);
+});
+
+test("the required CI job runs after a non-green audit and rejects every non-success result", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const check = workflow.slice(workflow.indexOf("\n  check:\n"));
+  assert.match(check, /\n    needs: a11y\n/);
+  assert.match(check, /\n    if: always\(\)\n/);
+  assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
+  const guard = check.match(/steps:\n      - name: Require successful accessibility audit\n        env:\n          A11Y_RESULT: [^\n]+\n        run: ([^\n]+)/);
+  assert(guard, "Audit guard must be the required job's first step");
+  for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
+    const execution = spawnSync("bash", ["-c", guard[1]], { env: { A11Y_RESULT: result } });
+    assert.equal(execution.status, result === "success" ? 0 : 1, `Audit result ${result || "missing"}`);
+  }
 });
 
 test("WCAG 2.0, 2.1 and 2.2 A/AA are included, and even minor violations fail", () => {

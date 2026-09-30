@@ -6,7 +6,10 @@ Run `npm ci --include=dev`, `npx playwright install --with-deps chromium`, then
 GitHub Actions uses its own Postgres 17 service container. The runner rejects
 all other databases before connecting; do not pass staging/production URLs.
 
-The `a11y` job is a dependency of the existing required `check` job. Any axe
+The `a11y` job is a dependency of the existing required `check` job. The required
+job runs even after a failed/skipped audit and explicitly rejects any result
+other than `success`; GitHub's mergeable skipped-check behavior cannot bypass it.
+Wrangler readiness uses the retained `/up` liveness endpoint. Any axe
 violation, unexpected HTTP status, redirect, non-HTML response, missing dynamic
 fixture, or failed negative control prevents `check` from passing. Reports and
 screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
