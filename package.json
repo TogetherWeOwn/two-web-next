@@ -8,6 +8,7 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "check": "npm run typecheck && npm run test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -21,7 +22,10 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260929.1",
     "@types/node": "^26.6.3",
+    "@vitest/coverage-v8": "^5.0.2",
     "drizzle-kit": "^0.31.11",
+    "esbuild": "0.28.1",
+    "miniflare": "5.20260926.1-alpha",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
     "wrangler": "^4.143.1"

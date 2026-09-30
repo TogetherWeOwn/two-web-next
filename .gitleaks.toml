@@ -11,3 +11,13 @@ regexes = ['''1539711683898118154''', '''326474832151838730''']
 description = "Fixture moderator snowflake: the public SySOp role id (TOG-106/TOG-427), referenced in tests and the QA seam against fixture role lists only — the live grant stays env-only via DISCORD_MODERATOR_ROLE_IDS"
 targetRules = ["discord-client-id"]
 regexes = ['''508654771276873729''']
+
+[[allowlists]]
+description = "Synthetic event-key fixtures (ULID-shaped, not credentials) in the event search tests"
+targetRules = ["generic-api-key"]
+regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FA[A-D]''']
+
+[[allowlists]]
+description = "Two synthetic ULID event keys in binding-only DB regression fixtures, not credentials"
+targetRules = ["generic-api-key"]
+regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FAV''', '''01ARZ3NDEKTSV4RRFFQ69G5FAW''']

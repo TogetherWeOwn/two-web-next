@@ -5,10 +5,15 @@
 ### Added
 
 - Weekly event series with timezone-aware recurrence input and idempotent occurrence materialization during event reconciliation.
+- Legacy auth, session, join and QA-login acceptance mapping with explicit parity gaps; Hono, Miniflare/workerd and test-container Postgres regression coverage.
+- Port member-data exposure and access-log acceptance tests from Pest to Vitest, including the mounted Worker role matrix and real failing Postgres INSERTs.
 
 ### Fixed
 
 - Record each materialized occurrence's creation audit in the same transaction as its event row; retries do not duplicate audit entries.
+- Join landing links preserve safe return paths and reject whitespace in return destinations; recovery pages share the validated Discord invite fallback and the widget sends no referrer.
+- Refuse admin member-data responses when the access-log INSERT fails; replace Hono's finalized response rather than returning an ignored 503.
+- Isolate member-data test cleanup and failure DDL in disposable test-service schemas; include directly mounted GET and ALL routes in the exposure inventory.
 
 ## [0.2.0](https://github.com/TogetherWeOwn/two-web-next/compare/v0.1.0...v0.2.0) (2026-09-29)
 

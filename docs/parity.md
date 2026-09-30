@@ -26,9 +26,9 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
 | `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count; RsvpButton/prev-next/related pending | W8 ✅ (partial) |
-| `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | pending | W9 📋 |
-| `GET /events.rss` (published upcoming, ETag/304, atom self-link) | pending | W9 📋 |
-| `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | pending | W9 📋 |
+| `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
+| `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
+| `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
 | `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | ✅ same-app flow (`identify`+`guilds.join`, auto-join, role recompute) | W5 ✅ |
 | `GET /auth/qa/{identity}` (staging-only, header token) | ✅ as `POST /auth/qa/:identity` — **deliberate divergence**: GET login is CSRF-able; POST + byte-identical 404s | W5 ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; throttle pending | W5 ✅ + N5 (new card, throttle) |
@@ -38,7 +38,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | pending | W8 📋 + W11 🔶 |
-| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | contract pinned, routes pending | W9 📋 + W10 slice 2 ⛔ |
+| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, FOR UPDATE capacity races (test/rsvp.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
 
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
@@ -48,7 +48,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /about`, `GET /faq` (static, zero-query) | ✅ | W4 ✅ |
 | `GET /privacy` (versioned `content/privacy-policy-v1.md` from disk, no session/cache/DB) | ❌ missing — no card covered it | **N1** (new: `/privacy` versioned page) |
 | `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ❌ (`/health`, `/healthz` exist, no queue payload) | **N3** (new: `/up` health check) |
-| `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ❌ missing | W16 📋 (CSP/header parity scope) |
+| `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-uri` + Reporting API `Reporting-Endpoints`/`Report-To` point at it | W16 📋 (TOG-10107) |
 
 ## 3. Machine ingress (`routes/api.php`)
 
@@ -63,7 +63,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 |---|---|---|
 | GoingCount (badge, `going-count-updated` broadcast, one count query) | ✅ contract + binder + 18 drift tests | W10 slice 1 ✅ |
 | RsvpButton (all states, honeypot swallow, throttle copy, focus) | re-spec ✅, needs W9 routes | W10 slice 2 ⛔, blocked by W9 |
-| EventsCalendar (list+grid one pass, `?q=` search + logging, month math, Discord transients) | re-spec ✅, needs W8 | W10 slice 3 ⛔, blocked by W8 |
+| EventsCalendar (list+grid one pass, `?q=` search + logging, month math, Discord transients) | re-spec ✅, needs W8 | server side (search + logging) ✅ TOG-10105; island UI W10 slice 3 |
 | PastEvents (20/page, canonicals, no RSVP controls) | re-spec ✅, needs W8 | W10 slice 4 ⛔, blocked by W8 |
 | MemberProfile (view/edit, PATCH validation, spam trap, focus) | re-spec ✅, needs W7 | W10 slice 5 ⛔, blocked by W7 |
 
@@ -77,7 +77,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | FeaturedContent resource (CRUD + publish window + live preview + safe delete) | pending | W11 🔶 (M4; verify: homepage render path) |
 | JoinAttempt resource (read-only viewer: outcome/source/request/discord-id) | pending | W12 📋 (M8) |
 | JoinFunnelStats widget (per-outcome counts, 60 s cache, no member data) | pending | W12 📋 (M8 funnel-stats) |
-| TopZeroResultSearches widget (normalized queries only) | pending — not named in W12 scope | W12 📋 (verify scope at build) |
+| TopZeroResultSearches widget (normalized queries only) | ✅ TOG-10105 (dashboard section, moderator gate) | W12 📋 (verify scope at build) |
 | Moderator admin guide + member-data docs | ops docs follow the rebuild | W11 🔶 / W12 📋 |
 
 ## 6. Jobs, queues, scheduler
@@ -87,8 +87,8 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | SyncEventToDiscord (unique per eventKey, tries 6, backoff 10/60/300/900/3600, debounce 10 s, grant recheck, terminal stamp) | pending (PR #7 in review) | W13 ⛔ |
 | CallInternalAction (`role.assign`/`announcement.post` only; production web never dispatches it — drill-only) | pending, port shape | W13 ⛔ |
 | `events:reconcile` every 10 min (close past, materialize series, re-dispatch stale; single-flight) | pending | W13 ⛔ |
-| `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | pending | W13 ⛔ |
-| `web_sessions` expiry cleanup (no legacy equivalent — Laravel GC; rows accumulate without one) | ❌ missing | W13 ⛔ (verify scope at build) |
+| `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ this card (90 d each, legacy constants) | W13 ⛔ |
+| `web_sessions` expiry cleanup (no legacy equivalent — Laravel GC; rows accumulate without one) | ✅ this card (expiry sweep in the prune pass) | W13 ⛔ |
 | Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | pending | W8 📋 + W13 ⛔ |
 
 ## 7. Console commands
@@ -124,7 +124,7 @@ go hunting for them.
 | Legacy | Next status | Card |
 |---|---|---|
 | EventPolicy (view/drafts/publish/cancel/toggleRsvp/Delete moderator-only) | pending | W8 📋 |
-| RsvpPolicy (owner-only write; Published + !ended + rsvpOpen create) | pending | W9 📋 |
+| RsvpPolicy (owner-only write; Published + !ended + rsvpOpen create) | ✅ owner-only, Published + !ended + rsvpOpen | W9 ✅ |
 | FeaturedContentPolicy (all moderator; public via `currentlyVisible`) | pending | W11 🔶 |
 | JoinAttemptPolicy (read moderator; writes denied — controller writes direct) | pending | W6 🔶 (write) + W12 📋 (read) |
 | UserPolicy (`updateProfile` self-only) | pending | W7 📋 |
@@ -135,8 +135,9 @@ go hunting for them.
 | Legacy | Next status | Card |
 |---|---|---|
 | `secureHeaders`-equivalent (CSP on web+admin+leaves, static anti-framing/sniffing globally) | ✅ global secureHeaders (stricter: no inline/eval — no Livewire to need it) | W3 ✅/W4 ✅ |
-| One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; human routes pending | W14 ✅ + W9 📋 |
-| Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes) | ❌ no throttle layer yet | **N5** (new: human-route throttles) |
+| One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; RSVP writes ✅ (rateLimitExceeded); other human routes as they land | W14 ✅ + W9 ✅ |
+| Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes) | ✅ `src/throttle.ts` + every-POST-throttled audit (`test/throttle.test.ts`) | **N5** ✅ |
+| VerifyCsrfToken on unsafe web methods | Central same-origin guard for POST/PUT/PATCH/DELETE, two exact machine exemptions, mounted-route audit; no CSRF token scheme ([policy](same-origin.md)) | [TOG-10850](/TOG/issues/TOG-10850) |
 | `member-access-log` (arm/flush, fail-closed 503 when enforced) | ✅ `src/access-log.ts` middleware on member routes; admin guard carries the same contract | W7 ✅ + W12 📋 (retention) |
 | TrustHosts (APP_URL host only) / trustProxies (nginx socket) | Workers: platform TLS; host check pending | W16 📋 |
 | Maintenance mode except `/discord` | dropped — Workers deploys are atomic, no maintenance mode; DB-free `/discord` floor preserved | dropped (platform) |
@@ -148,8 +149,8 @@ go hunting for them.
 |---|---|---|
 | EventService (capacity/waitlist under lock, series create/materialize, sync-after-commit) | pending | W8 📋 + W11 🔶 + W13 ⛔ |
 | InternalActionClient + signer (sole bot speaker; `addMember` sync-only, never queued) | ✅ signer byte-parity; client pending | W14 ✅ + W13 ⛔ |
-| EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | pending | W8 📋 (JSON-LD) + W9 📋 (feeds) |
-| RsvpRateLimit / AgentEventRateLimit | pending / ✅ | W9 📋 / W14 ✅ |
+| EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | ✅ | W8 ✅ (JSON-LD) + W9 ✅ (feeds) |
+| RsvpRateLimit / AgentEventRateLimit | ✅ / ✅ | W9 ✅ / W14 ✅ |
 | SafeRedirect (guarded `next`), SpamTrap (honeypot + 1000 ms floor) | pending | W6 🔶 / W7 📋 + W9 📋 |
 | RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |
 | MemberStatsSource / Profiles support (rank, stats, milestones) | pending | W7 📋 |

@@ -2,6 +2,7 @@
 // JSX idiom — no client JS, no component framework. Moderators get labelled
 // fields and field errors; every form posts back to its own route.
 
+import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
 import type { EventRow, FeaturedRow } from "./store";
@@ -52,7 +53,7 @@ export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, d
   </Shell>
 );
 
-export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number> }> = ({ actor, funnel }) => (
+export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>; zeroSearches?: ZeroResultSearch[] }> = ({ actor, funnel, zeroSearches }) => (
   <Shell title="Dashboard">
     <section>
       <h1>Moderation</h1>
@@ -91,6 +92,34 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number> 
                   <tr key={outcome}>
                     <td>{outcome}</td>
                     <td data-testid={`funnel-${outcome}`}>{n}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      ) : null}
+      {zeroSearches ? (
+        <section data-testid="top-zero-searches">
+          <h2>Top searches with no results</h2>
+          <p>What guests looked for on /events and found nothing. A repeat miss is a game night nobody posted yet.</p>
+          {zeroSearches.length === 0 ? (
+            <p data-testid="top-zero-searches-empty">No missed searches.</p>
+          ) : (
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Search</th>
+                  <th>Misses</th>
+                  <th>Last searched</th>
+                </tr>
+              </thead>
+              <tbody>
+                {zeroSearches.map((r) => (
+                  <tr key={r.query}>
+                    <td>{r.query}</td>
+                    <td>{r.searches}</td>
+                    <td>{r.lastSearchedAt.toISOString()}</td>
                   </tr>
                 ))}
               </tbody>

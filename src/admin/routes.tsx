@@ -22,6 +22,7 @@
 // guard flushes the access log (M5). Writes leave the audit trail in the
 // store (M7) and dispatch the write-back seam where one is due (M3).
 
+import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
@@ -43,6 +44,7 @@ import {
   updateEvent,
   updateFeatured,
 } from "./store";
+import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
 import { parseRecurrenceForm } from "./recurrence";
@@ -113,7 +115,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
     const db = await dbFor(c);
     const funnel = db ? await joinFunnelStats(db) : undefined;
-    return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} />);
+    // Normalized queries + counts only; a failing or blocked read resolves
+    // undefined itself, so the widget is omitted — the dashboard never waits.
+    const zeroSearches = db ? await topZeroResultSearches(db) : undefined;
+    return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />);
   });
 
   admin.get("/join-attempts", async (c) => {
@@ -151,7 +156,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<EventFormPage mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/events", async (c) => {
+  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -208,7 +213,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     );
   });
 
-  admin.post("/events/:key", async (c) => {
+  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const key = c.req.param("key");
@@ -247,7 +252,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   });
 
   for (const action of ["publish", "cancel"] as const) {
-    admin.post(`/events/:key/${action}`, async (c) => {
+    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
       try {
@@ -283,7 +288,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<FeaturedFormPage mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/featured", async (c) => {
+  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -321,7 +326,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<FeaturedFormPage mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
   });
 
-  admin.post("/featured/:id", async (c) => {
+  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
@@ -352,7 +357,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
   });
 
-  admin.post("/featured/:id/delete", async (c) => {
+  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
