@@ -1,3 +1,18 @@
+// route-inventory: GET /admin
+// route-inventory: GET /admin/events
+// route-inventory: GET /admin/events/new
+// route-inventory: GET /admin/events/:key
+// route-inventory: GET /admin/featured
+// route-inventory: GET /admin/featured/new
+// route-inventory: GET /admin/featured/:id
+// route-inventory: POST /admin/events
+// route-inventory: POST /admin/events/:key
+// route-inventory: POST /admin/events/:key/publish
+// route-inventory: POST /admin/events/:key/cancel
+// route-inventory: POST /admin/featured
+// route-inventory: POST /admin/featured/:id
+// route-inventory: POST /admin/featured/:id/delete
+// Canonical mounted paths; these tests also exercise adminApp at its child root.
 // Admin pt1 tests (W11 M9): 403-pins + CRUD round-trips.
 //
 // Two layers, same seams as the site (src/index.tsx, test/app.test.ts):
