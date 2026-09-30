@@ -167,7 +167,10 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
       if (enforceEnabled(c.env)) {
-        return c.text("Member data is temporarily unavailable.", 503);
+        // The handler already finalized its response. Returning a new response
+        // here is ignored by Hono's compose; replace it before it leaves.
+        c.res = c.text("Member data is temporarily unavailable.", 503);
+        c.header("cache-control", "private, no-store");
       }
     }
   };
