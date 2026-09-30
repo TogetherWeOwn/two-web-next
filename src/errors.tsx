@@ -174,7 +174,9 @@ export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
     // static lookup. ASSETS.fetch never re-enters the user Worker.
     if (c.env?.ASSETS && (c.req.method === "GET" || c.req.method === "HEAD")) {
       const asset = await c.env.ASSETS.fetch(c.req.raw);
-      if (asset.status !== 404) return asset;
+      // ASSETS responses have immutable headers; outer security middleware
+      // needs a writable copy. Preserve the streaming body and asset metadata.
+      if (asset.status !== 404) return new Response(asset.body, asset);
     }
     return notFoundHandler(c);
   });
