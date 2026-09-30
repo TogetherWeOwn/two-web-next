@@ -22,6 +22,11 @@ export type IngressConfig = {
   readsPerMinute: number;
   serviceMutatingPerMinute: number;
   serviceReadsPerMinute: number;
+  // The outer route shield (two-web TOG-8402, config `agent-events.route_per_minute`):
+  // every hit per credential per minute, counted before auth, the grant lookup
+  // and the audit write. A flood guard above the inner budgets' sum, not the
+  // allowance — the bot's normal burst never sees it.
+  routePerMinute: number;
   lockWaitMs: number;
 };
 
@@ -34,6 +39,7 @@ export const DEFAULT_CONFIG: IngressConfig = {
   readsPerMinute: 30,
   serviceMutatingPerMinute: 60,
   serviceReadsPerMinute: 300,
+  routePerMinute: 60,
   lockWaitMs: 5000,
 };
 
@@ -130,7 +136,23 @@ export function validateFields(raw: unknown): { ok: true; fields: Fields } | { o
   return { ok: true, fields: { title: title!, game, description, starts_at: startsAt!, ends_at: endsAt!, timezone: timezone!, location: location!, capacity } };
 }
 
-export async function handleAgentEvent(sql: Sql, cfg: IngressConfig, body: unknown, credential: string | null): Promise<Answer> {
+/** One 429 shape for every throttle on this ingress (two-web TOG-6788). */
+export function throttleEnvelope(retryAfterSeconds: number): Answer {
+  const retry = Math.max(1, retryAfterSeconds);
+  return {
+    status: 429,
+    body: { reason: "rate_limited", message: `Too many requests. Try again in ${retry} seconds.`, retry_after: retry },
+    headers: { "Retry-After": String(retry) },
+  };
+}
+
+export async function handleAgentEvent(
+  sql: Sql,
+  cfg: IngressConfig,
+  body: unknown,
+  credential: string | null,
+  clientIp: string | null = null,
+): Promise<Answer> {
   const requestId = ulid();
   const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
   const dig = await digest(isPlainObject(body) ? body : {});
@@ -143,6 +165,15 @@ export async function handleAgentEvent(sql: Sql, cfg: IngressConfig, body: unkno
     await audit(sql, grant, op, eventKey, key, dig, requestId, result, reason);
     return { status, body: { reason, message, request_id: requestId } };
   };
+
+  // The outer shield (two-web TOG-8402): every hit per credential per minute,
+  // counted before auth, the grant lookup and the audit write — ahead of the
+  // enabled check, as the route middleware fires before the controller runs.
+  // A presented credential buckets on its own hash (one guess never spends
+  // another's); anonymous hits bucket per IP. Refused hits write nothing.
+  const shieldKey = credential ? await sha256Hex(credential) : `ip:${clientIp ?? "unknown"}`;
+  const shielded = await shield(sql, cfg, shieldKey);
+  if (shielded) return shielded;
 
   if (!cfg.enabled) {
     return deny(null, auditOp, auditKey, "denied", "ingress_disabled", 404, "The agent event ingress is not enabled in this environment.");
@@ -231,6 +262,22 @@ async function replayAnswer(sql: Tx, grant: Grant, op: string, replay: Row, dig:
   return { status: replay.status, body: { ...(replay.body as Record<string, unknown>), replayed: true, request_id: requestId } };
 }
 
+// The outer shield's counter (two-web TOG-8402): one bucket per credential
+// hash (or anonymous IP), counted before auth. Returns the 429 envelope when
+// the budget is spent — audited by nobody, since the hit never reached auth —
+// and records the hit otherwise.
+async function shield(sql: Sql, cfg: IngressConfig, shieldKey: string): Promise<Answer | null> {
+  const bucket = `shield:${shieldKey}`;
+  return sql.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-hits:${bucket}`}, 0))`;
+    const [r] = await tx`SELECT count(*)::int AS n, coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - now()))), 1)::int AS wait
+                         FROM agent_event_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
+    if (r!.n >= cfg.routePerMinute) return throttleEnvelope(Math.max(1, r!.wait));
+    await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
+    return null;
+  });
+}
+
 async function rateLimit(sql: Sql, cfg: IngressConfig, grant: Grant, op: Op): Promise<Answer | null> {
   const read = op === "read";
   const buckets: [string, number][] = [
@@ -247,9 +294,7 @@ async function rateLimit(sql: Sql, cfg: IngressConfig, grant: Grant, op: Op): Pr
                            FROM agent_event_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
       if (r!.n >= max) retry = Math.max(retry, Math.max(1, r!.wait));
     }
-    if (retry > 0) {
-      return { status: 429, body: { reason: "rate_limited", message: `Too many requests. Try again in ${retry} seconds.`, retry_after: retry }, headers: { "Retry-After": String(retry) } };
-    }
+    if (retry > 0) return throttleEnvelope(retry);
     for (const [bucket] of buckets) await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
     await tx`DELETE FROM agent_event_hits WHERE at < now() - interval '5 minutes'`;
     return null;
@@ -295,7 +340,10 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
 
   if (op === "read") {
     const [{ n }] = await tx`SELECT count(*)::int AS n FROM agent_events WHERE agent_grant_id = ${grant.id}` as [{ n: number }];
-    const receipts = await tx`SELECT operation, result, reason_code, request_id, created_at FROM agent_event_audits WHERE grant_id = ${grant.id} AND event_key = ${ek} ORDER BY id LIMIT 50`;
+    // The bounded window (two-web AgentEventReceiptWindowTest): the latest 50,
+    // oldest first. Newest-first then reversed — LIMIT applies before the flip.
+    const newest = await tx`SELECT operation, result, reason_code, request_id, created_at FROM agent_event_audits WHERE grant_id = ${grant.id} AND event_key = ${ek} ORDER BY id DESC LIMIT 50`;
+    const receipts = [...newest].reverse();
     return done(200, {
       event: proofFields(event),
       local: { status: event.status, synced_to_discord: false },
