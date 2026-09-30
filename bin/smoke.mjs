@@ -50,13 +50,13 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
       const headers = response.headers;
       check(Boolean(headers.get("content-security-policy")?.trim()), "nonempty Content-Security-Policy", headers.get("content-security-policy") ? "empty" : "missing");
       check(headers.get("x-content-type-options")?.toLowerCase() === "nosniff", "X-Content-Type-Options nosniff", headers.get("x-content-type-options") ?? "missing");
-      // Staging noindex is applied to HTML only (src/headers.ts), not feeds or redirects.
-      if (route.type === "text/html") {
+      const contentType = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+      // Staging noindex follows returned HTML, including guest denials (src/headers.ts).
+      if (contentType === "text/html") {
         check(/\bnoindex\b/i.test(headers.get("x-robots-tag") ?? ""), "staging X-Robots-Tag noindex", headers.get("x-robots-tag") ?? "missing");
       }
       if (route.type) {
-        const actual = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
-        check(actual === route.type, `Content-Type ${route.type}`, actual ?? "missing");
+        check(contentType === route.type, `Content-Type ${route.type}`, contentType ?? "missing");
       }
       const body = await response.text();
       if (route.json) {

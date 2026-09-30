@@ -135,6 +135,38 @@ test("allows degraded /up and guest admin 403", async (t) => {
   assert.equal(result.ok, true, result.output);
 });
 
+for (const robotsTag of [null, "index, follow", "noindex, nofollow"]) {
+  test(`guest admin HTML 403 requires noindex (${robotsTag ?? "missing"})`, async (t) => {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/admin") {
+        result.status = 403;
+        result.body = "<h1>Forbidden</h1>";
+        result.headers["content-type"] = "Text/HTML; charset=UTF-8";
+        delete result.headers.location;
+        if (robotsTag !== null) result.headers["x-robots-tag"] = robotsTag;
+      }
+    });
+    const result = await run(url);
+    assert.equal(result.ok, robotsTag === "noindex, nofollow", result.output);
+    if (!result.ok) {
+      assert.ok(result.output.includes(`FAIL /admin: expected staging X-Robots-Tag noindex; actual ${robotsTag ?? "missing"}`), result.output);
+      assert.ok(!result.output.includes("PASS /admin"), result.output);
+    }
+  });
+}
+
+test("non-HTML redirects and guest admin 403 do not require noindex", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (["/discord", "/profile", "/admin"].includes(route)) {
+      result.headers["content-type"] = "text/plain; charset=UTF-8";
+      delete result.headers["x-robots-tag"];
+      if (route === "/admin") { result.status = 403; delete result.headers.location; }
+    }
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+});
+
 test("rejects wrong content type despite successful status and body", async (t) => {
   const { url } = await stub(t, (route, result) => { if (route === "/events.rss") result.headers["content-type"] = "text/html"; });
   const result = await run(url);
