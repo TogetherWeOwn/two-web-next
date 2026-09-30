@@ -330,7 +330,9 @@ export const EventsCalendarPage: FC<{
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
-  const searchMiss = searching && !hasVisibleResults;
+  // An error state suppresses the miss block: a failed read must never read
+  // as "no matches" (contract: error beats everything, including a search).
+  const searchMiss = searching && !hasVisibleResults && emptyState === null;
   const url = calendarUrl(state);
   const byDay = new Map<string, CalRow[]>();
   for (const e of [...upcoming, ...(showPast ? past : [])]) {
