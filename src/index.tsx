@@ -18,6 +18,7 @@ import {
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
 import { dbPing, hyperdriveQuery } from "./db/ping";
 import { databaseOptions, databaseUrl } from "./db/connection";
+import { isDatabaseUnavailable } from "./db/errors";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
@@ -226,8 +227,16 @@ async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, r
 const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
 
 app.get("/", async (c) => {
-  const store = await storeFor(c);
-  const session = await readSession(c, store);
+  // The public pitch survives app-DB loss too. A failed session lookup must
+  // render as guest, never infer identity from the signed bearer cookie.
+  let session: Session | null = null;
+  let sessionUnavailable = false;
+  try {
+    session = await readSession(c, await storeFor(c));
+  } catch (err) {
+    if (!isDatabaseUnavailable(err)) throw err;
+    sessionUnavailable = true;
+  }
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
@@ -235,7 +244,7 @@ app.get("/", async (c) => {
   const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,
+    <Home session={session} sessionUnavailable={sessionUnavailable} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,
   );
 });
 
@@ -491,9 +500,17 @@ app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => 
   // the origin check below refuses one anyway.
   const origin = c.req.header("origin");
   if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-  const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (token) await store.revoke(await hashToken(token)).catch(() => {});
+  if (token) {
+    // Revocation remains best-effort during an outage, including first-use
+    // migration failure. Clearing this browser's cookie is not DB revocation.
+    try {
+      const store = await storeFor(c);
+      await store.revoke(await hashToken(token));
+    } catch (err) {
+      if (!isDatabaseUnavailable(err)) throw err;
+    }
+  }
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
   return c.redirect("/", 303);
 });

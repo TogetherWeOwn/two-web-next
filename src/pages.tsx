@@ -159,7 +159,8 @@ export const Home: FC<{
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
-}> = ({ session, notice, inviteUrl, appUrl, counts }) => (
+  sessionUnavailable?: boolean;
+}> = ({ session, notice, inviteUrl, appUrl, counts, sessionUnavailable = false }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -185,7 +186,9 @@ export const Home: FC<{
         <h1>The lobby is open.</h1>
         <p class="lead">We spent most of our life private. Now you can just turn up.</p>
         <p>Small enough that people notice when you come back.</p>
-        {session?.member ? (
+        {sessionUnavailable ? (
+          <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
+        ) : session?.member ? (
           <a class="btn" href={inviteUrl}>Open Discord</a>
         ) : (
           <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>

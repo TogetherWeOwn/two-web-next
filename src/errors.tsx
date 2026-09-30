@@ -1,7 +1,9 @@
 import type { Context, Hono } from "hono";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
+import { isDatabaseUnavailable } from "./db/errors";
 import type { Env } from "./env";
+import { inviteDestination } from "./invite";
 import { Layout, SiteFooter } from "./pages";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
@@ -106,6 +108,7 @@ export function notFoundHandler(c: Context): Response | Promise<Response> {
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
   console.error("unhandled error:", err);
   alertRequestError(err, { method: c.req.method, route: c.req.routePath || c.req.path });
+  if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
   c.header("cache-control", "no-store, private");
   c.status(500);
   return c.html(<InternalErrorPage />);
@@ -131,6 +134,18 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   c.header("cache-control", "no-store, private");
   c.status(429);
   return c.html(<RateLimitedPage />);
+}
+
+// Shared outage envelope: no session/data reads, no driver details. Explicit
+// JSON endpoints (e.g. ingress) may opt in even without an Accept header.
+export function databaseUnavailable(c: Context, jsonOnly = false): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  c.header("Vary", "Accept");
+  c.status(503);
+  if (jsonOnly || c.req.header("accept")?.includes("application/json")) {
+    return c.json({ error: "db_unavailable", message: "The service is temporarily unavailable. Try again shortly." });
+  }
+  return c.html(<MaintenancePage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
 }
 
 export function maintenanceHandler(inviteUrl: string): (c: Context) => Response | Promise<Response> {
