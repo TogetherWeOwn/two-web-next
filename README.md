@@ -67,6 +67,31 @@ production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 | `DATABASE_URL` | var (dev) / Hyperdrive binding (staging/prod) | Local/dev: agent-testdb. Without it sessions cannot persist (per-request memory store, fails closed to guest). |
 | `DISCORD_MODERATOR_ROLE_IDS` | var | Snowflake IDs, comma-separated, never names. Blank = nobody is a moderator (safe default). |
 | `QA_AUTH_TOKEN` | secret (staging only) | Enables `POST /auth/qa/:identity`. Unset everywhere else; the route 404s without it. |
+| `FEATURED_IMAGE_HOSTS` | var | Additional approved image hosts, comma-separated exact DNS names (e.g. `images.unsplash.com`). Empty/unset permits only `cdn.discordapp.com`. Used by both featured form validation and CSP. |
+
+### Image and frame policy
+
+Featured images must be full HTTPS URLs (255 characters maximum), with alt text,
+no credentials, and no non-default port. IP literals (including alternate IPv4
+spellings and IPv6), single-label hosts, localhost and private/reserved DNS
+suffixes are rejected. `FEATURED_IMAGE_HOSTS` accepts hostnames only, not schemes,
+paths, ports or wildcards; invalid entries are ignored, never inserted into CSP.
+Hosts match exactly, not their subdomains. The Discord CDN is always permitted
+for avatars and featured images; add other hosts only after approving the host
+and its content. The shipped variable is empty: arbitrary remote image URLs are
+not admitted. Existing rows on unapproved hosts remain browser-blocked until
+edited or their host is approved.
+
+`img-src` permits `'self'` for site assets plus HTTPS on those same approved
+hosts. This is a browser-load policy, not a server image fetch/proxy or DNS
+resolution check. Approved hosts must remain publicly routed and trustworthy;
+CSP also blocks redirects outside its sources. Removing a host blocks existing
+images on it. No proxying or resizing is performed.
+
+Only GET/HEAD `/join` permits frames, and only from `https://discord.com` for
+the widget. Other routes have `frame-src 'none'`; `frame-ancestors 'none'` and
+`X-Frame-Options: DENY` still prevent framing this site. CSP continues reporting
+to `/csp-reports` via both `report-uri` and the `csp-endpoint` reporting group.
 
 ## Contributing
 
