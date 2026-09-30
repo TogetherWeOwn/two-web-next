@@ -40,6 +40,7 @@ import {
   listEvents,
   listFeatured,
   NotFoundError,
+  setRsvpOpen,
   transitionEvent,
   updateEvent,
   updateFeatured,
@@ -140,14 +141,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const q = c.req.query("q") ?? undefined;
     const status = c.req.query("status") ?? undefined;
-    const rows = await listEvents(db, { q, status });
+    const rsvpOpen = c.req.query("rsvp_open") ?? "";
+    const rows = await listEvents(db, { q, status, rsvpOpen: rsvpOpen === "1" ? true : rsvpOpen === "0" ? false : undefined });
     declareAccess(c, {
       resource: "events",
       action: "list",
       route: "admin.events.index",
       subjects: rows.map((r) => r.eventKey),
     });
-    return c.html(<EventsPage rows={rows} q={q ?? ""} status={status ?? ""} />);
+    return c.html(<EventsPage rows={rows} q={q ?? ""} status={status ?? ""} rsvpOpen={rsvpOpen} />);
   });
 
   admin.get("/events/new", (c) => {
@@ -233,19 +235,22 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
   });
 
-  for (const action of ["publish", "cancel"] as const) {
+  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
     admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
       try {
-        const to = action === "publish" ? "published" : "cancelled";
-        const { row, writeBack } = await transitionEvent(db, c.get("adminActor"), c.req.param("key"), to);
+        const actor = c.get("adminActor");
+        const key = c.req.param("key");
+        const { row, writeBack } = action === "rsvp-pause" || action === "rsvp-reopen"
+          ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
+          : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
         if (writeBack) await dispatchWriteBack(c.env, writeBack);
         return c.redirect(`/admin/events/${row.eventKey}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
         if (err instanceof ValidationError) {
-          return errorPage(c, 422, "That transition is not allowed", err.fields.status);
+          return errorPage(c, 422, "That transition is not allowed", err.fields.status ?? err.fields.rsvp_open);
         }
         throw err;
       }

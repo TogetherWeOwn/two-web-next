@@ -194,7 +194,19 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
   </Shell>
 );
 
-export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = ({ rows, q, status }) => (
+const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
+  if (row.status !== "published" || row.endsAt <= new Date()) return null;
+  const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
+  return (
+    <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
+      <button type="submit" class="link" data-testid={action}>
+        {row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
+      </button>
+    </form>
+  );
+};
+
+export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string; rsvpOpen: string }> = ({ rows, q, status, rsvpOpen }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
@@ -211,6 +223,14 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = (
                 {s === "" ? "All" : s}
               </option>
             ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="rsvp_open">RSVPs</label>
+          <select id="rsvp_open" name="rsvp_open">
+            <option value="" selected={rsvpOpen === ""}>All</option>
+            <option value="1" selected={rsvpOpen === "1"}>Open</option>
+            <option value="0" selected={rsvpOpen === "0"}>Paused</option>
           </select>
         </div>
         <div class="field">
@@ -255,6 +275,7 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = (
                       <button type="submit" class="link">Cancel</button>
                     </form>
                   ) : null}
+                  <RsvpAction row={r} />
                 </td>
               </tr>
             ))
@@ -363,6 +384,7 @@ export const EventFormPage: FC<{
                   <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
                 </form>
               ) : null}
+              <RsvpAction row={row} />
             </div>
           </section>
         ) : null}

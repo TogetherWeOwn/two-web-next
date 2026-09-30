@@ -6,18 +6,14 @@
 // - spatie LogsActivity dirty-only audit on both resources (M7).
 // - AccessRecorder one-row-per-request access log (M5).
 //
-// Concurrency: every state change runs in one transaction behind a
-// row-equivalent serialisation. Drizzle/postgres-js has no FOR UPDATE builder
-// in 0.45, so the transition re-reads inside the transaction and aborts on a
-// concurrent change (optimistic guard on updated_at); W1/W13 own the
-// Hyperdrive FOR UPDATE semantics proof. The queue dispatch + reconcile
-// backstop arrive with W8/W13; `writeBackDue` marks what they must carry.
+// Pause/reopen holds the same event row lock as member RSVP writes. Moderator
+// routes dispatch the returned write-back only after the transaction commits.
 
 import { and, asc, desc, eq, ilike, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { activityLog, events, featuredContents, memberDataAccessLogs } from "../db/admin-schema";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
-import { isMirrored, newEventKey, nextStatus } from "./validation";
+import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
 
 export type Actor = { id: string; username: string };
 
@@ -166,6 +162,39 @@ export async function transitionEvent(
   });
 }
 
+/** Pause/reopen keeps the event published; only a changed flag needs a sync. */
+export async function setRsvpOpen(
+  db: Db,
+  actor: Actor,
+  eventKey: string,
+  open: boolean,
+  clock: () => Date = () => new Date(),
+): Promise<{ row: EventRow; writeBack: WriteBack }> {
+  return db.transaction(async (tx) => {
+    // Share the RSVP writer's event lock. Check the clock after acquiring it,
+    // so a wait that crosses the end cannot reopen an expired event.
+    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
+    if (!locked) throw new NotFoundError("event");
+    const now = clock();
+    if (locked.status !== "published" || locked.endsAt <= now) {
+      throw new ValidationError({ rsvp_open: "Only published events that have not ended can pause or reopen RSVPs." });
+    }
+    if (locked.rsvpOpen === open) return { row: locked, writeBack: null };
+    const [row] = await tx.update(events).set({ rsvpOpen: open, updatedAt: now })
+      .where(eq(events.eventKey, eventKey)).returning();
+    if (!row) throw new Error("event RSVP toggle returned no row");
+    await tx.insert(activityLog).values({
+      logName: "default",
+      description: `${open ? "reopened" : "paused"} RSVPs for event ${row.title}`,
+      subjectType: "Event",
+      subjectId: row.eventKey,
+      causerId: actor.id,
+      properties: { rsvpOpen: { before: locked.rsvpOpen, after: open } },
+    });
+    return { row, writeBack: { eventKey: row.eventKey, status: "published" } };
+  });
+}
+
 export class NotFoundError extends Error {
   constructor(readonly what: string) {
     super(`${what} not found`);
@@ -174,11 +203,12 @@ export class NotFoundError extends Error {
 
 export async function listEvents(
   db: Db,
-  opts: { q?: string; status?: string; order?: "asc" | "desc" },
+  opts: { q?: string; status?: string; rsvpOpen?: boolean; order?: "asc" | "desc" },
 ): Promise<EventRow[]> {
   const conds = [];
   if (opts.q) conds.push(ilike(events.title, `%${opts.q}%`));
   if (opts.status) conds.push(eq(events.status, opts.status));
+  if (opts.rsvpOpen !== undefined) conds.push(eq(events.rsvpOpen, opts.rsvpOpen));
   const where = conds.length === 1 ? conds[0] : conds.length > 1 ? and(...conds) : undefined;
   const order = opts.order === "asc" ? asc(events.startsAt) : desc(events.startsAt);
   if (where) return db.select().from(events).where(where).orderBy(order);

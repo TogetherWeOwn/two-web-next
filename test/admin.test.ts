@@ -83,6 +83,8 @@ describe("admin guard pins (memory store, no DB)", () => {
       ["POST", "/events/abc"],
       ["POST", "/events/abc/publish"],
       ["POST", "/events/abc/cancel"],
+      ["POST", "/events/abc/rsvp-pause"],
+      ["POST", "/events/abc/rsvp-reopen"],
       ["POST", "/featured"],
       ["POST", "/featured/1"],
       ["POST", "/featured/1/delete"],

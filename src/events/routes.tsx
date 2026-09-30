@@ -4,7 +4,7 @@
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
-import { NotFoundError, createEvent, getEvent, transitionEvent, updateEvent } from "../admin/store";
+import { NotFoundError, createEvent, getEvent, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
@@ -351,19 +351,18 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  for (const action of ["publish", "cancel"] as const) {
+  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
     app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
       const who = await moderator(c);
       if (who instanceof Response) return who;
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       try {
-        const { row, writeBack } = await transitionEvent(
-          db,
-          { id: who.id, username: who.username },
-          c.req.param("key"),
-          action === "publish" ? "published" : "cancelled",
-        );
+        const actor = { id: who.id, username: who.username };
+        const key = c.req.param("key");
+        const { row, writeBack } = action === "rsvp-pause" || action === "rsvp-reopen"
+          ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
+          : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
         if (writeBack) await dispatchWriteBack(c.env, writeBack);
         return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
       } catch (err) {
@@ -378,7 +377,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
   // DELETE 204 always (quiet), any other verb 405. One shared 12/min budget per member.
   const rsvpBody = (a: RsvpAnswer) => ({ data: { status: a.status, synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null } });
-  const closed = (c: Ctx) => c.json({ reason: "event_not_open", message: "This event is not taking RSVPs." }, 403);
+  const closed = (c: Ctx, why: string) => c.json({ reason: "event_not_open", why, message: "This event is not taking RSVPs." }, 403);
 
   async function member(c: Ctx): Promise<Session | Response> {
     const origin = c.req.header("origin");
@@ -416,7 +415,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!r.ok) {
       if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
       if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
-      if (r.reason === "closed") return closed(c);
+      if (r.reason === "closed") return closed(c, r.why);
       return c.json({ reason: "event_at_capacity", message: "This event is full.", event_key: key, capacity: r.capacity }, 409);
     }
     await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
