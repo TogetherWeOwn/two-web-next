@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import type { Env } from "../src/env";
-import { QUEUE_CRITICAL_AT, QUEUE_WARN_AT, upBody } from "../src/up";
+import { QUEUE_CRITICAL_AT, QUEUE_READ_TIMEOUT_MS, QUEUE_WARN_AT, upBody } from "../src/up";
 
 // N3 (TOG-9895): GET /up ports two-web HealthCheckController + QueueHealth.
 // Always 200; `degraded` iff pending >= 20; an uncountable/unreachable ledger
@@ -131,5 +131,24 @@ describe("GET /up", () => {
     const body = (await res.json()) as any;
     expect(body.queue.status).toBe("unknown");
     expect(body.queue.detail).toBe("queue ledger is not configured.");
+  });
+});
+
+describe("/up bounded reads", () => {
+  it("a hung ledger read reports unknown instead of hanging", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = upBody(() => new Promise(() => {}));
+      await vi.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS + 1);
+      expect((await p).queue.status).toBe("unknown");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a malformed DATABASE_URL answers 200 unknown, not 500", async () => {
+    const res = await app.request("/up", {}, { ...env, DATABASE_URL: "not a url" } as Env);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { queue: { status: string } }).queue.status).toBe("unknown");
   });
 });

@@ -370,10 +370,19 @@ app.get("/up", async (c) => {
   // The queue ledger lives in the same Postgres as the rest of the W13 backend:
   // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
   const url = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
-  const sql = injected ?? (url ? postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) : null);
+  let sql: EnvWithDepth["QUEUE_DEPTH_STORE"] | null = injected ?? null;
   try {
     c.header("cache-control", "no-store");
-    return c.json(await upBody(sql ? () => pgQueueDepth(sql) : null));
+    // Client construction can throw (malformed URL); that is `unknown`, never a 500.
+    if (!sql && url) {
+      try {
+        sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 });
+      } catch (err) {
+        console.warn("Health check could not build the queue client.", { exception: err instanceof Error ? err.name : typeof err });
+      }
+    }
+    const client = sql;
+    return c.json(await upBody(client ? () => pgQueueDepth(client) : null));
   } finally {
     // Per-request client; an injected double owns its own lifecycle.
     if (sql && !injected) await sql.end({ timeout: 1 }).catch(() => {});

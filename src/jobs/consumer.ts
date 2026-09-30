@@ -4,6 +4,8 @@ import { handleCallInternalAction } from "./call-internal-action";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
+const LEDGER_TIMEOUT_MS = 2000;
+
 type Msg = { body: unknown; attempts: number; ack(): void; retry(o?: { delaySeconds?: number }): void };
 
 // Legacy identity of each job, for the queue.failing alert line (ports Queue::failing fields).
@@ -32,7 +34,18 @@ export async function consume(
     // turned the probe `unknown` buys nothing. Never let them block ack/retry.
     const ledgerWarn = (what: string) => (e: unknown) =>
       console.warn(`queue ledger ${what} failed`, e instanceof Error ? e.message : e);
-    if (jobId) await deps.ledger.reserved(jobId).catch(ledgerWarn("reserved"));
+    // Bounded too: a hung ledger must not stall the batch either.
+    const bounded = (what: string, op: Promise<unknown>) => {
+      let t: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<void>((r) => {
+        t = setTimeout(() => {
+          ledgerWarn(what)(new Error("timed out"));
+          r();
+        }, LEDGER_TIMEOUT_MS);
+      });
+      return Promise.race([op.catch(ledgerWarn(what)), timeout]).finally(() => clearTimeout(t));
+    };
+    if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
 
     let outcome: Outcome;
     try {
@@ -42,29 +55,30 @@ export async function consume(
           : await handleCallInternalAction(body, m.attempts, deps.bot);
     } catch (e) {
       // Unexpected: let the platform redeliver with the same message (same idempotency key).
-      if (jobId) await deps.ledger.released(jobId, new Date()).catch(ledgerWarn("released"));
       console.error("job threw; will redeliver", body.kind, e instanceof Error ? e.message : e);
       // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
       if (m.attempts >= JOBS[body.kind].tries) {
         alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
+        // Out of tries: a terminal failure, not a phantom pending row.
+        if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, e instanceof Error ? e.constructor.name : "threw"));
+      } else if (jobId) {
+        await bounded("released", deps.ledger.released(jobId, new Date()));
       }
       m.retry();
       continue;
     }
     if ("retryInSeconds" in outcome) {
       if (jobId)
-        await deps.ledger
-          .released(jobId, new Date(Date.now() + outcome.retryInSeconds * 1000))
-          .catch(ledgerWarn("released"));
+        await bounded("released", deps.ledger.released(jobId, new Date(Date.now() + outcome.retryInSeconds * 1000)));
       m.retry({ delaySeconds: outcome.retryInSeconds });
       continue;
     }
     if ("failed" in outcome) {
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed);
-      if (jobId) await deps.ledger.failed(jobId, body.kind, key, outcome.failed).catch(ledgerWarn("failed"));
+      if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
     } else if (jobId) {
-      await deps.ledger.dequeued(jobId).catch(ledgerWarn("dequeued"));
+      await bounded("dequeued", deps.ledger.dequeued(jobId));
     }
     if (body.kind === "sync-event") await deps.lock.release(uniqueKey(body.eventKey));
     m.ack();

@@ -55,7 +55,8 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
           job_id = excluded.job_id,
           kind = excluded.kind,
           available_at = excluded.available_at,
-          reserved_at = null`;
+          reserved_at = null
+        where queue_jobs.reserved_at is null`; // never clobber a job a consumer is running
     },
     async reserved(jobId) {
       await sql`update queue_jobs set reserved_at = now() where job_id = ${jobId}::uuid`;

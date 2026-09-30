@@ -20,6 +20,18 @@ import type { QueueDepth } from "./jobs/postgres";
 export const QUEUE_WARN_AT = 20;
 export const QUEUE_CRITICAL_AT = 100;
 
+/** A hung ledger must not hang the probe: past this the read reports `unknown`. */
+export const QUEUE_READ_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, rej) => {
+    t = setTimeout(() => rej(new Error("queue depth read timed out")), ms);
+  });
+  p.catch(() => {});
+  return Promise.race([p, timeout]).finally(() => clearTimeout(t));
+}
+
 export type QueuePayload = {
   status: "healthy" | "degraded" | "unknown";
   pending: number | null;
@@ -61,7 +73,7 @@ export async function upBody(measure: (() => Promise<QueueDepth>) | null): Promi
 
   let depth: QueueDepth;
   try {
-    depth = await measure();
+    depth = await withTimeout(measure(), QUEUE_READ_TIMEOUT_MS);
   } catch (err) {
     // Name only, never the message: the queue tables carry job payloads and
     // the endpoint must not leak one into a log (ports Log::warning's
