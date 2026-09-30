@@ -48,7 +48,8 @@ describe("guest event pages with unavailable session storage", () => {
     expect(html).toContain("1 going");
     for (const value of [SUBJECT.username, SUBJECT.userId, "event-attendees", "Who's going"])
       expect(html).not.toContain(value);
-    expect(res.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(html).toContain('data-testid="event-join-pitch"');
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.get("vary")).toBe("Cookie");
     expect(res.headers.get("set-cookie")).toBeNull();
 

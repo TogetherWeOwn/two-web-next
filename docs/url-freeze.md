@@ -36,7 +36,7 @@ route-level 403/410 for `/e/{key}` land with W8; `crawlableEvents` in
 | `.ics` / `.rss` feeds | W9 |
 | `/profile`, `/members/{user}` | W7 |
 | `/admin/*` | W11–W12 |
-| `/healthz`, `/up` | deploy health (this repo serves `/healthz` since W3) |
+| `/up` | deploy/uptime health (N3); Next-only `/health`, `/healthz`, `/db-ping` removed ([TOG-10852](/TOG/issues/TOG-10852)), ordinary 404 rather than redirect aliases |
 
 Note: legacy `/join*` is the one-click OAuth journey; this repo's equivalent
 `/auth/discord*` shipped in W3 with the same `identify` + `guilds.join`

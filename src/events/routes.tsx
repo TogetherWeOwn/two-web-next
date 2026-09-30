@@ -11,6 +11,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
+import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
@@ -66,7 +67,7 @@ function jsonLd(e: PublicEvent, appUrl: string): string {
     eventStatus: e.status === "cancelled" ? "https://schema.org/EventCancelled" : "https://schema.org/EventScheduled",
     location: { "@type": "VirtualLocation", url: e.location && /^https?:/.test(e.location) ? e.location : appUrl },
     ...(e.description ? { description: e.description } : {}),
-    url: `${appUrl}/e/${e.eventKey}`,
+    url: canonicalUrl(appUrl, `/e/${e.eventKey}`),
   };
   // `<` escaped so a title can never close the script element.
   return JSON.stringify(ld).replace(/</g, "\\u003c");
@@ -264,21 +265,23 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
     if (e.status === "cancelled") {
-      c.header("x-robots-tag", "noindex");
-      return c.html(<EventGonePage />, 410);
+      c.header("x-robots-tag", "noindex, nofollow");
+      return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
     }
+    // The guest join pitch depends on the viewer; never share-cache this HTML.
+    c.header("cache-control", "private, no-store");
+    c.header("vary", "Cookie");
     // The injected reader uses only bindings/cookies; this route additionally
     // carries the access middleware's request-local variables.
     const session = await readSession(c as unknown as Ctx);
     if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
-    c.header("cache-control", session || e.status === "draft" ? "private, no-store" : "public, max-age=60");
-    c.header("vary", "Cookie");
+    if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
     const attendees = session?.member ? await listGoingAttendees(db, e.id) : [];
     if (attendees.length > 0 && session) {
       c.set("viewerId", session.id);
       c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
     }
-    return c.html(<EventPage e={e} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} />);
+    return c.html(<EventPage e={e} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------

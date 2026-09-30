@@ -30,6 +30,9 @@ describe.skipIf(!process.env.DATABASE_URL)("member-only event attendees (isolate
     for (const value of [SUBJECT.username, SUBJECT.userId, "event-attendees", "Who's going"])
       expect(html).not.toContain(value);
     expect(res.headers.get("vary")).toBe("Cookie");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(html.includes('data-testid="event-join-pitch"')).toBe(role === "guest");
+    expect(html).toContain('data-testid="event-copy-link"');
     expect(await logs()).toHaveLength(0);
   });
 
@@ -43,6 +46,24 @@ describe.skipIf(!process.env.DATABASE_URL)("member-only event attendees (isolate
       viewerDiscordId: actor.userId, viewerUserId: actor.userId, resource: "member", action: "list",
       subjectUserIds: [SUBJECT.userId], subjectCount: 1, route: "events.page",
     }]);
+  });
+
+  it.each(["published", "past", "draft"])("%s keeps the logged attendee list alongside event states and canonical sharing", async (status) => {
+    await fixture.db.update(events).set({ status, location: "Lobby & voice" });
+    const res = await request(undefined, { headers: await headers(status === "draft" ? MODERATOR : MEMBER) });
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    expect(html).toContain(`<a href="/members/${SUBJECT.userId}">${SUBJECT.username}</a>`);
+    expect(html).toContain('data-testid="event-venue">Lobby &amp; voice');
+    expect(html).toContain(`data-copy-link="${env.APP_URL}/e/${EVENT_KEY}"`);
+    expect(html).not.toContain('data-testid="event-join-pitch"');
+    if (status !== "published") {
+      expect(html).toContain(`data-testid="event-${status}"`);
+      expect(html).toContain('name="robots" content="noindex, nofollow"');
+    }
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("vary")).toBe("Cookie");
+    expect(await logs()).toMatchObject([{ subjectUserIds: [SUBJECT.userId], subjectCount: 1, route: "events.page" }]);
   });
 
   it("orders by original answer time, excludes other statuses/events, missing users and empty names", async () => {

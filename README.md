@@ -9,6 +9,8 @@ maintenance mode: fixes only, no new features.
 Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest,
 [Drizzle](https://orm.drizzle.team) + Postgres. Migration plan: TOG-9671.
 Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
+Operations (deploy/rollback, `/up`, queues, outages and restore drills):
+[docs/runbook.md](docs/runbook.md).
 
 ## What works today
 
@@ -74,8 +76,10 @@ Never lower a floor simply to make a regression pass.
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ACCOUNT_ID`, followed by a `/health` smoke test against
-https://next.togetherweown.com. There is deliberately no production job:
+`CLOUDFLARE_ACCOUNT_ID`, followed by a `/up` smoke test against
+https://next.togetherweown.com. The smoke checks HTTP 200 and the expected health
+envelope for liveness, not database readiness: degraded or unknown queue health
+does not fail deployment. There is deliberately no production job:
 production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 
 ## Configuration

@@ -25,7 +25,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`) | `/auth/discord*` live; `/join` path alias pending | W6 🔶 |
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count; member-only logged attendee names/profile links implemented in this slice; RsvpButton/prev-next/related pending | W8 ✅ (partial) + TOG-10823 |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links implemented in this slice (pending merge); RsvpButton/prev-next/related pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) + [TOG-10823](/TOG/issues/TOG-10823) |
 | `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
 | `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
 | `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
@@ -47,8 +47,24 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /discord` (302 `no-store`, configured-or-fallback invite) | ✅ incl. hardcoded fallback | W4 ✅ |
 | `GET /about`, `GET /faq` (static, zero-query) | ✅ | W4 ✅ |
 | `GET /privacy` (versioned `content/privacy-policy-v1.md` from disk, no session/cache/DB) | ❌ missing — no card covered it | **N1** (new: `/privacy` versioned page) |
-| `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ❌ (`/health`, `/healthz` exist, no queue payload) | **N3** (new: `/up` health check) |
+| `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ✅ N3; sole deploy/uptime endpoint, payload unchanged | **N3** + [TOG-10852](/TOG/issues/TOG-10852) |
 | `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-uri` + Reporting API `Reporting-Endpoints`/`Report-To` point at it | W16 📋 (TOG-10107) |
+
+### Diagnostic surface decision ([TOG-10852](/TOG/issues/TOG-10852))
+
+Delete the Next-only `/db-ping`, `/health` and `/healthz` routes in every
+configuration. Legacy exposes only `/up`; retaining a token/flag-protected
+ping would add a credential and an unnecessary public connection/fingerprinting
+surface. Removed paths use the ordinary branded 404 (same body and headers as
+unknown paths), without reading any database binding.
+
+The existing `/up` queue read already exercises the Worker-to-Hyperdrive-to-Postgres
+path: a counted queue proves connectivity; `queue.status: "unknown"` reports an
+unconfigured/unreachable ledger, not database acceptance. Deploy smoke moves from
+`/health` to `/up` and accepts the existing healthy/degraded/unknown envelope,
+including during an outage. It does not turn liveness into a database gate or
+change `/up`'s payload. The direct CLI probe remains non-HTTP and operator-invoked;
+no public version/clock endpoint or redirect alias remains.
 
 ## 3. Machine ingress (`routes/api.php`)
 

@@ -30,7 +30,9 @@ original RSVP `created_at ASC` ordering (ID tie-break), status/event filtering,
 escaping, missing users, empty names, self-exclusion and real failed access-log
 INSERTs (enforced 503, explicitly disabled enforcement 200). One access-log row
 names all rendered subjects except the viewer; guests never query the identity
-projection. `Vary: Cookie` separates public guest HTML from private member HTML.
+projection. All normal event HTML is `private, no-store` because the guest join
+pitch also depends on the session; `Vary: Cookie` preserves explicit viewer
+separation. State banners and canonical sharing coexist with the logged list.
 The next roster has `username`, not a separate `display_name`; the list uses that
 same visible name as profiles. Profile links are an explicit addition in this
 slice; the legacy markup displayed names only.
