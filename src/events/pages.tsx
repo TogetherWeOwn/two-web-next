@@ -83,7 +83,7 @@ import {
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
 import { googleCalendarUrl } from "./feeds";
-import type { PublicEvent } from "./reads";
+import type { EventAttendee, PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
   try {
@@ -512,7 +512,7 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> = ({ e, appUrl, jsonLd }) => (
+export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string }> = ({ e, attendees = [], appUrl, jsonLd }) => (
   <Shell title={e.title} canonical={`${appUrl}/e/${e.eventKey}`} description={e.description}>
     <h1>{e.title}</h1>
     <p>
@@ -528,6 +528,14 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> =
       {" · "}
       <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
     </p>
+    {attendees.length > 0 ? (
+      <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
+        <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
+        <ul>{attendees.map((attendee) => (
+          <li><a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a></li>
+        ))}</ul>
+      </section>
+    ) : null}
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>
 );
