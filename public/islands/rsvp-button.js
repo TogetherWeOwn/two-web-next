@@ -405,7 +405,6 @@
     fetch(url, init).then(
       function (res) {
         if (controller && inflight !== controller) return;
-        inflight = null;
         if (res.ok) {
           if (isWithdraw) {
             setBusy(false, button);
@@ -414,6 +413,7 @@
             return;
           }
           var done = function (syncedAt, syncFailed) {
+            if (controller && inflight !== controller) return;
             setBusy(false, button);
             if (action === "waitlisted") {
               paintWaitlisted(null);
@@ -431,7 +431,7 @@
             syncNote(syncedAt, syncFailed);
           };
           if (res.status === 204) return done(null, false);
-          res
+          return res
             .json()
             .then(
               function (j) {
@@ -460,13 +460,14 @@
           // A non-member 403 ({error:"forbidden"}) is not stale — show the
           // failure alert instead of reload-looping the same SSR controls.
           var reloadClosed = function () {
+            if (controller && inflight !== controller) return;
             setBusy(false, button);
             if (typeof location !== "undefined" && location.reload) location.reload();
             else notice(TESTID.closed, "status", COPY.past, false, false);
           };
           if (res.json) {
             try {
-              res.json().then(
+              return res.json().then(
                 function (j) {
                   if (controller && inflight !== controller) return;
                   if (j && j.error === "forbidden") {
@@ -488,6 +489,7 @@
           // 409 carries the authoritative cap ({capacity} in JSON); DOM
           // data-capacity is the fallback when the body is unreadable.
           var paintFull = function (capNum) {
+            if (controller && inflight !== controller) return;
             setBusy(false, button);
             var msg = COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
             var old = root.querySelector('[data-testid="' + TESTID.full + '"]');
@@ -505,7 +507,7 @@
           var domNum = domRaw === null || domRaw === "" ? NaN : Number(domRaw);
           if (res.json) {
             try {
-              res.json().then(
+              return res.json().then(
                 function (j) {
                   if (controller && inflight !== controller) return;
                   var c = j ? (j.capacity !== undefined ? Number(j.capacity) : NaN) : NaN;
@@ -530,7 +532,10 @@
         setBusy(false, button);
         notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
       }
-    );
+    ).finally(function () {
+      // Keep ownership through body parsing; header arrival is not completion.
+      if (inflight === controller) inflight = null;
+    });
   }
 
   var buttons = root.querySelectorAll("[data-action]");

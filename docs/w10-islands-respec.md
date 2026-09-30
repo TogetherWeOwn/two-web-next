@@ -1,6 +1,6 @@
 # TOG-9689 — W10: Livewire → islands re-spec + drift tests
 
-**Status:** slice 1 merged-ready; slices 2–5 as gated child cards.
+**Status:** slice 1 merged; slices 2–5 as gated child cards.
 **Source of truth for behavior:** two-web (maintenance-only) `app/Livewire/*.php`,
 `resources/views/livewire/*.blade.php`, `tests/Feature/Livewire/*`, `tests/Feature/Events/*`,
 `tests/Feature/Profile/*`. This doc re-expresses them; nothing is ported verbatim
@@ -39,14 +39,15 @@ Legacy: `GoingCount.php` + `going-count.blade.php` + `GoingCountTest.php` (TOG-7
   one `GET /events.json` per answered event; non-matching island keys fire nothing;
   missing row keeps last known-good. Executable: `test/islands-going-count.test.ts` (18 tests).
 
-## 2. RsvpButton (slice 2, after W8/W9 — the routes it writes don't exist yet)
+## 2. RsvpButton (slice 2, on the frozen W8/W9 routes)
 
 Legacy: `RsvpButton.php` + `rsvp-button.blade.php` + `RsvpButtonTest.php`
 (TOG-8135 session-expiry, TOG-7976 throttle copy CM-frozen, TOG-6956 focus moves,
 TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
 
 - Writes: `PUT /events/{key}/rsvp {status}` (201 first write / 200 re-answer),
-  `DELETE /events/{key}/rsvp` → 204. Status values: `going` / `waitlisted` / none.
+  `DELETE /events/{key}/rsvp` → 204. PUT accepts `going` / `maybe` / `not_going` /
+  `waitlisted`; the island exposes going, waitlist and withdrawal controls.
   Request budget: one request per click; abort-then-resend on double-click.
 - States rendered: guest login link (never a dead button); closed (Cancelled /
   Not published yet / been-and-gone, `role="status"`); full + waitlist join; in-line
@@ -57,8 +58,11 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
 - Broadcasts `going-count-updated {eventKey, viewerState}` on every successful write
   (going / waitlisted / none) and re-reads nothing itself — the badge owns its aggregate.
 - Honeypot `website` field: a filled decoy answers the byte-identical success shape
-  without touching limiter/auth/DB; nothing attacker-shaped logged. Toast floor
-  `MIN_FILL_MS = 1000` server-enforced; fail-closed on zero/future stamps.
+  without touching limiter/auth/DB; nothing attacker-shaped logged. Per the executable
+  contract (`rsvpTrapTripped`), a bare RSVP click has no form-open timestamp or
+  minimum-fill gate; absent/empty inputs never trip. `RSVP_MIN_FILL_MS = 1000` is
+  a legacy constant, not a W9 enforcement claim. Non-string and filled duplicate
+  decoys fail closed.
 - Drift tests pin: requests fired per click (method/URL/body), all states rendered,
   broadcast payload, CM throttle copy verbatim, honeypot success-shape equality.
 - Needs from W9: frozen `PUT/DELETE` status codes, throttle agreement (12/min shared

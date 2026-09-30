@@ -1,4 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { getTableColumns } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { Hono } from "hono";
+import { events } from "../src/db/admin-schema";
+import type { Db } from "../src/db/index";
+import type { Env, Session } from "../src/env";
+import { registerEventRoutes } from "../src/events/routes";
+import type { ViewerRsvp } from "../src/events/reads";
+import * as rsvpService from "../src/events/rsvp";
 import {
   EVENT_FULL_TESTID,
   GOING_COUNT_TESTID,
@@ -42,15 +51,8 @@ import {
   waitlistPositionCopy,
 } from "../src/islands/contracts";
 
-/**
- * TOG-9887: RsvpButton island parity checklist vs legacy Livewire, pinned at
- * two-web main. Each executable test names its legacy row
- * (RsvpButton.php / rsvp-button.blade.php / RsvpButtonTest.php / PR #431 /
- * SpamTrap.php); each skip names the blocker that owns the row.
- *
- * Slice state: no binder and no SSR exist yet — TOG-9839 (blocked, gated on
- * W9 routes TOG-9688) owns the implementation. Pure-contract rows run here;
- * binder/SSR/server rows skip with the blocker named rather than stalling.
+/** Contract and real route SSR drift; no database or network.
+ * Shipped-script click/state coverage lives in islands-rsvp-binder.test.ts.
  */
 
 describe("rsvp-button requests fired: one request per click", () => {
@@ -209,7 +211,7 @@ describe("rsvp-button abuse surface: status codes + budget + decoy (PR #431, Spa
     );
   });
 
-  it("pins the honeypot field and fill floor the W9 writes enforce", () => {
+  it("pins the honeypot field and legacy floor constant, not a bare-click timing gate", () => {
     expect(RSVP_HONEY_FIELD).toBe("website");
     expect(RSVP_MIN_FILL_MS).toBe(1000);
   });
@@ -230,46 +232,136 @@ describe("rsvp-button clock-ended + pause + focus + return path", () => {
   });
 });
 
-describe.skip("rsvp-button binder rows (blocked on TOG-9839 implementation, gated on W9 TOG-9688)", () => {
-  it("abort-then-resends on double-click so one click is one request", () => {
-    expect(true).toBe(false);
+const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const viewer: Session = { id: "member-one", username: "one", avatar: null, member: true, moderator: false };
+function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<string, ViewerRsvp> = {}) {
+  const startsAt = new Date("2030-01-01T20:00:00Z");
+  const event: typeof events.$inferSelect = {
+    id: 42, eventKey: KEY, title: "Squad night", game: null, description: null,
+    startsAt, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "Europe/London",
+    location: null, capacity: 4, status: "published", discordEventId: null,
+    createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
+    recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
+    createdAt: startsAt, updatedAt: startsAt, ...over,
+  };
+  const queries: { sql: string; params: unknown[] }[] = [];
+  const cols = Object.keys(getTableColumns(events)) as (keyof typeof event)[];
+  const db = drizzle(async (sql, params) => {
+    queries.push({ sql, params });
+    if (sql.includes('from "events"')) return { rows: [cols.map((k) => event[k] instanceof Date ? event[k].toISOString() : event[k])] };
+    if (sql.includes('group by')) return { rows: [[event.id, 4]] };
+    const answer = answers[String(params[1])];
+    return { rows: params[0] === event.id && answer ? [[answer.status, answer.syncedToDiscordAt?.toISOString() ?? null]] : [] };
+  });
+  let who: Session | null = null;
+  let authReads = 0;
+  const auth = async () => { authReads++; return who; };
+  const app = new Hono<{ Bindings: Env }>();
+  registerEventRoutes(app, auth, auth);
+  const env = { APP_URL: "https://next.example.test", ADMIN_DB: db as unknown as Db } as unknown as Env;
+  return {
+    queries, db, event,
+    authReads: () => authReads,
+    as: (session: Session | null) => { who = session; },
+    request: (path = `/e/${KEY}`, init?: RequestInit) => app.request(path, init, env),
+  };
+}
+
+function mount(html: string): string {
+  return /<section data-island="rsvp-button"[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
+}
+
+describe("rsvp-button SSR/server drift", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("SSR binds the event key and guest page-return link without exposing actions or reading an answer", async () => {
+    const p = page(); const res = await p.request(`/e/${KEY}?from=calendar`); const html = await res.text();
+    expect(res.status).toBe(200); expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(mount(html)).toContain(`data-event-key="${KEY}"`);
+    expect(mount(html)).toContain(`href="${loginUrl(`/e/${KEY}?from=calendar`)}"`);
+    expect(mount(html)).toContain(RSVP_COPY.guestCta);
+    expect(mount(html)).not.toContain("data-action");
+    expect(html).toContain('src="/islands/rsvp-button.js"');
+    expect(p.queries.filter((q) => q.sql.includes('from "rsvps"') && !q.sql.includes('group by'))).toHaveLength(0);
   });
 
-  it("renders optimistic saving in flight with aria-busy and a disabled control", () => {
-    expect(true).toBe(false);
+  it.each([
+    ["cancelled", {}, "Cancelled", 410],
+    ["draft", {}, "Not published yet", 200],
+    ["past", {}, "This one has been and gone", 200],
+    ["published", { endsAt: new Date("2020-01-01T22:00:00Z") }, "This one has been and gone", 200],
+  ] as const)("closes %s, including clock-ended Published, without action controls", async (status, over, copy, code) => {
+    const p = page({ status, ...over }); p.as({ ...viewer, moderator: true });
+    const res = await p.request(); const html = mount(await res.text());
+    expect(res.status).toBe(code); expect(html).toContain(`role="status" data-testid="${RSVP_CLOSED_TESTID}">${copy}`);
+    expect(html).not.toContain("data-action");
+    if (status === "cancelled") expect(res.headers.get("x-robots-tag")).toBe("noindex");
   });
 
-  it("keeps the button enabled beside the throttle wait, failure alert, and sync notes", () => {
-    expect(true).toBe(false);
+  it("preserves draft authorization", async () => {
+    const p = page({ status: "draft" }); p.as(viewer);
+    expect((await p.request()).status).toBe(403);
   });
 
-  it("moves focus to the confirmation/position/restored control on success only", () => {
-    expect(true).toBe(false);
+  it("renders full + waitlist join, never a going button", async () => {
+    const p = page(); p.as(viewer); const html = mount(await (await p.request()).text());
+    expect(html).toContain(`data-testid="${EVENT_FULL_TESTID}"`);
+    expect(html).toContain("This one&#39;s full. Cap is 4.");
+    expect(html).toContain(`data-testid="${WAITLIST_JOIN_TESTID}"`);
+    expect(html).not.toContain(`data-testid="${RSVP_GOING_TESTID}"`);
   });
 
-  it("reloads into the guest render on a 419 instead of the native confirm (TOG-9354)", () => {
-    expect(true).toBe(false);
-  });
-});
-
-describe.skip("rsvp-button SSR/server rows (blocked on W9 routes TOG-9688 + TOG-9839)", () => {
-  it("SSR marks the mount with data-island=rsvp-button and the event-key binding", () => {
-    expect(true).toBe(false);
-  });
-
-  it("clock-ended-but-Published closes the control (TOG-7419 hole the island must not re-open)", () => {
-    expect(true).toBe(false);
+  it("renders going, withdraw and the stored sync stamp with an accessible confirmation", async () => {
+    const p = page({}, { [viewer.id]: { status: "going", syncedToDiscordAt: new Date("2026-09-29T12:00:00Z") } });
+    p.as(viewer); const html = mount(await (await p.request()).text());
+    expect(html).toContain(`role="status" tabindex="-1" data-testid="${RSVP_CONFIRMED_TESTID}"`);
+    expect(html).toContain(`aria-hidden="true" data-testid="${RSVP_CHECK_TESTID}"`);
+    expect(html).toContain(`data-testid="${RSVP_WITHDRAW_TESTID}"`);
+    expect(html).toContain(`data-testid="${RSVP_SYNCED_TESTID}"`);
+    expect(html).not.toContain(`data-testid="${EVENT_FULL_TESTID}"`);
   });
 
-  it("paused events keep withdraw/leave-the-line for holders, paused copy for the rest (TOG-8725)", () => {
-    expect(true).toBe(false);
+  it("renders waitlist fallback + claim-seat when room exists, without inventing a position", async () => {
+    const p = page({ capacity: null }, { [viewer.id]: { status: "waitlisted", syncedToDiscordAt: null } });
+    p.as(viewer); const html = mount(await (await p.request()).text());
+    expect(html).toContain(`data-testid="${WAITLIST_POSITION_TESTID}">You&#39;re on the waitlist`);
+    expect(html).toContain(`data-testid="${WAITLIST_CLAIM_TESTID}"`);
+    expect(html).toContain(`data-testid="${WAITLIST_LEAVE_TESTID}"`);
+    expect(html).toContain(`data-testid="${RSVP_SYNCING_TESTID}"`);
+    expect(html).not.toContain("in line");
   });
 
-  it("a filled honeypot decoy answers the byte-identical success shape with no write (TOG-8715)", () => {
-    expect(true).toBe(false);
+  it.each([null, "going", "waitlisted"] as const)("paused keeps only withdraw/leave for holder %s", async (status) => {
+    const p = page({ rsvpOpen: false }, status ? { [viewer.id]: { status, syncedToDiscordAt: null } } : {});
+    p.as(viewer); const html = mount(await (await p.request()).text());
+    expect(html).toContain(RSVP_COPY.paused);
+    expect(html).not.toContain('data-action="going"'); expect(html).not.toContain('data-action="waitlisted"');
+    expect(html.includes('data-action="withdraw"')).toBe(status !== null);
   });
 
-  it("never serves one member another member's answer on the eager-loaded path", () => {
-    expect(true).toBe(false);
+  it("never serves another member's answer and marks personalized HTML uncacheable", async () => {
+    const p = page({}, { [viewer.id]: { status: "going", syncedToDiscordAt: null } });
+    p.as(viewer); const first = await p.request(); expect(mount(await first.text())).toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
+    p.as({ ...viewer, id: "member-two" }); const second = await p.request();
+    expect(mount(await second.text())).not.toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
+    expect(second.headers.get("cache-control")).toBe("private, no-store");
+    const reads = p.queries.filter((q) => q.sql.includes('from "rsvps"') && !q.sql.includes('group by'));
+    expect(reads.map((q) => q.params)).toEqual([[42, "member-one"], [42, "member-two"]]);
+    expect(reads.every((q) => q.sql.includes('"user_id" ='))).toBe(true);
+  });
+
+  it("filled decoy is byte-identical to first-write success without auth, DB, limiter or write service", async () => {
+    const p = page({ capacity: null }); p.as(viewer);
+    const write = vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({ ok: true, created: true,
+      answer: { status: "going", syncedToDiscordAt: null }, mirrored: null, eventKey: KEY });
+    const init = (input: unknown): RequestInit => ({ method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
+    const real = await p.request(`/events/${KEY}/rsvp`, init({ status: "going" }));
+    expect(real.status).toBe(201); expect(write).toHaveBeenCalledTimes(1);
+    const authReads = p.authReads(); const queries = p.queries.length;
+    const trap = await p.request("/events/invalid-key/rsvp", init({ status: "going", website: "filled" }));
+    expect(trap.status).toBe(real.status); expect(await trap.text()).toBe(await real.text());
+    expect(p.authReads()).toBe(authReads); expect(p.queries).toHaveLength(queries); expect(write).toHaveBeenCalledTimes(1);
+    const withdrawn = await p.request("/events/invalid-key/rsvp?website=filled", { method: "DELETE" });
+    expect(withdrawn.status).toBe(204); expect(await withdrawn.text()).toBe(""); expect(p.authReads()).toBe(authReads);
   });
 });

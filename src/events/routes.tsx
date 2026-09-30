@@ -30,7 +30,7 @@ import {
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, getViewerRsvp, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -259,17 +259,19 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
-    if (e.status === "draft") {
-      const session = await readSession(c);
-      if (!session?.moderator) return c.text("Forbidden", 403);
-      c.header("cache-control", "private, no-store");
-    } else if (e.status === "cancelled") {
+    // The RSVP mount is personalized, so even guest variants are never shared.
+    c.header("cache-control", "private, no-store");
+    if (e.status === "cancelled") {
       c.header("x-robots-tag", "noindex");
-      return c.html(<EventGonePage />, 410);
-    } else {
-      c.header("cache-control", "public, max-age=60");
+      return c.html(<EventGonePage e={e} />, 410);
     }
-    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} />);
+    const session = await readSession(c);
+    if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
+    const member = session?.member === true;
+    const answer = member ? await getViewerRsvp(db, e.id, session.id) : null;
+    const returnTo = c.req.path + new URL(c.req.url).search;
+    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)}
+      member={member} answer={answer} returnTo={returnTo} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------

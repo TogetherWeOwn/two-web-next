@@ -112,8 +112,8 @@ export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent |
 
 /** Viewer answer for the RSVP island (TOG-9839 slice 2): the caller's own row
  * only — keyed on the session user, never another member's. Null when the
- * viewer has not answered. Position is always derived client-side as the
- * fallback copy: there is no position column and no waitlist-count query. */
+ * viewer has not answered. Waitlist copy uses the null-position fallback:
+ * there is no position column and no waitlist-count query. */
 export type ViewerRsvp = { status: string; syncedToDiscordAt: Date | null };
 export async function getViewerRsvp(db: Db, eventId: number, userId: string): Promise<ViewerRsvp | null> {
   const [row] = await db

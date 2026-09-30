@@ -83,7 +83,8 @@ import {
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
 import { googleCalendarUrl } from "./feeds";
-import type { PublicEvent } from "./reads";
+import type { PublicEvent, ViewerRsvp } from "./reads";
+import { RsvpButton } from "./rsvp-button";
 
 const fmt = (d: Date, tz: string): string => {
   try {
@@ -512,7 +513,7 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> = ({ e, appUrl, jsonLd }) => (
+export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; member?: boolean; answer?: ViewerRsvp | null; returnTo?: string }> = ({ e, appUrl, jsonLd, member = false, answer = null, returnTo = `/e/${e.eventKey}` }) => (
   <Shell title={e.title} canonical={`${appUrl}/e/${e.eventKey}`} description={e.description}>
     <h1>{e.title}</h1>
     <p>
@@ -528,13 +529,16 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> =
       {" · "}
       <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
     </p>
+    <RsvpButton e={e} member={member} answer={answer} returnTo={returnTo} />
+    <script src="/islands/rsvp-button.js" defer />
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>
 );
 
-export const EventGonePage: FC = () => (
+export const EventGonePage: FC<{ e: PublicEvent }> = ({ e }) => (
   <Shell title="Event cancelled" robots="noindex, nofollow">
     <h1>This event was cancelled</h1>
+    <RsvpButton e={e} member={false} answer={null} returnTo={`/e/${e.eventKey}`} />
     <p><a href="/events">See upcoming events</a></p>
   </Shell>
 );
