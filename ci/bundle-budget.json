@@ -1,0 +1,10 @@
+{
+  "$comment": "Per-file budgets for unbundled public assets. Baseline 2026-09-30 (raw/gzip bytes): events-calendar 8108/2793, going-count 2776/1145, member-profile 5193/1977, past-events 3778/1434, styles 2087/882. Ceilings leave roughly 25-45% headroom, not room for a framework import. Every public/islands/*.js must have a budget. Raising a ceiling requires a separate deliberate PR explaining the growth; never relax a budget just to make CI green.",
+  "budgets": {
+    "public/islands/events-calendar.js": { "maxRawBytes": 10240, "maxGzipBytes": 3584 },
+    "public/islands/going-count.js": { "maxRawBytes": 4096, "maxGzipBytes": 1536 },
+    "public/islands/member-profile.js": { "maxRawBytes": 7168, "maxGzipBytes": 2560 },
+    "public/islands/past-events.js": { "maxRawBytes": 5120, "maxGzipBytes": 2048 },
+    "public/styles.css": { "maxRawBytes": 3072, "maxGzipBytes": 1280 }
+  }
+}

@@ -68,3 +68,44 @@ jobs:
         run: bash ci/check-migration-numbers.sh
       - name: Build (wrangler dry run)
         run: npx wrangler deploy --dry-run --outdir dist
+
+  bundle-budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # The checker uses only Node built-ins; no install/build/network needed.
+      - run: node ci/check-bundle-budget.mjs --selftest
+      - run: node ci/check-bundle-budget.mjs
+
+  lighthouse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+      # Ignore process bindings and .env; the fixture also discards runtime env.
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false"
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Lighthouse (local fixture worker, no database or Discord)
+        run: npm run lighthouse
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Performance evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lighthouse-${{ github.sha }}
+          path: .lighthouseci/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

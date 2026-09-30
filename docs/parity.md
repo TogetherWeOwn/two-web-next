@@ -127,7 +127,7 @@ no public version/clock endpoint or redirect alias remains.
 | `bot:internal-action-smoke` (live-against-staging QA) | no equivalent | W16 📋 (cutover rehearsal) |
 | `queue:check-depth` (box probe) | dropped as a command (no box on Workers) — replaced by `GET /up` | **N3** |
 | `error-alert:probe`, `queue:poison-probe` (drills) | dropped as commands — re-express as Vitest tests | W13 ⛔ / W15 ⛔ (verify scope) |
-| `ci:session-cookie` (perf-budget session minter) | no equivalent | W15 ⛔ (verify scope; drop if no budget job) |
+| `ci:session-cookie` (perf-budget session minter) | unnecessary for the five guest-page budgets; authenticated perf surfaces remain uncovered | [TOG-10845](/TOG/issues/TOG-10845), [coverage](performance-budgets.md) |
 | `inspire` | stock scaffold | dropped (no-op) |
 
 ## 8. Mail, notifications, webhooks
@@ -198,6 +198,7 @@ go hunting for them.
 | Design-lab routes (non-prod visual experiments) | ✅ correctly absent | dropped (never production) |
 | DB sessions, 120-min sliding lifetime | ✅ DB-backed + rotation; **divergence**: 30 d rotating TTL (Worker-compatible; no sliding lottery) — CPO decision, verify at W16 | W5 ✅ |
 | Session cookie `__Host-`, HttpOnly, Lax; OAuth state bound to signed cookie | ✅ | W5 ✅ |
+| Lighthouse public-page budgets + per-entry raw/gzip bundle budgets | local fixture worker, real pages/assets; legacy LCP/CLS/mobile profile unchanged, all islands and stylesheet budgeted | [TOG-10845](/TOG/issues/TOG-10845), [performance gates](performance-budgets.md) |
 
 ## 13. New cards created by this matrix (all in TWO Web Next, one PR each)
 
