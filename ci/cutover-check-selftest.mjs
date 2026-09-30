@@ -190,9 +190,146 @@ test('wrong TLS, transport errors and wrong edge redirects are failures', async 
   }
 });
 
+test('every A/AAAA address gets separate identity, TLS and HTTP verdicts with per-address caching', async () => {
+  const ips = ['127.0.0.1', '127.0.0.2', '::1'];
+  for (const failure of ['identity', 'tls', 'http', 'transport']) {
+    const calls = new Map();
+    const result = await runChecks(options('after'), {
+      freeze, resolver: { resolve4: async () => ips.slice(0, 2), resolve6: async () => ips.slice(2) },
+      request: async (url, addresses) => {
+        assert.equal(addresses.length, 1);
+        const [ip] = addresses;
+        const key = `${url}@${ip}`;
+        calls.set(key, (calls.get(key) ?? 0) + 1);
+        const response = { ...fixture(url, 'after'), tlsVerified: true, remoteIp: ip };
+        if (ip === '::1') {
+          if (failure === 'transport') throw Object.assign(new Error('down'), { code: 'ECONNREFUSED' });
+          if (failure === 'tls') response.tlsVerified = false;
+          if (failure === 'identity' && new URL(url).pathname === '/up') response.headers[ORIGIN_HEADER] = 'two-web';
+          if (failure === 'http' && new URL(url).pathname === '/about') response.status = 503;
+        }
+        return response;
+      },
+    });
+    assert.equal(result.ok, false, failure);
+    const id = { identity: 'target-origin', tls: `tls:https://${apex}/up`, http: 'url:/about', transport: `transport:https://${apex}/up` }[failure];
+    assert.ok(result.checks.some(check => check.id === id && check.address === '::1' && !check.ok), failure);
+    for (const ip of ips) {
+      for (const row of URL_CASES) {
+        const url = `https://${apex}${row.path.replace('{key}', eventKey).replace('{user}', '0')}`;
+        assert.equal(calls.get(`${url}@${ip}`), 1, `${failure}: ${url}@${ip}`);
+      }
+    }
+    assert.ok([...calls.values()].every(count => count === 1), 'no repeated transfers for reused /up, sitemap or robots');
+  }
+});
+
+test('mixed good/legacy loopback DNS answers cannot hide behind the first address', async () => {
+  const servers = [];
+  const hits = [0, 0];
+  try {
+    for (const [index, ip] of ['127.0.0.1', '127.0.0.2'].entries()) {
+      const server = createServer((_req, res) => {
+        hits[index]++;
+        res.writeHead(200, { [ORIGIN_HEADER]: index === 0 ? NEXT_IDENTITY : 'two-web', 'cache-control': 'no-store' });
+        res.end('{}');
+      });
+      servers.push(server);
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(index === 0 ? 0 : servers[0].address().port, ip, resolve);
+      });
+    }
+    const port = servers[0].address().port;
+    const result = await runChecks(options('after'), {
+      freeze, resolver: { resolve4: async () => ['127.0.0.1', '127.0.0.2'], resolve6: async () => [] },
+      request: async (url, ips) => {
+        if (new URL(url).pathname === '/up') {
+          const response = await curlRequest(`http://${apex}:${port}/up`, ips, { timeout: 2 });
+          return { ...response, tlsVerified: true }; // TLS is covered separately by the trusted-certificate fixture.
+        }
+        return { ...fixture(url, 'after'), tlsVerified: true };
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.deepEqual(hits, [1, 1]);
+    assert.ok(result.checks.some(check => check.id === 'target-origin' && check.address === '127.0.0.1' && check.ok));
+    assert.ok(result.checks.some(check => check.id === 'target-origin' && check.address === '127.0.0.2' && !check.ok));
+  } finally {
+    await Promise.all(servers.filter(server => server.listening).map(server => new Promise(resolve => server.close(resolve))));
+  }
+});
+
+test('robots parsing respects comments, wildcard paths, crawler groups and allow precedence', async () => {
+  const cases = [
+    ['Disallow: /*', false],
+    ['Disallow: / # maintenance', false],
+    ['Disallow: /*$', false],
+    ['Disallow: /\nAllow: /about', false], // a leaf exception cannot hide a blocked homepage
+    ['Disallow: /about$', false],
+    ['Disallow: /%61bout$', false],
+    ['Disallow: /%2Fabout$', true],
+    ['Disallow: /private/\nAllow: /private/public/', true],
+    ['Disallow: /\nAllow: /', true],
+    ['Disallow: /about/child$', true],
+    ['User-agent: unrelatedbot\nDisallow: /', true],
+    ['User-agent: Googlebot\nDisallow: /', false],
+    ['User-agent: unrelatedbot\nDisallow: /\nUser-agent: *\nDisallow:', true],
+    ['Disallow:\nUser-agent: *\nDisallow: /*', false], // repeated matching groups combine
+    ['Disallow: /about\nAllow: /about$', true],
+  ];
+  for (const [rules, expected] of cases) {
+    const result = await runChecks(options('after'), {
+      freeze, resolver: stubDns(), request: async url => {
+        const response = fixture(url, 'after');
+        if (new URL(url).pathname === '/robots.txt') response.body = `User-agent: *\nDisallow:\n${rules}\nSitemap: https://${apex}/sitemap_index.xml # sitemap comment\n`;
+        return { ...response, tlsVerified: true };
+      },
+    });
+    assert.equal(result.ok, expected, rules);
+    assert.equal(result.checks.find(check => check.id === 'robots-after-crawlable').ok, expected, rules);
+  }
+});
+
+test('indexing parses directive names and preserves header and crawler scope', async () => {
+  const cases = [
+    ['before', 'max-image-preview: none', '', false],
+    ['before', 'googlebot: noindex', '', false],
+    ['before', 'googlebot: nofollow, noindex', '', false],
+    ['before', 'googlebot: nofollow, none', '', false],
+    ['before', 'max-image-preview: none, noindex', '', true],
+    ['before', 'NONE', '', true],
+    ['before', ['googlebot: noindex', 'noindex, nofollow'], '', true],
+    ['before', 'googlebot: noindex', '<meta name="robots" content="noindex">', false],
+    ['after', 'max-image-preview: none', '', true],
+    ['after', 'max-snippet: 0, max-image-preview: none', '', true],
+    ['after', 'googlebot: noindex', '', false],
+    ['after', 'googlebot: none', '', false],
+    ['after', '', '<meta name="robots" content="max-image-preview: none">', true],
+    ['after', '', '<meta name="googlebot-news" content="noindex">', false],
+    ['after', '', '<meta name="bingbot" content="none">', false],
+  ];
+  for (const [phase, header, meta, expected] of cases) {
+    const result = await runChecks(options(phase), {
+      freeze, resolver: stubDns(), request: async url => {
+        const response = fixture(url, phase);
+        if (new URL(url).hostname === options(phase).target && new URL(url).pathname === '/about') {
+          response.headers['x-robots-tag'] = header;
+          response.body += meta;
+        }
+        return { ...response, tlsVerified: true };
+      },
+    });
+    assert.equal(result.ok, expected, `${phase}: ${JSON.stringify(header)} ${meta}`);
+    if (phase === 'before') assert.equal(result.checks.find(check => check.id === 'preview-header:/about').ok, expected);
+    else assert.equal(result.checks.find(check => check.id === 'indexing:/about').ok, expected);
+  }
+});
+
 test('real curl transport pins loopback, parses headers, does not follow and rejects invalid TLS', async () => {
   const server = createServer((req, res) => {
-    res.writeHead(302, { location: 'https://must-not-contact.example/', 'x-two-origin': NEXT_IDENTITY });
+    res.writeHead(302, { location: 'https://must-not-contact.example/', 'x-two-origin': NEXT_IDENTITY,
+      'x-robots-tag': ['googlebot: noindex', 'noindex, nofollow'] });
     res.end('body');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -201,6 +338,8 @@ test('real curl transport pins loopback, parses headers, does not follow and rej
     const response = await curlRequest(`http://${apex}:${port}/probe`, ['127.0.0.1'], { timeout: 1 });
     assert.equal(response.status, 302);
     assert.equal(response.headers[ORIGIN_HEADER], NEXT_IDENTITY);
+    assert.deepEqual(response.headers['x-robots-tag'], ['googlebot: noindex', 'noindex, nofollow']);
+    await assert.rejects(curlRequest(`http://${apex}:${port}/probe`, ['127.0.0.1', '127.0.0.2']), /exactly one DNS address/);
     assert.equal(response.body, 'body');
     assert.equal(response.tlsVerified, false);
     assert.equal(response.remoteIp, '127.0.0.1');

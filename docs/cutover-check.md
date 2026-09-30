@@ -30,7 +30,10 @@ node ci/cutover-check.mjs --phase after --target togetherweown.com --json
   answered. Cloudflare can share IPs across legacy and Next.
 - Exit **0** = every check passed, **1** = one or more findings, **2** = invalid
   invocation/setup. JSON contains the phase, target, overall `ok`, and named
-  checks; transport failures never count as success or UNKNOWN.
+  checks; transport failures never count as success or UNKNOWN. Each HTTP/TLS
+  check has an `address` field (null if DNS failed). Every returned address is
+  probed separately, and cached only by URL + address; one healthy edge cannot
+  mask a legacy, broken-TLS or wrong-status address.
 
 ## Phase contract and prerequisites
 
@@ -38,9 +41,9 @@ node ci/cutover-check.mjs --phase after --target togetherweown.com --json
 |---|---|---|
 | Target `/up` | 200, `X-TWO-Origin: two-web-next`, `no-store` | same, on apex |
 | Apex `/up` | 200, `X-TWO-Origin: two-web` | 200, `X-TWO-Origin: two-web-next` |
-| Target public HTML | `X-Robots-Tag: noindex` required | no header/meta `noindex` or `none` |
-| Target archive HTML | noindex | still noindex |
-| Robots | 200, sitemap on target origin; crawlable preview can expose noindex | same, no global `Disallow: /` |
+| Target public HTML | unscoped `X-Robots-Tag: noindex` or `none` required | no header/meta indexing prohibition, including scoped search rules |
+| Target archive HTML | universal noindex | still universal noindex |
+| Robots | 200, sitemap on target origin; crawlable preview can expose noindex | same; all public probes crawlable for generic, Googlebot/Googlebot-News and Bingbot |
 | Sitemap/canonical | HTTPS target origin (candidate) | HTTPS target origin (apex) |
 | Apex HTTPS | direct 200 | direct 200 |
 | HTTP apex, HTTP/www, HTTPS/www | 301/308 directly to HTTPS apex, preserving path/query | same |
@@ -53,6 +56,16 @@ of the Next marker alone does not prove Laravel identity. This PR adds only the
 Next marker; it does not alter the frozen legacy deployment or edge config.
 Likewise, the www/HTTP redirects are edge configuration gates, not new app
 middleware. A green local selftest does **not** prove that these are deployed.
+
+Indexing checks parse directive names and crawler scope: `max-image-preview:
+none` limits image previews and does **not** prohibit indexing. A crawler-only
+`googlebot: noindex` cannot satisfy the universal preview header guard. Repeated
+X-Robots-Tag fields retain separate scopes. Robots parsing strips `#` comments,
+combines matching groups, falls back to `*`, handles wildcard/end-anchor paths
+and percent-encoding, and applies longest-rule/Allow-tie precedence. Thus `/`,
+`/*` and slash-with-comment blocks fail; a disallow for an unrelated crawler
+alone does not. Canonicals on the four static leaves use configured `APP_URL`,
+not the request host or query string.
 
 All HTTPS probes require a trusted certificate and matching hostname. A/AAAA
 lookups are bounded (3 seconds, one try), with ENODATA allowed for a missing
@@ -96,10 +109,15 @@ npm run check
 `check` runs the selftest in the required CI job. Selftests use only loopback
 HTTP/TLS servers, injected DNS stubs, disposable certificates and local files.
 They do not query real domains, follow external redirects, use Discord secrets
-or connect to any database. The rest of the suite uses local fixtures when
+or connect to any database. Vitest also feeds actual Hono-rendered static-leaf
+HTML into the canonical/indexing gates in both phases (`test/cutover-routes.test.mjs`);
+these are in-process requests with no database bindings or live sockets. The rest of the suite uses local fixtures when
 `DATABASE_URL` is unset, or approved agent-testdb/CI service containers only.
 
 Implementation references:
+- [RFC 9309 robots parsing](https://www.rfc-editor.org/rfc/rfc9309.html#section-2.2)
+- [Robots meta and X-Robots-Tag directive/scope syntax](https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag)
+- [Hono local request testing](https://hono.dev/docs/api/hono#request) (environment binding overload verified in installed Hono types)
 - [Node DNS Resolver API](https://nodejs.org/docs/latest-v24.x/api/dns.html#class-dnspromisesresolver)
 - [curl --resolve](https://curl.se/docs/manpage.html#--resolve),
   [--disable](https://curl.se/docs/manpage.html#--disable) and

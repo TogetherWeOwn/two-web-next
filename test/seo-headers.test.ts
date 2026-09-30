@@ -143,11 +143,18 @@ describe("share meta (TOG-5624)", () => {
     }
   });
 
-  it("leaves without a canonical carry no share tags but keep feed autodiscovery", async () => {
-    for (const path of ["/about", "/faq", "/rules", "/privacy"]) {
-      const html = await (await app.request(path, {}, env)).text();
-      expect(html, `${path} og:`).not.toContain("og:");
-      expect(html, `${path} twitter:`).not.toContain("twitter:");
+  it.each(["/about", "/faq", "/rules", "/privacy"])("%s has one configured self-canonical and keeps feed autodiscovery", async (path) => {
+    for (const appUrl of [APP_URL, `${APP_URL}/`]) {
+      const res = await app.request(`https://untrusted.example.test${path}?utm_source=share`, {}, { ...env, APP_URL: appUrl });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
+      expect(res.headers.getSetCookie()).toHaveLength(0);
+      const html = await res.text();
+      expect(html.match(/rel="canonical"/g)).toHaveLength(1);
+      expect(html).toContain(`<link rel="canonical" href="${APP_URL}${path}"`);
+      expect(html).toContain(`<meta property="og:url" content="${APP_URL}${path}"`);
+      expect(html).not.toContain("untrusted.example.test");
+      expect(html).not.toContain("utm_source");
       expect(html).toContain('type="application/rss+xml"');
     }
   });

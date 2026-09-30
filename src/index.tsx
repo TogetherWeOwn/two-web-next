@@ -255,7 +255,7 @@ app.get("/discord", (c) => {
 for (const path of ["/about", "/faq"] as const) {
   app.get(path, (c) => {
     c.header("cache-control", "public, max-age=3600");
-    return c.html(path === "/about" ? <About /> : <Faq />);
+    return c.html(path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />);
   });
 }
 
@@ -288,7 +288,7 @@ export function rulesLastUpdated(raw: string | undefined): { iso: string; label:
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules lastUpdated={stamp} />);
+  return c.html(<Rules appUrl={c.env.APP_URL} lastUpdated={stamp} />);
 });
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
@@ -302,7 +302,7 @@ const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
 
 app.get("/privacy", (c) => {
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Privacy version={POLICY_VERSION} html={PRIVACY_HTML} />);
+  return c.html(<Privacy appUrl={c.env.APP_URL} version={POLICY_VERSION} html={PRIVACY_HTML} />);
 });
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;

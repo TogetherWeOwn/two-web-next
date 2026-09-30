@@ -98,6 +98,7 @@ export function parseArgs(argv) {
 // --resolve pins the measured DNS answers without changing TLS SNI/verification.
 // Sources: https://curl.se/docs/manpage.html#--resolve and #--disable
 export async function curlRequest(url, addresses, { connectTo, caFile, timeout = 15 } = {}) {
+  if (addresses.length !== 1 || !isIP(addresses[0])) throw new Error('probe exactly one DNS address per transfer');
   const parsed = new URL(url);
   const dir = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), 'cutover-'));
   try {
@@ -119,7 +120,9 @@ export async function curlRequest(url, addresses, { connectTo, caFile, timeout =
       if (colon < 0) continue;
       const key = line.slice(0, colon).toLowerCase();
       const value = line.slice(colon + 1).trim();
-      headers[key] = headers[key] ? `${headers[key]}, ${value}` : value;
+      // Preserve header boundaries: a crawler scope lasts only within that field.
+      if (key === 'x-robots-tag') (headers[key] ??= []).push(value);
+      else headers[key] = headers[key] ? `${headers[key]}, ${value}` : value;
     }
     return { status: meta.http_code, headers, body: await readFile(join(dir, 'body'), 'utf8'),
       tlsVerified: parsed.protocol === 'https:' && meta.ssl_verify_result === 0, remoteIp: meta.remote_ip };
@@ -155,12 +158,92 @@ function absoluteOn(value, origin) {
   try { const url = new URL(value); return url.origin === origin && !url.username && !url.password; }
   catch { return false; }
 }
-const noindex = value => /\b(?:noindex|none)\b/i.test(value ?? '');
+// Directive names, not values: max-image-preview: none does not mean noindex.
+// Source: https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag
+const valuedDirectives = new Set(['max-snippet', 'max-image-preview', 'max-video-preview', 'unavailable_after']);
+function indexingRules(header, html) {
+  const rules = [];
+  for (const field of Array.isArray(header) ? header : [header ?? '']) {
+    let crawler = '*';
+    for (let token of field.toLowerCase().split(',')) {
+      token = token.trim();
+      const scope = token.match(/^([\w*-]+):\s*(.*)$/);
+      if (scope && !valuedDirectives.has(scope[1])) {
+        crawler = scope[1];
+        token = scope[2];
+      }
+      if (['noindex', 'none'].includes(token)) rules.push({ crawler, source: 'header' });
+    }
+  }
+  for (const tag of tags(html, 'meta')) {
+    const name = tag.name?.toLowerCase();
+    if (!['robots', 'googlebot', 'googlebot-news', 'bingbot'].includes(name)) continue;
+    if ((tag.content ?? '').toLowerCase().split(',').some(token => ['noindex', 'none'].includes(token.trim()))) {
+      rules.push({ crawler: name === 'robots' ? '*' : name, source: 'meta' });
+    }
+  }
+  return rules;
+}
+
+// RFC 9309: strip comments, combine matching groups, fall back to *, and
+// prefer the longest matching path (Allow wins a tie). No regex backtracking.
+// Source: https://www.rfc-editor.org/rfc/rfc9309.html#section-2.2
+function robotsGroups(body) {
+  const groups = [];
+  let group;
+  for (const line of body.split(/\r?\n/)) {
+    const field = line.split('#', 1)[0].trim().match(/^([\w-]+):\s*(.*)$/);
+    if (!field) continue;
+    const name = field[1].toLowerCase();
+    const value = field[2].trim();
+    if (name === 'user-agent') {
+      if (!group || group.rules.length) {
+        group = { agents: [], rules: [] };
+        groups.push(group);
+      }
+      group.agents.push(value.toLowerCase());
+    } else if (group && ['allow', 'disallow'].includes(name)) {
+      group.rules.push({ allow: name === 'allow', pattern: value });
+    }
+  }
+  return groups;
+}
+function normalizeRobotsPath(value) {
+  return value.replace(/[^\x00-\x7f]/gu, char => encodeURIComponent(char)).replace(/%[\da-f]{2}/gi, encoded => {
+    const char = String.fromCharCode(Number.parseInt(encoded.slice(1), 16));
+    return /^[\w.~-]$/.test(char) ? char : encoded.toUpperCase();
+  });
+}
+function matchesRobotsPath(pattern, path) {
+  pattern = normalizeRobotsPath(pattern);
+  path = normalizeRobotsPath(path);
+  const anchored = pattern.endsWith('$');
+  const parts = (anchored ? pattern.slice(0, -1) : pattern).split('*');
+  if (!path.startsWith(parts[0])) return false;
+  let offset = parts[0].length;
+  for (let i = 1; i < parts.length; i++) {
+    const part = parts[i];
+    const at = anchored && i === parts.length - 1 ? path.length - part.length : path.indexOf(part, offset);
+    if (at < offset || !path.startsWith(part, at)) return false;
+    offset = at + part.length;
+  }
+  return !anchored || offset === path.length;
+}
+function robotsAllows(groups, crawler, path) {
+  const matching = groups.filter(group => group.agents.includes(crawler));
+  const applicable = matching.length ? matching : groups.filter(group => group.agents.includes('*'));
+  const rules = applicable.flatMap(group => group.rules).filter(rule => rule.pattern && matchesRobotsPath(rule.pattern, path));
+  const length = rule => Buffer.byteLength(normalizeRobotsPath(rule.pattern));
+  const longest = rules.reduce((max, rule) => Math.max(max, length(rule)), 0);
+  const best = rules.filter(rule => length(rule) === longest);
+  return !best.length || best.some(rule => rule.allow);
+}
 
 export async function runChecks(options, { resolver = new Resolver({ timeout: 3000, tries: 1 }),
   request = curlRequest, freeze = null } = {}) {
   const checks = [];
-  const record = (id, ok, detail) => checks.push({ id, ok: Boolean(ok), detail });
+  const record = (id, ok, detail, address) => checks.push({ id, ok: Boolean(ok), detail,
+    ...(address !== undefined ? { address } : {}) });
   const markdown = freeze ?? await readFile(freezeFile, 'utf8');
   const uncovered = uncoveredFrozenPaths(markdown);
   record('url-freeze-coverage', uncovered.length === 0, uncovered.length ? `unmapped: ${uncovered.join(', ')}` : 'all frozen patterns mapped');
@@ -178,54 +261,76 @@ export async function runChecks(options, { resolver = new Resolver({ timeout: 30
   }
   const cache = new Map();
   const probe = async url => {
-    if (cache.has(url)) return cache.get(url);
-    const name = new URL(url).hostname;
-    let response = null;
-    try {
-      const ips = addresses.get(name);
-      if (!ips?.length) throw new Error('no verified DNS answers');
-      response = await request(url, ips);
-      if (new URL(url).protocol === 'https:') record(`tls:${url}`, response.tlsVerified, 'certificate chain and hostname verification');
-    } catch (err) { record(`transport:${url}`, false, `probe failed (${err.code ?? err.name})`); }
-    cache.set(url, response);
-    return response;
+    const ips = addresses.get(new URL(url).hostname);
+    const results = [];
+    // Include a failed measurement when DNS is absent; never silently skip it.
+    for (const ip of ips?.length ? ips : [null]) {
+      const key = `${url}\0${ip}`;
+      if (!cache.has(key)) {
+        let response = null;
+        try {
+          if (!ip) throw new Error('no verified DNS answers');
+          response = await request(url, [ip]);
+          if (new URL(url).protocol === 'https:') record(`tls:${url}`, response.tlsVerified, 'certificate chain and hostname verification', ip);
+        } catch (err) { record(`transport:${url}`, false, `probe failed (${err.code ?? err.name})`, ip); }
+        cache.set(key, response);
+      }
+      results.push({ ip, response: cache.get(key) });
+    }
+    return results;
+  };
+  const measure = async (url, evaluate) => {
+    for (const { ip, response } of await probe(url)) {
+      evaluate(response, (id, ok, detail) => record(id, ok, detail, ip));
+    }
   };
   const origin = `https://${options.target}`;
   const apex = `https://${options.apex}`;
-  const up = await probe(`${origin}/up`);
-  record('target-origin', up?.status === 200 && up.headers[ORIGIN_HEADER] === NEXT_IDENTITY,
-    `expected 200 + ${ORIGIN_HEADER}: ${NEXT_IDENTITY}`);
-  record('target-up-no-store', /\bno-store\b/i.test(up?.headers['cache-control'] ?? ''), 'identity response must not be cached');
-  const apexUp = await probe(`${apex}/up`);
+  await measure(`${origin}/up`, (up, record) => {
+    record('target-origin', up?.status === 200 && up.headers[ORIGIN_HEADER] === NEXT_IDENTITY,
+      `expected 200 + ${ORIGIN_HEADER}: ${NEXT_IDENTITY}`);
+    record('target-up-no-store', /\bno-store\b/i.test(up?.headers['cache-control'] ?? ''), 'identity response must not be cached');
+  });
   const expectedIdentity = options.phase === 'before' ? options.legacyIdentity : NEXT_IDENTITY;
-  record('apex-origin', apexUp?.status === 200 && apexUp.headers[ORIGIN_HEADER] === expectedIdentity,
-    `expected 200 + ${ORIGIN_HEADER}: ${expectedIdentity}; missing is not proof of legacy`);
-  const apexHome = await probe(`${apex}/`);
-  record('apex-home', apexHome?.status === 200, 'apex HTTPS must serve directly, not loop/redirect');
+  await measure(`${apex}/up`, (up, record) => {
+    record('apex-origin', up?.status === 200 && up.headers[ORIGIN_HEADER] === expectedIdentity,
+      `expected 200 + ${ORIGIN_HEADER}: ${expectedIdentity}; missing is not proof of legacy`);
+  });
+  await measure(`${apex}/`, (home, record) => {
+    record('apex-home', home?.status === 200, 'apex HTTPS must serve directly, not loop/redirect');
+  });
   const redirectPath = '/about?cutover=1';
   for (const base of [`http://${options.apex}`, `http://www.${options.apex}`, `https://www.${options.apex}`]) {
-    const response = await probe(`${base}${redirectPath}`);
-    record(`edge-redirect:${base}`, [301, 308].includes(response?.status) &&
-      response.headers.location === `${apex}${redirectPath}`, 'single permanent hop to HTTPS apex, preserving path/query');
+    await measure(`${base}${redirectPath}`, (response, record) => {
+      record(`edge-redirect:${base}`, [301, 308].includes(response?.status) &&
+        response.headers.location === `${apex}${redirectPath}`, 'single permanent hop to HTTPS apex, preserving path/query');
+    });
   }
-  const sitemap = await probe(`${origin}/sitemap_index.xml`);
-  const locs = [...(sitemap?.body ?? '').matchAll(/<loc\b[^>]*>([^<]+)<\/loc>/gi)].map(match => xmlText(match[1].trim()));
-  record('sitemap', sitemap?.status === 200 && /<urlset\b/i.test(sitemap.body) && locs.length > 0 &&
-    locs.every(url => absoluteOn(url, origin)), 'nonempty urlset, every loc absolute HTTPS on target host');
   let eventKey = options.eventKey;
-  if (!eventKey) {
-    const event = locs.find(url => absoluteOn(url, origin) && /^\/e\/[\w-]+$/.test(new URL(url).pathname));
-    if (event) eventKey = new URL(event).pathname.slice(3);
-  }
+  await measure(`${origin}/sitemap_index.xml`, (sitemap, record) => {
+    const locs = [...(sitemap?.body ?? '').matchAll(/<loc\b[^>]*>([^<]+)<\/loc>/gi)].map(match => xmlText(match[1].trim()));
+    record('sitemap', sitemap?.status === 200 && /<urlset\b/i.test(sitemap.body) && locs.length > 0 &&
+      locs.every(url => absoluteOn(url, origin)), 'nonempty urlset, every loc absolute HTTPS on target host');
+    if (!eventKey) {
+      const event = locs.find(url => absoluteOn(url, origin) && /^\/e\/[\w-]+$/.test(new URL(url).pathname));
+      if (event) eventKey = new URL(event).pathname.slice(3);
+    }
+  });
   record('published-event-fixture', Boolean(eventKey), 'use a published sitemap event or --event-key; never skip a frozen pattern');
-  const robots = await probe(`${origin}/robots.txt`);
-  const robotsSitemaps = [...(robots?.body ?? '').matchAll(/^\s*Sitemap:\s*(\S+)\s*$/gim)].map(match => match[1]);
-  record('robots-sitemap', robots?.status === 200 && robotsSitemaps.length > 0 &&
-    robotsSitemaps.every(url => url === `${origin}/sitemap_index.xml`), 'robots sitemap advertises the target origin');
-  // Before: X-Robots-Tag on each public HTML page is the indexing guard; the
-  // app intentionally keeps robots crawlable so crawlers can observe noindex.
-  record('robots-after-crawlable', options.phase === 'before' || !/^\s*Disallow:\s*\/\s*$/im.test(robots?.body ?? ''),
-    'after cutover robots must not globally disallow crawling');
+  await measure(`${origin}/robots.txt`, (robots, record) => {
+    const body = (robots?.body ?? '').split(/\r?\n/).map(line => line.split('#', 1)[0]).join('\n');
+    const robotsSitemaps = [...body.matchAll(/^\s*Sitemap:\s*(\S+)\s*$/gim)].map(match => match[1]);
+    record('robots-sitemap', robots?.status === 200 && robotsSitemaps.length > 0 &&
+      robotsSitemaps.every(url => url === `${origin}/sitemap_index.xml`), 'robots sitemap advertises the target origin');
+    const groups = robotsGroups(body);
+    const paths = URL_CASES.filter(row => row.indexable).map(row => row.path.replace('{key}', eventKey));
+    const blocked = ['*', 'googlebot', 'googlebot-news', 'bingbot'].flatMap(crawler =>
+      paths.filter(path => !robotsAllows(groups, crawler, path)).map(path => `${crawler}:${path}`));
+    // Preview headers need to be crawlable to be seen; after, public pages must
+    // be crawlable by generic and supported search crawlers, not unrelated bots.
+    record('robots-after-crawlable', options.phase === 'before' || blocked.length === 0,
+      blocked.length ? `blocked public paths: ${blocked.join(', ')}` : 'public paths crawlable');
+  });
   for (const row of URL_CASES) {
     if (row.path.includes('{key}') && !eventKey) {
       record(`url:${row.path}`, false, 'published event key missing');
@@ -233,36 +338,38 @@ export async function runChecks(options, { resolver = new Resolver({ timeout: 30
     }
     const path = row.path.replace('{key}', eventKey).replace('{user}', options.memberId);
     const url = `${origin}${path}`;
-    const response = await probe(url);
-    record(`url:${path}`, response?.status === row.status, `expected ${row.status}, received ${response?.status ?? 'no response'}`);
-    if (!response) continue;
-    if (row.redirect) {
-      let location;
-      try { location = new URL(response.headers.location, url); } catch { /* fails below */ }
-      let ok = false;
-      if (row.redirect === 'invite') {
-        ok = location?.protocol === 'https:' && !location.username && !location.password &&
-          ((location.hostname === 'discord.gg' && /^\/[\w-]+$/.test(location.pathname)) ||
-          (location.hostname === 'discord.com' && /^\/invite\/[\w-]+$/.test(location.pathname)));
-        record('discord-no-store', /\bno-store\b/i.test(response.headers['cache-control'] ?? ''), 'invite must not be cached');
-      } else if (row.redirect === 'oauth') {
-        const callback = path.startsWith('/join') ? '/join/callback' : '/auth/discord/callback';
-        ok = location?.origin === 'https://discord.com' && location.pathname === '/oauth2/authorize' &&
-          location.searchParams.get('redirect_uri') === `${origin}${callback}`;
-      } else ok = location?.href === `${origin}${row.redirect}`;
-      record(`location:${path}`, ok, `expected ${row.redirect} redirect (not followed)`);
-    }
-    if (row.html) {
-      record(`html:${path}`, /\btext\/html\b/i.test(response.headers['content-type'] ?? ''), 'HTML, not a JSON/challenge status substitute');
-      const canonicals = tags(response.body, 'link').filter(tag => tag.rel?.toLowerCase() === 'canonical');
-      record(`canonical:${path}`, canonicals.length === 1 && canonicals[0].href === url,
-        'one absolute self-canonical on target host');
-      const metas = tags(response.body, 'meta').filter(tag => ['robots', 'googlebot', 'bingbot'].includes(tag.name?.toLowerCase()));
-      const blocked = noindex(response.headers['x-robots-tag']) || metas.some(tag => noindex(tag.content));
-      const shouldIndex = options.phase === 'after' && row.indexable;
-      record(`indexing:${path}`, shouldIndex ? !blocked : blocked, shouldIndex ? 'indexable after flip' : 'must be noindex');
-      if (options.phase === 'before') record(`preview-header:${path}`, noindex(response.headers['x-robots-tag']), 'preview HTML needs X-Robots-Tag noindex');
-    }
+    await measure(url, (response, record) => {
+      record(`url:${path}`, response?.status === row.status, `expected ${row.status}, received ${response?.status ?? 'no response'}`);
+      if (!response) return;
+      if (row.redirect) {
+        let location;
+        try { location = new URL(response.headers.location, url); } catch { /* fails below */ }
+        let ok = false;
+        if (row.redirect === 'invite') {
+          ok = location?.protocol === 'https:' && !location.username && !location.password &&
+            ((location.hostname === 'discord.gg' && /^\/[\w-]+$/.test(location.pathname)) ||
+            (location.hostname === 'discord.com' && /^\/invite\/[\w-]+$/.test(location.pathname)));
+          record('discord-no-store', /\bno-store\b/i.test(response.headers['cache-control'] ?? ''), 'invite must not be cached');
+        } else if (row.redirect === 'oauth') {
+          const callback = path.startsWith('/join') ? '/join/callback' : '/auth/discord/callback';
+          ok = location?.origin === 'https://discord.com' && location.pathname === '/oauth2/authorize' &&
+            location.searchParams.get('redirect_uri') === `${origin}${callback}`;
+        } else ok = location?.href === `${origin}${row.redirect}`;
+        record(`location:${path}`, ok, `expected ${row.redirect} redirect (not followed)`);
+      }
+      if (row.html) {
+        record(`html:${path}`, /\btext\/html\b/i.test(response.headers['content-type'] ?? ''), 'HTML, not a JSON/challenge status substitute');
+        const canonicals = tags(response.body, 'link').filter(tag => tag.rel?.toLowerCase() === 'canonical');
+        record(`canonical:${path}`, canonicals.length === 1 && canonicals[0].href === url,
+          'one absolute self-canonical on target host');
+        const rules = indexingRules(response.headers['x-robots-tag'], response.body);
+        const shouldIndex = options.phase === 'after' && row.indexable;
+        record(`indexing:${path}`, shouldIndex ? rules.length === 0 : rules.some(rule => rule.crawler === '*'),
+          shouldIndex ? 'indexable after flip, including crawler-scoped rules' : 'must be universally noindex');
+        if (options.phase === 'before') record(`preview-header:${path}`,
+          rules.some(rule => rule.source === 'header' && rule.crawler === '*'), 'preview HTML needs unscoped X-Robots-Tag noindex/none');
+      }
+    });
   }
   return { phase: options.phase, target: options.target, ok: checks.every(check => check.ok), checks };
 }
@@ -274,7 +381,7 @@ async function main() {
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else {
       console.log(`cutover-check: ${result.phase} ${result.target}`);
-      for (const check of result.checks) console.log(`${check.ok ? 'PASS' : 'FAIL'} ${check.id}: ${check.detail}`);
+      for (const check of result.checks) console.log(`${check.ok ? 'PASS' : 'FAIL'} ${check.id}${check.address ? ` [${check.address}]` : ''}: ${check.detail}`);
       console.log(`${result.checks.filter(check => !check.ok).length} failure(s); no DNS/configuration changes executed`);
     }
     process.exitCode = result.ok ? 0 : 1;
