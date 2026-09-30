@@ -1,6 +1,8 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Counts } from "./counts";
 import type { Session } from "./env";
+import type { HomeEvent } from "./events/reads";
+import { cardTimeLabel } from "./islands/contracts";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
@@ -159,7 +161,9 @@ export const Home: FC<{
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
-}> = ({ session, notice, inviteUrl, appUrl, counts }) => (
+  upcomingEvents: HomeEvent[];
+  eventsUnavailable: boolean;
+}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -213,6 +217,37 @@ export const Home: FC<{
       <section aria-label="Community ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
         <p>Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.</p>
+      </section>
+      <section aria-labelledby="home-events-heading">
+        <p class="strap">Next up</p>
+        <h2 id="home-events-heading">Game nights, when they land.</h2>
+        {upcomingEvents.length > 0 ? (
+          <>
+            <ul class="facts home-events" data-testid="home-events-list">
+              {upcomingEvents.map((event) => (
+                <li class="card">
+                  <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
+                    <p><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)}</time></p>
+                    <h3>{event.title}</h3>
+                    {event.location ? <p>{event.location}</p> : null}
+                    <p>{event.goingCount} going</p>
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p><a href="/events">See all events <span aria-hidden="true">→</span></a></p>
+          </>
+        ) : (
+          <div class="card" data-testid="home-events-empty" data-state={eventsUnavailable ? "unavailable" : "empty"}>
+            <h3>{eventsUnavailable ? "Game nights are unavailable right now." : "Nothing scheduled yet."}</h3>
+            <p>{eventsUnavailable
+              ? "We couldn’t load the schedule. The Discord is still open — check there for the next game night."
+              : "Game nights get posted here. Join the Discord and you’ll hear about the next one."}</p>
+          </div>
+        )}
+        {!session ? (
+          <p><a class="btn" href="/join" data-testid="home-events-join">Join the Discord <span aria-hidden="true">→</span></a></p>
+        ) : null}
       </section>
     </main>
     <SiteFooter />

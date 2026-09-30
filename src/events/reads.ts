@@ -6,6 +6,8 @@ import { EVENTS_PAST_DRAWER_LIMIT, escapeLikeTerm, PAST_EVENTS_PAGE_SIZE } from 
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
 
+export type HomeEvent = Pick<PublicEvent, "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount">;
+
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PAST_EVENTS_PAGE_SIZE;
 export const JSON_MAX_LIMIT = 100;
@@ -56,6 +58,19 @@ export async function listUpcoming(db: Db, now = new Date(), opts: CalendarReadO
     .where(and(calendarVisible(opts), gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
   return withGoing(db, rows);
+}
+
+/** Home teaser: published and not ended, capped in SQL; calendar visibility is broader. */
+export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEvent[]> {
+  const rows = await db
+    .select()
+    .from(events)
+    .where(and(eq(events.status, "published"), gte(events.endsAt, now)))
+    .orderBy(asc(events.startsAt), asc(events.id))
+    .limit(3);
+  // The homepage gets public signposts and an aggregate, never creator or RSVP identities.
+  return (await withGoing(db, rows)).map(({ eventKey, title, startsAt, timezone, location, goingCount }) =>
+    ({ eventKey, title, startsAt, timezone, location, goingCount }));
 }
 
 /** Identity wins over display eligibility: hidden, renamed and paginated rows still suppress Discord copies. */
