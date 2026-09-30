@@ -225,7 +225,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
     try {
       const { row, writeBack } = await updateEvent(db, c.get("adminActor"), key, input);
-      if (writeBack) await dispatchWriteBack(c.env, writeBack);
+      if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
       return c.redirect(`/admin/events/${row.eventKey}`, 303);
     } catch (err) {
       if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
@@ -240,7 +240,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       try {
         const to = action === "publish" ? "published" : "cancelled";
         const { row, writeBack } = await transitionEvent(db, c.get("adminActor"), c.req.param("key"), to);
-        if (writeBack) await dispatchWriteBack(c.env, writeBack);
+        if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         return c.redirect(`/admin/events/${row.eventKey}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");

@@ -188,7 +188,12 @@ describe("DB-backed sessions and rotation", () => {
       return array;
     });
     try {
-      const res = await signIn(e, state, cookie);
+      // Supply the edge ID so the request ULID does not consume the session
+      // entropy seam. This test pins the 32-byte bearer, not logging entropy.
+      const res = await app.request(`/auth/discord/callback?code=abc&state=${state}`, {
+        headers: { cookie, "cf-ray": "0123456789abcdef-LHR" },
+      }, e);
+      expect(res.status).toBe(302);
       const raw = res.headers.getSetCookie().find((c) => c.startsWith("__Host-two_session="))!;
       const value = decodeURIComponent(raw.split(";")[0]!.split("=")[1]!);
       // hono signs `token.signature`; the bearer part is a random `two_` token.

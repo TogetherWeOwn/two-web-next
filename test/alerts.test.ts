@@ -60,6 +60,18 @@ describe("rate limit", () => {
     expect(fingerprintOf(new BoomError(), "/join")).toBe("BoomError@/join");
   });
 
+  it("includes a safe request ID without making it part of the fingerprint", () => {
+    const lines: string[] = [];
+    const opts = { limiter: new AlertRateLimit(), sink: (line: string) => void lines.push(line) };
+    const req = { method: "POST", route: "/join", requestId: "0123456789abcdef-LHR" };
+    expect(alertRequestError(new BoomError(), req, opts)).toBe(true);
+    expect(alertRequestError(new BoomError(), { ...req, requestId: "fedcba9876543210-LHR" }, opts)).toBe(false);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ request_id: req.requestId, fingerprint: "BoomError@/join" });
+    alertRequestError(new BoomError(), { ...req, route: "/other", requestId: "bearer-secret" }, opts);
+    expect(lines[1]).not.toContain("bearer-secret");
+    expect(JSON.parse(lines[1]!)).not.toHaveProperty("request_id");
+  });
+
   it("stays bounded", () => {
     const rl = new AlertRateLimit(ALERT_WINDOW_MS, () => 1);
     for (let i = 0; i < 2000; i++) rl.allow(`f${i}`);

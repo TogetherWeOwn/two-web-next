@@ -1,6 +1,7 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
 import { BotTerminalError, BotTransportError } from "./types";
 import type { BotClient, EventStore, UniqueLock } from "./types";
+import { safeRequestId } from "../request-log";
 
 export type Outcome = { done: true } | { retryInSeconds: number } | { failed: string };
 
@@ -11,11 +12,12 @@ export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },
   lock: UniqueLock,
   eventKey: string,
+  requestId?: string,
 ): Promise<boolean> {
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
   if (!(await lock.acquire(uniqueKey(eventKey), SYNC_EVENT.uniqueForSeconds))) return false;
   await queue.send(
-    { kind: "sync-event", eventKey, idempotencyKey: crypto.randomUUID() },
+    { kind: "sync-event", eventKey, idempotencyKey: crypto.randomUUID(), requestId: safeRequestId(requestId) },
     { delaySeconds: SYNC_EVENT.debounceSeconds },
   );
   return true;

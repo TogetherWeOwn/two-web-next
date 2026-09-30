@@ -342,7 +342,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         endsAtUtc: existing.endsAt.toISOString(),
       });
       const { row, writeBack } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
-      if (writeBack) await dispatchWriteBack(c.env, writeBack);
+      if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
       return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);
@@ -364,7 +364,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
           c.req.param("key"),
           action === "publish" ? "published" : "cancelled",
         );
-        if (writeBack) await dispatchWriteBack(c.env, writeBack);
+        if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
       } catch (err) {
         if (err instanceof ValidationError) return invalid(c, err);
@@ -419,7 +419,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       if (r.reason === "closed") return closed(c);
       return c.json({ reason: "event_at_capacity", message: "This event is full.", event_key: key, capacity: r.capacity }, 409);
     }
-    await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
+    await dispatchRsvpSync(c.env, r.eventKey, r.mirrored, c.get("requestId"));
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
   });
 
@@ -441,7 +441,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const key = c.req.param("key");
     const r = await withdrawRsvp(db, KEY_RE.test(key) ? key : "", who.id);
     if (r.limited) return rateLimitExceeded(c, r.retryAfter);
-    await dispatchRsvpSync(c.env, key, r.status);
+    await dispatchRsvpSync(c.env, key, r.status, c.get("requestId"));
     return c.body(null, 204);
   });
 

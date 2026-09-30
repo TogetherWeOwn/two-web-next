@@ -98,6 +98,18 @@ describe("structured request logs (local fixtures only)", () => {
     expect(JSON.stringify(log.mock.calls)).not.toContain(ray);
   });
 
+  it("adds the header to HEAD responses and only accepts a colo code", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const req = new Request("https://example.test/members/private-id", { method: "HEAD", headers: { "cf-ray": RAY } });
+    Object.defineProperty(req, "cf", { value: { colo: "198.51.100.42" } });
+    const res = await fixture().fetch(req, env);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("");
+    expect(res.headers.get("x-request-id")).toBe(RAY);
+    expect(logs(log)).toEqual([expect.objectContaining({ method: "HEAD", route: "/members/:user", colo: null })]);
+    expect(JSON.stringify(log.mock.calls)).not.toContain("198.51.100.42");
+  });
+
   it("generates unique ULIDs with the timestamp encoded in the first ten characters", () => {
     vi.spyOn(Date, "now").mockReturnValue(1469918176385);
     const ids = Array.from({ length: 100 }, () => newRequestId());
