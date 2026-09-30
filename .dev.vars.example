@@ -12,3 +12,7 @@ DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next
 DISCORD_MODERATOR_ROLE_IDS=
 # Staging-only QA seam. Unset everywhere else: the route 404s without it.
 QA_AUTH_TOKEN=
+# CSP violation sink sampling (TOG-10107): fraction of valid reports logged.
+# Unset or unparseable = 1.0 (log everything). Lower it if report volume
+# ever outweighs the signal.
+# CSP_REPORT_SAMPLE_RATE=1.0
