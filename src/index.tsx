@@ -4,6 +4,7 @@ import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
 import { agentEventsRoute } from "./agent-events/route";
+import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import { cspReportsRoute } from "./csp-reports";
 import {
@@ -358,7 +359,7 @@ app.get("/robots.txt", (c) => {
 // `/discord`. Flood control lives in the handler instead.
 app.post("/csp-reports", cspReportsRoute);
 
-app.post("/api/agent-events", agentEventsRoute);
+app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsRoute);
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.get("/healthz", (c) => c.json({ ok: true }));
@@ -486,7 +487,7 @@ registerEventRoutes(
   async (c) => readSession(c, await storeFor(c), false),
 );
 
-app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+app.post("/logout", requestBodyLimit("action"), throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
   // the origin check below refuses one anyway.
   const origin = c.req.header("origin");
@@ -500,7 +501,7 @@ app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => 
 
 // Staging-only QA seam. 404 everywhere that is not the staging host with
 // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post("/auth/qa/:identity", throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), async (c) => {
+app.post("/auth/qa/:identity", requestBodyLimit("action"), throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), async (c) => {
   if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);

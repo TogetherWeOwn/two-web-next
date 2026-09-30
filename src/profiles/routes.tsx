@@ -19,6 +19,7 @@ import { getSignedCookie } from "hono/cookie";
 import { type Context, type Next, Hono } from "hono";
 import postgres from "postgres";
 import { dbFor } from "../admin/db";
+import { requestBodyLimit } from "../body-limit";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
@@ -186,9 +187,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
     return c.redirect(`/members/${id}`, 303);
   };
 
-  app.patch("/members/:user", (c) => patch(c));
+  app.patch("/members/:user", requestBodyLimit("form"), (c) => patch(c));
   // Plain HTML forms cannot PATCH: the edit form posts `_method=PATCH`.
-  app.post("/members/:user", async (c) => {
+  app.post("/members/:user", requestBodyLimit("form"), async (c) => {
     const ct = c.req.header("content-type") ?? "";
     if (ct.includes("application/x-www-form-urlencoded") || ct.includes("multipart/form-data")) {
       const body = await c.req.parseBody({ all: true }).catch(() => null);

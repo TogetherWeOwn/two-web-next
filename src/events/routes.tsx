@@ -4,6 +4,7 @@
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
+import { requestBodyLimit } from "../body-limit";
 import { NotFoundError, createEvent, getEvent, transitionEvent, updateEvent } from "../admin/store";
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
@@ -299,7 +300,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
 
   const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
 
-  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  app.post("/events", requestBodyLimit("json"), throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const who = await moderator(c);
     if (who instanceof Response) return who;
     const db = await dbFor(c);
@@ -313,7 +314,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  app.patch("/events/:key", requestBodyLimit("json"), throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
     const who = await moderator(c);
     if (who instanceof Response) return who;
     const db = await dbFor(c);
@@ -352,7 +353,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   for (const action of ["publish", "cancel"] as const) {
-    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+    app.post(`/events/:key/${action}`, requestBodyLimit("action"), throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
       const who = await moderator(c);
       if (who instanceof Response) return who;
       const db = await dbFor(c);
@@ -390,7 +391,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  app.put("/events/:key/rsvp", async (c) => {
+  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
     c.header("cache-control", "private, no-store");
     const input = await body(c);
     // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
@@ -423,7 +424,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
   });
 
-  app.delete("/events/:key/rsvp", async (c) => {
+  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
     c.header("cache-control", "private, no-store");
     // Both sources are evaluated independently, with ALL values preserved:
     // `query()` is first-wins, so duplicates use `queries()` — an empty query
