@@ -5,7 +5,7 @@ const html = [
   ["/", /The lobby is open/],
   ["/about", /About Together We Own/],
   ["/faq", /Frequently asked questions/],
-  ["/rules", /House rules/],
+  ["/rules", /id="rules-heading"/],
   ["/privacy", /Privacy policy/],
   ["/events", /id="events-heading"/],
   ["/events/past", /Past events/],

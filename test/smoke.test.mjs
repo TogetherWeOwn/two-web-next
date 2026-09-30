@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { test } from "node:test";
+import { build } from "esbuild";
 import { smoke } from "../bin/smoke.mjs";
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
@@ -11,7 +12,7 @@ const fixtures = {
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
   "/faq": [200, "text/html", "<h1>Frequently asked questions</h1>"],
-  "/rules": [200, "text/html", "<h1>House rules</h1>"],
+  "/rules": [200, "text/html", '<h1 id="rules-heading">House rules</h1>'],
   "/privacy": [200, "text/html", "<h1>Privacy policy</h1>"],
   "/events": [200, "text/html", '<h1 id="events-heading">Events</h1>'],
   "/events/past": [200, "text/html", "<h1>Past events</h1>"],
@@ -118,6 +119,28 @@ for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
     assert.ok(!result.output.includes("upstream fallback"));
   });
 }
+
+test("rules accepts rendered Rules but rejects rendered Home with the shared footer", async (t) => {
+  // In-memory rendering uses local components only: https://esbuild.github.io/api/#write
+  const bundle = await build({
+    entryPoints: ["src/pages.tsx"], bundle: true, write: false, format: "esm", platform: "node",
+  });
+  const { Home, Rules } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+  const home = Home({ session: null, notice: null, inviteUrl: "https://discord.gg/fixture",
+    appUrl: "https://example.test", counts: { memberCount: null, onlineCount: null } }).toString();
+  const rules = Rules({ lastUpdated: null }).toString();
+  assert.match(home, /<a href="\/rules">House rules<\/a>/);
+  assert.match(rules, /id="rules-heading"/);
+  for (const [body, expected] of [[home, false], [rules, true]]) {
+    const { url } = await stub(t, (route, result) => { if (route === "/rules") result.body = body; });
+    const result = await run(url);
+    assert.equal(result.ok, expected, result.output);
+    if (!expected) {
+      assert.match(result.output, /FAIL \/rules: expected body matching .*rules-heading.*; actual body did not match/);
+      assert.ok(!result.output.includes("PASS /rules"), result.output);
+    }
+  }
+});
 
 test("rejects valid JSON with the old /health shape", async (t) => {
   const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = '{"ok":true}'; });
