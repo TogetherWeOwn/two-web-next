@@ -71,6 +71,13 @@
       "when": 1790762321401,
       "tag": "1007_queue-ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790791865799,
+      "tag": "1008_agent-event-idempotency-prune-idx",
+      "breakpoints": true
     }
   ]
 }

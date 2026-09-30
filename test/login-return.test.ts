@@ -217,7 +217,10 @@ describe("url.intended (auth-gate bounce)", () => {
 
   it("a POST bounce does not record an intended page", async () => {
     const { env } = isolated();
-    const bounce = await app.request("/admin/", { method: "POST" }, env);
+    // Same-origin POST reaches the guard (outer sameOrigin middleware fails
+    // closed without an Origin); the bounce itself records intended only for
+    // GET/HEAD, so a POST redirects without the cookie.
+    const bounce = await app.request("/admin/", { method: "POST", headers: { origin: APP_URL } }, env);
     expect(bounce.status).toBe(302);
     expect(setCookies(bounce)).not.toContain(`${LOGIN_INTENDED_COOKIE}=`);
   });
@@ -406,7 +409,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const { env } = { env: envFor(createMemorySessionStore()) };
     const res = await app.request(`/e/${KEY}`, {}, env);
     expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe("public, max-age=60");
+    // Never share-cached: the guest pitch / join banner personalize on the
+    // viewer, so even guests get private,no-store + Vary: Cookie (main W16).
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.get("vary")?.toLowerCase()).toContain("cookie");
     const html = await res.text();
     expect(html).toContain('data-testid="event-join-pitch"');

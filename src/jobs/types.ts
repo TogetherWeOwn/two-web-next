@@ -48,8 +48,34 @@ export interface EventStore {
   staleEventKeys(): Promise<string[]>;
 }
 
-export interface AccessLogStore {
+/**
+ * Query surface a single-flight job body runs on: the reserved transaction
+ * client (postgres.js `TransactionSql`). Awaited tagged-template queries
+ * only — the flight owns the transaction, so no nested `begin`/`reserve`/`end`
+ * (postgres.js rejects `begin` on a transaction client at runtime).
+ *
+ * `any[]` parameters are deliberate: both the pool client and the transaction
+ * client are assignable here, so bodies compile unchanged against either.
+ */
+export type TxClient = (strings: TemplateStringsArray, ...values: any[]) => Promise<any>;
+
+/** One age-pruned table (Laravel MassPrunable): mass delete older than cutoff, returns rows removed. */
+export interface AgePrunedTable {
   pruneOlderThan(cutoff: Date): Promise<number>;
+}
+
+/** web_sessions expiry sweep: delete rows reads can no longer see (expires_at <= now). */
+export interface SessionSweeper {
+  sweepExpired(now: Date): Promise<number>;
+}
+
+/** Every table the daily model:prune pass owns (routes/console.php ×3 + web_sessions GC). */
+export interface PruneStores {
+  accessLog: AgePrunedTable;
+  joinAttempts: AgePrunedTable;
+  idempotencyKeys: AgePrunedTable;
+  searchLog: AgePrunedTable;
+  sessions: SessionSweeper;
 }
 
 /** ShouldBeUnique: acquire returns false while another holder's lock is live. */

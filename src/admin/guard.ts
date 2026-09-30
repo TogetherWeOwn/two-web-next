@@ -77,8 +77,8 @@ export function enforceEnabled(env: Env): boolean {
 }
 
 /**
- * The whole guard as one ordered middleware: origin check (POST) → guest
- * redirect → moderator 403 → handler → access-log flush → no-store.
+ * Panel authorization: guest redirect → moderator 403 → handler →
+ * access-log flush → no-store. The outer app enforces same-origin writes.
  *
  * Read routes declare what member data they surfaced via `c.set("access",
  * {...})`; the guard writes the row after the handler. Writes do not log
@@ -104,11 +104,6 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
     next: Next,
   ) => {
-    if (c.req.method === "POST") {
-      const origin = c.req.header("origin");
-      if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-    }
-
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
     // Guest: into the site Discord OAuth flow, like everyone else. There is
     // no panel login page. The bounce records the page they asked for

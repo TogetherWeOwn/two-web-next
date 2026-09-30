@@ -6,6 +6,8 @@ import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
 
+export const SkipLink: FC = () => <a class="skip-link" href="#main">Skip to content</a>;
+
 export const Layout: FC<
   PropsWithChildren<{
     title: string;
@@ -42,7 +44,7 @@ export const Layout: FC<
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
     </head>
-    <body>{children}</body>
+    <body><SkipLink />{children}</body>
   </html>
 );
 
@@ -106,11 +108,11 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
   <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <section aria-labelledby="join-heading">
         <h1 id="join-heading">Join Together We Own</h1>
@@ -158,11 +160,11 @@ export const Recovery: FC<{
   <Layout title={`${title} — Together We Own`}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a class="btn" href="/join">Join with Discord</a>
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       <section aria-labelledby="recovery-heading">
         <h1 id="recovery-heading">{title}</h1>
         <p class="lead">{message}</p>
@@ -191,7 +193,7 @@ export const Home: FC<{
   >
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         {session ? (
           <form method="post" action="/logout">
             <span class="who">{session.username}</span>
@@ -202,7 +204,7 @@ export const Home: FC<{
         )}
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       {/*
         The flashed join confirmation takes the notice slot: both carry the same
         event, and the banner is the richer of the two (reinvite action, exact
@@ -262,11 +264,11 @@ const Leaf: FC<PropsWithChildren<{ title: string; headingId: string; heading: st
   <Layout title={title}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a class="btn" href={JOIN_HREF}>Join with Discord</a>
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       <section aria-labelledby={headingId}>
         <h1 id={headingId}>{heading}</h1>
         {children}

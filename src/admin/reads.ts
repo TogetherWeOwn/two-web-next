@@ -5,9 +5,10 @@ import { and, count, desc, eq, gte, or } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
+import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
 
-/** config/join.php retention: attempts older than this are pruned (W13 cron). */
-export const JOIN_RETENTION_DAYS = 90;
+/** config/join.php retention: attempts older than this are pruned (W13 cron). Canonical value lives in jobs/constants (legacy parity pin). */
+export const JOIN_RETENTION_DAYS = JOIN_ATTEMPT_RETENTION_DAYS;
 
 export type RosterEntry = { userId: string; username: string | null; status: string; answeredAt: Date };
 
@@ -46,6 +47,17 @@ export async function listJoinAttempts(
     .where(and(...conds))
     .orderBy(desc(joinAttempts.createdAt), desc(joinAttempts.id))
     .limit(PAGE);
+}
+
+/** Direct lookup uses the list's retention window; mapped identities remain audit subjects after leaving. */
+export async function getJoinAttempt(db: Db, id: number, now?: Date) {
+  const [row] = await db
+    .select({ attempt: joinAttempts, memberId: users.id })
+    .from(joinAttempts)
+    .leftJoin(users, eq(users.id, joinAttempts.discordId))
+    .where(and(eq(joinAttempts.id, id), gte(joinAttempts.createdAt, windowStart(now))))
+    .limit(1);
+  return row ?? null;
 }
 
 function windowStart(now: Date = new Date()): Date {

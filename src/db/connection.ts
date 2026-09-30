@@ -6,8 +6,8 @@ export function databaseUrl(env: Pick<Env, "DATABASE_URL" | "DB">): string | und
   return env.DATABASE_URL || env.DB?.connectionString;
 }
 
-// Hyperdrive pools underneath the per-request client. Match the /db-ping
-// driver posture: no prepared statements or extra type-discovery round trips.
+// Hyperdrive pools underneath the per-request client: no prepared statements
+// or extra type-discovery round trips.
 export const databaseOptions = {
   max: 1,
   idle_timeout: 10,

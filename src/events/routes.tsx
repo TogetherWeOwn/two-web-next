@@ -11,6 +11,7 @@ import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
 import { takeJoinResult } from "../return-journey";
+import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
@@ -66,7 +67,7 @@ function jsonLd(e: PublicEvent, appUrl: string): string {
     eventStatus: e.status === "cancelled" ? "https://schema.org/EventCancelled" : "https://schema.org/EventScheduled",
     location: { "@type": "VirtualLocation", url: e.location && /^https?:/.test(e.location) ? e.location : appUrl },
     ...(e.description ? { description: e.description } : {}),
-    url: `${appUrl}/e/${e.eventKey}`,
+    url: canonicalUrl(appUrl, `/e/${e.eventKey}`),
   };
   // `<` escaped so a title can never close the script element.
   return JSON.stringify(ld).replace(/</g, "\\u003c");
@@ -273,44 +274,37 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
     // The page personalizes on the session (member/guest join pitch) and on
-    // the one-shot join confirmation, so every branch reads both and varies
-    // on the cookie. A signed-in exit always rotates the session cookie, so
-    // it must never be cacheable (TOG-10356 review: cancelled 410s carried a
-    // rotated auth cookie with no Cache-Control).
-    if (e.status === "draft") {
-      const session = await readSession(c);
-      // Headers before the gate: a signed-in non-moderator still rotated
-      // their session cookie above, so even the 403 must not be cacheable.
-      c.header("cache-control", "private, no-store");
-      c.header("vary", "Cookie");
-      if (!session?.moderator) return c.text("Forbidden", 403);
-      const joinResult = await takeJoinResult(c);
-      return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} />);
-    }
+    // the one-shot join confirmation, so it is never share-cached (main W16)
+    // and always varies on the cookie (TOG-10356 finding 5). A signed-in exit
+    // always rotates the session cookie, so even the 403/410 must carry
+    // private,no-store (TOG-10356 review: cancelled 410s carried a rotated
+    // auth cookie with no Cache-Control). Headers go before the draft gate:
+    // a signed-in non-moderator still rotated above, so the 403 must not be
+    // cacheable either.
     if (e.status === "cancelled") {
       const session = await readSession(c);
-      c.header("x-robots-tag", "noindex");
-      // Viewer-independent body, but a signed-in view still rotates the auth
-      // cookie above: private when personalized, shared-cached for guests.
-      c.header("cache-control", session ? "private, no-store" : "public, max-age=60");
+      void session;
+      c.header("x-robots-tag", "noindex, nofollow");
+      c.header("cache-control", "private, no-store");
       c.header("vary", "Cookie");
-      return c.html(<EventGonePage />, 410);
+      return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
     }
+    // Never share-cache this HTML: the guest join pitch and the one-shot
+    // join banner both depend on the viewer/cookies.
+    c.header("cache-control", "private, no-store");
+    c.header("vary", "Cookie");
     const session = await readSession(c);
+    if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
+    if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
     // One-shot join confirmation (legacy join_result flash): the event page
     // is a join-CTA landing (`/join?next=/e/<key>`), so it consumes and
     // renders the banner exactly once like /, /join and /profile.
     const joinResult = await takeJoinResult(c);
-    c.header("cache-control", session || joinResult ? "private, no-store" : "public, max-age=60");
-    c.header("vary", "Cookie");
     return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
-  // Same origin rule as /logout: SameSite=Lax already blocks cross-site sends.
   async function moderator(c: Ctx): Promise<Session | Response> {
-    const origin = c.req.header("origin");
-    if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     // Non-rotating: concurrent writes with one cookie must all authenticate.
     const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
@@ -415,8 +409,6 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   const closed = (c: Ctx) => c.json({ reason: "event_not_open", message: "This event is not taking RSVPs." }, 403);
 
   async function member(c: Ctx): Promise<Session | Response> {
-    const origin = c.req.header("origin");
-    if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
     // Non-rotating: concurrent writes with one cookie must all authenticate.
     const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);

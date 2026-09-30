@@ -50,11 +50,11 @@ export const ProfilePage: FC<{
     >
       <header class="bar">
         <a class="brand" href="/">TWO</a>
-        <nav>
+        <nav aria-label="Primary">
           <a class="btn" href="/profile">Your profile</a>
         </nav>
       </header>
-      <main>
+      <main id="main" tabindex={-1}>
         {joinResult ? <JoinResultBanner result={joinResult} /> : null}
         <section aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
           {img ? (
