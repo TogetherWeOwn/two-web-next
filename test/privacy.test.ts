@@ -1,3 +1,4 @@
+// route-inventory: GET /privacy
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
 import { POLICY_MARKDOWN } from "../src/privacy-content";
