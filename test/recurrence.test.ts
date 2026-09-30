@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDb } from "../src/db/index";
+import type { Db } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { activityLog, events } from "../src/db/admin-schema";
 import { createEvent, materializeMissingInstances, materializeRecurringSeries, transitionEvent } from "../src/admin/store";
 import { MAX_OCCURRENCES, occurrences, parseRecurrenceForm } from "../src/admin/recurrence";
@@ -87,15 +88,20 @@ describe("parseRecurrenceForm (legacy RecurrenceInput messages)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture | undefined;
+  let db: Db;
   const actor = { id: "recurrence-test", username: "mod" };
   const input = { title: "Sunday Squad", game: null, description: null, startsAtUtc: starts, endsAtUtc: ends, timezone: "Europe/London", location: null, capacity: null };
-  const cleanup = async () => {
-    await db.delete(events);
-    await db.delete(activityLog);
-  };
-  beforeEach(cleanup);
-  afterEach(cleanup);
+  beforeEach(async () => {
+    // Validates the test host/principal before constructing a driver. All reads,
+    // writes and failure DDL use this owned schema, with no public fallback.
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterEach(async () => {
+    await fixture?.dispose();
+    fixture = undefined;
+  });
 
   it("creates the parent plus missing occurrences as drafts, and re-running creates nothing", async () => {
     const { row } = await createEvent(db, actor, input, { frequency: "weekly", count: 4, endsOn: null });
@@ -163,6 +169,31 @@ describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb
       expect(await db.select().from(activityLog)).toEqual(audits);
     } finally {
       await db.execute(sql`alter table activity_log drop constraint recurrence_test_audit_failure`);
+    }
+  });
+
+  it("keeps another schema's events and audits through failure DDL, reset and disposal", async () => {
+    const sentinel = await createMemberDataFixture(process.env.DATABASE_URL!);
+    try {
+      await db.execute(sql`alter table activity_log add constraint recurrence_test_audit_failure
+        check ((properties->'recurrenceIndex'->>'after')::integer is distinct from 4)`);
+      // This would fail if the constraint were installed on the sentinel table.
+      await createEvent(sentinel.db, actor, input, { frequency: "weekly", count: 4, endsOn: null });
+      const sentinelEvents = await sentinel.db.select().from(events).orderBy(events.id);
+      const sentinelAudits = await sentinel.db.select().from(activityLog).orderBy(activityLog.id);
+      expect(sentinelEvents).toHaveLength(4);
+      expect(sentinelAudits).toHaveLength(4);
+
+      await expect(createEvent(db, actor, input, { frequency: "weekly", count: 4, endsOn: null })).rejects.toThrow();
+      await createEvent(db, actor, input);
+      await fixture!.reset();
+      expect(await db.select().from(events)).toHaveLength(0);
+      expect(await db.select().from(activityLog)).toHaveLength(0);
+      await fixture!.dispose();
+      expect(await sentinel.db.select().from(events).orderBy(events.id)).toEqual(sentinelEvents);
+      expect(await sentinel.db.select().from(activityLog).orderBy(activityLog.id)).toEqual(sentinelAudits);
+    } finally {
+      await sentinel.dispose();
     }
   });
 
