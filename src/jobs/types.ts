@@ -42,7 +42,11 @@ export type SyncAttempt = {
   eventKey: string;
   revision: number;
   mirroredAt: Date;
+  /** `failed` is a definitive refusal, never an ambiguous/exhausted carrier. */
   state: "pending" | "succeeded" | "failed";
+  requestAttempts: number;
+  /** Null after the automatic request budget is exhausted; identity stays pending. */
+  nextAttemptAt: Date | null;
 } & ({ action: "event.upsert"; payload: EventUpsert } | { action: "event.cancel"; payload: { eventKey: string } });
 
 export interface EventStore {
@@ -50,10 +54,14 @@ export interface EventStore {
   prepareSync(eventKey: string, idempotencyKey: string, mirroredAt: Date): Promise<SyncAttempt | { waiting: true } | null>;
   /** Atomically settle the attempt and acknowledge only its revision/RSVP cutoff. */
   completeSync(attempt: SyncAttempt, discordEventId: string): Promise<void>;
+  /** Atomically claim a due request, increment its durable budget and lease it. */
+  claimSync(attempt: SyncAttempt, now: Date): Promise<SyncAttempt | null>;
+  deferSync(attempt: SyncAttempt, nextAttemptAt: Date | null): Promise<void>;
+  /** Settle only a definitive refusal. */
   failSync(idempotencyKey: string): Promise<void>;
   needsSync(eventKey: string): Promise<boolean>;
-  /** Recover a stranded/long-backoff attempt without changing its request key. */
-  pendingSyncKey(eventKey: string): Promise<string | null>;
+  /** Recovery preserves request identity, eligibility and attempts across carriers. */
+  pendingSync(eventKey: string): Promise<SyncAttempt | null>;
   /** Published events past ends_at -> past. Returns rows changed. */
   closeFinished(now: Date): Promise<number>;
   /** Top up every live series (draft/published parent). Returns rows created; idempotent. */

@@ -5,6 +5,7 @@ import {
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
   PRUNE_CRON,
   RECONCILE_CRON,
+  SYNC_EVENT,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
 import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
@@ -35,9 +36,12 @@ export async function reconcileEvents(deps: {
   const stale = await deps.events.staleEventKeys();
   let resynced = 0;
   for (const key of stale) {
-    // Recover the existing attempted request with its immutable build-time key;
-    // a carrier outage/long retry must not strand the per-event pending slot.
-    await dispatchSyncEvent(deps.queue, deps.lock, key, (await deps.events.pendingSyncKey(key)) ?? undefined);
+    // A carrier can be stranded, delayed or exhausted. Only recover a due
+    // request with budget left, always under its original immutable key.
+    const pending = await deps.events.pendingSync(key);
+    if (pending && (pending.requestAttempts >= SYNC_EVENT.tries || !pending.nextAttemptAt ||
+      pending.nextAttemptAt > (deps.now ?? (() => new Date()))())) continue;
+    await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
     resynced++; // Laravel counts stale rows, not accepted dispatches
   }
   if (closed > 0 || materialized > 0 || resynced > 0) {

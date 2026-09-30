@@ -1,17 +1,20 @@
 import type postgres from "postgres";
 import { and, inArray, isNotNull } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
-import * as schema from "../db/schema";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import * as schema from "../db/admin-schema";
 import { materializeMissingInstances } from "../admin/store";
+import { SYNC_EVENT } from "./constants";
 import type { EventStore, EventUpsert, SyncAttempt, TxClient } from "./types";
 
-type AttemptRow = { idempotency_key: string; revision: string | number; mirrored_at: Date; state: SyncAttempt["state"] }
+type AttemptRow = { idempotency_key: string; revision: string | number; mirrored_at: Date; state: SyncAttempt["state"];
+  request_attempts: number; next_attempt_at: Date | null }
   & ({ action: "event.upsert"; payload: EventUpsert } | { action: "event.cancel"; payload: { eventKey: string } });
 
 function attemptFrom(row: AttemptRow): SyncAttempt {
   const base = {
     idempotencyKey: row.idempotency_key, eventKey: row.payload.eventKey,
     revision: Number(row.revision), mirroredAt: row.mirrored_at, state: row.state,
+    requestAttempts: row.request_attempts, nextAttemptAt: row.next_attempt_at,
   };
   if (row.action === "event.cancel") return { ...base, action: "event.cancel", payload: row.payload };
   return { ...base, action: "event.upsert", payload: {
@@ -28,6 +31,8 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
   const staleKeys = async (eventKey: string | null) => {
     const rows = await sql`select event_key from events
       where status in ('published', 'cancelled') and (${eventKey}::text is null or event_key = ${eventKey})
+      and not exists (select 1 from event_sync_attempts rejected
+        where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
       and (sync_revision > synced_revision or
         (status = 'published' and (discord_event_id is null or exists (
           select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
@@ -44,15 +49,17 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
       // DO NOTHING conflicts retry; they must not acknowledge an unseen row
       // from another transaction's READ COMMITTED snapshot.
       const [created] = await sql`insert into event_sync_attempts
-        (idempotency_key, event_id, revision, action, payload, mirrored_at)
+        (idempotency_key, event_id, revision, action, payload, mirrored_at, next_attempt_at)
         select ${idempotencyKey}::uuid, id, sync_revision,
           case when status = 'cancelled' then 'event.cancel' else 'event.upsert' end,
           case when status = 'cancelled' then jsonb_build_object('eventKey', event_key)
           else jsonb_build_object('eventKey', event_key, 'name', title, 'startsAt', starts_at,
             'endsAt', ends_at, 'location', coalesce(location, ''), 'description', description) end,
-          ${mirroredAt}
+          ${mirroredAt}, ${mirroredAt}
         from events where event_key = ${eventKey} and status in ('published', 'cancelled')
-        and (sync_revision > synced_revision or
+        and not exists (select 1 from event_sync_attempts rejected
+        where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+      and (sync_revision > synced_revision or
           (status = 'published' and (discord_event_id is null or exists (
             select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
           ))))
@@ -76,15 +83,30 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
       ) update rsvps set synced_to_discord_at = mirrored.mirrored_at
         from mirrored where rsvps.event_id = mirrored.id and rsvps.updated_at <= mirrored.mirrored_at`;
     },
+    async claimSync(attempt, now) {
+      const [row] = await sql`update event_sync_attempts
+        set request_attempts = request_attempts + 1,
+          next_attempt_at = ${new Date(now.getTime() + SYNC_EVENT.uniqueForSeconds * 1000)}
+        where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
+          and request_attempts < ${SYNC_EVENT.tries} and next_attempt_at <= ${now}
+        returning *`;
+      return row ? attemptFrom(row) : null;
+    },
+    async deferSync(attempt, nextAttemptAt) {
+      // The claim count fences a late response from an earlier lease holder.
+      await sql`update event_sync_attempts set next_attempt_at = ${nextAttemptAt}
+        where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
+          and request_attempts = ${attempt.requestAttempts}`;
+    },
     async failSync(idempotencyKey) {
       await sql`update event_sync_attempts set state = 'failed'
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
     },
     needsSync: async (eventKey) => (await staleKeys(eventKey)).length > 0,
-    async pendingSyncKey(eventKey) {
-      const [row] = await sql`select a.idempotency_key from event_sync_attempts a join events e on e.id = a.event_id
+    async pendingSync(eventKey) {
+      const [row] = await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
         where e.event_key = ${eventKey} and a.state = 'pending'`;
-      return row?.idempotency_key ?? null;
+      return row ? attemptFrom(row) : null;
     },
     async closeFinished(now) {
       const rows = await sql`update events set status = 'past', updated_at = ${now}
@@ -94,12 +116,18 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
     async materializeSeries() {
       // Reconciliation owns the transaction/advisory lock. Do not begin a
       // nested transaction on its reserved postgres.js client.
-      const db = drizzle(sql as postgres.Sql, { schema });
+      // pg-proxy avoids postgres-js Drizzle's global timestamp/JSON parser
+      // mutation: snapshot/ledger queries on this client still need native types.
+      const db = drizzle(async (query, params) => ({
+        rows: await (sql as postgres.Sql).unsafe(query, params as never[]).values(),
+      }), { schema });
       const parents = await db.select().from(schema.events).where(and(
         isNotNull(schema.events.recurrenceFrequency), inArray(schema.events.status, ["draft", "published"]),
       ));
       let created = 0;
-      for (const parent of parents) created += await materializeMissingInstances(db, parent);
+      // The writer consumes returned rows only, not postgres-js result metadata.
+      const writer = db as unknown as Parameters<typeof materializeMissingInstances>[0];
+      for (const parent of parents) created += await materializeMissingInstances(writer, parent);
       return created;
     },
     staleEventKeys: () => staleKeys(null),

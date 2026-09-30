@@ -29,7 +29,7 @@ function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: s
 export async function consume(
   batch: { messages: readonly Msg[] },
   deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger;
-    dispatchPending?: (eventKey: string) => Promise<unknown> },
+    dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown> },
 ): Promise<void> {
   for (const m of batch.messages) {
     const body = m.body as QueueMessage;
@@ -97,7 +97,8 @@ export async function consume(
       console.error("job threw", body.kind, e instanceof Error ? e.message : e);
       // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
       if (m.attempts >= JOBS[body.kind].tries) {
-        if (!(await failAttempt())) continue;
+        // An unexpected/exhausted carrier says nothing definitive about the
+        // remote request. Keep any pending snapshot; only retire this ledger.
         alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
         // Out of tries: a terminal failure, not a phantom pending row — and not
         // a retry either. The job already spent its tries (the transport's
@@ -121,7 +122,7 @@ export async function consume(
       continue;
     }
     if ("failed" in outcome) {
-      if (!(await failAttempt())) continue;
+      if (outcome.definitive && !(await failAttempt())) continue;
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed);
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
@@ -134,11 +135,24 @@ export async function consume(
         // Release before checking: a racing after-commit producer either owns
         // the successor lock or this dispatch does. A rejected send still
         // leaves the dirty revision for reconciliation.
-        try {
-          if (await deps.events.needsSync(body.eventKey)) await deps.dispatchPending(body.eventKey);
-        } catch (e) {
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            console.warn("sync successor dispatch timed out; reconcile will retry");
+            resolve();
+          }, LEDGER_TIMEOUT_MS);
+        });
+        const successor = (async () => {
+          if (await deps.events.needsSync(body.eventKey)) {
+            controller.signal.throwIfAborted();
+            await deps.dispatchPending!(body.eventKey, controller.signal);
+          }
+        })().catch((e: unknown) => {
           console.warn("sync successor dispatch failed; reconcile will retry", e instanceof Error ? e.message : e);
-        }
+        });
+        await Promise.race([successor, timeout]).finally(() => clearTimeout(timer));
       }
     }
     m.ack();

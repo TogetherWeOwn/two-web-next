@@ -37,11 +37,13 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[
   return {
     mirrored,
     prepareSync: async (_eventKey, idempotencyKey, mirroredAt) => ({ eventKey: "e1", idempotencyKey, mirroredAt,
-      revision: 1, state: "pending", action: "event.upsert", payload }),
+      revision: 1, state: "pending", requestAttempts: 0, nextAttemptAt: new Date(0), action: "event.upsert", payload }),
+    claimSync: async (attempt) => ({ ...attempt, requestAttempts: attempt.requestAttempts + 1 }),
+    deferSync: async () => {},
     completeSync: async (_attempt, id) => void mirrored.push(id),
     failSync: async () => {},
     needsSync: async () => false,
-    pendingSyncKey: async () => null,
+    pendingSync: async () => null,
     closeFinished: async () => 0,
     materializeSeries: async () => 0,
     staleEventKeys: async () => [],
@@ -258,6 +260,85 @@ describe("queue ledger (N3)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("a hung successor ledger is bounded, and its late insert never sends after expiry", async () => {
+    vi.useFakeTimers();
+    try {
+      let unblock!: () => void;
+      const occupied = new Promise<void>((resolve) => { unblock = resolve; });
+      const rows = new Set<string>();
+      const ledger: QueueLedger = {
+        enqueued: vi.fn(async ({ jobId }) => { await occupied; rows.add(jobId); }),
+        reserved: async () => occupied,
+        released: async () => {},
+        dequeued: async (id) => { await occupied; rows.delete(id); },
+        failed: async () => {},
+      };
+      const send = vi.fn(async () => {});
+      const lock = memLock();
+      const bot = { upsertEvent: vi.fn(async () => ({ ok: true, requestId: null, discordEventId: "d1" })) } as unknown as BotClient;
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" });
+      const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" });
+      const p = consume({ messages: [first, second] }, {
+        bot, events: store({ needsSync: async (key) => key === "e1" }), lock, ledger,
+        dispatchPending: (key, signal) => dispatchSyncEvent(trackingQueue({ send }, ledger, undefined, signal), lock, key, undefined, signal),
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await p;
+      expect(first.acked && second.acked).toBe(true);
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(2);
+      expect(ledger.enqueued).toHaveBeenCalledOnce();
+      expect(send).not.toHaveBeenCalled();
+      unblock(); // the timed-out insert may actually complete after ACK
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).not.toHaveBeenCalled();
+      expect(rows.size).toBe(0); // late insert compensated, not phantom depth
+      expect(lock.held.size).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("an already-started successor send that completes late retains its ledger row", async () => {
+    vi.useFakeTimers();
+    try {
+      let accepted!: () => void;
+      const transport = new Promise<void>((resolve) => { accepted = resolve; });
+      const send = vi.fn(() => transport);
+      const lock = memLock();
+      const ledger = memLedger();
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" });
+      const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" });
+      const bot = { upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }) } as unknown as BotClient;
+      const p = consume({ messages: [first, second] }, { bot, lock, ledger,
+        events: store({ needsSync: async (key) => key === "e1" }),
+        dispatchPending: (key, signal) => dispatchSyncEvent(trackingQueue({ send }, ledger, undefined, signal), lock, key, undefined, signal),
+      });
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(first.acked && second.acked).toBe(true);
+      expect(send).toHaveBeenCalledOnce();
+      expect(ledger.rows.size).toBe(1);
+      accepted();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ledger.rows.size).toBe(1); // acceptance is ambiguous until its consumer settles it
+      expect(lock.held.has(uniqueKey("e1"))).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("a hung dirty check cannot hold terminal ACK or later messages", async () => {
+    vi.useFakeTimers();
+    try {
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1" });
+      const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2" });
+      const dispatchPending = vi.fn(async () => {});
+      const bot = { upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }) } as unknown as BotClient;
+      const p = consume({ messages: [first, second] }, { bot, lock: memLock(), ledger: memLedger(), dispatchPending,
+        events: store({ needsSync: () => new Promise<boolean>(() => {}) }) });
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(first.acked && second.acked).toBe(true);
+      expect(dispatchPending).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it("an exhausted throw acks and frees the sync lock instead of retrying", async () => {

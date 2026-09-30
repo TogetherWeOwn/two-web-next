@@ -35,7 +35,7 @@ export function pageShellFixture(status = "published") {
   const event: typeof events.$inferSelect = {
     id: 1, eventKey: EVENT_KEY, title: "Fixture game night", game: "Chess", description: "Play together.",
     startsAt: now, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "UTC", location: "Lobby",
-    capacity: null, status, discordEventId: null, createdBy: MEMBER_ID, rsvpOpen: true,
+    capacity: null, status, discordEventId: null, syncRevision: 1, syncedRevision: 0, createdBy: MEMBER_ID, rsvpOpen: true,
     recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
     parentEventId: null, recurrenceIndex: null, createdAt: now, updatedAt: now,
   };

@@ -54,7 +54,8 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
   try {
     const lock = pgUniqueLock(sql);
     await consume(batch, { bot, events: pgEventStore(sql), lock, ledger: pgQueueLedger(ledgerSql),
-      dispatchPending: (eventKey) => dispatchSyncEvent(trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(ledgerSql)), lock, eventKey),
+      dispatchPending: (eventKey, signal) => dispatchSyncEvent(
+        trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(ledgerSql), undefined, signal), lock, eventKey, undefined, signal),
     });
   } finally {
     // A wedged ledger statement must not hold the invocation open: force-close

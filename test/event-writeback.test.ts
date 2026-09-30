@@ -104,11 +104,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   }
   function botDouble() {
     return {
-      upsertEvent: vi.fn(async (..._args: Parameters<BotClient["upsertEvent"]>) => ({ ok: true as const, requestId: null, discordEventId: "discord-1" })),
-      cancelEvent: vi.fn(async (..._args: Parameters<BotClient["cancelEvent"]>) => ({ ok: true as const, requestId: null, discordEventId: "discord-1" })),
+      upsertEvent: vi.fn<BotClient["upsertEvent"]>(async (..._args) => ({ ok: true as const, requestId: null, discordEventId: "discord-1" })),
+      cancelEvent: vi.fn<BotClient["cancelEvent"]>(async (..._args) => ({ ok: true as const, requestId: null, discordEventId: "discord-1" })),
       postAnnouncement: vi.fn(), assignRole: vi.fn(),
     } satisfies BotClient;
   }
+  const makeDue = () => sql`update event_sync_attempts set next_attempt_at = now() - interval '1 second' where state = 'pending'`;
   const deps = (bot: BotClient) => ({ bot, events: pgEventStore(sql), lock: pgUniqueLock(sql), ledger: pgQueueLedger(sql),
     dispatchPending: (key: string) => enqueueSyncEvent(env, buildSyncMessage(key, "published")!),
   });
@@ -279,6 +280,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(first.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
     expect((await request("PATCH", `/events/${eventKey}`, { title: "Changed title" })).status).toBe(200);
     expect(sent).toHaveLength(1);
+    await makeDue(); // the transport delivers only after the persisted delay
     await consume({ messages: [delivery(original, 2)] }, deps(bot));
     expect(requests).toEqual([{ name: "Game night", key: original.idempotencyKey },
       { name: "Game night", key: original.idempotencyKey }]);
@@ -305,6 +307,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     await consume({ messages: [waiting] }, deps(bot));
     expect(waiting.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
     expect(bot.upsertEvent).toHaveBeenCalledOnce();
+    await makeDue();
     await consume({ messages: [delivery(first, 2)] }, deps(bot));
     await consume({ messages: [delivery(second, 2)] }, deps(bot));
     expect(bot.upsertEvent.mock.calls.map((call) => (call[0] as { name: string }).name))
@@ -320,6 +323,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     bot.upsertEvent.mockImplementationOnce(async () => { throw new BotTransportError("response lost"); });
     await consume({ messages: [delivery(original)] }, deps(bot));
     await sql`update events set title = 'Newer revision' where event_key = ${eventKey}`;
+    await makeDue();
     await sql`update job_unique_locks set expires_at = now() - interval '1 second'`;
     await reconcileEvents({ events: pgEventStore(sql),
       queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
@@ -331,21 +335,158 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
   });
 
-  it("terminal failure frees the pending snapshot but keeps the event dirty for recovery", async () => {
+  for (const failure of ["lost-response", "local-completion"] as const) {
+    it(`${failure} exhaustion settles the carrier but preserves the unresolved request and ordering`, async () => {
+      await seed();
+      await enqueueEventSync(env, eventKey, "published");
+      const original = sent[0]!.body;
+      const seen = new Set<string>();
+      const bot = botDouble();
+      bot.upsertEvent.mockImplementation(async (_payload, key) => {
+        seen.add(key); // idempotent remote double: one application per key
+        if (failure === "lost-response") throw new BotTransportError("applied, response lost");
+        return { ok: true, requestId: null, discordEventId: "discord-1" };
+      });
+      const dependencies = deps(bot);
+      if (failure === "local-completion") dependencies.events.completeSync = async () => { throw new Error("local commit unavailable"); };
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        if (attempt > 1) await makeDue();
+        const m = delivery(original, attempt);
+        await consume({ messages: [m] }, dependencies);
+        expect(m.ack).toHaveBeenCalledTimes(attempt === 6 ? 1 : 0);
+      }
+      const pending = await pgEventStore(sql).pendingSync(eventKey);
+      expect(pending).toMatchObject({ idempotencyKey: original.idempotencyKey, state: "pending", requestAttempts: 6, nextAttemptAt: null });
+      expect(seen.size).toBe(1);
+      expect(await sql`select job_id from queue_jobs`).toHaveLength(0);
+      expect(await sql`select job_id from queue_failed_jobs`).toHaveLength(1);
+      await sql`update events set title = 'Newer revision' where event_key = ${eventKey}`;
+      for (let pass = 0; pass < 3; pass++) await reconcileEvents({ events: pgEventStore(sql),
+        queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
+      expect(sent).toHaveLength(1); // neither rekeys the unresolved revision nor overtakes it
+      const other = delivery({ ...original, jobId: crypto.randomUUID(), idempotencyKey: crypto.randomUUID() }, 6);
+      await consume({ messages: [other] }, deps(bot));
+      expect(other.ack).toHaveBeenCalledOnce();
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
+      // Explicit operator recovery renews only the budget/eligibility, never
+      // action/payload/key. No automatic edit/reconcile performs this reset.
+      await sql`update event_sync_attempts set request_attempts = 0, next_attempt_at = now() - interval '1 second'
+        where idempotency_key = ${original.idempotencyKey}::uuid`;
+      bot.upsertEvent.mockResolvedValue({ ok: true, requestId: null, discordEventId: "discord-1" });
+      await reconcileEvents({ events: pgEventStore(sql),
+        queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
+      expect(sent[1]!.body.idempotencyKey).toBe(original.idempotencyKey);
+      await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
+      expect(bot.upsertEvent.mock.calls[6]).toEqual([pending!.payload, original.idempotencyKey]);
+      expect(sent[2]!.body.idempotencyKey).not.toBe(original.idempotencyKey);
+      await consume({ messages: [delivery(sent[2]!.body)] }, deps(bot));
+      expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+    });
+  }
+
+  it("carrier exhaustion before the request cap recovers with the same key and remaining budget", async () => {
     await seed();
     await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
     const bot = botDouble();
-    bot.upsertEvent.mockImplementationOnce(async () => { throw new BotTransportError("down"); });
-    const m = delivery(sent[0]!.body, 6);
-    await consume({ messages: [m] }, deps(bot));
-    expect(m.ack).toHaveBeenCalledOnce();
-    expect(await pgEventStore(sql).pendingSyncKey(eventKey)).toBeNull();
-    expect(await pgEventStore(sql).staleEventKeys()).toEqual([eventKey]);
+    bot.upsertEvent.mockImplementationOnce(async () => { throw new BotTransportError("response lost"); });
+    await consume({ messages: [delivery(original, 6)] }, deps(bot));
+    expect(await pgEventStore(sql).pendingSync(eventKey)).toMatchObject({ idempotencyKey: original.idempotencyKey, requestAttempts: 1 });
+    await makeDue();
     await reconcileEvents({ events: pgEventStore(sql),
       queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
-    expect(sent[1]!.body.idempotencyKey).not.toBe(sent[0]!.body.idempotencyKey);
+    expect(sent[1]!.body.idempotencyKey).toBe(original.idempotencyKey);
     await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
+    expect(await sql`select request_attempts, state from event_sync_attempts`).toEqual([{ request_attempts: 2, state: "succeeded" }]);
+  });
+
+  it("definitive refusal suppresses unchanged revision recovery but permits a later edit", async () => {
+    const id = await seed();
+    await sql`update events set discord_event_id = 'discord-1', synced_revision = sync_revision where id = ${id}`;
+    await request("PATCH", `/events/${eventKey}`, { title: "Rejected edit" });
+    const bot = botDouble();
+    bot.upsertEvent.mockResolvedValueOnce({ ok: false, code: "action_not_allowed", status: 403, requestId: null,
+      message: "not allowed", retryable: false, retryAfterSeconds: null });
+    await consume({ messages: [delivery(sent[0]!.body)] }, deps(bot));
+    for (let pass = 0; pass < 3; pass++) await reconcileEvents({ events: pgEventStore(sql),
+      queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
+    expect(bot.upsertEvent).toHaveBeenCalledOnce();
+    expect(sent).toHaveLength(1);
     expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+    await enqueueEventSync(env, eventKey, "published"); // even an unchanged producer notification is a no-op
+    await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
+    expect(bot.upsertEvent).toHaveBeenCalledOnce();
+    await request("PATCH", `/events/${eventKey}`, { title: "Allowed newer edit" });
+    await consume({ messages: [delivery(sent[2]!.body)] }, deps(bot));
+    expect(bot.upsertEvent).toHaveBeenCalledTimes(2);
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+  });
+
+  for (const attempts of [6, 11]) {
+    it(`waiting carrier at delivery ${attempts} settles its ledger without retiring the older request`, async () => {
+      await seed();
+      await enqueueEventSync(env, eventKey, "published");
+      const original = sent[0]!.body;
+      const bot = botDouble();
+      bot.upsertEvent.mockImplementationOnce(async () => { throw new BotTransportError("lost response"); });
+      await consume({ messages: [delivery(original)] }, deps(bot));
+      await sql`update job_unique_locks set expires_at = now() - interval '1 second'`;
+      await request("PATCH", `/events/${eventKey}`, { title: "Waiting newer edit" });
+      const waiting = delivery(sent[1]!.body, attempts);
+      await consume({ messages: [waiting] }, deps(bot));
+      expect(waiting.ack).toHaveBeenCalledOnce();
+      expect(waiting.retry).not.toHaveBeenCalled();
+      expect(await sql`select job_id from queue_jobs where job_id = ${waiting.body.jobId!}::uuid`).toHaveLength(0);
+      expect(await sql`select job_id from queue_failed_jobs where job_id = ${waiting.body.jobId!}::uuid`).toHaveLength(1);
+      expect(await pgEventStore(sql).pendingSync(eventKey)).toMatchObject({ idempotencyKey: original.idempotencyKey });
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      await makeDue();
+      await consume({ messages: [delivery(original, 2)] }, deps(bot));
+      const successor = sent[2]!.body;
+      await consume({ messages: [delivery(successor)] }, deps(bot));
+      expect(bot.upsertEvent.mock.calls[2]![0].name).toBe("Waiting newer edit");
+      expect(await sql`select job_id from queue_jobs`).toHaveLength(0);
+      expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+    });
+  }
+
+  it("long Retry-After persists eligibility and request accounting across reconciliation and new carriers", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
+    const bot = botDouble();
+    bot.upsertEvent.mockResolvedValue({ ok: false, code: "rate_limited", status: 429, requestId: null,
+      message: "slow down", retryable: true, retryAfterSeconds: 3600 });
+    const before = Date.now();
+    await consume({ messages: [delivery(original)] }, deps(bot));
+    const pending = (await pgEventStore(sql).pendingSync(eventKey))!;
+    expect(pending.requestAttempts).toBe(1);
+    expect(pending.nextAttemptAt!.getTime()).toBeGreaterThanOrEqual(before + 3600_000);
+    await sql`update job_unique_locks set expires_at = now() - interval '1 second'`;
+    for (const minutes of [10, 20, 30, 50]) await reconcileEvents({ events: pgEventStore(sql),
+      queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql),
+      now: () => new Date(before + minutes * 60_000) });
+    expect(sent).toHaveLength(1);
+    const early = delivery(original, 2);
+    await consume({ messages: [early] }, deps(bot));
+    expect(early.retry.mock.calls[0]![0]!.delaySeconds).toBeGreaterThan(3500);
+    expect(bot.upsertEvent).toHaveBeenCalledOnce();
+    for (let requestAttempt = 2; requestAttempt <= 6; requestAttempt++) {
+      await makeDue();
+      await sql`update job_unique_locks set expires_at = now() - interval '1 second'`;
+      await reconcileEvents({ events: pgEventStore(sql),
+        queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
+      const recovered = sent.at(-1)!.body;
+      expect(recovered.idempotencyKey).toBe(original.idempotencyKey);
+      await consume({ messages: [delivery(recovered, 1)] }, deps(bot));
+      expect((await pgEventStore(sql).pendingSync(eventKey))!.requestAttempts).toBe(requestAttempt);
+    }
+    expect(bot.upsertEvent).toHaveBeenCalledTimes(6); // carrier attempts=1 never resets request budget
+    const last = delivery(original, 2);
+    await consume({ messages: [last] }, deps(bot));
+    expect(last.ack).toHaveBeenCalledOnce();
+    expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
+    expect((await pgEventStore(sql).pendingSync(eventKey))!.nextAttemptAt).toBeNull();
   });
 
   it("redundant queued keys do not send another bot request for a clean revision", async () => {
@@ -358,6 +499,51 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     await consume({ messages: [redundant] }, deps(bot));
     expect(redundant.ack).toHaveBeenCalledOnce();
     expect(bot.upsertEvent).toHaveBeenCalledOnce();
+  });
+
+  it("concurrent carriers share one durable request claim and cannot contact the bot early", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
+    let finish!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { finish = resolve; });
+    const bot = botDouble();
+    bot.upsertEvent.mockImplementationOnce(async () => {
+      entered();
+      await held;
+      return { ok: true, requestId: null, discordEventId: "discord-1" };
+    });
+    const first = delivery(original);
+    const consuming = consume({ messages: [first] }, deps(bot));
+    await started;
+    const duplicate = delivery(original, 2);
+    await consume({ messages: [duplicate] }, deps(bot));
+    expect(bot.upsertEvent).toHaveBeenCalledOnce();
+    expect(duplicate.retry.mock.calls[0]![0]!.delaySeconds).toBeGreaterThan(290);
+    expect((await pgEventStore(sql).pendingSync(eventKey))!.requestAttempts).toBe(1);
+    finish();
+    await consuming;
+    expect(first.ack).toHaveBeenCalledOnce();
+    await consume({ messages: [delivery(original, 3)] }, deps(bot));
+    expect(bot.upsertEvent).toHaveBeenCalledOnce();
+  });
+
+  it("recurrence materialization shares the flight transaction without changing native job parsers", async () => {
+    await seed();
+    await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 3, recurrence_index = 1`;
+    await sql.begin(async (tx) => {
+      const events = pgEventStore(tx);
+      expect(await events.materializeSeries()).toBe(2);
+      expect(await events.materializeSeries()).toBe(0);
+      expect(await events.closeFinished(new Date())).toBe(0);
+      const [row] = await tx`select starts_at from events limit 1`;
+      expect(row!.starts_at).toBeInstanceOf(Date);
+    });
+    expect(await sql`select id from events where status = 'draft'`).toHaveLength(2);
+    expect(await sql`select id from activity_log`).toHaveLength(2);
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([eventKey]);
   });
 
   it("event and RSVP revisions roll back with their mutations", async () => {

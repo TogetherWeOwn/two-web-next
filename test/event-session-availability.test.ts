@@ -17,7 +17,7 @@ const event: PublicEvent = {
   id: 1, eventKey: EVENT_KEY, title: "Friday night games", description: null, game: null,
   startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
   timezone: "UTC", location: null, capacity: null, status: "published", discordEventId: null,
-  createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
+  syncRevision: 1, syncedRevision: 0, createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
   recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
   createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-01"), goingCount: 1,
 };

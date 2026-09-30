@@ -317,27 +317,42 @@ Message contracts from [src/jobs/types.ts](../src/jobs/types.ts):
 | `two-internal-action` / `INTERNAL_ACTION_QUEUE` | `kind: "role-assign"`, `action: { userId, roleKey }`, `idempotencyKey: null`, optional `jobId` |
 
 The tracking producer supplies `jobId`; it is not the bot idempotency key.
-The consumer routes by `kind` and caps sync work at 6 attempts, internal actions
-at 5. Policy-controlled retry delays are `10,60,300,900,3600` seconds for sync
-and `5,15,60,180` for internal actions. These apply to handled retryable outcomes
-and `BotTransportError`, not every throw; `retryAfterSeconds` can override them.
-Below the cap, generic errors (including today's ordinary `notWired` errors)
-call `m.retry()` without `delaySeconds`, leaving timing to the transport. At the
-cap they are recorded as terminal failures and acknowledged without another
-retry. Do not assume the arrays provide a guaranteed containment window.
-See [consumer error paths](../src/jobs/consumer.ts).
+W8 web/RSVP writes and cron use the same tracked W13 sync carrier. The first
+attempt snapshots current status/action/payload/revision in `event_sync_attempts`;
+retries and recovery keep that request's key and payload immutable. Later
+mutations stay dirty until the pending request resolves, then use a new key.
+Drafts do not start requests. The bot HTTP adapter remains unwired; this is not
+proof of live Discord delivery.
 
-Transport `max_retries: 10` is only a backstop. Calling a producer again mints a
-new key; role assignments have no key. The sync uniqueness lock lasts 300
-seconds (shorter than the longest policy retry), so neither ledger nor lock
-proves exactly-once downstream effects. Sync reads current event state, not a
-snapshot.
+Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
+tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
+Sync requests independently persist `request_attempts` and `next_attempt_at`:
+claims lease the request for 300 seconds; backoff (`10,60,300,900,3600`) and the
+bot's authoritative Retry-After persist before retry. An early/recovered carrier
+cannot contact the bot before eligibility or reset the six-request budget.
+Generic sync throws may call `m.retry()` without a delay, but persisted
+eligibility still prevents an early bot call. Reconciliation skips legitimately
+delayed requests even if the unique lock has expired.
 
-The separate W8 carrier [src/events/sync.ts](../src/events/sync.ts) uses
-`action`/`dedupeKey`, not W13 `kind`. `EVENT_SYNC_QUEUE` is unbound in current
-config; missing binding only logs, send errors are logged/swallowed. Do not send
-W8 bodies to W13 queues or assume creating `two-web-next-event-sync` alone fixes
-this integration.
+A carrier failure is **not** a resolved bot request. Transport loss or a failed
+local completion retains a `pending` snapshot, even after all six automatic
+request attempts. At that cap, automatic reconciliation pauses that request
+(and newer revisions); its null `next_attempt_at` or exhausted count is an
+explicit operator-recovery condition. Preserve the snapshot and failed ledger
+history. A bounded, reviewed recovery must reconcile remote effects and renew
+only the original request's budget/eligibility, **never** its key, action,
+payload or revision. This runbook does not authorize a live reset or provide a
+blind replay command. A `failed` snapshot instead means a definitive refusal:
+automatic dispatch of that unchanged revision is suppressed; a meaningful
+subsequent mutation is eligible. Retrying an unchanged refused revision likewise
+requires an explicit reviewed operator action, not deleting history.
+
+Best-effort successor checks/dispatch time out after two seconds so a wedged
+ledger cannot hold terminal ACK or later batch messages. A late ledger insert
+is compensated without sending after timeout. An already-started send may be
+accepted late and retains its tracked row; dirty revision reconciliation remains
+the recovery backstop. Ledger/locks alone still do not prove exactly-once remote
+effects. See [consumer error paths](../src/jobs/consumer.ts).
 
 ## Backups and restore drill
 

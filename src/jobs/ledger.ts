@@ -24,15 +24,21 @@ export function trackingQueue(
   queue: Sendable,
   ledger: QueueLedger,
   now: () => Date = () => new Date(),
+  signal?: AbortSignal,
 ): Sendable {
   return {
     async send(body, opts) {
+      signal?.throwIfAborted();
       const msg = body as QueueMessage;
       const jobId = crypto.randomUUID();
       const availableAt = new Date(now().getTime() + (opts?.delaySeconds ?? 0) * 1000);
       const key = msg.kind === "sync-event" ? uniqueKey(msg.eventKey) : null;
       await ledger.enqueued({ jobId, kind: msg.kind, key, availableAt });
       try {
+        // A bounded successor may time out while its ledger insert is still
+        // queued. Compensate a late insert; never begin a send after expiry.
+        // An already-started send may complete late and keeps its tracked row.
+        signal?.throwIfAborted();
         return await queue.send({ ...msg, jobId }, opts);
       } catch (err) {
         await ledger.dequeued(jobId).catch(() => {});

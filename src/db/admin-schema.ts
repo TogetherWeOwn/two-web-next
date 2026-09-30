@@ -77,6 +77,8 @@ export const eventSyncAttempts = pgTable(
     payload: jsonb("payload").notNull(),
     mirroredAt: timestamp("mirrored_at", { withTimezone: true }).notNull(),
     state: text("state").notNull().default("pending"),
+    requestAttempts: integer("request_attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [uniqueIndex("event_sync_attempts_pending_idx").on(t.eventId).where(sql`${t.state} = 'pending'`)],
 );
