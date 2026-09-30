@@ -6,7 +6,8 @@
 // Legacy assertion mapping and intentional port differences: docs/w15-member-data-parity.md.
 import { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "../src/index";
+import rawApp from "../src/index";
+import app from "./app";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { profiles } from "../src/db/schema";
@@ -33,6 +34,8 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     ...ADMIN_READS.map((path) => `GET /admin${path === "/" ? "" : path}`),
     // ALL includes middleware as well as handlers. Pin their multiplicity;
     // filtering wildcards or deduplicating would hide added ALL endpoints.
+    // The two global ALL /* registrations are the composed security/robots
+    // headers and the strict per-environment trustHosts guard (W16).
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
     // The event-page access logger is a second GET handler on the same route.
     "GET /e/:key",
@@ -41,7 +44,7 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
 }
 
 it("keeps every mounted GET-capable profile/admin route in the non-vacuous exposure inventory", () => {
-  assertReadInventory(app);
+  assertReadInventory(rawApp);
 });
 
 it.each([
@@ -52,7 +55,7 @@ it.each([
 ])("detects a directly mounted %s %s outside the reviewed exposure inventory", (method, path) => {
   // Copy the actual mounted app, not a fresh child router; don't mutate the
   // singleton used by the role matrix or the other test files.
-  const mounted = new Hono().route("/", app);
+  const mounted = new Hono().route("/", rawApp);
   assertReadInventory(mounted);
   mounted.on(method, path, (c) => c.text("unlogged member export"));
   expect(() => assertReadInventory(mounted)).toThrow();

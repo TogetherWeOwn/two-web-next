@@ -1,6 +1,6 @@
 // route-inventory: GET /up
 import { describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { QUEUE_CRITICAL_AT, QUEUE_READ_TIMEOUT_MS, QUEUE_WARN_AT, upBody } from "../src/up";
 

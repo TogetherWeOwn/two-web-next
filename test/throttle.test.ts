@@ -1,7 +1,8 @@
 // N5 (TOG-9897): human-route throttles + the every-POST-throttled audit
 // (ports TOG-8709: a new mutating route that ships without a throttle fails CI).
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import rawApp from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { isThrottleMiddleware, throttle, type EnvWithThrottle } from "../src/throttle";
 import { Hono } from "hono";
@@ -20,7 +21,7 @@ const EXEMPT: Record<string, string> = {
 };
 
 describe("every mutating route is throttled", () => {
-  const routes = app.routes.filter((r) => MUTATING.has(r.method));
+  const routes = rawApp.routes.filter((r) => MUTATING.has(r.method));
   const keys = new Map<string, boolean>();
   for (const r of routes) {
     const k = `${r.method} ${r.path}`;
