@@ -1,6 +1,6 @@
 {
-  "id": "68a830fb-5bcd-431e-a4f0-e9bd19850077",
-  "prevId": "80245dac-ecda-4fec-85fa-3ce5ba76af0f",
+  "id": "dd41c7a0-9e34-4f2b-b1c9-f771e4a2d506",
+  "prevId": "68a830fb-5bcd-431e-a4f0-e9bd19850077",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1360,6 +1360,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "synced_to_discord_at": {
+          "name": "synced_to_discord_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",

@@ -9,8 +9,12 @@ import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
+import { rateLimitExceeded } from "../errors";
 import { discordEventsSource } from "./discord-transients";
 import {
+  RSVP_HONEY_FIELD,
+  rsvpHoneyFilled,
+  rsvpTrapTripped,
   calendarEmptyState,
   calendarSearching,
   dedupeTransients,
@@ -22,6 +26,7 @@ import {
   calendarZone,
   currentCalendarMonth,
 } from "../islands/contracts";
+import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
@@ -188,7 +193,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   app.get("/events.json", async (c) => {
-    const session = await readSession(c);
+    // Non-rotating: concurrent writes with one cookie must all authenticate.
+    const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
@@ -270,19 +276,24 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   async function moderator(c: Ctx): Promise<Session | Response> {
     const origin = c.req.header("origin");
     if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-    const session = await readSession(c);
+    // Non-rotating: concurrent writes with one cookie must all authenticate.
+    const session = await readFragmentSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
     if (!session.moderator) return c.json({ error: "forbidden" }, 403);
     return session;
   }
 
   async function body(c: Ctx): Promise<Record<string, unknown>> {
-    const ct = c.req.header("content-type") ?? "";
+    // Media types are case-insensitive (RFC 2045 §5.1): normalize before the
+    // JSON check so `Application/Json` cannot smuggle a body past the trap.
+    // Forms parse with all values preserved: duplicate keys arrive as arrays
+    // (first-wins would let a filled duplicate hide behind an empty sibling).
+    const ct = (c.req.header("content-type") ?? "").toLowerCase();
     if (ct.includes("application/json")) {
       const j = await c.req.json().catch(() => null);
       return j && typeof j === "object" ? (j as Record<string, unknown>) : {};
     }
-    return (await c.req.parseBody()) as Record<string, unknown>;
+    return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   }
 
   const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
@@ -361,4 +372,77 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       }
     });
   }
+
+  // ---- RSVP (member writes, W9) ---------------------------------------------------
+  // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
+  // DELETE 204 always (quiet), any other verb 405. One shared 12/min budget per member.
+  const rsvpBody = (a: RsvpAnswer) => ({ data: { status: a.status, synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null } });
+  const closed = (c: Ctx) => c.json({ reason: "event_not_open", message: "This event is not taking RSVPs." }, 403);
+
+  async function member(c: Ctx): Promise<Session | Response> {
+    const origin = c.req.header("origin");
+    if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
+    // Non-rotating: concurrent writes with one cookie must all authenticate.
+    const session = await readFragmentSession(c);
+    if (!session) return c.json({ error: "unauthenticated" }, 401);
+    if (!session.member) return c.json({ error: "forbidden" }, 403);
+    return session;
+  }
+
+  app.put("/events/:key/rsvp", async (c) => {
+    c.header("cache-control", "private, no-store");
+    const input = await body(c);
+    // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
+    // without touching limiter, auth or DB, and logs nothing. Present non-string
+    // values count as filled (fail-closed); absent/empty inputs are genuine.
+    if (rsvpTrapTripped(input)) {
+      return c.json(rsvpBody({ status: isRsvpStatus(input.status) ? input.status : "going", syncedToDiscordAt: null }), 201);
+    }
+    const who = await member(c);
+    if (who instanceof Response) return who;
+    if (!isRsvpStatus(input.status)) return c.json({ error: "invalid", fields: { status: ["status is invalid"] } }, 422);
+    // Accepted, then refused: answering for the caller instead would look like it worked.
+    if (input.user_id !== undefined && String(input.user_id) !== who.id) return c.json({ error: "forbidden" }, 403);
+    const key = c.req.param("key");
+    if (!KEY_RE.test(key)) return c.json({ error: "not_found" }, 404);
+    const db = await dbFor(c);
+    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    // Policy, clock and budget are decided inside writeRsvp, after all blocking waits
+    // (member/event/RSVP-row locks and the throttle prune), as in Laravel: a refused
+    // write does not spend an attempt. No pre-lock check here — a stale read could
+    // refuse a write that is open by the time the locks are held.
+    const r = await writeRsvp(db, key, who.id, input.status);
+    if (!r.ok) {
+      if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
+      if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
+      if (r.reason === "closed") return closed(c);
+      return c.json({ reason: "event_at_capacity", message: "This event is full.", event_key: key, capacity: r.capacity }, 409);
+    }
+    await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
+    return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
+  });
+
+  app.delete("/events/:key/rsvp", async (c) => {
+    c.header("cache-control", "private, no-store");
+    // Both sources are evaluated independently, with ALL values preserved:
+    // `query()` is first-wins, so duplicates use `queries()` — an empty query
+    // value must not mask a filled sibling or a filled body decoy, and a
+    // non-string body value trips like a filled string.
+    const queryHoney = c.req.queries(RSVP_HONEY_FIELD);
+    const bodyHoney = (await body(c).catch(() => ({} as Record<string, unknown>)))[RSVP_HONEY_FIELD];
+    if (rsvpHoneyFilled(queryHoney) || rsvpHoneyFilled(bodyHoney)) return c.body(null, 204);
+    const who = await member(c);
+    if (who instanceof Response) return who;
+    const db = await dbFor(c);
+    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    // Only the caller's own row is reachable: the delete is keyed on the session user.
+    // The budget is charged inside withdrawRsvp, atomically with the delete.
+    const key = c.req.param("key");
+    const r = await withdrawRsvp(db, KEY_RE.test(key) ? key : "", who.id);
+    if (r.limited) return rateLimitExceeded(c, r.retryAfter);
+    await dispatchRsvpSync(c.env, key, r.status);
+    return c.body(null, 204);
+  });
+
+  app.all("/events/:key/rsvp", (c) => c.body(null, 405, { Allow: "PUT, DELETE" }));
 }
