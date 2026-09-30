@@ -1,3 +1,5 @@
+import type { QueueMessage } from "./jobs/types";
+
 export type Env = AgentEventsEnv & {
   APP_URL: string;
   DISCORD_CLIENT_ID: string;
@@ -28,6 +30,16 @@ export type Env = AgentEventsEnv & {
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
   MEMBER_ACCESS_LOG_ENFORCE?: string;
+};
+
+// Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.
+export type JobsEnv = Env & {
+  // Queues are producer+consumer on this Worker; the DB string comes from Hyperdrive once it exists
+  // (later slice), else DATABASE_URL (local/agent-testdb).
+  SYNC_EVENT_QUEUE: Queue<QueueMessage>;
+  INTERNAL_ACTION_QUEUE: Queue<QueueMessage>;
+  HYPERDRIVE?: Hyperdrive;
+  DATABASE_URL?: string;
 };
 
 export type Session = {

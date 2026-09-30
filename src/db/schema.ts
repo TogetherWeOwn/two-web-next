@@ -159,3 +159,10 @@ export const profiles = pgTable("profiles", {
 });
 
 export type ProfileRow = typeof profiles.$inferSelect;
+
+// W13: ShouldBeUnique lock rows for queued jobs (Cache::lock equivalent). Acquired atomically with a
+// conditional upsert that only wins over expired rows; see src/jobs/postgres.ts.
+export const jobUniqueLocks = pgTable("job_unique_locks", {
+  key: text("key").primaryKey(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});

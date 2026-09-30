@@ -22,11 +22,14 @@ import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from ".
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
+import { registerEventRoutes } from "./events/routes";
+import { sitemapEvents } from "./events/reads";
+import { dbFor } from "./admin/db";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
-import { buildRobots, buildSitemapUrls, renderSitemap } from "./seo";
+import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -310,10 +313,13 @@ registerJoinRoutes(app, { storeFor, issueSession }, {
 // events only. No DB binding yet, so the static entries ship now; the W8 events slice adds the
 // published /e/{key} rows (drafts 403 / cancelled 410 stay out of the index).
 // W6 adds /join (changefreq monthly, priority 0.9 — same as legacy).
-app.get("/sitemap_index.xml", (c) => {
+app.get("/sitemap_index.xml", async (c) => {
   c.header("content-type", "application/xml; charset=UTF-8");
   c.header("cache-control", "public, max-age=3600");
-  return c.body(renderSitemap(buildSitemapUrls(c.env.APP_URL, [])));
+  // Published events only; a DB outage degrades to the static entries, never a 500.
+  const db = await dbFor(c).catch(() => null);
+  const rows = db ? await sitemapEvents(db).catch(() => []) : [];
+  return c.body(renderSitemap(buildSitemapUrls(c.env.APP_URL, crawlableEvents(rows))));
 });
 
 // robots.txt is dynamic, not a static file in public/ (TOG-7071): the Sitemap line names this
@@ -408,6 +414,9 @@ app.route("/admin", adminApp());
 // Member journeys (W7): /profile, /members/:user. Gate + member-access-log are
 // scoped to those paths inside profilesApp; see src/profiles/routes.tsx.
 app.route("/", profilesApp());
+
+// W8: public events pages, /events.json and moderator event writes.
+registerEventRoutes(app, async (c) => readSession(c, await storeFor(c)));
 
 app.post("/logout", async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;

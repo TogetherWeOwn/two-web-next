@@ -23,9 +23,9 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`) | `/auth/discord*` live; `/join` path alias pending | W6 🔶 |
-| `GET /events` (EventsCalendar full-page) | contract pinned, page pending | W8 📋 + W10 slice 3 ⛔ |
-| `GET /events/past` (archive, 20/page) | contract pinned, page pending | W8 📋 + W10 slice 4 ⛔ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | pending | W8 📋 |
+| `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
+| `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count; RsvpButton/prev-next/related pending | W8 ✅ (partial) |
 | `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | pending | W9 📋 |
 | `GET /events.rss` (published upcoming, ETag/304, atom self-link) | pending | W9 📋 |
 | `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | pending | W9 📋 |
@@ -34,9 +34,9 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; throttle pending | W5 ✅ + N5 (new card, throttle) |
 | `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block (bot DB) pending | W7 ✅ |
 | `PATCH /members/{user}` (owner-only, throttle 30,1, bio/games/timezone validation) | ✅ + `POST _method=PATCH` for the plain form | W7 ✅ |
-| `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | contract pinned (`EVENTS_JSON_URL`, row shape), route pending | W8 📋 |
-| `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | pending | W8 📋 (public) + W11 🔶 (admin loop) |
-| `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | pending | W8 📋 + W11 🔶 |
+| `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | ✅ session-gated, paged, ETag/304, `going_count` | W8 ✅ |
+| `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
+| `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | pending | W8 📋 + W11 🔶 |
 | `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | contract pinned, routes pending | W9 📋 + W10 slice 2 ⛔ |
 
@@ -117,7 +117,7 @@ go hunting for them.
 | No mailables / notifications (confirmed absent) | ✅ nothing to build | — (pinned here) |
 | No Slack/Discord webhook posts (confirmed absent) | ✅ nothing to build | — (pinned here) |
 | RestartCardClient/Paperclip value objects (dead code, no callers) | ✅ do not port | dropped (dead) |
-| Log-line alerting instead (error alert 1/5 min, Queue::failing critical) | ❌ no equivalent on Workers | **N4** (new: alert parity) |
+| Log-line alerting instead (error alert 1/5 min, Queue::failing critical) | ✅ `src/alerts.ts` (`error.alert`, 1 per `class@route` / 5 min per isolate; `queue.failing` from `src/jobs/consumer.ts`), runbook `docs/runbook-alerts.md` | **N4** ✅ |
 
 ## 9. Policies and gates
 
