@@ -112,6 +112,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/featured/:id` | moderator | admin: edit form |
 | `GET /admin/featured/new` | moderator | admin: create form |
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
+| `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
 | `GET /auth/discord` | public | app: current equivalent of legacy `/auth/discord/redirect` |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
 | `GET /discord` | public | seo: invite redirect |

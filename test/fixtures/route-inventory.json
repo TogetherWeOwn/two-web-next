@@ -15,6 +15,7 @@
   { "method": "GET", "path": "/admin/featured/:id", "auth": "moderator" },
   { "method": "GET", "path": "/admin/featured/new", "auth": "moderator" },
   { "method": "GET", "path": "/admin/join-attempts", "auth": "moderator" },
+  { "method": "GET", "path": "/admin/join-attempts/:id", "auth": "moderator" },
   { "method": "GET", "path": "/auth/discord", "auth": "public" },
   { "method": "GET", "path": "/auth/discord/callback", "auth": "oauth-state" },
   { "method": "GET", "path": "/discord", "auth": "public" },
