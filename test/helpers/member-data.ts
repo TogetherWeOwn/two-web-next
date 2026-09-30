@@ -1,7 +1,6 @@
-// W15 fixtures: synthetic identities only. Live suites share the migrated test DB
-// and run serially (vitest.config.ts); never pass a staging/production URL.
+// W15 fixtures: synthetic identities only, on the isolated member-data-db fixture.
 import { serializeSigned } from "hono/utils/cookie";
-import { activityLog, events, memberDataAccessLogs, rsvps } from "../../src/db/admin-schema";
+import { events, rsvps } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import { joinAttempts, profiles, users } from "../../src/db/schema";
 import type { Env } from "../../src/env";
@@ -38,16 +37,6 @@ export async function cookieFor(store: SessionStore, actor: typeof MEMBER): Prom
   return (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {
     path: "/", secure: true, httpOnly: true, sameSite: "Lax",
   })).split(";")[0]!;
-}
-
-export async function clean(db: Db): Promise<void> {
-  await db.delete(memberDataAccessLogs);
-  await db.delete(activityLog);
-  await db.delete(rsvps);
-  await db.delete(profiles);
-  await db.delete(joinAttempts);
-  await db.delete(events);
-  await db.delete(users);
 }
 
 export async function seed(db: Db, hasProfile = true): Promise<void> {

@@ -2,19 +2,20 @@
 // request-local declaration instead of Eloquent retrieval observers; see parity table.
 import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { enforceOn, memberAccessLog, type AccessDecl, type AccessSink } from "../src/access-log";
 import { enforceEnabled } from "../src/admin/guard";
 import { adminApp } from "../src/admin/routes";
 import { recordAccess } from "../src/admin/store";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
-import { createDb, type Db } from "../src/db/index";
+import type { Db } from "../src/db/index";
 import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { profilesApp } from "../src/profiles/routes";
 import { createDbProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore } from "../src/sessions";
-import { clean, cookieFor, env, EVENT_KEY, MEMBER, MODERATOR, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
+import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -86,7 +87,8 @@ describe("access-log flush lifecycle", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("member data access (real recorder on agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: Db;
   let sessions = createMemorySessionStore();
   const profileApp = (connection = db) => profilesApp({
     sessionStore: sessions, store: createDbProfileStore(connection),
@@ -97,8 +99,10 @@ describe.skipIf(!process.env.DATABASE_URL)("member data access (real recorder on
   const rows = () => db.select().from(memberDataAccessLogs).orderBy(memberDataAccessLogs.id);
   const entry = () => ({ viewerDiscordId: MODERATOR.userId, viewerUserId: MODERATOR.userId, resource: "member", action: "list", subjectUserIds: [SUBJECT.userId], route: "test.members.index" });
 
-  beforeEach(async () => { await clean(db); sessions = createMemorySessionStore(); });
-  afterEach(() => clean(db));
+  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
+  beforeEach(async () => { await fixture.reset(); sessions = createMemorySessionStore(); });
+  afterEach(() => fixture?.reset());
+  afterAll(() => fixture?.dispose());
 
   it.each([false, true])("HTML and JSON Accept views log exactly once with profile row=%s", async (hasProfile) => {
     await seed(db, hasProfile);
@@ -211,8 +215,36 @@ describe.skipIf(!process.env.DATABASE_URL)("member data access (real recorder on
     expect(await rows()).toHaveLength(0);
   });
 
+  it("isolates cleanup, failure DDL and disposal from another fixture's rows and constraints", async () => {
+    const sibling = await createMemberDataFixture(process.env.DATABASE_URL!);
+    try {
+      expect(sibling.schemaName).not.toBe(fixture.schemaName);
+      await seed(db);
+      await seed(sibling.db);
+      await recordAccess(sibling.db, entry());
+      const rollback = new Error("rollback isolated DDL");
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`alter table member_data_access_logs drop column subject_count`);
+        throw rollback;
+      }).catch((error: unknown) => { if (error !== rollback) throw error; });
+      await fixture.reset();
+      expect(await db.select().from(users)).toHaveLength(0);
+      expect(await sibling.db.select().from(users)).toHaveLength(4);
+      expect(await sibling.db.select().from(memberDataAccessLogs)).toHaveLength(1);
+      const targets = await sibling.db.execute(sql`
+        select distinct target.relnamespace::regnamespace::text as schema_name
+        from pg_constraint fk join pg_class source on source.oid = fk.conrelid
+        join pg_class target on target.oid = fk.confrelid
+        where fk.contype = 'f' and source.relnamespace = current_schema()::regnamespace`);
+      expect(targets.map((target) => target.schema_name)).toEqual([sibling.schemaName]);
+    } finally { await sibling.dispose(); }
+    expect(await db.execute(sql`select 1 from pg_namespace where nspname = ${sibling.schemaName}`)).toHaveLength(0);
+    await seed(db); // Disposing a sibling did not drop our tables or FKs.
+    expect(await db.select().from(users)).toHaveLength(4);
+  });
+
   it("the access table stores identifiers/metadata only, not another copy of member contents", async () => {
-    const columns = await db.execute(sql`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'member_data_access_logs' order by column_name`);
+    const columns = await db.execute(sql`select column_name from information_schema.columns where table_schema = current_schema() and table_name = 'member_data_access_logs' order by column_name`);
     expect(columns.map((column) => column.column_name)).toEqual([
       "action", "id", "occurred_at", "resource", "route", "subject_count", "subject_user_ids", "viewer_discord_id", "viewer_user_id",
     ]);

@@ -27,9 +27,12 @@ Test aliases:
 E asserts all private reads on the **mounted application**, all registered admin
 GETs across the four roles, direct/form outsider writes, and public HTML/source
 absence of unique username, bio, game, avatar and snowflake tokens. P additionally
-pins escaping and moderator/member representation equality. The inventory asserts
-nonempty exact route sets; adding an export under any parameter name requires a
-new exposure case. It is a test-net guard, not an automatic query observer.
+pins escaping and moderator/member representation equality. The inventory pins
+all GET-capable registrations on the actual mounted app, including ALL handlers
+and middleware multiplicity (no deduplication or namespace-only filter). Nine
+mutation cases prove that direct member/admin GET or ALL exports, renamed
+parameters, exports in a new namespace, and duplicate wildcard/own-profile ALL
+handlers fail completeness. It is a test-net guard, not an automatic query observer.
 
 ## `tests/Feature/Profile/MemberDirectoryExposureTest.php` — 6 clauses
 
@@ -48,7 +51,7 @@ new exposure case. It is a test-net guard, not an automatic query observer.
 | --- | --- |
 | 40: two logged HTML/JSON-Accept views, with/without profile; self-view exclusion | A: `HTML and JSON Accept views log exactly once with profile row=%s`; checks both real DB shapes, all row fields/time, all own-record paths, and missing target. W7 resource is `profile`, not Laravel `member`. |
 | 79: all member-data routes carry recorder | E exact non-vacuous inventory + A real rows on both registered read paths; removing middleware makes A fail. **Difference:** no Laravel gathered-middleware introspection or automatic hydration hook. |
-| 83: newly added unlogged route detected despite parameter rename | E: `detects a newly added member export regardless of its parameter name`. |
+| 83: newly added unlogged route detected despite parameter rename | E: `detects a directly mounted %s %s outside the reviewed exposure inventory`; nine GET/ALL mutation cases against a copy of the actual mounted app. |
 | 92: guests/authenticated 404s write nothing; deleted writer cannot mutate | E guest denial + A HTML/JSON missing/self paths. P missing/malformed ids and no rows. W7 writer difference as above. |
 | 118: denied edit is not attributed to target | A: `owner save and denied member/moderator edits never become target-attributed read rows`; verifies persisted bio and zero access rows. |
 | 138: bound-member JSON does not reread to identify subject | A row attribution + flush lifecycle use the already-declared id. W7 profile GET still returns HTML for JSON Accept. **Difference:** no route-model binding/query-count port; `recordAccess` consumes explicit IDs and never queries profiles/users. |
@@ -85,9 +88,29 @@ new exposure case. It is a test-net guard, not an automatic query observer.
 
 ## Verification and limits
 
-Run against a dedicated, migrated database on **agent-testdb**, never staging or
-production. Existing suites delete shared tables; serial Vitest files do not
-serialize other agents' processes.
+W15's two live suites validate the URL **before constructing a driver**: only
+`agent_test` with an empty password on **agent-testdb:5432**, or the exact
+`postgres:ci@localhost:5432/postgres` service URL with both GitHub Actions and CI
+flags set. Query/fragment overrides, other principals/passwords/ports, and
+production/staging hosts are refused without echoing the URL. A password callback
+pins the authorized empty password instead of postgres.js's `PGPASSWORD` fallback.
+
+Each suite owns a random disposable schema, runs the canonical migrations with
+FKs retargeted to that schema, and uses a search_path with **no public fallback**.
+Reset takes no arbitrary Db argument; cleanup and rollback-only failure DDL stay
+on that scoped pool. Finally, the fixture closes its pool and drops only its own
+schema. Eighteen DB-free safety cases and a real sibling-schema test prove URL
+refusal, option pinning, row/FK isolation, failure-DDL rollback and disposal.
+
+No pre-migrated database is needed for the W15-only run (65 tests):
+
+```sh
+DATABASE_URL=postgres://agent_test@agent-testdb:5432/postgres npx vitest run test/member-data-fixture.test.ts test/member-exposure.test.ts test/member-data-access.test.ts
+npm run typecheck
+```
+
+Other pre-existing suites still delete shared tables; serial files do not
+serialize other agents. A full-repo run must use a dedicated migrated test DB:
 
 ```sh
 DATABASE_URL=postgres://agent_test@agent-testdb:5432/tog_10116_w15_tests npm run db:migrate

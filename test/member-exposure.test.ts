@@ -1,41 +1,68 @@
 // W15 Pest port: assert exposure on the mounted worker, not only isolated routers.
 // Legacy assertion mapping and intentional port differences: docs/w15-member-data-parity.md.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Hono } from "hono";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "../src/index";
-import { adminApp } from "../src/admin/routes";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import type { Db } from "../src/db/index";
 import { profiles } from "../src/db/schema";
-import { profilesApp } from "../src/profiles/routes";
 import { createMemorySessionStore } from "../src/sessions";
-import { clean, cookieFor, env, EVENT_KEY, MEMBER, MODERATOR, OUTSIDER, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
+import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR, OUTSIDER, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 // Nonempty, exhaustive inventories: a newly registered read needs an exposure
 // case. This cannot quietly become [] == [] when a namespace is renamed.
 const PROFILE_READS = ["/profile", "/members/:user"];
 const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured", "/featured/new", "/featured/:id", "/join-attempts"];
-const readPaths = (router: { routes: { method: string; path: string }[] }) => router.routes.filter((r) => r.method === "GET").map((r) => r.path).sort();
+const OTHER_READS = [
+  "/", "/discord", "/about", "/faq", "/rules", "/privacy", "/join", "/join/discord", "/join/callback",
+  "/sitemap_index.xml", "/robots.txt", "/health", "/healthz", "/db-ping", "/auth/discord", "/auth/discord/callback",
+  "/events", "/events/past", "/events.json", "/e/:key",
+];
+const readInventory = (router: { routes: { method: string; path: string }[] }) => router.routes
+  .filter((r) => r.method === "GET" || r.method === "ALL")
+  .map((r) => `${r.method} ${r.path}`).sort();
 
-it("keeps every registered profile/admin read in the non-vacuous exposure inventory", () => {
-  expect(readPaths(profilesApp())).toEqual([...PROFILE_READS].sort());
-  expect(readPaths(adminApp())).toEqual([...ADMIN_READS].sort());
+function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
+  expect(readInventory(router)).toEqual([
+    ...[...OTHER_READS, ...PROFILE_READS].map((path) => `GET ${path}`),
+    ...ADMIN_READS.map((path) => `GET /admin${path === "/" ? "" : path}`),
+    // ALL includes middleware as well as handlers. Pin their multiplicity;
+    // filtering wildcards or deduplicating would hide added ALL endpoints.
+    "ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
+  ].sort());
+}
+
+it("keeps every mounted GET-capable profile/admin route in the non-vacuous exposure inventory", () => {
+  assertReadInventory(app);
 });
 
-it("detects a newly added member export regardless of its parameter name", () => {
-  const router = profilesApp();
-  router.get("/members/:member/export", (c) => c.text("not implemented"));
-  expect(readPaths(router).filter((path) => !PROFILE_READS.includes(path))).toEqual(["/members/:member/export"]);
+it.each([
+  ["GET", "/members/:member/export"], ["ALL", "/members/:member/export"],
+  ["GET", "/admin/unlogged-export"], ["ALL", "/admin/unlogged-export"],
+  ["ALL", "/members/*"], ["ALL", "/profile"],
+  ["GET", "/directory"], ["ALL", "/directory"], ["ALL", "/*"],
+])("detects a directly mounted %s %s outside the reviewed exposure inventory", (method, path) => {
+  // Copy the actual mounted app, not a fresh child router; don't mutate the
+  // singleton used by the role matrix or the other test files.
+  const mounted = new Hono().route("/", app);
+  assertReadInventory(mounted);
+  mounted.on(method, path, (c) => c.text("unlogged member export"));
+  expect(() => assertReadInventory(mounted)).toThrow();
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worker (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: Db;
   let sessions = createMemorySessionStore();
   const bindings = () => ({ ...env, ADMIN_DB: db, SESSION_STORE: sessions });
   const request = (path: string, init: RequestInit = {}) => app.request(path, init, bindings());
   const headers = async (actor: typeof MEMBER) => ({ cookie: await cookieFor(sessions, actor) });
 
-  beforeEach(async () => { await clean(db); await seed(db); sessions = createMemorySessionStore(); });
-  afterEach(() => clean(db));
+  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
+  beforeEach(async () => { await fixture.reset(); await seed(db); sessions = createMemorySessionStore(); });
+  afterEach(() => fixture?.reset());
+  afterAll(() => fixture?.dispose());
 
   it.each(["text/html", "application/json"])("guest %s: no profile/member data or writes", async (accept) => {
     for (const path of ["/profile", `/members/${SUBJECT.userId}`, "/members/999999999999999999"]) {
