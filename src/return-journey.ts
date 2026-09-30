@@ -41,6 +41,11 @@ const deleteOpts = { path: "/", secure: true };
 /**
  * Explicit `?next=` on the sign-in link. A safe value rides OAuth; anything
  * else leaves no trace (legacy: hostile writes never reach login_next).
+ *
+ * Every new login replaces the explicit destination: a missing or hostile
+ * value deletes a stale explicit cookie from an abandoned earlier login, so
+ * the callback cannot honor another journey's return. The gate-recorded
+ * intended cookie is untouched — the callback falls back to it.
  */
 export async function rememberLoginNext(c: Ctx, raw: string | undefined): Promise<void> {
   const next = safeNext(raw);
@@ -49,6 +54,8 @@ export async function rememberLoginNext(c: Ctx, raw: string | undefined): Promis
       ...cookieOpts,
       maxAge: JOURNEY_TTL_SECONDS,
     });
+  } else {
+    deleteCookie(c, LOGIN_NEXT_COOKIE, deleteOpts);
   }
 }
 
