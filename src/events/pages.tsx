@@ -103,11 +103,11 @@ const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: 
   <Layout title={`${title} — Together We Own`} canonical={canonical} shareTitle={title} shareDescription={description} robots={robots}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a href="/events">Events</a>
       </nav>
     </header>
-    <main>{children}</main>
+    <main id="main" tabindex={-1}>{children}</main>
   </Layout>
 );
 

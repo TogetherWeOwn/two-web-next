@@ -5,6 +5,7 @@
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
+import { SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 
@@ -15,27 +16,16 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title} — TWO admin</title>
       <link rel="stylesheet" href="/styles.css" />
-      <style>{`
-        .admin-table { width: 100%; border-collapse: collapse; }
-        .admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
-        .field { margin: 1rem 0; }
-        .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
-        .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
-        .field .hint { color: #6b6257; font-size: .85rem; }
-        .field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
-        .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
-        .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
-        .filters .field { margin: 0; }
-      `}</style>
     </head>
     <body>
+      <SkipLink />
       <header class="bar">
         <a class="brand" href="/admin">TWO admin</a>
-        <nav>
+        <nav aria-label="Administration">
           <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
         </nav>
       </header>
-      <main>{children}</main>
+      <main id="main" tabindex={-1}>{children}</main>
       <footer>Together We Own · moderators only</footer>
     </body>
   </html>
