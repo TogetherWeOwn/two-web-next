@@ -26,7 +26,8 @@ test("QA member edits and persists their profile using the keyboard", async ({ p
   await expect(page.getByTestId("profile-saved")).toHaveText("Profile saved.");
   await expect(page.getByTestId("profile-saved")).toBeFocused();
   await page.reload();
-  await expect(page.getByLabel("Bio", { exact: true })).toHaveValue("Keyboard smoke: community game nights.");
-  await expect(page.getByLabel("Games (one per line)")).toHaveValue("Deep Rock Galactic\nMinecraft");
-  await expect(page.getByLabel("Timezone", { exact: true })).toHaveValue("Europe/London");
+  const view = page.getByTestId("profile-view");
+  await expect(view.getByText("Keyboard smoke: community game nights.", { exact: true })).toBeVisible();
+  await expect(view.getByText("Timezone: Europe/London", { exact: true })).toBeVisible();
+  await expect(view.getByRole("listitem")).toHaveText(["Deep Rock Galactic", "Minecraft"]);
 });

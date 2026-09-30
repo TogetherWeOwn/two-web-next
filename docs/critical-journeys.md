@@ -46,9 +46,14 @@ real 1000 ms anti-spam floor before submitting.
 The Worker substitutes exact Discord API responses and throws on every
 unrecognized outbound fetch; it never forwards upstream. Calendar Discord
 transients use the existing injectable empty source. Browser routing blocks
-all non-local network traffic (including `discord.com`, CDN/invite and staging
-hosts). Only the join spec fulfills the OAuth authorize navigation with a
-local redirect, without `route.fetch()`. Teardown asserts no unexpected
+all non-local requests (including `discord.com`, CDN/invite and staging hosts).
+Because Playwright does not re-intercept server redirect hops, Chromium also
+uses a dead loopback proxy with only loopback destinations bypassed. The
+`e2e/isolation.spec.ts` redirect canary must fail at that proxy, without a
+Discord connection. Only the join spec fetches the **local** OAuth entry with
+`maxRedirects: 0`, validates its authorize URL and fulfills a local callback
+redirect with the real state cookies. No Discord authorize URL is fetched.
+All direct API helpers disable redirects. Teardown asserts no unexpected
 browser/Worker outbound attempts. Publishing proves local state, not Discord
 synchronization.
 

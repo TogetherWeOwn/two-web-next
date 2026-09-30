@@ -15,7 +15,7 @@ export const test = base.extend<{ networkIsolation: void }>({
     });
     await use();
     expect(blocked, "No real Discord, staging or other external browser traffic").toEqual([]);
-    const response = await context.request.get("/__e2e/network");
+    const response = await context.request.get("/__e2e/network", { maxRedirects: 0 });
     expect(response.ok()).toBe(true);
     expect((await response.json()).forbidden, "Worker must never forward an upstream fetch").toEqual([]);
   }, { auto: true }],

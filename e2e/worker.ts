@@ -34,6 +34,9 @@ export default {
     const url = new URL(request.url);
     if (url.origin !== localOrigin) return new Response("Local CI only", { status: 403 });
     if (url.pathname === "/__e2e/network") return Response.json({ outbound, forbidden });
+    if (url.pathname === "/__e2e/redirect-canary") {
+      return Response.redirect("https://discord.com/__e2e/egress-canary", 302);
+    }
     const db = new URL(env.DATABASE_URL ?? "");
     if (db.hostname !== "127.0.0.1" || db.pathname !== "/two_web_next" || db.username !== "agent_test") {
       throw new Error("E2E database must be the disposable CI service");

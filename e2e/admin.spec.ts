@@ -19,11 +19,11 @@ test("moderator creates a draft, publishes it and sees it in the public calendar
 
   const guest = await context.browser()!.newContext({ baseURL: "https://localhost:8787", ignoreHTTPSErrors: true });
   try {
-    const draft = await guest.request.get(`/e/${eventKey}`);
+    const draft = await guest.request.get(`/e/${eventKey}`, { maxRedirects: 0 });
     expect(draft.status()).toBe(403);
     await page.getByRole("button", { name: "Publish", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Status: published", exact: true })).toBeVisible();
-    const published = await guest.request.get(`/e/${eventKey}`);
+    const published = await guest.request.get(`/e/${eventKey}`, { maxRedirects: 0 });
     expect(published.status()).toBe(200);
     expect(await published.text()).toContain("E2E Moderator Game Night");
   } finally {

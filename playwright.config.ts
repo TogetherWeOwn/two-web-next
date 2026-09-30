@@ -16,6 +16,9 @@ export default defineConfig({
     baseURL: "https://localhost:8787",
     ignoreHTTPSErrors: true,
     serviceWorkers: "block",
+    // Browser routing doesn't re-intercept server-side redirect hops. A dead
+    // proxy makes every non-loopback destination fail closed, even on redirects.
+    launchOptions: { args: ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=localhost;127.0.0.1;[::1]"] },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
