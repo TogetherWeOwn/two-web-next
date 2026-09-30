@@ -62,3 +62,17 @@ export async function sitemapEvents(db: Db): Promise<{ key: string; status: "pub
   const rows = await db.select().from(events).where(eq(events.status, "published")).orderBy(asc(events.startsAt));
   return rows.map((r) => ({ key: r.eventKey, status: "published" as const, updatedAt: r.updatedAt.toISOString() }));
 }
+
+/** Feed scope: upcoming (ends_at >= now), soonest first. `statuses` differs for RSS vs ICS. */
+export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
+  return db
+    .select()
+    .from(events)
+    .where(and(inArray(events.status, statuses), gte(events.endsAt, now)))
+    .orderBy(asc(events.startsAt));
+}
+
+export async function getEventRow(db: Db, key: string) {
+  const [row] = await db.select().from(events).where(eq(events.eventKey, key));
+  return row ?? null;
+}

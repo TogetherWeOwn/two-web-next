@@ -26,9 +26,9 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
 | `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count; RsvpButton/prev-next/related pending | W8 ✅ (partial) |
-| `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | pending | W9 📋 |
-| `GET /events.rss` (published upcoming, ETag/304, atom self-link) | pending | W9 📋 |
-| `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | pending | W9 📋 |
+| `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
+| `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
+| `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
 | `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | ✅ same-app flow (`identify`+`guilds.join`, auto-join, role recompute) | W5 ✅ |
 | `GET /auth/qa/{identity}` (staging-only, header token) | ✅ as `POST /auth/qa/:identity` — **deliberate divergence**: GET login is CSRF-able; POST + byte-identical 404s | W5 ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; throttle pending | W5 ✅ + N5 (new card, throttle) |
@@ -148,7 +148,7 @@ go hunting for them.
 |---|---|---|
 | EventService (capacity/waitlist under lock, series create/materialize, sync-after-commit) | pending | W8 📋 + W11 🔶 + W13 ⛔ |
 | InternalActionClient + signer (sole bot speaker; `addMember` sync-only, never queued) | ✅ signer byte-parity; client pending | W14 ✅ + W13 ⛔ |
-| EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | pending | W8 📋 (JSON-LD) + W9 📋 (feeds) |
+| EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | ✅ | W8 ✅ (JSON-LD) + W9 ✅ (feeds) |
 | RsvpRateLimit / AgentEventRateLimit | pending / ✅ | W9 📋 / W14 ✅ |
 | SafeRedirect (guarded `next`), SpamTrap (honeypot + 1000 ms floor) | pending | W6 🔶 / W7 📋 + W9 📋 |
 | RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |
