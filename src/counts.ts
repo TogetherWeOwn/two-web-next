@@ -46,20 +46,19 @@ function liveCounts(row: Row | undefined): LiveCounts {
   return { memberCount, onlineCount: memberCount == null ? null : count(row?.online_count) };
 }
 
-// One entry per view bounds isolate memory and scopes cache reuse to the DB
-// connection, not the per-request Env object. Concurrent requests share the
-// in-flight read. Cache unavailable results too: a failing source warns once
-// per fill, not once per visitor. There is no post-expiry stale fallback.
+// One settled entry per view bounds isolate memory and scopes cache reuse to
+// the DB connection. Never share pending I/O: Workers can cancel it when the
+// owning invocation ends, stranding later callers on an unresolved promise.
+// Concurrent cold requests fill independently with their own read deadlines.
+// Cache unavailable results too; there is no post-expiry stale fallback.
 function cachedRead<T>(key: string, fallback: T, read: (sql: postgres.Sql) => Promise<T>) {
-  let cache: { url: string; value: Promise<T>; expiresAt: number } | undefined;
+  let cache: { url: string; value: T; expiresAt: number } | undefined;
+  let latestFill = 0;
   return async (url: string | undefined): Promise<T> => {
     if (!url) return fallback;
     if (cache?.url === url && Date.now() < cache.expiresAt) return cache.value;
-    const entry: { url: string; value: Promise<T>; expiresAt: number } = {
-      url, value: Promise.resolve(fallback), expiresAt: Infinity,
-    };
-    cache = entry;
-    entry.value = (async () => {
+    const fill = ++latestFill;
+    const value = await (async () => {
       let sql: postgres.Sql | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -80,8 +79,10 @@ function cachedRead<T>(key: string, fallback: T, read: (sql: postgres.Sql) => Pr
       // Never log the driver message/URL: either may contain credentials.
       console.warn("Counts read unavailable", { key });
       return fallback;
-    }).finally(() => { entry.expiresAt = Date.now() + COUNTS_CACHE_TTL_MS; });
-    return entry.value;
+    });
+    // An older slow fill must not replace a newer completed snapshot.
+    if (fill === latestFill) cache = { url, value, expiresAt: Date.now() + COUNTS_CACHE_TTL_MS };
+    return value;
   };
 }
 

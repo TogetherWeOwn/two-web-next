@@ -34,7 +34,7 @@ export async function createWebV1Fixture(raw: string) {
       CREATE TABLE web_v1.live_counts (
         human_member_count bigint,
         online_count bigint,
-        counts_updated_at timestamptz
+        counts_updated_at text
       )
     `;
     await sql`

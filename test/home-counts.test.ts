@@ -51,7 +51,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     fixture = await createWebV1Fixture(process.env.DATABASE_URL!);
     const sql = fixture.sql;
     await sql`
-      INSERT INTO web_v1.live_counts VALUES (84, 12, ${new Date(NOW).toISOString()}::timestamptz)
+      INSERT INTO web_v1.live_counts VALUES (84, 12, ${new Date(NOW).toISOString()}::text)
     `;
     // Deliberately scrambled insertion order. These are highest-rank-held
     // counts, not role holder totals; null and zero mean different things.
@@ -114,11 +114,24 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     expect(html).not.toContain('</strong> online');
   });
 
-  it("suppresses numerals at the exact ten-minute stale boundary; ranks remain readable", async () => {
-    await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = ${new Date(NOW - 600_000).toISOString()}::timestamptz`;
+  it.each([-599_999, 599_999])("renders text timestamps just inside the freshness boundary (%i ms)", async (offset) => {
+    const timestamp = new Date(NOW + offset).toISOString();
+    await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = ${timestamp}::text`;
+    const [row] = await fixture.sql`SELECT counts_updated_at, pg_typeof(counts_updated_at)::text AS type FROM web_v1.live_counts`;
+    expect(row).toEqual({ counts_updated_at: timestamp, type: "text" });
+    expect(await home()).toContain('<strong>84</strong> members');
+  });
+
+  it.each([-600_000, 600_000])("suppresses text timestamps at the exact stale boundary (%i ms); ranks remain readable", async (offset) => {
+    await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = ${new Date(NOW + offset).toISOString()}::text`;
     const html = await home();
     emptyCounts(html);
     expect(html).toContain('<dt>Member</dt><dd>40</dd>');
+  });
+
+  it("degrades invalid timestamp text with HTTP 200", async () => {
+    await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = 'not-a-timestamp'`;
+    emptyCounts(await home());
   });
 
   it("degrades missing and undated live rows", async () => {

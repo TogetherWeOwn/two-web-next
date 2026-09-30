@@ -9,7 +9,10 @@ complete schema of every `web_v1` view.
 Source: frozen `TogetherWeOwn/two-web` at
 [`2eaefb8dc7af6e7e9bf62fd561d09e8babf31ba4`](https://github.com/TogetherWeOwn/two-web/tree/2eaefb8dc7af6e7e9bf62fd561d09e8babf31ba4),
 particularly `app/Support/Counts/{CountsReader,LiveCounts,Rank}.php` and
-`resources/views/home.blade.php`.
+`resources/views/home.blade.php`. The frozen producer's
+[`docs/WEBSITE_CONTRACT.md` §2](https://github.com/TogetherWeOwn/two-bot/blob/96777468472f23a02a1e97a43ffab3912fe5df2a/docs/WEBSITE_CONTRACT.md#2-the-views)
+specifies ISO-8601 UTC **text** for timestamps. Do not retype a v1 view column
+as `timestamptz`; column type changes require a new major schema version.
 
 ## `web_v1.live_counts`
 
@@ -21,7 +24,7 @@ TWO guild. Never aggregate multiple guilds into this row.
 | --- | --- | --- |
 | `human_member_count` | nullable nonnegative integer / bigint | Human members, not bots; null means unknown, **not zero**. |
 | `online_count` | nullable nonnegative integer / bigint | Online population accompanying the snapshot. Null means unknown. Display only when positive and the member count is usable. |
-| `counts_updated_at` | nullable `timestamptz` | Actual collector snapshot time, not the request time or a view refresh that did not collect new data. |
+| `counts_updated_at` | nullable `text`, ISO-8601 UTC (e.g. `2026-09-30T12:00:00.000Z`) | Actual collector snapshot time, not the request time or a view refresh that did not collect new data. |
 
 The reader issues:
 
@@ -83,8 +86,10 @@ not hide independently readable ranks.
   for Hyperdrive. Each per-read client closes after use.
 - Independent `counts.live` and `counts.ranks` caches use the legacy **60-second
   TTL**, scoped to the selected connection string within the Worker isolate.
-  They are bounded single-entry caches, not shared edge storage. Concurrent
-  callers share the in-flight read; changing database bindings forces a reread.
+  They are bounded single-entry caches of **settled values**, not shared edge
+  storage. Concurrent cold callers read independently with their own deadlines;
+  no request-owned pending promise is reused after an invocation ends. Changing
+  database bindings forces a reread.
 - Cached snapshots keep their already-evaluated freshness until TTL expiry,
   matching legacy. A warm cache can survive an outage until expiry; there is no
   post-expiry stale fallback.

@@ -116,16 +116,29 @@ describe("readCounts contract", () => {
 });
 
 describe("60-second isolate cache", () => {
-  it("shares in-flight reads across callers and env objects; refreshes at expiry", async () => {
+  it("caches only settled reads across env objects and refreshes at expiry", async () => {
     const replies = await Promise.all(Array.from({ length: 8 }, () => counts.readCounts({ ...env })));
     expect(replies.every((reply) => reply.memberCount === 84)).toBe(true);
-    expect(state.queries).toHaveLength(2);
+    expect(state.queries).toHaveLength(16); // Cold callers own their I/O and deadlines.
     state.live[0]!.human_member_count = "99";
     vi.setSystemTime(NOW + 59_999);
-    expect((await counts.readCounts(env)).memberCount).toBe(84);
-    expect(state.queries).toHaveLength(2);
+    expect((await counts.readCounts({ ...env })).memberCount).toBe(84);
+    expect(state.queries).toHaveLength(16);
     vi.setSystemTime(NOW + 60_000);
     expect((await counts.readCounts(env)).memberCount).toBe(99);
+    expect(state.queries).toHaveLength(18);
+  });
+
+  it("does not let an unresolved fill own a later caller's deadline", async () => {
+    state.hung = true;
+    const first = counts.readCounts(env);
+    await vi.advanceTimersByTimeAsync(300);
+    state.hung = false;
+    await expect(counts.readCounts(env)).resolves.toMatchObject({ memberCount: 84 });
+    expect(state.queries).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(counts.COUNTS_READ_TIMEOUT_MS - 300);
+    await expect(first).resolves.toEqual(counts.UNAVAILABLE);
+    expect((await counts.readCounts(env)).memberCount).toBe(84);
     expect(state.queries).toHaveLength(4);
   });
 
