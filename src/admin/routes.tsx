@@ -11,6 +11,7 @@
 // - POST /admin/events/:key/publish  draft → published (write-back due)
 // - POST /admin/events/:key/cancel   draft|published → cancelled
 // - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
+// - GET  /admin/join-attempts/:id    read-only attempt detail
 // - GET  /admin/featured             list, position order
 // - GET  /admin/featured/new         create form
 // - POST /admin/featured             create
@@ -46,10 +47,10 @@ import {
 } from "./store";
 import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
-import { joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
+import { getJoinAttempt, joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
-import { AdminDashboard, ErrorPage, EventFormPage, EventsPage, FeaturedFormPage, FeaturedPage, JoinAttemptsPage } from "./pages";
+import { AdminDashboard, ErrorPage, EventFormPage, EventsPage, FeaturedFormPage, FeaturedPage, JoinAttemptPage, JoinAttemptsPage } from "./pages";
 
 type Vars = {
   Bindings: Env;
@@ -133,6 +134,25 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       subjects: rows.flatMap((r) => (r.discordId ? [r.discordId] : [])),
     });
     return c.html(<JoinAttemptsPage rows={rows} outcome={outcome} q={q} outcomes={JOIN_OUTCOMES} />);
+  });
+
+  admin.get("/join-attempts/:id", async (c) => {
+    const rawId = c.req.param("id");
+    const id = Number(rawId);
+    if (!/^[1-9]\d*$/.test(rawId) || !Number.isSafeInteger(id)) {
+      return errorPage(c, 404, "Join attempt not found");
+    }
+    const db = await dbOr503(c);
+    if (!db) return c.text("Admin temporarily unavailable", 503);
+    const result = await getJoinAttempt(db, id);
+    if (!result) return errorPage(c, 404, "Join attempt not found");
+    declareAccess(c, {
+      resource: "join_attempts",
+      action: "view",
+      route: "admin.join-attempts.show",
+      subjects: result.memberId ? [result.memberId] : [],
+    });
+    return c.html(<JoinAttemptPage row={result.attempt} />);
   });
 
   admin.get("/events", async (c) => {

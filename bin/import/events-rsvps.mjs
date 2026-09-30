@@ -84,6 +84,7 @@ async function upsert(sql, table, columns, keys, row) {
   const values = { ...row };
   for (const column of columns) {
     if (timestampColumns.has(column)) values[column] = sql`${row[column]}::text::timestamptz`;
+    if (column === "recurrence_ends_on") values[column] = sql`${row[column]}::text::date::timestamp`;
   }
   const [saved] = await sql`
     insert into ${sql(table)} ${sql(values, columns)}
@@ -99,7 +100,7 @@ function comparableColumns(sql, columns) {
   return columns.map((column) => timestampColumns.has(column)
     ? sql`to_char(${sql(column)} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ${sql(column)}`
     : column === "recurrence_ends_on"
-      ? sql`${sql(column)}::date::text as ${sql(column)}`
+      ? sql`to_char(${sql(column)}, 'YYYY-MM-DD') as ${sql(column)}`
       : sql(column)).reduce((a, b) => sql`${a}, ${b}`);
 }
 
@@ -123,7 +124,8 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
         timezone, location, capacity, status, rsvp_open, discord_event_id,
         to_char(discord_sync_failed_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as discord_sync_failed_at,
         discord_sync_failure_code, created_by::text, recurrence_frequency,
-        recurrence_count, recurrence_ends_on::text, parent_event_id::text, recurrence_index,
+        recurrence_count, to_char(recurrence_ends_on, 'YYYY-MM-DD') as recurrence_ends_on,
+        parent_event_id::text, recurrence_index,
         to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
         to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as updated_at,
         agent_grant_id, proof_marker, agent_version
@@ -198,25 +200,26 @@ export function reportExitCode(report) {
   return Object.values(report.unresolved).some((count) => count > 0) ? 2 : 0;
 }
 
+export function connectDatabase(raw) {
+  const url = new URL(raw);
+  const port = url.port ? Number(url.port) : 5432;
+  if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname || !url.username
+    || url.pathname.length < 2 || port < 1) throw new Error("Expected a complete PostgreSQL URL from env.");
+  return postgres(raw, {
+    max: 1, prepare: false, fetch_types: false, connect_timeout: 10, onnotice: () => {},
+    // Never fall back to inherited PGUSER/PGPASSWORD/PGDATABASE/PGPORT settings.
+    username: decodeURIComponent(url.username), database: decodeURIComponent(url.pathname.slice(1)),
+    password: () => decodeURIComponent(url.password), port,
+  });
+}
+
 export async function main(args = process.argv.slice(2), env = process.env) {
   let legacy, target;
   try {
     const options = parseArgs(args);
     if (!env.LEGACY_DATABASE_URL || !env.DATABASE_URL) throw new Error("Import URLs are unset.");
-    const connect = (raw) => {
-      const url = new URL(raw);
-      if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname || !url.username || url.pathname.length < 2) {
-        throw new Error("Expected a complete PostgreSQL URL from env.");
-      }
-      return postgres(raw, {
-        max: 1, prepare: false, fetch_types: false, connect_timeout: 10, onnotice: () => {},
-        // Never fall back to inherited PGUSER/PGPASSWORD/PGDATABASE credentials.
-        username: decodeURIComponent(url.username), database: decodeURIComponent(url.pathname.slice(1)),
-        password: () => decodeURIComponent(url.password),
-      });
-    };
-    legacy = connect(env.LEGACY_DATABASE_URL);
-    target = connect(env.DATABASE_URL);
+    legacy = connectDatabase(env.LEGACY_DATABASE_URL);
+    target = connectDatabase(env.DATABASE_URL);
     const report = await importEventsRsvps(legacy, target, options);
     console.log(JSON.stringify(report));
     return reportExitCode(report);

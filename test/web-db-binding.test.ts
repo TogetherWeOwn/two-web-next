@@ -80,7 +80,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
 
   const login = async (identity = "qa-member", bindings = env) => {
     const res = await request(`/auth/qa/${identity}`, {
-      method: "POST", headers: { "X-TWO-QA-Auth": baseEnv.QA_AUTH_TOKEN! },
+      method: "POST", headers: { origin: bindings.APP_URL, "X-TWO-QA-Auth": baseEnv.QA_AUTH_TOKEN! },
     }, bindings);
     expect(res.status).toBe(204);
     return cookieFrom(res);

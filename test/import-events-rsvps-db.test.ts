@@ -29,6 +29,8 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
   });
 
   beforeEach(async () => {
+    await legacy`set datestyle = 'ISO, MDY'`;
+    await target`set datestyle = 'ISO, MDY'`;
     await fixture.reset();
     await fixture.client`drop schema if exists ${fixture.client(legacySchema)} cascade`;
     await fixture.client`create schema ${fixture.client(legacySchema)}`;
@@ -94,6 +96,32 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     expect(await target`select * from rsvps order by id`).toEqual(rsvps);
     expect(await legacy`select * from events order by id`).toEqual(sourceBefore);
     expect((await importEventsRsvps(legacy, target)).events.unchanged).toBe(4);
+  });
+
+  it.each([
+    ["SQL, DMY", "ISO, MDY"], ["ISO, MDY", "SQL, DMY"],
+    ["SQL, DMY", "German, DMY"], ["Postgres, DMY", "SQL, MDY"],
+  ])("preserves calendar dates across DateStyle source=%s destination=%s", async (sourceStyle, targetStyle) => {
+    await legacy`select set_config('DateStyle', ${sourceStyle}, false)`;
+    await target`select set_config('DateStyle', ${targetStyle}, false)`;
+    const dry = await importEventsRsvps(legacy, target);
+    expect(dry.events).toMatchObject({ inserted: 3, updated: 1 });
+    await importEventsRsvps(legacy, target, { dryRun: false });
+    const [stored] = await target`select to_char(recurrence_ends_on, 'YYYY-MM-DD HH24:MI:SS') as calendar
+      from events where event_key = ${parentKey}`;
+    expect(stored!.calendar).toBe("2026-11-01 00:00:00");
+    const [source] = await legacy`select to_char(recurrence_ends_on, 'YYYY-MM-DD') as calendar from events where id = 30`;
+    expect(source!.calendar).toBe("2026-11-01");
+    for (const dryRun of [true, false]) {
+      const replay = await importEventsRsvps(legacy, target, { dryRun });
+      expect(replay.events).toMatchObject({ unchanged: 4, updated: 0, inserted: 0 });
+    }
+    await legacy`update events set recurrence_ends_on = '2026-12-02' where id = 30`;
+    const update = await importEventsRsvps(legacy, target, { dryRun: false });
+    expect(update.events).toMatchObject({ updated: 1, unchanged: 3 });
+    expect((await target`select to_char(recurrence_ends_on, 'YYYY-MM-DD') as calendar from events where id = 500`)[0]!.calendar)
+      .toBe("2026-12-02");
+    expect((await importEventsRsvps(legacy, target, { dryRun: false })).events.unchanged).toBe(4);
   });
 
   it("upserts changed content and answers without duplicating or deleting other destination rows", async () => {

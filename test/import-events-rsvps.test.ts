@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 // Standalone operator scripts intentionally run directly under Node, not the TS app.
 // @ts-expect-error standalone mjs has no type declarations
-import { main, parentFirst, parseArgs, reportExitCode } from "../bin/import/events-rsvps.mjs";
+import { connectDatabase, main, parentFirst, parseArgs, reportExitCode } from "../bin/import/events-rsvps.mjs";
 
 const event = (id: string, parent: string | null = null) => ({ id, event_key: `key-${id}`, parent_event_id: parent });
 
@@ -31,6 +31,27 @@ describe("legacy events import controls", () => {
     expect(reportExitCode({ unresolved: { creators: 0, rsvpEvents: 0, rsvpUsers: 0 } })).toBe(0);
     expect(reportExitCode({ unresolved: { creators: 0, rsvpEvents: 0, rsvpUsers: 1 } })).toBe(2);
     expect(reportExitCode({ unresolved: { creators: 1, rsvpEvents: 0, rsvpUsers: 0 } })).toBe(2);
+  });
+
+  it.each([
+    ["postgres://agent_test@agent-testdb/two_web_next", 5432],
+    ["postgres://agent_test@agent-testdb:5432/two_web_next", 5432],
+    ["postgres://agent_test@agent-testdb:15432/two_web_next", 15432],
+  ])("pins URL/default port without connecting: %s", async (url, port) => {
+    vi.stubEnv("PGPORT", "6432");
+    let client;
+    try {
+      // postgres.js is lazy: inspect the real CLI factory without querying any port.
+      client = connectDatabase(url);
+      expect(client.options.port).toEqual([port]);
+    } finally {
+      await client?.end({ timeout: 2 });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects port zero rather than falling back to inherited connection settings", () => {
+    expect(() => connectDatabase("postgres://agent_test@agent-testdb:0/two_web_next")).toThrow();
   });
 
   it("does not disclose argv/env secrets on failure", async () => {

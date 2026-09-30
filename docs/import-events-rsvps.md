@@ -12,7 +12,9 @@ Supply `LEGACY_DATABASE_URL` and `DATABASE_URL` through the operator's approved
 environment/secret injection. Do not put connection strings on the command line,
 in shell history, or in reports. The source connection must select the legacy
 schema through its search path; the destination must select the migrated Next
-schema. The script never changes either search path.
+schema. The script never changes either search path. Username, database, password
+and port come from each URL, not inherited `PG*` defaults. An omitted URL port
+is pinned to 5432; an explicit nonzero URL port is honored.
 
 ```sh
 node bin/import/events-rsvps.mjs             # default: read-only dry run
@@ -48,7 +50,9 @@ Event start/end instants retain their UTC meaning alongside the IANA timezone;
 Laravel's timestamp-without-time-zone bookkeeping is explicitly interpreted as
 UTC. Comparisons and writes preserve all six PostgreSQL fractional digits, without
 passing timestamps through JavaScript `Date` (see [PostgreSQL formatting](https://www.postgresql.org/docs/17/functions-formatting.html)).
-Recurrence end dates remain dates, not instants. Cancelled/past states,
+Recurrence end dates remain dates, not instants: both projections use explicit
+`YYYY-MM-DD` formatting and writes cast text to date to timezone-free midnight,
+independent of source/destination `DateStyle`. Cancelled/past states,
 closed RSVPs, waitlisted answers, Discord mirror IDs, terminal failure stamps,
 and RSVP sync stamps are retained.
 
