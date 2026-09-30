@@ -11,6 +11,7 @@
 // - POST /admin/events/:key/publish  draft → published (write-back due)
 // - POST /admin/events/:key/cancel   draft|published → cancelled
 // - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
+// - GET  /admin/join-attempts/:id    read-only attempt detail
 // - GET  /admin/featured             list, position order
 // - GET  /admin/featured/new         create form
 // - POST /admin/featured             create
@@ -46,10 +47,11 @@ import {
 } from "./store";
 import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
-import { joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
+import { getJoinAttempt, joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
+import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
-import { AdminDashboard, ErrorPage, EventFormPage, EventsPage, FeaturedFormPage, FeaturedPage, JoinAttemptsPage } from "./pages";
+import { AdminDashboard, ErrorPage, EventFormPage, EventsPage, FeaturedFormPage, FeaturedPage, JoinAttemptPage, JoinAttemptsPage } from "./pages";
 
 type Vars = {
   Bindings: Env;
@@ -135,6 +137,25 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<JoinAttemptsPage rows={rows} outcome={outcome} q={q} outcomes={JOIN_OUTCOMES} />);
   });
 
+  admin.get("/join-attempts/:id", async (c) => {
+    const rawId = c.req.param("id");
+    const id = Number(rawId);
+    if (!/^[1-9]\d*$/.test(rawId) || !Number.isSafeInteger(id)) {
+      return errorPage(c, 404, "Join attempt not found");
+    }
+    const db = await dbOr503(c);
+    if (!db) return c.text("Admin temporarily unavailable", 503);
+    const result = await getJoinAttempt(db, id);
+    if (!result) return errorPage(c, 404, "Join attempt not found");
+    declareAccess(c, {
+      resource: "join_attempts",
+      action: "view",
+      route: "admin.join-attempts.show",
+      subjects: result.memberId ? [result.memberId] : [],
+    });
+    return c.html(<JoinAttemptPage row={result.attempt} />);
+  });
+
   admin.get("/events", async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
@@ -160,15 +181,31 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
     let input;
+    let recurrence;
     try {
-      input = parseEventForm(values);
+      // Both parsers run so one submit reports every field error; the event
+      // rules own starts/timezone errors, the recurrence rules own theirs.
+      const errors: Record<string, string> = {};
+      try {
+        input = parseEventForm(values);
+      } catch (err) {
+        if (!(err instanceof ValidationError)) throw err;
+        Object.assign(errors, err.fields);
+      }
+      try {
+        recurrence = parseRecurrenceForm(values);
+      } catch (err) {
+        if (!(err instanceof ValidationError)) throw err;
+        Object.assign(errors, err.fields);
+      }
+      if (Object.keys(errors).length > 0) throw new ValidationError(errors);
     } catch (err) {
       if (err instanceof ValidationError) {
         return formError(c, err, (errors, v) => c.html(<EventFormPage mode="new" values={v} errors={errors} />), values);
       }
       throw err;
     }
-    const { row } = await createEvent(db, c.get("adminActor"), input);
+    const { row } = await createEvent(db, c.get("adminActor"), input!, recurrence ?? null);
     return c.redirect(`/admin/events/${row.eventKey}`, 303);
   });
 
@@ -224,8 +261,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       throw err;
     }
     try {
-      const { row, writeBack } = await updateEvent(db, c.get("adminActor"), key, input);
+      const { row, writeBack, childWriteBacks } = await updateEvent(db, c.get("adminActor"), key, input);
       if (writeBack) await dispatchWriteBack(c.env, writeBack);
+      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
       return c.redirect(`/admin/events/${row.eventKey}`, 303);
     } catch (err) {
       if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");

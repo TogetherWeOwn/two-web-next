@@ -79,11 +79,6 @@ export function profilesApp(deps: ProfileDeps = {}) {
 
   // Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed).
   const gate = async (c: Ctx, next: Next) => {
-    // The origin check for forged same-shape writes (SameSite=Lax already stops the cookie).
-    if (c.req.method !== "GET" && c.req.method !== "HEAD") {
-      const origin = c.req.header("origin");
-      if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-    }
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     if (!token) return c.redirect("/auth/discord", 302);
     let viewer: Viewer | null = null;
