@@ -44,9 +44,6 @@ export function pageShellFixture(status = "published") {
     isPublished: false, position: 0, startsAt: null, endsAt: null, createdBy: MEMBER_ID,
     createdAt: now, updatedAt: now,
   };
-  const joinAttempt: typeof joinAttempts.$inferSelect = {
-    id: 1, outcome: "added", source: "join", requestId: "fixture-join-request", discordId: MEMBER_ID, createdAt: now,
-  };
   const encode = <T extends Record<string, unknown>>(columns: Record<string, unknown>, row: T) =>
     Object.keys(columns).map((key) => row[key] instanceof Date ? row[key].toISOString() : row[key]);
   const db = drizzle(async (sql, params) => {
@@ -64,7 +61,12 @@ export function pageShellFixture(status = "published") {
       return { rows: [encode(getTableColumns(featuredContents), featured)] };
     }
     if (sql.includes('from "join_attempts"') && sql.includes('"join_attempts"."id" =')) {
-      return { rows: params.includes(1) ? [[...encode(getTableColumns(joinAttempts), joinAttempt), MEMBER_ID]] : [] };
+      if (params[0] !== 1) return { rows: [] };
+      const attempt: typeof joinAttempts.$inferSelect = {
+        id: 1, outcome: "added", source: "site", requestId: "fixture-request",
+        discordId: MEMBER_ID, createdAt: now,
+      };
+      return { rows: [[...encode(getTableColumns(joinAttempts), attempt), MEMBER_ID]] };
     }
     if (sql.includes('from "rsvps"') || sql.includes('from "join_attempts"') || sql.includes('from "event_search_log"')
       || sql.startsWith('insert into "member_data_access_logs"') || sql.startsWith("SET LOCAL")) return { rows: [] };
