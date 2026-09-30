@@ -28,6 +28,7 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const queries: string[] = [];
   const db = drizzle(async (sql) => {
     queries.push(sql);
+    if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
     if (sql.includes('from "rsvps"')) return { rows: [[row.id, 3]] };
     if (sql.includes('"event_key" =')) {
       return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };

@@ -5,6 +5,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import app from "../../src/index";
 import { events, featuredContents } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
+import { joinAttempts } from "../../src/db/schema";
 import type { Env } from "../../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions";
 
@@ -15,14 +16,14 @@ export const HTML_READS = [
   "/", "/about", "/faq", "/rules", "/privacy", "/join", "/join/callback",
   "/events", "/events/past", "/e/:key", "/profile", "/members/:user",
   "/admin", "/admin/events", "/admin/events/new", "/admin/events/:key",
-  "/admin/featured", "/admin/featured/new", "/admin/featured/:id", "/admin/join-attempts",
+  "/admin/featured", "/admin/featured/new", "/admin/featured/:id", "/admin/join-attempts", "/admin/join-attempts/:id",
 ];
 
 // Redirects, feeds and machine endpoints have no HTML success page. Their branded
 // error responses are covered separately; new GET routes must be classified here.
 export const NON_HTML_READS = [
   "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback",
-  "/sitemap_index.xml", "/robots.txt", "/health", "/healthz", "/db-ping", "/up",
+  "/sitemap_index.xml", "/robots.txt", "/up",
   "/events.json", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 
@@ -43,6 +44,10 @@ export function pageShellFixture(status = "published") {
     isPublished: false, position: 0, startsAt: null, endsAt: null, createdBy: MEMBER_ID,
     createdAt: now, updatedAt: now,
   };
+  const attempt: typeof joinAttempts.$inferSelect = {
+    id: 1, outcome: "added", source: "join", requestId: "page-shell-join-request", discordId: MEMBER_ID,
+    createdAt: now,
+  };
   const encode = <T extends Record<string, unknown>>(columns: Record<string, unknown>, row: T) =>
     Object.keys(columns).map((key) => row[key] instanceof Date ? row[key].toISOString() : row[key]);
   const db = drizzle(async (sql, params) => {
@@ -60,7 +65,13 @@ export function pageShellFixture(status = "published") {
       if (sql.includes('"id" =') && !params.includes(1)) return { rows: [] };
       return { rows: [encode(getTableColumns(featuredContents), featured)] };
     }
-    if (sql.includes('from "rsvps"') || sql.includes('from "join_attempts"') || sql.includes('from "event_search_log"')
+    if (sql.includes('from "join_attempts"')) {
+      if (sql.includes("count(*)")) return { rows: [[attempt.outcome, 1]] };
+      if (sql.includes('"join_attempts"."id" =') && params[0] !== attempt.id) return { rows: [] };
+      const row = encode(getTableColumns(joinAttempts), attempt);
+      return { rows: [sql.includes('left join "users"') ? [...row, MEMBER_ID] : row] };
+    }
+    if (sql.includes('from "rsvps"') || sql.includes('from "event_search_log"')
       || sql.startsWith('insert into "member_data_access_logs"') || sql.startsWith("SET LOCAL")) return { rows: [] };
     throw new Error(`Unexpected page-shell fixture query: ${sql}`);
   });

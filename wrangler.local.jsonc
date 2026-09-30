@@ -1,0 +1,28 @@
+// Local-only development with the passwordless agent-testdb URL in .dev.vars.
+// No Hyperdrive: Miniflare's Hyperdrive validator requires a nonempty password.
+// Do not deploy this configuration or use remote development.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "two-web-next-local",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": { "directory": "./public" },
+  "queues": {
+    "producers": [
+      { "queue": "two-sync-event-local", "binding": "SYNC_EVENT_QUEUE" },
+      { "queue": "two-internal-action-local", "binding": "INTERNAL_ACTION_QUEUE" }
+    ],
+    "consumers": [
+      { "queue": "two-sync-event-local", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
+      { "queue": "two-internal-action-local", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+    ]
+  },
+  "vars": {
+    "APP_URL": "http://localhost:8787",
+    "DISCORD_CLIENT_ID": "",
+    "DISCORD_GUILD_ID": "",
+    "DISCORD_INVITE_URL": ""
+  }
+}

@@ -140,7 +140,8 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     }
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("vary")).toBe("Cookie");
-    expect(f.queries).toHaveLength(5);
+    expect(f.queries).toHaveLength(6); // Member-only attendees plus the three navigation reads.
+    expect(f.queries.filter((q) => q.sql.includes('inner join "users"'))).toHaveLength(1);
   });
 
   it.each([true, false])("hides the guest CTA for a signed-in viewer (member=%s) and disables shared caching", async (member) => {
@@ -170,7 +171,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     const mod = await draft.request({ headers: { cookie: await cookie(draft.env, true) } });
     expect(mod.status).toBe(200);
     expect(mod.headers.get("cache-control")).toBe("private, no-store");
-    expect(draft.queries.slice(4)).toHaveLength(3);
+    expect(draft.queries.slice(4)).toHaveLength(4); // Three navigation reads plus member-only attendees.
     const cancelled = pageFixture(row(2, { status: "cancelled" }));
     const gone = await cancelled.request();
     expect(gone.status).toBe(410);

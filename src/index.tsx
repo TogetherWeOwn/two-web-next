@@ -28,6 +28,7 @@ import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
+import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
@@ -195,9 +196,11 @@ async function issueSession(
   });
 }
 
-async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, rotateToken = true): Promise<Session | null> {
+async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
+  // Anonymous public pages must not depend on session storage or its startup DDL.
+  const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
   if (!row) return null;
   // Abortable calendar fragments validate expiry/revocation but must not delete
@@ -229,16 +232,17 @@ async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, r
 const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
 
 app.get("/", async (c) => {
-  const store = await storeFor(c);
-  const session = await readSession(c, store);
+  // Optional homepage data must not take down the funnel during a DB outage.
+  const session = await readSession(c).catch(() => null);
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
   const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
+  const featured = await dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,
+    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} featured={featured} />,
   );
 });
 
@@ -469,8 +473,8 @@ app.route("/", profilesApp());
 // W8: public events pages, /events.json and moderator event writes.
 registerEventRoutes(
   app,
-  async (c) => readSession(c, await storeFor(c)),
-  async (c) => readSession(c, await storeFor(c), false),
+  async (c) => readSession(c),
+  async (c) => readSession(c, false),
 );
 
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {

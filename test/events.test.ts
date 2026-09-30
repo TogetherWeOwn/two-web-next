@@ -1,3 +1,11 @@
+// route-inventory: GET /events
+// route-inventory: GET /events/past
+// route-inventory: GET /events.json
+// route-inventory: GET /e/:key
+// route-inventory: POST /events
+// route-inventory: PATCH /events/:key
+// route-inventory: POST /events/:key/publish
+// route-inventory: POST /events/:key/cancel
 // W8: events sync carrier (unit, no DB) + public pages / JSON / moderator round-trips
 // (agent-testdb; skipped without DATABASE_URL like test/admin.test.ts).
 import { serializeSigned } from "hono/utils/cookie";
