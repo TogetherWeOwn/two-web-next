@@ -68,14 +68,53 @@ export async function recordSearch(
 
 export type ZeroResultSearch = { query: string; searches: number; lastSearchedAt: Date };
 
-/** Content-gap read: zero-result queries by miss count, ties alphabetical. */
-export async function topZeroResultSearches(db: Db, limit = 10): Promise<ZeroResultSearch[]> {
-  const rows = await db
-    .select({ query: eventSearchLogs.normalizedQuery, searches: count(), lastSearchedAt: max(eventSearchLogs.occurredAt) })
-    .from(eventSearchLogs)
-    .where(eq(eventSearchLogs.resultCount, 0))
-    .groupBy(eventSearchLogs.normalizedQuery)
-    .orderBy(desc(count()), asc(eventSearchLogs.normalizedQuery))
-    .limit(Math.max(1, limit));
-  return rows.map((r) => ({ query: r.query, searches: Number(r.searches), lastSearchedAt: r.lastSearchedAt! }));
+/** Read deadline: the optional widget must never hold the dashboard (a locked table would wait forever). */
+export const LOG_READ_DEADLINE_MS = 500;
+
+/**
+ * Content-gap read: zero-result queries by miss count, ties alphabetical.
+ * Optional analytics: never throws, never waits past the deadline — a blocked
+ * or failed read resolves undefined so the dashboard omits the widget.
+ * The SELECT runs in a transaction with DB-side lock/statement timeouts so
+ * Postgres cancels a lock-blocked read server-side (a client-side race alone
+ * would leave the SELECT holding a connection).
+ */
+export async function topZeroResultSearches(
+  db: Db,
+  limit = 10,
+  deadlineMs = LOG_READ_DEADLINE_MS,
+): Promise<ZeroResultSearch[] | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = (async (): Promise<ZeroResultSearch[] | undefined> => {
+    try {
+      return await db.transaction(async (tx) => {
+        // Transaction-scoped: lock waits and the statement itself are cancelled by Postgres, freeing the connection.
+        await tx.execute(
+          sql`select set_config('lock_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true)`,
+        );
+        const rows = await tx
+          .select({
+            query: eventSearchLogs.normalizedQuery,
+            searches: count(),
+            lastSearchedAt: max(eventSearchLogs.occurredAt),
+          })
+          .from(eventSearchLogs)
+          .where(eq(eventSearchLogs.resultCount, 0))
+          .groupBy(eventSearchLogs.normalizedQuery)
+          .orderBy(desc(count()), asc(eventSearchLogs.normalizedQuery))
+          .limit(Math.max(1, limit));
+        return rows.map((r) => ({ query: r.query, searches: Number(r.searches), lastSearchedAt: r.lastSearchedAt! }));
+      });
+    } catch {
+      return undefined;
+    }
+  })();
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), deadlineMs);
+  });
+  try {
+    return await Promise.race([read, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

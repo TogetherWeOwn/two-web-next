@@ -184,7 +184,29 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
   it("counts zero-result searches, misses only, ties alphabetical", async () => {
     for (const q of ["valorant", "VALORANT", " valorant ", "chess-boxing", "helldivers"]) await req(`/events?q=${encodeURIComponent(q)}`);
     const top = await topZeroResultSearches(db);
-    expect(top.map((r) => [r.query, r.searches])).toEqual([["valorant", 3], ["chess-boxing", 1]]);
+    expect(top!.map((r) => [r.query, r.searches])).toEqual([["valorant", 3], ["chess-boxing", 1]]);
+  });
+
+  it("serves /admin 200 with the widget omitted while the search-log table is locked", async () => {
+    // P2: the optional widget SELECT must be cancelled DB-side so the
+    // dashboard never waits on an analytics-only lock (no Promise.race-only fix).
+    const locker = postgres(process.env.DATABASE_URL!, { max: 1 });
+    try {
+      await locker.begin(async (tx) => {
+        await tx`lock table event_search_logs in access exclusive mode`;
+        const t0 = Date.now();
+        const mod = await req("/admin", { headers: { cookie: await cookieFor(store, true) } });
+        expect(mod.status).toBe(200);
+        expect(Date.now() - t0).toBeLessThan(2000);
+        const html = await mod.text();
+        expect(html).not.toContain('data-testid="top-zero-searches"');
+        await new Promise((r) => setTimeout(r, 300));
+        const active = await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`;
+        expect(active[0]!.n).toBe(0);
+      });
+    } finally {
+      await locker.end();
+    }
   });
 
   it("serves results when the log table is down", async () => {

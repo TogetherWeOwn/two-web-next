@@ -113,8 +113,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
     const db = await dbFor(c);
     const funnel = db ? await joinFunnelStats(db) : undefined;
-    // Normalized queries + counts only; a failing read hides the widget, not the dashboard.
-    const zeroSearches = db ? await topZeroResultSearches(db).catch(() => undefined) : undefined;
+    // Normalized queries + counts only; a failing or blocked read resolves
+    // undefined itself, so the widget is omitted — the dashboard never waits.
+    const zeroSearches = db ? await topZeroResultSearches(db) : undefined;
     return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />);
   });
 
