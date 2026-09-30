@@ -55,7 +55,11 @@ const NOTICES: Record<Exclude<Notice, null>, string> = {
 
 const JOIN_HREF = "/join";
 
-export const Join: FC<{ inviteUrl: string; widgetUrl: string | null }> = ({ inviteUrl, widgetUrl }) => (
+export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null }> = ({
+  inviteUrl,
+  widgetUrl,
+  next,
+}) => (
   <Layout title="Join — Together We Own" canonical={undefined}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
@@ -71,7 +75,13 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null }> = ({ invi
           Prefer the manual way? The invite link is right below.
         </p>
         <p>
-          <a class="btn" href="/join/discord" data-testid="join-oneclick">Join with Discord</a>{" "}
+          <a
+            class="btn"
+            href={next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord"}
+            data-testid="join-oneclick"
+          >
+            Join with Discord
+          </a>{" "}
           <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
         </p>
         {widgetUrl ? (
@@ -82,6 +92,7 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null }> = ({ invi
             height="500"
             sandbox="allow-scripts allow-same-origin"
             loading="lazy"
+            referrerpolicy="no-referrer"
             data-testid="join-widget"
           />
         ) : (

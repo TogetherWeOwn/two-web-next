@@ -19,6 +19,7 @@ import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord
 import { dbPing, hyperdriveQuery } from "./db/ping";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import type { Env, Session } from "./env";
+import { inviteDestination } from "./invite";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
@@ -62,32 +63,9 @@ app.use(
   }),
 );
 
-// The last resort, hardcoded on purpose (ports two-web DiscordInviteController::FALLBACK_INVITE).
-// The WEB-HOMEPAGE campaign code: never expires, unlimited uses, so the join button has an invite
-// that cannot rot and web arrivals attribute to the website. An invite code is not a secret: it is
-// a public join link that grants nothing but membership of a server anyone can ask to join.
-export const FALLBACK_INVITE = "https://discord.gg/4GwEDNRTtx";
-
-const DISCORD_HOSTS = new Set(["discord.gg", "discord.com"]);
-
-function landsInDiscord(url: string): boolean {
-  let parts: URL;
-  try {
-    parts = new URL(url);
-  } catch {
-    return false;
-  }
-  return parts.protocol === "https:" && DISCORD_HOSTS.has(parts.hostname.toLowerCase());
-}
-
-// The configured invite if usable, the hardcoded one otherwise. Never throws: a member clicking
-// the join link is the single most valuable request this site serves, and an error page is worse
-// than an invite one rotation out of date.
-function inviteDestination(configured: string): string {
-  if (landsInDiscord(configured)) return configured;
-  console.error("services.discord.invite_url is unusable; serving the hardcoded fallback invite.");
-  return FALLBACK_INVITE;
-}
+// The Discord invite floor lives in ./invite so the join journey's recovery
+// page can share it (same file the /discord redirect uses).
+export { FALLBACK_INVITE, inviteDestination } from "./invite";
 
 const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 
@@ -307,7 +285,7 @@ app.get("/privacy", (c) => {
 registerJoinRoutes(app, { storeFor, issueSession }, {
   joinPage: (c, props) => {
     c.header("cache-control", "public, max-age=3600");
-    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} />);
+    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} />);
   },
   recovery: (c, props, status = 200) => {
     c.header("cache-control", "no-store, private");

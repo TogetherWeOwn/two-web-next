@@ -21,6 +21,13 @@ async function withGoing(db: Db, rows: (typeof events.$inferSelect)[]): Promise<
   return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
 }
 
+/** Title/description substring match; SQL wildcards in the query match themselves. */
+export function searchCondition(q: string | null): SQL | undefined {
+  if (!q) return undefined;
+  const term = `%${escapeLikeTerm(q)}%`;
+  return or(ilike(events.title, term), ilike(events.description, term));
+}
+
 /**
  * The EventsCalendar visibility clause (legacy `visible()`): drafts are
  * invisible to non-moderators — inside a search too, so a member searching a
@@ -36,11 +43,8 @@ export interface CalendarReadOpts {
 function calendarVisible(opts: CalendarReadOpts): SQL | undefined {
   const clauses: SQL[] = [];
   if (!opts.includeDrafts) clauses.push(sql`${events.status} != 'draft'`);
-  const q = opts.search?.trim() ?? "";
-  if (q !== "") {
-    const term = `%${escapeLikeTerm(q)}%`;
-    clauses.push(or(ilike(events.title, term), ilike(events.description, term))!);
-  }
+  const condition = searchCondition(opts.search?.trim() ?? null);
+  if (condition) clauses.push(condition);
   return clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : and(...clauses);
 }
 
@@ -83,8 +87,8 @@ export async function listCalendarPast(
 }
 
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
-export async function listPast(db: Db, page: number, now = new Date()): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number }> {
-  const archived = or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now)));
+export async function listPast(db: Db, page: number, now = new Date(), q: string | null = null): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number }> {
+  const archived = and(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))), searchCondition(q));
   const [total] = await db.select({ n: count() }).from(events).where(archived);
   const rows = await db
     .select()

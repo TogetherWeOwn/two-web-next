@@ -8,6 +8,7 @@ import { NotFoundError, createEvent, getEvent, transitionEvent, updateEvent } fr
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
+import { matchQuery, recordSearch } from "./search-log";
 import { discordEventsSource } from "./discord-transients";
 import {
   calendarEmptyState,
@@ -97,11 +98,12 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // may not contain the matches reads as "no results"); an unknown view
     // keeps the current one, which for a fresh URL means the default list.
     const q = c.req.query("q") ?? "";
-    const searching = q.trim() !== "";
+    const match = matchQuery(q);
+    const searching = match !== null;
     const view = searching ? "list" : (parseCalendarView(c.req.query("view")) ?? "list");
     const past = c.req.query("past") === "1";
 
-    const opts = { includeDrafts: session?.moderator ?? false, search: q };
+    const opts = { includeDrafts: session?.moderator ?? false, search: match };
     const localUpcoming = await listUpcoming(db, now, opts);
     const localPast = await listCalendarPast(db, now, opts);
 
@@ -114,7 +116,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // Probe only candidate identities, without search/draft/time/pagination
     // predicates. A filtered canonical row must never become a stale transient.
     const persistedIds = await persistedDiscordIds(db, discordRows.map((t) => t.discordId));
-    const term = q.trim().toLowerCase();
+    const term = (match ?? "").toLowerCase();
     const transients = dedupeTransients(discordRows, persistedIds).filter((t) =>
       (t.endsAt === null || t.endsAt >= now) &&
       (term === "" || t.title.toLowerCase().includes(term) || (t.description ?? "").toLowerCase().includes(term)),
@@ -144,7 +146,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // One structured line per rendered search: normalized query + visible
     // count, no identity (legacy EventSearchLogger, TOG-8400). Fail-open.
     if (searching) {
-      const entry = eventSearchLogEntry(q, upcoming.length + (past || searching ? localPast.length : 0));
+      const visibleCount = upcoming.length + localPast.length;
+      await recordSearch(db, q, visibleCount);
+      const entry = eventSearchLogEntry(match ?? "", visibleCount);
       if (entry) {
         try {
           console.info("event_search", JSON.stringify(entry));
@@ -154,7 +158,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       }
     }
 
-    c.header("cache-control", session ? "private, no-store" : "public, max-age=60");
+    // Search analytics must run per request, not only on shared-cache misses.
+    c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
+    if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
     return c.html(
       <EventsCalendarPage

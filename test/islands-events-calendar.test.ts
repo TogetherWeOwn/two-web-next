@@ -127,6 +127,7 @@ function calendar(
   extraEnv: Record<string, unknown> = {},
 ) {
   const queries: { sql: string; params: unknown[] }[] = [];
+  const logs: { normalizedQuery: string; resultCount: number }[] = [];
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
   const encode = (row: typeof events.$inferSelect) =>
     columns.map((k) => {
@@ -153,8 +154,15 @@ function calendar(
     if (sql.includes("limit")) rows = rows.slice(0, Number(params.at(-1)));
     return { rows: rows.map(encode) };
   });
+  // pg-proxy has no transactions; model the analytics write without a real DB.
+  Object.assign(db, {
+    transaction: async (fn: (tx: Db) => Promise<void>) => fn({
+      execute: async () => {},
+      insert: () => ({ values: async (row: (typeof logs)[number]) => { logs.push(row); } }),
+    } as unknown as Db),
+  });
   const env = { ...baseEnv, ...extraEnv, ADMIN_DB: db as unknown as Db, DISCORD_EVENTS: source } as unknown as Env;
-  return { env, queries, request: (path: string, init?: RequestInit) => app.request(path, init, env) };
+  return { env, queries, logs, request: (path: string, init?: RequestInit) => app.request(path, init, env) };
 }
 
 async function moderatorCookie(env: Record<string, unknown>): Promise<string> {
@@ -611,6 +619,23 @@ describe("EventsCalendar SSR drift", () => {
     ended.endsAt = new Date(Date.UTC(2020, 0, 1, 2));
     const html = await (await calendar([local], [], okSource([transient("d1", new Date(Date.UTC(2030, 0, 1))), ended])).request("/events")).text();
     expect(cardKeys(html)).toEqual([local.eventKey]);
+  });
+
+  it("preserves main's persisted search analytics, no-store and NUL sanitization", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const src = calendar([eventRow({ title: "Chess  night" })], [], okSource());
+    const res = await src.request("/events?q=%20CHESS%20%20night%20");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, follow");
+    expect(await res.text()).toContain("Chess  night");
+    expect(src.logs).toEqual([{ normalizedQuery: "chess night", resultCount: 1 }]);
+    await src.request("/events?q=%00");
+    await src.request("/events?q=Chess%00%20%20night");
+    expect(src.logs).toEqual([
+      { normalizedQuery: "chess night", resultCount: 1 },
+      { normalizedQuery: "chess night", resultCount: 1 },
+    ]);
+    expect(src.queries.flatMap((q) => q.params).some((p) => typeof p === "string" && p.includes("\u0000"))).toBe(false);
   });
 
   it("logs a normalized search with the visible count and nothing else", async () => {

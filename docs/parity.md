@@ -63,7 +63,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 |---|---|---|
 | GoingCount (badge, `going-count-updated` broadcast, one count query) | ✅ contract + binder + 18 drift tests | W10 slice 1 ✅ |
 | RsvpButton (all states, honeypot swallow, throttle copy, focus) | re-spec ✅, needs W9 routes | W10 slice 2 ⛔, blocked by W9 |
-| EventsCalendar (list+grid one pass, `?q=` search + logging, month math, Discord transients) | re-spec ✅, needs W8 | W10 slice 3 ⛔, blocked by W8 |
+| EventsCalendar (list+grid one pass, `?q=` search + logging, month math, Discord transients) | re-spec ✅, needs W8 | server side (search + logging) ✅ TOG-10105; island UI W10 slice 3 |
 | PastEvents (20/page, canonicals, no RSVP controls) | re-spec ✅, needs W8 | W10 slice 4 ⛔, blocked by W8 |
 | MemberProfile (view/edit, PATCH validation, spam trap, focus) | re-spec ✅, needs W7 | W10 slice 5 ⛔, blocked by W7 |
 
@@ -77,7 +77,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | FeaturedContent resource (CRUD + publish window + live preview + safe delete) | pending | W11 🔶 (M4; verify: homepage render path) |
 | JoinAttempt resource (read-only viewer: outcome/source/request/discord-id) | pending | W12 📋 (M8) |
 | JoinFunnelStats widget (per-outcome counts, 60 s cache, no member data) | pending | W12 📋 (M8 funnel-stats) |
-| TopZeroResultSearches widget (normalized queries only) | pending — not named in W12 scope | W12 📋 (verify scope at build) |
+| TopZeroResultSearches widget (normalized queries only) | ✅ TOG-10105 (dashboard section, moderator gate) | W12 📋 (verify scope at build) |
 | Moderator admin guide + member-data docs | ops docs follow the rebuild | W11 🔶 / W12 📋 |
 
 ## 6. Jobs, queues, scheduler

@@ -167,6 +167,20 @@ export const rsvps = pgTable(
   (t) => [unique("rsvps_event_user_unique").on(t.eventId, t.userId), index("rsvps_user_id_idx").on(t.userId)],
 );
 
+// One rendered /events?q= search: normalized query + visible result count only.
+// No user id, session or IP by design (legacy EventSearchLog, TOG-8400); pruned
+// at 90 d by the W13 cron.
+export const eventSearchLogs = pgTable(
+  "event_search_logs",
+  {
+    id: serial("id").primaryKey(),
+    normalizedQuery: text("normalized_query").notNull(),
+    resultCount: integer("result_count").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("event_search_logs_zero_idx").on(t.resultCount, t.normalizedQuery), index("event_search_logs_occurred_at_idx").on(t.occurredAt)],
+);
+
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type FeaturedContent = typeof featuredContents.$inferSelect;
