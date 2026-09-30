@@ -13,7 +13,8 @@ import { createMemorySessionStore, hashToken, newSessionToken } from "../src/ses
 // about/faq/rules/privacy leaves (TOG-5310/8396/5147/8609/6853), the manifest
 // half of WebManifestTest (TOG-7677; icons live in N2), and the response
 // headers (TOG-7328/6770/8729 — four static headers + CSP sink presence +
-// staging X-Robots-Tag; the CSP shape itself belongs to TOG-10107).
+// staging X-Robots-Tag by serving host + pinned HSTS absence; the CSP shape
+// itself belongs to TOG-10107).
 // Event share tags and /events routes belong to W8; the W8 slice extends
 // the sitemap/share tables here.
 
@@ -121,6 +122,19 @@ describe("share meta (TOG-5624)", () => {
     tags(html, `${APP_URL}/join`, "Join Together We Own", "Approve once with Discord and we will add you to the server.");
   });
 
+  it("emits no double-slash canonical when APP_URL carries a trailing slash", async () => {
+    // APP_URL is an unconstrained binding; src/seo.ts canonicalUrl strips
+    // the slash so the canonical matches the sitemap and resolves 200.
+    const slashed = { ...env, APP_URL: `${APP_URL}/` };
+    const html = await (await app.request("/join", {}, slashed)).text();
+    expect(html).toContain(`<link rel="canonical" href="${APP_URL}/join"`);
+    expect(html).toContain(`<meta property="og:url" content="${APP_URL}/join"`);
+    expect(html).not.toContain("//join");
+    const home = await (await app.request("/", {}, slashed)).text();
+    expect(home).toContain(`<link rel="canonical" href="${APP_URL}/"`);
+    expect(home).not.toContain('href="https://next.example.test//"');
+  });
+
   it("keeps exactly one self-pointing canonical per tagged page", async () => {
     for (const [path, canonical] of [["/", `${APP_URL}/`], ["/join", `${APP_URL}/join`]] as const) {
       const html = await (await app.request(path, {}, env)).text();
@@ -156,7 +170,7 @@ describe("static leaves (DB-free floor)", () => {
     expect(html).toContain("Est. 1998");
   });
 
-  it("every page footers the leaf links, and the leaves are in the sitemap", async () => {
+  it("the home shell footers the leaf links, and the leaves are in the sitemap", async () => {
     const xml = await (await app.request("/sitemap_index.xml", {}, env)).text();
     for (const leaf of ["about", "faq", "rules", "privacy"]) {
       expect(xml).toContain(`<loc>${APP_URL}/${leaf}</loc>`);
@@ -269,6 +283,15 @@ describe("profile share tags (TOG-6793)", () => {
     expect(html.match(/rel="canonical"/g)).toHaveLength(1);
   });
 
+  it("emits no double-slash member canonical when APP_URL carries a trailing slash", async () => {
+    const { app: profiles, sessions } = profileHarness();
+    const cookie = await cookieFor(sessions, { userId: "100000000000000002", username: "bob" });
+    const slashed = { ...env, APP_URL: `${APP_URL}/` };
+    const html = await (await profiles.request(`/members/${MEMBER.userId}`, { headers: { cookie } }, slashed)).text();
+    expect(html).toContain(`<link rel="canonical" href="${APP_URL}/members/${MEMBER.userId}"`);
+    expect(html).not.toContain("//members/");
+  });
+
   it("leaks no share tags to logged-out visitors: the redirect body carries no canonical or tags", async () => {
     const { app: profiles } = profileHarness();
     for (const path of [`/members/${MEMBER.userId}`, "/profile"]) {
@@ -326,8 +349,39 @@ describe("security headers per route class", () => {
     expect(robotsTagFor("https://togetherweown.com")).toBeNull();
     expect(robotsTagFor(APP_URL)).toBe("noindex, nofollow");
     expect((await app.request("/", {}, env)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
-    const apex = await app.request("/", {}, { ...env, APP_URL: "https://togetherweown.com" });
+    // Absolute URL: the in-process default host is localhost, so a bare "/"
+    // would conflate config and serving host. Apex config + apex serving host
+    // is the only clean combination.
+    const apex = await app.request("https://togetherweown.com/", {}, { ...env, APP_URL: "https://togetherweown.com" });
     expect(apex.headers.get("X-Robots-Tag")).toBeNull();
+  });
+
+  it("noindexes by the serving host, not just APP_URL: an apex build on a preview alias stays noindex", async () => {
+    // Unit: config-only call keeps the old verdict; a serving host refines it.
+    expect(robotsTagFor("https://togetherweown.com", "togetherweown.com")).toBeNull();
+    expect(robotsTagFor("https://togetherweown.com", "preview.example.test")).toBe("noindex, nofollow");
+    expect(robotsTagFor("not-a-url", "togetherweown.com")).toBe("noindex, nofollow");
+    // Request-level: APP_URL is apex, but the Worker answers on other hosts.
+    const apex = { ...env, APP_URL: "https://togetherweown.com" };
+    for (const url of ["https://preview.example.test/", "https://two-web-next.example.workers.dev/", "http://localhost/"]) {
+      const res = await app.request(url, {}, apex);
+      expect(res.status, url).toBe(200);
+      expect(res.headers.get("X-Robots-Tag"), url).toBe("noindex, nofollow");
+    }
+    const prod = await app.request("https://togetherweown.com/", {}, apex);
+    expect(prod.headers.get("X-Robots-Tag")).toBeNull();
+    // JSON stays untagged even on a preview host.
+    const json = await app.request("https://preview.example.test/health", {}, apex);
+    expect(json.headers.get("X-Robots-Tag")).toBeNull();
+  });
+
+  it("never emits Strict-Transport-Security from the app: the edge owns HSTS (TOG-8729)", async () => {
+    // Hono defaults strictTransportSecurity on; src/index.tsx explicitly
+    // disables it, so a local dev server can never pin a machine to HTTPS.
+    for (const path of ["/", "/about", "/health"]) {
+      const res = await app.request(path, {}, env);
+      expect(res.headers.get("Strict-Transport-Security"), path).toBeNull();
+    }
   });
 
   it("the mounted admin dispatch carries the global headers even when it fails closed", async () => {
@@ -408,8 +462,9 @@ describe("URL freeze + no soft 404s", () => {
 // | tests/Feature/HomeUpcomingEventsTest.php             | W8               |
 // | tests/Feature/FeaturedContentOnHomePageTest.php      | W8               |
 // * The nginx template has no Workers equivalent: the edge (Cloudflare)
-// owns HSTS there, so the port pins the app-side values + documents the
-// edge ownership instead of asserting on a file that does not exist.
+// owns HSTS there, so this card explicitly disables Hono's default HSTS
+// (strictTransportSecurity: false in src/index.tsx) and pins its absence
+// instead of asserting on a file that does not exist.
 describe("mapping table", () => {
   it("is documentation, not code", () => {
     expect(true).toBe(true);

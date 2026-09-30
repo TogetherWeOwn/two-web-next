@@ -1,6 +1,7 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Counts } from "./counts";
 import type { Session } from "./env";
+import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
 
@@ -44,9 +45,11 @@ export const Layout: FC<
   </html>
 );
 
-// The site footer carries the static-leaf links on every page (ports the
-// legacy home footer: About, FAQ, House rules, Privacy). One component so a
-// new leaf cannot ship without a way back to it.
+// The site footer carries the static-leaf links on the funnel + leaf + error
+// shells (home, join, recovery, about/faq/rules/privacy, branded errors —
+// ports the legacy home footer: About, FAQ, House rules, Privacy). Admin,
+// events and profile shells intentionally keep their own chrome. One
+// component so a new leaf cannot ship without a way back to it.
 export const SiteFooter: FC = () => (
   <footer>
     Together We Own · adult gaming community · founded 1998
@@ -78,7 +81,7 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
   next,
   appUrl,
 }) => (
-  <Layout title="Join Together We Own" canonical={`${appUrl}/join`} shareDescription={JOIN_INTRO}>
+  <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
       <nav>
@@ -159,7 +162,7 @@ export const Home: FC<{
 }> = ({ session, notice, inviteUrl, appUrl, counts }) => (
   <Layout
     title="Together We Own — the lobby is open"
-    canonical={`${appUrl}/`}
+    canonical={canonicalUrl(appUrl, "/")}
     shareDescription="We spent most of our life private. Now you can just turn up."
   >
     <header class="bar">

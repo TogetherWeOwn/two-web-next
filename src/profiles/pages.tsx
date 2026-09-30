@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
 import { Layout } from "../pages";
+import { canonicalUrl } from "../seo";
 import {
   MEMBER_PROFILE_ISLAND,
   MOUNT_ATTR,
@@ -41,7 +42,7 @@ export const ProfilePage: FC<{
   return (
     <Layout
       title={`${member.username} — Member profile`}
-      canonical={`${appUrl}/members/${member.id}`}
+      canonical={canonicalUrl(appUrl, `/members/${member.id}`)}
       shareDescription={PROFILE_SHARE_DESCRIPTION}
       robots="noindex, nofollow"
     >

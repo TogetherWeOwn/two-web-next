@@ -54,13 +54,18 @@ const CSP_REPORT_ENDPOINT = "/csp-reports";
 // leaves and the mounted admin/profile sub-apps inherit it from the outer
 // dispatch. The CSP shape + report sink belong to the CSP-report slice
 // (TOG-10107) and are configured above; the staging X-Robots-Tag lives in
-// the robotsTag middleware below. Strict-Transport-Security is deliberately
-// absent: the edge owns it (TOG-8729).
+// the robotsTag middleware below. Strict-Transport-Security is explicitly
+// disabled here (strictTransportSecurity: false below): the edge owns it
+// (TOG-8729) — Hono defaults it on, and emitting it from the app would pin
+// local dev machines to HTTPS. The absence is pinned in test/seo-headers.
 // One ALL /* registration (the exposure inventory in
 // test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
 // plus the staging X-Robots-Tag composed into a single wrapper. Mounted
 // sub-apps inherit both from this outer dispatch.
 const staticSecurityHeaders = secureHeaders({
+  // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
+  // machines to HTTPS, so the Hono default is explicitly off.
+  strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     imgSrc: ["'self'", "https://cdn.discordapp.com"],
