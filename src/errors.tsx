@@ -20,11 +20,11 @@ const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?
   <Layout title={`${title} — Together We Own`} robots={NOINDEX}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a class="btn" href={headerCta.href}>{headerCta.label}</a>
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       <section aria-labelledby="error-heading">
         <p class="strap" aria-hidden="true">{code}</p>
         <h1 id="error-heading">{title}</h1>

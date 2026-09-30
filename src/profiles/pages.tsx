@@ -48,11 +48,11 @@ export const ProfilePage: FC<{
     >
       <header class="bar">
         <a class="brand" href="/">TWO</a>
-        <nav>
+        <nav aria-label="Primary">
           <a class="btn" href="/profile">Your profile</a>
         </nav>
       </header>
-      <main>
+      <main id="main" tabindex={-1}>
         <section aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
           {img ? (
             <img data-testid={PROFILE_AVATAR_TESTID} src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" />
