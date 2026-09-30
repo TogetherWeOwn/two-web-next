@@ -51,6 +51,7 @@ describe("featured image policy (local fixtures)", () => {
     "localhost", "a.localhost", "internal", "a.local", "a.internal", "a.lan", "a.home", "a.test",
     "a.invalid", "a.example", "a.onion", "a.arpa",
     "localdomain", "localhost.localdomain", "cdn.localhost.localdomain", "alt", "images.alt", "cdn.images.alt",
+    "corp", "images.corp", "cdn.images.corp", "mail", "images.mail", "cdn.images.mail",
     "127.0.0.1", "127.1", "2130706433", "0x7f000001", "0177.0.0.1",
     "0.0.0.0", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "8.8.8.8",
     "[::1]", "[fc00::1]", "[::ffff:127.0.0.1]", "[2001:4860:4860::8888]",

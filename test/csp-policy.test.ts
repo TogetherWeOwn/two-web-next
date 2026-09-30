@@ -57,7 +57,7 @@ describe("route CSP (local fixtures, no DB)", () => {
       .toBe("'self' https://cdn.discordapp.com");
   });
 
-  it.each(["localdomain", "localhost.localdomain", "cdn.localhost.localdomain", "alt", "images.alt", "cdn.images.alt"])("omits configured reserved namespace %s from CSP", async (host) => {
+  it.each(["localdomain", "localhost.localdomain", "cdn.localhost.localdomain", "alt", "images.alt", "cdn.images.alt", "corp", "images.corp", "cdn.images.corp", "mail", "images.mail", "cdn.images.mail"])("omits configured reserved namespace %s from CSP", async (host) => {
     const configured = { ...env, FEATURED_IMAGE_HOSTS: `images.unsplash.com,${host}` };
     for (const path of ["/join", "/about"]) {
       const res = await app.request(path, {}, configured);

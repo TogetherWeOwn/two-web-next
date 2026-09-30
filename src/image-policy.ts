@@ -2,7 +2,7 @@
 // wildcards or user-supplied CSP source expressions. Discord avatars retain
 // their existing CDN permission even when no featured hosts are configured.
 const DISCORD_IMAGE_HOST = "cdn.discordapp.com";
-const PRIVATE_SUFFIXES = ["localhost", "localdomain", "local", "internal", "lan", "home", "test", "invalid", "example", "onion", "arpa", "alt"];
+const PRIVATE_SUFFIXES = ["localhost", "localdomain", "local", "internal", "lan", "home", "corp", "mail", "test", "invalid", "example", "onion", "arpa", "alt"];
 
 function isPublicHostname(host: string): boolean {
   if (host.length > 253) return false;

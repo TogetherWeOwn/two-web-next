@@ -69,7 +69,7 @@ describe("featured create/edit image validation (local fixtures)", () => {
       expect(updateFeatured).not.toHaveBeenCalled();
     });
 
-    it.each(["localdomain", "localhost.localdomain", "cdn.localhost.localdomain", "alt", "images.alt", "cdn.images.alt"])(`${path} rejects configured reserved namespace %s without writing`, async (host) => {
+    it.each(["localdomain", "localhost.localdomain", "cdn.localhost.localdomain", "alt", "images.alt", "cdn.images.alt", "corp", "images.corp", "cdn.images.corp", "mail", "images.mail", "cdn.images.mail"])(`${path} rejects configured reserved namespace %s without writing`, async (host) => {
       const res = await post(path, `https://${host}/photo.png`, { ...env, FEATURED_IMAGE_HOSTS: host });
       expect(res.status).toBe(422);
       const html = await res.text();
