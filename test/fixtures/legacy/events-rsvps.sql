@@ -5,7 +5,8 @@
 -- 2026_09_28_000100_add_recurrence_to_events_table.php,
 -- 2026_09_28_000100_add_discord_sync_failure_to_events_table.php,
 -- 2026_09_29_000200_add_rsvp_open_to_events_table.php,
--- 2026_08_19_000300_create_rsvps_table.php.
+-- 2026_08_19_000300_create_rsvps_table.php,
+-- 2026_09_27_000001_create_agent_event_grant_tables.php (grant/event ownership only).
 CREATE TABLE legacy.users (
     id bigserial PRIMARY KEY,
     discord_id varchar(255) NOT NULL UNIQUE,
@@ -17,6 +18,19 @@ CREATE TABLE legacy.users (
     created_at timestamp,
     updated_at timestamp
 );
+CREATE TABLE legacy.agent_event_grants (
+    id uuid PRIMARY KEY,
+    agent_id varchar(255) NOT NULL,
+    company_id varchar(255) NOT NULL,
+    guild_id varchar(255) NOT NULL,
+    verifier_hash varchar(64) NOT NULL UNIQUE,
+    expires_at timestamp,
+    disabled_at timestamp,
+    max_events integer NOT NULL DEFAULT 1,
+    created_at timestamp,
+    updated_at timestamp
+);
+CREATE INDEX legacy_grants_agent ON legacy.agent_event_grants(agent_id);
 CREATE TABLE legacy.events (
     id bigserial PRIMARY KEY,
     title varchar(255) NOT NULL,
@@ -40,7 +54,10 @@ CREATE TABLE legacy.events (
     recurrence_index integer,
     discord_sync_failed_at timestamp,
     discord_sync_failure_code varchar(64),
-    rsvp_open boolean NOT NULL DEFAULT true
+    rsvp_open boolean NOT NULL DEFAULT true,
+    agent_grant_id uuid UNIQUE REFERENCES legacy.agent_event_grants(id) ON DELETE SET NULL,
+    proof_marker varchar(255) UNIQUE,
+    agent_version integer NOT NULL DEFAULT 0
 );
 CREATE INDEX legacy_events_status_starts_at ON legacy.events(status, starts_at);
 CREATE INDEX legacy_events_parent ON legacy.events(parent_event_id);

@@ -9,7 +9,7 @@ const eventColumns = [
   "recurrence_frequency", "recurrence_count", "recurrence_ends_on",
   "parent_event_id", "recurrence_index", "created_at", "updated_at",
 ];
-const rsvpColumns = ["event_id", "user_id", "status", "synced_to_discord_at", "created_at", "updated_at"];
+const rsvpColumns = ["event_id", "user_id", "legacy_id", "status", "synced_to_discord_at", "created_at", "updated_at"];
 const timestampColumns = new Set([
   "starts_at", "ends_at", "discord_sync_failed_at", "synced_to_discord_at", "created_at", "updated_at",
 ]);
@@ -57,7 +57,7 @@ function validateEvent(event) {
   for (const column of ["starts_at", "ends_at", "created_at", "updated_at"]) {
     if (!event[column] || !Number.isFinite(Date.parse(event[column]))) throw new Error("Missing/invalid legacy event timestamp.");
   }
-  if (Date.parse(event.ends_at) <= Date.parse(event.starts_at)) throw new Error("Invalid legacy event time range.");
+  if (event.ends_at <= event.starts_at) throw new Error("Invalid legacy event time range.");
   try { new Intl.DateTimeFormat("en", { timeZone: event.timezone }); }
   catch { throw new Error("Invalid legacy event timezone."); }
   if (event.recurrence_frequency !== null && event.recurrence_frequency !== "weekly") {
@@ -69,8 +69,8 @@ function equalRows(existing, incoming, columns) {
   return columns.every((column) => {
     const a = existing[column], b = incoming[column];
     if (a === null || b === null) return a === b;
-    if (timestampColumns.has(column)) return new Date(a).getTime() === new Date(b).getTime();
-    if (column === "recurrence_ends_on") return new Date(a).toISOString().slice(0, 10) === b;
+    // Timestamp projections are UTC text with all six PostgreSQL fractional digits.
+    if (timestampColumns.has(column) || column === "recurrence_ends_on") return a === b;
     return String(a) === String(b);
   });
 }
@@ -80,12 +80,34 @@ async function upsert(sql, table, columns, keys, row) {
     .map((column) => sql`${sql(column)} = excluded.${sql(column)}`);
   const sets = assignments.reduce((a, b) => sql`${a}, ${b}`);
   const conflict = keys.map((key) => sql(key)).reduce((a, b) => sql`${a}, ${b}`);
+  // Force text parameters: the driver's timestamp serializer also truncates string inputs via Date.
+  const values = { ...row };
+  for (const column of columns) {
+    if (timestampColumns.has(column)) values[column] = sql`${row[column]}::text::timestamptz`;
+  }
   const [saved] = await sql`
-    insert into ${sql(table)} ${sql(row, columns)}
+    insert into ${sql(table)} ${sql(values, columns)}
     on conflict (${conflict}) do update set ${sets}
     returning id
   `;
   return String(saved.id);
+}
+
+// postgres.js returns timestamp Dates at millisecond precision; project text instead.
+// https://www.postgresql.org/docs/17/functions-formatting.html (US = six digits)
+function comparableColumns(sql, columns) {
+  return columns.map((column) => timestampColumns.has(column)
+    ? sql`to_char(${sql(column)} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ${sql(column)}`
+    : column === "recurrence_ends_on"
+      ? sql`${sql(column)}::date::text as ${sql(column)}`
+      : sql(column)).reduce((a, b) => sql`${a}, ${b}`);
+}
+
+class UnsupportedOwnershipError extends Error {
+  constructor(count) {
+    super("Unsupported legacy agent ownership; no destination writes.");
+    this.count = count;
+  }
 }
 
 const counts = () => ({ read: 0, inserted: 0, updated: 0, unchanged: 0, orphaned: 0 });
@@ -95,20 +117,27 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
   return legacy.begin("isolation level repeatable read read only", async (source) => {
     await source`set local timezone = 'UTC'`;
     const events = await source`
-      select id::text, event_key, title, game, description, starts_at::text, ends_at::text,
+      select id::text, event_key, title, game, description,
+        to_char(starts_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as starts_at,
+        to_char(ends_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ends_at,
         timezone, location, capacity, status, rsvp_open, discord_event_id,
-        (discord_sync_failed_at at time zone 'UTC')::text as discord_sync_failed_at,
+        to_char(discord_sync_failed_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as discord_sync_failed_at,
         discord_sync_failure_code, created_by::text, recurrence_frequency,
         recurrence_count, recurrence_ends_on::text, parent_event_id::text, recurrence_index,
-        (created_at at time zone 'UTC')::text as created_at,
-        (updated_at at time zone 'UTC')::text as updated_at
+        to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
+        to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as updated_at,
+        agent_grant_id, proof_marker, agent_version
       from events order by id
     `;
+    // Grants are deliberately not migrated. Even a deleted grant can leave proof/version attribution.
+    const unsupported = events.filter((event) => event.agent_grant_id !== null
+      || event.proof_marker !== null || event.agent_version !== 0);
+    if (unsupported.length) throw new UnsupportedOwnershipError(unsupported.length);
     const rsvps = await source`
       select r.id::text, r.event_id::text, u.discord_id, r.status,
-        (r.synced_to_discord_at at time zone 'UTC')::text as synced_to_discord_at,
-        (r.created_at at time zone 'UTC')::text as created_at,
-        (r.updated_at at time zone 'UTC')::text as updated_at
+        to_char(r.synced_to_discord_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as synced_to_discord_at,
+        to_char(r.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
+        to_char(r.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as updated_at
       from rsvps r left join users u on u.id = r.user_id order by r.id
     `;
     const creators = await source`select id::text, discord_id from users where id in (select created_by from events)`;
@@ -130,7 +159,7 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
           ...event, created_by: creator ?? null,
           parent_event_id: event.parent_event_id === null ? null : savedEvents.get(event.parent_event_id),
         };
-        const [existing] = await sql`select * from events where event_key = ${event.event_key}`;
+        const [existing] = await sql`select id, ${comparableColumns(sql, eventColumns)} from events where event_key = ${event.event_key}`;
         const operation = !existing ? "inserted" : equalRows(existing, row, eventColumns) ? "unchanged" : "updated";
         report.events.read++;
         report.events[operation]++;
@@ -150,9 +179,12 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
         if (!eventId) report.unresolved.rsvpEvents++;
         if (!userId) report.unresolved.rsvpUsers++;
         if (!eventId || !userId) { report.rsvps.orphaned++; continue; }
-        const row = { ...rsvp, event_id: eventId, user_id: userId };
+        const row = { ...rsvp, event_id: eventId, user_id: userId, legacy_id: rsvp.id };
         const [existing] = eventId.startsWith("new:") ? []
-          : await sql`select * from rsvps where event_id = ${eventId} and user_id = ${userId}`;
+          : await sql`select id, ${comparableColumns(sql, rsvpColumns)} from rsvps where event_id = ${eventId} and user_id = ${userId}`;
+        if (existing && existing.legacy_id !== null && String(existing.legacy_id) !== rsvp.id) {
+          throw new Error("Conflicting legacy RSVP identity.");
+        }
         const operation = !existing ? "inserted" : equalRows(existing, row, rsvpColumns) ? "unchanged" : "updated";
         report.rsvps[operation]++;
         if (!dryRun && operation !== "unchanged") await upsert(sql, "rsvps", rsvpColumns, ["event_id", "user_id"], row);
@@ -188,9 +220,13 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     const report = await importEventsRsvps(legacy, target, options);
     console.log(JSON.stringify(report));
     return reportExitCode(report);
-  } catch {
+  } catch (error) {
     // Driver errors can carry URLs, SQL parameters, or member data. Never echo them.
-    console.error("events-rsvps: import failed; verify flags, env URLs, schema, source validity and database access. Outcome unconfirmed; inspect destination before retry.");
+    if (error instanceof UnsupportedOwnershipError) {
+      console.error(`events-rsvps: rejected ${error.count} agent-attributed events; grants/proofs are unsupported. No destination writes.`);
+    } else {
+      console.error("events-rsvps: import failed; verify flags, env URLs, schema, source validity and database access. Outcome unconfirmed; inspect destination before retry.");
+    }
     return 1;
   } finally {
     await Promise.all([legacy, target].filter(Boolean).map((sql) => sql.end({ timeout: 2 }).catch(() => {})));

@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -161,6 +161,9 @@ export const rsvps = pgTable(
       .notNull()
       .references(() => events.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
+    // Source tie-break survives orphan recovery; native answers leave it null.
+    // FIFO: created_at, coalesce(legacy_id, id), id. Do not JSON-serialize this bigint.
+    legacyId: bigint("legacy_id", { mode: "bigint" }),
     // going | maybe | not_going | waitlisted (src/islands/contracts.ts RSVP_STATUSES).
     status: text("status").notNull(),
     // Null until the Discord mirror has caught up with this answer. Every write resets it

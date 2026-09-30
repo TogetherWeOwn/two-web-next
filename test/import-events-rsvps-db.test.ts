@@ -121,6 +121,64 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     expect(await target`select user_id from rsvps where event_id = 500`).toMatchObject([{ user_id: '100000000000000903' }]);
   });
 
+  it("preserves equal-time FIFO when the earlier member recovers after the later one", async () => {
+    await legacy`update rsvps set status = 'waitlisted', created_at = '2026-09-30 11:01:00' where id in (70, 71)`;
+    await target`delete from users where id = '100000000000000901'`;
+    const first = await importEventsRsvps(legacy, target, { dryRun: false });
+    expect(first.rsvps.orphaned).toBe(3);
+    const later = await target`select id, legacy_id from rsvps`;
+    expect(later).toMatchObject([{ legacy_id: '71' }]);
+    await target`insert into users (id, username) values
+      ('100000000000000901', 'Synthetic recovered earlier'), ('100000000000000903', 'Synthetic recovered parent RSVP')`;
+    const recovered = await importEventsRsvps(legacy, target, { dryRun: false });
+    expect(reportExitCode(recovered)).toBe(0);
+    const ordered = await target`select r.user_id, r.legacy_id from rsvps r join events e on e.id = r.event_id
+      where e.event_key = '01K00000000000000000000010' and r.status = 'waitlisted'
+      order by r.created_at, coalesce(r.legacy_id, r.id), r.id`;
+    expect(ordered.map((row) => row.user_id)).toEqual(['100000000000000901', '100000000000000902']);
+    expect(ordered.map((row) => row.legacy_id)).toEqual(['70', '71']);
+    expect((await target`select id from rsvps where legacy_id = 71`)[0]!.id).toBe(later[0]!.id);
+    const replay = await importEventsRsvps(legacy, target, { dryRun: false });
+    expect(replay.rsvps).toMatchObject({ unchanged: 4, inserted: 0, updated: 0 });
+  });
+
+  it("backfills exact bigint ordering on existing pairs without renumbering or deleting native rows", async () => {
+    const earlierId = '9007199254740993', laterId = '9007199254740994';
+    await legacy`update rsvps set id = ${earlierId}, status = 'waitlisted', created_at = '2026-09-30 11:01:00' where id = 70`;
+    await legacy`update rsvps set id = ${laterId}, status = 'waitlisted', created_at = '2026-09-30 11:01:00' where id = 71`;
+    await target`insert into events (id, event_key, title, starts_at, ends_at)
+      values (600, '01K00000000000000000000010', 'Synthetic existing child', '2026-10-25T20:00:00Z', '2026-10-25T22:00:00Z')`;
+    const [existing] = await target`insert into rsvps (event_id, user_id, status, created_at)
+      values (600, '100000000000000902', 'waitlisted', '2026-09-30 11:01:00+00') returning id`;
+    const [native] = await target`insert into rsvps (event_id, user_id, status, created_at)
+      values (600, 'synthetic-native', 'waitlisted', '2026-09-30 11:00:00+00') returning *`;
+    const dry = await importEventsRsvps(legacy, target);
+    expect(dry.rsvps.updated).toBe(1);
+    expect((await target`select legacy_id from rsvps where id = ${existing!.id}`)[0]!.legacy_id).toBeNull();
+    await importEventsRsvps(legacy, target, { dryRun: false });
+    const ordered = await target`select user_id, legacy_id from rsvps where event_id = 600
+      order by created_at, coalesce(legacy_id, id), id`;
+    expect(ordered.map((row) => row.user_id)).toEqual(['synthetic-native', '100000000000000901', '100000000000000902']);
+    expect(ordered.map((row) => row.legacy_id)).toEqual([null, earlierId, laterId]);
+    expect((await target`select id from rsvps where user_id = '100000000000000902'`)[0]!.id).toBe(existing!.id);
+    expect((await target`select * from rsvps where id = ${native!.id}`)[0]).toEqual(native);
+    const replay = await importEventsRsvps(legacy, target, { dryRun: false });
+    expect(replay.rsvps).toMatchObject({ unchanged: 3, updated: 0 });
+  });
+
+  it("rejects conflicting source identity without partially updating the destination", async () => {
+    await importEventsRsvps(legacy, target, { dryRun: false });
+    await legacy`update events set title = 'Synthetic must roll back' where id = 30`;
+    await legacy`update rsvps set id = 800 where id = 70`;
+    const before = await target`select * from events order by id`;
+    const beforeRsvps = await target`select * from rsvps order by id`;
+    for (const dryRun of [true, false]) {
+      await expect(importEventsRsvps(legacy, target, { dryRun })).rejects.toThrow('Conflicting legacy RSVP identity');
+    }
+    expect(await target`select * from events order by id`).toEqual(before);
+    expect(await target`select * from rsvps order by id`).toEqual(beforeRsvps);
+  });
+
   it("reports dangling legacy RSVP references and missing creators explicitly", async () => {
     await legacy`alter table rsvps drop constraint rsvps_event_id_fkey`;
     await legacy`alter table rsvps drop constraint rsvps_user_id_fkey`;
@@ -130,6 +188,69 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     expect(report.unresolved).toEqual({ creators: 1, rsvpEvents: 1, rsvpUsers: 1 });
     expect(report.rsvps.orphaned).toBe(1);
     expect((await target`select created_by from events where id = 500`)[0]!.created_by).toBeNull();
+  });
+
+  it.each(["grant", "deleted-grant-proof", "version"])("rejects %s ownership before any destination writes", async (attribution) => {
+    const before = await target`select * from events order by id`;
+    if (attribution === "version") {
+      await legacy`update events set agent_version = 3 where id = 30`;
+    } else {
+      const grantId = "00000000-0000-4000-8000-000000000001";
+      await legacy`insert into agent_event_grants (id, agent_id, company_id, guild_id, verifier_hash)
+        values (${grantId}, 'synthetic-agent', 'synthetic-company', 'synthetic-guild', ${"0".repeat(64)})`;
+      await legacy`update events set agent_grant_id = ${grantId}, created_by = null,
+        proof_marker = ${attribution === "deleted-grant-proof" ? "synthetic-proof" : null} where id = 30`;
+      if (attribution === "deleted-grant-proof") {
+        await legacy`delete from agent_event_grants where id = ${grantId}`;
+        expect((await legacy`select agent_grant_id from events where id = 30`)[0]!.agent_grant_id).toBeNull();
+      }
+    }
+    // The rejected series also has children and RSVPs; none may be flattened or detached.
+    for (const dryRun of [true, false]) {
+      await expect(importEventsRsvps(legacy, target, { dryRun })).rejects.toThrow("Unsupported legacy agent ownership");
+    }
+    expect(await target`select * from events order by id`).toEqual(before);
+    expect(await target`select * from rsvps`).toHaveLength(0);
+    expect(await target`select * from agent_events`).toHaveLength(0);
+    expect(await target`select * from agent_event_grants`).toHaveLength(0);
+  });
+
+  it.each([
+    ["events", "starts_at"], ["events", "ends_at"], ["events", "discord_sync_failed_at"],
+    ["events", "created_at"], ["events", "updated_at"], ["rsvps", "synced_to_discord_at"],
+    ["rsvps", "created_at"], ["rsvps", "updated_at"],
+  ])("repairs submillisecond mismatch in %s.%s and then reports unchanged", async (table, column) => {
+    await importEventsRsvps(legacy, target, { dryRun: false });
+    await target`update ${target(table)} set ${target(column)} = ${target(column)} + interval '0.0001 seconds'`;
+    const dry = await importEventsRsvps(legacy, target);
+    const repaired = await importEventsRsvps(legacy, target, { dryRun: false });
+    const tableCounts = table === "events" ? repaired.events : repaired.rsvps;
+    expect(tableCounts.updated).toBeGreaterThan(0);
+    expect(table === "events" ? dry.events.updated : dry.rsvps.updated).toBe(tableCounts.updated);
+    const fractions = await target`select extract(microseconds from ${target(column)})::int % 1000000 as fraction
+      from ${target(table)} where ${target(column)} is not null`;
+    expect(fractions.every((row) => row.fraction === 0)).toBe(true);
+    const replay = await importEventsRsvps(legacy, target, { dryRun: false });
+    expect(replay.events).toMatchObject({ updated: 0, unchanged: 4 });
+    expect(replay.rsvps).toMatchObject({ updated: 0, unchanged: 3 });
+  });
+
+  it("preserves source microseconds including submillisecond event duration", async () => {
+    await legacy`update events set starts_at = '2026-09-01 10:00:00.123456+00',
+      ends_at = '2026-09-01 10:00:00.123457+00', created_at = '2026-08-31 09:00:00.654321' where id = 40`;
+    await legacy`update rsvps set created_at = '2026-09-30 11:00:00.999999',
+      synced_to_discord_at = '2026-09-30 12:00:00.000001' where id = 70`;
+    await importEventsRsvps(legacy, target, { dryRun: false });
+    const [event] = await target`select to_char(starts_at at time zone 'UTC', 'SS.US') as starts_at,
+      to_char(ends_at at time zone 'UTC', 'SS.US') as ends_at,
+      to_char(created_at at time zone 'UTC', 'SS.US') as created_at from events where status = 'past'`;
+    expect(event).toEqual({ starts_at: "00.123456", ends_at: "00.123457", created_at: "00.654321" });
+    const [rsvp] = await target`select to_char(created_at at time zone 'UTC', 'SS.US') as created_at,
+      to_char(synced_to_discord_at at time zone 'UTC', 'SS.US') as synced_to_discord_at from rsvps where status = 'going'`;
+    expect(rsvp).toEqual({ created_at: "00.999999", synced_to_discord_at: "00.000001" });
+    const replay = await importEventsRsvps(legacy, target, { dryRun: false });
+    expect(replay.events).toMatchObject({ updated: 0, unchanged: 4 });
+    expect(replay.rsvps).toMatchObject({ updated: 0, unchanged: 3 });
   });
 
   it("rolls back all destination changes on late RSVP validation failure", async () => {
