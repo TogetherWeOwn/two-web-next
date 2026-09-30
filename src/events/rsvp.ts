@@ -20,13 +20,17 @@ export type RsvpWriteResult =
   | { ok: true; created: boolean; answer: RsvpAnswer; mirrored: EventStatus | null; eventKey: string }
   | { ok: false; reason: "not_found" }
   | { ok: false; reason: "closed"; why: "draft" | "cancelled" | "past" | "paused" }
-  | { ok: false; reason: "at_capacity"; capacity: number };
+  | { ok: false; reason: "at_capacity"; capacity: number }
+  | { ok: false; reason: "limited"; retryAfter: number };
 
 /** Draft/cancelled/past events and paused ones take no new answers (RsvpPolicy + TOG-8725). */
-export async function writeRsvp(db: Db, eventKey: string, userId: string, status: RsvpWriteStatus, now = new Date()): Promise<RsvpWriteResult> {
+export async function writeRsvp(db: Db, eventKey: string, userId: string, status: RsvpWriteStatus, clock: () => Date = () => new Date()): Promise<RsvpWriteResult> {
   return db.transaction(async (tx) => {
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!ev) return { ok: false, reason: "not_found" } as const;
+    // Read the clock only once the row lock is held: a wait behind a lock holder must not
+    // let an answer slip in after the event has ended.
+    const now = clock();
     if (ev.status !== "published") return { ok: false, reason: "closed", why: ev.status === "cancelled" ? "cancelled" : ev.status === "draft" ? "draft" : "past" } as const;
     if (ev.endsAt <= now) return { ok: false, reason: "closed", why: "past" } as const;
     if (!ev.rsvpOpen) return { ok: false, reason: "closed", why: "paused" } as const;
@@ -38,6 +42,10 @@ export async function writeRsvp(db: Db, eventKey: string, userId: string, status
       const [tally] = await tx.select({ n: count() }).from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.status, "going")));
       if (Number(tally?.n ?? 0) >= ev.capacity) return { ok: false, reason: "at_capacity", capacity: ev.capacity } as const;
     }
+    // Budget is charged only for a write that is accepted: policy and capacity are decided
+    // above under the row lock, the hit and the write commit together below.
+    const verdict = await chargeThrottle(tx, userId);
+    if (verdict.limited) return { ok: false, reason: "limited", retryAfter: verdict.retryAfter } as const;
     // Any change makes the Discord mirror stale again.
     const [row] = await tx
       .insert(rsvps)
@@ -74,9 +82,15 @@ export type Verdict = { limited: false } | { limited: true; retryAfter: number }
  * overshoot (the Laravel limiter is cache-backed and best-effort; this is stricter).
  */
 export async function hitRsvpThrottle(db: Db, userId: string): Promise<Verdict> {
+  return db.transaction((tx) => chargeThrottle(tx, userId));
+}
+
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+async function chargeThrottle(tx: Tx, userId: string): Promise<Verdict> {
   const bucket = `rsvp-write:${userId}`;
   const { maxAttempts, decaySeconds } = RSVP_RATE_LIMIT;
-  return db.transaction(async (tx) => {
+  {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${bucket}))`);
     const rows = (await tx.execute(sql`
       select count(*)::int as n,
@@ -87,7 +101,7 @@ export async function hitRsvpThrottle(db: Db, userId: string): Promise<Verdict> 
     await tx.execute(sql`insert into web_throttle_hits (bucket) values (${bucket})`);
     await tx.execute(sql`delete from web_throttle_hits where at < now() - interval '5 minutes'`);
     return { limited: false } as const;
-  });
+  }
 }
 
 export async function dispatchRsvpSync(env: Env, eventKey: string, status: EventStatus | null): Promise<void> {

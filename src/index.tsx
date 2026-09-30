@@ -165,6 +165,15 @@ async function issueSession(
   });
 }
 
+/** Validates the cookie without rotating it (API writes; rotation is for page views). */
+async function peekSession(c: Context<{ Bindings: Env }>, store: SessionStore): Promise<Session | null> {
+  const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+  if (!token || !token.startsWith("two_")) return null;
+  const row = await store.get(await hashToken(token));
+  if (!row) return null;
+  return { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator };
+}
+
 async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
@@ -412,7 +421,11 @@ app.route("/admin", adminApp());
 app.route("/", profilesApp());
 
 // W8: public events pages, /events.json and moderator event writes.
-registerEventRoutes(app, async (c) => readSession(c, await storeFor(c)));
+registerEventRoutes(
+  app,
+  async (c) => readSession(c, await storeFor(c)),
+  async (c) => peekSession(c, await storeFor(c)),
+);
 
 app.post("/logout", async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;

@@ -75,7 +75,7 @@ async function feedResponse(c: Ctx, body: string, headers: Record<string, string
   return new Response(body, { status: 200, headers: { ...headers, etag } });
 }
 
-export function registerEventRoutes(app: App, readSession: SessionReader): void {
+export function registerEventRoutes(app: App, readSession: SessionReader, peekSession: SessionReader = readSession): void {
   const unavailable = (c: Ctx) => c.text("Events temporarily unavailable", 503);
 
   app.get("/events", async (c) => {
@@ -107,7 +107,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
   });
 
   app.get("/events.json", async (c) => {
-    const session = await readSession(c);
+    // Non-rotating: concurrent writes with one cookie must all authenticate.
+    const session = await peekSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
@@ -189,7 +190,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
   async function moderator(c: Ctx): Promise<Session | Response> {
     const origin = c.req.header("origin");
     if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-    const session = await readSession(c);
+    // Non-rotating: concurrent writes with one cookie must all authenticate.
+    const session = await peekSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
     if (!session.moderator) return c.json({ error: "forbidden" }, 403);
     return session;
@@ -290,7 +292,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
   async function member(c: Ctx): Promise<Session | Response> {
     const origin = c.req.header("origin");
     if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-    const session = await readSession(c);
+    // Non-rotating: concurrent writes with one cookie must all authenticate.
+    const session = await peekSession(c);
     if (!session) return c.json({ error: "unauthenticated" }, 401);
     if (!session.member) return c.json({ error: "forbidden" }, 403);
     return session;
@@ -317,10 +320,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
     const ev = await getPublicEvent(db, key);
     if (!ev) return c.json({ error: "not_found" }, 404);
     if (ev.status !== "published" || ev.endsAt <= new Date() || !ev.rsvpOpen) return closed(c);
-    const verdict = await hitRsvpThrottle(db, who.id);
-    if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
+    // The budget is charged inside writeRsvp, atomically with the accepted write.
     const r = await writeRsvp(db, key, who.id, input.status);
     if (!r.ok) {
+      if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
       if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
       if (r.reason === "closed") return closed(c);
       return c.json({ reason: "event_at_capacity", message: "This event is full.", event_key: key, capacity: r.capacity }, 409);

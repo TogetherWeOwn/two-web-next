@@ -233,4 +233,40 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect((await rows(ev.id)).length).toBe(ok);
     for (const r of writes) expect([201, 403]).toContain(r.status);
   });
+  it("one cookie used by concurrent writes authenticates every request (no destructive rotation)", async () => {
+    const ev = await seed();
+    const cookie = await cookieFor(store, "same-cookie");
+    const go = () =>
+      app.request(
+        `/events/${ev.key}/rsvp`,
+        { method: "PUT", headers: { cookie, origin: APP_URL, accept: "application/json", "content-type": "application/json" }, body: JSON.stringify({ status: "going" }) },
+        env,
+      );
+    const codes = (await Promise.all([go(), go(), go()])).map((r) => r.status).sort();
+    expect(codes).toEqual([200, 200, 201]);
+  });
+
+  it("refused writes (event full) spend no budget: a waitlist answer still goes through after 12 refusals", async () => {
+    const ev = await seed({ capacity: 1 });
+    expect((await put(ev.key, "holder", "going")).status).toBe(201);
+    for (let i = 0; i < RSVP_RATE_LIMIT.maxAttempts; i++) expect((await put(ev.key, "u-full", "going")).status).toBe(409);
+    expect((await put(ev.key, "u-full", "waitlisted")).status).toBe(201);
+  });
+
+  it("expiry is judged after the row lock: an answer queued behind a lock holder is refused once the event ends", async () => {
+    const ev = await seed({ endsAt: new Date(Date.now() + 1500) });
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select id from events where id = ${ev.id} for update`;
+      await held;
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const pending = put(ev.key, "late", "going");
+    await new Promise((r) => setTimeout(r, 1800));
+    release();
+    await holder;
+    expect((await pending).status).toBe(403);
+    expect(await rows(ev.id)).toHaveLength(0);
+  });
 });
