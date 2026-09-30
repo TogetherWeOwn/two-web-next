@@ -11,6 +11,7 @@
 // The live suite truncates only the tables this slice owns, in FK-safe order.
 
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
@@ -18,6 +19,7 @@ import { dispatchWriteBack } from "../src/admin/writeback";
 import { activityLog, events, featuredContents, memberDataAccessLogs } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
+import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
@@ -103,7 +105,9 @@ describe("admin guard pins (memory store, no DB)", () => {
   it("403s a forged-origin POST even for a moderator", async () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store, MOD);
-    const res = await adminApp(store).request("/events", {
+    // Same-origin is an outer-app concern, not part of panel authorization.
+    const mounted = new Hono<{ Bindings: Env }>().use("*", sameOrigin).route("/admin", adminApp(store));
+    const res = await mounted.request("/admin/events", {
       method: "POST",
       headers: { cookie, origin: "https://evil.test" },
       body: new URLSearchParams({ title: "x" }),

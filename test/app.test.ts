@@ -229,7 +229,7 @@ describe("DB-backed sessions and rotation", () => {
     const { state, cookie } = await startSignIn(e);
     const sessionCookie = cookiesFrom(await signIn(e, state, cookie));
 
-    const out = await app.request("/logout", { method: "POST", headers: { cookie: sessionCookie } }, e);
+    const out = await app.request("/logout", { method: "POST", headers: { cookie: sessionCookie, origin: e.APP_URL } }, e);
     expect(out.status).toBe(303);
 
     const replay = await app.request("/", { headers: { cookie: sessionCookie } }, e);
@@ -329,13 +329,13 @@ describe("staging-only QA seam", () => {
 
   it("404s when the QA token is not configured, even on the staging host", async () => {
     const e = staging(undefined);
-    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { [QA_HEADER]: "x" } }, e);
+    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "x" } }, e);
     expect(res.status).toBe(404);
   });
 
   it("404s off the staging host even with a token configured", async () => {
     const e = { ...staging("qa-secret"), APP_URL: "https://evil.example.test" };
-    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { [QA_HEADER]: "qa-secret" } }, e);
+    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } }, e);
     expect(res.status).toBe(404);
   });
 
@@ -343,12 +343,12 @@ describe("staging-only QA seam", () => {
     const e = staging("qa-secret");
     const badToken = await app.request(
       "/auth/qa/qa-member",
-      { method: "POST", headers: { [QA_HEADER]: "wrong" } },
+      { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "wrong" } },
       e,
     );
     const badIdentity = await app.request(
       "/auth/qa/nope",
-      { method: "POST", headers: { [QA_HEADER]: "qa-secret" } },
+      { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } },
       e,
     );
     expect(badToken.status).toBe(404);
@@ -363,7 +363,7 @@ describe("staging-only QA seam", () => {
       ["qa-moderator", "QA Moderator", true],
     ] as const) {
       const e = staging("qa-secret");
-      const res = await app.request(`/auth/qa/${identity}`, { method: "POST", headers: { [QA_HEADER]: "qa-secret" } }, e);
+      const res = await app.request(`/auth/qa/${identity}`, { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } }, e);
       expect(res.status).toBe(204);
       const home = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, e);
       expect(await home.text()).toContain(username);
