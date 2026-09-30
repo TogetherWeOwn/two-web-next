@@ -8,7 +8,8 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test",
+    "check": "npm run typecheck && npm run test && npm run test:cutover",
+    "test:cutover": "node --test ci/cutover-check-selftest.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check"

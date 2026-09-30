@@ -374,6 +374,8 @@ app.get("/healthz", (c) => c.json({ ok: true }));
 type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
 
 app.get("/up", async (c) => {
+  // Fixed app identity for the cutover probe, including unknown/degraded reads.
+  c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
   // The queue ledger lives in the same Postgres as the rest of the W13 backend:
   // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
