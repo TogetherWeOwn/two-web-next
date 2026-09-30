@@ -135,7 +135,7 @@ go hunting for them.
 | Legacy | Next status | Card |
 |---|---|---|
 | `secureHeaders`-equivalent (CSP on web+admin+leaves, static anti-framing/sniffing globally) | ✅ global secureHeaders (stricter: no inline/eval — no Livewire to need it) | W3 ✅/W4 ✅ |
-| One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; human routes pending | W14 ✅ + W9 📋 |
+| One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; RSVP writes ✅ (rateLimitExceeded); other human routes as they land | W14 ✅ + W9 ✅ |
 | Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes) | ❌ no throttle layer yet | **N5** (new: human-route throttles) |
 | `member-access-log` (arm/flush, fail-closed 503 when enforced) | ✅ `src/access-log.ts` middleware on member routes; admin guard carries the same contract | W7 ✅ + W12 📋 (retention) |
 | TrustHosts (APP_URL host only) / trustProxies (nginx socket) | Workers: platform TLS; host check pending | W16 📋 |
