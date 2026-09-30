@@ -22,8 +22,9 @@ by `docs/parity.md`; the four 2026-era regression suites it adds
 read-only: no PHP tests, no live deployment or database probes, no legacy
 mutations.
 
-Legacy test counts at the audited snapshot: **214 files** (141 Feature / 42
-Unit / 18 Browser / 4 Integration). Paths in the tables are relative to legacy
+Legacy test counts at the audited snapshot: **203 `*Test.php` files** (141
+Feature / 43 Unit / 15 Browser / 4 Integration; 212 PHP files total including
+9 support helpers). Paths in the tables are relative to legacy
 `tests/`. Destinations are relative to this repository.
 
 - **Ported/adapted:** the behavior is asserted by named Vitest suites.
@@ -45,7 +46,8 @@ suite below.
 | G4 feed expiry rotates validators with no write | `test/event-feeds.test.ts` | +1 | `Feature/Events/FeedExpiryValidatorTest.php` (clock crosses `ends_at`; RSS+ICS drop the row, stale ETag → 200, new ETag → 304; per-event ICS still serves) |
 | G5 hot-path index presence | `test/schema-hot-path.test.ts` | 2 | `Feature/Events/HotPathIndexTest.php` **index-presence half** (`pg_indexes` introspection) |
 
-Totals after this slice: **48 test files, 745 passed, 10 skipped**.
+Totals: **50 test files, 757 passed, 10 skipped** (CI run 36768106922,
+disposable Postgres service container).
 
 ## Application gaps found — routed, not fixed here
 
@@ -88,17 +90,17 @@ series (W13) and agent-events grants respectively — see defers below.
 | `Feature/Events/HotPathIndexTest.php` | **Adapted (G5):** index presence in `test/schema-hot-path.test.ts`; EXPLAIN half deferred (A6). |
 | `Feature/Events/EventsFeedTest.php`, `EventIcsTest.php`, `EventRssTest.php`, `EventGoogleCalendarTest.php`, `EventEtagTest.php` | **Ported:** byte fixtures + route policy in `test/event-feeds.test.ts` (11 tests): ICS folding/escaping/CANCELLED, RSS escaping + description omission, guid stability across rename, DST pubDate, multibyte round-trip, webcal swap, sessionless ETag/304, drafts never exposed, cancelled excluded from RSS but in ICS. |
 | `Feature/Events/EventJsonAccessTest.php` | **Ported:** sessionless view policy in `test/event-feeds.test.ts` (draft 403 / unknown-malformed 404 / ETag 304) and `test/events.test.ts` (`/events.json` 401 with a session → 200 sessionless with ETag/304). |
-| `Feature/Events/EventLifecycleTest.php`, `EventPolicyTest.php`, `EventKeyTest.php`, `EventScheduleTest.php` | **Ported:** `test/events.test.ts` (8 tests): CRUD + publish/cancel round-trip with write-back enqueued, ULID route keys, forged-origin 403, wall→UTC PATCH, cancelled republish 422, 410 + `x-robots-tag` noindex (`events.test.ts:167-168`); transition guard G2 above; wall-time scheduling G1/G2. |
+| `Feature/Events/EventLifecycleTest.php`, `EventPolicyTest.php`, `EventKeyTest.php`, `EventScheduleTest.php` | **Ported:** `test/events.test.ts` (7 tests): CRUD + publish/cancel round-trip with write-back enqueued, ULID route keys, forged-origin 403, wall→UTC PATCH, cancelled republish 422, 410 + `x-robots-tag` noindex (`events.test.ts:167-168`); transition guard G2 above; wall-time scheduling G1/G2. |
 | `Feature/Events/EventPaginationTest.php`, `PastEventsArchiveTest.php` | **Ported:** `test/events.test.ts` "past archive pages twenty newest-first eligible rows with a stable tie-break". |
-| `Feature/Events/EventSearchTest.php`, `EventSearchLogTest.php` | **Ported:** `test/event-search.test.ts` (18 tests: tokenization, ranking, logging, admin widget). |
-| `Feature/Events/RsvpAuthGateTest.php`, `RsvpEndedEventTest.php`, `RsvpPauseTest.php`, `RsvpWriteBackFailureTest.php` | **Ported:** `test/rsvp.test.ts` (31 tests): guest 401 / foreign-origin 403 / bad status 422 / other verbs 405 / foreign `user_id` 403; 201/200/204 with mirror-stamp reset; draft/cancelled/ended/paused refuse PUT writing nothing; write-back failure paths; honeypot rows. |
+| `Feature/Events/EventSearchTest.php`, `EventSearchLogTest.php` | **Ported:** `test/event-search.test.ts` (22 tests: tokenization, ranking, logging, admin widget). |
+| `Feature/Events/RsvpAuthGateTest.php`, `RsvpEndedEventTest.php`, `RsvpPauseTest.php`, `RsvpWriteBackFailureTest.php` | **Ported:** `test/rsvp.test.ts` (30 tests): guest 401 / foreign-origin 403 / bad status 422 / other verbs 405 / foreign `user_id` 403; 201/200/204 with mirror-stamp reset; draft/cancelled/ended/paused refuse PUT writing nothing; write-back failure paths; honeypot rows. |
 | `Feature/Events/RsvpUniqueLockRaceTest.php`, `Integration/RsvpCapacityRaceTest.php` | **Ported:** `test/rsvp.test.ts:343` (40 concurrent writes by one member → exactly 12 budget), `:352` (14 members chase 3 seats → exactly 3 win, 409 `event_at_capacity` shape), `:373` (double-submit → one row). Real Postgres, real SQL locking. |
 | `Feature/Events/RsvpThrottleTest.php`, `Feature/Throttling/ThrottleCoverageTest.php`, `ThrottleEnvelopeTest.php` | **Ported:** `test/throttle.test.ts` (7 tests): mutating-route coverage, honest exemption list, budget-then-429 with the one JSON envelope, branded browser page, logout 30/min + QA login 10/min (the dual budgets from PR #49). |
 | `Feature/QueueHealthEndpointTest.php`, `Feature/Console/CheckQueueDepthCommandTest.php` | **Ported/dropped:** `GET /up` with the queue ledger depth in `test/up.test.ts` (always 200, degraded at warn, unknown on outage, bounded read); the `queue:check-depth` command itself is dropped (`docs/parity.md` §10, N3). |
-| `Feature/Console/ReconcileEventsCommandTest.php` | **Ported:** cron/queue behavior in `test/jobs.test.ts` (24 tests: pinned cron expressions, dispatch debounce + idempotency key, backoff walk, bot Retry-After, duplicate replay, ledger transitions), `test/jobs-ledger.test.ts` (6), `test/jobs-postgres.test.ts` (3: overlapping cron single-fights and frees the lock), `test/worker-runner.test.ts` (9). |
+| `Feature/Console/ReconcileEventsCommandTest.php` | **Ported:** cron/queue behavior in `test/jobs.test.ts` (24 tests: pinned cron expressions, dispatch debounce + idempotency key, backoff walk, bot Retry-After, duplicate replay, ledger transitions), `test/jobs-ledger.test.ts` (6), `test/jobs-postgres.test.ts` (6 tests: overlapping cron single-flight, non-blocking jobs, reserved-tx body, lock TTL/expiry/takeover), `test/worker-runner.test.ts` (9). |
 | `Feature/Console/QueuePoisonProbeTest.php` | **Dropped:** a legacy staging probe tool, not a product contract; poison rows surface as `/up` `failed` counts (`test/up.test.ts`). |
 | `Feature/Events/TerminalSyncRefusalTest.php` | **Ported:** the W15 agent-events slice ([TOG-10121](/TOG/issues/TOG-10121), done): terminal bot refusal fails now and marks the ledger row failed (`test/jobs.test.ts`), shield/contract rows in `test/agent-events.test.ts` / `test/agent-events-shield.test.ts`. |
-| `Feature/Admin/EventRsvpRosterTest.php` | **Ported:** roster reads in `test/roster.test.ts` (15) and `test/admin-reads.test.ts`. |
+| `Feature/Admin/EventRsvpRosterTest.php` | **Ported:** roster reads in `test/roster.test.ts` (11) and `test/admin-reads.test.ts`. |
 | `Feature/Livewire/EventsCalendarTest.php`, `EventsCalendarTimezoneTest.php`, `HomeUpcomingEventsTest.php` | **Ported (island contract):** `test/islands-events-calendar.test.ts`, `test/islands-past-events.test.ts`, `test/islands-going-count.test.ts` (W10 slices 3-4). Browser-level rows remain W10 / [TOG-9689](/TOG/issues/TOG-9689). |
 | `Feature/Events/EventJsonLdTest.php` | **Out of scope:** SEO slice [TOG-10118](/TOG/issues/TOG-10118) (delivered separately, `test/seo.test.ts`). |
 
@@ -122,8 +124,8 @@ series (W13) and agent-events grants respectively — see defers below.
 
 ```
 npm run typecheck                                    # clean
-DATABASE_URL=...two_web_next_tog10789 npm test       # 48 files, 745 passed, 10 skipped
+npm test (CI run 36768106922, disposable Postgres)   # 50 files, 757 passed, 10 skipped
 ```
 
 Legacy inventory: `gh api repos/TogetherWeOwn/two-web/git/trees/<sha>?recursive=1`
-at `2eaefb8d` (214 test files; 141 Feature / 42 Unit / 18 Browser / 4 Integration).
+at `2eaefb8d` (203 `*Test.php` files; 141 Feature / 43 Unit / 15 Browser / 4 Integration).
