@@ -2,11 +2,12 @@
 import { and, asc, count, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
+import { PAST_EVENTS_PAGE_SIZE } from "../islands/contracts";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
 
-export const PAGE_SIZE = 20;
-export const JSON_DEFAULT_LIMIT = 20;
+export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
+export const JSON_DEFAULT_LIMIT = PAST_EVENTS_PAGE_SIZE;
 export const JSON_MAX_LIMIT = 100;
 
 async function withGoing(db: Db, rows: (typeof events.$inferSelect)[]): Promise<PublicEvent[]> {
@@ -31,15 +32,21 @@ export async function listUpcoming(db: Db, now = new Date()): Promise<PublicEven
 }
 
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
-export async function listPast(db: Db, page: number, now = new Date()): Promise<{ rows: PublicEvent[]; hasMore: boolean }> {
+export async function listPast(db: Db, page: number, now = new Date()): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number }> {
+  const archived = or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now)));
+  const [total] = await db.select({ n: count() }).from(events).where(archived);
   const rows = await db
     .select()
     .from(events)
-    .where(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))))
-    .orderBy(desc(events.startsAt))
+    .where(archived)
+    .orderBy(desc(events.startsAt), desc(events.id))
     .limit(PAGE_SIZE + 1)
     .offset((Math.max(1, page) - 1) * PAGE_SIZE);
-  return { rows: await withGoing(db, rows.slice(0, PAGE_SIZE)), hasMore: rows.length > PAGE_SIZE };
+  return {
+    rows: await withGoing(db, rows.slice(0, PAGE_SIZE)),
+    hasMore: rows.length > PAGE_SIZE,
+    totalPages: Math.ceil(Number(total?.n ?? 0) / PAGE_SIZE),
+  };
 }
 
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {
@@ -61,4 +68,18 @@ export async function listJson(
 export async function sitemapEvents(db: Db): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
   const rows = await db.select().from(events).where(eq(events.status, "published")).orderBy(asc(events.startsAt));
   return rows.map((r) => ({ key: r.eventKey, status: "published" as const, updatedAt: r.updatedAt.toISOString() }));
+}
+
+/** Feed scope: upcoming (ends_at >= now), soonest first. `statuses` differs for RSS vs ICS. */
+export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
+  return db
+    .select()
+    .from(events)
+    .where(and(inArray(events.status, statuses), gte(events.endsAt, now)))
+    .orderBy(asc(events.startsAt));
+}
+
+export async function getEventRow(db: Db, key: string) {
+  const [row] = await db.select().from(events).where(eq(events.eventKey, key));
+  return row ?? null;
 }

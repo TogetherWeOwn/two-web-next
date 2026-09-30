@@ -17,7 +17,7 @@ const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured",
 const OTHER_READS = [
   "/", "/discord", "/about", "/faq", "/rules", "/privacy", "/join", "/join/discord", "/join/callback",
   "/sitemap_index.xml", "/robots.txt", "/health", "/healthz", "/db-ping", "/auth/discord", "/auth/discord/callback",
-  "/events", "/events/past", "/events.json", "/e/:key",
+  "/events", "/events/past", "/events.json", "/e/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) => router.routes
   .filter((r) => r.method === "GET" || r.method === "ALL")
@@ -132,6 +132,18 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
       const body = await res.text();
       for (const personal of [...PERSONAL_STRINGS, SUBJECT.userId]) expect(body, path).not.toContain(personal);
       if (path === "/events" || path.startsWith("/e/")) expect(body).toContain("1 going");
+    }
+    expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
+  });
+
+  it.each(["guest", "non-member", "member", "moderator"])("%s: public calendar feeds never expose member data", async (role) => {
+    const actor = role === "moderator" ? MODERATOR : role === "member" ? MEMBER : OUTSIDER;
+    for (const path of ["/events.ics", "/events.rss", `/events/${EVENT_KEY}.ics`]) {
+      const res = await request(path, { headers: role === "guest" ? {} : await headers(actor) });
+      expect(res.status, path).toBe(200);
+      const body = await res.text();
+      expect(body).toContain("Friday night games");
+      for (const personal of [...PERSONAL_STRINGS, SUBJECT.userId]) expect(body, path).not.toContain(personal);
     }
     expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
   });

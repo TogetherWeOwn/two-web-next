@@ -42,7 +42,7 @@ handlers fail completeness. It is a test-net guard, not an automatic query obser
 | 56: no logged-out PATCH writer | E same case proves refusal/no write. **W7 difference:** PATCH is deliberately restored as the owner-only island form writer; guest gets 302, not legacy 405. |
 | 68: member-adjacent JSON, event detail, RSVP writes behind login | E: `guest member-adjacent JSON is refused without returning attendees`; `/events.json` is 401. **W8 difference:** published `/e/:key` is public with aggregate counts only. RSVP write endpoints are not implemented in this checkout; no claim of a W9 port here. |
 | 77: crafted guest Livewire mount denied | E mounted profile denial and P guest route pins. **Architecture:** no Livewire endpoint or server component mount exists; island HTML is served only after the member gate. |
-| 90: public pages/source contain no member data | E: `public pages contain no member data in HTML/source; RSVP counts remain public`; `/`, events/past, join, about, FAQ, rules, privacy, sitemap, event detail. **Gap:** legacy RSS/ICS/feed routes are absent from this checkout, not claimed covered. |
+| 90: public pages/source contain no member data | E: `public pages contain no member data in HTML/source; RSVP counts remain public`; `/`, events/past, join, about, FAQ, rules, privacy, sitemap, event detail. E: `%s: public calendar feeds never expose member data` covers collection ICS, RSS and per-event ICS across all four roles (W9 merged during this revision). |
 | 127: public RSVP count, never attendee name | E same public case pins `1 going` with a real RSVP and absence of all personal tokens. |
 
 ## `tests/Feature/MemberDataAccessCompletenessTest.php` — 7 clauses
@@ -102,7 +102,7 @@ on that scoped pool. Finally, the fixture closes its pool and drops only its own
 schema. Eighteen DB-free safety cases and a real sibling-schema test prove URL
 refusal, option pinning, row/FK isolation, failure-DDL rollback and disposal.
 
-No pre-migrated database is needed for the W15-only run (65 tests):
+No pre-migrated database is needed for the W15-only run (69 tests):
 
 ```sh
 DATABASE_URL=postgres://agent_test@agent-testdb:5432/postgres npx vitest run test/member-data-fixture.test.ts test/member-exposure.test.ts test/member-data-access.test.ts
@@ -126,6 +126,6 @@ schema damage.
 This slice provides an acceptance net and one proven fail-closed fix. It does
 **not** certify complete Laravel parity or a production security gate: automatic
 query capture/keyless refusal, streamed reads, append-only enforcement and the
-executable retention adapter remain unresolved controls; feeds and MemberStats
-are outside the currently implemented surface. Those are explicit findings for
+executable retention adapter remain unresolved controls; MemberStats
+is outside the currently implemented surface. Those are explicit findings for
 the build/security owners, not silent skips or claims of clean production.
