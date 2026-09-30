@@ -114,6 +114,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     SESSION_SECRET,
     ADMIN_DB: db,
     SESSION_STORE: store,
+    DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   } as unknown as Env;
   const req = (path: string, init: RequestInit = {}) => app.request(path, init, env);
   const hour = 3600_000;
