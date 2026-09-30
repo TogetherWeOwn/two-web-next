@@ -430,12 +430,17 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(html).not.toContain('data-testid="discord-join"');
   });
 
-  it("a signed-in non-member still gets the join pitch", async () => {
+  it("a signed-in non-member sees no guest pitch (legacy @guest parity)", async () => {
+    // Legacy show.blade.php wraps the pitch in @guest: any signed-in viewer
+    // is past the join pitch, even before guild membership lands. The
+    // non-member's recovery path is /join, not the event page.
     const store = createMemorySessionStore();
     const cookie = await sessionCookie(store, { userId: "43", member: false });
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(store));
     expect(res.headers.get("cache-control")).toBe("private, no-store");
-    expect(await res.text()).toContain('data-testid="event-join-pitch"');
+    const html = await res.text();
+    expect(html).not.toContain('data-testid="event-join-pitch"');
+    expect(html).not.toContain('data-testid="discord-join"');
   });
 
   it("the event landing renders the join confirmation once, then never again", async () => {

@@ -520,9 +520,10 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-// Legacy show.blade.php pitch (data-testid="event-join-pitch"): everyone who is
-// not a guild member — guests and signed-in non-members alike — gets the join
-// CTA carrying this page as ?next= so the journey lands them back here. The
+// Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
+// the blade wraps it in @guest, so any signed-in viewer (member or
+// non-member) never sees it. The pitch carries this page as ?next= so the
+// journey lands the guest back here after joining. The
 // one-shot join confirmation renders above the pitch when this page is the
 // join landing (TOG-10356): the newly authenticated member would otherwise see
 // neither the banner nor the guest pitch. Attendees/member-stats shell is
@@ -547,7 +548,7 @@ export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl
       <p data-testid="going-count" data-island="going-count" data-event-key={e.eventKey}>
         {goingCountText(e.goingCount, e.capacity)}
       </p>
-      {!session?.member ? (
+      {!session ? (
         <section data-testid="event-join-pitch" aria-label="Join the community">
           <p>Game nights get posted here first. Join the Discord and you&apos;ll see them before they land on this page.</p>
           <p>
