@@ -2,20 +2,16 @@
 // Live against agent-testdb (skipped without DATABASE_URL, like test/events.test.ts). Never point
 // this at anything but a test container.
 import { serializeSigned } from "hono/utils/cookie";
-import { drizzle } from "drizzle-orm/postgres-js";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "../src/index";
-import * as adminSchema from "../src/db/admin-schema";
-import * as baseSchema from "../src/db/schema";
 import { events, rsvps } from "../src/db/admin-schema";
-import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import type { SyncMessage } from "../src/events/sync";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
 import { RSVP_RATE_LIMIT } from "../src/islands/contracts";
-import { testDatabaseUrl } from "./helpers/member-data-db";
+import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -45,21 +41,16 @@ describe("rsvp test containment", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
-  // Executable guard: a non-test DATABASE_URL throws before any driver is
-  // constructed, so the whole-table deletes below can never reach staging or
-  // production. Empty stays empty so the suite still skips cleanly without
-  // DATABASE_URL (the describe body runs at collection even when skipped).
-  // postgres.js treats password: "" as absent and falls back to PGPASSWORD,
-  // so the authorized empty test password is pinned via callback, and the
-  // port is pinned against PGPORT the same way.
-  const rawUrl = process.env.DATABASE_URL ?? "";
-  const url = rawUrl ? testDatabaseUrl(rawUrl) : null;
-  const client = url
-    ? postgres(url.href, { max: 20, port: 5432, connect_timeout: 5, password: () => url.password })
-    : (null as unknown as ReturnType<typeof postgres>);
-  const db = url
-    ? drizzle(client, { schema: { ...baseSchema, ...adminSchema } })
-    : (null as unknown as Db);
+  // Owned disposable schema (W15 fixture): every pool and driver below resolves
+  // unqualified names inside `w9_<uuid>`, so the deletes, raw throttle SQL and
+  // lock holders in this file can never reach the caller's tables. The guard
+  // runs before any driver exists: a non-test DATABASE_URL throws in beforeAll
+  // (and in the static containment pin above), and dispose() drops the schema.
+  // Pool width 20: race tests hold a lock transaction open while concurrent
+  // requests and the pg_stat_activity observer need their own connections.
+  let fixture: MemberDataFixture;
+  let client: ReturnType<typeof postgres>;
+  let db: MemberDataFixture["db"];
   const store = createMemorySessionStore();
   const sent: SyncMessage[] = [];
   const env = {
@@ -70,10 +61,15 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET,
-    ADMIN_DB: db,
+    get ADMIN_DB() { return db; },
     SESSION_STORE: store,
     EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
   } as unknown as Env;
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 20 });
+    client = fixture.client;
+    db = fixture.db;
+  });
 
   // Sessions rotate on each authenticated view, so every request mints a fresh cookie.
   const call = async (method: string, key: string, as: string | null, body?: unknown, extra: Record<string, string> = {}) =>
@@ -104,14 +100,37 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     return { id: row!.id, key };
   }
   const rows = (eventId: number) => db.select().from(rsvps).where(eq(rsvps.eventId, eventId));
+  const state = async (eventId: number) => {
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    return { rows: (await rows(eventId)).length, hits: n };
+  };
+
+  // Sentinel OUTSIDE the owned schema: a row in the shared database the
+  // suite must never touch. Asserted intact by the last test (proves every
+  // delete, raw throttle statement and lock holder above stayed scoped) and
+  // dropped on teardown. A separate connection without the fixture
+  // search_path reaches it; the fixture pools cannot even see it.
+  let sentinelAdmin!: ReturnType<typeof postgres>;
+  beforeAll(async () => {
+    const url = testDatabaseUrl(process.env.DATABASE_URL!);
+    sentinelAdmin = postgres(url.href, { max: 1, port: 5432, connect_timeout: 5, password: () => url.password });
+    await sentinelAdmin`create table if not exists w9_sentinel_proof (id int primary key, note text)`;
+    await sentinelAdmin`insert into w9_sentinel_proof values (1, 'untouched') on conflict (id) do nothing`;
+  });
 
   beforeEach(async () => {
     await client`delete from web_throttle_hits`;
-    await db.delete(rsvps);
-    await db.delete(events);
+    await fixture.reset();
     sent.length = 0;
   });
-  afterAll(async () => void (await client?.end()));
+  afterAll(async () => {
+    try {
+      await sentinelAdmin`drop table if exists w9_sentinel_proof`;
+    } finally {
+      await sentinelAdmin.end();
+      await fixture?.dispose();
+    }
+  });
 
   it("guest 401, foreign origin 403, bad status 422, other verbs 405, someone else's user_id 403", async () => {
     const ev = await seed();
@@ -213,6 +232,58 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(await rows(ev.id)).toHaveLength(1);
     const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
     expect(n).toBe(0);
+  });
+
+  it("honeypot: a filled duplicate DELETE query cannot hide behind an empty first value", async () => {
+    const ev = await seed();
+    expect((await put(ev.key, "u1", "going")).status).toBe(201);
+    await client`delete from web_throttle_hits`;
+    // query() is first-wins (?website=&website=spam reads ""); the trap must
+    // see every value.
+    const res = await app.request(
+      `/events/${ev.key}/rsvp?website=&website=spam`,
+      {
+        method: "DELETE",
+        headers: { cookie: await cookieFor(store, "u1"), origin: APP_URL, accept: "application/json", "content-type": "application/json" },
+      },
+      env,
+    );
+    expect(res.status).toBe(204);
+    expect(await state(ev.id)).toEqual({ rows: 1, hits: 0 });
+  });
+
+  it("honeypot: a filled duplicate PUT form cannot hide behind an empty last value", async () => {
+    const ev = await seed();
+    // parseBody() is last-wins (website=spam&website= reads ""); the trap
+    // must see every value.
+    const res = await app.request(
+      `/events/${ev.key}/rsvp`,
+      {
+        method: "PUT",
+        headers: { cookie: await cookieFor(store, "u1"), origin: APP_URL, accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
+        body: "status=going&website=spam&website=",
+      },
+      env,
+    );
+    expect(res.status).toBe(201);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+  });
+
+  it("honeypot: a mixed-case JSON media type cannot hide a DELETE body trap", async () => {
+    const ev = await seed();
+    expect((await put(ev.key, "u1", "going")).status).toBe(201);
+    await client`delete from web_throttle_hits`;
+    const res = await app.request(
+      `/events/${ev.key}/rsvp?website=`,
+      {
+        method: "DELETE",
+        headers: { cookie: await cookieFor(store, "u1"), origin: APP_URL, accept: "application/json", "content-type": "Application/Json" },
+        body: JSON.stringify({ website: true }),
+      },
+      env,
+    );
+    expect(res.status).toBe(204);
+    expect(await state(ev.id)).toEqual({ rows: 1, hits: 0 });
   });
 
   it("honeypot: absent/empty inputs stay genuine (PUT writes, DELETE removes + charges)", async () => {
@@ -475,6 +546,25 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(n).toBe(0);
     await client`delete from web_throttle_hits where bucket = 'unrelated-expired-hold'`;
   });
+  // Runs last (named z_): after every delete, raw throttle statement and
+  // lock holder in this file, the row outside the owned schema must be
+  // intact — the executable proof that cleanup stayed scoped. The fixture
+  // pools pin search_path to the owned schema (they cannot even resolve a
+  // public-schema table: verified with a negative control), so the only
+  // pool that can reach the sentinel is the unscoped admin one, which the
+  // suite uses solely to plant and read it. Vitest runs its in file order,
+  // so this is the final DB test.
+  it("z_sentinel: the row outside the owned schema survives the whole suite", async () => {
+    const srows = (await sentinelAdmin`select note from w9_sentinel_proof where id = 1`) as unknown as { note: string }[];
+    expect(srows[0]!.note).toBe("untouched");
+    // The suite did its work inside the owned schema: its tables exist there
+    // and the public sentinel table is not one of them.
+    const orows = (await sentinelAdmin`select count(*)::int as n from pg_tables where schemaname = ${fixture.schemaName} and tablename in ('events', 'rsvps', 'web_throttle_hits')`) as unknown as { n: number }[];
+    expect(orows[0]!.n).toBe(3);
+    const prows = (await sentinelAdmin`select count(*)::int as n from pg_tables where schemaname = 'public' and tablename = 'w9_sentinel_proof'`) as unknown as { n: number }[];
+    expect(prows[0]!.n).toBe(1);
+  });
+
   it("the budget hit waits for the RSVP row lock (DELETE and PUT on an existing answer)", async () => {
     for (const verb of ["DELETE", "PUT"] as const) {
       const ev = await seed();

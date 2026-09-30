@@ -789,10 +789,14 @@ export const RSVP_MIN_FILL_MS = 1000;
 /**
  * Trap verdict: true when the honeypot value is filled. A present non-string
  * value counts as filled (fail-closed); absent/empty inputs are genuine
- * clicks and never trip. Honeypot half of profileTrapTripped, without the
- * profile form's opened-at floor (the RSVP click island carries no trap).
+ * clicks and never trip. Arrays — duplicate query/form keys, parsed with all
+ * values preserved — trip when ANY element is filled, so a filled duplicate
+ * can never hide behind an empty sibling. Honeypot half of
+ * profileTrapTripped, without the profile form's opened-at floor (the RSVP
+ * click island carries no trap).
  */
 export function rsvpHoneyFilled(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(rsvpHoneyFilled);
   return typeof value === "string" ? value !== "" : value !== undefined && value !== null;
 }
 

@@ -284,12 +284,16 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   }
 
   async function body(c: Ctx): Promise<Record<string, unknown>> {
-    const ct = c.req.header("content-type") ?? "";
+    // Media types are case-insensitive (RFC 2045 §5.1): normalize before the
+    // JSON check so `Application/Json` cannot smuggle a body past the trap.
+    // Forms parse with all values preserved: duplicate keys arrive as arrays
+    // (first-wins would let a filled duplicate hide behind an empty sibling).
+    const ct = (c.req.header("content-type") ?? "").toLowerCase();
     if (ct.includes("application/json")) {
       const j = await c.req.json().catch(() => null);
       return j && typeof j === "object" ? (j as Record<string, unknown>) : {};
     }
-    return (await c.req.parseBody()) as Record<string, unknown>;
+    return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   }
 
   const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
@@ -420,9 +424,11 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
 
   app.delete("/events/:key/rsvp", async (c) => {
     c.header("cache-control", "private, no-store");
-    // Both sources are evaluated independently: an empty query value must not mask
-    // a filled body decoy, and a non-string body value trips like a filled string.
-    const queryHoney = c.req.query(RSVP_HONEY_FIELD);
+    // Both sources are evaluated independently, with ALL values preserved:
+    // `query()` is first-wins, so duplicates use `queries()` — an empty query
+    // value must not mask a filled sibling or a filled body decoy, and a
+    // non-string body value trips like a filled string.
+    const queryHoney = c.req.queries(RSVP_HONEY_FIELD);
     const bodyHoney = (await body(c).catch(() => ({} as Record<string, unknown>)))[RSVP_HONEY_FIELD];
     if (rsvpHoneyFilled(queryHoney) || rsvpHoneyFilled(bodyHoney)) return c.body(null, 204);
     const who = await member(c);

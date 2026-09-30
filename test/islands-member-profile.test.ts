@@ -142,6 +142,14 @@ describe("member-profile spam trap", () => {
     expect(rsvpHoneyFilled(undefined)).toBe(false);
     expect(rsvpHoneyFilled(null)).toBe(false);
     expect(rsvpHoneyFilled("")).toBe(false);
+    // Duplicate keys arrive as arrays (parseBody all:true, queries()): any
+    // filled element trips, so a filled duplicate cannot hide behind an
+    // empty sibling in either position.
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: ["", "spam"] })).toBe(true);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: ["spam", ""] })).toBe(true);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: ["", ""] })).toBe(false);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: [] })).toBe(false);
+    expect(rsvpHoneyFilled(["", true])).toBe(true);
   });
   it("tripped and real saves answer identically; only the real one writes; nothing is logged", async () => {
     const { app, store, cookie } = await setup();
