@@ -9,6 +9,9 @@ import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
+import { rateLimitExceeded } from "../errors";
+import { RSVP_HONEY_FIELD } from "../islands/contracts";
+import { dispatchRsvpSync, hitRsvpThrottle, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listFeed, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
@@ -277,4 +280,73 @@ export function registerEventRoutes(app: App, readSession: SessionReader): void 
       }
     });
   }
+
+  // ---- RSVP (member writes, W9) ---------------------------------------------------
+  // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
+  // DELETE 204 always (quiet), any other verb 405. One shared 12/min budget per member.
+  const rsvpBody = (a: RsvpAnswer) => ({ data: { status: a.status, synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null } });
+  const closed = (c: Ctx) => c.json({ reason: "event_not_open", message: "This event is not taking RSVPs." }, 403);
+
+  async function member(c: Ctx): Promise<Session | Response> {
+    const origin = c.req.header("origin");
+    if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
+    const session = await readSession(c);
+    if (!session) return c.json({ error: "unauthenticated" }, 401);
+    if (!session.member) return c.json({ error: "forbidden" }, 403);
+    return session;
+  }
+
+  app.put("/events/:key/rsvp", async (c) => {
+    c.header("cache-control", "private, no-store");
+    const input = await body(c);
+    // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
+    // without touching limiter, auth or DB, and logs nothing.
+    if (typeof input[RSVP_HONEY_FIELD] === "string" && input[RSVP_HONEY_FIELD] !== "") {
+      return c.json(rsvpBody({ status: isRsvpStatus(input.status) ? input.status : "going", syncedToDiscordAt: null }), 201);
+    }
+    const who = await member(c);
+    if (who instanceof Response) return who;
+    if (!isRsvpStatus(input.status)) return c.json({ error: "invalid", fields: { status: ["status is invalid"] } }, 422);
+    // Accepted, then refused: answering for the caller instead would look like it worked.
+    if (input.user_id !== undefined && String(input.user_id) !== who.id) return c.json({ error: "forbidden" }, 403);
+    const key = c.req.param("key");
+    if (!KEY_RE.test(key)) return c.json({ error: "not_found" }, 404);
+    const db = await dbFor(c);
+    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    // Policy before budget, as in Laravel: a refused write does not spend an attempt.
+    const ev = await getPublicEvent(db, key);
+    if (!ev) return c.json({ error: "not_found" }, 404);
+    if (ev.status !== "published" || ev.endsAt <= new Date() || !ev.rsvpOpen) return closed(c);
+    const verdict = await hitRsvpThrottle(db, who.id);
+    if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
+    const r = await writeRsvp(db, key, who.id, input.status);
+    if (!r.ok) {
+      if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
+      if (r.reason === "closed") return closed(c);
+      return c.json({ reason: "event_at_capacity", message: "This event is full.", event_key: key, capacity: r.capacity }, 409);
+    }
+    await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
+    return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
+  });
+
+  app.delete("/events/:key/rsvp", async (c) => {
+    c.header("cache-control", "private, no-store");
+    const honey = c.req.query(RSVP_HONEY_FIELD) ?? (await body(c).catch(() => ({} as Record<string, unknown>)))[RSVP_HONEY_FIELD];
+    if (typeof honey === "string" && honey !== "") return c.body(null, 204);
+    const who = await member(c);
+    if (who instanceof Response) return who;
+    const db = await dbFor(c);
+    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    const verdict = await hitRsvpThrottle(db, who.id);
+    if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
+    // Only the caller's own row is reachable: the delete is keyed on the session user.
+    const key = c.req.param("key");
+    if (KEY_RE.test(key)) {
+      const r = await withdrawRsvp(db, key, who.id);
+      await dispatchRsvpSync(c.env, key, r.status);
+    }
+    return c.body(null, 204);
+  });
+
+  app.all("/events/:key/rsvp", (c) => c.body(null, 405, { Allow: "PUT, DELETE" }));
 }

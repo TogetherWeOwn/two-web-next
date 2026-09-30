@@ -38,7 +38,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | pending | W8 📋 + W11 🔶 |
-| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | contract pinned, routes pending | W9 📋 + W10 slice 2 ⛔ |
+| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, FOR UPDATE capacity races (test/rsvp.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
 
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
@@ -124,7 +124,7 @@ go hunting for them.
 | Legacy | Next status | Card |
 |---|---|---|
 | EventPolicy (view/drafts/publish/cancel/toggleRsvp/Delete moderator-only) | pending | W8 📋 |
-| RsvpPolicy (owner-only write; Published + !ended + rsvpOpen create) | pending | W9 📋 |
+| RsvpPolicy (owner-only write; Published + !ended + rsvpOpen create) | ✅ owner-only, Published + !ended + rsvpOpen | W9 ✅ |
 | FeaturedContentPolicy (all moderator; public via `currentlyVisible`) | pending | W11 🔶 |
 | JoinAttemptPolicy (read moderator; writes denied — controller writes direct) | pending | W6 🔶 (write) + W12 📋 (read) |
 | UserPolicy (`updateProfile` self-only) | pending | W7 📋 |
@@ -149,7 +149,7 @@ go hunting for them.
 | EventService (capacity/waitlist under lock, series create/materialize, sync-after-commit) | pending | W8 📋 + W11 🔶 + W13 ⛔ |
 | InternalActionClient + signer (sole bot speaker; `addMember` sync-only, never queued) | ✅ signer byte-parity; client pending | W14 ✅ + W13 ⛔ |
 | EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | ✅ | W8 ✅ (JSON-LD) + W9 ✅ (feeds) |
-| RsvpRateLimit / AgentEventRateLimit | pending / ✅ | W9 📋 / W14 ✅ |
+| RsvpRateLimit / AgentEventRateLimit | ✅ / ✅ | W9 ✅ / W14 ✅ |
 | SafeRedirect (guarded `next`), SpamTrap (honeypot + 1000 ms floor) | pending | W6 🔶 / W7 📋 + W9 📋 |
 | RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |
 | MemberStatsSource / Profiles support (rank, stats, milestones) | pending | W7 📋 |
