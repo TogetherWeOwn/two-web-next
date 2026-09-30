@@ -1,6 +1,6 @@
 // W9 calendar feeds: byte-level fixtures pinned to two-web's EventIcs/EventRss/EventGoogleCalendar
 // output, plus route tests (agent-testdb; skipped without DATABASE_URL).
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { events } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
@@ -97,6 +97,34 @@ describe("feed builders (byte fixtures)", () => {
       "https://calendar.google.com/calendar/render?action=TEMPLATE&text=Friday%20night%20Helldivers&dates=20260715T180000Z%2F20260715T200000Z&details=Bring%20stims.&location=Voice%3A%20General",
     );
   });
+
+  it("omits the item description element when the event has none, keeping the channel description", () => {
+    const out = eventsRss([row({ description: null }), row({ eventKey: "01J0000000000000000000EMPT", description: "" })], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    // Exactly one <description> remains: the channel's own.
+    expect(out.match(/<description>/g)).toHaveLength(1);
+    expect(out).toContain("<pubDate>Wed, 15 Jul 2026 18:00:00 +0000</pubDate></item>");
+  });
+
+  it("keeps the permalink guid stable across a rename and renders pubDate in UTC on both DST sides", () => {
+    const summer = eventsRss([row()], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    const renamed = eventsRss([row({ title: "Renamed raid" })], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    const guid = `<guid isPermaLink="true">${APP_URL}/e/${KEY}</guid>`;
+    expect(summer).toContain(guid);
+    expect(renamed).toContain(guid);
+    expect(summer).toContain("<pubDate>Wed, 15 Jul 2026 18:00:00 +0000</pubDate>"); // BST: 19:00 local
+    const winter = eventsRss([row({ startsAt: new Date("2026-01-15T20:00:00Z") })], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    expect(winter).toContain("<pubDate>Thu, 15 Jan 2026 20:00:00 +0000</pubDate>"); // GMT: 20:00 local
+  });
+
+  it("round-trips emoji and multibyte titles byte-for-byte (RSS escaped, ICS raw)", () => {
+    const title = "🎮 Nächster Raid — 東京ゲームナイト";
+    const rss = eventsRss([row({ title })], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    expect(rss).toContain(`<title>${title}</title>`);
+    expect(new TextDecoder().decode(new TextEncoder().encode(rss))).toContain(title);
+    const ics = eventIcs(row({ title }), APP_URL);
+    expect(ics).toContain(`SUMMARY:${title}`);
+    for (const l of ics.split("\r\n")) expect(new TextEncoder().encode(l).length).toBeLessThanOrEqual(75);
+  });
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
@@ -149,5 +177,47 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
     expect((await req("/events/01J0000000000000000000DRF1.ics")).status).toBe(403);
     expect((await req("/events/01J0000000000000000000NONE.ics")).status).toBe(404);
     expect((await req("/events/nope.ics")).status).toBe(404);
+  });
+
+  it("drops an expired event from feeds and rotates the ETag with no write when the clock passes ends_at", async () => {
+    // Legacy FeedExpiryValidatorTest: a subscriber's cached feed must go stale
+    // purely because the event ended — expiry is a read-time property, not a
+    // write-triggered one. listFeed compares ends_at against now at request time.
+    await ins("01J0000000000000000000EXP1", "published", "2026-07-15T20:00:00Z");
+    // Fake only the clock: the driver needs its real socket timers.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-07-15T19:59:00Z"));
+
+      const fresh = await req("/events.rss");
+      expect(fresh.status).toBe(200);
+      expect(fresh.headers.get("cache-control")).toBe("max-age=300, public");
+      const freshBody = await fresh.text();
+      expect(freshBody).toContain("EXP1");
+      const etag = fresh.headers.get("etag")!;
+      expect((await req("/events.rss", { headers: { "if-none-match": etag } })).status).toBe(304);
+      const icsFresh = await req("/events.ics");
+      expect(await icsFresh.text()).toContain("EXP1");
+
+      // One minute later the event has ended; no row changed, yet both feeds
+      // must drop it and the validators minted before the boundary must miss.
+      vi.setSystemTime(new Date("2026-07-15T20:01:00Z"));
+
+      const stale = await req("/events.rss", { headers: { "if-none-match": etag } });
+      expect(stale.status).toBe(200);
+      const staleBody = await stale.text();
+      expect(staleBody).not.toContain("EXP1");
+      const etag2 = stale.headers.get("etag")!;
+      expect(etag2).not.toBe(etag);
+      expect((await req("/events.rss", { headers: { "if-none-match": etag2 } })).status).toBe(304);
+
+      const icsStale = await req("/events.ics");
+      expect(await icsStale.text()).not.toContain("EXP1");
+      const icsEtag2 = icsStale.headers.get("etag")!;
+      expect((await req("/events.ics", { headers: { "if-none-match": icsEtag2 } })).status).toBe(304);
+      expect((await req("/events/01J0000000000000000000EXP1.ics")).status).toBe(200); // per-event download still serves
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

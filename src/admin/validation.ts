@@ -11,8 +11,10 @@
 //   over the explicit zone: refused by shape, the parser only accepts naive
 //   input (TOG-6804).
 // - An autumn-overlap (fold) wall time names two instants. A fresh parse
-//   takes the first occurrence; an unchanged edit keeps the exact stored
-//   instant via the hidden *_utc carrier (TOG-6805, see routes).
+//   takes the second (GMT) occurrence — the same instant legacy
+//   EventInput::instant produced; an unchanged edit keeps the exact stored
+//   instant (either side of the fold) via the hidden *_utc carrier
+//   (TOG-6805, see routes).
 
 export type EventStatus = "draft" | "published" | "cancelled" | "past";
 
