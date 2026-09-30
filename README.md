@@ -49,9 +49,19 @@ otherwise, so the cold CI run (no test-DB access) stays green.
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ACCOUNT_ID`, followed by a `/health` smoke test against
-https://next.togetherweown.com. There is deliberately no production job:
-production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
+`CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com`.
+The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
+Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
+on every response and staging noindex on HTML (the application's header contract).
+Redirects are not followed; each request/body has a 5-second timeout. A failure
+names the route and expected versus actual result and fails the deploy job after
+six attempts. There is deliberately no production job: production
+(togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
+
+`npm run test:smoke` runs the checker against a loopback stub server with local
+fixtures only, no external network or database. It is included in `npm run check`
+so both PR CI and the pre-deploy check exercise the selftest. The checker itself
+is a staging-only post-deploy probe, not a production test command.
 
 ## Configuration
 
