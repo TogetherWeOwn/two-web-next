@@ -4,7 +4,8 @@
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
-import { NotFoundError, createEvent, getEvent, transitionEvent, updateEvent } from "../admin/store";
+import { NotFoundError, createEvent, getEvent, recordAccess, transitionEvent, updateEvent } from "../admin/store";
+import { memberAccessLog } from "../access-log";
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
@@ -32,7 +33,7 @@ import {
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -266,11 +267,14 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     });
   });
 
-  app.get("/e/:key", async (c) => {
-    const key = c.req.param("key");
+  app.get("/e/:key", memberAccessLog(async (c) => {
+    const db = await dbFor(c);
+    return db ? (entry) => recordAccess(db, entry) : null;
+  }), async (c) => {
+    const key = c.req.param("key") ?? "";
     if (!KEY_RE.test(key)) return c.notFound();
     const db = await dbFor(c);
-    if (!db) return unavailable(c);
+    if (!db) return c.text("Events temporarily unavailable", 503);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
     // The page personalizes on the session (member/guest join pitch) and on
@@ -282,7 +286,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // a signed-in non-moderator still rotated above, so the 403 must not be
     // cacheable either.
     if (e.status === "cancelled") {
-      const session = await readSession(c);
+      const session = await readSession(c as unknown as Ctx);
       void session;
       c.header("x-robots-tag", "noindex, nofollow");
       c.header("cache-control", "private, no-store");
@@ -293,14 +297,21 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // join banner both depend on the viewer/cookies.
     c.header("cache-control", "private, no-store");
     c.header("vary", "Cookie");
-    const session = await readSession(c);
+    // The injected reader uses only bindings/cookies; this route additionally
+    // carries the access middleware's request-local variables.
+    const session = await readSession(c as unknown as Ctx);
     if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
     if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
     // One-shot join confirmation (legacy join_result flash): the event page
     // is a join-CTA landing (`/join?next=/e/<key>`), so it consumes and
     // renders the banner exactly once like /, /join and /profile.
     const joinResult = await takeJoinResult(c);
-    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} />);
+    const attendees = session?.member ? await listGoingAttendees(db, e.id) : [];
+    if (attendees.length > 0 && session) {
+      c.set("viewerId", session.id);
+      c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
+    }
+    return c.html(<EventPage e={e} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
@@ -369,8 +380,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         startsAtUtc: existing.startsAt.toISOString(),
         endsAtUtc: existing.endsAt.toISOString(),
       });
-      const { row, writeBack } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
+      const { row, writeBack, childWriteBacks } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
       if (writeBack) await dispatchWriteBack(c.env, writeBack);
+      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
       return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);

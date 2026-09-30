@@ -87,7 +87,7 @@ import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl } from "./feeds";
-import type { PublicEvent } from "./reads";
+import type { EventAttendee, PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
   try {
@@ -525,9 +525,9 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
 // CTA carrying this page as ?next= so the journey lands them back here. The
 // one-shot join confirmation renders above the pitch when this page is the
 // join landing (TOG-10356): the newly authenticated member would otherwise see
-// neither the banner nor the guest pitch. SEO shell (canonical/share/robots/
-// badges/venue/copy-link) is main's W16 advance — kept verbatim.
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; session?: Session | null; joinResult?: JoinResult | null }> = ({ e, appUrl, jsonLd, session, joinResult }) => {
+// neither the banner nor the guest pitch. Attendees/member-stats shell is
+// main's advance — kept verbatim.
+export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string; session?: Session | null; joinResult?: JoinResult | null }> = ({ e, attendees = [], appUrl, jsonLd, session, joinResult }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -565,6 +565,14 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; ses
         <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">Copy link</a>
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {attendees.length > 0 ? (
+        <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
+          <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
+          <ul>{attendees.map((attendee) => (
+            <li><a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a></li>
+          ))}</ul>
+        </section>
+      ) : null}
       <script src="/islands/copy-link.js" defer />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
     </Shell>

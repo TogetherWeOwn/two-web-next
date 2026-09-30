@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import app from "../../src/index";
 import { events, featuredContents } from "../../src/db/admin-schema";
+import { joinAttempts } from "../../src/db/schema";
 import type { Db } from "../../src/db/index";
 import type { Env } from "../../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions";
@@ -15,14 +16,14 @@ export const HTML_READS = [
   "/", "/about", "/faq", "/rules", "/privacy", "/join", "/join/callback",
   "/events", "/events/past", "/e/:key", "/profile", "/members/:user",
   "/admin", "/admin/events", "/admin/events/new", "/admin/events/:key",
-  "/admin/featured", "/admin/featured/new", "/admin/featured/:id", "/admin/join-attempts",
+  "/admin/featured", "/admin/featured/new", "/admin/featured/:id", "/admin/join-attempts", "/admin/join-attempts/:id",
 ];
 
 // Redirects, feeds and machine endpoints have no HTML success page. Their branded
 // error responses are covered separately; new GET routes must be classified here.
 export const NON_HTML_READS = [
   "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback",
-  "/sitemap_index.xml", "/robots.txt", "/health", "/healthz", "/db-ping", "/up",
+  "/sitemap_index.xml", "/robots.txt", "/up",
   "/events.json", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 
@@ -58,6 +59,14 @@ export function pageShellFixture(status = "published") {
     if (sql.includes('from "featured_contents"')) {
       if (sql.includes('"id" =') && !params.includes(1)) return { rows: [] };
       return { rows: [encode(getTableColumns(featuredContents), featured)] };
+    }
+    if (sql.includes('from "join_attempts"') && sql.includes('"join_attempts"."id" =')) {
+      if (params[0] !== 1) return { rows: [] };
+      const attempt: typeof joinAttempts.$inferSelect = {
+        id: 1, outcome: "added", source: "site", requestId: "fixture-request",
+        discordId: MEMBER_ID, createdAt: now,
+      };
+      return { rows: [[...encode(getTableColumns(joinAttempts), attempt), MEMBER_ID]] };
     }
     if (sql.includes('from "rsvps"') || sql.includes('from "join_attempts"') || sql.includes('from "event_search_log"')
       || sql.startsWith('insert into "member_data_access_logs"') || sql.startsWith("SET LOCAL")) return { rows: [] };

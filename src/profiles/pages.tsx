@@ -22,6 +22,31 @@ import {
   profileJoinedMonth,
 } from "../islands/contracts";
 import type { MemberView } from "./store";
+import type { MemberStats } from "./stats";
+
+const statsLabel = (key: string) => key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+const statsDate = (date: Date) => date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+
+const MemberStatsBlock: FC<{ stats: MemberStats }> = ({ stats }) => (
+  <section aria-labelledby="member-stats-heading" data-testid="profile-stats">
+    <h2 id="member-stats-heading">Member stats</h2>
+    <dl>
+      {stats.rankKey ? <><dt>Rank</dt><dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd></> : null}
+      {stats.joinedAt ? <><dt>Joined</dt><dd data-testid={PROFILE_JOINED_TESTID}><time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time></dd></> : null}
+      {stats.tenureDays !== null ? <><dt>Tenure</dt><dd>{stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}</dd></> : null}
+      <dt>Membership</dt><dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd>
+    </dl>
+    <h3>Milestones</h3>
+    {stats.milestones.length > 0 ? (
+      <ol>{stats.milestones.map((milestone) => (
+        <li>
+          {statsLabel(milestone.type)}{milestone.detail ? ` — ${milestone.detail}` : ""}
+          {" · "}<time datetime={milestone.occurredAt.toISOString()}>{statsDate(milestone.occurredAt)}</time>
+        </li>
+      ))}</ol>
+    ) : <p>No milestones yet.</p>}
+  </section>
+);
 
 // Share tags (TOG-6793): the canonical is always the shareable member URL,
 // so /profile and /members/{user} never present as duplicates. The
@@ -35,9 +60,10 @@ export const ProfilePage: FC<{
   isOwner: boolean;
   appUrl: string;
   joinResult?: JoinResult | null;
+  stats?: MemberStats | null;
   errors?: Record<string, string>;
   values?: { bio: string; games_text: string; timezone: string };
-}> = ({ member, isOwner, appUrl, joinResult, errors, values }) => {
+}> = ({ member, isOwner, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const form = values ?? { bio: member.bio ?? "", games_text: member.games.join("\n"), timezone: member.timezone ?? "" };
@@ -65,8 +91,8 @@ export const ProfilePage: FC<{
             </span>
           )}
           <h1 id="member-heading" tabindex="-1" data-testid={PROFILE_NAME_TESTID}>{member.username}</h1>
-          {member.rank ? <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p> : null}
-          {joined ? <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p> : null}
+          {!stats?.rankKey && member.rank ? <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p> : null}
+          {!stats?.joinedAt && joined ? <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p> : null}
           {member.timezone ? <p>Timezone: {member.timezone}</p> : null}
           {member.bio ? <p>{member.bio}</p> : <p>No bio yet.</p>}
           {member.games.length > 0 ? (
@@ -75,6 +101,7 @@ export const ProfilePage: FC<{
             <p>No games listed yet.</p>
           )}
         </section>
+        {stats ? <MemberStatsBlock stats={stats} /> : null}
         {isOwner ? (
           <section aria-labelledby="edit-heading" data-testid={PROFILE_EDIT_TESTID} {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }} data-member-id={member.id}>
             <h2 id="edit-heading" tabindex="-1">Edit your profile</h2>

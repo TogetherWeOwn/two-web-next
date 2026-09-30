@@ -1,3 +1,7 @@
+// route-inventory: ALL /*
+// route-inventory: ALL /admin/*
+// route-inventory: ALL /profile
+// route-inventory: ALL /members/*
 // W15 Pest port: assert exposure on the mounted worker, not only isolated routers.
 // Legacy assertion mapping and intentional port differences: docs/w15-member-data-parity.md.
 import { Hono } from "hono";
@@ -30,6 +34,8 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     // ALL includes middleware as well as handlers. Pin their multiplicity;
     // filtering wildcards or deduplicating would hide added ALL endpoints.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
+    // The event-page access logger is a second GET handler on the same route.
+    "GET /e/:key",
     "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
   ].sort());
 }

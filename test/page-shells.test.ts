@@ -20,7 +20,8 @@ function assertShell(html: string) {
 
 function assertInventory(router: { routes: { method: string; path: string }[] }) {
   const actual = router.routes.filter((route) => route.method === "GET").map((route) => route.path).sort();
-  expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS].sort());
+  // Event attendee access logging is a second GET registration, not another page.
+  expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS, "/e/:key"].sort());
 }
 
 beforeEach(() => {
@@ -55,6 +56,7 @@ it.each([
   ["/e/missing-event", 404],
   ["/admin/events/missing-event", 404],
   ["/admin/featured/999", 404],
+  ["/admin/join-attempts/999", 404],
   ["/members/100000000000000002", 404],
   ["/missing-page", 404],
   [`/e/${EVENT_KEY}`, 410],
