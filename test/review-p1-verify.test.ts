@@ -5,8 +5,8 @@ import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
 // Mirrors of the 3rd review's P1 proofs, against the fixed code. Live-DB parts
-// use connection-scoped temporary tables on agent-testdb; shared tables are
-// never written or dropped.
+// use connection-scoped temporary tables on DATABASE_URL (CI's postgres:17
+// service, agent-testdb locally); shared tables are never written or dropped.
 
 function memLock(held = new Set<string>()): UniqueLock & { held: Set<string> } {
   return {
@@ -34,7 +34,10 @@ function msg(body: unknown, attempts = 1) {
     retry(o?: { delaySeconds?: number }) { r.retried = o?.delaySeconds ?? "now"; },
   });
 }
-const URL = "postgres://agent_test@agent-testdb:5432/postgres";
+// CI sets DATABASE_URL to its postgres:17 service (localhost); local runs fall
+// back to the shared agent-testdb host. Never hardcode the host: CI has no
+// `agent-testdb` DNS and fails with EAI_AGAIN (PR #30 `check` on d276d0b).
+const URL = process.env.DATABASE_URL ?? "postgres://agent_test@agent-testdb:5432/postgres";
 
 describe("P1-2: every accepted jobId keeps its row (real SQL)", () => {
   it("two live dispatches of the same key count 2", async () => {
