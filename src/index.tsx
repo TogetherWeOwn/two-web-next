@@ -27,7 +27,7 @@ import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { listHomeUpcoming, sitemapEvents } from "./events/reads";
+import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
@@ -227,15 +227,17 @@ const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_fail
 
 app.get("/", async (c) => {
   // A DB outage must not break the funnel, including session setup. Fail closed to guest.
-  const session = await storeFor(c).then((store) => readSession(c, store)).catch(() => null);
+  const session = await storeFor(c).then((store) => readSession(c, store)).catch(() => {
+    // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
+    console.warn("Home session unavailable; serving as guest.", { exception: "SessionReadFailure" });
+    return null;
+  });
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
   const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
-  const upcomingEvents = await dbFor(c)
-    .then((db) => db ? listHomeUpcoming(db) : null)
-    .catch(() => null);
+  const upcomingEvents = await loadHomeUpcoming(() => dbFor(c));
   c.header("cache-control", "private, no-store");
   return c.html(
     <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}

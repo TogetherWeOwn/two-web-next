@@ -7,7 +7,7 @@ import app from "../src/index";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { listHomeUpcoming } from "../src/events/reads";
+import { HOME_EVENTS_DB_TIMEOUT_MS, HOME_EVENTS_DEADLINE_MS, listHomeUpcoming, loadHomeUpcoming } from "../src/events/reads";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 
 // Prove connection construction failure without opening any database socket.
@@ -37,12 +37,20 @@ function event(id: number, overrides: Partial<typeof events.$inferSelect> = {}):
   };
 }
 
-function fixture(rows: (typeof events.$inferSelect)[] = [], failAt?: "events" | "rsvps") {
+function fixture(rows: (typeof events.$inferSelect)[] = [], failAt?: "events" | "rsvps", holdAt?: "events" | "rsvps") {
   const queries: { sql: string; params: unknown[] }[] = [];
+  let started!: () => void;
+  let rejectRead!: (err: Error) => void;
+  const waitForStall = new Promise<void>((resolve) => { started = resolve; });
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
-    if (failAt && sql.includes(`from "${failAt}"`)) throw new Error("database unavailable");
+    if (sql.includes("set_config")) return { rows: [] };
+    if (failAt && sql.includes(`from "${failAt}"`)) throw new Error("postgres://user:secret@host/db private-member private-session");
+    if (holdAt && sql.includes(`from "${holdAt}"`)) {
+      started();
+      await new Promise<void>((_, reject) => { rejectRead = reject; });
+    }
     if (sql.includes('from "rsvps"')) {
       return { rows: [[1, 2], [2, 1]].filter(([id]) => params.includes(id)) };
     }
@@ -59,11 +67,13 @@ function fixture(rows: (typeof events.$inferSelect)[] = [], failAt?: "events" | 
       return value instanceof Date ? value.toISOString() : value;
     })) };
   }) as unknown as Db;
+  // pg-proxy has no transactions; run the callback on this SQL-recording fixture.
+  Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
   const env = { ...baseEnv, ADMIN_DB: db } as Env;
-  return { db, env, queries, request: () => app.request("/", {}, env) };
+  return { db, env, queries, waitForStall, rejectRead: () => rejectRead(new Error("late private-session failure")), request: () => app.request("/", {}, env) };
 }
 
-afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
 function freezeNow() {
   vi.useFakeTimers();
@@ -91,14 +101,17 @@ describe("homepage upcoming events", () => {
     const rows = await listHomeUpcoming(f.db, NOW);
     expect(rows.map((r) => r.eventKey)).toEqual(["event-1", "event-2", "event-3"]);
     expect(rows.map((r) => r.goingCount)).toEqual([2, 1, 0]);
-    expect(f.queries).toHaveLength(2);
-    expect(f.queries[0]!.sql).toContain('"events"."status" = $1');
-    expect(f.queries[0]!.sql).toContain('"events"."ends_at" >= $2');
-    expect(f.queries[0]!.sql).toContain('order by "events"."starts_at" asc, "events"."id" asc limit $3');
-    expect(f.queries[0]!.params).toEqual(["published", expect.any(String), 3]);
-    expect(f.queries[1]!.sql).toContain('"rsvps"."status" =');
-    expect(f.queries[1]!.params).toEqual([1, 2, 3, "going"]);
-    expect(f.queries[1]!.sql).not.toContain("user_id");
+    expect(f.queries).toHaveLength(3);
+    expect(f.queries[0]!.sql).toContain("set_config('lock_timeout', $1, true)");
+    expect(f.queries[0]!.sql).toContain("set_config('statement_timeout', $2, true)");
+    expect(f.queries[0]!.params).toEqual([`${HOME_EVENTS_DB_TIMEOUT_MS}ms`, `${HOME_EVENTS_DB_TIMEOUT_MS}ms`]);
+    expect(f.queries[1]!.sql).toContain('"events"."status" = $1');
+    expect(f.queries[1]!.sql).toContain('"events"."ends_at" >= $2');
+    expect(f.queries[1]!.sql).toContain('order by "events"."starts_at" asc, "events"."id" asc limit $3');
+    expect(f.queries[1]!.params).toEqual(["published", expect.any(String), 3]);
+    expect(f.queries[2]!.sql).toContain('"rsvps"."status" =');
+    expect(f.queries[2]!.params).toEqual([1, 2, 3, "going"]);
+    expect(f.queries[2]!.sql).not.toContain("user_id");
     expect(Object.keys(rows[0]!).sort()).toEqual(["eventKey", "goingCount", "location", "startsAt", "timezone", "title"]);
   });
 
@@ -124,7 +137,7 @@ describe("homepage upcoming events", () => {
     expect(html).not.toContain("Game night 4");
     for (const id of [1, 2, 3]) expect(html).toContain(`href="/e/event-${id}"`);
     expect(html).toContain('datetime="2030-07-04T19:00:00.000Z"');
-    expect(html).toContain("Thu 4 Jul, 20:00");
+    expect(html).toContain("Thu 4 Jul, 20:00 (Europe/London)");
     expect(html).toContain("Voice lobby");
     expect(html).toContain("2 going");
     expect(html).toContain("0 going");
@@ -142,7 +155,7 @@ describe("homepage upcoming events", () => {
     const html = await expectEmpty(await f.request(), "empty");
     expect(html).toContain("Nothing scheduled yet.");
     expect(html).not.toContain(row.title);
-    expect(f.queries).toHaveLength(1); // no aggregate query for an empty list
+    expect(f.queries).toHaveLength(2); // settings + events, no aggregate query for an empty list
   });
 
   it("shows a designed empty state without any rows", async () => {
@@ -162,10 +175,56 @@ describe("homepage upcoming events", () => {
 
   it.each(["events", "rsvps"] as const)("degrades to unavailable, still 200, when the %s read rejects", async (failAt) => {
     freezeNow();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const html = await expectEmpty(await fixture([event(1)], failAt).request(), "unavailable");
     expect(html).toContain("Game nights are unavailable right now.");
     expect(html).not.toContain("Nothing scheduled yet.");
     expect(html).not.toContain("Game night 1");
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Home events unavailable; serving the fallback.", { exception: "ReadFailure" });
+    for (const secret of ["postgres://", "secret", "private-member", "private-session", "select"]) {
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
+    }
+  });
+
+  it.each(["events", "rsvps"] as const)("returns 200 at the deadline when the %s read stalls, and handles late rejection", async (holdAt) => {
+    freezeNow();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const f = fixture([event(1)], undefined, holdAt);
+    const request = f.request();
+    await f.waitForStall;
+    await vi.advanceTimersByTimeAsync(HOME_EVENTS_DEADLINE_MS);
+    await expectEmpty(await request, "unavailable");
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Home events unavailable; serving the fallback.", { exception: "HomeEventsDeadline" });
+    expect(vi.getTimerCount()).toBe(0);
+    f.rejectRead();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(warn).toHaveBeenCalledTimes(1); // no duplicate or unhandled late rejection
+    expect(f.queries).toHaveLength(holdAt === "events" ? 2 : 3);
+  });
+
+  it("bounds DB setup too and clears the timer after a successful read", async () => {
+    freezeNow();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const pending = loadHomeUpcoming(() => new Promise(() => {}));
+    await vi.advanceTimersByTimeAsync(HOME_EVENTS_DEADLINE_MS);
+    expect(await pending).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Home events unavailable; serving the fallback.", { exception: "HomeEventsDeadline" });
+    await fixture().request();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("labels each card's effective zone, including the UTC fallback for an invalid zone", async () => {
+    freezeNow();
+    const startsAt = new Date("2030-07-05T00:30:00Z");
+    const html = await (await fixture([
+      event(1, { startsAt, timezone: "Europe/London" }),
+      event(2, { startsAt, timezone: "America/New_York" }),
+      event(3, { startsAt, timezone: "Invalid/Zone" }),
+    ]).request()).text();
+    expect(html).toContain("Fri 5 Jul, 01:30 (Europe/London)");
+    expect(html).toContain("Thu 4 Jul, 20:30 (America/New_York)");
+    expect(html).toContain("Fri 5 Jul, 00:30 (UTC)");
+    expect(html).not.toContain("Invalid/Zone");
   });
 
   it("degrades when DB configuration is missing", async () => {
@@ -188,7 +247,8 @@ describe("homepage upcoming events", () => {
     await store.create({ tokenHash: await hashToken(token), userId: "private-member", username: "Private member name", avatar: null,
       member: true, moderator: true, expiresAt: new Date(NOW.getTime() + 3600_000) });
     const cookie = (await serializeSigned("__Host-two_session", token, baseEnv.SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
-    vi.spyOn(store, "get").mockRejectedValue(new Error("session unavailable"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(store, "get").mockRejectedValue(new Error("postgres://user:secret@host/db private-member private-session"));
     const response = await app.request("/", { headers: { cookie } }, { ...f.env, SESSION_STORE: store } as Env);
     expect(response.status).toBe(200);
     const html = await response.text();
@@ -197,5 +257,9 @@ describe("homepage upcoming events", () => {
     expect(html).not.toContain("Private member name");
     expect(html).not.toContain("Sign out");
     expect(response.headers.get("set-cookie")).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith("Home session unavailable; serving as guest.", { exception: "SessionReadFailure" });
+    for (const secret of ["postgres://", "secret", "private-member", "private-session"]) {
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
+    }
   });
 });

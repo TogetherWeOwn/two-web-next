@@ -2,7 +2,7 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Counts } from "./counts";
 import type { Session } from "./env";
 import type { HomeEvent } from "./events/reads";
-import { cardTimeLabel } from "./islands/contracts";
+import { cardTimeLabel, isValidZone } from "./islands/contracts";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
@@ -227,7 +227,7 @@ export const Home: FC<{
               {upcomingEvents.map((event) => (
                 <li class="card">
                   <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
-                    <p><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)}</time></p>
+                    <p><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time></p>
                     <h3>{event.title}</h3>
                     {event.location ? <p>{event.location}</p> : null}
                     <p>{event.goingCount} going</p>
