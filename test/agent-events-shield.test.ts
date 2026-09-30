@@ -9,6 +9,7 @@ import {
 } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 import agentEvents from "../drizzle/0001_agent-events.sql?raw";
+import { testDatabaseUrl } from "./helpers/member-data-db";
 
 // W15: the outer route shield (two-web TOG-8402, `agent-events.route_per_minute`).
 // Every hit per credential per minute, counted in Postgres BEFORE auth, the
@@ -74,9 +75,13 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     (await sql`SELECT count(*)::int AS n FROM agent_event_audits WHERE reason_code = ${reason}`)[0]!.n as number;
 
   beforeAll(async () => {
-    admin = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const url = testDatabaseUrl(process.env.DATABASE_URL!); // Must run before postgres() or any DDL.
+    // postgres.js treats password: "" as absent and falls back to PGPASSWORD.
+    // A callback pins the authorized empty test password without that fallback.
+    const validated = { port: 5432, password: () => url.password, onnotice: (() => {}) as () => void };
+    admin = postgres(url.href, { ...validated, max: 1 });
     await admin.unsafe(`CREATE SCHEMA ${schemaName}`);
-    sql = postgres(process.env.DATABASE_URL!, { max: 8, connection: { search_path: schemaName }, onnotice: () => {} });
+    sql = postgres(url.href, { ...validated, max: 8, connection: { search_path: schemaName } });
     // drizzle qualifies FK targets with "public"; strip it so the throwaway schema owns them.
     for (const stmt of agentEvents.replaceAll('"public".', "").split("--> statement-breakpoint")) {
       if (stmt.trim()) await sql.unsafe(stmt);
@@ -255,10 +260,54 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     expect((await sql`SELECT count(*)::int AS n FROM agent_event_hits WHERE at < now() - interval '5 minutes'`)[0]!.n as number).toBe(0);
   });
 
+  it("admits a fresh credential while an unrelated stale row is locked", async () => {
+    const stale = (
+      await sql`INSERT INTO agent_event_hits (bucket, at) VALUES ('shield:locked-stale', now() - interval '10 minutes') RETURNING id`
+    )[0]!.id as number;
+    const url = testDatabaseUrl(process.env.DATABASE_URL!);
+    const holder = postgres(url.href, {
+      max: 1,
+      port: 5432,
+      password: () => url.password,
+      connection: { search_path: schemaName },
+      onnotice: () => {},
+    });
+    try {
+      await holder.unsafe("BEGIN");
+      await holder`SELECT id FROM agent_event_hits WHERE id = ${stale} FOR UPDATE`;
+      const start = Date.now();
+      const r = await handleAgentEvent(
+        sql,
+        { ...cfg(60), lockWaitMs: 50 },
+        { op: "create", idempotency_key: key() },
+        null,
+        "127.0.0.34",
+      );
+      const elapsed = Date.now() - start;
+      // The locked stale row is skipped by the prune, not waited on: a fresh
+      // credential is still admitted to auth (401, grant-free) instead of
+      // answering 503 operation_busy.
+      expect(r.status).toBe(401);
+      expect(r.body.reason).toBe("unauthenticated");
+      expect(elapsed).toBeLessThan(4000);
+    } finally {
+      await holder.unsafe("ROLLBACK");
+      await holder.end();
+    }
+    await sql`DELETE FROM agent_event_hits WHERE bucket = 'shield:locked-stale'`;
+  });
+
   it("bounds the shield lock wait under contention", async () => {
     const busyBefore = await audits("operation_busy");
     const token = `sh-cont-${schemaName}`;
-    const holder = postgres(process.env.DATABASE_URL!, { max: 1, connection: { search_path: schemaName }, onnotice: () => {} });
+    const url = testDatabaseUrl(process.env.DATABASE_URL!);
+    const holder = postgres(url.href, {
+      max: 1,
+      port: 5432,
+      password: () => url.password,
+      connection: { search_path: schemaName },
+      onnotice: () => {},
+    });
     try {
       // Hold the exact advisory lock the shield takes: `agent-event-hits:`
       // + its `shield:<credential-hash>` bucket.
