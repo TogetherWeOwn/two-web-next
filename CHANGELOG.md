@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Port member-data exposure and access-log acceptance tests from Pest to Vitest, including the mounted Worker role matrix and real failing Postgres INSERTs.
+
+### Fixed
+
+- Refuse admin member-data responses when the access-log INSERT fails; replace Hono's finalized response rather than returning an ignored 503.
+
 ## [0.2.0](https://github.com/TogetherWeOwn/two-web-next/compare/v0.1.0...v0.2.0) (2026-09-29)
 
 
