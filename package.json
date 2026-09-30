@@ -8,7 +8,10 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test",
+    "check": "npm run typecheck && npm run e2e:typecheck && npm run e2e:safety && npm run test",
+    "e2e": "playwright test",
+    "e2e:typecheck": "tsc --noEmit -p e2e/tsconfig.json",
+    "e2e:safety": "node --test e2e/safety.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check"
@@ -20,6 +23,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260929.1",
+    "@playwright/test": "1.63.0",
     "@types/node": "^26.6.3",
     "drizzle-kit": "^0.31.11",
     "esbuild": "0.28.1",

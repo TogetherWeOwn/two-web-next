@@ -6,3 +6,6 @@ dist/
 .env*
 *.log
 coverage/
+e2e/.dev.vars
+playwright-report/
+test-results/
