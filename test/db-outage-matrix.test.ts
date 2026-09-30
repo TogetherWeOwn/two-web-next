@@ -51,8 +51,8 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/db-ping", status: 503, format: "json" },
   { method: "GET", route: "/auth/discord", status: 302, location: "https://discord.com/oauth2/authorize" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
-  { method: "GET", route: "/join/discord", status: 302, location: "https://discord.com/oauth2/authorize" },
-  { method: "GET", route: "/join/callback", status: 200, format: "html" },
+  { method: "GET", route: "/join/discord", status: 503, format: "html" },
+  { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },
   { method: "POST", route: "/auth/qa/:identity", path: "/auth/qa/member", status: 404, format: "html" },
   { method: "POST", route: "/csp-reports", status: 204, body: "{}", contentType: "application/csp-report" },
@@ -74,8 +74,8 @@ const MATRIX: Case[] = [
   { method: "PATCH", route: "/members/:user", status: 503, actor: "member", format: "json", body: '{"bio":"Fixture","games":[]}' },
   { method: "POST", route: "/members/:user", status: 503, actor: "member", format: "html", body: "_method=PATCH&bio=Fixture&games_text=", contentType: "application/x-www-form-urlencoded" },
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
-  // Even empty create forms pass through the enforced admin access-log gate.
-  ...["/admin/events/new", "/admin/featured/new"].map((route) => ({ method: "GET", route, status: 503, actor: "moderator" as const, format: "html" as const })),
+  // Empty create forms expose no member subjects and need no data read.
+  ...["/admin/events/new", "/admin/featured/new"].map((route) => ({ method: "GET", route, status: 200, actor: "moderator" as const, format: "html" as const })),
   ...["/admin/join-attempts", "/admin/events", "/admin/events/:key", "/admin/featured", "/admin/featured/:id"].map((route) => ({
     method: "GET", route, status: 503, actor: "moderator" as const, format: "html" as const,
   })),

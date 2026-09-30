@@ -30,13 +30,17 @@ Target stronger guarantees in Next: static `/rules` survives app-DB loss;
 member-data dependencies must fail closed with sanitized 503 responses rather
 than legacy framework 500 pages. These are assertions, not waivers: a current
 500 or an unbranded browser error fails the matrix and requires a follow-up.
-Admin create forms also require 503 when their enforced access-log gate cannot
-record the read, even when their form itself needs no DB data. `/up` is liveness, not readiness: it stays 200 and
+Admin create forms expose no member subjects and can remain 200 with a local
+valid-session fixture; losing the production session store must still refuse
+access with 503. `/up` is liveness, not readiness: it stays 200 and
 reports unavailable queue depth as `unknown`. Session lookup failure is not a
 valid authenticated identity; protected routes may therefore redirect to
 login (or reject a machine request) before reaching their DB-dependent handler.
 The matrix separates that production session-failure path from authorized
-handler probes using a local session fixture.
+handler probes using a local session fixture. The active join OAuth start and
+callback may fail closed with branded 503 during app-DB loss: the database-free
+`/join` page and `/discord` invite floor remain available. This does not pretend
+that losing app persistence is equivalent to a bot-counts outage.
 
 These tests verify in-process HTTP behavior. They do not claim staging,
 production, deployed Hyperdrive, real Discord or real OAuth acceptance.
