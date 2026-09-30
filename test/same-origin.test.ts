@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import app from "../src/index";
 import { createMemorySessionStore } from "../src/sessions";
+import { cookieFor, env as memberEnv, MODERATOR } from "./helpers/member-data";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS, sameOrigin } from "../src/same-origin";
 
-const env = { APP_URL: "https://two.test/" } as Env;
+const env: Env = { ...memberEnv, APP_URL: "https://two.test/" };
 const forbidden = { error: "cross_origin" };
 
 function fixture() {
@@ -66,13 +67,14 @@ describe("mounted route same-origin audit", () => {
 
   it.each(guarded)("refuses cross-origin $method $path with the one envelope before sessions", async ({ method, path }) => {
     const store = createMemorySessionStore();
+    const cookie = await cookieFor(store, MODERATOR);
     const get = vi.spyOn(store, "get");
     const create = vi.spyOn(store, "create");
     const revoke = vi.spyOn(store, "revoke");
     const concrete = path.replace(/:[a-z]+/g, "123456789012345678");
     // Filled honeypots must not shortcut the outer guard either.
     const res = await app.request(`https://two.test${concrete}`, {
-      method, headers: { origin: "https://evil.test", accept: "text/html", "content-type": "application/json" },
+      method, headers: { cookie, origin: "https://evil.test", accept: "text/html", "content-type": "application/json" },
       body: JSON.stringify({ website: "spam", status: "going" }),
     }, { ...env, SESSION_STORE: store } as Env);
     expect(res.status).toBe(403);
@@ -103,6 +105,7 @@ describe("same-origin middleware", () => {
       {},
       { origin: "https://evil.test" },
       { origin: "null" },
+      { origin: "" },
       { origin: "https://two.test.evil.test" },
       { origin: "http://two.test" },
       { origin: "https://two.test:444" },
