@@ -1,6 +1,7 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Counts } from "./counts";
 import type { Session } from "./env";
+import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
 
@@ -44,6 +45,21 @@ export const Layout: FC<
   </html>
 );
 
+// The site footer carries the static-leaf links on the funnel + leaf + error
+// shells (home, join, recovery, about/faq/rules/privacy, branded errors —
+// ports the legacy home footer: About, FAQ, House rules, Privacy). Admin,
+// events and profile shells intentionally keep their own chrome. One
+// component so a new leaf cannot ship without a way back to it.
+export const SiteFooter: FC = () => (
+  <footer>
+    Together We Own · adult gaming community · founded 1998
+    <nav aria-label="Site">
+      <a href="/about">About</a> <a href="/faq">FAQ</a> <a href="/rules">House rules</a>{" "}
+      <a href="/privacy">Privacy</a>
+    </nav>
+  </footer>
+);
+
 export type Notice = "joined" | "already_member" | "join_failed" | "signin_failed" | null;
 
 const NOTICES: Record<Exclude<Notice, null>, string> = {
@@ -55,12 +71,17 @@ const NOTICES: Record<Exclude<Notice, null>, string> = {
 
 const JOIN_HREF = "/join";
 
-export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null }> = ({
+// Join carries the same share tags as home (TOG-5624): the funnel lives on
+// shared links. The intro doubles as the share description, same as legacy.
+export const JOIN_INTRO = "Approve once with Discord and we will add you to the server.";
+
+export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string }> = ({
   inviteUrl,
   widgetUrl,
   next,
+  appUrl,
 }) => (
-  <Layout title="Join — Together We Own" canonical={undefined}>
+  <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
       <nav>
@@ -70,10 +91,8 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
     <main>
       <section aria-labelledby="join-heading">
         <h1 id="join-heading">Join Together We Own</h1>
-        <p class="lead">
-          One click with Discord and we'll add you to the server — no invite link, no waiting.
-          Prefer the manual way? The invite link is right below.
-        </p>
+        <p class="lead">{JOIN_INTRO}</p>
+        <p>One click with Discord and we&apos;ll add you to the server — no invite link, no waiting.</p>
         <p>
           <a
             class="btn"
@@ -102,7 +121,7 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
         )}
       </section>
     </main>
-    <footer>Together We Own · adult gaming community · founded 1998</footer>
+    <SiteFooter />
   </Layout>
 );
 
@@ -130,7 +149,7 @@ export const Recovery: FC<{
         </p>
       </section>
     </main>
-    <footer>Together We Own · adult gaming community · founded 1998</footer>
+    <SiteFooter />
   </Layout>
 );
 
@@ -142,9 +161,9 @@ export const Home: FC<{
   counts: Counts;
 }> = ({ session, notice, inviteUrl, appUrl, counts }) => (
   <Layout
-    title="Together We Own — adult gaming community"
-    canonical={`${appUrl}/`}
-    shareDescription="Small enough that people notice when you come back."
+    title="Together We Own — the lobby is open"
+    canonical={canonicalUrl(appUrl, "/")}
+    shareDescription="We spent most of our life private. Now you can just turn up."
   >
     <header class="bar">
       <a class="brand" href="/">TWO</a>
@@ -163,8 +182,9 @@ export const Home: FC<{
       {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
       <section class="hero">
         <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
-        <h1>We spent most of our life private. Now you can just turn up.</h1>
-        <p class="lead">Small enough that people notice when you come back.</p>
+        <h1>The lobby is open.</h1>
+        <p class="lead">We spent most of our life private. Now you can just turn up.</p>
+        <p>Small enough that people notice when you come back.</p>
         {session?.member ? (
           <a class="btn" href={inviteUrl}>Open Discord</a>
         ) : (
@@ -195,7 +215,7 @@ export const Home: FC<{
         <p>Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.</p>
       </section>
     </main>
-    <footer>Together We Own · adult gaming community · founded 1998</footer>
+    <SiteFooter />
   </Layout>
 );
 
@@ -218,7 +238,7 @@ const Leaf: FC<PropsWithChildren<{ title: string; headingId: string; heading: st
         {children}
       </section>
     </main>
-    <footer>Together We Own · adult gaming community · founded 1998</footer>
+    <SiteFooter />
   </Layout>
 );
 
@@ -270,7 +290,9 @@ const RULES: Array<[string, string]> = [
   ],
 ];
 
-export const Rules: FC<{ lastUpdated: string | null }> = ({ lastUpdated }) => (
+// The stamp carries both the machine date and the human label (ports the
+// legacy "1 September 2026" render): crawlers read datetime, members read words.
+export const Rules: FC<{ lastUpdated: { iso: string; label: string } | null }> = ({ lastUpdated }) => (
   <Leaf title="House rules — Together We Own" headingId="rules-heading" heading="House rules">
     <p class="lead">
       Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in
@@ -278,7 +300,7 @@ export const Rules: FC<{ lastUpdated: string | null }> = ({ lastUpdated }) => (
     </p>
     {lastUpdated ? (
       <p data-testid="rules-last-updated" class="strap">
-        Last updated <time datetime={lastUpdated}>{lastUpdated}</time>
+        Last updated <time datetime={lastUpdated.iso}>{lastUpdated.label}</time>
       </p>
     ) : null}
     <ol data-testid="rules-list" class="facts">
@@ -366,12 +388,42 @@ const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, st
     ],
   },
   {
+    section: "Game picker",
+    sectionId: "faq-onboarding",
+    items: [
+      [
+        "How does the game picker work?",
+        "After you accept the rules, the welcome post in the landing channel mentions you with a game picker attached. Pick your games and the bot grants the matching roles. It never DMs you. Changed your mind later? Pick again.",
+      ],
+    ],
+  },
+  {
+    section: "Support tickets",
+    sectionId: "faq-tickets",
+    items: [
+      [
+        "How do I open a private support ticket?",
+        "Use the ticket or support button in the server: a private channel opens for you and staff, and a staff member claims it. One active ticket at a time — finish or close the open one before starting another.",
+      ],
+    ],
+  },
+  {
+    section: "Your site profile",
+    sectionId: "faq-profile",
+    items: [
+      [
+        "How do I fill in my profile?",
+        "Sign in with Discord and open your profile. Three things are yours to write: a short bio, your games, and your timezone. We never ask for or store your email.",
+      ],
+    ],
+  },
+  {
     section: "Privacy and conduct",
     sectionId: "faq-privacy",
     items: [
       [
         "What do you store about me, and what are the rules?",
-        "We store Discord user IDs, timestamps, and channel IDs — enough to count joins honestly. We never store message content, email, location, or voice audio. The conduct version is one line: be someone a nervous newcomer is glad to meet.",
+        "We store Discord user IDs, timestamps, and channel IDs — enough to count joins honestly. We never store message content, email, location, or voice audio. Ask anytime to be removed and we delete your rows.",
       ],
     ],
   },

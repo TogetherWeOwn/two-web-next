@@ -86,6 +86,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     ...baseEnv,
     ADMIN_DB: db,
     SESSION_STORE: store,
+    DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
     EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
   } as unknown as Env;
   // Sessions rotate on every authenticated view (a replayed cookie is a guest), so each
