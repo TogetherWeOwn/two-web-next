@@ -10,6 +10,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
+import { takeJoinResult } from "../return-journey";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
@@ -168,6 +169,17 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
     if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
+    // Guest sign-in links carry this page as ?next= so the OAuth round trip
+    // lands back here (TOG-10356). Rooted pathname + search only — the
+    // journey guard re-validates before any redirect, so a hostile query can
+    // at worst fall back to the default landing, never off-app.
+    let loginReturnTo: string | null = null;
+    try {
+      const u = new URL(c.req.url);
+      loginReturnTo = u.pathname + u.search;
+    } catch {
+      loginReturnTo = "/events";
+    }
     return c.html(
       <EventsCalendarPage
         state={state}
@@ -180,6 +192,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         member={session?.member ?? false}
         inviteUrl={c.env.DISCORD_INVITE_URL}
         appUrl={c.env.APP_URL}
+        loginReturnTo={loginReturnTo}
       />,
     );
   });
@@ -259,17 +272,38 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
+    // The page personalizes on the session (member/guest join pitch) and on
+    // the one-shot join confirmation, so every branch reads both and varies
+    // on the cookie. A signed-in exit always rotates the session cookie, so
+    // it must never be cacheable (TOG-10356 review: cancelled 410s carried a
+    // rotated auth cookie with no Cache-Control).
     if (e.status === "draft") {
       const session = await readSession(c);
-      if (!session?.moderator) return c.text("Forbidden", 403);
+      // Headers before the gate: a signed-in non-moderator still rotated
+      // their session cookie above, so even the 403 must not be cacheable.
       c.header("cache-control", "private, no-store");
-    } else if (e.status === "cancelled") {
-      c.header("x-robots-tag", "noindex");
-      return c.html(<EventGonePage />, 410);
-    } else {
-      c.header("cache-control", "public, max-age=60");
+      c.header("vary", "Cookie");
+      if (!session?.moderator) return c.text("Forbidden", 403);
+      const joinResult = await takeJoinResult(c);
+      return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} />);
     }
-    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} />);
+    if (e.status === "cancelled") {
+      const session = await readSession(c);
+      c.header("x-robots-tag", "noindex");
+      // Viewer-independent body, but a signed-in view still rotates the auth
+      // cookie above: private when personalized, shared-cached for guests.
+      c.header("cache-control", session ? "private, no-store" : "public, max-age=60");
+      c.header("vary", "Cookie");
+      return c.html(<EventGonePage />, 410);
+    }
+    const session = await readSession(c);
+    // One-shot join confirmation (legacy join_result flash): the event page
+    // is a join-CTA landing (`/join?next=/e/<key>`), so it consumes and
+    // renders the banner exactly once like /, /join and /profile.
+    const joinResult = await takeJoinResult(c);
+    c.header("cache-control", session || joinResult ? "private, no-store" : "public, max-age=60");
+    c.header("vary", "Cookie");
+    return c.html(<EventPage e={e} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------

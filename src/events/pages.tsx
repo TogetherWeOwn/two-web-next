@@ -81,7 +81,10 @@ import {
   type CalendarState,
 } from "../islands/contracts";
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
+import { loginUrl } from "../islands/contracts";
 import type { Session } from "../env";
+import { JoinResultBanner } from "../pages";
+import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl } from "./feeds";
 import type { PublicEvent } from "./reads";
 
@@ -138,12 +141,13 @@ const rowLocation = (e: CalRow): string | null => e.location;
  * Discord-native rows get "RSVP in Discord" and no going count (there are no
  * local answers to count). `isPast` suppresses the action area entirely.
  */
-const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; inviteUrl: string }> = ({
+const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; inviteUrl: string; loginReturnTo: string | null }> = ({
   e,
   zone,
   isPast,
   member,
   inviteUrl,
+  loginReturnTo,
 }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
@@ -178,7 +182,7 @@ const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; i
           </p>
         ) : member ? null : (
           <p>
-            <a href="/auth/discord" data-testid="signin">
+            <a href={loginUrl(loginReturnTo)} data-testid="signin">
               {EVENTS_EMPTY_COPY.signIn}
             </a>
           </p>
@@ -326,7 +330,9 @@ export const EventsCalendarPage: FC<{
   member: boolean;
   inviteUrl: string;
   appUrl: string;
-}> = ({ state, upcoming, past, zone, now, emptyState, discordFailed, member, inviteUrl, appUrl }) => {
+  /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
+  loginReturnTo?: string | null;
+}> = ({ state, upcoming, past, zone, now, emptyState, discordFailed, member, inviteUrl, appUrl, loginReturnTo = null }) => {
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
@@ -447,7 +453,7 @@ export const EventsCalendarPage: FC<{
               <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
               <ul data-testid={EVENTS_LIST_TESTID}>
                 {upcoming.map((e) => (
-                  <CalCard e={e} zone={zone} isPast={false} member={member} inviteUrl={inviteUrl} />
+                  <CalCard e={e} zone={zone} isPast={false} member={member} inviteUrl={inviteUrl} loginReturnTo={loginReturnTo} />
                 ))}
               </ul>
               {showPast && past.length > 0 ? (
@@ -455,7 +461,7 @@ export const EventsCalendarPage: FC<{
                   <h2>{EVENTS_PAST_LIST_HEADING}</h2>
                   <ul data-testid={EVENTS_PAST_LIST_TESTID}>
                     {past.map((e) => (
-                      <CalCard e={e} zone={zone} isPast member={member} inviteUrl={inviteUrl} />
+                      <CalCard e={e} zone={zone} isPast member={member} inviteUrl={inviteUrl} loginReturnTo={loginReturnTo} />
                     ))}
                   </ul>
                 </div>
@@ -512,9 +518,16 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> = ({ e, appUrl, jsonLd }) => (
+// Legacy show.blade.php pitch (data-testid="event-join-pitch"), verbatim
+// copy. Everyone who is not a guild member — guests and signed-in
+// non-members alike — gets the join CTA carrying this page as ?next= so the
+// journey lands them back here. The one-shot join confirmation renders above
+// the pitch when this page is the join landing: the newly authenticated
+// member would otherwise see neither the banner nor the guest pitch.
+export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; session: Session | null; joinResult?: JoinResult | null }> = ({ e, appUrl, jsonLd, session, joinResult }) => (
   <Shell title={e.title} canonical={`${appUrl}/e/${e.eventKey}`} description={e.description}>
     <h1>{e.title}</h1>
+    {joinResult ? <JoinResultBanner result={joinResult} /> : null}
     <p>
       <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
     </p>
@@ -528,6 +541,16 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> =
       {" · "}
       <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
     </p>
+    {!session?.member ? (
+      <section data-testid="event-join-pitch">
+        <p>Game nights get posted here first. Join the Discord and you&#39;ll see them before they land on this page.</p>
+        <p>
+          <a class="btn" href={`/join?next=${encodeURIComponent(`/e/${e.eventKey}`)}`} data-testid="discord-join">
+            Join the Discord
+          </a>
+        </p>
+      </section>
+    ) : null}
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>
 );

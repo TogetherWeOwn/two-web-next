@@ -35,7 +35,7 @@ import { profilesApp } from "./profiles/routes";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
-import { consumeLoginReturn, rememberLoginNext, takeJoinResult } from "./return-journey";
+import { consumeLoginReturn, LOGIN_INTENDED_COOKIE, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
 
@@ -317,8 +317,11 @@ registerJoinRoutes(app, { storeFor, issueSession }, {
     // Carrying the join-result flash makes the response viewer-specific:
     // the static page keeps its shared-cache TTL only when there is nothing
     // to consume (otherwise a guest could read another member's banner).
+    // Vary stays on every variant: the representation depends on the flash
+    // cookie even when this view has nothing to consume.
     const joinResult = await takeJoinResult(c);
     c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=3600");
+    c.header("vary", "Cookie");
     return c.html(
       <Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} joinResult={joinResult} />,
     );
@@ -483,9 +486,25 @@ app.get("/auth/discord/callback", async (c) => {
     member: join !== "failed",
     moderator,
   });
-  // The remembered destination wins over the default landing notice —
-  // explicit next, then the gate-recorded intended page (legacy precedence).
-  return c.redirect(returnTo ?? `/?n=${join === "failed" ? "join_failed" : join}`, 302);
+  // A failed auto-join keeps the recovery landing even when a destination
+  // was remembered: the session is a non-member one, so a member-only gate
+  // (/profile, /members/*) would answer bare 403 and swallow the failure
+  // explanation plus the invite fallback. The intended destination is
+  // re-recorded for the retry instead of being lost. Successful joins keep
+  // the legacy precedence: explicit next, then intended page, then notice.
+  if (join === "failed") {
+    if (returnTo) {
+      await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+        maxAge: 600,
+      });
+    }
+    return c.redirect("/?n=join_failed", 302);
+  }
+  return c.redirect(returnTo ?? `/?n=${join}`, 302);
 });
 
 // Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard

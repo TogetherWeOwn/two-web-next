@@ -6,15 +6,19 @@
 // src/return-journey.ts. No production or staging login is touched; every
 // Discord call is mocked.
 import { serializeSigned } from "hono/utils/cookie";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { eq } from "drizzle-orm";
 import app from "../src/index";
 import type { Env } from "../src/env";
+import { events } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import {
   JOIN_RESULT_COOKIE,
   LOGIN_INTENDED_COOKIE,
   LOGIN_NEXT_COOKIE,
 } from "../src/return-journey";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore, type Sql } from "../src/sessions";
+import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -133,13 +137,18 @@ describe("login_next (legacy ReturnToPageTest)", () => {
     ["backslash", "%5C%5Cevil.test"],
     ["scheme", "javascript%3Aalert(1)"],
     ["whitespace", "%20%20"],
+    ["NUL control", "%2Fevents%00"],
     ["empty", ""],
   ])("a hostile %s next leaves no trace and lands on the default notice", async (_label, next) => {
     mockDiscord();
     const { env } = isolated();
     const start = await startLogin(env, `?next=${next}`);
-    expect(setCookies(start.res)).not.toContain(`${LOGIN_NEXT_COOKIE}=`);
+    // Stale-clear emits a deletion cookie (Max-Age=0) for missing/hostile
+    // values, so absence of the name is the wrong pin: assert no live cookie
+    // survives in the browser jar instead.
+    expect(start.jar[LOGIN_NEXT_COOKIE]).toBeUndefined();
     const cb = await finishLogin(env, start.state, start.jar);
+    expect(cb.status).toBe(302);
     expect(cb.headers.get("location")).toBe("/?n=joined");
   });
 
@@ -211,6 +220,50 @@ describe("url.intended (auth-gate bounce)", () => {
     const bounce = await app.request("/admin/", { method: "POST" }, env);
     expect(bounce.status).toBe(302);
     expect(setCookies(bounce)).not.toContain(`${LOGIN_INTENDED_COOKIE}=`);
+  });
+
+  it("a restarted login without next forgets the abandoned explicit next", async () => {
+    // Review finding 6: rememberLoginNext clears a stale explicit cookie when
+    // the new login carries no next, so the callback falls back to the
+    // gate-recorded intended page instead of another journey's return.
+    mockDiscord();
+    const { env } = isolated();
+    const first = await startLogin(env, "?next=%2Fevents");
+    expect(first.jar[LOGIN_NEXT_COOKIE]).toBeTruthy();
+    const bounce = await app.request("/profile", {}, env);
+    const j = jarFrom(bounce, first.jar);
+    expect(j[LOGIN_INTENDED_COOKIE]).toBeTruthy();
+    const fresh = await startLogin(env, "", sendJar(j));
+    // The browser applies the deletion cookie, so the stale value is gone
+    // while the intended destination survives.
+    const browser = jarFrom(fresh.res, j);
+    expect(browser[LOGIN_NEXT_COOKIE]).toBeUndefined();
+    expect(browser[LOGIN_INTENDED_COOKIE]).toBeTruthy();
+    const cb = await finishLogin(env, fresh.state, browser);
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get("location")).toBe("/profile");
+  });
+
+  it("a failed auto-join keeps the recovery landing instead of the protected page", async () => {
+    // Review finding 7: join==="failed" issues a non-member session, so
+    // honoring /profile would answer bare 403 and swallow the failure
+    // explanation plus the invite fallback. The intended destination is
+    // re-recorded for the retry instead of being lost.
+    mockDiscord({ joinStatus: 500 });
+    const { env } = isolated();
+    const bounce = await app.request("/profile", {}, env);
+    const j = jarFrom(bounce);
+    const start = await startLogin(env, "", sendJar(j));
+    const cb = await finishLogin(env, start.state, { ...j, ...start.jar });
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get("location")).toBe("/?n=join_failed");
+    const jar = jarFrom(cb, { ...j, ...start.jar });
+    expect(jar[LOGIN_INTENDED_COOKIE]).toBeTruthy();
+    const landing = await app.request("/?n=join_failed", { headers: { cookie: sendJar(jar) } }, env);
+    expect(landing.status).toBe(200);
+    const html = await landing.text();
+    expect(html).toContain("couldn&#39;t add you to the Discord automatically");
+    expect(html).toContain("Join with an invite link instead");
   });
 });
 
@@ -290,24 +343,56 @@ describe("/join next forwarding (legacy ReturnToPageTest)", () => {
 });
 
 // Rendered-state checks that need real rows behind the page. CI runs these
-// against the postgres service; locally they run against agent-testdb when
-// DATABASE_URL points at a migrated database. Never production or staging.
-describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-testdb)", async () => {
-  const { createDb } = await import("../src/db/index");
-  const { events, rsvps, activityLog } = await import("../src/db/admin-schema");
-  const { users, profiles } = await import("../src/db/schema");
-  const db = createDb(process.env.DATABASE_URL!);
+// against the postgres service; locally they run against agent-testdb. The
+// disposable W15 fixture owns a per-run schema: the guard refuses non-test
+// URLs before any driver exists, reset/dispose confine every write, and no
+// caller table is ever touched. Never production or staging.
+// Static containment pin: the guard this file wires below refuses non-test
+// URLs before any driver exists. Always runs, needs no database.
+describe("login-return test containment", () => {
+  it("refuses a non-test DATABASE_URL before driver construction", () => {
+    expect(() => testDatabaseUrl("postgres://agent_test@staging.example.test/some_db", {})).toThrow(
+      "refusing before connecting",
+    );
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-testdb)", () => {
+  // Owned disposable schema (W15 fixture): every pool and driver below resolves
+  // unqualified names inside `w15_<uuid>`, so the deletes and seeds in this
+  // file can never reach the caller's tables. The guard runs before any driver
+  // exists: a non-test DATABASE_URL throws in beforeAll (and in the static
+  // containment pin above), and dispose() drops the schema.
+  let fixture: MemberDataFixture;
+  let db: MemberDataFixture["db"];
+  // Synthetic ULID-shaped event key, not a credential — allowlisted in
+  // .gitleaks.toml alongside the other fixture keys.
   const KEY = "01J0AABBCCDDEEFFGGHHMMNNPP";
 
   const envFor = (store: SessionStore) =>
-    ({ ...baseEnv, SESSION_STORE: store, ADMIN_DB: db, JOIN_DEPS: { store: async () => fakeSql() } }) as unknown as Env;
+    ({
+      ...baseEnv,
+      SESSION_STORE: store,
+      get ADMIN_DB() {
+        return db;
+      },
+      JOIN_DEPS: { store: async () => fakeSql() },
+      // No live Discord scheduled-events read: the calendar merges local rows
+      // with transients, and the mocked fetch would read as a failed source.
+      DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+    }) as unknown as Env;
+
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   beforeEach(async () => {
-    await db.delete(rsvps);
-    await db.delete(activityLog);
-    await db.delete(events);
-    await db.delete(profiles);
-    await db.delete(users);
+    await fixture.reset();
     await db.insert(events).values({
       eventKey: KEY,
       title: "Sunday Squad",
@@ -322,6 +407,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const res = await app.request(`/e/${KEY}`, {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(res.headers.get("vary")?.toLowerCase()).toContain("cookie");
     const html = await res.text();
     expect(html).toContain('data-testid="event-join-pitch"');
     expect(html).toContain("Game nights get posted here first. Join the Discord and you&#39;ll see them before they land on this page.");
@@ -333,6 +419,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const cookie = await sessionCookie(store, { userId: "42", member: true });
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(store));
     expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("vary")?.toLowerCase()).toContain("cookie");
     const html = await res.text();
     expect(html).not.toContain('data-testid="event-join-pitch"');
     expect(html).not.toContain('data-testid="discord-join"');
@@ -346,18 +433,58 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(await res.text()).toContain('data-testid="event-join-pitch"');
   });
 
+  it("the event landing renders the join confirmation once, then never again", async () => {
+    // Finding 3: the /e/<key> join CTA carries next=/e/<key>, so the join
+    // landing must consume and render the flash like /, /join and /profile.
+    const store = createMemorySessionStore();
+    const env = envFor(store);
+    mockDiscord({ joinStatus: 204 });
+    const next = encodeURIComponent(`/e/${KEY}`);
+    const start = await app.request(`/join/discord?next=${next}`, {}, env);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const cb = await app.request(`/join/callback?code=abc&state=${state}`, { headers: { cookie: sendJar(jarFrom(start)) } }, env);
+    expect(cb.headers.get("location")).toBe(`/e/${KEY}`);
+    const jar = jarFrom(cb, jarFrom(start));
+    expect(jar[JOIN_RESULT_COOKIE]).toBeTruthy();
+
+    const first = await app.request(`/e/${KEY}`, { headers: { cookie: sendJar(jar) } }, env);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    const html = await first.text();
+    expect(html).toContain('data-testid="join-result"');
+    expect(html).toContain('data-testid="reinvite-link"');
+    const after = jarFrom(first, jar);
+    expect(after[JOIN_RESULT_COOKIE]).toBeUndefined();
+
+    const second = await app.request(`/e/${KEY}`, { headers: { cookie: sendJar(after) } }, env);
+    expect(await second.text()).not.toContain('data-testid="join-result"');
+  });
+
+  it("a cancelled event with a rotated session cookie is never cacheable", async () => {
+    // Finding 2: readSession rotates before the cancelled branch, so the 410
+    // must carry private,no-store even though the body is viewer-independent.
+    await db.update(events).set({ status: "cancelled" }).where(eq(events.eventKey, KEY));
+    const store = createMemorySessionStore();
+    const cookie = await sessionCookie(store, { userId: "42", member: true });
+    const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(store));
+    expect(res.status).toBe(410);
+    expect(res.headers.getSetCookie().some((c) => c.startsWith("__Host-two_session="))).toBe(true);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("vary")?.toLowerCase()).toContain("cookie");
+  });
+
   it("/events cards carry the login CTA with the page as next for guests only", async () => {
     const guest = await app.request("/events", {}, envFor(createMemorySessionStore()));
     expect(guest.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(guest.headers.get("vary")?.toLowerCase()).toContain("cookie");
     const html = await guest.text();
-    expect(html).toContain('href="/auth/discord?next=%2Fevents" data-testid="events-login"');
-    expect(html).toContain("Log in with Discord");
+    expect(html).toContain('href="/auth/discord?next=%2Fevents" data-testid="signin"');
+    expect(html).toContain("Sign in with Discord");
 
     const store = createMemorySessionStore();
     const cookie = await sessionCookie(store, { userId: "42", member: true });
     const member = await app.request("/events", { headers: { cookie } }, envFor(store));
     expect(member.headers.get("cache-control")).toBe("private, no-store");
-    expect(await member.text()).not.toContain('data-testid="events-login"');
+    expect(await member.text()).not.toContain('data-testid="signin"');
   });
 
   it("the join_result banner lands on /profile too and is consumed there", async () => {
