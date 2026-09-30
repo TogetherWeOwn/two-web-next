@@ -1,7 +1,7 @@
 // Event search logging (W8 follow-up, ports legacy EventSearchLogger, TOG-8400).
 // Normalized query + result count only: no user id, session, IP or raw input.
 // Fail-open: a down table degrades to an unrecorded search, never a broken page.
-import { count, desc, eq, max, asc } from "drizzle-orm";
+import { count, desc, eq, max, asc, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { eventSearchLogs } from "../db/admin-schema";
 
@@ -25,6 +25,8 @@ export function normalizeQuery(raw: string | null | undefined): string | null {
 
 /** Write deadline: logging must never hold the response (a locked table would wait forever). */
 export const LOG_WRITE_DEADLINE_MS = 500;
+/** DB-side cap, shorter than the response deadline, so a blocked INSERT is cancelled server-side rather than left queued. */
+export const LOG_DB_TIMEOUT_MS = 400;
 
 /** Never throws, never waits past the deadline. Logs the error class only (a driver message can carry the DSN). */
 export async function recordSearch(
@@ -40,7 +42,13 @@ export async function recordSearch(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const write = (async () => {
     try {
-      await db.insert(eventSearchLogs).values({ normalizedQuery: normalized, resultCount: Math.max(0, resultCount) });
+      await db.transaction(async (tx) => {
+        // Transaction-scoped: lock waits and the statement itself are cancelled by Postgres, freeing the connection.
+        await tx.execute(
+          sql`select set_config('lock_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true)`,
+        );
+        await tx.insert(eventSearchLogs).values({ normalizedQuery: normalized, resultCount: Math.max(0, resultCount) });
+      });
     } catch (err) {
       warn(err instanceof Error ? err.constructor.name : typeof err);
     }

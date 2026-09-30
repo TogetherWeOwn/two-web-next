@@ -1,6 +1,7 @@
 // Event search logging + TopZeroResultSearches (ports legacy EventSearchLogTest, TOG-8400).
 // Unit parts need no DB; the round-trip runs on agent-testdb (skipped without DATABASE_URL).
 import { serializeSigned } from "hono/utils/cookie";
+import postgres from "postgres";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { eventSearchLogs, events } from "../src/db/admin-schema";
@@ -48,7 +49,10 @@ describe("normalizeQuery (legacy EventSearchLogger::normalize)", () => {
 });
 
 describe("recordSearch is fail-open", () => {
-  const failingDb = { insert: () => ({ values: async () => { throw new Error("postgres://user:secret@host/db down"); } }) } as unknown as Db;
+  // Fake Db whose transaction runs the callback against a fake tx (execute is a no-op, insert is the given values fn).
+  const fakeDb = (values: (v: unknown) => unknown) =>
+    ({ transaction: async (fn: (tx: unknown) => Promise<void>) => fn({ execute: async () => {}, insert: () => ({ values }) }) }) as unknown as Db;
+  const failingDb = fakeDb(async () => { throw new Error("postgres://user:secret@host/db down"); });
 
   it("never throws and never logs the driver message", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -59,7 +63,7 @@ describe("recordSearch is fail-open", () => {
 
   it("returns at the deadline when the write never settles", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const hung = { insert: () => ({ values: () => new Promise<void>(() => {}) }) } as unknown as Db;
+    const hung = fakeDb(() => new Promise<void>(() => {}));
     const t0 = Date.now();
     await expect(recordSearch(hung, "helldiv", 1, 30)).resolves.toBeUndefined();
     expect(Date.now() - t0).toBeLessThan(1000);
@@ -69,13 +73,13 @@ describe("recordSearch is fail-open", () => {
 
   it("writes nothing for a blank query", async () => {
     const values = vi.fn();
-    await recordSearch({ insert: () => ({ values }) } as unknown as Db, "  ", 0);
+    await recordSearch(fakeDb(values), "  ", 0);
     expect(values).not.toHaveBeenCalled();
   });
 
   it("clamps a negative count to zero", async () => {
     const values = vi.fn(async () => {});
-    await recordSearch({ insert: () => ({ values }) } as unknown as Db, "x", -3);
+    await recordSearch(fakeDb(values), "x", -3);
     expect(values).toHaveBeenCalledWith({ normalizedQuery: "x", resultCount: 0 });
   });
 });
@@ -122,6 +126,25 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
       { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB", title: "Old chess night", startsAt: new Date(Date.now() - 74 * hour), endsAt: new Date(Date.now() - 72 * hour), status: "published" },
       { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC", title: "Secret draft helldivers", startsAt: new Date(Date.now() + 72 * hour), endsAt: new Date(Date.now() + 74 * hour), status: "draft" },
     ]);
+  });
+
+  it("cancels a log INSERT blocked on a table lock (no blocked backend remains)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const locker = postgres(process.env.DATABASE_URL!, { max: 1 });
+    try {
+      await locker.begin(async (tx) => {
+        await tx`lock table event_search_logs in access exclusive mode`;
+        const t0 = Date.now();
+        await recordSearch(createDb(process.env.DATABASE_URL!), "blocked", 0);
+        expect(Date.now() - t0).toBeLessThan(1500);
+        await new Promise((r) => setTimeout(r, 300));
+        const active = await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`;
+        expect(active[0]!.n).toBe(0);
+      });
+    } finally {
+      await locker.end();
+      warn.mockRestore();
+    }
   });
 
   it("logs normalized query + count, shows past matches, never caches a search", async () => {
