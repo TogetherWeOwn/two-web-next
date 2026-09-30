@@ -36,8 +36,11 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[
   const mirrored: string[] = [];
   return {
     mirrored,
-    find: async () => ({ eventKey: "e1", payload, status: "published", mirrored: true }),
-    recordMirrored: async (_k, id) => void mirrored.push(id),
+    prepareSync: async (_eventKey, idempotencyKey, mirroredAt) => ({ eventKey: "e1", idempotencyKey, mirroredAt,
+      revision: 1, state: "pending", action: "event.upsert", payload }),
+    completeSync: async (_attempt, id) => void mirrored.push(id),
+    failSync: async () => {},
+    needsSync: async () => false,
     closeFinished: async () => 0,
     staleEventKeys: async () => [],
     ...over,
@@ -125,10 +128,10 @@ describe("SyncEventToDiscord", () => {
   it("drops deleted and unmirrored events without calling the bot", async () => {
     const m1 = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" });
     const m2 = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" });
-    await consume({ messages: [m1] }, { bot: noBot, events: store({ find: async () => null }), lock: memLock(), ledger: memLedger() });
+    await consume({ messages: [m1] }, { bot: noBot, events: store({ prepareSync: async () => null }), lock: memLock(), ledger: memLedger() });
     await consume(
       { messages: [m2] },
-      { bot: noBot, events: store({ find: async () => ({ eventKey: "e1", payload, status: "draft", mirrored: false }) }), lock: memLock(), ledger: memLedger() },
+      { bot: noBot, events: store({ prepareSync: async () => null }), lock: memLock(), ledger: memLedger() },
     );
     expect(m1.acked && m2.acked).toBe(true);
   });

@@ -34,13 +34,14 @@ export async function handleSyncEvent(
   attempts: number,
   deps: { bot: BotClient; events: EventStore; now?: () => Date },
 ): Promise<Outcome> {
-  // Stamp no RSVP newer than the row read; a write during the bot call must
-  // remain pending, even if it committed before the response arrived.
-  const mirroredAt = (deps.now ?? (() => new Date()))();
-  const event = await deps.events.find(msg.eventKey);
-  if (!event) return { done: true }; // deleted while queued: drop
-  if (!event.mirrored || (event.status !== "published" && event.status !== "cancelled")) return { done: true };
-  const action = event.status === "cancelled" ? "event.cancel" : "event.upsert";
+  // First send reads the latest debounced row. Persist that exact request before
+  // contacting the bot: a lost response must retry it under the same UUID, not
+  // a newer edit (which gets its own subsequent request/key).
+  const attempt = await deps.events.prepareSync(msg.eventKey, msg.idempotencyKey, (deps.now ?? (() => new Date()))());
+  if (!attempt) return { done: true }; // deleted/draft/past before first send
+  if ("waiting" in attempt) return { retryInSeconds: SYNC_EVENT.debounceSeconds };
+  if (attempt.state !== "pending") return { done: true }; // settled redelivery
+  const action = attempt.action;
 
   // Laravel release(): past $tries the job fails (MaxAttemptsExceeded).
   const retry = (seconds: number): Outcome =>
@@ -50,9 +51,9 @@ export async function handleSyncEvent(
 
   let answer;
   try {
-    answer = action === "event.cancel"
-      ? await deps.bot.cancelEvent({ eventKey: event.eventKey }, msg.idempotencyKey)
-      : await deps.bot.upsertEvent(event.payload, msg.idempotencyKey);
+    answer = attempt.action === "event.cancel"
+      ? await deps.bot.cancelEvent(attempt.payload, msg.idempotencyKey)
+      : await deps.bot.upsertEvent(attempt.payload, msg.idempotencyKey);
   } catch (e) {
     if (e instanceof BotTransportError) return retry(backoffFor(SYNC_EVENT.backoffSeconds, attempts));
     if (e instanceof BotTerminalError) return { failed: e.message };
@@ -65,6 +66,6 @@ export async function handleSyncEvent(
     // The bot's number beats ours: on a 429 it knows where the ceiling is.
     return retry(answer.retryAfterSeconds ?? backoffFor(SYNC_EVENT.backoffSeconds, attempts));
   }
-  await deps.events.recordMirrored(msg.eventKey, answer.discordEventId, mirroredAt);
+  await deps.events.completeSync(attempt, answer.discordEventId);
   return { done: true };
 }

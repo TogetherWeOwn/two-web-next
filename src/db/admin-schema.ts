@@ -1,4 +1,5 @@
-import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -36,6 +37,9 @@ export const events = pgTable(
     capacity: integer("capacity"),
     status: text("status").notNull().default("draft"),
     discordEventId: text("discord_event_id").unique(),
+    // Database triggers advance this outbox revision with event/RSVP writes.
+    syncRevision: bigint("sync_revision", { mode: "number" }).notNull().default(1),
+    syncedRevision: bigint("synced_revision", { mode: "number" }).notNull().default(0),
     createdBy: text("created_by"),
     // Pause flag (TOG-8725): a published event stays visible while taking no
     // new answers. Default true so every row written by a caller that does
@@ -58,6 +62,23 @@ export const events = pgTable(
     index("events_status_starts_at_idx").on(t.status, t.startsAt),
     index("events_parent_event_id_idx").on(t.parentEventId),
   ],
+);
+
+// An attempted request is immutable for the lifetime of its idempotency key.
+// One pending attempt per event also orders requests when retries outlive the
+// debounce lock. Keep settled snapshots so late redelivery cannot replay edits.
+export const eventSyncAttempts = pgTable(
+  "event_sync_attempts",
+  {
+    idempotencyKey: uuid("idempotency_key").primaryKey(),
+    eventId: integer("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    revision: bigint("revision", { mode: "number" }).notNull(),
+    action: text("action").notNull(),
+    payload: jsonb("payload").notNull(),
+    mirroredAt: timestamp("mirrored_at", { withTimezone: true }).notNull(),
+    state: text("state").notNull().default("pending"),
+  },
+  (t) => [uniqueIndex("event_sync_attempts_pending_idx").on(t.eventId).where(sql`${t.state} = 'pending'`)],
 );
 
 export const featuredContents = pgTable(

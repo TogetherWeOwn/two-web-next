@@ -1,5 +1,6 @@
 import postgres from "postgres";
 import type { Env, JobsEnv } from "../env";
+import { databaseOptions, databaseUrl } from "../db/connection";
 import { migrate as migrateSessions, type Sql as SessionSql } from "../sessions";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
@@ -22,9 +23,9 @@ const bot: BotClient = {
 function sqlFor(env: Env & { HYPERDRIVE?: Hyperdrive }) {
   // The wrangler hyperdrive binding is `DB` (S1); `HYPERDRIVE` stays as an
   // accepted alias for environments that predate it.
-  const url = env.HYPERDRIVE?.connectionString ?? env.DB?.connectionString ?? env.DATABASE_URL;
-  if (!url) throw new Error("no database configured (DB/HYPERDRIVE or DATABASE_URL)");
-  return postgres(url, { max: 1 });
+  const url = databaseUrl(env) || env.HYPERDRIVE?.connectionString;
+  if (!url) throw new Error("no database configured (DATABASE_URL or DB/HYPERDRIVE)");
+  return postgres(url, databaseOptions);
 }
 
 /** Web after-commit producer, sharing reconciliation's ledger and unique lock. */
@@ -51,7 +52,10 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
   // behind an un-cancellable ledger UPDATE (TOG-9895 review).
   const ledgerSql = sqlFor(env);
   try {
-    await consume(batch, { bot, events: pgEventStore(sql), lock: pgUniqueLock(sql), ledger: pgQueueLedger(ledgerSql) });
+    const lock = pgUniqueLock(sql);
+    await consume(batch, { bot, events: pgEventStore(sql), lock, ledger: pgQueueLedger(ledgerSql),
+      dispatchPending: (eventKey) => dispatchSyncEvent(trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(ledgerSql)), lock, eventKey),
+    });
   } finally {
     // A wedged ledger statement must not hold the invocation open: force-close
     // past the timeout; the main client closes normally.

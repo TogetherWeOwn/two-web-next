@@ -89,7 +89,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `events:reconcile` every 10 min (close past, materialize series, re-dispatch stale; single-flight) | pending | W13 ⛔ |
 | `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ this card (90 d each, legacy constants) | W13 ⛔ |
 | `web_sessions` expiry cleanup (no legacy equivalent — Laravel GC; rows accumulate without one) | ✅ this card (expiry sweep in the prune pass) | W13 ⛔ |
-| Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | ✅ admin/JSON edits, publish/cancel and RSVP use W13 `SYNC_EVENT_QUEUE`, ledger, 10 s debounce + unique lock; consumer chooses upsert/cancel from current row. Bot HTTP adapter still pending (no live Discord proof) | [TOG-10815](/TOG/issues/TOG-10815) |
+| Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | ✅ admin/JSON edits, publish/cancel and RSVP use W13 `SYNC_EVENT_QUEUE`, ledger, 10 s debounce + unique lock. Transactional event/RSVP revisions recover rejected sends and in-flight mutations (including cancellations/withdrawals); the first attempted current-row upsert/cancel is immutable on retry, and newer revisions use a new key. Bot HTTP adapter still pending (no live Discord proof) | [TOG-10815](/TOG/issues/TOG-10815) |
 
 ## 7. Console commands
 

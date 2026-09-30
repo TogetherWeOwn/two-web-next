@@ -37,20 +37,24 @@ export interface BotClient {
   assignRole(r: RoleAssignment): Promise<BotSuccess<{ outcome: string }> | BotFailure>;
 }
 
-export type MirroredEvent = {
+export type SyncAttempt = {
+  idempotencyKey: string;
   eventKey: string;
-  payload: EventUpsert;
-  status: "draft" | "published" | "cancelled" | "past";
-  mirrored: boolean;
-};
+  revision: number;
+  mirroredAt: Date;
+  state: "pending" | "succeeded" | "failed";
+} & ({ action: "event.upsert"; payload: EventUpsert } | { action: "event.cancel"; payload: { eventKey: string } });
 
 export interface EventStore {
-  find(eventKey: string): Promise<MirroredEvent | null>;
-  /** Persist discord_event_id and stamp only RSVPs updated at or before `mirroredAt`. */
-  recordMirrored(eventKey: string, discordEventId: string, mirroredAt: Date): Promise<void>;
+  /** Snapshot at first attempt, not dispatch. Retries return the persisted request. */
+  prepareSync(eventKey: string, idempotencyKey: string, mirroredAt: Date): Promise<SyncAttempt | { waiting: true } | null>;
+  /** Atomically settle the attempt and acknowledge only its revision/RSVP cutoff. */
+  completeSync(attempt: SyncAttempt, discordEventId: string): Promise<void>;
+  failSync(idempotencyKey: string): Promise<void>;
+  needsSync(eventKey: string): Promise<boolean>;
   /** Published events past ends_at -> past. Returns rows changed. */
   closeFinished(now: Date): Promise<number>;
-  /** Published, and discord_event_id null or any RSVP unsynced. */
+  /** Published/cancelled dirty revisions, plus the legacy missing-ID/RSVP backstop. */
   staleEventKeys(): Promise<string[]>;
 }
 

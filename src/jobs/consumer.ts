@@ -28,7 +28,8 @@ function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: s
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
 export async function consume(
   batch: { messages: readonly Msg[] },
-  deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger },
+  deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger;
+    dispatchPending?: (eventKey: string) => Promise<unknown> },
 ): Promise<void> {
   for (const m of batch.messages) {
     const body = m.body as QueueMessage;
@@ -68,6 +69,19 @@ export async function consume(
         timeout,
       ]).finally(() => clearTimeout(t));
     };
+    const failAttempt = async () => {
+      if (body.kind !== "sync-event") return true;
+      try {
+        await deps.events.failSync(body.idempotencyKey);
+        return true;
+      } catch (e) {
+        // Snapshot settlement is correctness-critical, unlike the depth ledger.
+        // Never ack a terminal message while it still blocks future revisions.
+        console.error("sync attempt settlement failed", e instanceof Error ? e.message : e);
+        m.retry();
+        return false;
+      }
+    };
     if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
 
     let outcome: Outcome;
@@ -83,6 +97,7 @@ export async function consume(
       console.error("job threw", body.kind, e instanceof Error ? e.message : e);
       // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
       if (m.attempts >= JOBS[body.kind].tries) {
+        if (!(await failAttempt())) continue;
         alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
         // Out of tries: a terminal failure, not a phantom pending row — and not
         // a retry either. The job already spent its tries (the transport's
@@ -106,13 +121,26 @@ export async function consume(
       continue;
     }
     if ("failed" in outcome) {
+      if (!(await failAttempt())) continue;
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed);
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
     }
-    if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
+    if (body.kind === "sync-event") {
+      await releaseLock(uniqueKey(body.eventKey));
+      if ("done" in outcome && deps.dispatchPending) {
+        // Release before checking: a racing after-commit producer either owns
+        // the successor lock or this dispatch does. A rejected send still
+        // leaves the dirty revision for reconciliation.
+        try {
+          if (await deps.events.needsSync(body.eventKey)) await deps.dispatchPending(body.eventKey);
+        } catch (e) {
+          console.warn("sync successor dispatch failed; reconcile will retry", e instanceof Error ? e.message : e);
+        }
+      }
+    }
     m.ack();
   }
 }

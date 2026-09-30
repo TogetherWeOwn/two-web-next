@@ -6,6 +6,9 @@ import type { Env } from "../src/env";
 import { buildSyncMessage, enqueueEventSync } from "../src/events/sync";
 import { consume } from "../src/jobs/consumer";
 import { pgEventStore } from "../src/jobs/events";
+import { reconcileEvents } from "../src/jobs/cron";
+import { trackingQueue } from "../src/jobs/ledger";
+import { BotTransportError } from "../src/jobs/types";
 import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { uniqueKey } from "../src/jobs/sync-event";
 import type { BotClient, QueueMessage } from "../src/jobs/types";
@@ -101,12 +104,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   }
   function botDouble() {
     return {
-      upsertEvent: vi.fn(async () => ({ ok: true as const, requestId: null, discordEventId: "discord-1" })),
-      cancelEvent: vi.fn(async () => ({ ok: true as const, requestId: null, discordEventId: "discord-1" })),
+      upsertEvent: vi.fn(async (..._args: Parameters<BotClient["upsertEvent"]>) => ({ ok: true as const, requestId: null, discordEventId: "discord-1" })),
+      cancelEvent: vi.fn(async (..._args: Parameters<BotClient["cancelEvent"]>) => ({ ok: true as const, requestId: null, discordEventId: "discord-1" })),
       postAnnouncement: vi.fn(), assignRole: vi.fn(),
     } satisfies BotClient;
   }
-  const deps = (bot: BotClient) => ({ bot, events: pgEventStore(sql), lock: pgUniqueLock(sql), ledger: pgQueueLedger(sql) });
+  const deps = (bot: BotClient) => ({ bot, events: pgEventStore(sql), lock: pgUniqueLock(sql), ledger: pgQueueLedger(sql),
+    dispatchPending: (key: string) => enqueueSyncEvent(env, buildSyncMessage(key, "published")!),
+  });
 
   for (const mode of ["admin", "json"] as const) {
     for (const operation of ["publish", "cancel", "edit", "draft-edit"] as const) {
@@ -197,12 +202,137 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     await assertTracked();
   });
 
+  it("cancellation committed during an upsert gets a new successor request", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
+    const bot = botDouble();
+    bot.upsertEvent.mockImplementationOnce(async () => {
+      expect((await request("POST", `/events/${eventKey}/cancel`)).status).toBe(200);
+      expect(sent).toHaveLength(1); // old unique lock absorbs the notification
+      return { ok: true, requestId: null, discordEventId: "discord-1" };
+    });
+    const first = delivery(original);
+    await consume({ messages: [first] }, deps(bot));
+    expect(first.ack).toHaveBeenCalledOnce();
+    expect(sent).toHaveLength(2);
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([eventKey]);
+    const successor = sent[1]!.body;
+    expect(successor.idempotencyKey).not.toBe(original.idempotencyKey);
+    await consume({ messages: [delivery(successor)] }, deps(bot));
+    expect(bot.upsertEvent).toHaveBeenCalledOnce();
+    expect(bot.cancelEvent).toHaveBeenCalledExactlyOnceWith({ eventKey }, successor.idempotencyKey);
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+    await consume({ messages: [delivery(original, 2)] }, deps(bot));
+    expect(bot.upsertEvent).toHaveBeenCalledOnce(); // settled late redelivery is a no-op
+  });
+
+  for (const operation of ["edit", "cancel", "withdraw"] as const) {
+    it(`reconciliation recovers ${operation} after a carrier failure`, async () => {
+      const id = await seed();
+      await sql`insert into rsvps (event_id, user_id, status, synced_to_discord_at)
+        values (${id}, 'test-user', 'going', now())`;
+      await sql`update events set discord_event_id = 'discord-1', synced_revision = sync_revision where id = ${id}`;
+      expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+      const carrier = env.SYNC_EVENT_QUEUE;
+      env.SYNC_EVENT_QUEUE = { send: async () => { throw new Error("transport down"); } };
+      const response = operation === "edit"
+        ? await request("PATCH", `/events/${eventKey}`, { title: "Recovered title" })
+        : operation === "cancel" ? await request("POST", `/events/${eventKey}/cancel`)
+        : await request("DELETE", `/events/${eventKey}/rsvp`, undefined, false, false);
+      expect(response.status).toBe(operation === "withdraw" ? 204 : 200);
+      env.SYNC_EVENT_QUEUE = carrier;
+      expect(sent).toEqual([]);
+      expect(await sql`select job_id from queue_jobs`).toEqual([]);
+      expect(await sql`select key from job_unique_locks`).toEqual([]);
+      expect(await pgEventStore(sql).staleEventKeys()).toEqual([eventKey]);
+      const reconciled = await reconcileEvents({ events: pgEventStore(sql),
+        queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql) });
+      expect(reconciled.resynced).toBe(1);
+      const bot = botDouble();
+      await consume({ messages: [delivery(sent[0]!.body)] }, deps(bot));
+      expect(bot.cancelEvent).toHaveBeenCalledTimes(operation === "cancel" ? 1 : 0);
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(operation === "cancel" ? 0 : 1);
+      expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+      if (operation === "withdraw") expect(await sql`select id from rsvps`).toEqual([]);
+    });
+  }
+
+  it("lost-response retries keep the original payload/key, then deliver an edit with a new key", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
+    const applied: string[] = [];
+    const requests: { name: string; key: string }[] = [];
+    const seen = new Set<string>();
+    const bot: BotClient = { ...botDouble(), upsertEvent: async (payload, key) => {
+      requests.push({ name: payload.name, key });
+      if (!seen.has(key)) {
+        seen.add(key);
+        applied.push(payload.name);
+        if (key === original.idempotencyKey) throw new BotTransportError("response lost after apply");
+      }
+      return { ok: true, requestId: null, discordEventId: "discord-1" };
+    } };
+    const first = delivery(original);
+    await consume({ messages: [first] }, deps(bot));
+    expect(first.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
+    expect((await request("PATCH", `/events/${eventKey}`, { title: "Changed title" })).status).toBe(200);
+    expect(sent).toHaveLength(1);
+    await consume({ messages: [delivery(original, 2)] }, deps(bot));
+    expect(requests).toEqual([{ name: "Game night", key: original.idempotencyKey },
+      { name: "Game night", key: original.idempotencyKey }]);
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([eventKey]);
+    const successor = sent[1]!.body;
+    expect(successor.idempotencyKey).not.toBe(original.idempotencyKey);
+    await consume({ messages: [delivery(successor)] }, deps(bot));
+    expect(applied).toEqual(["Game night", "Changed title"]);
+    expect(requests[2]).toEqual({ name: "Changed title", key: successor.idempotencyKey });
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+  });
+
+  it("retries cannot overtake an older pending request after the debounce lock expires", async () => {
+    await seed();
+    const bot = botDouble();
+    bot.upsertEvent.mockImplementationOnce(async () => { throw new BotTransportError("lost response"); });
+    await enqueueEventSync(env, eventKey, "published");
+    const first = sent[0]!.body;
+    await consume({ messages: [delivery(first)] }, deps(bot));
+    await sql`update job_unique_locks set expires_at = now() - interval '1 second'`;
+    expect((await request("PATCH", `/events/${eventKey}`, { title: "Later title" })).status).toBe(200);
+    const second = sent[1]!.body;
+    const waiting = delivery(second);
+    await consume({ messages: [waiting] }, deps(bot));
+    expect(waiting.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
+    expect(bot.upsertEvent).toHaveBeenCalledOnce();
+    await consume({ messages: [delivery(first, 2)] }, deps(bot));
+    await consume({ messages: [delivery(second, 2)] }, deps(bot));
+    expect(bot.upsertEvent.mock.calls.map((call) => (call[0] as { name: string }).name))
+      .toEqual(["Game night", "Game night", "Later title"]);
+    expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
+  });
+
+  it("event and RSVP revisions roll back with their mutations", async () => {
+    const id = await seed();
+    const before = await sql`select sync_revision from events where id = ${id}`;
+    await expect(sql.begin(async (tx) => {
+      await tx`update events set title = 'Never committed' where id = ${id}`;
+      await tx`insert into rsvps (event_id, user_id, status) values (${id}, 'test-user', 'going')`;
+      throw new Error("abort");
+    })).rejects.toThrow("abort");
+    expect(await sql`select sync_revision from events where id = ${id}`).toEqual(before);
+    expect(await sql`select id from rsvps`).toEqual([]);
+  });
+
   it("mirror stamping does not mark an RSVP written during the bot call as synced", async () => {
     const id = await seed();
     await sql`insert into rsvps (event_id, user_id, status, updated_at) values (${id}, 'test-user', 'going', '2026-01-01')`;
     const cutoff = new Date("2026-01-02T00:00:00Z");
+    const events = pgEventStore(sql);
+    const attempt = await events.prepareSync(eventKey, crypto.randomUUID(), cutoff);
+    if (!attempt || "waiting" in attempt) throw new Error("missing attempt");
     await sql`update rsvps set updated_at = '2026-01-03' where event_id = ${id}`;
-    await pgEventStore(sql).recordMirrored(eventKey, "discord-1", cutoff);
+    await events.completeSync(attempt, "discord-1");
     expect((await sql`select synced_to_discord_at from rsvps`)[0]!.synced_to_discord_at).toBeNull();
     expect((await sql`select discord_event_id from events`)[0]!.discord_event_id).toBe("discord-1");
   });

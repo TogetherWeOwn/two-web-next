@@ -17,13 +17,13 @@ function memLock(held = new Set<string>()): UniqueLock & { held: Set<string> } {
 }
 function store(): EventStore {
   return {
-    find: async () => ({
-      eventKey: "e1",
+    prepareSync: async (_key, idempotencyKey, mirroredAt) => ({
+      eventKey: "e1", idempotencyKey, mirroredAt, revision: 1, state: "pending", action: "event.upsert",
       payload: { eventKey: "e1", name: "n", startsAt: "s", endsAt: null, location: "l", description: null },
-      mirrored: true,
-      status: "published",
     }),
-    recordMirrored: async () => {},
+    completeSync: async () => {},
+    failSync: async () => {},
+    needsSync: async () => false,
     closeFinished: async () => 0,
     staleEventKeys: async () => [],
   };
