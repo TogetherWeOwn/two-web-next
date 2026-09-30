@@ -58,7 +58,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       APP_URL, SESSION_SECRET, DISCORD_CLIENT_ID: "test", DISCORD_CLIENT_SECRET: "test",
       DISCORD_BOT_TOKEN: "test", DISCORD_GUILD_ID: "test", DISCORD_INVITE_URL: "https://discord.gg/test",
       DB: { connectionString: url.href },
-      SYNC_EVENT_QUEUE: { send: async (body, options) => { sent.push({ body: body as SyncEventMessage, options }); } },
+      SYNC_EVENT_QUEUE: { send: async (body, options) => { sent.push({ body: body as SyncEventMessage, options }); return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } }; } },
       ADMIN_DB: fixture.db, SESSION_STORE: sessions,
     } as Env;
   });

@@ -50,7 +50,7 @@ describe("event sync carrier", () => {
 
   it("enqueues with the 10 s debounce delay and the legacy backoff schedule", async () => {
     const sent: { m: QueueMessage; o?: { delaySeconds?: number } }[] = [];
-    const env = { ...baseEnv, SYNC_EVENT_QUEUE: { send: async (m: QueueMessage, o?: { delaySeconds?: number }) => void sent.push({ m, o }) } };
+    const env = { ...baseEnv, SYNC_EVENT_QUEUE: { send: async (m: QueueMessage, o?: { delaySeconds?: number }) => { sent.push({ m, o }); return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } }; } } };
     const msg = await enqueueEventSync(env, "01ABC", "published");
     expect(sent).toHaveLength(1);
     expect(sent[0]!.m).toMatchObject(msg!);
