@@ -78,6 +78,31 @@ test("finds name-based bindings at the root and in named environments", () => {
   }
 });
 
+test("collects required secret names at root and in named environments", () => {
+  const keys = readWranglerKeys(JSON.stringify({
+    vars: { APP_URL: "https://example.test" },
+    secrets: { required: ["NEW_SECRET"] },
+    env: { staging: { secrets: { required: ["STAGING_SECRET"] } } },
+  }));
+  assert.deepEqual(keys, set("APP_URL", "NEW_SECRET", "STAGING_SECRET"));
+  // Secret names (never values) are enforced like any other Wrangler key.
+  assert.deepEqual(checkKeys(set("APP_URL"), set("NEW_SECRET", "STAGING_SECRET"), set("APP_URL")), [
+    "Wrangler key missing from Env/JobsEnv: NEW_SECRET",
+    "Undocumented Wrangler key: NEW_SECRET",
+    "Wrangler key missing from Env/JobsEnv: STAGING_SECRET",
+    "Undocumented Wrangler key: STAGING_SECRET",
+  ]);
+  // Declared, typed and documented secrets pass.
+  assert.deepEqual(
+    checkKeys(
+      set("APP_URL", "NEW_SECRET", "STAGING_SECRET"),
+      set("NEW_SECRET", "STAGING_SECRET"),
+      set("APP_URL", "NEW_SECRET", "STAGING_SECRET"),
+    ),
+    [],
+  );
+});
+
 test("does not interpret JSON var data or deployment metadata as declarations", () => {
   assert.deepEqual(readWranglerKeys(JSON.stringify({
     vars: {

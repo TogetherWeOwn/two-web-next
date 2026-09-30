@@ -74,6 +74,11 @@ export function readWranglerKeys(text) {
   function visitEnvironment(value) {
     if (!value || typeof value !== "object") return;
     for (const key of Object.keys(value.vars ?? {})) keys.add(key);
+    // Secret names only (never values): `secrets.required` declares names at
+    // the root and per named environment (not inherited between them).
+    for (const name of value.secrets?.required ?? []) {
+      if (typeof name === "string") keys.add(name);
+    }
     for (const section of arrayBindings) add(value[section], "binding");
     for (const section of singleBindings) add([value[section]], "binding");
     add(value.queues?.producers, "binding");
