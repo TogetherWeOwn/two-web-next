@@ -10,8 +10,12 @@ one admitted caller, one guild. Wire contract is unchanged from two-web `docs/ag
   `lock_timeout` -> `503 operation_busy`. Idempotency rows are re-checked under the lock, so concurrent duplicate
   deliveries execute once and all get the original answer (`replayed: true`). Rate budgets are rows in
   `agent_event_hits` (per grant 10 mutating / 30 read per minute, service 60 / 300), also lock-serialised. No KV.
-- Not ported yet: the outer per-credential route shield (use a Cloudflare rate-limit rule), Discord write-back and
-  the bot `event.read` observation (`read` answers `verification_unavailable`).
+- W15: the outer per-credential route shield (two-web TOG-8402, `AGENT_EVENTS_ROUTE_PER_MINUTE`, default 60/min)
+  counts every hit per credential hash (anonymous per IP) before auth and the audit write; refused hits write
+  nothing. Receipt window is the latest 50, chronological. Bot action constructors live in `src/bot/actions.ts`
+  (role.assign carries no idempotency key; announcement/event calls require a UUID key).
+- Not ported yet: Discord write-back and the bot `event.read` observation
+  (`read` answers `verification_unavailable`); the idempotency-row prune cron (two-web `model:prune` daily).
 
 ## Bot signer (`src/bot/signer.ts`)
 

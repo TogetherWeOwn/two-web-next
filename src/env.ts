@@ -65,4 +65,6 @@ export type AgentEventsEnv = {
   AGENT_EVENTS_CALLER_AGENT_ID?: string;
   AGENT_EVENTS_GUILD_ID?: string;
   AGENT_EVENTS_PRODUCTION_GUILD_ID?: string;
+  // Outer shield budget (two-web `agent-events.route_per_minute`, default 60).
+  AGENT_EVENTS_ROUTE_PER_MINUTE?: string;
 };
