@@ -1,11 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import fixture from "./fixtures/legacy/users-profiles.sql?raw";
-import usersMigration from "../drizzle/0000_init-users.sql?raw";
-import profilesMigration from "../drizzle/1003_profiles.sql?raw";
+import { createUsersProfilesFixture, type UsersProfilesFixture } from "./helpers/import-users-profiles-db";
 
 const script = fileURLToPath(new URL("../bin/import/users-profiles.mjs", import.meta.url).href);
 function run(args: string[] = [], env: Record<string, string> = {}) {
@@ -15,11 +11,9 @@ function run(args: string[] = [], env: Record<string, string> = {}) {
 function counts(output: string) {
   return output.trim().split("\n").map((line) => JSON.parse(line));
 }
-function scopedUrl(url: string, schema: string) {
+function withDateStyle(url: string, style: string) {
   const scoped = new URL(url);
-  scoped.searchParams.set("search_path", schema);
-  // Prove UTC preservation independently of the caller's connection timezone.
-  scoped.searchParams.set("timezone", "Pacific/Honolulu");
+  scoped.searchParams.set("datestyle", style);
   return scoped.toString();
 }
 
@@ -51,40 +45,17 @@ describe("users/profiles import CLI safety (no database)", () => {
 
 const url = process.env.DATABASE_URL;
 describe.skipIf(!url)("users/profiles import against disposable Postgres", () => {
-  const suffix = randomUUID().replaceAll("-", "");
-  const legacySchema = `legacy_up_${suffix}`;
-  const nextSchema = `next_up_${suffix}`;
-  let admin: postgres.Sql;
-  let legacy: postgres.Sql;
-  let next: postgres.Sql;
+  let fixture: UsersProfilesFixture;
+  let legacy: UsersProfilesFixture["legacy"];
+  let next: UsersProfilesFixture["next"];
   let env: Record<string, string>;
 
   beforeAll(async () => {
-    const parsed = new URL(url!);
-    const agentTest = parsed.hostname === "agent-testdb" && parsed.pathname === "/two_web_next"
-      && parsed.username === "agent_test" && !parsed.password && (!parsed.port || parsed.port === "5432");
-    const ciService = process.env.CI === "true" && parsed.hostname === "localhost" && parsed.port === "5432"
-      && parsed.username === "postgres" && parsed.password === "ci" && parsed.pathname === "/postgres";
-    if (!agentTest && !ciService) throw new Error("Import tests require agent-testdb/two_web_next or the CI service container");
-    admin = postgres(url!, { max: 1, onnotice: () => {} });
-    await admin.unsafe(`CREATE SCHEMA ${legacySchema}; CREATE SCHEMA ${nextSchema}`);
-    legacy = postgres(url!, { max: 1, connection: { search_path: legacySchema }, onnotice: () => {} });
-    next = postgres(url!, { max: 1, connection: { search_path: nextSchema }, onnotice: () => {} });
-    await next.unsafe(usersMigration);
-    await next.unsafe(profilesMigration);
-    env = { LEGACY_DATABASE_URL: scopedUrl(url!, legacySchema), DATABASE_URL: scopedUrl(url!, nextSchema) };
+    fixture = await createUsersProfilesFixture(url!);
+    ({ legacy, next, env } = fixture);
   });
-  beforeEach(async () => {
-    await legacy.unsafe("DROP TABLE IF EXISTS profiles; DROP TABLE IF EXISTS users");
-    await legacy.unsafe(fixture);
-    await next`delete from profiles`;
-    await next`delete from users`;
-  });
-  afterAll(async () => {
-    await Promise.all([legacy?.end(), next?.end()]);
-    await admin?.unsafe(`DROP SCHEMA IF EXISTS ${legacySchema} CASCADE; DROP SCHEMA IF EXISTS ${nextSchema} CASCADE`);
-    await admin?.end();
-  });
+  beforeEach(async () => { await fixture.reset(); });
+  afterAll(async () => { await fixture?.dispose(); });
 
   it("defaults to a read-only dry run; apply preserves natural keys and times; re-run writes nothing", async () => {
     const before = await legacy`select * from users order by id`;
@@ -134,6 +105,40 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
     expect(counts(run(["--dry-run"], env).stdout).map((row) => row.changed)).toEqual([0, 0]);
     expect(await legacy`select * from users order by id`).toEqual(before);
     expect(await legacy`select * from profiles order by id`).toEqual(beforeProfiles);
+  });
+
+  it.each([
+    ["SQL, DMY", "ISO, MDY"],
+    ["ISO, DMY", "SQL, MDY"],
+    ["German, DMY", "Postgres, MDY"],
+  ])("preserves UTC timestamps from %s into %s, including unchanged previews", async (sourceStyle, targetStyle) => {
+    // Keep every date ambiguous so SQL/DMY -> MDY would silently swap month/day, not just throw.
+    await legacy`update users set updated_at = '2026-08-02 11:00:00' where id in (11, 22)`;
+    await legacy`update profiles set updated_at = '2026-08-05 15:00:00' where user_id = 11`;
+    const styledEnv = {
+      LEGACY_DATABASE_URL: withDateStyle(env.LEGACY_DATABASE_URL!, sourceStyle),
+      DATABASE_URL: withDateStyle(env.DATABASE_URL!, targetStyle),
+    };
+    const applied = run(["--apply"], styledEnv);
+    expect(applied.status, applied.stderr).toBe(0);
+    const users = await next`select created_at, updated_at, xmin::text as version from users order by id`;
+    const profiles = await next`select created_at, updated_at, xmin::text as version from profiles order by user_id`;
+    expect(users.map((row) => [row.created_at.toISOString(), row.updated_at.toISOString()])).toEqual([
+      ["2026-08-01T10:00:00.000Z", "2026-08-02T11:00:00.000Z"],
+      ["2026-08-02T11:00:00.000Z", "2026-08-02T11:00:00.000Z"],
+      ["2026-08-03T12:00:00.000Z", "2026-08-03T12:00:00.000Z"],
+    ]);
+    expect(profiles.map((row) => [row.created_at.toISOString(), row.updated_at.toISOString()])).toEqual([
+      ["2026-08-04T14:00:00.000Z", "2026-08-05T15:00:00.000Z"],
+      ["2026-08-05T16:00:00.000Z", "2026-08-05T16:00:00.000Z"],
+    ]);
+    for (const args of [[], ["--apply"]]) {
+      const repeat = run(args, styledEnv);
+      expect(repeat.status, repeat.stderr).toBe(0);
+      expect(counts(repeat.stdout).map((row) => [row.changed, row.written])).toEqual([[0, 0], [0, 0]]);
+    }
+    expect(await next`select created_at, updated_at, xmin::text as version from users order by id`).toEqual(users);
+    expect(await next`select created_at, updated_at, xmin::text as version from profiles order by user_id`).toEqual(profiles);
   });
 
   it("updates conflicts and only dirty rows, including nulls and membership changes", async () => {

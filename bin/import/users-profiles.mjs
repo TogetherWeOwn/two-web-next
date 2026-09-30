@@ -6,6 +6,8 @@ import postgres from "postgres";
 // session, OAuth credential or moderator field is ever read from legacy.
 export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) {
   return legacy.begin("isolation level repeatable read read only", async (source) => {
+    // Timestamp text must be unambiguous even with caller/server DateStyle overrides.
+    await source`set local datestyle = 'ISO, YMD'`;
     const users = await source`
       select discord_id, username, avatar, (discord_joined_at is not null) as member,
         created_at::text as created_at, coalesce(updated_at, created_at)::text as updated_at
@@ -27,6 +29,7 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
     }
 
     return next.begin(dryRun ? "read only" : "", async (target) => {
+      await target`set local datestyle = 'ISO, YMD'`;
       const counts = {
         users: { read: users.length, changed: 0, unchanged: 0, written: 0 },
         profiles: { read: profiles.length, changed: 0, unchanged: 0, written: 0 },
