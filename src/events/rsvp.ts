@@ -66,13 +66,18 @@ export async function writeRsvp(db: Db, eventKey: string, userId: string, status
 }
 
 /** Quiet by design: no row, unknown event or cancelled event all answer the same. */
-export async function withdrawRsvp(db: Db, eventKey: string, userId: string): Promise<{ deleted: boolean; status: EventStatus | null }> {
+export async function withdrawRsvp(db: Db, eventKey: string, userId: string): Promise<{ limited: false; deleted: boolean; status: EventStatus | null } | { limited: true; retryAfter: number }> {
   return db.transaction(async (tx) => {
+    // Same lock order as writeRsvp (member, then event row); the budget hit is stamped and
+    // committed together with the delete, after both waits.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
-    if (!ev) return { deleted: false, status: null };
+    const verdict = await chargeThrottle(tx, userId);
+    if (verdict.limited) return { limited: true, retryAfter: verdict.retryAfter } as const;
+    if (!ev) return { limited: false, deleted: false, status: null } as const;
     const gone = await tx.delete(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId))).returning({ id: rsvps.id });
     const mirrorable = ev.status === "published" || ev.status === "cancelled";
-    return { deleted: gone.length > 0, status: gone.length > 0 && mirrorable ? (ev.status as EventStatus) : null };
+    return { limited: false, deleted: gone.length > 0, status: gone.length > 0 && mirrorable ? (ev.status as EventStatus) : null } as const;
   });
 }
 
@@ -84,9 +89,6 @@ export type Verdict = { limited: false } | { limited: true; retryAfter: number }
  * advisory lock makes count-then-insert atomic per bucket, so a concurrent burst cannot
  * overshoot (the Laravel limiter is cache-backed and best-effort; this is stricter).
  */
-export async function hitRsvpThrottle(db: Db, userId: string): Promise<Verdict> {
-  return db.transaction((tx) => chargeThrottle(tx, userId));
-}
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 

@@ -11,7 +11,7 @@ import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
 import { RSVP_HONEY_FIELD } from "../islands/contracts";
-import { dispatchRsvpSync, hitRsvpThrottle, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
+import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { EventGonePage, EventPage, EventsPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listFeed, listJson, listPast, listUpcoming, type PublicEvent } from "./reads";
@@ -340,14 +340,12 @@ export function registerEventRoutes(app: App, readSession: SessionReader, peekSe
     if (who instanceof Response) return who;
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
-    const verdict = await hitRsvpThrottle(db, who.id);
-    if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
     // Only the caller's own row is reachable: the delete is keyed on the session user.
+    // The budget is charged inside withdrawRsvp, atomically with the delete.
     const key = c.req.param("key");
-    if (KEY_RE.test(key)) {
-      const r = await withdrawRsvp(db, key, who.id);
-      await dispatchRsvpSync(c.env, key, r.status);
-    }
+    const r = await withdrawRsvp(db, KEY_RE.test(key) ? key : "", who.id);
+    if (r.limited) return rateLimitExceeded(c, r.retryAfter);
+    await dispatchRsvpSync(c.env, key, r.status);
     return c.body(null, 204);
   });
 

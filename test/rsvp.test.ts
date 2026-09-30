@@ -305,4 +305,26 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const [hit] = await client`select at from web_throttle_hits where bucket = 'rsvp-write:stamp'`;
     expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(t).getTime());
   });
+  it("withdrawals queued behind the event lock charge after it: 12 DELETEs + 12 PUTs let exactly 12 through", async () => {
+    const ev = await seed();
+    const other = await seed();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = client.begin(async (tx) => {
+      await tx`select id from events where id = ${ev.id} for update`;
+      await held;
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const dels = Array.from({ length: 12 }, () => call("DELETE", ev.key, "dq"));
+    await new Promise((r) => setTimeout(r, 300));
+    const puts = Array.from({ length: 12 }, () => put(other.key, "dq"));
+    await new Promise((r) => setTimeout(r, 300));
+    release();
+    await holder;
+    const codes = (await Promise.all([...dels, ...puts])).map((r) => r.status);
+    expect(codes.filter((c) => c === 429)).toHaveLength(12);
+    const [nr] = await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:dq'`;
+    const n = nr!.n;
+    expect(n).toBe(12);
+  });
 });
