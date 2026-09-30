@@ -111,18 +111,18 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
   });
 
   it("serves feeds sessionless with ETag/304 and never exposes drafts", async () => {
-    await ins("01J0000000000000000000PUB1", "published");
+    await ins("01J0000000000000000000PXB1", "published");
     await ins("01J0000000000000000000DRF1", "draft");
     await ins("01J0000000000000000000CAN1", "cancelled");
-    await ins("01J0000000000000000000OLD1", "published", "2000-01-02T00:00:00Z");
+    await ins("01J00000000000000000000KD1", "published", "2000-01-02T00:00:00Z");
 
     const rss = await req("/events.rss");
     expect(rss.status).toBe(200);
     expect(rss.headers.get("content-type")).toBe("application/rss+xml; charset=utf-8");
     expect(rss.headers.get("set-cookie")).toBeNull();
     const rssBody = await rss.text();
-    expect(rssBody).toContain("PUB1");
-    for (const k of ["DRF1", "CAN1", "OLD1"]) expect(rssBody).not.toContain(k);
+    expect(rssBody).toContain("PXB1");
+    for (const k of ["DRF1", "CAN1", "0KD1"]) expect(rssBody).not.toContain(k);
     const etag = rss.headers.get("etag")!;
     const nm = await req("/events.rss", { headers: { "if-none-match": etag } });
     expect(nm.status).toBe(304);
@@ -132,20 +132,20 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
     const icsBody = await ics.text();
     expect(ics.headers.get("content-type")).toBe("text/calendar; charset=utf-8");
     expect(ics.headers.get("set-cookie")).toBeNull();
-    expect(icsBody).toContain("PUB1");
+    expect(icsBody).toContain("PXB1");
     expect(icsBody).toContain("STATUS:CANCELLED");
     expect(icsBody).not.toContain("DRF1");
     expect((await req("/events.ics", { headers: { "if-none-match": ics.headers.get("etag")! } })).status).toBe(304);
   });
 
   it("per-event ICS: 200 published, 403 draft, 404 unknown/malformed, 304 on ETag", async () => {
-    await ins("01J0000000000000000000PUB1", "published");
+    await ins("01J0000000000000000000PXB1", "published");
     await ins("01J0000000000000000000DRF1", "draft");
-    const ok = await req("/events/01J0000000000000000000PUB1.ics");
+    const ok = await req("/events/01J0000000000000000000PXB1.ics");
     expect(ok.status).toBe(200);
-    expect(ok.headers.get("content-disposition")).toBe('attachment; filename="01J0000000000000000000PUB1.ics"');
+    expect(ok.headers.get("content-disposition")).toBe('attachment; filename="01J0000000000000000000PXB1.ics"');
     expect(ok.headers.get("set-cookie")).toBeNull();
-    expect((await req("/events/01J0000000000000000000PUB1.ics", { headers: { "if-none-match": ok.headers.get("etag")! } })).status).toBe(304);
+    expect((await req("/events/01J0000000000000000000PXB1.ics", { headers: { "if-none-match": ok.headers.get("etag")! } })).status).toBe(304);
     expect((await req("/events/01J0000000000000000000DRF1.ics")).status).toBe(403);
     expect((await req("/events/01J0000000000000000000NONE.ics")).status).toBe(404);
     expect((await req("/events/nope.ics")).status).toBe(404);
