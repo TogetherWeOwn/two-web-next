@@ -55,6 +55,7 @@ it.each([
   ["/e/missing-event", 404],
   ["/admin/events/missing-event", 404],
   ["/admin/featured/999", 404],
+  ["/admin/join-attempts/999", 404],
   ["/members/100000000000000002", 404],
   ["/missing-page", 404],
   [`/e/${EVENT_KEY}`, 410],
