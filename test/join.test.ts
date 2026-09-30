@@ -240,6 +240,84 @@ describe("GET /join (database-free leaf)", () => {
   });
 });
 
+// W15 ports ReturnToPageTest, JoinWidgetFallbackTest, JoinDenialMatrixTest
+// and JoinCallbackFailureTest. Remaining framework-specific cases are mapped
+// explicitly in docs/w15-auth-tests.md rather than counted as passing.
+describe("W15 join landing and recovery parity", () => {
+  it("forwards a safe return path from the landing page to one-click OAuth", async () => {
+    const { env: e } = isolated();
+    const next = "/events?month=2026-10";
+    const res = await app.request(`/join?next=${encodeURIComponent(next)}`, {}, e);
+    expect(await res.text()).toContain(`href="/join/discord?next=${encodeURIComponent(next)}"`);
+  });
+
+  it.each(["https://evil.test/", "//evil.test/", "/\\evil.test", "javascript:alert(1)"])(
+    "strips hostile landing return path %s", async (next) => {
+      const { env: e } = isolated();
+      const html = await (await app.request(`/join?next=${encodeURIComponent(next)}`, {}, e)).text();
+      expect(html).toContain('href="/join/discord"');
+      expect(html).not.toContain(encodeURIComponent(next));
+    },
+  );
+
+  it("renders the widget with sandbox, lazy loading and no-referrer", async () => {
+    const { env: e } = isolated();
+    const html = await (await app.request("/join", {}, e)).text();
+    for (const attr of ['sandbox="allow-scripts allow-same-origin"', 'loading="lazy"', 'referrerpolicy="no-referrer"']) {
+      expect(html).toContain(attr);
+    }
+  });
+
+  it.each(["", "javascript:alert(1)", "https://evil.test/invite"])(
+    "uses the static Discord invite on recovery when configuration is unusable: %s", async (invite) => {
+      const { env: e } = isolated();
+      const html = await (await app.request("/join/callback?error=access_denied", {}, { ...e, DISCORD_INVITE_URL: invite })).text();
+      expect(html).toContain('href="https://discord.gg/4GwEDNRTtx"');
+      if (invite) expect(html).not.toContain(invite);
+    },
+  );
+
+  it.each(["access_denied", "server_error", "temporarily_unavailable"])(
+    "clears attribution and return cookies, records a denied outcome and never exchanges on %s", async (error) => {
+      const { fake, env: e } = isolated();
+      const calls = mockDiscord();
+      const start = await startJoin(e, "?source=web-homepage&next=/events");
+      const res = await app.request(`/join/callback?error=${error}&error_description=never-echo`, { headers: { cookie: start.cookie } }, e);
+      expect(res.status).toBe(200);
+      expect(await res.text()).not.toContain("never-echo");
+      expect(calls).toHaveLength(0);
+      expect(fake.attempts).toEqual([{ outcome: "denied", source: "web-homepage", requestId: null, discordId: null }]);
+      for (const name of ["state", "source", "next"]) {
+        expect(res.headers.getSetCookie().join("\n")).toContain(`__Host-two_join_${name}=; Max-Age=0`);
+      }
+      // Simulate the browser after the deletion cookies: no stale attribution.
+      await app.request("/join/callback?error=access_denied", {}, e);
+      expect(fake.attempts[1]?.source).toBeNull();
+    },
+  );
+
+  it("records already-member separately, issues a session, and consumes safe return state", async () => {
+    const { fake, env: e } = isolated();
+    mockDiscord({ joinStatus: 204 });
+    const { state, cookie } = await startJoin(e, "?source=returning&next=/events");
+    const res = await finishJoinCb(e, state!, cookie);
+    expect(res.headers.get("location")).toBe("/events");
+    expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
+    expect(fake.attempts).toEqual([{ outcome: "already_member", source: "returning", requestId: null, discordId: "42" }]);
+    expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_join_next=; Max-Age=0");
+  });
+
+  it("a refused bot join records degradation but never issues a successful member session", async () => {
+    const { fake, env: e } = isolated();
+    mockDiscord({ joinStatus: 403 });
+    const { state, cookie } = await startJoin(e);
+    const res = await finishJoinCb(e, state!, cookie);
+    expect(res.status).toBe(200);
+    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+    expect(fake.attempts[0]?.outcome).toBe("degraded");
+  });
+});
+
 describe("GET /join/discord (throttled OAuth start)", () => {
   it("redirects to Discord with identify+guilds.join and the /join/callback redirect URI", async () => {
     const { env: e } = isolated();
