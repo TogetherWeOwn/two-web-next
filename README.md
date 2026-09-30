@@ -21,6 +21,13 @@ Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](doc
 - Moderator flag recomputed at login from Discord snowflake role IDs (never names) via the bot token; blank allowlist and failed lookups fail closed without blocking sign-in.
 - Staging-only QA seam (`POST /auth/qa/:identity`): 404s everywhere but the staging host with `QA_AUTH_TOKEN` set.
 
+## Moderator guides
+
+- [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
+  event and featured-content workflows, dashboard diagnostics, and safe escalation.
+- [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
+  current notices, recovery pages, and the invite fallback.
+
 ## Develop
 
 ```sh
