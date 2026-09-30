@@ -100,9 +100,29 @@
   if (!root) return;
   var eventKey = root.getAttribute("data-event-key");
   if (!eventKey) return;
-  var loginUrl =
-    root.getAttribute("data-login-url") ||
-    ("/auth/discord?next=" + encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/"));
+  // DOM text is never assigned to href unvalidated. The SSR contract only
+  // ever emits "/auth/discord" or "/auth/discord?next=<pct-encoded return>",
+  // so accept exactly that shape, normalize the return path through
+  // decode/encode, and fall back to the location-derived link otherwise.
+  function safeLoginUrl(raw, fallback) {
+    if (typeof raw !== "string") return fallback;
+    var marker = "?next=";
+    var at = raw.indexOf(marker);
+    var base = at === -1 ? raw : raw.slice(0, at);
+    if (base !== "/auth/discord") return fallback;
+    if (at === -1) return "/auth/discord";
+    var next;
+    try {
+      next = decodeURIComponent(raw.slice(at + marker.length));
+    } catch (e) {
+      return fallback;
+    }
+    return "/auth/discord?next=" + encodeURIComponent(next);
+  }
+  var loginUrl = safeLoginUrl(
+    root.getAttribute("data-login-url"),
+    "/auth/discord?next=" + encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/")
+  );
   var url = "/events/" + encodeURIComponent(eventKey) + "/rsvp";
 
   var inflight = null;

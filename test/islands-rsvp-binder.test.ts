@@ -40,10 +40,10 @@ function node(testid: string, text: string, action?: string) {
   if (action) n.setAttribute("data-action", action);
   return n;
 }
-function browser(state: "open" | "going" | "waitlisted" | "closed" | "full" = "open") {
+function browser(state: "open" | "going" | "waitlisted" | "closed" | "full" = "open", loginUrl = "/auth/discord?next=%2Fe%2Fraid%2Fone") {
   const root = new Node();
   root.setAttribute("data-event-key", "raid/one");
-  root.setAttribute("data-login-url", "/auth/discord?next=%2Fe%2Fraid%2Fone");
+  root.setAttribute("data-login-url", loginUrl);
   root.setAttribute("data-capacity", "4");
   root.setAttribute("data-full", state === "full" ? "true" : "false");
   root.setAttribute("data-paused", "false");
@@ -164,6 +164,17 @@ describe("RsvpButton shipped binder", () => {
     expect(notice.getAttribute("role")).toBe("alert"); expect(notice.focused).toBe(true);
     expect(notice.children[1]!.href).toBe("/auth/discord?next=%2Fe%2Fraid%2Fone");
     expect(b.get("rsvp-going")!.disabled).toBe(false); expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it.each([
+    ["javascript:alert(1)", "/auth/discord?next=%2Fe%2Fraid%2Fone"],
+    ["https://evil.example.test/phish", "/auth/discord?next=%2Fe%2Fraid%2Fone"],
+    ["", "/auth/discord?next=%2Fe%2Fraid%2Fone"],
+    ["/auth/discord?next=%2Fe%2Fother", "/auth/discord?next=%2Fe%2Fother"],
+    ["/auth/discord", "/auth/discord"],
+  ])("never assigns hostile mount text %s to the login href (falls back or keeps contract shape)", async (raw, expected) => {
+    const b = browser("open", raw); b.get("rsvp-going")!.click(); b.finish(0, 401); await b.settle();
+    expect(b.get("rsvp-session-expired")!.children[1]!.href).toBe(expected);
   });
 
   it.each(["network", "500", "422"])("announces %s failure without stealing focus or disabling retry", async (kind) => {
