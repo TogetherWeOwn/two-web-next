@@ -35,13 +35,35 @@ Cutover/DNS changes are outside this runbook.
 All commands run from this repository root in Bash, with Node 24 and the
 lockfile-installed Wrangler (4.143.1 at this revision). Database drill commands
 also need PostgreSQL client tools compatible with the server, Python 3 and `psql`.
+Remote batches use fail-fast subshells: a failed command stops that batch without
+changing the caller's shell options. Stop the incident workflow on failure;
+do not continue by pasting a later block.
+
+Database commands clear inherited `PGHOSTADDR`, `PGSERVICE`, `PGSERVICEFILE`
+and `PGOPTIONS`; a host address can redirect the connection, and service settings
+override environment defaults. `PGPASSFILE=/dev/null` prevents fallback to a
+saved credential. See PostgreSQL's [environment variables](https://www.postgresql.org/docs/17/libpq-envars.html)
+and [service precedence](https://www.postgresql.org/docs/17/libpq-pgservice.html).
 Install development tools even when the shell defaults to production mode:
 
 ```bash
-npm ci --include=dev
-# Safe local gate: database-dependent tests skip, everything else uses fixtures.
-env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npm run check
+(
+  set -euo pipefail
+  npm ci --include=dev
+  # Fixture-only gate: conditional SQL suites skip; exclude the unconditional one.
+  env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
+    npm run check -- -- --exclude test/review-p1-verify.test.ts
+)
 ```
+
+The extra `-- --` forwards [Vitest's exclusion](https://vitest.dev/guide/cli.html#exclude)
+through the nested npm scripts. Unset `DATABASE_URL` alone is **not** fixture-only:
+`test/review-p1-verify.test.ts` has unconditional SQL cases and a fallback to
+`agent-testdb` database `postgres`. The exclusion intentionally omits those cases;
+it is not full SQL coverage. Full database verification must explicitly use
+`postgres://agent_test@agent-testdb:5432/two_web_next` and the migrated schema,
+never that fallback or a live service. Required CI runs the complete suite on
+its disposable Postgres service.
 
 ## Deploy and record the rollback pointer
 
@@ -61,8 +83,11 @@ approved account and binding isolation before any remote mutation.
    must already be injected, never supplied on argv:
 
    ```bash
-   npx --no-install wrangler deployments list --name two-web-next --json
-   npx --no-install wrangler deployments status --name two-web-next --json
+   (
+     set -euo pipefail
+     npx --no-install wrangler deployments list --name two-web-next --json
+     npx --no-install wrangler deployments status --name two-web-next --json
+   )
    ```
 
 3. Normal path: merge to `main` invokes
@@ -94,11 +119,14 @@ Wrangler's implicit previous-version default in a concurrent release incident.
 Keep required resources/bindings in place; never delete a queue to roll back.
 
 ```bash
-# REMOTE MUTATION: run only after the incident's rollback decision.
-read -r -p 'Recorded known-good Worker version ID: ' GOOD_VERSION
-: "${GOOD_VERSION:?A recorded Worker version ID is required}"
-npx --no-install wrangler rollback "$GOOD_VERSION" --name two-web-next
-npx --no-install wrangler deployments status --name two-web-next --json
+(
+  set -euo pipefail
+  # REMOTE MUTATION: run only after the incident's rollback decision.
+  read -r -p 'Recorded known-good Worker version ID: ' GOOD_VERSION
+  : "${GOOD_VERSION:?A recorded Worker version ID is required}"
+  npx --no-install wrangler rollback "$GOOD_VERSION" --name two-web-next
+  npx --no-install wrangler deployments status --name two-web-next --json
+)
 ```
 
 Wrangler prompts for confirmation; the rollback becomes active on all this
@@ -209,12 +237,15 @@ exhaustion and terminal acknowledgement, not successful draining.
 For an authorized queue incident, contain delivery without deleting messages:
 
 ```bash
-# REMOTE MUTATION: authorized incident containment, not a test.
-npx --no-install wrangler queues pause-delivery two-sync-event
-npx --no-install wrangler queues pause-delivery two-internal-action
-# Remote transport metadata; ledger counts cannot replace it.
-npx --no-install wrangler queues info two-sync-event
-npx --no-install wrangler queues info two-internal-action
+(
+  set -euo pipefail
+  # REMOTE MUTATION: authorized incident containment, not a test.
+  npx --no-install wrangler queues pause-delivery two-sync-event
+  npx --no-install wrangler queues pause-delivery two-internal-action
+  # Remote transport metadata; ledger counts cannot replace it.
+  npx --no-install wrangler queues info two-sync-event
+  npx --no-install wrangler queues info two-internal-action
+)
 ```
 
 Pause is reversible but does not stop producers or the scheduled handler.
@@ -225,9 +256,12 @@ After the implementation gate, holds and downstream readiness are explicitly
 cleared, the approved drain starts by resuming the **existing** transport:
 
 ```bash
-# REMOTE MUTATION: only after the above gates; NOT safe on today's stubs.
-npx --no-install wrangler queues resume-delivery two-sync-event
-npx --no-install wrangler queues resume-delivery two-internal-action
+(
+  set -euo pipefail
+  # REMOTE MUTATION: only after the above gates; NOT safe on today's stubs.
+  npx --no-install wrangler queues resume-delivery two-sync-event
+  npx --no-install wrangler queues resume-delivery two-internal-action
+)
 ```
 
 Use transport backlog plus redacted delivery/failure evidence to judge draining.
@@ -251,8 +285,9 @@ the connection to staging/production for a test/probe. Real incident data
 inspection requires the authorized custodian and incident scope, not this drill:
 
 ```bash
-PGHOST=agent-testdb PGPORT=5432 PGUSER=agent_test PGDATABASE=two_web_next \
-  PGPASSWORD='' PGSSLMODE=disable PGSERVICE='' \
+env -u PGHOSTADDR -u PGSERVICE -u PGSERVICEFILE -u PGOPTIONS \
+  PGHOST=agent-testdb PGPORT=5432 PGUSER=agent_test PGDATABASE=two_web_next \
+  PGPASSWORD='' PGPASSFILE=/dev/null PGSSLMODE=disable \
   psql -X -v ON_ERROR_STOP=1 <<'SQL'
 SELECT job_id, kind, key, available_at, reserved_at, created_at
 FROM queue_jobs ORDER BY created_at, job_id LIMIT 100;
@@ -282,12 +317,21 @@ Message contracts from [src/jobs/types.ts](../src/jobs/types.ts):
 | `two-internal-action` / `INTERNAL_ACTION_QUEUE` | `kind: "role-assign"`, `action: { userId, roleKey }`, `idempotencyKey: null`, optional `jobId` |
 
 The tracking producer supplies `jobId`; it is not the bot idempotency key.
-The consumer routes by `kind`. Sync retries allow 6 attempts with backoffs
-`10,60,300,900,3600` seconds; internal actions allow 5 with `5,15,60,180`.
+The consumer routes by `kind` and caps sync work at 6 attempts, internal actions
+at 5. Policy-controlled retry delays are `10,60,300,900,3600` seconds for sync
+and `5,15,60,180` for internal actions. These apply to handled retryable outcomes
+and `BotTransportError`, not every throw; `retryAfterSeconds` can override them.
+Below the cap, generic errors (including today's ordinary `notWired` errors)
+call `m.retry()` without `delaySeconds`, leaving timing to the transport. At the
+cap they are recorded as terminal failures and acknowledged without another
+retry. Do not assume the arrays provide a guaranteed containment window.
+See [consumer error paths](../src/jobs/consumer.ts).
+
 Transport `max_retries: 10` is only a backstop. Calling a producer again mints a
 new key; role assignments have no key. The sync uniqueness lock lasts 300
-seconds (shorter than the longest retry), so neither ledger nor lock proves
-exactly-once downstream effects. Sync reads current event state, not a snapshot.
+seconds (shorter than the longest policy retry), so neither ledger nor lock
+proves exactly-once downstream effects. Sync reads current event state, not a
+snapshot.
 
 The separate W8 carrier [src/events/sync.ts](../src/events/sync.ts) uses
 `action`/`dedupeKey`, not W13 `kind`. `EVENT_SYNC_QUEUE` is unbound in current
@@ -319,12 +363,17 @@ value from a comment or switch to another URL if it fails. These remote commands
 pin the approved bucket/jurisdiction and avoid inherited overrides:
 
 ```bash
-# REMOTE: only the explicitly authorized database and EU member-data destination.
-: "${DATABASE_URL:?Custodian must inject the approved backup connection}"
-BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon \
-  WRANGLER_BIN= bash bin/neon-backup.sh backup staging
-BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon \
-  WRANGLER_BIN= bash bin/neon-backup.sh check staging
+(
+  set -euo pipefail
+  # REMOTE: only the authorized database and EU member-data destination.
+  : "${DATABASE_URL:?Custodian must inject the approved backup connection}"
+  unset PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
+  export PGPASSFILE=/dev/null
+  BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon \
+    WRANGLER_BIN= bash bin/neon-backup.sh backup staging
+  BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon \
+    WRANGLER_BIN= bash bin/neon-backup.sh check staging
+)
 ```
 
 Do not run `rotate` against real archives without retention/deletion approval.
@@ -358,9 +407,9 @@ or alternative credential is implied.
 set -euo pipefail
 : "${PAPERCLIP_RUN_SCRATCH_DIR:?Use the run-owned scratch directory}"
 export PGHOST=agent-testdb PGPORT=5432 PGUSER=agent_test PGDATABASE=two_web_next
-export PGPASSWORD='' PGSSLMODE=disable
-# Ignore inherited service configuration; the target above is test-only.
-unset PGSERVICE PGSERVICEFILE
+export PGPASSWORD='' PGPASSFILE=/dev/null PGSSLMODE=disable
+# Ignore inherited address/service/options; never use a fallback password file.
+unset PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
 DRILL_SCHEMA=runbook_restore_drill
 ARCHIVE="$PAPERCLIP_RUN_SCRATCH_DIR/runbook-fixture.dump"
 COUNTS_BEFORE="$PAPERCLIP_RUN_SCRATCH_DIR/runbook-counts-before.tsv"
