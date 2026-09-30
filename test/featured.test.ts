@@ -3,7 +3,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import app from "../src/index";
 import { featuredContents } from "../src/db/admin-schema";
 import { FEATURED_READ_DEADLINE_MS, listVisibleFeatured } from "../src/featured";
-import { featuredImageAllowed } from "../src/featured-image";
+import { featuredImageAllowed, featuredImageSrc } from "../src/featured-image";
 import { adminApp } from "../src/admin/routes";
 import { serializeSigned } from "hono/utils/cookie";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
@@ -84,6 +84,15 @@ describe("featured homepage fallback (local fixtures)", () => {
     ["https://user:password@cdn.discordapp.com/photo.jpg", false],
   ])("matches the strict image policy for %s", (url, allowed) => {
     expect(featuredImageAllowed(url, env.APP_URL)).toBe(allowed);
+  });
+
+  it.each([
+    ["/local.jpg", "/local.jpg"],
+    ["https://next.example.test/photo.jpg?a=1#frag", "/photo.jpg?a=1#frag"],
+    ["https://cdn.discordapp.com/attachments/photo.jpg", "https://cdn.discordapp.com/attachments/photo.jpg"],
+    ["https://images.example.test/photo.jpg", null],
+  ])("renders a 'self'-safe src for %s", (url, src) => {
+    expect(featuredImageSrc(url, env.APP_URL)).toBe(src);
   });
 });
 
@@ -223,7 +232,8 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     });
     const res = await home();
     const html = await res.text();
-    expect(html).toContain(`src="${env.APP_URL}/local.jpg"`);
+    expect(html).toContain('src="/local.jpg"');
+    expect(html).not.toContain(`src="${env.APP_URL}/local.jpg"`);
     expect(html).toContain("Old imported photo");
     expect(html).not.toContain("https://images.example.test/old.jpg");
     expect(res.headers.get("content-security-policy")).toContain("img-src 'self' https://cdn.discordapp.com");

@@ -1,7 +1,7 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Counts } from "./counts";
 import type { VisibleFeatured } from "./featured";
-import { featuredImageAllowed } from "./featured-image";
+import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
 import { canonicalUrl } from "./seo";
 
@@ -213,10 +213,12 @@ export const Home: FC<{
               <article class="card" data-testid="featured-item" key={item.id}>
                 <h3>{item.url ? <a href={item.url}>{item.title}</a> : item.title}</h3>
                 {item.body ? <p>{item.body}</p> : null}
-                {item.imageUrl && featuredImageAllowed(item.imageUrl, appUrl) ? (
+                {(() => {
+                  const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl) : null;
+                  return src ? (
                   <img
                     class="featured-image"
-                    src={item.imageUrl}
+                    src={src}
                     alt={item.imageAlt?.trim() || item.title}
                     width="640"
                     height="360"
@@ -224,7 +226,8 @@ export const Home: FC<{
                     decoding="async"
                     referrerpolicy="no-referrer"
                   />
-                ) : null}
+                  ) : null;
+                })()}
               </article>
             ))}
           </div>
