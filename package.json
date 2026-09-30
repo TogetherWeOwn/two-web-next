@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test",
+    "check": "npm run typecheck && npm run test && node --test ci/a11y-policy.test.mjs",
+    "a11y": "node ci/a11y.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check"
@@ -19,11 +20,13 @@
     "postgres": "^3.4.9"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@cloudflare/workers-types": "^5.20260929.1",
     "@types/node": "^26.6.3",
     "drizzle-kit": "^0.31.11",
     "esbuild": "0.28.1",
     "miniflare": "5.20260926.1-alpha",
+    "playwright": "^1.63.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
     "wrangler": "^4.143.1"

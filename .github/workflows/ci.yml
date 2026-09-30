@@ -17,9 +17,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  a11y:
+    name: a11y
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: WCAG 2.2 AA (local fixtures, no external services)
+        run: npm run a11y
+      - name: Accessibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-evidence
+          path: artifacts/a11y/
+          if-no-files-found: error
+          retention-days: 14
   # name pinned equal to the id: `check` is a required check on main.
+  # A failing audit must also prevent the existing required check from passing.
   check:
     name: check
+    needs: a11y
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
