@@ -17,8 +17,8 @@
 //
 // Session seam: the cookie carries a random token; the row in the session
 // store is the session (same contract as src/index.tsx: tests inject a
-// SessionStore on the env as SESSION_STORE, local/dev builds a postgres
-// store from DATABASE_URL, no binding fails closed to 503). The guard reads
+// SessionStore on the env as SESSION_STORE, runtime builds a postgres store
+// from DATABASE_URL or DB.connectionString, no binding fails closed to 503). The guard reads
 // the row — it never rotates: rotation is the site's per-view concern, and
 // an admin read must not invalidate the cookie the moderator's other tab
 // holds. Never trust a role bit from the cookie: the moderator decision is
@@ -28,6 +28,7 @@ import { getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
+import { databaseOptions, databaseUrl } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
 import {
   createMemorySessionStore,
@@ -52,9 +53,9 @@ const migratedUrls = new Set<string>();
 export async function sessionStoreFor(c: { env: Env }): Promise<SessionStore | null> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
-  const url = c.env.DATABASE_URL;
+  const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedUrls.has(url)) {
     await migrate(sql);
     migratedUrls.add(url);

@@ -22,7 +22,9 @@ import { dbFor } from "../admin/db";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
+import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
+import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
@@ -41,7 +43,7 @@ export type ProfileDeps = {
   sessionStore?: SessionStore;
   store?: ProfileStore;
   accessLog?: AccessSink;
-  /** bucket → verdict. Default: web_throttle_hits via DATABASE_URL; no DB allows. */
+  /** bucket → verdict. Default: web_throttle_hits via the web DB; no DB allows. */
   throttle?: (bucket: string) => Promise<Verdict>;
 };
 
@@ -66,9 +68,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
   };
   const throttle = async (c: { env: Env }, bucket: string): Promise<Verdict> => {
     if (deps.throttle) return deps.throttle(bucket);
-    const url = c.env.DATABASE_URL;
+    const url = databaseUrl(c.env);
     if (!url) return { limited: false };
-    const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+    const sql = postgres(url, databaseOptions) as unknown as Sql;
     if (!migratedThrottle.has(url)) {
       await migrateJoin(sql);
       migratedThrottle.add(url);
@@ -125,7 +127,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
     // One-shot join confirmation: a member who just completed the join sees the
     // added/already-member banner (and the reinvite action) on their landing.
     const joinResult = await takeJoinResult(c);
-    return c.html(<ProfilePage member={member} isOwner={viewer.id === member.id} joinResult={joinResult} />);
+    return c.html(<ProfilePage member={member} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} joinResult={joinResult} />);
   };
 
   app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));
@@ -136,11 +138,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const viewer = c.get("viewer");
     const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(() => ({ limited: false }) as Verdict);
     if (verdict.limited) {
-      return c.json(
-        { reason: "rate_limited", message: "Too many profile updates. Try again shortly.", retry_after: verdict.retryAfter },
-        429,
-        { "Retry-After": String(verdict.retryAfter) },
-      );
+      return rateLimitExceeded(c, verdict.retryAfter);
     }
     // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
     if (!SNOWFLAKE.test(id) || viewer.id !== id) return c.text("Forbidden", 403);
@@ -169,6 +167,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
         <ProfilePage
           member={member}
           isOwner
+          appUrl={c.env.APP_URL}
           errors={result.errors}
           values={{
             bio: typeof input.bio === "string" ? input.bio : "",

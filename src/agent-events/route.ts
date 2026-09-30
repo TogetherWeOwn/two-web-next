@@ -4,12 +4,14 @@ import type { Env } from "../env";
 import { DEFAULT_CONFIG, type IngressConfig, handleAgentEvent } from "./service";
 
 export function ingressConfig(env: Env): IngressConfig {
+  const routePerMinute = Number(env.AGENT_EVENTS_ROUTE_PER_MINUTE);
   return {
     ...DEFAULT_CONFIG,
     enabled: env.AGENT_EVENTS_ENABLED === "true" || env.AGENT_EVENTS_ENABLED === "1",
     callerAgentId: env.AGENT_EVENTS_CALLER_AGENT_ID ?? "",
     stagingGuildId: env.AGENT_EVENTS_GUILD_ID || DEFAULT_CONFIG.stagingGuildId,
     productionGuildId: env.AGENT_EVENTS_PRODUCTION_GUILD_ID || DEFAULT_CONFIG.productionGuildId,
+    routePerMinute: Number.isInteger(routePerMinute) && routePerMinute > 0 ? routePerMinute : DEFAULT_CONFIG.routePerMinute,
   };
 }
 
@@ -36,7 +38,10 @@ export async function agentEventsRoute(c: Context<{ Bindings: Env }>): Promise<R
   }
   const sql = postgres(url, { max: 1, fetch_types: false, prepare: false });
   try {
-    const a = await handleAgentEvent(sql, cfg, body, bearer(c.req.header("authorization")));
+    // Anonymous shield bucket: Cloudflare's client address header. A machine
+    // caller always presents a credential, so this only keys floods without one.
+    const ip = c.req.header("cf-connecting-ip") ?? null;
+    const a = await handleAgentEvent(sql, cfg, body, bearer(c.req.header("authorization")), ip);
     return c.json(a.body, a.status as 200, a.headers);
   } catch (err) {
     console.error("agent-events failed", (err as Error).name);

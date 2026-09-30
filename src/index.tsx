@@ -17,6 +17,7 @@ import {
 } from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
 import { dbPing, hyperdriveQuery } from "./db/ping";
+import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import type { Env, Session } from "./env";
 import { inviteDestination } from "./invite";
@@ -27,8 +28,10 @@ import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
+import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
+import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { consumeLoginReturn, rememberLoginNext, takeJoinResult } from "./return-journey";
@@ -47,22 +50,50 @@ const app = new Hono<{ Bindings: Env }>();
 // requires absolute HTTPS URLs, not this same-origin relative destination.
 const CSP_REPORT_ENDPOINT = "/csp-reports";
 
-app.use(
-  "*",
-  secureHeaders({
-    contentSecurityPolicy: {
-      defaultSrc: ["'self'"],
-      imgSrc: ["'self'", "https://cdn.discordapp.com"],
-      styleSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      frameAncestors: ["'none'"],
-      formAction: ["'self'"],
-      reportUri: CSP_REPORT_ENDPOINT,
-      reportTo: "csp-endpoint",
-    },
-    reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
-  }),
-);
+// The four static headers (fonts byte-identical to SECURITY_HEADERS in
+// src/headers.ts — the tested copy; the parity test pins both sides so drift
+// fails the build). X-Frame-Options is DENY: nothing frames this site
+// (TOG-5469). Registered globally, not on a route group: the DB-free funnel
+// leaves and the mounted admin/profile sub-apps inherit it from the outer
+// dispatch. The CSP shape + report sink belong to the CSP-report slice
+// (TOG-10107) and are configured above; the staging X-Robots-Tag lives in
+// the robotsTag middleware below. Strict-Transport-Security is explicitly
+// disabled here (strictTransportSecurity: false below): the edge owns it
+// (TOG-8729) — Hono defaults it on, and emitting it from the app would pin
+// local dev machines to HTTPS. The absence is pinned in test/seo-headers.
+// One ALL /* registration (the exposure inventory in
+// test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
+// plus the staging X-Robots-Tag composed into a single wrapper. Mounted
+// sub-apps inherit both from this outer dispatch.
+const staticSecurityHeaders = secureHeaders({
+  // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
+  // machines to HTTPS, so the Hono default is explicitly off.
+  strictTransportSecurity: false,
+  contentSecurityPolicy: {
+    defaultSrc: ["'self'"],
+    imgSrc: ["'self'", "https://cdn.discordapp.com"],
+    styleSrc: ["'self'"],
+    scriptSrc: ["'self'"],
+    frameAncestors: ["'none'"],
+    formAction: ["'self'"],
+    reportUri: CSP_REPORT_ENDPOINT,
+    reportTo: "csp-endpoint",
+  },
+  xContentTypeOptions: SECURITY_HEADERS["X-Content-Type-Options"],
+  referrerPolicy: SECURITY_HEADERS["Referrer-Policy"],
+  xFrameOptions: SECURITY_HEADERS["X-Frame-Options"],
+  permissionsPolicy: {
+    camera: [],
+    microphone: [],
+    geolocation: [],
+  },
+  reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
+});
+
+app.use("*", async (c, next) => {
+  await staticSecurityHeaders(c, next);
+  await robotsTag(c, async () => {});
+});
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
@@ -87,16 +118,12 @@ const migratedUrls = new Set<string>();
 async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
-  const url = c.env.DATABASE_URL;
-  // No DB binding: sessions cannot persist (a fresh memory store per request
-  // fails closed to guest). This is the transitional state until the
-  // Hyperdrive binding lands (W1/S1); staging sets DATABASE_URL meanwhile.
+  const url = databaseUrl(c.env);
+  // No DB configuration: a fresh memory store per request fails closed to guest.
   if (!url) return createMemorySessionStore();
-  // Short-lived per-request client, one pooled connection max. Never ended
-  // while the store holds it (ending here would hand the store a dead client);
-  // idle sockets close themselves via idle_timeout. The W1 Hyperdrive spike
-  // owns production pooling; Hyperdrive will use this same Sql surface.
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
+  // Keep it alive while the store uses it; idle_timeout closes idle sockets.
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedUrls.has(url)) {
     await migrate(sql);
     migratedUrls.add(url);
@@ -104,19 +131,17 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   return createPostgresSessionStore(sql);
 }
 
-// Roster persistence for the N6 user-roster write. Same posture as storeFor:
-// tests inject a Sql double through ROSTER_STORE; staging/production use
-// DATABASE_URL with a short-lived per-request client and the runtime DDL; an
-// absent DATABASE_URL means the roster write quietly degrades to null (a
-// no-op upsert) so sign-in stays up instead of 500ing.
+// Roster persistence shares storeFor's DB selection so signed-in profiles
+// read the same users sign-in writes. Tests may inject ROSTER_STORE; no DB
+// configuration means a no-op upsert so DB-free sign-in tests still work.
 const migratedRosterUrls = new Set<string>();
 
 async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
   if (injected) return injected;
-  const url = c.env.DATABASE_URL;
+  const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedRosterUrls.has(url)) {
     await migrateRoster(sql);
     migratedRosterUrls.add(url);
@@ -166,11 +191,16 @@ async function issueSession(
   });
 }
 
-async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore): Promise<Session | null> {
+async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, rotateToken = true): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
   const row = await store.get(await hashToken(token));
   if (!row) return null;
+  // Abortable calendar fragments validate expiry/revocation but must not delete
+  // the browser's current token: an aborted response cannot deliver a replacement.
+  if (!rotateToken) {
+    return { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator };
+  }
   // Rotation: every authenticated page view mints a fresh token and deletes
   // the old row in the same statement. A replayed cookie finds no row: guest.
   const replacement = newSessionToken();
@@ -259,7 +289,7 @@ export function rulesLastUpdated(raw: string | undefined): { iso: string; label:
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules lastUpdated={stamp?.iso ?? null} />);
+  return c.html(<Rules lastUpdated={stamp} />);
 });
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
@@ -288,7 +318,7 @@ registerJoinRoutes(app, { storeFor, issueSession }, {
     const joinResult = await takeJoinResult(c);
     c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=3600");
     return c.html(
-      <Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} joinResult={joinResult} />,
+      <Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} joinResult={joinResult} />,
     );
   },
   recovery: (c, props, status = 200) => {
@@ -372,6 +402,8 @@ app.get("/auth/discord", async (c) => {
 });
 
 app.get("/auth/discord/callback", async (c) => {
+  const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
+  if (limited) return limited;
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
   deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
   // Consume the return journey on every terminal path — success, denial and
@@ -429,9 +461,13 @@ app.route("/admin", adminApp());
 app.route("/", profilesApp());
 
 // W8: public events pages, /events.json and moderator event writes.
-registerEventRoutes(app, async (c) => readSession(c, await storeFor(c)));
+registerEventRoutes(
+  app,
+  async (c) => readSession(c, await storeFor(c)),
+  async (c) => readSession(c, await storeFor(c), false),
+);
 
-app.post("/logout", async (c) => {
+app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
   // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
   // the origin check below refuses one anyway.
   const origin = c.req.header("origin");
@@ -445,7 +481,7 @@ app.post("/logout", async (c) => {
 
 // Staging-only QA seam. 404 everywhere that is not the staging host with
 // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post("/auth/qa/:identity", async (c) => {
+app.post("/auth/qa/:identity", throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), async (c) => {
   if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
