@@ -2,6 +2,35 @@
 import { pathToFileURL } from "node:url";
 import postgres from "postgres";
 
+// Legacy Socialite saves CDN URLs; Next's profile renderer requires an avatar hash.
+// Discord paths: https://docs.discord.com/developers/reference#image-formatting
+function avatarHash(id, avatar) {
+  if (avatar === null || avatar === "") return null;
+  if (typeof avatar !== "string") throw new Error("Invalid legacy avatar");
+  if (/^[a-z0-9_]{1,64}$/i.test(avatar)) return avatar;
+  const url = new URL(avatar);
+  if (url.origin !== "https://cdn.discordapp.com" || url.username || url.password || url.hash) {
+    throw new Error("Invalid legacy avatar");
+  }
+  if (/^\/embed\/avatars\/[0-5]\.png$/.test(url.pathname)) return null;
+  const match = /^\/avatars\/(\d{1,20})\/([a-z0-9_]{1,64})\.(?:png|jpe?g|webp|gif)$/.exec(url.pathname);
+  if (!match || match[1] !== id) throw new Error("Invalid legacy avatar");
+  return match[2]; // Image query parameters are not part of the stored hash.
+}
+
+export function createImportClient(url) {
+  const parsed = new URL(url);
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname || !parsed.username || parsed.pathname.length < 2) {
+    throw new Error("Invalid connection URL");
+  }
+  return postgres(url, {
+    max: 1, connect_timeout: 10, debug: false,
+    connection: { timezone: "UTC" }, onnotice: () => {},
+    // URL/default port and empty password must never inherit PGPORT/PGPASSWORD.
+    port: Number(parsed.port || 5432), password: () => decodeURIComponent(parsed.password),
+  });
+}
+
 // Explicit projections are the import boundary: no password, remember token,
 // session, OAuth credential or moderator field is ever read from legacy.
 export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) {
@@ -22,6 +51,7 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
         throw new Error("Invalid legacy identity or timestamps");
       }
     }
+    for (const row of users) row.avatar = avatarHash(row.discord_id, row.avatar);
     for (const row of profiles) {
       if (!Array.isArray(row.games) || row.games.some((game) => typeof game !== "string")) {
         throw new Error("Invalid legacy profile games");
@@ -109,20 +139,8 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   let next;
   try {
     // Laravel timestamps are UTC wall times, independent of the client/server zone.
-    const client = (url) => {
-      const parsed = new URL(url);
-      if (!["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname || !parsed.username || parsed.pathname.length < 2) {
-        throw new Error("Invalid connection URL");
-      }
-      return postgres(url, {
-        max: 1, connect_timeout: 10, debug: false,
-        connection: { timezone: "UTC" }, onnotice: () => {},
-        // An empty URL password means empty, never an inherited PGPASSWORD.
-        password: () => decodeURIComponent(parsed.password),
-      });
-    };
-    legacy = client(env.LEGACY_DATABASE_URL);
-    next = client(env.DATABASE_URL);
+    legacy = createImportClient(env.LEGACY_DATABASE_URL);
+    next = createImportClient(env.DATABASE_URL);
     const result = await importUsersProfiles(legacy, next, { dryRun: args[0] !== "--apply" });
     console.log(JSON.stringify({ table: "users", dryRun: result.dryRun, ...result.users }));
     console.log(JSON.stringify({ table: "profiles", dryRun: result.dryRun, ...result.profiles }));

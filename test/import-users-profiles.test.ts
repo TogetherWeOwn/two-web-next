@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { profileAvatarSrcset } from "../src/islands/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createUsersProfilesFixture, type UsersProfilesFixture } from "./helpers/import-users-profiles-db";
 
@@ -27,6 +28,29 @@ describe("users/profiles import CLI safety (no database)", () => {
     expect(rejected.stderr).not.toContain("synthetic-password");
     expect(rejected.stderr).not.toContain("example.test");
     expect(run(["--apply", "--dry-run"]).status).toBe(2);
+  });
+
+  it.each([
+    ["", "", 5432, 5432],
+    [":5434", "", 5434, 5432],
+    ["", ":5435", 5432, 5435],
+    [":5434", ":5435", 5434, 5435],
+  ])("pins both client ports for source %s and target %s without connecting", (sourcePort, targetPort, expectedSource, expectedTarget) => {
+    const constructed = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      const { createImportClient } = await import(${JSON.stringify(pathToFileURL(script).href)});
+      const clients = [process.env.LEGACY_DATABASE_URL, process.env.DATABASE_URL].map(createImportClient);
+      console.log(JSON.stringify(clients.map(sql => sql.options.port)));
+      await Promise.all(clients.map(sql => sql.end()));
+    `], {
+      env: {
+        PGPORT: "5433",
+        LEGACY_DATABASE_URL: `postgres://agent_test@agent-testdb${sourcePort}/two_web_next`,
+        DATABASE_URL: `postgres://agent_test@agent-testdb${targetPort}/two_web_next`,
+      },
+      encoding: "utf8", timeout: 20_000,
+    });
+    expect(constructed.status, constructed.stderr).toBe(0);
+    expect(JSON.parse(constructed.stdout)).toEqual([[expectedSource], [expectedTarget]]);
   });
 
   it("has help, refuses identical endpoints and redacts malformed-URL errors", () => {
@@ -78,7 +102,11 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
     const users = await next`select *, xmin::text as version from users order by id`;
     const profiles = await next`select *, xmin::text as version from profiles order by user_id`;
     expect(users.map((row) => row.id)).toEqual(before.map((row) => row.discord_id));
-    expect(users[0]).toMatchObject({ username: "synthetic-member", member: true, avatar: "https://example.test/avatar.png" });
+    expect(users[0]).toMatchObject({ username: "synthetic-member", member: true, avatar: "abc123" });
+    expect(profileAvatarSrcset(users[0]!.id, users[0]!.avatar)).toEqual({
+      src: "https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=128",
+      srcset: "https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=64 1x, https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=128 2x, https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=256 3x",
+    });
     expect(users[1]).toMatchObject({ username: "synthetic-member", member: false, avatar: null });
     expect(users[0]!.created_at.toISOString()).toBe("2026-08-01T10:00:00.000Z");
     expect(users[2]!.updated_at.toISOString()).toBe("2026-08-03T12:00:00.000Z");
@@ -105,6 +133,55 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
     expect(counts(run(["--dry-run"], env).stdout).map((row) => row.changed)).toEqual([0, 0]);
     expect(await legacy`select * from users order by id`).toEqual(before);
     expect(await legacy`select * from profiles order by id`).toEqual(beforeProfiles);
+  });
+
+  it.each([
+    ["https://cdn.discordapp.com/avatars/900000000000000011/a_abc123.gif?size=512", "a_abc123"],
+    ["https://cdn.discordapp.com/avatars/900000000000000011/abc123.webp?size=64", "abc123"],
+    ["https://cdn.discordapp.com/avatars/900000000000000011/abc123.jpeg", "abc123"],
+    ["abc123", "abc123"],
+    ["https://cdn.discordapp.com/embed/avatars/0.png", null],
+    ["https://cdn.discordapp.com/embed/avatars/5.png?size=128", null],
+    [null, null],
+    ["", null],
+  ])("normalizes avatar %s for the actual renderer and unchanged preview/apply", async (avatar, expectedHash) => {
+    await legacy`update users set avatar = ${avatar} where id = 11`;
+    const applied = run(["--apply"], env);
+    expect(applied.status, applied.stderr).toBe(0);
+    const users = await next`select id, avatar, xmin::text as version from users order by id`;
+    expect(users[0]!.avatar).toBe(expectedHash);
+    const rendered = profileAvatarSrcset(users[0]!.id, users[0]!.avatar);
+    if (expectedHash === null) expect(rendered).toBeNull();
+    else expect(rendered!.src).toBe(`https://cdn.discordapp.com/avatars/900000000000000011/${expectedHash}.png?size=128`);
+    for (const args of [[], ["--apply"]]) {
+      const repeat = run(args, env);
+      expect(repeat.status, repeat.stderr).toBe(0);
+      expect(counts(repeat.stdout).map((row) => [row.changed, row.written])).toEqual([[0, 0], [0, 0]]);
+    }
+    expect(await next`select id, avatar, xmin::text as version from users order by id`).toEqual(users);
+  });
+
+  it.each([
+    "https://cdn.discordapp.com.evil.test/avatars/900000000000000011/abc123.png",
+    "http://cdn.discordapp.com/avatars/900000000000000011/abc123.png",
+    "https://cdn.discordapp.com/avatars/900000000000000022/abc123.png",
+    "https://synthetic-secret@cdn.discordapp.com/avatars/900000000000000011/abc123.png",
+    "https://cdn.discordapp.com:444/avatars/900000000000000011/abc123.png",
+    "https://cdn.discordapp.com/avatars/900000000000000011/abc123.png#synthetic-secret",
+    "https://cdn.discordapp.com/avatars/900000000000000011/%61bc123.png",
+    "https://cdn.discordapp.com/avatars/900000000000000011/abc123.svg",
+    "https://cdn.discordapp.com/embed/avatars/6.png",
+    "synthetic-invalid-avatar/secret",
+  ])("refuses unsupported or mismatched avatar %s before writing without logging it", async (avatar) => {
+    await legacy`update users set avatar = ${avatar} where id = 11`;
+    for (const args of [[], ["--apply"]]) {
+      const refused = run(args, env);
+      expect(refused.status).toBe(1);
+      expect(refused.stdout + refused.stderr).not.toContain(avatar);
+      expect(refused.stdout + refused.stderr).not.toContain("synthetic-secret");
+    }
+    expect(await next`select * from users`).toHaveLength(0);
+    expect(await next`select * from profiles`).toHaveLength(0);
   });
 
   it.each([

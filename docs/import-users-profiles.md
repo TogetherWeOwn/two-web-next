@@ -4,7 +4,7 @@ Cutover tooling for [TOG-10831](/TOG/issues/TOG-10831). Implementing or testing 
 
 ## Operator invocation
 
-Provision `LEGACY_DATABASE_URL` (source) and `DATABASE_URL` (migrated Next destination) in the execution environment through the approved secret mechanism. Never place credentials in arguments, shell history, committed files, or logs. Both URLs require a PostgreSQL scheme, host, username and database; an empty password does not fall back to `PGPASSWORD`.
+Provision `LEGACY_DATABASE_URL` (source) and `DATABASE_URL` (migrated Next destination) in the execution environment through the approved secret mechanism. Never place credentials in arguments, shell history, committed files, or logs. Both URLs require a PostgreSQL scheme, host, username and database; an empty password does not fall back to `PGPASSWORD`. Each client uses the URL's explicit port or 5432, never inherited `PGPORT` (Postgres.js options override URL/environment defaults: https://github.com/porsager/postgres#connection).
 
 ```sh
 node bin/import/users-profiles.mjs             # default: read-only dry run
@@ -31,11 +31,14 @@ DDL and model semantics are pinned to frozen `TogetherWeOwn/two-web` commit `2ea
 | Legacy | Next | Rule |
 |---|---|---|
 | `users.discord_id` | `users.id` | Unique natural key, kept as text; never numeric conversion |
-| `users.username`, `avatar` | Same fields | Preserve username (not `display_name`) and nullable avatar |
+| `users.username` | Same field | Preserve username (not `display_name`) |
+| `users.avatar` | `users.avatar` | Same-user Discord CDN URL → hash; existing hash preserved; null/empty/default avatar → null |
 | `users.discord_joined_at` | `users.member` | Non-null is positive **historical** guild-join evidence; null imports as false |
 | `profiles.user_id` → `users.id` → `users.discord_id` | `profiles.user_id` | Resolve legacy integer FK to Discord natural key |
 | `profiles.bio`, `games`, `timezone` | Same fields | Preserve nulls and JSON string array; no invented timezone |
 | Both `created_at`, `updated_at` | Same fields | UTC wall times → `timestamptz`; preserve creation time on conflicts too |
+
+Legacy Socialite's `getAvatar()` supplies a URL (`DiscordLoginController.php:277`), whereas Next's `profileAvatarSrcset` consumes a hash. Normalize only HTTPS `cdn.discordapp.com/avatars/<same-discord-id>/<hash>.(png|jpg|jpeg|webp|gif)` URLs; discard image query parameters, preserve animated `a_` hashes and support already-normalized hashes matching the renderer. Discord default `/embed/avatars/0.png` through `5.png` map to null (Next's initial fallback), as do null/empty avatars. Other hosts, userinfo, fragments, non-default ports, mismatched IDs and unsupported paths fail validation before destination writes, without logging source values. CDN path definitions: https://docs.discord.com/developers/reference#image-formatting. No avatar URL is fetched.
 
 **No legacy member boolean exists.** `discord_joined_at` is an import proxy, not a current-membership check: legacy failed logins do not clear old join evidence, and a successful guild response missing `joined_at` can store null (`DiscordLoginController.php:107-113,248-249,280-282`). Next recomputes actual membership and moderator status at sign-in. The import creates **no sessions or authorization state**. `is_moderator`, `remember_token`, display names, sync markers and all credentials are excluded from the source query, not merely dropped before writing.
 
@@ -53,4 +56,4 @@ npx vitest run test/import-users-profiles.test.ts
 npm run check
 ```
 
-Without `DATABASE_URL`, CLI safety tests run and the DB fixture tests skip. With it, tests prove counts, dry-run no writes, exact-key/time mapping (including conflicting DateStyles), no moderator/token import, actual no-op row versions, conflict updates, source immutability, validation failures and transaction rollback. Fixture construction reuses the strict test URL validator: caller query strings/fragments are rejected before driver construction or DDL, CI requires both `CI=true` and `GITHUB_ACTIONS=true`, and test port/password are pinned rather than inherited from libpq environment variables. Only fixture-generated connection URLs carry an isolated `search_path`. Mocked-driver coverage in `test/member-data-fixture.test.ts` proves refusal before connecting. Tests never contact Discord, legacy VPS, Neon, production or staging.
+Without `DATABASE_URL`, CLI safety tests run and the DB fixture tests skip. With it, tests prove counts, dry-run no writes, exact-key/time mapping (including conflicting DateStyles), normalized avatar import-to-render and refusal cases, no moderator/token import, actual no-op row versions, conflict updates, source immutability, validation failures and transaction rollback. Fixture construction reuses the strict test URL validator: caller query strings/fragments are rejected before driver construction or DDL, CI requires both `CI=true` and `GITHUB_ACTIONS=true`, and test port/password are pinned rather than inherited from libpq environment variables. Only fixture-generated connection URLs carry an isolated `search_path`. Mocked-driver coverage in `test/member-data-fixture.test.ts` proves refusal before connecting. Tests never contact Discord, legacy VPS, Neon, production or staging.

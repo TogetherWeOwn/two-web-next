@@ -30,7 +30,7 @@ CREATE TABLE profiles (
 
 INSERT INTO users (id, discord_id, username, display_name, avatar, discord_synced_at,
   remember_token, created_at, updated_at, is_moderator, discord_joined_at) VALUES
-  (11, '900000000000000011', 'synthetic-member', 'Synthetic Display', 'https://example.test/avatar.png',
+  (11, '900000000000000011', 'synthetic-member', 'Synthetic Display', 'https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=1024',
    '2026-09-29 12:00:00', 'synthetic-remember-must-not-copy-a', '2026-08-01 10:00:00', '2026-09-29 12:00:00', true, '2026-07-01 12:00:00'),
   (22, '900000000000000022', 'synthetic-member', NULL, NULL,
    '2026-09-28 13:00:00', 'synthetic-remember-must-not-copy-b', '2026-08-02 11:00:00', '2026-09-28 13:00:00', false, NULL),
