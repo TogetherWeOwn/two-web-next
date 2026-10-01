@@ -148,15 +148,15 @@
     }
   }
 
-  // The URL for a settled search: the raw input value (blank means no search),
-  // the drawer stays as it was, and the search forces the list view — so
-  // view/month params are dropped, matching the server's calendarUrl().
+  // Match the native form's resolved state, not arbitrary address parameters.
+  // The route still forces a nonblank search to list view; blank input keeps
+  // the current view/month. Paging is intentionally not carried forward.
   function searchUrl(value) {
     var url = new URL("/events", window.location.origin);
     if (value.trim() !== "") url.searchParams.set("q", value);
-    if (new URL(window.location.href).searchParams.get("past") === "1") {
-      url.searchParams.set("past", "1");
-    }
+    url.searchParams.set("view", root.dataset.view);
+    url.searchParams.set("month", root.dataset.month);
+    if (root.dataset.past === "1") url.searchParams.set("past", "1");
     return url;
   }
 

@@ -728,7 +728,7 @@ let inputNode: Node;
 
 const LIVE_IDS = ["events-view-status", "events-search-status", "events-past-status", "calendar-month-status"];
 
-function browser(entry = "/events") {
+function browser(entry = "/events", state: Partial<CalendarState> = {}) {
   const zones = { head: new Node(), actions: new Node(), miss: new Node(), content: new Node() };
   for (const [name, node] of Object.entries(zones)) node.attributes.set("data-cal-zone", name);
   zones.content.childNodes = ["original content"];
@@ -744,7 +744,7 @@ function browser(entry = "/events") {
   const og = new Node();
   og.content = canonical.href;
   const root = new Node();
-  root.dataset = { view: "list", month: "2026-09", past: "", loadError: EVENTS_CALENDAR_FETCH_FAILED };
+  root.dataset = { view: state.view ?? "list", month: state.month ?? "2026-09", past: state.past ? "1" : "", loadError: EVENTS_CALENDAR_FETCH_FAILED };
   let click: (event: Click) => void = () => {};
   let popstate: () => void = () => {};
   const focusables: Record<string, Node> = {};
@@ -842,32 +842,41 @@ function browser(entry = "/events") {
 }
 
 describe("EventsCalendar shipped binder request/state drift", () => {
-  it("adds and removes Clear in a swapped form-actions zone without replacing the focused input", async () => {
+  it("swaps hidden state and Clear without replacing the focused search input", async () => {
     const src = calendar([eventRow({ title: "Jam" })], [], okSource());
-    const initial = await (await src.request("/events")).text();
-    const searched = await (await src.request("/events?q=jam")).text();
+    const initial = await (await src.request("/events?view=calendar&month=2030-01")).text();
+    const searched = await (await src.request("/events?q=jam&month=2030-02&past=1")).text();
+    const cleared = await (await src.request("/events?view=calendar&month=2030-03")).text();
     const actions = (html: string) => html.match(/<span data-cal-zone="actions">([\s\S]*?)<\/span>/)?.[1];
-    expect(actions(initial)).toBe("");
+    expect(actions(initial)).toContain('name="view" value="calendar"');
+    expect(actions(initial)).toContain('name="month" value="2030-01"');
+    expect(actions(initial)).not.toContain('name="past"');
     expect(actions(searched)).toContain(`data-testid="${EVENTS_SEARCH_CLEAR_TESTID}"`);
-    const b = browser();
+    expect(actions(searched)).toContain('name="view" value="list"');
+    expect(actions(searched)).toContain('name="month" value="2030-02"');
+    expect(actions(searched)).toContain('name="past" value="1"');
+    const b = browser("/events", { view: "calendar", month: "2030-01" });
     const input = b.input;
     input.focus();
     input.value = "jam";
     b.inputEvent();
     b.fireTimer();
-    b.finish(0, "searched", { input: "jam", actions: [actions(searched)] });
+    b.finish(0, "searched", { input: "jam", month: "2030-02", past: "1", actions: [actions(searched)] });
     await b.settle();
     expect(b.zones.actions.childNodes).toEqual([actions(searched)]);
     expect(b.input).toBe(input);
     expect(input.focused).toBe(true);
-    b.clickLink("/events");
-    b.finish(1, "cleared", { input: "", actions: [] });
+    b.clickLink("/events?view=calendar&month=2030-03");
+    b.finish(1, "cleared", { input: "", view: "calendar", month: "2030-03", actions: [actions(cleared)] });
     await b.settle();
     expect(b.input).toBe(input);
     expect(input.value).toBe("");
     expect(input.focused).toBe(true);
-    expect(b.zones.actions.childNodes).toEqual([]);
-    expect(b.history).toEqual(["/events?q=jam", "/events"]);
+    expect(b.zones.actions.childNodes).toEqual([actions(cleared)]);
+    expect(actions(cleared)).not.toContain('name="past"');
+    expect(actions(cleared)).not.toContain(`data-testid="${EVENTS_SEARCH_CLEAR_TESTID}"`);
+    b.submit();
+    expect(b.requests[2]!.url).toBe("/events?view=calendar&month=2030-03");
   });
 
   it("SSR-restores the current address when failed Clear supersedes Back", async () => {
@@ -900,7 +909,7 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     b.requests[2]!.reject(new Error("offline"));
     await b.settle();
     expect(b.reloads).toEqual([APP_URL + "/events"]); // Restore Back's address, not the failed destination.
-    expect(b.history).toEqual(["/events?q=old"]);
+    expect(b.history).toEqual(["/events?q=old&view=list&month=2026-09"]);
   });
 
   it("keeps last-good content on failure after a successful Back commit", async () => {
@@ -948,7 +957,7 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     await b.settle();
     expect(b.input.value).toBe("newer");
     b.fireTimer();
-    expect(b.requests[1]!.url).toBe("/events?q=newer&past=1");
+    expect(b.requests[1]!.url).toBe("/events?q=newer&view=list&month=2026-09&past=1");
   });
 
   it("copies an empty SSR search status over stale miss text on a read error", async () => {
@@ -994,13 +1003,13 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     expect(b.requests).toHaveLength(0);
     b.fireTimer();
     expect(b.requests).toHaveLength(1);
-    expect(b.requests[0]!.url).toBe("/events?q=jam");
+    expect(b.requests[0]!.url).toBe("/events?q=jam&view=list&month=2026-09");
     expect(b.skeleton.hidden).toBe(true); // typing is deliberately unskeletoned
     expect(b.zones.content.hidden).toBe(false);
     b.finish(0, "p1", { input: "jam" });
     await b.settle();
     expect(b.input.value).toBe("jam"); // untouched by push loads
-    expect(b.history).toEqual(["/events?q=jam"]);
+    expect(b.history).toEqual(["/events?q=jam&view=list&month=2026-09"]);
   });
 
   it("submits the GET form as the same settled read, cancelling a pending debounce", async () => {
@@ -1009,17 +1018,30 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     b.inputEvent();
     expect(b.submit()).toBe(true);
     expect(b.requests).toHaveLength(1);
-    expect(b.requests[0]!.url).toBe("/events?q=jam");
+    expect(b.requests[0]!.url).toBe("/events?q=jam&view=list&month=2026-09");
     b.fireTimer(); // the debounce was cleared
     expect(b.requests).toHaveLength(1);
   });
 
-  it("keeps the drawer flag on a settled search and drops view/month", async () => {
-    const b = browser("/events?view=calendar&month=2026-10&past=1");
-    b.input.value = "raid";
-    b.inputEvent();
-    b.fireTimer();
-    expect(b.requests[0]!.url).toBe("/events?q=raid&past=1");
+  it.each([
+    { view: "calendar" as const, month: "2026-10", past: true },
+    { view: "calendar" as const, month: "2026-10", past: false },
+    { view: "list" as const, month: "2026-09", past: true },
+  ])("keeps resolved $view/$month/past=$past state on changed or blank search", (state) => {
+    // Raw address state must not override the resolved SSR state or leak extras.
+    const b = browser("/events?view=bad&month=bad&past=true&page=7&extra=bad", state);
+    for (const query of ["raid & friends", "", "   "]) {
+      b.input.value = query;
+      b.submit();
+      const url = new URL(b.requests.at(-1)!.url, APP_URL);
+      expect([...url.searchParams.keys()].sort()).toEqual([
+        ...(query.trim() ? ["q"] : []), "view", "month", ...(state.past ? ["past"] : []),
+      ].sort());
+      expect(url.searchParams.get("q")).toBe(query.trim() ? query : null);
+      expect(url.searchParams.getAll("view")).toEqual([state.view]);
+      expect(url.searchParams.getAll("month")).toEqual([state.month]);
+      expect(url.searchParams.getAll("past")).toEqual(state.past ? ["1"] : []);
+    }
   });
 
   it("aborts a superseded read and ignores its late response", async () => {
