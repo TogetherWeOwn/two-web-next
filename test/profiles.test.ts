@@ -92,12 +92,12 @@ function harness(opts: { logDown?: boolean; throttle?: (b: string) => Promise<{ 
 }
 
 describe("exposure matrix: who sees what (memory doubles)", () => {
-  it("guest: redirected to Discord OAuth on every route, nothing rendered, nothing logged", async () => {
+  it("guest: reads go to OAuth, writes to explicit recovery, nothing rendered or logged", async () => {
     const { app, log } = harness();
     for (const [method, path] of [["GET", "/profile"], ["GET", `/members/${ALICE.userId}`], ["PATCH", `/members/${ALICE.userId}`]] as const) {
       const res = await app.request(path, { method }, env);
-      expect(res.status, `${method} ${path}`).toBe(302);
-      expect(res.headers.get("location")).toBe("/auth/discord");
+      expect(res.status, `${method} ${path}`).toBe(method === "PATCH" ? 303 : 302);
+      expect(res.headers.get("location")).toBe(method === "PATCH" ? "/auth/recover?next=%2Fprofile" : "/auth/discord");
       expect(await res.text()).not.toContain("alice");
     }
     expect(log).toHaveLength(0);

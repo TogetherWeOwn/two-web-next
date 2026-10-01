@@ -52,6 +52,10 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/auth/discord", status: 302, location: "https://discord.com/oauth2/authorize" },
   { method: "GET", route: "/auth/discord/redirect", status: 302, location: "/auth/discord" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
+  // Stale-tab liveness probe and expired-write recovery (main #239): neither
+  // reads the DB without a session cookie, so both stay 200 during an outage.
+  { method: "GET", route: "/auth/status", status: 200, format: "json" },
+  { method: "GET", route: "/auth/recover", status: 200, format: "html" },
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },
@@ -95,9 +99,11 @@ const MATRIX: Case[] = [
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
 // endpoint. Pin known middleware multiplicity instead of filtering wildcards.
-// Profile paths carry three registrations each: the session gate, the
-// join-result consumer, and the mandatory access log.
-const MIDDLEWARE = ["ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*", "ALL /members/*"];
+// Global `*` carries five: the pre-throttle guard, trust-hosts, same-origin,
+// the stale-tab auth-status script and the expired-write banner (main #239
+// added the last two). Profile paths carry three registrations each: the
+// session gate, the join-result consumer, and the mandatory access log.
+const MIDDLEWARE = ["ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*", "ALL /members/*"];
 function assertInventory(router: { routes: { method: string; path: string }[] }): void {
   const endpoints = router.routes.filter((r) => r.method !== "ALL").map((r) => `${r.method} ${r.path}`);
   const expected = MATRIX.filter((r) => r.method !== "ALL").map((r) => `${r.method} ${r.route}`);

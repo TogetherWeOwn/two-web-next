@@ -227,16 +227,17 @@ describe("public session failure boundaries", () => {
     expect((await app.request("/", { headers: { cookie } }, bindings)).status).toBe(500);
   });
   it.each([refused(), pgError("42501"), new TypeError("private revocation bug")])(
-    "clears the browser cookie on failed revocation without claiming the row was revoked: %s", async (error) => {
+    "refuses an authoritative logout when revocation fails instead of clearing the cookie: %s", async (error) => {
       const { store, cookie, bindings } = await fixture();
       vi.spyOn(store, "revoke").mockRejectedValue(error);
       const res = await app.request("/logout", { method: "POST", headers: { cookie, origin: env.APP_URL } }, bindings);
-      expect(res.status).toBe(303);
-      expect(res.headers.get("location")).toBe("/");
+      // Main #239: a failed revocation must not clear this browser's cookie
+      // as if the server row were gone. The body carries no driver details.
+      expect(res.status).toBe(503);
+      expect(res.headers.get("location")).toBeNull();
       expect(store.revoke).toHaveBeenCalledOnce();
-      expect(console.warn).toHaveBeenCalledWith("logout session revocation failed");
-      const cleared = res.headers.getSetCookie().join(";");
-      for (const flag of ["__Host-two_session=;", "Max-Age=0", "Path=/", "Secure"]) expect(cleared).toContain(flag);
+      expect(res.headers.getSetCookie()).toEqual([]);
+      expect(await res.text()).toBe("Sign-out temporarily unavailable");
     },
   );
   it.each([undefined, "*/*", "text/html", "application/json", "text/html, application/json;q=0", "text/html;q=1, application/json;q=0.1"])(
