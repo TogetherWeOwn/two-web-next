@@ -238,17 +238,27 @@ export function parseEventForm(
 
   let startsAtUtc: Date | null = null;
   let endsAtUtc: Date | null = null;
-  if (startsRaw && endsRaw && !fields.timezone) {
+  if (!fields.timezone) {
     // Untouched fold/gap-ambiguous wall text keeps the exact instant the
     // form rendered (TOG-6805): the carrier rides in the hidden field, and a
     // match on minute precision means "no keystroke", so the stored instant
     // wins over a re-parse that could land on the other side of the fold.
-    try {
-      startsAtUtc = preservedOrParsed(startsRaw, carriers?.startsAtUtc, timezone);
-      endsAtUtc = preservedOrParsed(endsRaw, carriers?.endsAtUtc, timezone);
-    } catch (e) {
-      if (e instanceof ValidationError) Object.assign(fields, e.fields);
-      else throw e;
+    for (const [raw, carrier, field] of [
+      [startsRaw, carriers?.startsAtUtc, "starts_at"],
+      [endsRaw, carriers?.endsAtUtc, "ends_at"],
+    ] as const) {
+      if (!raw) continue;
+      try {
+        const instant = preservedOrParsed(raw, carrier, timezone);
+        if (field === "starts_at") startsAtUtc = instant;
+        else endsAtUtc = instant;
+      } catch (e) {
+        if (!(e instanceof ValidationError)) throw e;
+        // The shared parser speaks "wall"; the event form needs the input's name.
+        for (const [name, message] of Object.entries(e.fields)) {
+          fields[name === "wall" ? field : name] = message;
+        }
+      }
     }
     if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The end is after the start.";
   }

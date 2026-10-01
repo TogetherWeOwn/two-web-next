@@ -95,6 +95,16 @@ for arg in "$@"; do
   esac
 done
 
+# --dry-run is documented for rotate only (see usage above). For any other
+# command the flag used to be silently ignored — `backup --dry-run` still
+# dumped and uploaded, `promote-weekly --dry-run` still wrote the manifest.
+# Reject it here, before any connection, pg_dump, wrangler, temp-dir or
+# manifest work can happen.
+if [ "$DRY_RUN" = 1 ] && [ "$CMD" != "rotate" ]; then
+  echo "neon-backup: --dry-run is only supported for 'rotate'" >&2
+  usage
+fi
+
 # DATABASE_URL comes from the environment only. No .env parsing, no defaults:
 # a dump must never guess which database it is reading.
 require_database_url() {
