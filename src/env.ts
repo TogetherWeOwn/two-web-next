@@ -32,6 +32,9 @@ export type Env = AgentEventsEnv & {
   // everything); out-of-range values clamp. Lower it if report volume ever
   // outweighs the signal.
   CSP_REPORT_SAMPLE_RATE?: string;
+  // Extra exact HTTPS image hosts, comma-separated; shared by admin validation
+  // and img-src. No schemes, ports, paths or wildcards. Discord CDN is always allowed.
+  FEATURED_IMAGE_HOSTS?: string;
 };
 
 // Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.

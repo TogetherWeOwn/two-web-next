@@ -301,6 +301,13 @@ describe("EventsCalendar review regressions", () => {
     expect(list).toContain('id="event-grid-link"');
   });
 
+  it.each(["list", "calendar"])("marks the active %s navigation link with valid link ARIA", async (view) => {
+    const html = await (await calendar([eventRow()], [], okSource()).request(`/events?view=${view}`)).text();
+    expect(html).not.toContain("aria-pressed");
+    expect(html).toContain(`aria-current="page" data-testid="events-view-${view}"`);
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+  });
+
   it("suppresses both the visible and live search miss when the read fails", async () => {
     const html = await (await calendar([], [], failedSource()).request("/events?q=x")).text();
     expect(html).toContain(EVENTS_EMPTY_ERROR_TESTID);
