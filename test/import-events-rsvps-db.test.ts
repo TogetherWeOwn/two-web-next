@@ -33,6 +33,7 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
   beforeEach(async () => {
     await legacy`set datestyle = 'ISO, MDY'`;
     await target`set datestyle = 'ISO, MDY'`;
+    await target`alter table events enable trigger events_ics_sequence`;
     await fixture.reset();
     await fixture.client`drop schema if exists ${fixture.client(legacySchema)} cascade`;
     await fixture.client`create schema ${fixture.client(legacySchema)}`;
@@ -106,6 +107,46 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     expect(await target`select * from rsvps order by id`).toEqual(rsvps);
     expect(await legacy`select * from events order by id`).toEqual(sourceBefore);
     expect((await importEventsRsvps(legacy, target)).events.unchanged).toBe(4);
+  });
+
+  it.each(["O", "A"])("preserves trigger mode %s and exact bigint revisions through dry-run, apply and replay", async (mode) => {
+    if (mode === "A") await target`alter table events enable always trigger events_ics_sequence`;
+    const triggerMode = async () => (await target`select tgenabled from pg_trigger
+      where tgrelid = 'events'::regclass and tgname = 'events_ics_sequence'`)[0]!.tgenabled;
+    const before = await target`select * from events order by id`;
+    const high = "9007199254740993";
+    await legacy`alter table events add column ics_sequence bigint not null default 0`;
+    await legacy`update events set ics_sequence = ${high}`;
+    await importEventsRsvps(legacy, target);
+    expect(await triggerMode()).toBe(mode);
+    expect(await target`select * from events order by id`).toEqual(before);
+    await importEventsRsvps(legacy, target, { dryRun: false });
+    expect(await triggerMode()).toBe(mode);
+    expect((await target`select ics_sequence from events`).map((row) => row.ics_sequence)).toEqual([high, high, high, high]);
+    expect((await importEventsRsvps(legacy, target, { dryRun: false })).events.unchanged).toBe(4);
+    expect(await triggerMode()).toBe(mode);
+    // A native write after import must use the trigger again.
+    await target`update events set title = 'Native edit' where id = 500`;
+    expect((await target`select ics_sequence from events where id = 500`)[0]!.ics_sequence).toBe("9007199254740994");
+    await legacy`update events set ics_sequence = 1, title = 'Older source edit' where id = 30`;
+    await importEventsRsvps(legacy, target, { dryRun: false });
+    expect((await target`select ics_sequence from events where id = 500`)[0]!.ics_sequence).toBe("9007199254740995");
+    expect((await importEventsRsvps(legacy, target, { dryRun: false })).events.unchanged).toBe(4);
+  });
+
+  it("backfills older sources from floored UTC epochs without lowering the target", async () => {
+    const source = await legacy`select event_key,
+      GREATEST(0, FLOOR(EXTRACT(EPOCH FROM updated_at))::bigint)::text as expected from events order by event_key`;
+    await importEventsRsvps(legacy, target, { dryRun: false });
+    const stored = await target`select event_key, ics_sequence from events order by event_key`;
+    for (const row of stored) {
+      const expected = source.find((event) => event.event_key === row.event_key)!.expected;
+      expect(BigInt(row.ics_sequence)).toBeGreaterThanOrEqual(BigInt(expected));
+      if (row.event_key !== parentKey) expect(row.ics_sequence).toBe(expected);
+    }
+    const before = await target`select event_key, ics_sequence from events order by event_key`;
+    expect((await importEventsRsvps(legacy, target, { dryRun: false })).events.unchanged).toBe(4);
+    expect(await target`select event_key, ics_sequence from events order by event_key`).toEqual(before);
   });
 
   it.each([
@@ -305,11 +346,29 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     expect(replay.rsvps).toMatchObject({ updated: 0, unchanged: 3 });
   });
 
-  it("rolls back all destination changes on late RSVP validation failure", async () => {
+  it.each(["D", "R"])("rejects unsupported trigger mode %s before destination writes", async (mode) => {
+    if (mode === "D") await target`alter table events disable trigger events_ics_sequence`;
+    else await target`alter table events enable replica trigger events_ics_sequence`;
+    const before = await target`select * from events order by id`;
+    await expect(importEventsRsvps(legacy, target, { dryRun: false }))
+      .rejects.toThrow('Calendar revision trigger must be enabled for origin or always');
+    expect(await target`select * from events order by id`).toEqual(before);
+    expect(await target`select * from rsvps`).toHaveLength(0);
+    expect((await target`select tgenabled from pg_trigger
+      where tgrelid = 'events'::regclass and tgname = 'events_ics_sequence'`)[0]!.tgenabled).toBe(mode);
+  });
+
+  it.each(["O", "A"])("rolls back destination data and trigger mode %s on late RSVP validation failure", async (mode) => {
+    if (mode === "A") await target`alter table events enable always trigger events_ics_sequence`;
     const before = await target`select * from events order by id`;
     await legacy`update rsvps set status = 'invalid-synthetic-status' where id = 72`;
     await expect(importEventsRsvps(legacy, target, { dryRun: false })).rejects.toThrow('Invalid legacy RSVP status');
     expect(await target`select * from events order by id`).toEqual(before);
     expect(await target`select * from rsvps`).toHaveLength(0);
+    expect((await target`select tgenabled from pg_trigger
+      where tgrelid = 'events'::regclass and tgname = 'events_ics_sequence'`)[0]!.tgenabled).toBe(mode);
+    await target`update events set title = 'After failed import' where id = 500`;
+    expect(BigInt((await target`select ics_sequence from events where id = 500`)[0]!.ics_sequence))
+      .toBe(BigInt(before[0]!.ics_sequence) + 1n);
   });
 });
