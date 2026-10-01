@@ -244,7 +244,7 @@ except RuntimeError as error:
 });
 
 describe("supervisor failure evidence (benign local processes only)", () => {
-  it.each(["SIGKILL", "deadline", "invalid artifact", "valid artifact", "zero exit"])("persists sanitized evidence after %s", (kind) => {
+  it.each(["SIGKILL", "deadline", "invalid artifact", "valid artifact", "valid refusal artifact", "zero exit"])("persists sanitized evidence after %s", (kind) => {
     const dir = fixture(); const script = supervisor(dir);
     const result = python(script, `
 revision = "c" * 40
@@ -261,6 +261,7 @@ def snapshot(repo, run_dir):
 expected = {"revision": revision, "wranglerVersion": "4.143.1",
             "runtime": "ephemeral-remote-preview-not-deployed-worker",
             "receipt": {}, "result": {"ok": False, "error": "remote_staging_preflight_refused", "cleanup": True}}
+if sys.argv[3] == "valid refusal artifact": expected["result"]["refusal"] = ["binding_user_mismatch", "receipt_target_mismatch"]
 def bounded(command, cwd, env, timeout_s, grace_s=10, output=None):
     if command[0].endswith("/esbuild"):
         runner = pathlib.Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--outfile=")))
@@ -269,7 +270,7 @@ import path from "node:path";
 const dir = process.env.W1_REMOTE_RUN_DIR;
 writeFileSync(path.join(dir, "private-wrangler.log"), "private synthetic-token-not-evidence\\nW1_SCHEMA " + JSON.stringify({schema: "%s", created: true, cleanup: "not_verified"}) + "\\nW1_SCHEMA {\\"schema\\":\\"invalid-synthetic-token-not-evidence\\"}\\n");
 if ("%s" === "invalid artifact") writeFileSync(path.join(dir, "result.json"), "null");
-if ("%s" === "valid artifact") writeFileSync(path.join(dir, "result.json"), %s);
+if ("%s".startsWith("valid ")) writeFileSync(path.join(dir, "result.json"), %s);
 if ("%s" === "deadline") { process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); }
 else if ("%s" !== "zero exit") process.kill(process.pid, "SIGKILL");
 ''' % (schema, sys.argv[3], sys.argv[3], json.dumps(json.dumps(expected)), sys.argv[3], sys.argv[3]))
@@ -292,7 +293,7 @@ print(json.dumps({"status": status, "evidence": evidence, "expected": expected,
     expect(result.status).toBe(kind === "deadline" ? 124 : kind === "zero exit" ? 1 : 137);
     expect(result.reaped).toBe(true);
     expect(result.mode).toBe(0o600);
-    if (kind === "valid artifact") expect(result.evidence).toEqual(result.expected);
+    if (kind.startsWith("valid ")) expect(result.evidence).toEqual(result.expected);
     else expect(result.evidence).toMatchObject({ revision: "c".repeat(40), wranglerVersion: "4.143.1",
       runnerExitStatus: kind === "zero exit" ? 0 : result.status, result: { ok: false, cleanup: "not_verified", schema: "w1_staging_" + "d".repeat(32) } });
     expect(JSON.stringify(result.evidence)).not.toContain("synthetic-token-not-evidence");

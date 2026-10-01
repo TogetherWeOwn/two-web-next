@@ -2,13 +2,13 @@
 
 The purchased HTML landing page is the visual foundation for the homepage. Its centered landing composition, condensed uppercase typography, dark surfaces, lime palette (#a3ff12), square buttons, mirrored angular side details and compact account treatment are adapted to Hono SSR in `src/pages.tsx` and `public/theme.css`. The account reference contributes styling only: Discord OAuth, sessions, guild joins and logout remain the existing flows. There is no password/registration form.
 
-Only the homepage opts into the stylesheet. Other routes retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
+The homepage and branded error/OAuth recovery shells opt into the stylesheet. They share `SiteHeader` and `SiteFooter`; error/recovery composition uses `RecoveryShell` without reading sessions or requiring a database. The 404 keeps optional event suggestions and labelled GET search below the centered status hero. The maintenance header and primary action link directly to the configured Discord invite, not OAuth. Other routes retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
 
 ## Assets
 
 - `public/fonts/display-latin-{500,700}.woff2`: Latin Rajdhani from `@fontsource/rajdhani` 5.3.0 (OFL-1.1). Its unmodified font license is retained in `public/fonts/LICENSE.txt`. Two weights total roughly 31 KB. No remote font origin.
 - `public/logo.svg` and `public/icons/*.png`: generated temporary TWO wordmark, not template art. Regenerate all five consistently with `python3 ci/generate-icons.py`. The mark stays inside the maskable safe area. Existing install icon URLs, sizes and manifest identity are unchanged; theme/background colors match the new mark.
-- `public/theme.css`: adapted, homepage-scoped rules, under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
+- `public/theme.css`: adapted rules scoped to opted-in shells, under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
 
 ## Discord preview policy
 
@@ -17,6 +17,8 @@ The homepage Discord card links to `/join#join-heading`, where the existing prev
 `discordWidgetUrl` accepts only a 10-25 digit configured guild ID for the join preview. That lazy iframe retains its title, fixed dimensions, no-referrer policy and `allow-scripts allow-same-origin` sandbox. The server CSP allows self-hosted fonts and permits frames only from `https://discord.com/widget` on `/join` GET and HEAD requests. Homepage and other routes/methods retain `frame-src 'none'`; script/style directives remain self-only, with no inline exception. Exact-head independent security review still applies.
 
 ## Verification
+
+`test/error-theme.test.ts` exercises all four error statuses and the actual denied OAuth callback with no DB binding and outbound fetch forbidden. Existing response-contract suites retain the single 429 JSON envelope, Retry-After, no failure echo, optional bounded 404 reads and direct maintenance invite. The browser audit covers both populated and empty 404 suggestions, 429/500/503 and OAuth recovery on desktop/mobile. No new assets or immutable cache policy are introduced; the shared external theme, fonts and logo remain served by the existing asset binding.
 
 `test/home-theme.test.ts` covers guest/member/nonmember states, original sign-in/join/logout endpoints, notices/recovery, featured/events/counts, image policy, the join-page preview link, normalized invite fallback, identifier validation, strict CSP and scoped assets. The browser gate runs `ci/a11y-interactions.mjs` on every homepage fixture: actual first-Tab focus, header sign-in hover, and focused skip-link hover must retain at least 4.5:1 computed text/background contrast. These interaction results are recorded separately in the audit JSON; static axe scans alone do not cover hover. Existing page-shell and upcoming-event suites cover landmarks, first-tab skip link, scheduling/privacy and outages. Run only the relevant fixture suites locally; integration suites use the designated test database or CI containers, never staging/production databases.
 
