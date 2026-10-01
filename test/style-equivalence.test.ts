@@ -4,7 +4,7 @@ import { chromium, type Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import { EventFormPage } from "../src/admin/pages";
 import type { EventRow } from "../src/admin/store";
-import { InternalErrorPage, MaintenancePage, RateLimitedPage } from "../src/errors";
+import { InternalErrorPage, MaintenancePage, NotFoundPage, RateLimitedPage } from "../src/errors";
 import { Home } from "../src/pages";
 import { ProfilePage } from "../src/profiles/pages";
 import { concretePath, HTML_READS, MEMBER_ID, pageShellFixture } from "./helpers/page-shells";
@@ -54,6 +54,13 @@ async function cases() {
     })!.toString()) });
   }
   const now = new Date("2030-01-01T20:00:00Z");
+  const populated404 = NotFoundPage({ suggestions: [
+    { key: "style-proof-event", title: "Game night", startsAt: now, location: "Lobby" },
+    { key: "style-proof-no-location", title: "Online games", startsAt: now, location: null },
+  ] })!.toString();
+  expect(populated404).toContain('data-testid="error-event-suggestion"');
+  expect(populated404.match(/<p class="mt"><time datetime=/g)).toHaveLength(2);
+  rows.push({ name: "error-404-populated", html: offline(populated404) });
   const row: EventRow = {
     id: 1, icsSequence: 1n, eventKey: "style-proof-event", title: "Game night", game: null, description: null,
     startsAt: now, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "UTC", location: "Lobby",
@@ -128,6 +135,12 @@ describe("factored stylesheet", () => {
         for (const row of await cases()) {
           await oldPage.setContent(canonicalMarkup(row.html).replace("</head>", `<style>${baseline}</style></head>`));
           await newPage.setContent(row.html.replace("</head>", `<style>${current}</style></head>`));
+          if (row.name === "error-404-populated") {
+            for (const page of [oldPage, newPage]) {
+              expect(await page.evaluate(`Array.from(document.querySelectorAll('[data-testid="error-event-suggestion"] + p'),
+                (element) => getComputedStyle(element).color)`)).toEqual(["rgb(107, 98, 87)", "rgb(107, 98, 87)"]);
+            }
+          }
           expect(await snapshot(newPage), `${width} ${row.name} default`).toEqual(await snapshot(oldPage));
           for (const page of [oldPage, newPage]) {
             await page.keyboard.press("Tab");

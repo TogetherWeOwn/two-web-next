@@ -53,7 +53,7 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
           {suggestions.map((event) => (
             <li class="cd">
               <a href={`/e/${encodeURIComponent(event.key)}`} data-testid="error-event-suggestion">{event.title}</a>
-              <p>
+              <p class="mt">
                 <time datetime={event.startsAt.toISOString()}>{event.startsAt.toISOString().slice(0, 16).replace("T", " ")} UTC</time>
                 {event.location ? <> · {event.location}</> : null}
               </p>

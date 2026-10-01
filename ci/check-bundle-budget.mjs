@@ -9,8 +9,8 @@ import assert from 'node:assert/strict';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // Nested island helpers are budgeted too: an island may import a shared
-// `./vendor/*.js`, and Workers serves everything under public/. Dot segments
-// can never be valid budget keys; the regex alone would accept `..`.
+// `./vendor/*.js`, and Workers serves dot files/directories under public/ too.
+// Parent traversal can never be a valid budget key; the regex alone accepts `..`.
 const assetPattern = /^public\/(?:islands\/(?:[^/]+\/)*[^/]+\.js|styles\.css)$/;
 
 function isBudgetKey(entry) {
@@ -23,7 +23,6 @@ function discoverServed(root) {
   const islands = [];
   const walk = (dir, prefix) => {
     for (const name of readdirSync(dir, { withFileTypes: true })) {
-      if (name.name.startsWith('.')) continue;
       if (name.isDirectory()) walk(join(dir, name.name), `${prefix}${name.name}/`);
       else if (name.isFile() && name.name.endsWith('.js')) islands.push(`${prefix}${name.name}`);
     }
@@ -148,6 +147,30 @@ function selftest() {
       save(budget);
     }, 0);
     rmSync(join(root, 'public/islands/vendor'), { recursive: true, force: true });
+    for (const path of ['.hidden.js', '.vendor/framework.js', 'vendor/.helper.js']) {
+      const entry = `public/islands/${path}`;
+      const helper = Buffer.from(`/* ${'x'.repeat(100000)} */\n`);
+      const helperCeiling = { maxRawBytes: helper.length, maxGzipBytes: gzipSync(helper).length };
+      const addHelper = () => {
+        mkdirSync(dirname(join(root, entry)), { recursive: true });
+        writeFileSync(join(root, entry), helper);
+        writeFileSync(join(root, 'public/islands/example.js'), `import "./${path}";\n`);
+      };
+      check(`dot path ${path} cannot escape enforcement`, addHelper, 2, `no budget for ${entry}`);
+      check(`budgeted dot path ${path} fits`, (budget) => {
+        addHelper();
+        budget.budgets[entry] = { ...helperCeiling };
+        save(budget);
+      }, 0);
+      for (const [metric, field] of [['raw', 'maxRawBytes'], ['gzip', 'maxGzipBytes']]) {
+        check(`dot path ${path} ${metric} breach`, (budget) => {
+          addHelper();
+          budget.budgets[entry] = { ...helperCeiling, [field]: helperCeiling[field] - 1 };
+          save(budget);
+        }, 1, `${entry}: ${metric}`);
+      }
+      rmSync(join(root, 'public/islands', path.split('/')[0]), { recursive: true, force: true });
+    }
     check('stylesheet cannot escape enforcement', (budget) => {
       delete budget.budgets['public/styles.css'];
       save(budget);

@@ -79,9 +79,10 @@ The byte ceilings are specific to Next's unbundled assets, based on the measured
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not
 serve. The checker exits **0** if every asset fits, **1** for size breaches or
 missing budgeted assets, **2** for missing/invalid configuration or unenforced
-assets. Its 19-case selftest isolates raw/gzip breaches, exact boundaries,
+assets. Its 31-case selftest isolates raw/gzip breaches, exact boundaries,
 missing files, malformed/empty/invalid budgets and newly unbudgeted assets,
-including imported nested helpers. The newly landed `copy-link` island has an
+including imported nested helpers and dot-prefixed files/directories that Workers
+also serves. Hidden paths require explicit ceilings and cannot escape raw/gzip enforcement. The newly landed `copy-link` island has an
 initial ceiling based on its measured size. Island ceilings stay unchanged.
 The stylesheet ceilings remain **3072/1280 raw/gzip bytes**. Main's home-event
 and error-search rules must be preserved while reducing asset size; whitespace
