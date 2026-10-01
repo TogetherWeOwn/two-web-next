@@ -15,10 +15,14 @@ beforeEach(() => {
 
 describe("dbFor connection wiring", () => {
   it("keeps injected DBs ahead of runtime configuration", async () => {
-    const injected = {} as Db;
-    expect(await dbFor({ env: { ADMIN_DB: injected, DB: { connectionString: "postgres://hyperdrive.test/db" } } as unknown as Env }))
-      .toBe(injected);
+    const execute = vi.fn().mockResolvedValue([{ injected: true }]);
+    const injected = { marker: "injected", execute } as unknown as Db;
+    const wrapped = await dbFor({ env: { ADMIN_DB: injected, DB: { connectionString: "postgres://hyperdrive.test/db" } } as unknown as Env });
+    expect(wrapped).toMatchObject({ marker: "injected" });
+    expect(await wrapped!.execute("select 1" as never)).toEqual([{ injected: true }]);
+    expect(execute).toHaveBeenCalledExactlyOnceWith("select 1");
     expect(makeSql).not.toHaveBeenCalled();
+    expect(makeDb).not.toHaveBeenCalled();
   });
 
   it("builds the route DB from Hyperdrive when the explicit URL is absent", async () => {

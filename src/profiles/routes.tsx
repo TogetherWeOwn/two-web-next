@@ -24,7 +24,7 @@ import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { type AccessDecl, type AccessSink } from "../access-log";
 import { bufferedMemberHtml, bufferedMemberText, declareMemberResult, memberReadBoundary } from "../member-reads";
-import { rateLimitExceeded } from "../errors";
+import { NotFoundPage, rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
@@ -98,6 +98,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
 
   // Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed).
   const gate = async (c: Ctx, next: Next) => {
+    c.header("cache-control", "private, no-store");
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     if (!token) return c.redirect("/auth/discord", 302);
     let viewer: Viewer | null = null;
@@ -107,7 +108,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
       const row = await sessions.get(await hashToken(token));
       if (row) viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
     } catch (err) {
-      console.error("profiles could not resolve the session; refusing.", { error: String(err) });
+      console.error("profiles could not resolve the session; refusing.", { exception: err instanceof Error ? err.constructor.name : "UnknownFailure" });
       return c.text("Profiles temporarily unavailable", 503);
     }
     // A cookie whose row is gone (revoked/expired/rotated) is a guest.
@@ -137,13 +138,13 @@ export function profilesApp(deps: ProfileDeps = {}) {
   }
 
   const render = async (c: Ctx, id: string) => {
-    if (!SNOWFLAKE.test(id)) return bufferedMemberText(c, "404 Not Found", 404);
+    if (!SNOWFLAKE.test(id)) return bufferedMemberHtml(c, <NotFoundPage />, 404);
     const store = await storeFor(c);
     if (!store) return bufferedMemberText(c, "Profiles temporarily unavailable", 503);
     const member = await store.find(id);
     // Borrowed non-SQL stores declare retrieved keys, never the requested id.
     declareMemberResult(member ? [member.id] : []);
-    if (!member) return bufferedMemberText(c, "404 Not Found", 404);
+    if (!member) return bufferedMemberHtml(c, <NotFoundPage />, 404);
     const viewer = c.get("viewer");
     const stats = await statsFor(c, member.id);
     return bufferedMemberHtml(c, <ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);

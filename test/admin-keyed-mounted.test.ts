@@ -55,14 +55,16 @@ describe.skipIf(!process.env.DATABASE_URL)("mounted keyed admin reads (isolated 
     await denial(await request(surface === "roster" ? `/events/${EVENT_KEY}` : "/"));
   });
 
-  it.each(["comment", "mutation"])("a %s statement cannot evade the read prefix inside an existing roster handler", async (mode) => {
+  it.each(["comment", "mutation", "builder"])("a %s statement cannot evade the read prefix inside an existing roster handler", async (mode) => {
     const original = reads.listRoster;
     vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
       const rows = await original(db, key);
       try {
-        await memberReads.keyedMemberRead(() => db.execute(mode === "comment"
-          ? sql`/* added query */ select id, username from users`
-          : sql`update users set username = 'mutated-private-name' returning id, username`));
+        await memberReads.keyedMemberRead<unknown>(() => mode === "builder"
+          ? db.update(users).set({ username: "mutated-private-name" }).returning()
+          : db.execute(mode === "comment"
+            ? sql`/* added query */ select id, username from users`
+            : sql`update users set username = 'mutated-private-name' returning id, username`));
       } catch {}
       return rows;
     });

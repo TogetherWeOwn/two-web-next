@@ -109,6 +109,25 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
     expect(res.status).toBe(302);
   });
 
+  it("session failure refuses contents with no-store and class-only diagnostics", async () => {
+    const { app, sessions, store, log } = harness();
+    const cookie = await cookieFor(sessions, BOB);
+    const find = vi.spyOn(store, "find");
+    const fail = vi.spyOn(sessions, "get").mockRejectedValue(new Error(`private-query ${BOB.userId} ${ALICE.userId}`));
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await app.request(`/members/${ALICE.userId}`, { headers: { cookie } }, env);
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.text()).not.toMatch(/alice|private-query|10000000000000000/);
+      expect(diagnostic).toHaveBeenCalledExactlyOnceWith("profiles could not resolve the session; refusing.", { exception: "Error" });
+      expect(find).not.toHaveBeenCalled();
+      expect(log).toHaveLength(0);
+    } finally {
+      fail.mockRestore(); find.mockRestore(); diagnostic.mockRestore();
+    }
+  });
+
   it("signed-in non-member: 403 on every route, nothing rendered, nothing logged", async () => {
     const { app, sessions, log } = harness();
     const headers = { cookie: await cookieFor(sessions, OUTSIDER) };

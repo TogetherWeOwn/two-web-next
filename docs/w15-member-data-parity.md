@@ -123,12 +123,28 @@ npm run typecheck
 ```
 
 Other pre-existing suites still delete shared tables; serial files do not
-serialize other agents. A full-repo run must use a dedicated migrated test DB:
+serialize other agents. Broad local tests must use a run-owned migrated test DB.
+Three importer suites additionally pin the local database name to `two_web_next`,
+but create and drop only their own disposable schemas; run those separately
+rather than weakening their guards or pointing destructive suites at that DB:
 
 ```sh
-DATABASE_URL=postgres://agent_test@agent-testdb:5432/tog_10116_w15_tests npm run db:migrate
-DATABASE_URL=postgres://agent_test@agent-testdb:5432/tog_10116_w15_tests npm run check
+# Create this run-owned DB on agent-testdb first; validate the run UUID/name.
+TEST_DB="w15_${PAPERCLIP_RUN_ID//-/}"
+DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" npm run db:migrate
+DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" npm run test:coverage -- --exclude test/import-content-funnel.test.ts --exclude test/import-events-rsvps-db.test.ts --exclude test/import-users-profiles.test.ts
+DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next npx vitest run test/import-content-funnel.test.ts test/import-events-rsvps-db.test.ts test/import-users-profiles.test.ts
+npm run typecheck
+npm run config:check
+node --test ci/a11y-*.test.mjs
+npm run test:cutover
 ```
+
+CI's job-private Postgres service allows all suites in one run. Local accessibility
+bot-view fixtures intercept `session.prepareQuery`, retain returned `member_id`
+on both stats projections, and refuse unknown `web_v1` queries before borrowing
+the driver. Boundary-level tests prove that observation cannot discard this
+isolation layer; this is synthetic fixture evidence, not a bot-database test.
 
 The first genuine failing-INSERT run reproduced admin `200` where the requirement
 was `503`; the same tests pass after `adminGuard` replaces `c.res`. Assertions
@@ -149,7 +165,8 @@ adapter observes prepared execution and transaction descendants. One permit
 allows one statement; keyed results must provide each selected sensitive table's
 actual owner Column. Contract refusals poison the request even if caught.
 Comment-prefixed statements and RETURNING mutations cannot evade SELECT-prefix
-inspection; handler mutations refuse before execution. Only the final audit
+inspection; raw and fluent mutation builders refuse before execution (the mounted
+UPDATE regression also verifies the stored username remains unchanged). Only the final audit
 sink exits capture, and its failed INSERT still refuses contents.
 
 Explicit non-sensitive classifications permit mapped event/featured records and

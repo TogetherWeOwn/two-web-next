@@ -42,7 +42,7 @@ export function memberReadDb(db: Db): Db {
   let observed: Db | undefined;
   return new Proxy(db, {
     get(target, property) {
-      const queryMethod = ["select", "selectDistinct", "selectDistinctOn", "execute", "transaction", "$with", "with", "query"].includes(String(property));
+      const queryMethod = ["select", "selectDistinct", "selectDistinctOn", "insert", "update", "delete", "refreshMaterializedView", "execute", "transaction", "$with", "with", "query"].includes(String(property));
       const source = memberReadActive() && queryMethod ? (observed ??= observeMemberReads(target)) : target;
       const value = Reflect.get(source, property);
       return typeof value === "function" ? value.bind(source) : value;

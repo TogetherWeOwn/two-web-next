@@ -20,8 +20,8 @@ function assertShell(html: string) {
 
 function assertInventory(router: { routes: { method: string; path: string }[] }) {
   const actual = router.routes.filter((route) => route.method === "GET").map((route) => route.path).sort();
-  // Event attendee access logging is a second GET registration, not another page.
-  expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS, "/e/:key"].sort());
+  // The event read boundary encloses its existing GET registration.
+  expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS].sort());
 }
 
 beforeEach(() => {
