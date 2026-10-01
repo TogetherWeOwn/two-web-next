@@ -7,6 +7,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "workers_dev": false,
+  // Preserve unrelated dashboard vars; source vars below override same-name vars.
+  // Remote secrets are retained by Wrangler (never copied into source).
+  "keep_vars": true,
   // Staging host. The Discord application must list ${APP_URL}/auth/discord/callback as a redirect URI.
   "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],
   // W13: Laravel queue + scheduler parity (TOG-9692). Cron expressions are pinned to
@@ -42,6 +45,8 @@
     "FEATURED_IMAGE_HOSTS": "",
     "DISCORD_CLIENT_ID": "1539711683898118154",
     "DISCORD_GUILD_ID": "326474832151838730",
+    // Approved SySOp only. Preflight checks this exact public deployment value.
+    "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
     // WEB-HOMEPAGE campaign invite (never expires, unlimited); the fallback when auto-join fails.
     "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
   },

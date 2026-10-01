@@ -57,6 +57,9 @@ jobs:
       - run: npm run check
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Moderator role-config preflight (before any Cloudflare mutation)
+        # Read the same top-level source var Wrangler deploys, not a CI secret.
+        run: npm run check:worker-moderators
       - name: Ensure queues exist
         # Idempotent: "already exists" is fine; a real permission error surfaces at deploy.
         run: |
@@ -65,7 +68,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy to Cloudflare Workers
-        run: npx wrangler deploy
+        run: npx wrangler deploy --config wrangler.jsonc
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
