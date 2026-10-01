@@ -81,6 +81,21 @@ describe("featured UTC window precision (local fixtures)", () => {
     expect(fieldErrors({ ...fields, ends_at: "2026-10-01T12:34:56.700000" })).toHaveProperty("ends_at");
   });
 
+  it.each(["0001", "0004", "0099", "0100"])("does not remap the AD year %s to the twentieth century", (year) => {
+    const parsed = parseFeaturedForm({ title: "Slot", starts_at: `${year}-10-01 12:34:56.789123` });
+    expect(parsed.startsAtUtc?.toISOString()).toBe(`${year}-10-01T12:34:56.789Z`);
+    expect(parsed.startsAtUtcText).toBe(`${year}-10-01T12:34:56.789123Z`);
+  });
+
+  it.each(["starts_at", "ends_at"])("distinctly rejects unsupported BC input in %s", (field) => {
+    expect(fieldErrors({ [field]: "0200-10-01 12:34:56.789123 BC" })[field])
+      .toBe("BC dates are not supported. Clear or replace this window bound with an AD date.");
+  });
+
+  it("rejects year zero instead of remapping it to AD 1900", () => {
+    expect(fieldErrors({ starts_at: "0000-10-01 12:34:56.789123" })).toHaveProperty("starts_at");
+  });
+
   it("does not broaden event wall-time parsing to seconds or milliseconds", () => {
     expect(wallToUtc("2026-10-01 12:34", "UTC")).toEqual(new Date("2026-10-01T12:34:00.000Z"));
     for (const raw of ["2026-10-01 12:34:56", "2026-10-01 12:34:56.789"]) {
@@ -147,13 +162,60 @@ describe.skipIf(!process.env.DATABASE_URL)("featured edit precision (isolated te
   // SQL text assertions are essential: Date equality hides lost microseconds.
   const preciseStart = "2026-10-01 12:34:56.789123";
   const preciseEnd = "2026-10-01 13:45:12.345678";
-  const seedWindow = async (start = preciseStart, end = preciseEnd) => {
+  const seedWindow = async (start: string | null = preciseStart, end: string | null = preciseEnd) => {
     await fixture.client`UPDATE featured_contents SET starts_at = ${start}::timestamptz, ends_at = ${end}::timestamptz WHERE id = ${id}`;
   };
   const sqlWindow = async () => {
     const [row] = await fixture.client`SELECT starts_at::text AS start, ends_at::text AS end FROM featured_contents WHERE id = ${id}`;
     return row;
   };
+
+  it.each([
+    ["0200-10-01 12:34:56.789123 BC", preciseEnd],
+    [null, "0200-10-01 13:45:12.345678 BC"],
+    ["0200-10-01 12:34:56.789123 BC", "0199-10-01 13:45:12.345678 BC"],
+  ])("rejects an unrelated edit without changing a BC window (%s, %s)", async (start, end) => {
+    await seedWindow(start, end);
+    const before = await sqlWindow();
+    const windows = windowFields(await read());
+    const response = await save({ ...windows, title: "Do not convert BC to AD" });
+    expect(response.status).toBe(422);
+    const html = await response.text();
+    expect(html).toContain("BC dates are not supported.");
+    expect(windowFields(html)).toEqual(windows);
+    expect(windows).toEqual({ starts_at: start ?? "", ends_at: end ?? "" });
+    expect(await sqlWindow()).toEqual(before);
+    expect((await stored()).title).toBe(fields.title);
+    expect(await fixture.db.select().from(activityLog).where(eq(activityLog.subjectId, String(id)))).toEqual([]);
+  });
+
+  it.each(["clear", "replace"])("can explicitly %s stored BC bounds with era-aware auditing", async (action) => {
+    const start = "0200-10-01 12:34:56.789123 BC";
+    const end = "0199-10-01 13:45:12.345678 BC";
+    await seedWindow(start, end);
+    const windows = windowFields(await read());
+    const values = action === "clear" ? { starts_at: "", ends_at: "" } : { starts_at: preciseStart, ends_at: preciseEnd };
+    expect((await save({ ...windows, ...values })).status).toBe(303);
+    expect(await sqlWindow()).toEqual({
+      start: action === "clear" ? null : `${preciseStart}+00`,
+      end: action === "clear" ? null : `${preciseEnd}+00`,
+    });
+    const [audit] = await fixture.db.select().from(activityLog).where(eq(activityLog.subjectId, String(id)));
+    expect(audit!.properties).toMatchObject({
+      startsAt: { before: start, after: action === "clear" ? null : preciseStart },
+      endsAt: { before: end, after: action === "clear" ? null : preciseEnd },
+    });
+  });
+
+  it.each(["0001", "0004", "0099", "0100"])("round-trips the actual SQL year %s AD on a title-only edit", async (year) => {
+    await seedWindow(`${year}-10-01 12:34:56.789123`, `${year}-10-01 13:45:12.345678`);
+    const before = await sqlWindow();
+    expect((await save({ ...windowFields(await read()), title: "Same AD year" })).status).toBe(303);
+    expect(await sqlWindow()).toEqual(before);
+    const [audit] = await fixture.db.select().from(activityLog).where(eq(activityLog.subjectId, String(id)));
+    expect(audit!.properties).not.toHaveProperty("startsAt");
+    expect(audit!.properties).not.toHaveProperty("endsAt");
+  });
 
   it.each([
     ["title", "Microsecond headline"], ["body", "Microsecond body"], ["position", "9"],

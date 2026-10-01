@@ -29,13 +29,16 @@ export type FeaturedEditRow = FeaturedRow & { startsAtText: string | null; endsA
 
 // Date decoding loses imported microseconds and cannot represent infinity.
 // Pin formatting to UTC independently of the connection's TimeZone/DateStyle.
+// Keep BC visible so validation cannot mistake an unsupported era for AD.
 const featuredEditSelection = {
   ...getTableColumns(featuredContents),
   startsAtText: sql<string | null>`CASE WHEN isfinite(${featuredContents.startsAt})
     THEN to_char(${featuredContents.startsAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')
+      || CASE WHEN EXTRACT(YEAR FROM ${featuredContents.startsAt} AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END
     ELSE ${featuredContents.startsAt}::text END`,
   endsAtText: sql<string | null>`CASE WHEN isfinite(${featuredContents.endsAt})
     THEN to_char(${featuredContents.endsAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')
+      || CASE WHEN EXTRACT(YEAR FROM ${featuredContents.endsAt} AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END
     ELSE ${featuredContents.endsAt}::text END`,
 };
 
