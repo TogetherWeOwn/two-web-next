@@ -170,8 +170,18 @@ export async function handleAgentEvent(
   credential: string | null,
   clientIp: string | null = null,
 ): Promise<Answer> {
+  const admitted = await admitAgentEvent(sql, cfg, credential, clientIp);
+  return "handle" in admitted ? admitted.handle(body) : admitted;
+}
+
+/** Admission binds the body handler to this hit; HTTP callers run it before buffering. */
+export async function admitAgentEvent(
+  sql: Sql,
+  cfg: IngressConfig,
+  credential: string | null,
+  clientIp: string | null = null,
+): Promise<Answer | { handle: (body: unknown) => Promise<Answer> }> {
   const requestId = ulid();
-  const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
 
   // The outer shield (two-web TOG-8402): every hit per credential per minute,
   // counted before auth, the grant lookup and the audit write — ahead of the
@@ -183,6 +193,11 @@ export async function handleAgentEvent(
   const shieldKey = credential ? await sha256Hex(credential) : `ip:${clientIp ?? "unknown"}`;
   const shielded = await shield(sql, cfg, shieldKey, requestId);
   if (shielded) return shielded;
+  return { handle: (body) => processAgentEvent(sql, cfg, body, credential, requestId) };
+}
+
+async function processAgentEvent(sql: Sql, cfg: IngressConfig, body: unknown, credential: string | null, requestId: string): Promise<Answer> {
+  const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
   let dig: string;
   try {
     dig = await digest(isPlainObject(body) ? body : {});
