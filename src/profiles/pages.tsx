@@ -80,13 +80,12 @@ export const ProfilePage: FC<{
       </header>
       <main id="main" tabindex={-1}>
         <section aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
-          {img ? (
-            <img data-testid={PROFILE_AVATAR_TESTID} src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" />
-          ) : (
-            <span data-testid={PROFILE_AVATAR_TESTID} aria-hidden="true" class="avatar-initial">
+          <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="avatar">
+            {img ? <img src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
+            <span data-avatar-initial="" class="avatar-initial" hidden={!!img}>
               {[...member.username][0]?.toUpperCase() ?? "?"}
             </span>
-          )}
+          </span>
           <h1 id="member-heading" tabindex="-1" data-testid={PROFILE_NAME_TESTID}>{member.username}</h1>
           {!stats?.rankKey && member.rank ? <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p> : null}
           {!stats?.joinedAt && joined ? <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p> : null}
@@ -98,6 +97,7 @@ export const ProfilePage: FC<{
             <p>No games listed yet.</p>
           )}
         </section>
+        <script src="/islands/avatar.js" defer></script>
         {stats ? <MemberStatsBlock stats={stats} /> : null}
         {isOwner ? (
           <section aria-labelledby="edit-heading" data-testid={PROFILE_EDIT_TESTID} {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }} data-member-id={member.id}>
