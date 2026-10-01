@@ -208,9 +208,11 @@ export const queueJobs = pgTable("queue_jobs", {
 });
 
 // Terminal failures, mirroring legacy `failed_jobs`: reported by /up, never thresholded.
+// One outcome per dispatch jobId, not event key: transport redelivery must not
+// inflate failed depth, while independent dispatches for one event remain visible.
 export const queueFailedJobs = pgTable("queue_failed_jobs", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
-  jobId: uuid("job_id").notNull(),
+  jobId: uuid("job_id").notNull().unique("queue_failed_jobs_job_id_unique"),
   kind: text("kind").notNull(),
   key: text("key"),
   reason: text("reason").notNull(),
