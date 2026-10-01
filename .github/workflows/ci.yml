@@ -11,14 +11,47 @@ on:
 
 permissions:
   contents: read
+  # The scope job lists the PR's changed files via the API.
+  pull-requests: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Cheap change-scope gate (TOG-11811): a docs-only PR (`**/*.md`, `docs/**`)
+  # fast-passes the heavy jobs below instead of occupying two runner slots for
+  # 20 minutes. `check` still reports success under its own name, so the
+  # required check keeps gating merges (paths-ignore would leave it missing and
+  # block the PR, so it is deliberately not used here).
+  scope:
+    name: scope
+    runs-on: [self-hosted, two-selfhosted]
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - id: scope
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed-files.txt"
+          if grep -v -E '\.md$|^docs/' "$RUNNER_TEMP/changed-files.txt" | grep -q .; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          fi
+
   a11y:
     name: a11y
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
     # Self-hosted runners share one Docker host, so a published 5432 (and
@@ -77,7 +110,7 @@ jobs:
   # A failing audit must also prevent the existing required check from passing.
   check:
     name: check
-    needs: a11y
+    needs: [a11y, scope]
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
     runs-on: [self-hosted, two-selfhosted]
@@ -98,50 +131,66 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
+      - name: Docs-only fast pass (no code changed)
+        if: needs.scope.outputs.docs_only == 'true'
+        run: echo "Docs-only change per the scope job; required check passes without the heavy suite."
       - name: Require successful accessibility audit
+        if: needs.scope.outputs.docs_only != 'true'
         env:
           A11Y_RESULT: ${{ needs.a11y.result }}
         run: test "$A11Y_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.scope.outputs.docs_only != 'true'
       - name: Job-private localhost:5432 forward to the Postgres service
+        if: needs.scope.outputs.docs_only != 'true'
         run: |
           apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
       - uses: actions/setup-node@v7
+        if: needs.scope.outputs.docs_only != 'true'
         with:
           node-version: 24
           cache: npm
       - name: Dependency audit selftest (local fixtures)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run deps:audit:selftest
       - name: Dependency audit (lockfile, including dev dependencies)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run deps:audit
       - run: npm ci
+        if: needs.scope.outputs.docs_only != 'true'
       - name: Seeded admin properties (10s budget, local fixtures)
+        if: needs.scope.outputs.docs_only != 'true'
         # Skip npm's extra process startup; keep the same suite and hard budget.
         run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
       - name: Public-route smoke selftest (loopback fixtures)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run test:smoke
       - name: Apply migrations
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Exercise the exact pre-deploy invocation on the same migrated service.
       - name: Configuration drift check + selftest
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run config:check
       - name: Check (typecheck + coverage gate)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run test:cutover
       - name: Coverage job summary
-        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage report
-        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-${{ github.sha }}
@@ -149,10 +198,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Neon backup selftest (stubbed, no secrets)
+        if: needs.scope.outputs.docs_only != 'true'
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
+        if: needs.scope.outputs.docs_only != 'true'
         run: bash ci/check-migration-numbers.sh
       - name: Pre-flip probe selftests (fixtures, no secrets)
+        if: needs.scope.outputs.docs_only != 'true'
         run: |
           npm run check:moderators
           DISCORD_MODERATOR_ROLE_IDS=508654771276873729 npm run check:moderators -- --require-configured
@@ -166,8 +218,11 @@ jobs:
           fi
 
       - name: Production deploy gate selftest (fixtures, no secrets or network)
+        if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/production-deploy-gate.test.mjs
       - name: Build (wrangler dry run)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --outdir dist
       - name: Production build (wrangler dry run, no deployment)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
