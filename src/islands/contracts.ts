@@ -246,20 +246,30 @@ export const EVENT_DISCORD_RSVP_TESTID = "event-discord-rsvp";
 
 const MONTH_RE = /^(\d{1,4})-(\d{1,2})$/;
 
-/** Parse `month` input ("YYYY-MM", padding optional) or null → caller falls back. */
+/** Years 0001–9999, padding optional; year zero/bad input → caller falls back. */
 export function parseCalendarMonth(raw: string | null | undefined): string | null {
   const m = raw ? MONTH_RE.exec(raw) : null;
   if (!m) return null;
+  const year = Number(m[1]);
   const month = Number(m[2]);
-  if (month < 1 || month > 12) return null;
+  if (year < 1 || month < 1 || month > 12) return null;
   return `${m[1]!.padStart(4, "0")}-${String(month).padStart(2, "0")}`;
 }
 
+/** Month steps saturate at 0001-01/9999-12, never emitting an unsupported URL. */
 export function addCalendarMonth(month: string, delta: number): string {
-  const m = MONTH_RE.exec(month);
-  if (!m) return month;
-  const total = Number(m[1]) * 12 + (Number(m[2]) - 1) + delta;
+  const parsed = parseCalendarMonth(month);
+  if (!parsed || !Number.isInteger(delta)) return month;
+  const [y, m] = parsed.split("-").map(Number);
+  const total = Math.max(12, Math.min(9999 * 12 + 11, y! * 12 + (m! - 1) + delta));
   return `${String(Math.floor(total / 12)).padStart(4, "0")}-${String((total % 12) + 1).padStart(2, "0")}`;
+}
+
+/** Unlike Date.UTC, setUTCFullYear constructs years 1–99 literally. */
+function calendarDate(year: number, monthIndex: number, day: number): Date {
+  const date = new Date(0);
+  date.setUTCFullYear(year, monthIndex, day);
+  return date;
 }
 
 export function calendarMonthLabel(month: string): string {
@@ -268,7 +278,7 @@ export function calendarMonthLabel(month: string): string {
     month: "long",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date(Date.UTC(y!, m! - 1, 1)));
+  }).format(calendarDate(y!, m! - 1, 1));
 }
 
 export function isValidZone(zone: string | null | undefined): boolean {
@@ -287,10 +297,13 @@ function partsIn(instant: Date, zone: string, opts: Intl.DateTimeFormatOptions):
   return new Map(parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
 }
 
-/** "YYYY-MM-DD" wall date in `zone` (invalid zones read as UTC). */
+/** Canonical ISO wall date, including expanded years (invalid zones read as UTC). */
 export function wallDateIso(instant: Date, zone: string): string {
-  const p = partsIn(instant, zone, { year: "numeric", month: "2-digit", day: "2-digit" });
-  return `${p.get("year")}-${p.get("month")}-${p.get("day")}`;
+  const p = partsIn(instant, zone, { era: "short", year: "numeric", month: "2-digit", day: "2-digit" });
+  // Intl's Gregorian year is era-relative: 1 BC is astronomical year zero.
+  const year = Number(p.get("year"));
+  const isoYear = p.get("era") === "BC" ? 1 - year : year;
+  return calendarDate(isoYear, Number(p.get("month")) - 1, Number(p.get("day"))).toISOString().split("T")[0]!;
 }
 
 /** "HH:mm" 24-hour wall time in `zone` (invalid zones read as UTC). */
@@ -299,9 +312,9 @@ export function wallTimeHm(instant: Date, zone: string): string {
   return `${p.get("hour")}:${p.get("minute")}`;
 }
 
-/** "YYYY-MM" wall month in `zone`. */
+/** ISO wall month in `zone`; unsupported years remain rejectable by the parser. */
 export function wallMonth(instant: Date, zone: string): string {
-  return wallDateIso(instant, zone).slice(0, 7);
+  return wallDateIso(instant, zone).slice(0, -3);
 }
 
 /** "Fri 4 Nov, 20:00" — the card's human time in the host zone (legacy 'D j M, H:i'). */
@@ -332,7 +345,7 @@ export function currentCalendarMonth(now: Date): string {
 }
 
 export interface CalendarDay<E = unknown> {
-  /** "YYYY-MM-DD" grid date. */
+  /** ISO date; trailing neighbours after 9999-12 use the expanded year +010000. */
   iso: string;
   /** Day of month (1–31). */
   day: number;
@@ -346,15 +359,15 @@ export function monthGrid<E>(month: string, todayIso: string, byDay: Map<string,
   const m = MONTH_RE.exec(month);
   const y = Number(m![1]);
   const mo = Number(m![2]);
-  const first = Date.UTC(y, mo - 1, 1);
-  const last = Date.UTC(y, mo, 0);
+  const first = calendarDate(y, mo - 1, 1).getTime();
+  const last = calendarDate(y, mo, 0).getTime();
   const leadDays = (new Date(first).getUTCDay() + 6) % 7; // Monday index of the 1st
   const trailDays = 6 - ((new Date(last).getUTCDay() + 6) % 7);
   const weeks: CalendarDay<E>[][] = [];
   let week: CalendarDay<E>[] = [];
   for (let t = first - leadDays * 86_400_000; t <= last + trailDays * 86_400_000; t += 86_400_000) {
     const d = new Date(t);
-    const iso = d.toISOString().slice(0, 10);
+    const iso = d.toISOString().split("T")[0]!;
     week.push({
       iso,
       day: d.getUTCDate(),

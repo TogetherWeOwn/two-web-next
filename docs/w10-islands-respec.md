@@ -81,6 +81,12 @@ TOG-5624 share tags, TOG-8400 search logging, TOG-7332 announcements, TOG-6958 t
   Logging: normalized query + visible count only, no identity, fail-open.
 - Month grid: whole weeks Monday-first, host-zone "today" (modal event zone), bad `month`
   input falls back to this month (never 500), unknown view name keeps current view.
+  Supported month carriers are `0001-01` through `9999-12` (year zero falls back);
+  years 1–99 are literal, not 1901–1999. Previous/next steps stay on the boundary
+  month when they would leave that range. Full-week trailing neighbours after
+  `9999-12` retain valid expanded ISO dates (`+010000-01-01`), not month URLs.
+  Host-zone event/today buckets use the same canonical ISO years, interpreting
+  Gregorian eras (1 BC = year zero); unsupported implicit host months fall back.
 - Drafts invisible to non-moderators including inside search; withCount aggregate (no N+1);
   Discord display-only transients merged in start order, never persisted/published.
 - Drift tests pin: requests per action (single in flight, abort), all empty states,

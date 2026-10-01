@@ -54,20 +54,28 @@ splits G4 into two independently executed cases (+1 test; feed suite 12 rather
 than 11). New-head executed counts belong to its CI evidence on
 [TOG-10994](/TOG/issues/TOG-10994); the baseline is not a new-head pass.
 
-## Application-gap dispositions — implementation not included here
+## Application-gap dispositions — A1/A2 follow-up
 
-This PR is test/fixture/docs only by contract. The follow-up card
-`689bf6f8-4bbf-4073-9318-90d2cfb2fa45` ("two-web-next: add ended-draft publish
-refusal and occupied-seat capacity floor (legacy events parity)"; events domain
-owner) was created from the original audit. At reviewed head `b5b51c1c`, the
-occupied-seat floor has since landed and is asserted below; do not route a
-duplicate implementation from the historical A2 finding. A1 retains its
-separate unproved ended-draft disposition in this ledger.
+The original W15 audit slice was test/fixture/docs only. Its application follow-up,
+[TOG-10813](/TOG/issues/TOG-10813) (PR #72), adds the ended-draft refusal and
+count-bearing occupied-seat errors with `test/event-mutation-invariants.test.ts`.
+It reuses main's locked Going count and preserves waitlist promotion, recurrence,
+and RSVP pause/reopen behavior. Reviewed QA coverage and the G1 fold divergence
+above are unchanged; this application proof is not a full W15/W16 parity pass.
+
+Author-repair verification (2026-10-01, merged main `2618adce`): **11 targeted
+files, 217 passed, zero skipped**, using `agent-testdb` disposable fixture schemas.
+The first run covered mutation invariants, event-time validation, RSVP, waitlist,
+RSVP toggles and admin validation properties (146); the second covered admin
+form errors, recurrence, sub-minute recurrence, gap duration and ICS revisions
+(71). `npm run typecheck` and the application diff check against that main
+baseline passed. Exact-head CI and independent merge approval remain on
+[TOG-10929](/TOG/issues/TOG-10929), not inferred from local tests.
 
 | Row | Gap | Evidence |
 |---|---|---|
-| A1 | Publishing an already-ended draft is not refused | Legacy `Feature/Events/EndedDraftPublicationTest.php` refuses with "An event that has already ended cannot be published. Update its dates first." (lines 28, 43), rechecks under the lock (35), allows publish up to the strict boundary (49) and still allows cancellation of an ended draft (61). Next chain `src/events/routes.tsx:354` → `src/admin/store.ts:139` → `src/admin/validation.ts:324`: `nextStatus` never consults `ends_at` vs now. |
-| A2 | **Implemented/partial proof:** occupied-seat edit floor | `src/admin/store.ts:200-206` locks the event, counts Going seats and refuses capacity below that count. `test/rsvp-waitlist.test.ts:258-275` proves JSON and admin HTTP 422 below Going with unchanged stored capacity/RSVP row count and no write-back, then accepts equality. The parser-only form-floor half is G2. **Remaining proof gaps:** the pinned legacy stale-form recount/concurrent seat change, and grant-owned shrink path; the implemented JSON/admin floor is not an application gap. |
+| A1 | **Ported:** ended-draft publish refusal | `transitionEvent` in `src/admin/store.ts` checks persisted `endsAt < Date.now()` after acquiring the event-row lock, with the exact legacy "An event that has already ended cannot be published. Update its dates first." error. `test/event-mutation-invariants.test.ts` proves JSON/admin 422, unchanged event/RSVP/audit rows and no announcement, equality/future publication, legal ended-draft cancellation, a clock advancing during a real lock wait, and a concurrently committed end-time edit. |
+| A2 | **Adapted/partial:** occupied-seat edit floor | `updateEvent` in `src/admin/store.ts` reuses main's event-row lock and fresh `goingCount`, adding the occupied-seat count to the capacity error. `test/event-mutation-invariants.test.ts` proves JSON/admin refusal below Going from finite/unlimited capacity, unchanged event/RSVP/audit rows and no write-back, equality/higher/unlimited acceptance, non-Going controls, a title-only PATCH retaining capacity, stale-form recount and a concurrently committed seat behind the RSVP lock. Accepted edits preserve main's waitlist promotions. `test/rsvp-waitlist.test.ts` also pins the count-bearing JSON/admin errors. G2 remains parser-only proof. **Remaining gap:** agent-grant-owned shrink path; no pass inferred from moderator/admin tests. |
 
 The series-child variant (`Integration/EndedDraftSeriesPublicationTest.php`)
 and the agent-grant shrink row (`EventCapacityFloorTest` line 82) follow the
@@ -91,8 +99,8 @@ series (W13) and agent-events grants respectively — see defers below.
 | Legacy test file | Disposition and Next proof |
 |---|---|
 | `Feature/Events/EventTimezoneTest.php` | **Partial/adapted (G1):** both DST sides, round-trip, UTC zone, IANA/offset/impossible-date rejection, gap + shoulders, with the unchanged fold-carrier rule of TOG-6805 (G2) in `test/event-time-validation.test.ts`. Current Next's fresh fold parse selects the first occurrence (main PR #64), unlike legacy's second occurrence; an explicit authorized divergence or legacy-equivalent implementation remains required before full parity. Page-render display is the W10 islands drift net (`test/islands-events-calendar.test.ts`). |
-| `Feature/Events/EventCapacityFloorTest.php` | **Adapted/partial (G2, A2):** parser form-floor rows in `test/event-time-validation.test.ts` (1+ / large / empty / unlimited accept; zero/negative/non-numeric refuse). Occupied-seat JSON/admin edit refusal, no-mutation/no-write-back and equality acceptance are asserted in `test/rsvp-waitlist.test.ts:258-275`, backed by the locked Going count in `src/admin/store.ts:200-206`. **Remaining gaps:** explicit stale-form/concurrent recount and grant-owned shrink assertions; not an absent occupied-seat floor. |
-| `Feature/Events/EndedDraftPublicationTest.php` | **Gap (A1):** routed to the follow-up card (id above); cancelled-terminal and draft-only-publish guards are ported in `test/event-time-validation.test.ts` ("status transition guard"). |
+| `Feature/Events/EventCapacityFloorTest.php` | **Adapted/partial (G2, A2):** parser form-floor rows remain in `test/event-time-validation.test.ts`. `test/event-mutation-invariants.test.ts` and `test/rsvp-waitlist.test.ts` prove the locked Going-only floor on JSON/admin edits, count-bearing errors, no mutation/write-back on refusal, equality/higher/unlimited acceptance and stale-form/concurrent recount. **Remaining gap:** grant-owned shrink assertions; no full-file pass is inferred. |
+| `Feature/Events/EndedDraftPublicationTest.php` | **Ported (A1):** `test/event-mutation-invariants.test.ts` proves expired-draft refusal with the exact legacy reason, lock-before-clock/persisted-date races, strict boundary and ended-draft cancellation. Cancelled-terminal and draft-only-publish guards remain in `test/event-time-validation.test.ts` ("status transition guard"). |
 | `Feature/Events/FeedExpiryValidatorTest.php` | **Ported (G4):** `test/event-feeds.test.ts` table-driven "%s drops an expired event… no write after ends_at": RSS and ICS equality inclusion, one-second expiry, original validator miss, new validator hit, persisted full-row equality, per-event ICS still 200. |
 | `Feature/Events/HotPathIndexTest.php` | **Adapted (G5, A6):** `test/schema-hot-path.test.ts` presence checks plus `test/hot-path-indexes.test.ts:78-90,135-187` legacy-named definitions and real-SQL EXPLAIN access-path assertions. Forced `enable_seqscan = off` is a usability proof, not a production cost/planner pass; only that representative production-planner acceptance remains deferred. |
 | `Feature/Events/EventsFeedTest.php`, `EventIcsTest.php`, `EventRssTest.php`, `EventGoogleCalendarTest.php` | **Ported feed surfaces:** byte fixtures + route policy in `test/event-feeds.test.ts` (12 cases after the G4 review fix): ICS folding/escaping/CANCELLED, RSS escaping + description omission, guid stability across rename, DST pubDate, multibyte round-trip, webcal swap, sessionless ETag/304, drafts never exposed, cancelled excluded from RSS but in ICS. |
