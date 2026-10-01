@@ -2,6 +2,7 @@
 // EventIcs / EventRss / EventSubscribe / EventGoogleCalendar. No query, no auth, no HTTP.
 import type { events } from "../db/admin-schema";
 import { stripTrailingSlash } from "../seo";
+import { rssXml as xml } from "./rss-xml";
 
 type EventRow = typeof events.$inferSelect;
 
@@ -107,9 +108,6 @@ export const eventIcs = (e: EventRow, appUrl: string): string => calendar(vevent
 
 export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
   calendar(rows.flatMap((e) => vevent(e, appUrl)));
-
-/** htmlspecialchars(ENT_QUOTES | ENT_XML1). */
-const xml = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 
 export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
   const base = feedBase(appUrl);
