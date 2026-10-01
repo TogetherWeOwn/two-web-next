@@ -123,11 +123,15 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
   </ErrorShell>
 );
 
-export async function notFoundHandler(c: Context): Promise<Response> {
-  const suggestions = await notFoundSuggestions(c.env);
+// Host refusals use only this shell, never the optional DB lookup.
+export function notFoundResponse(c: Context, suggestions: SuggestedEvent[] = []): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   c.status(404);
   return c.html(<NotFoundPage suggestions={suggestions} />);
+}
+
+export async function notFoundHandler(c: Context): Promise<Response> {
+  return notFoundResponse(c, await notFoundSuggestions(c.env));
 }
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {

@@ -14,7 +14,7 @@
 
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
-import { notFoundHandler } from "./errors";
+import { notFoundResponse } from "./errors";
 
 /** Parse a single host authority; never truncate a malformed or joined value. */
 export function normalizeHost(raw: string | null | undefined): string | null {
@@ -77,7 +77,7 @@ export function trustHosts() {
     }
     if (urlHost === null || !isTrustedHost(c.env.APP_URL, [c.req.header("host"), urlHost])) {
       console.warn("refusing request with untrusted host");
-      return notFoundHandler(c);
+      return notFoundResponse(c);
     }
     await next();
   };

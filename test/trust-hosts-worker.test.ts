@@ -8,10 +8,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 // Exercise the real asset binding: constructed Response mocks have mutable
 // headers and miss the secureHeaders failure on ASSETS.fetch responses.
 // Local workerd only; no remote bindings, credentials, database or deployment.
-describe("TrustHosts with real Worker assets", () => {
+describe.each(["wrangler.jsonc", "wrangler.local.jsonc"])("TrustHosts with real Worker assets (%s)", (configPath) => {
+  const config = JSON.parse(readFileSync(configPath, "utf8").replace(/^\s*\/\/.*$/gm, ""));
   let mf: Miniflare;
   const unexpected: string[] = [];
-  const host = "next.example.test";
+  const host = new URL(config.vars.APP_URL).host;
   const css = readFileSync("public/styles.css", "utf8");
 
   // The RPC fetch bridge rewrites Host. Local HTTP preserves the authority
@@ -48,11 +49,11 @@ describe("TrustHosts with real Worker assets", () => {
       name: "trust-hosts-assets", modules: true, script: bundle.outputFiles![0]!.text,
       compatibilityDate: "2026-09-29", compatibilityFlags: ["nodejs_compat"],
       assets: {
-        directory: resolve("public"), binding: "ASSETS", run_worker_first: true,
+        ...config.assets, directory: resolve(config.assets.directory),
         routerConfig: { has_user_worker: true },
       },
       bindings: {
-        APP_URL: `https://${host}`, DISCORD_CLIENT_ID: "test-client",
+        APP_URL: config.vars.APP_URL, DISCORD_CLIENT_ID: "test-client",
         DISCORD_CLIENT_SECRET: "test-secret", DISCORD_GUILD_ID: "326474832151838730",
         DISCORD_BOT_TOKEN: "test-bot", DISCORD_INVITE_URL: "https://discord.gg/test",
         SESSION_SECRET: "test-session-signing-key-at-least-32-bytes",
@@ -97,7 +98,8 @@ describe("TrustHosts with real Worker assets", () => {
 
   it.each([
     ["GET", "evil.example.test"], ["HEAD", "evil.example.test"],
-    ["GET", "localhost"], ["HEAD", "localhost"],
+    ["GET", host.startsWith("localhost") ? "127.0.0.1" : "localhost"],
+    ["HEAD", host.startsWith("localhost") ? "127.0.0.1" : "localhost"],
   ])("refuses asset %s for untrusted Host %s before serving CSS", async (method, untrusted) => {
     const res = await request("/styles.css", method, { host: untrusted });
     expect(res.status).toBe(404);

@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { isTrustedHost, normalizeHost, trustedHost } from "../src/trust-hosts";
+import * as adminDb from "../src/admin/db";
 import type { Env } from "../src/env";
 
 const base: Env = {
@@ -171,6 +172,40 @@ describe("middleware: per-env allowlist", () => {
 });
 
 describe("review regressions: fail closed at the Worker boundary", () => {
+  it.each([
+    [base.APP_URL, EVIL, base.APP_URL],
+    [`https://${EVIL}`, "next.example.test", base.APP_URL],
+    [base.APP_URL, `next.example.test,${EVIL}`, base.APP_URL],
+    [base.APP_URL, "next.example.test", "not a url"],
+    [base.APP_URL, "next.example.test", ""],
+  ])("refusal of URL %s / Host %s / APP_URL %j never acquires DB or assets", async (url, host, appUrl) => {
+    const acquire = vi.spyOn(adminDb, "dbFor").mockRejectedValue(new Error("DB acquisition forbidden"));
+    const fetch = vi.fn(async () => new Response("asset lookup forbidden"));
+    try {
+      const res = await app.request(`${url}/styles.css`, {
+        headers: { host, cookie: "__Host-two_session=existing-token" },
+      }, { ...base, APP_URL: appUrl, DATABASE_URL: "postgres://agent_test@agent-testdb:5432/two_web_next", ASSETS: { fetch } });
+      const body = await res.text();
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("text/html");
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(res.headers.get("content-security-policy")).toContain("default-src 'self'");
+      expect(res.headers.get("set-cookie")).toBeNull();
+      expect(res.headers.get("location")).toBeNull();
+      expect(body).toContain("We cannot find that page");
+      expect(body).toContain('content="noindex, nofollow"');
+      expect(body).toContain('data-testid="error-home"');
+      expect(body).toContain('data-testid="error-join"');
+      expect(body).toContain('data-testid="error-events-empty"');
+      expect(body).not.toContain('data-testid="error-event-suggestion"');
+      expect(body).not.toContain(EVIL);
+      expect([...res.headers.values()].join("\n")).not.toContain(EVIL);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { acquire.mockRestore(); }
+  });
+
   it.each(["localhost", "127.0.0.1", "[::1]"])("production refuses loopback %s", async (host) => {
     const header = await app.request("https://togetherweown.com/up", { headers: { host } }, production);
     expect(header.status).toBe(404);
@@ -229,8 +264,8 @@ describe("review regressions: fail closed at the Worker boundary", () => {
     expect(isTrustedHost(base.APP_URL, [null])).toBe(false);
   });
 
-  it("all HTTP traffic, including assets, enters the Worker first", () => {
-    const config = JSON.parse(readFileSync("wrangler.jsonc", "utf8")
+  it.each(["wrangler.jsonc", "wrangler.local.jsonc"])("all HTTP traffic, including assets, enters the Worker first (%s)", (path) => {
+    const config = JSON.parse(readFileSync(path, "utf8")
       .replace(/^\s*\/\/.*$/gm, ""));
     expect(config.assets.run_worker_first).toBe(true);
     expect(config.assets.binding).toBe("ASSETS");
@@ -255,7 +290,7 @@ describe("review regressions: fail closed at the Worker boundary", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it("missing assets still get the branded DB-free 404", async () => {
+  it("trusted missing assets still get the branded 404", async () => {
     const env = { ...base, ASSETS: { fetch: vi.fn(async () => new Response(null, { status: 404 })) } };
     const res = await app.request(`${base.APP_URL}/missing.css`, {}, env);
     expect(res.status).toBe(404);
