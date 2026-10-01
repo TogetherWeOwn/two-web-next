@@ -13,14 +13,14 @@ const identities = (start = 100): Identity[] => ["events", "rsvps", "users"].map
 }));
 
 type Allocator = {
-  name: string; identity_kind: string; id_default: string | null; owned_id_sequence: string | null;
+  name: string; identity_kind: string; id_default: string | null; custom_id_function: unknown; owned_id_sequence: string | null;
   id_sequence_ids: string[]; sequence_ids: string[]; schema_sequence_ids: string[];
 };
 const allocators = (rows = identities()): Allocator[] => rows.map((row) => {
   const id = String(Number(row.relation_id) + 1000);
   return {
     name: row.name, identity_kind: "", id_default: `nextval('synthetic.sequence_${id}'::regclass)`,
-    owned_id_sequence: id, id_sequence_ids: [id], sequence_ids: [id],
+    custom_id_function: false, owned_id_sequence: id, id_sequence_ids: [id], sequence_ids: [id],
     schema_sequence_ids: rows.map((table) => String(Number(table.relation_id) + 1000)),
   };
 });
@@ -112,6 +112,39 @@ describe("events import static and effective target separation", () => {
     targetRows[2]!.relation_id = "102";
     await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false).sql, { dryRun: false }))
       .resolves.toMatchObject({ dryRun: false, events: { read: 0 }, rsvps: { read: 0 } });
+  });
+
+  it("allows shared users in the destination schema without protecting unrelated destination sequences", async () => {
+    const sourceRows = allocators();
+    sourceRows[2]!.schema_sequence_ids = ["1200", "1201", "1102"];
+    const targetRows = identities(200);
+    targetRows[2]!.relation_id = "102";
+    await expect(importEventsRsvps(stubClient(identities(), true, undefined, sourceRows).sql, stubClient(targetRows, false).sql, { dryRun: false }))
+      .resolves.toMatchObject({ events: { read: 0 } });
+  });
+
+  it.each(["sequence_ids", "owned_id_sequence"] as const)("still protects shared users allocators from %s", async (field) => {
+    const sourceRows = allocators();
+    if (field === "owned_id_sequence") sourceRows[2]![field] = "1200";
+    else sourceRows[2]![field].push("1200");
+    await expect(assertSeparateTargets(stubClient(identities(), true, undefined, sourceRows).sql, stubClient(identities(200), false).sql))
+      .rejects.toThrow("no destination writes");
+  });
+
+  it.each([true, null, "false"])("refuses custom or unconfirmed ID function identity (%s)", async (custom_id_function) => {
+    const targetRows = identities(200);
+    const allocatorRows = allocators(targetRows);
+    allocatorRows[0]!.custom_id_function = custom_id_function;
+    await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false, undefined, allocatorRows).sql, { dryRun: false }))
+      .rejects.toThrow("no destination writes");
+  });
+
+  it("allows an explicitly qualified builtin nextval allocator", async () => {
+    const targetRows = identities(200);
+    const allocatorRows = allocators(targetRows);
+    allocatorRows[0]!.id_default = "pg_catalog.nextval('synthetic.sequence_1200'::regclass)";
+    await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false, undefined, allocatorRows).sql))
+      .resolves.toMatchObject({ events: { read: 0 } });
   });
 
   it.each(["events", "rsvps"])("refuses distinct writable %s tables with a shared source allocator", async (table) => {
@@ -303,6 +336,74 @@ describe.skipIf(!url)("events import separation on disposable test schemas", () 
     }
   });
 
+  it("refuses a visible custom nextval that hides a source allocator behind a disjoint argument", async () => {
+    await target.unsafe(`CREATE FUNCTION "${emptySchema}".nextval(pg_catalog.regclass) RETURNS integer
+      LANGUAGE sql VOLATILE AS $body$ SELECT pg_catalog.nextval('"${legacySchema}"."events_id_seq"'::regclass)::integer $body$`);
+    const destination = connectDatabase(alias(`${emptySchema},${fixture.schemaName},pg_catalog`, "synthetic_nextval_collision"));
+    try {
+      for (const table of ["events", "rsvps"]) {
+        await destination.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ALTER COLUMN id
+          SET DEFAULT nextval('"${fixture.schemaName}"."${table}_id_seq"'::regclass)`);
+      }
+      const expressions = await destination`select pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) as value,
+        (select count(*)::integer from pg_catalog.pg_depend d join pg_catalog.pg_class s on s.oid = d.refobjid and s.relkind = 'S'
+          where d.classid = 'pg_catalog.pg_attrdef'::regclass and d.objid = ad.oid
+            and d.refclassid = 'pg_catalog.pg_class'::regclass) as sequences,
+        exists (select 1 from pg_catalog.pg_depend d where d.classid = 'pg_catalog.pg_attrdef'::regclass and d.objid = ad.oid
+          and d.refclassid = 'pg_catalog.pg_proc'::regclass
+          and d.refobjid <> 'pg_catalog.nextval(pg_catalog.regclass)'::regprocedure) as custom_function
+        from pg_catalog.pg_attrdef ad join pg_catalog.pg_attribute a on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+        where ad.adrelid in ('events'::regclass, 'rsvps'::regclass) and a.attname = 'id'`;
+      expect(expressions).toHaveLength(2);
+      // Both defaults match the old text check but depend on the custom function.
+      for (const expression of expressions) {
+        expect(expression.value).toMatch(/^nextval\('(?:[^']|'')+'::regclass\)$/);
+        expect(expression.sequences).toBe(1);
+        expect(expression.custom_function).toBe(true);
+      }
+      const sourceBefore = await snapshot(legacy);
+      const targetBefore = await snapshot(target);
+      for (const dryRun of [true, false]) {
+        await expect(importEventsRsvps(legacy, destination, { dryRun })).rejects.toThrow("no destination writes");
+        expect(await snapshot(legacy)).toEqual(sourceBefore);
+        expect(await snapshot(target)).toEqual(targetBefore);
+      }
+      for (const table of ["events", "rsvps"]) {
+        await destination.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ALTER COLUMN id
+          SET DEFAULT pg_catalog.nextval('"${fixture.schemaName}"."${table}_id_seq"'::regclass)`);
+      }
+      expect((await importEventsRsvps(legacy, destination, { dryRun: false })).events.inserted).toBe(4);
+      expect(await snapshot(legacy)).toEqual(sourceBefore);
+    } finally {
+      for (const table of ["events", "rsvps"]) {
+        await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ALTER COLUMN id
+          SET DEFAULT pg_catalog.nextval('"${fixture.schemaName}"."${table}_id_seq"'::regclass)`);
+      }
+      await destination.end();
+      await target.unsafe(`DROP FUNCTION "${emptySchema}".nextval(pg_catalog.regclass)`);
+    }
+  });
+
+  it("allows isolated writable tables when shared users resolve in the destination schema", async () => {
+    // Rename only the owned legacy fixture table; its dependencies stay intact.
+    await legacy.unsafe(`ALTER TABLE "${legacySchema}".users RENAME TO users_private`);
+    const source = connectDatabase(alias(`${legacySchema},${fixture.schemaName}`, "synthetic_shared_users"));
+    try {
+      const sourceBefore = await snapshot(source);
+      const targetBefore = await snapshot(target);
+      for (const dryRun of [true, false]) {
+        await expect(source.begin("isolation level repeatable read read only", (sourceTx: unknown) =>
+          target.begin(`isolation level repeatable read ${dryRun ? "read only" : "read write"}`, (targetTx) =>
+            assertSeparateTargets(sourceTx, targetTx)))).resolves.toBeUndefined();
+        expect(await snapshot(source)).toEqual(sourceBefore);
+        expect(await snapshot(target)).toEqual(targetBefore);
+      }
+    } finally {
+      await source.end();
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}".users_private RENAME TO users`);
+    }
+  });
+
   it.each(["events", "rsvps"])("refuses distinct target tables that allocate IDs from source %s sequence", async (table) => {
     // These identifiers are generated fixture schema names and a fixed table list.
     await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ALTER COLUMN id
@@ -369,16 +470,20 @@ describe.skipIf(!url)("events import separation on disposable test schemas", () 
     }
   });
 
-  it("allows isolated schemas and applies real fixture rows while source state stays unchanged", async () => {
-    const sourceBefore = await snapshot(legacy);
-    const dryBefore = await snapshot(target);
-    expect((await importEventsRsvps(legacy, target)).events.inserted).toBe(4);
-    expect(await snapshot(target)).toEqual(dryBefore);
-    const report = await importEventsRsvps(legacy, target, { dryRun: false });
-    expect(report.events.inserted).toBe(4);
-    expect(report.rsvps.inserted).toBe(3);
-    expect(await snapshot(legacy)).toEqual(sourceBefore);
-    expect((await importEventsRsvps(legacy, target, { dryRun: false })).events.unchanged).toBe(4);
+  it("allows isolated schemas with CLI clients and keeps source state unchanged through apply/replay", async () => {
+    const source = connectDatabase(alias(legacySchema, "synthetic_cli_source"));
+    const destination = connectDatabase(alias(fixture.schemaName, "synthetic_cli_target"));
+    try {
+      const sourceBefore = await snapshot(source);
+      const dryBefore = await snapshot(destination);
+      expect((await importEventsRsvps(source, destination)).events.inserted).toBe(4);
+      expect(await snapshot(destination)).toEqual(dryBefore);
+      const report = await importEventsRsvps(source, destination, { dryRun: false });
+      expect(report.events.inserted).toBe(4);
+      expect(report.rsvps.inserted).toBe(3);
+      expect(await snapshot(source)).toEqual(sourceBefore);
+      expect((await importEventsRsvps(source, destination, { dryRun: false })).events.unchanged).toBe(4);
+    } finally { await Promise.all([source.end(), destination.end()]); }
   });
 
   it("fails closed on missing destination identity with both fixture states unchanged", async () => {
