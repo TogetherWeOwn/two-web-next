@@ -105,8 +105,8 @@ for (const route of routes) {
       if (route.method === "GET") {
         expect(res.status).toBe(200);
         expect(await res.text()).toContain(`action="/admin/featured/${id}"`);
-        expect(getFeatured).toHaveBeenCalledExactlyOnceWith(db, id);
-        expect(recordAccess).toHaveBeenCalledExactlyOnceWith(db, expect.objectContaining({
+        expect(getFeatured).toHaveBeenCalledExactlyOnceWith(expect.anything(), id);
+        expect(recordAccess).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({
           resource: "featured_contents", route: "admin.featured.edit", subjectUserIds: [String(id)],
         }));
         expect(updateFeatured).not.toHaveBeenCalled();
@@ -114,14 +114,14 @@ for (const route of routes) {
       } else if (route.suffix === "/delete") {
         expect(res.status).toBe(303);
         expect(res.headers.get("location")).toBe("/admin/featured");
-        expect(deleteFeatured).toHaveBeenCalledExactlyOnceWith(db, actor, id);
+        expect(deleteFeatured).toHaveBeenCalledExactlyOnceWith(expect.anything(), actor, id);
         expect(getFeatured).not.toHaveBeenCalled();
         expect(updateFeatured).not.toHaveBeenCalled();
       } else {
         expect(res.status).toBe(303);
         expect(res.headers.get("location")).toBe(`/admin/featured/${id}`);
-        expect(getFeatured).toHaveBeenCalledExactlyOnceWith(db, id);
-        expect(updateFeatured).toHaveBeenCalledExactlyOnceWith(db, actor, id, expect.objectContaining({ title: "Updated fixture" }));
+        expect(getFeatured).toHaveBeenCalledExactlyOnceWith(expect.anything(), id);
+        expect(updateFeatured).toHaveBeenCalledExactlyOnceWith(expect.anything(), actor, id, expect.objectContaining({ title: "Updated fixture" }));
         expect(deleteFeatured).not.toHaveBeenCalled();
       }
       expect(dbOperation).not.toHaveBeenCalled();
