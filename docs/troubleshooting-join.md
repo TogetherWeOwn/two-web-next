@@ -25,8 +25,9 @@ There are two different journeys:
   consulting the session, database or bot. It bypasses website OAuth, not
   Discord's rules screening or the validity of the invite itself.
 
-Do not give out the legacy `/join/redirect` or
-`/auth/discord/redirect` URLs; Next uses the paths above.
+Give out the canonical paths above, not legacy URLs. `/join/redirect` is not
+mounted. Old `/auth/discord/redirect` links now redirect to a fresh
+`/auth/discord` journey; they are not a callback or a reason to reuse an approval.
 
 ## Homepage notices
 
@@ -85,7 +86,16 @@ fresh journey. Do not repeatedly click, refresh or try to evade the limit.
 
 Use `/admin/join-attempts` only for a legitimate support incident. It is
 read-only and contains member identifiers: do not copy its rows into a public
-channel. The `/admin` join funnel counts are aggregate hints.
+channel. It shows up to 100 rows per page within the last 90 days, newest first.
+Filter by **Outcome** or an exact **Discord id or request id**; **Filter** returns
+to page 1, and **Previous**/**Next** retain the filters. Open an outcome link for
+the recorded detail; older-than-window details return 404. See the
+[admin guide](moderator-admin-guide.md#read-only-join-attempts) for controls.
+
+The `/admin` **Join funnel, last 90 days** counts the whole window, not one viewer
+page. These are aggregate hints cached for 60 seconds, not live membership checks.
+A failed/slow optional read can omit the widget; absence does not mean zero
+attempts. This does not bypass admin session or audit checks.
 
 The join attempt outcomes are **not** the homepage notice names:
 
@@ -101,11 +111,12 @@ The table is not a complete sign-in history: `/auth/discord/callback` does not
 write join-attempt rows, throttled requests do not reach the recorder, and a
 missing join store can leave no row. The current live add-member call also
 leaves Request ID empty; do not promise a trace ID or infer success from an
-absent row. The list declares recorded Discord IDs for access logging; a detail
-logs a subject only when its Discord ID maps to a stored user other than the
-viewer, regardless of current membership. Missing/unmapped detail IDs, empty
-lists and self-only reads create no access row. Audit-write failures block the
-response under the default fail-closed policy, not every deployment configuration.
+absent row. The list declares only the rendered page's recorded Discord IDs for
+access logging; a detail logs a subject only when its Discord ID maps to a stored
+user other than the viewer, regardless of current membership. Missing/unmapped
+detail IDs, empty lists and self-only reads create no access row. Audit-write
+failures block the response under the default fail-closed policy, not every
+deployment configuration.
 A rendered page is not proof of an audit row. Any reported audit failure or 503
 on member data is a stop condition, not a reason to find another access path.
 
@@ -134,5 +145,9 @@ This guide describes the implementation, not a live staging certification:
 - [App routes](../src/index.tsx): `/auth/discord`, its callback, logout and
   `/discord`; [page text](../src/pages.tsx): notices, join/recovery pages and FAQ.
 - [Role lookup](../src/roles.ts) and [rate-limit page](../src/errors.tsx).
-- [Admin reads](../src/admin/reads.ts) and
-  [access logging](../src/access-log.ts).
+- [Admin routes](../src/admin/routes.tsx), [admin pages](../src/admin/pages.tsx),
+  [table queries](../src/admin/table-list.ts), [admin reads](../src/admin/reads.ts)
+  and [join-funnel widget](../src/admin/join-funnel.ts): read-only controls,
+  retention window, pagination and cached aggregate diagnostics.
+- [Admin guard](../src/admin/guard.ts), [sessions](../src/sessions.ts) and
+  [access logging](../src/access-log.ts): session availability and audit enforcement.
