@@ -267,6 +267,13 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       return c.redirect(`/admin/events/${row.eventKey}`, 303);
     } catch (err) {
       if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
+      if (err instanceof ValidationError) {
+        return formError(
+          c, err,
+          (errors, v) => c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+          values,
+        );
+      }
       throw err;
     }
   });
