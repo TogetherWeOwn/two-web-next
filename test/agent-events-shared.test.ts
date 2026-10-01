@@ -6,6 +6,8 @@ import { DEFAULT_CONFIG, handleAgentEvent, type IngressEffects } from "../src/ag
 import { sha256Hex } from "../src/bot/signer";
 import { signedEventReader } from "../src/bot/event-read";
 import { dispatchWriteBack } from "../src/admin/writeback";
+import { transitionEvent, updateEvent } from "../src/admin/store";
+import { parseEventForm, ValidationError } from "../src/admin/validation";
 import type { SyncMessage } from "../src/events/sync";
 import { createMemorySessionStore } from "../src/sessions";
 import type { Env } from "../src/env";
@@ -171,6 +173,73 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     expect(answers).toContainEqual({ user_id: "first-waiter", status: "going" });
     expect(answers).toContainEqual({ user_id: "second-waiter", status: "waitlisted" });
   });
+
+  it("invalidates stale agent versions after moderator edits and transitions", async () => {
+    const event_key = await create();
+    const actor = { id: "fixture-moderator", username: "Moderator" };
+    const edited = await updateEvent(fixture.db, actor, event_key, parseEventForm({ ...fields, title: "Moderator correction" }));
+    expect(edited.row.agentVersion).toBe(2);
+    const stale = await call("update", { event_key, version: 1, fields });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ reason: "stale_version", agent_version: 2 });
+    expect((await call("read", { event_key })).body.event).toMatchObject({ title: "Moderator correction", agent_version: 2 });
+    const fresh = await call("update", { event_key, version: 2, fields: { ...fields, title: "Agent fresh edit" } });
+    expect(fresh.body.agent_version).toBe(3);
+    const published = await transitionEvent(fixture.db, actor, event_key, "published");
+    expect(published.row.agentVersion).toBe(4);
+    expect((await call("update", { event_key, version: 3, fields })).body.reason).toBe("stale_version");
+    expect((await fixture.client`SELECT title, status, agent_version FROM events WHERE event_key = ${event_key}`)[0])
+      .toEqual({ title: "Agent fresh edit", status: "published", agent_version: 4 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("serializes a queued human publish behind an actual agent cancellation without resurrection", async () => {
+    const event_key = await create();
+    let release!: () => void;
+    let ready!: (pid: number) => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const acquired = new Promise<number>((resolve) => { ready = resolve; });
+    const holder = fixture.client.begin(async (tx) => {
+      await tx`SELECT id FROM events WHERE event_key = ${event_key} FOR UPDATE`;
+      const [backend] = await tx`SELECT pg_backend_pid() AS pid`;
+      ready(Number(backend!.pid));
+      await gate;
+    });
+    const waitForBlock = async (holderPid: number, cancelPid = -1): Promise<number> => {
+      const deadline = Date.now() + 3000;
+      do {
+        const waiting = await fixture.client`SELECT pid FROM pg_stat_activity WHERE datname = current_database()
+          AND wait_event_type = 'Lock' AND pid <> ${cancelPid}
+          AND (${holderPid} = ANY(pg_blocking_pids(pid)) OR ${cancelPid} = ANY(pg_blocking_pids(pid)))`;
+        if (waiting.length) return Number(waiting[0]!.pid);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      } while (Date.now() < deadline);
+      throw new Error("Contender never reached the event row lock");
+    };
+    let cancel: ReturnType<typeof call> | undefined;
+    let publish: Promise<unknown> | undefined;
+    try {
+      const holderPid = await acquired;
+      cancel = handleAgentEvent(fixture.client, { ...cfg, lockWaitMs: 5000 },
+        { op: "cancel", event_key, idempotency_key: randomUUID() }, credential, null, effects);
+      const cancelPid = await waitForBlock(holderPid);
+      // The agent already owns the first row-lock wait; human publication must
+      // observe its committed cancellation rather than the old draft snapshot.
+      publish = transitionEvent(fixture.db, { id: "fixture-moderator", username: "Moderator" }, event_key, "published")
+        .catch((error: unknown) => error);
+      expect(await waitForBlock(holderPid, cancelPid)).not.toBe(cancelPid);
+    } finally {
+      release();
+      await holder;
+      await cancel;
+      await publish;
+    }
+    expect((await cancel)!.status).toBe(200);
+    expect(await publish).toBeInstanceOf(ValidationError);
+    expect((await fixture.client`SELECT status FROM events WHERE event_key = ${event_key}`)[0]!.status).toBe("cancelled");
+    expect((await fixture.client`SELECT count(*)::int AS n FROM activity_log WHERE subject_id = ${event_key}`)[0]!.n).toBe(0);
+    expect(sent.map((message) => message.action)).toEqual(["event.cancel"]);
+  }, 15_000);
 
   it("refuses DST gaps without a shared event write or queue message", async () => {
     const result = await call("create", { fields: { ...fields, starts_at: "2030-03-31 01:30", ends_at: "2030-03-31 03:30" } });

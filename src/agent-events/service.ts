@@ -270,8 +270,10 @@ export async function handleAgentEvent(
 
       const out = await execute(tx, grant, op as Op, doc, idem, dig, requestId, effects);
       if (out.stored) {
+        // Bind encoded JSON as text so postgres.js cannot JSON-encode it again.
+        // Drizzle's transparent serializers must not change the stored shape.
         await tx`INSERT INTO agent_event_idempotency_keys (grant_id, key, payload_digest, status, body, event_key)
-                 VALUES (${grant.id}, ${idem}, ${dig}, ${out.status}, ${JSON.stringify(out.body)}::jsonb, ${out.eventKey ?? null})`;
+                 VALUES (${grant.id}, ${idem}, ${dig}, ${out.status}, ${JSON.stringify(out.body)}::text::jsonb, ${out.eventKey ?? null})`;
       }
       return { status: out.status, body: out.body, writeBack: out.writeBack };
     });
@@ -305,7 +307,10 @@ async function replayAnswer(sql: Tx, grant: Grant, op: string, replay: Row, dig:
     await audit(sql, grant, op, replay.event_key, key, dig, requestId, "conflict", "idempotency_conflict");
     return { status: 409, body: { reason: "idempotency_conflict", message: "This idempotency key was already used with a different payload. A key identifies one operation.", request_id: requestId } };
   }
-  return { status: replay.status, body: { ...(replay.body as Record<string, unknown>), replayed: true, request_id: requestId } };
+  // Earlier standalone clients double-encoded the body; retain their replay
+  // evidence without rewriting it or losing the original response fields.
+  const body = typeof replay.body === "string" ? JSON.parse(replay.body) : replay.body;
+  return { status: replay.status, body: { ...(body as Record<string, unknown>), replayed: true, request_id: requestId } };
 }
 
 // The outer shield's counter (two-web TOG-8402): one bucket per credential
@@ -435,7 +440,12 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
     if (f.capacity !== null && f.capacity < await goingCount(orm, event.id)) {
       return denyOutcome(422, "validation_failed", "The event fields did not validate.", { errors: { capacity: [CAPACITY_BELOW_GOING] } }, ek);
     }
-    const [u] = await tx`UPDATE events SET title=${f.title}, game=${f.game}, description=${f.description}, starts_at=${wallToUtc(f.starts_at, f.timezone).toISOString()}, ends_at=${wallToUtc(f.ends_at, f.timezone).toISOString()},
+    const startsAt = updatedInstant(f.starts_at, f.timezone, event.starts_at, event.timezone);
+    const endsAt = updatedInstant(f.ends_at, f.timezone, event.ends_at, event.timezone);
+    if (endsAt <= startsAt) {
+      return denyOutcome(422, "validation_failed", "The event fields did not validate.", { errors: { ends_at: ["The ends_at field must be a date after starts_at."] } }, ek);
+    }
+    const [u] = await tx`UPDATE events SET title=${f.title}, game=${f.game}, description=${f.description}, starts_at=${startsAt.toISOString()}, ends_at=${endsAt.toISOString()},
                          timezone=${f.timezone}, location=${f.location}, capacity=${f.capacity}, agent_version = agent_version + 1, updated_at = now()
                          WHERE event_key = ${ek} AND agent_version = ${doc.version as number} RETURNING status, agent_version`;
     if (!u) return denyOutcome(409, "stale_version", "The event changed since that version. Re-read and retry.", { agent_version: event.agent_version }, ek);
@@ -471,6 +481,13 @@ const proofFields = (e: Row) => ({
   timezone: e.timezone, location: e.location, capacity: e.capacity, status: e.status, agent_version: e.agent_version,
   proof_marker: e.proof_marker, discord_event_id: e.discord_event_id,
 });
+
+// Read speaks minute-precision wall text, not an offset. An unchanged endpoint
+// and zone must keep the exact instant, including a migrated second fold.
+function updatedInstant(wall: string, timezone: string, stored: Date | string, storedTimezone: string): Date {
+  const previous = new Date(stored);
+  return timezone === storedTimezone && wall === utcToWall(previous, timezone) ? previous : wallToUtc(wall, timezone);
+}
 
 function writeBackFor(eventKey: string, status: EventStatus): NonNullable<WriteBack> | undefined {
   return status === "published" || status === "cancelled" ? { eventKey, status } : undefined;

@@ -11,8 +11,13 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
 - All five operations use `events`, including nullable unique `agent_grant_id` and `proof_marker`, and
   `agent_version` (default 1). Human rows have no machine owner. A grant still owns at most one proof event;
   known foreign keys are refused. `update` requires the last read's integer `version` and increments it once.
+  Moderator edits, shifted recurrence children and moderator lifecycle changes also increment the version
+  on agent-owned rows, so an older agent update cannot overwrite a human correction. Lifecycle decisions
+  share the event-row lock across both writers; a cancelled event cannot be republished by a racing moderator.
 - Inputs/reads retain naive `YYYY-MM-DD HH:MM` wall strings and their IANA zone; storage uses UTC instants
   through the human form's DST resolver. Gaps are refused; fresh fold times use the first occurrence.
+  An unchanged wall string **and** zone preserve each stored endpoint exactly (including a migrated second
+  fold and sub-minute precision); changed walls/zones resolve afresh, with UTC end-after-start validation.
   Shared-row edits also enforce the Going capacity floor and promote available FIFO seats under the row lock.
 - Atomicity is Postgres only: `pg_advisory_xact_lock` per grant (create/read) or per event (mutations), with
   `lock_timeout` → `503 operation_busy`. Idempotency rows are re-checked under the lock, so concurrent duplicate
@@ -21,6 +26,8 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
 - The outer per-credential route shield (`AGENT_EVENTS_ROUTE_PER_MINUTE`, default 60/min) counts every hit
   per credential hash (anonymous per IP) before auth and the audit write; refused hits write nothing.
   Receipt window is the latest 50, chronological. Signer/digest/replay protocol assertions are unchanged.
+  Replay bodies are bound as text then cast to JSONB objects, independent of Drizzle's client serializers;
+  earlier double-encoded JSONB strings remain readable without rewriting the saved receipt.
 
 ## Publication and write-back
 

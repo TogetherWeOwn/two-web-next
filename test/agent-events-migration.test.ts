@@ -5,6 +5,8 @@ import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { testDatabaseUrl } from "./helpers/member-data-db";
+import { DEFAULT_CONFIG, handleAgentEvent } from "../src/agent-events/service";
+import { sha256Hex } from "../src/bot/signer";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url).href);
 const journal = JSON.parse(readFileSync(`${migrationsFolder}/meta/_journal.json`, "utf8")) as {
@@ -212,6 +214,77 @@ describe.skipIf(!process.env.DATABASE_URL)("1013 populated shared-agent-events m
       WHERE k.body->>'event_key' = e.event_key AND k.body->>'proof_marker' = e.proof_marker`;
     expect(references[0]!.n).toBe(legacyEvents.length);
     expect((await sql`SELECT to_regclass(${`${fixture.schemaName}.agent_events`}) AS retired`)[0]!.retired).toBeNull();
+  }, 30_000);
+
+  it("keeps both migrated fold instants through a read and title-only update, but resolves changed times/zones", async () => {
+    const sql = fixture.client;
+    const first = legacyEvents[0]!;
+    const credential = `migration-fixture-${randomUUID()}`;
+    const cfg = { ...DEFAULT_CONFIG, enabled: true, callerAgentId: "fixture-agent-0", stagingGuildId: "fixture-guild" };
+    await sql`UPDATE agent_event_grants SET verifier_hash = ${await sha256Hex(credential)} WHERE id = ${first.grant_id}`;
+    // Both endpoints are in the repeated hour. PostgreSQL migration chooses
+    // standard time, unlike the fresh-input resolver's first occurrence.
+    await sql`UPDATE agent_events SET timezone = 'Europe/London',
+      starts_at = '2026-10-25 01:10', ends_at = '2026-10-25 01:50' WHERE event_key = ${first.event_key}`;
+    await fixture.migrate();
+    const call = (op: string, rest: Record<string, unknown> = {}) => handleAgentEvent(sql, cfg,
+      { op, idempotency_key: randomUUID(), event_key: first.event_key, ...rest }, credential);
+    const read = await call("read");
+    expect(read.status).toBe(200);
+    const event = read.body.event as Record<string, unknown>;
+    expect(event).toMatchObject({ starts_at: "2026-10-25 01:10", ends_at: "2026-10-25 01:50", agent_version: 1 });
+    const snapshotTimes = async () => {
+      const [row] = await sql`SELECT starts_at, ends_at FROM events WHERE event_key = ${first.event_key}`;
+      return [new Date(row!.starts_at).toISOString(), new Date(row!.ends_at).toISOString()];
+    };
+    const original = ["2026-10-25T01:10:00.000Z", "2026-10-25T01:50:00.000Z"];
+    expect(await snapshotTimes()).toEqual(original);
+    expect((await call("update", { version: 1, fields: { ...event, title: "Title only" } })).status).toBe(200);
+    expect(await snapshotTimes()).toEqual(original);
+    // A changed end cannot resolve before the preserved second-fold start.
+    const invalid = await call("update", { version: 2, fields: { ...event, ends_at: "2026-10-25 01:20" } });
+    expect(invalid.status).toBe(422);
+    expect(invalid.body.errors).toHaveProperty("ends_at");
+    expect(await snapshotTimes()).toEqual(original);
+    // A changed start uses the first occurrence; the unchanged end stays exact.
+    expect((await call("update", { version: 2, fields: { ...event, starts_at: "2026-10-25 01:20" } })).status).toBe(200);
+    expect(await snapshotTimes()).toEqual(["2026-10-25T00:20:00.000Z", original[1]]);
+    // An explicit zone change must re-resolve even identical wall text.
+    expect((await call("update", { version: 3, fields: { ...event, timezone: "Europe/Paris" } })).status).toBe(200);
+    expect(await snapshotTimes()).toEqual(["2026-10-24T23:10:00.000Z", "2026-10-24T23:50:00.000Z"]);
+  }, 30_000);
+
+  it("stores object receipts and replays all five operations with a standalone postgres.js client", async () => {
+    await fixture.migrate();
+    const sql = fixture.client; // Never wrapped in drizzle(), like deployed ingress.
+    const credential = `standalone-fixture-${randomUUID()}`;
+    const cfg = { ...DEFAULT_CONFIG, enabled: true, callerAgentId: "standalone-fixture", stagingGuildId: "fixture-guild" };
+    await sql`INSERT INTO agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
+      VALUES (${cfg.callerAgentId}, 'fixture-company', ${cfg.stagingGuildId}, ${await sha256Hex(credential)})`;
+    const fields = { title: "Standalone client", game: null, description: null, location: "Voice", capacity: null,
+      starts_at: "2099-07-01 20:00", ends_at: "2099-07-01 22:00", timezone: "Europe/London" };
+    let event_key: string | undefined;
+    for (const op of ["create", "read", "update", "publish", "cancel"]) {
+      const body = { op, idempotency_key: randomUUID(), ...(event_key ? { event_key } : {}),
+        ...(op === "create" ? { fields } : op === "update" ? { version: 1, fields: { ...fields, title: "Edited" } } : {}) };
+      const original = await handleAgentEvent(sql, cfg, body, credential);
+      expect(original.status).toBe(op === "create" ? 201 : 200);
+      event_key ??= original.body.event_key as string;
+      const [stored] = await sql`SELECT jsonb_typeof(body) AS shape, body FROM agent_event_idempotency_keys WHERE key = ${body.idempotency_key}`;
+      expect(stored!.shape).toBe("object");
+      expect(stored!.body).toEqual(original.body);
+      const replay = await handleAgentEvent(sql, cfg, body, credential);
+      const { request_id: oldId, ...originalFields } = original.body;
+      expect(replay.status).toBe(original.status);
+      expect(replay.body).toEqual({ ...originalFields, replayed: true, request_id: expect.any(String) });
+      expect(replay.body.request_id).not.toBe(oldId);
+      // Preserve the prior standalone client's double-encoded evidence too.
+      await sql`UPDATE agent_event_idempotency_keys SET body = ${sql.json(JSON.stringify(original.body))} WHERE key = ${body.idempotency_key}`;
+      expect((await handleAgentEvent(sql, cfg, body, credential)).body)
+        .toEqual({ ...originalFields, replayed: true, request_id: expect.any(String) });
+      expect((await handleAgentEvent(sql, cfg, { ...body, fields: { ...fields, title: "Different payload" } }, credential)).body.reason)
+        .toBe("idempotency_conflict");
+    }
   }, 30_000);
 
   it("allows nullable human ownership, enforces shared uniqueness/FKs, and preserves events on grant deletion", async () => {
