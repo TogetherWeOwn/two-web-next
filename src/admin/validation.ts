@@ -86,9 +86,9 @@ const dtf = (tz: string) =>
     hour12: false,
   });
 
-function wallOfInstant(instantMs: number, tz: string): string {
+function wallOfInstant(instantMs: number, tz: string, formatter = dtf(tz)): string {
   const parts: Record<string, string> = {};
-  for (const p of dtf(tz).formatToParts(new Date(instantMs))) {
+  for (const p of formatter.formatToParts(new Date(instantMs))) {
     if (p.type !== "literal") parts[p.type] = p.value;
   }
   // en-GB can emit hour "24" for midnight; normalise to "00".
@@ -119,14 +119,16 @@ export function wallToUtc(raw: string, timezone: string): Date {
   // Keep only candidates that round-trip, then choose the earliest instant.
   // This also handles half-hour DST without assuming a one-hour change.
   const naiveMs = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi);
+  // Formatter setup is expensive; reuse it within this conversion only.
+  const formatter = dtf(timezone);
   const candidates = new Set<number>();
   for (const delta of [-36, 0, 36]) {
     const sample = naiveMs + delta * 3600_000;
-    const rendered = parseWall(wallOfInstant(sample, timezone));
+    const rendered = parseWall(wallOfInstant(sample, timezone, formatter));
     if (!rendered) continue;
     const renderedAsUtc = Date.UTC(rendered.y, rendered.mo - 1, rendered.d, rendered.h, rendered.mi);
     const candidate = naiveMs - (renderedAsUtc - sample);
-    if (wallOfInstant(candidate, timezone) === wallString(parts)) candidates.add(candidate);
+    if (wallOfInstant(candidate, timezone, formatter) === wallString(parts)) candidates.add(candidate);
   }
 
   // Gap check (TOG-6803): a time that never occurred has no candidate.

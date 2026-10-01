@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -97,6 +97,51 @@ test('transitive advisories require their own exception and new IDs invalidate i
   assert.equal(evaluate(report, allowlist).blocked.length, 2);
 });
 
+test('valid cycles preserve low/moderate policy and exact high/critical exceptions', () => {
+  for (const severity of ['low', 'moderate', 'high', 'critical']) {
+    const report = fixture('clean');
+    report.vulnerabilities = {
+      'fixture-a': { name: 'fixture-a', range: '1.0.0', severity, via: [{ source: 100001, severity }, 'fixture-b'] },
+      'fixture-b': { name: 'fixture-b', range: '1.0.0', severity, via: ['fixture-a'] },
+    };
+    report.metadata.vulnerabilities[severity] = 2;
+    report.metadata.vulnerabilities.total = 2;
+    const result = evaluate(report);
+    if (['low', 'moderate'].includes(severity)) {
+      assert.deepEqual(result.nonBlocking, ['fixture-a', 'fixture-b']);
+      assert.equal(result.blocked.length, 0);
+      continue;
+    }
+    assert.deepEqual(result.blocked.map((finding) => finding.advisoryIds), [[100001], [100001]]);
+    const allowlist = { version: 1, exceptions: ['fixture-a', 'fixture-b'].map((name) => ({
+      ...validException().exceptions[0], package: name, range: '1.0.0', severity,
+    })) };
+    assert.equal(evaluate(report, allowlist).allowed.length, 2);
+    assert.equal(evaluate(report, { ...allowlist, exceptions: allowlist.exceptions.slice(0, 1) }).blocked[0].package, 'fixture-b');
+    report.vulnerabilities['fixture-b'].via.push({ source: 100002, severity });
+    assert.equal(evaluate(report, allowlist).blocked.length, 2);
+    report.vulnerabilities['fixture-b'].via[1].severity = 'unrated';
+    assert.deepEqual(evaluate(report, allowlist).blocked.map((finding) => finding.severity), ['unknown', 'unknown']);
+  }
+});
+
+test('shared cyclic descendants are visited once per root without recursion', () => {
+  const report = fixture('clean');
+  // Repeated diamond paths previously caused exponential recursive expansion.
+  const length = 120;
+  for (let i = 0; i < length; i++) {
+    const name = `package-${i}`;
+    report.vulnerabilities[name] = { name, range: '*', severity: 'low',
+      via: i === length - 1 ? [{ source: 100001, severity: 'high' }, 'package-0']
+        : [...new Set([`package-${i + 1}`, `package-${Math.min(i + 2, length - 1)}`])] };
+  }
+  report.metadata.vulnerabilities.low = length;
+  report.metadata.vulnerabilities.total = length;
+  const result = evaluate(report);
+  assert.equal(result.blocked.length, length);
+  assert.ok(result.blocked.every((finding) => finding.severity === 'high' && finding.advisoryIds.length === 1));
+});
+
 test('malformed reports, registry errors, count mismatches and bad via references fail closed', () => {
   for (const report of [{}, [], { error: { code: 'E401' } }, { ...fixture('clean'), auditReportVersion: 1 },
     { ...fixture('clean'), metadata: { vulnerabilities: { total: 1 } } }]) {
@@ -133,9 +178,10 @@ test('severity counters must reconcile with total and individual package records
   assert.throws(() => evaluate(unexpected), /counter/);
 });
 
-test('real npm ignores inherited offline configuration only when the gate forces online', { timeout: 30_000 }, async () => {
+async function withRegistry(run) {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), 'deps-audit-online-'));
   const bulkBodies = [];
+  const advisory = { severity: 'high' };
   const server = createServer(async (request, response) => {
     response.setHeader('Content-Type', 'application/json');
     if (request.url === '/-/npm/v1/security/advisories/bulk') {
@@ -144,7 +190,7 @@ test('real npm ignores inherited offline configuration only when the gate forces
       const body = Buffer.concat(chunks);
       bulkBodies.push(JSON.parse(request.headers['content-encoding'] === 'gzip' ? gunzipSync(body) : body));
       response.end(JSON.stringify({ lodash: [{ id: 100001, title: 'Fixture advisory',
-        url: 'https://example.invalid/advisory/100001', severity: 'high', vulnerable_versions: '<4.17.21',
+        url: 'https://example.invalid/advisory/100001', severity: advisory.severity, vulnerable_versions: '<4.17.21',
         cwe: [], cvss: { score: 7.5, vectorString: null } }] }));
     } else if (request.url === '/lodash') {
       response.end(JSON.stringify({ name: 'lodash', 'dist-tags': { latest: '4.17.21' },
@@ -167,38 +213,78 @@ test('real npm ignores inherited offline configuration only when the gate forces
         'node_modules/lodash': { version: '4.17.20', resolved: `${registry}/lodash/-/lodash-4.17.20.tgz` } } }));
     // npm's environment and .npmrc both enable the bypass without a CLI override.
     writeFileSync(join(dir, '.npmrc'), `offline=true\nregistry=${registry}\ncache=${join(dir, 'cache')}\n`);
-    for (const offline of ['false', 'true', undefined]) {
-      const before = bulkBodies.length;
-      const env = { ...process.env, npm_config_registry: registry, npm_config_cache: join(dir, 'cache') };
-      delete env.npm_config_offline;
-      delete env.NPM_CONFIG_OFFLINE;
-      if (offline !== undefined) env.npm_config_offline = offline;
-      const child = spawn(process.execPath, [join(dir, 'ci/deps-audit.mjs')], {
-        env,
-        timeout: 15_000,
-      });
+    const env = { ...process.env, npm_config_registry: registry, npm_config_cache: join(dir, 'cache') };
+    delete env.npm_config_offline;
+    delete env.NPM_CONFIG_OFFLINE;
+    const execute = async (command, args, overrides = {}) => {
+      const child = spawn(command, args, { cwd: dir, env: { ...env, ...overrides }, timeout: 15_000 });
       let stdout = '', stderr = '';
       child.stdout.on('data', (chunk) => { stdout += chunk; });
       child.stderr.on('data', (chunk) => { stderr += chunk; });
       const [status] = await once(child, 'close');
-      assert.equal(status, 1, `offline=${offline}: ${stderr || stdout}`);
-      assert.ok(bulkBodies.length > before, `offline=${offline}: registry was not consulted`);
-      assert.deepEqual(bulkBodies[before], { lodash: ['4.17.20'] });
-      assert.equal(JSON.parse(stdout).blocked[0].package, 'lodash');
-    }
+      assert.ok([0, 1].includes(status), stderr || stdout);
+      return { status, stdout, stderr };
+    };
+    await run({ advisory, bulkBodies,
+      gate: (overrides) => execute(process.execPath, [join(dir, 'ci/deps-audit.mjs')], overrides),
+      audit: () => execute('npm', ['audit', '--offline=false', '--package-lock-only', '--json']),
+    });
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+test('real npm ignores inherited offline configuration only when the gate forces online', { timeout: 30_000 }, async () => {
+  await withRegistry(async ({ bulkBodies, gate }) => {
+    for (const offline of ['false', 'true', undefined]) {
+      const before = bulkBodies.length;
+      const result = await gate(offline === undefined ? {} : { npm_config_offline: offline });
+      assert.equal(result.status, 1, `offline=${offline}: ${result.stderr || result.stdout}`);
+      assert.ok(bulkBodies.length > before, `offline=${offline}: registry was not consulted`);
+      assert.deepEqual(bulkBodies[before], { lodash: ['4.17.20'] });
+      assert.equal(JSON.parse(result.stdout).blocked[0].package, 'lodash');
+    }
+  });
+});
+
+test('real npm gate bypasses a warmed installation cache after same-ID/range severity escalation', { timeout: 30_000 }, async () => {
+  await withRegistry(async ({ advisory, bulkBodies, gate, audit }) => {
+    advisory.severity = 'moderate';
+    const warm = await audit();
+    assert.equal(JSON.parse(warm.stdout).vulnerabilities.lodash.severity, 'moderate');
+    assert.equal((await gate()).status, 0);
+    advisory.severity = 'high';
+    const before = bulkBodies.length;
+    const stale = await audit();
+    assert.ok(bulkBodies.length > before, 'online warm-cache audit must contact the registry');
+    // Current npm retains moderate here; a future upstream cache fix may emit high.
+    assert.ok(['moderate', 'high'].includes(JSON.parse(stale.stdout).vulnerabilities.lodash.severity));
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const requests = bulkBodies.length;
+      const result = await gate();
+      assert.ok(bulkBodies.length > requests, 'gate must consult the registry after escalation');
+      assert.equal(result.status, 1, result.stderr || result.stdout);
+      assert.equal(JSON.parse(result.stdout).blocked[0].severity, 'high');
+      assert.deepEqual(JSON.parse(result.stdout).blocked[0].advisoryIds, [100001]);
+    }
+  });
 });
 
 test('CLI exit status: npm 0/1, findings, bad JSON, registry failure, and execution failure', () => {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), 'deps-audit-'));
   try {
     const npm = join(dir, 'npm');
+    const trace = join(dir, 'cache-trace');
     writeFileSync(npm, `#!/bin/sh
-[ "$*" = "audit --offline=false --package-lock-only --json --include=prod --include=dev --include=optional --include=peer" ] || exit 9
+[ "$1" = audit ] && [ "$2" = --offline=false ] || exit 9
+cache="\${3#--cache=}"
+[ "$cache" != "$3" ] && [ -d "$cache" ] || exit 9
+printf '%s\\n' "$cache" >> "$AUDIT_CACHE_TRACE"
+printf '%s' 'owned fixture marker' > "$cache/marker"
+shift 3
+[ "$*" = "--package-lock-only --json --include=prod --include=dev --include=optional --include=peer" ] || exit 9
 printf '%s' "$AUDIT_FIXTURE"
 exit "$AUDIT_STATUS"
 `);
@@ -222,13 +308,20 @@ exit "$AUDIT_STATUS"
       [JSON.stringify(fixture('clean')), 2, 1],
     ]) {
       const run = spawnSync(process.execPath, [script], {
-        env: { ...process.env, PATH: dir, AUDIT_FIXTURE: report, AUDIT_STATUS: String(npmStatus) }, encoding: 'utf8',
+        env: { ...process.env, PATH: dir, PAPERCLIP_RUN_SCRATCH_DIR: dir,
+          AUDIT_CACHE_TRACE: trace, AUDIT_FIXTURE: report, AUDIT_STATUS: String(npmStatus) }, encoding: 'utf8',
       });
       assert.equal(run.status, expected, run.stderr);
+      const caches = readFileSync(trace, 'utf8').trim().split('\n');
+      assert.equal(new Set(caches).size, caches.length, 'each invocation must use a unique cache');
+      assert.ok(caches.every((cache) => !existsSync(cache)), 'owned cache must be removed on success and failure');
     }
     rmSync(npm);
-    const missing = spawnSync(process.execPath, [script], { env: { ...process.env, PATH: dir }, encoding: 'utf8' });
+    const missing = spawnSync(process.execPath, [script], {
+      env: { ...process.env, PATH: dir, PAPERCLIP_RUN_SCRATCH_DIR: dir }, encoding: 'utf8',
+    });
     assert.equal(missing.status, 1);
+    assert.deepEqual(readdirSync(dir), ['cache-trace'], 'execution failures must also clean up');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

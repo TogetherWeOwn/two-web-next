@@ -17,7 +17,11 @@ including a loopback registry) and `npm run deps:audit` before installing
 dependencies. The audit reads `package-lock.json`, includes
 development/optional/peer dependencies, and blocks high, critical or unknown
 severity. It forces online auditing even when npm's environment or `.npmrc`
-enables offline mode. Invalid JSON, malformed/inconsistent severity counters,
+enables offline mode, using a fresh per-invocation cache rather than the restored
+installation cache (which can retain stale advisory severity). The owned audit
+cache is removed on success or failure. Cyclic `via` references are traversed
+once per reachable package, retaining every advisory ID and blocking severity.
+Invalid JSON, malformed/inconsistent severity counters, missing references,
 registry/process failures and invalid/expired exceptions also fail closed.
 Info/low/moderate findings do not block. Dependabot owns dependency upgrades;
 the gate never runs `npm audit fix`.

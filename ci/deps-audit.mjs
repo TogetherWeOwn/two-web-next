@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const knownSeverities = new Set(['info', 'low', 'moderate', 'high', 'critical']);
@@ -65,27 +66,37 @@ export function evaluateAudit(report, allowlist, today = new Date().toISOString(
 
   // npm's string "via" entries reference another vulnerable package. Include its
   // advisory IDs so a new transitive advisory cannot silently inherit an exception.
-  function advisories(name, path = new Set()) {
-    const vulnerability = vulnerabilities[name];
-    if (path.has(name) || !isObject(vulnerability) || vulnerability.name !== name
-      || !text(vulnerability.range) || !Array.isArray(vulnerability.via) || vulnerability.via.length === 0) {
-      throw new Error(`Invalid vulnerability or cyclic via reference for ${name}`);
-    }
+  function advisories(name) {
+    const visited = new Set([name]);
+    const pending = [name];
     const ids = new Set();
-    const severities = [vulnerability.severity];
-    for (const via of vulnerability.via) {
-      if (typeof via === 'string') {
-        const nested = advisories(via, new Set([...path, name]));
-        nested.ids.forEach((id) => ids.add(id));
-        severities.push(...nested.severities);
-      } else if (isObject(via) && Number.isSafeInteger(via.source) && via.source > 0) {
-        ids.add(via.source);
-        severities.push(via.severity);
-      } else {
-        throw new Error(`Invalid advisory for ${name}`);
+    const severities = new Set();
+    // Valid npm metavulnerability graphs can contain cycles. Each reachable
+    // package is visited once per root, bounding work even for shared descendants.
+    while (pending.length > 0) {
+      const current = pending.pop();
+      const vulnerability = Object.hasOwn(vulnerabilities, current) ? vulnerabilities[current] : undefined;
+      if (!isObject(vulnerability) || vulnerability.name !== current
+        || !text(vulnerability.range) || !Array.isArray(vulnerability.via) || vulnerability.via.length === 0) {
+        throw new Error(`Invalid vulnerability or via reference for ${current}`);
+      }
+      severities.add(vulnerability.severity);
+      for (const via of vulnerability.via) {
+        if (typeof via === 'string') {
+          if (!visited.has(via)) {
+            visited.add(via);
+            pending.push(via);
+          }
+        } else if (isObject(via) && Number.isSafeInteger(via.source) && via.source > 0) {
+          ids.add(via.source);
+          severities.add(via.severity);
+        } else {
+          throw new Error(`Invalid advisory for ${current}`);
+        }
       }
     }
-    return { ids: [...ids].sort((a, b) => a - b), severities };
+    if (ids.size === 0) throw new Error(`No reachable advisory for ${name}`);
+    return { ids: [...ids].sort((a, b) => a - b), severities: [...severities] };
   }
 
   const result = { blocked: [], allowed: [], nonBlocking: [] };
@@ -111,20 +122,25 @@ export function evaluateAudit(report, allowlist, today = new Date().toISOString(
 
 export function runAudit() {
   // No install scripts, node_modules or application/database credentials needed.
-  // Offline npm can emit a clean report without consulting the registry. CLI
-  // configuration overrides both inherited npm_config_offline and .npmrc files.
-  const audit = spawnSync('npm', ['audit', '--offline=false', '--package-lock-only', '--json', '--include=prod', '--include=dev', '--include=optional', '--include=peer'], {
-    cwd: root, encoding: 'utf8', timeout: 120_000, maxBuffer: 16 * 1024 * 1024,
-  });
-  if (audit.error || ![0, 1].includes(audit.status)) {
-    throw new Error('npm audit did not complete successfully');
+  // npm's advisory cache can retain old severity even after an online response.
+  // Override inherited config with a fresh, owned cache for every invocation.
+  const cache = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), 'deps-audit-cache-'));
+  try {
+    const audit = spawnSync('npm', ['audit', '--offline=false', `--cache=${cache}`, '--package-lock-only', '--json', '--include=prod', '--include=dev', '--include=optional', '--include=peer'], {
+      cwd: root, encoding: 'utf8', timeout: 120_000, maxBuffer: 16 * 1024 * 1024,
+    });
+    if (audit.error || ![0, 1].includes(audit.status)) {
+      throw new Error('npm audit did not complete successfully');
+    }
+    const report = JSON.parse(audit.stdout);
+    const allowlist = JSON.parse(readFileSync(new URL('./deps-audit-allowlist.json', import.meta.url), 'utf8'));
+    const result = evaluateAudit(report, allowlist);
+    // Do not print raw registry responses or stderr; only policy findings.
+    console.log(JSON.stringify(result, null, 2));
+    if (result.blocked.length > 0) process.exitCode = 1;
+  } finally {
+    rmSync(cache, { recursive: true, force: true });
   }
-  const report = JSON.parse(audit.stdout);
-  const allowlist = JSON.parse(readFileSync(new URL('./deps-audit-allowlist.json', import.meta.url), 'utf8'));
-  const result = evaluateAudit(report, allowlist);
-  // Do not print raw registry responses or stderr; only policy findings.
-  console.log(JSON.stringify(result, null, 2));
-  if (result.blocked.length > 0) process.exitCode = 1;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
