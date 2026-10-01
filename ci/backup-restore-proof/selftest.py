@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
+sys.dont_write_bytecode = True  # keep import caches out of the harness tree
 spec = importlib.util.spec_from_file_location("proof", HERE / "run.py")
 proof = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(proof)
