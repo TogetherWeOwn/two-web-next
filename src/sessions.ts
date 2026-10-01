@@ -22,7 +22,7 @@ export type DbSessionRow = {
 export type SessionStore = {
   create: (session: DbSessionRow & { tokenHash: string; expiresAt: Date }) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
-  /** Rotation: delete the old row and insert the replacement atomically. */
+  /** Rotation: atomically replace an unrevoked, unexpired source; otherwise return false. */
   rotate: (
     oldTokenHash: string,
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
@@ -92,15 +92,26 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       return row ? toRow(row) : null;
     },
     async rotate(oldTokenHash, replacement) {
-      // No-op rotation deletes nothing and inserts nothing: rotating an unknown
-      // or already-rotated token must not mint an orphan row.
+      // Lock before checking eligibility, including no-op rotation. Materializing
+      // the locked row keeps the wall-clock check after any lock wait; now() is
+      // pinned to transaction start and could renew an expired session.
       if (oldTokenHash === replacement.tokenHash) {
-        const rows = await sql<Record<string, unknown>[]>`select count(*)::int as n
-          from web_sessions where token_hash = ${oldTokenHash}`;
+        const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
+            select token_hash, revoked_at, expires_at from web_sessions
+            where token_hash = ${oldTokenHash} for update
+          )
+          select count(*)::int as n from locked
+          where revoked_at is null and expires_at > clock_timestamp()`;
         return Number(rows[0]?.n ?? 0) > 0;
       }
-      const rows = await sql<Record<string, unknown>[]>`with deleted as (
-          delete from web_sessions where token_hash = ${oldTokenHash} returning 1
+      const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
+          select token_hash, revoked_at, expires_at from web_sessions
+          where token_hash = ${oldTokenHash} for update
+        ), deleted as (
+          delete from web_sessions using locked
+          where web_sessions.token_hash = locked.token_hash
+            and locked.revoked_at is null and locked.expires_at > clock_timestamp()
+          returning 1
         )
         insert into web_sessions (token_hash, user_id, username, avatar, member, moderator, expires_at)
         select ${replacement.tokenHash}, ${replacement.userId}, ${replacement.username},

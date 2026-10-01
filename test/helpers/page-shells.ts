@@ -35,7 +35,7 @@ export const concretePath = (pattern: string) => pattern
 export function pageShellFixture(status = "published") {
   const now = new Date("2030-01-01T20:00:00Z");
   const event: typeof events.$inferSelect = {
-    id: 1, eventKey: EVENT_KEY, title: "Fixture game night", game: "Chess", description: "Play together.",
+    id: 1, icsSequence: 1n, eventKey: EVENT_KEY, title: "Fixture game night", game: "Chess", description: "Play together.",
     startsAt: now, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "UTC", location: "Lobby",
     capacity: null, status, discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: MEMBER_ID, rsvpOpen: true,

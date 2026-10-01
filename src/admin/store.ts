@@ -12,6 +12,8 @@
 
 import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
+import { parseFeaturedListQuery } from "./table-list";
+import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { activityLog, events, featuredContents, memberDataAccessLogs, rsvps } from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
@@ -27,7 +29,7 @@ export type FeaturedRow = typeof featuredContents.$inferSelect;
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
 
-const AUDIT_EXCLUDE = new Set(["discordEventId"]);
+const AUDIT_EXCLUDE = new Set(["discordEventId", "icsSequence"]);
 
 function dirty<T extends Record<string, unknown>>(before: T, after: Partial<T>): Record<string, { before: unknown; after: unknown }> {
   const out: Record<string, { before: unknown; after: unknown }> = {};
@@ -490,15 +492,17 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
   });
 }
 
-export async function listFeatured(db: Db, opts: { published?: boolean }): Promise<FeaturedRow[]> {
-  if (opts.published !== undefined) {
-    return db
-      .select()
-      .from(featuredContents)
-      .where(eq(featuredContents.isPublished, opts.published))
-      .orderBy(asc(featuredContents.position));
-  }
-  return db.select().from(featuredContents).orderBy(asc(featuredContents.position));
+export async function listFeatured(
+  db: Db,
+  opts: { published?: boolean; q?: string; sort?: string; order?: string },
+): Promise<FeaturedRow[]> {
+  const query = parseFeaturedListQuery({ q: opts.q, sort: opts.sort, order: opts.order });
+  const conds = [];
+  if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
+  if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
+  const column = query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
+  const order = query.order === "desc" ? desc(column) : asc(column);
+  return db.select().from(featuredContents).where(and(...conds)).orderBy(order, asc(featuredContents.id));
 }
 
 /** Imported source IDs are independent of native IDs; never fall back to a native match. */
