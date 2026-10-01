@@ -103,3 +103,15 @@ describe("private fixed-probe entrypoint", () => {
     expect(JSON.stringify(result)).not.toContain("do-not-serialize");
   });
 });
+
+describe("preflight refusal diagnosis", () => {
+  it("names failed predicates without leaking values", async () => {
+    const { refusalReasons } = await import("../spike/hyperdrive-semantics/remote-worker");
+    const env = environment();
+    expect(refusalReasons(env)).toEqual([]);
+    expect(refusalReasons(env, Date.now() + 301_000)).toEqual(["receipt_stale_or_unparseable_time"]);
+    const bad = { ...env, DB: { ...env.DB, user: "x", password: "" } } as unknown as ReturnType<typeof environment>;
+    expect(refusalReasons(bad)).toEqual(["binding_user_mismatch", "binding_password_missing"]);
+    expect(refusalReasons({ ...env, PREFLIGHT: "{" })).toContain("receipt_unparseable");
+  });
+});

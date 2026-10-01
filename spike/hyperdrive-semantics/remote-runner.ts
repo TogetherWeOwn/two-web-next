@@ -95,7 +95,7 @@ export function buildPreviewLaunch(wrangler: string, dir: string, config: string
 }
 
 type RemoteResult = Partial<import("./staging-checks").StagingResult> & {
-  ok: boolean; cleanup: boolean | "not_verified"; error?: string; path?: string;
+  ok: boolean; cleanup: boolean | "not_verified"; error?: string; path?: string; refusal?: string[];
 };
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -117,6 +117,11 @@ export function parseRemoteResult(value: unknown): RemoteResult {
   if (result.error === "remote_staging_preflight_refused") {
     if (result.ok || result.cleanup !== true || value.schema !== undefined || value.created !== undefined ||
         checkFields.some((field) => value[field] !== undefined)) return invalid();
+    if (value.refusal !== undefined) {
+      if (!Array.isArray(value.refusal) || value.refusal.length > 8 ||
+          !value.refusal.every((r) => typeof r === "string" && /^[a-z_]{3,48}$/.test(r))) return invalid();
+      result.refusal = value.refusal as string[];
+    }
     return result;
   }
   if (![true, false, "not_verified"].includes(value.created as boolean | string)) return invalid();
