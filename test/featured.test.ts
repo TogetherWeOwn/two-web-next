@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/postgres-js";
-import app from "../src/index";
+import app from "./app";
 import { featuredContents } from "../src/db/admin-schema";
 import { FEATURED_READ_DEADLINE_MS, listVisibleFeatured } from "../src/featured";
 import * as eventReads from "../src/events/reads";

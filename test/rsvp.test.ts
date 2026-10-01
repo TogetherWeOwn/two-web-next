@@ -9,7 +9,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import type { QueueMessage } from "../src/jobs/types";

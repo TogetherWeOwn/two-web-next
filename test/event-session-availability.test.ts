@@ -1,7 +1,7 @@
 // Mounted guest pages must not depend on session DDL. All persistence is mocked.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { getPublicEvent, listGoingAttendees, type PublicEvent } from "../src/events/reads";
 import { env, EVENT_KEY, SUBJECT } from "./helpers/member-data";
 

@@ -4,7 +4,7 @@ import { createEvent, updateEvent } from "../src/admin/store";
 import type { EventFormInput } from "../src/admin/validation";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { buildSyncMessage, enqueueEventSync } from "../src/events/sync";
 import { consume } from "../src/jobs/consumer";

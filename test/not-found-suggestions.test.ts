@@ -3,7 +3,7 @@ import { jsx } from "hono/jsx/jsx-runtime";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NotFoundPage } from "../src/errors";
-import app from "../src/index";
+import app from "./app";
 import * as adminDb from "../src/admin/db";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Db } from "../src/db/index";
@@ -94,6 +94,7 @@ describe("404 optional event lookup", () => {
       fixture(0, "draft"), fixture(0, "cancelled"), fixture(0, "past"),
       fixture(0, "published", "2026-09-30T20:00:00Z"),
     ]);
+    const acquire = vi.spyOn(adminDb, "dbFor");
     const sessions = sessionTrap();
     const res = await app.request("/lost/link", { headers: { cookie: "__Host-two_session=existing-token" } },
       { ...baseEnv, ADMIN_DB: db, SESSION_STORE: sessions.store } as EnvWithAdminDb);
@@ -109,6 +110,7 @@ describe("404 optional event lookup", () => {
     expect(html).not.toContain('href="/e/game-0"');
     expect(html).not.toContain('href="/e/game-4"');
     expect(sessions.accessed).not.toHaveBeenCalled();
+    expect(acquire).toHaveBeenCalledOnce();
     expect(queries).toHaveLength(2);
     expect(queries[0]!.sql).toContain("set_config('lock_timeout', $1, true)");
     expect(queries[0]!.sql).toContain("set_config('statement_timeout', $2, true)");

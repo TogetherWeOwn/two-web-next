@@ -2,7 +2,7 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import app from "../../src/index";
+import app from "../app";
 import { events, featuredContents } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import { joinAttempts } from "../../src/db/schema";
