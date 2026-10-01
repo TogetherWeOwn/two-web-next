@@ -37,7 +37,7 @@ import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttle
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody, upHttpStatus } from "./up";
+import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 
@@ -419,11 +419,12 @@ app.get("/up", async (c) => {
     // Two slots when shared, one per client otherwise: queue cannot starve DB.
     const sql = connect(url, shared ? 2 : 1);
     const queueSql = shared ? sql : connect(queueUrl, 1);
-    const body = await upBody(queueSql ? () => pgQueueDepth(queueSql) : null, sql);
+    const body = await upBody(queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null, sql);
     return c.json(body, upHttpStatus(body));
   } finally {
-    // Terminate request-owned work on timeout without extending the response
-    // deadline to drain it. An injected client owns its own lifecycle.
+    // Close request-owned clients without waiting to drain. Transaction-local
+    // server limits bound active queries; disconnect alone is not cancellation.
+    // An injected client owns its own lifecycle.
     for (const sql of owned) {
       const closed = sql.end({ timeout: 0 }).catch(() => {});
       try { c.executionCtx.waitUntil(closed); } catch { void closed; }

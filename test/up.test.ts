@@ -1,8 +1,9 @@
 // route-inventory: GET /up
 import { describe, expect, it, vi } from "vitest";
+import type { Sql, TransactionSql } from "postgres";
 import app from "./app";
 import type { Env } from "../src/env";
-import { databaseReadiness, pendingWebMigrations, QUEUE_CRITICAL_AT, QUEUE_READ_TIMEOUT_MS, QUEUE_WARN_AT, upBody, WEB_MIGRATIONS } from "../src/up";
+import { databaseReadiness, pendingWebMigrations, QUEUE_CRITICAL_AT, QUEUE_READ_TIMEOUT_MS, QUEUE_WARN_AT, upBody, WEB_MIGRATIONS, withHealthReadTimeout } from "../src/up";
 import { healthSql } from "./helpers/up";
 
 const env: Env = {
@@ -129,6 +130,50 @@ describe("GET /up", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ db: "error", pending_migrations: null, queue: { status: "unknown" } });
     expect(res.headers.get("x-two-origin")).toBe("two-web-next");
+  });
+});
+
+describe("/up transaction-local server budgets", () => {
+  it.each([[3000, "1000ms", "750ms"], [450, "200ms", "199ms"]])(
+    "uses a read-only scoped connection and shrinks limits for %i ms remaining", async (remaining, statement, lock) => {
+      vi.useFakeTimers();
+      const query = vi.fn(async () => []);
+      const tx = query as unknown as TransactionSql;
+      const begin = vi.fn(async (_options: string, read: (tx: TransactionSql) => Promise<unknown>) => read(tx));
+      const read = vi.fn(async () => "measured");
+      try {
+        expect(await withHealthReadTimeout({ begin } as unknown as Sql, read, Date.now() + Number(remaining))).toBe("measured");
+        expect(begin.mock.calls[0]?.[0]).toBe("read only");
+        const [strings, ...values] = query.mock.calls[0] as unknown as [TemplateStringsArray, ...unknown[]];
+        expect(strings.join("?")).toContain("set_config('statement_timeout', ?, true)");
+        expect(strings.join("?")).toContain("set_config('lock_timeout', ?, true)");
+        expect(values).toEqual([statement, lock]);
+        expect(read).toHaveBeenCalledExactlyOnceWith(tx);
+      } finally { vi.useRealTimers(); }
+    },
+  );
+
+  it("starts no read when connection acquisition consumes the response budget", async () => {
+    vi.useFakeTimers();
+    const query = vi.fn(async () => []);
+    const begin = async (_options: string, read: (tx: TransactionSql) => Promise<unknown>) => {
+      vi.setSystemTime(Date.now() + 2800);
+      return read(query as unknown as TransactionSql);
+    };
+    const read = vi.fn(async () => []);
+    try {
+      await expect(withHealthReadTimeout({ begin } as unknown as Sql, read)).rejects.toThrow("Health read deadline elapsed");
+      expect(query).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("fails closed rather than issuing an unbounded read if timeout setup fails", async () => {
+    const query = vi.fn(async () => { throw new Error("setting refused"); });
+    const begin = async (_options: string, read: (tx: TransactionSql) => Promise<unknown>) => read(query as unknown as TransactionSql);
+    const read = vi.fn(async () => []);
+    await expect(withHealthReadTimeout({ begin } as unknown as Sql, read)).rejects.toThrow("setting refused");
+    expect(read).not.toHaveBeenCalled();
   });
 });
 

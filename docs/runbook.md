@@ -163,10 +163,20 @@ web migration. An empty ledger counts all bundled web migrations as pending; a
 missing, unreadable or malformed ledger reports `null`, never a false zero.
 Volatile `clock_timestamp()` in both DB queries avoids Hyperdrive query caching.
 
-DB ping + ledger share a **3-second deadline**, running in parallel with the
-existing 3-second queue deadline. A timed-out request-owned client is terminated
-without waiting for its queries to drain. Exception messages, SQL and credentials
-are never returned/logged by this health path.
+DB ping + ledger share a **3-second response deadline**, running in parallel with
+the existing 3-second queue deadline. Each ping, ledger and queue read runs in a
+short read-only transaction with transaction-local **1-second statement** and
+**750-ms lock** limits. After connection acquisition, these limits shrink to the
+remaining response budget (with a 250-ms margin); an expired budget starts no
+read. Server limits abort active work even when disconnect alone would leave a
+lock-waiting backend. Request-owned clients close without waiting to drain;
+injected clients retain their own lifecycle. No session/global settings or
+migrations are changed. Exception messages, SQL and credentials are never
+returned/logged by this health path.
+
+Sources: [PostgreSQL statement/lock timeouts](https://www.postgresql.org/docs/current/runtime-config-client.html#RUNTIME-CONFIG-CLIENT-STATEMENT),
+[Hyperdrive transaction-scoped SET](https://developers.cloudflare.com/hyperdrive/concepts/connection-pooling/),
+[Postgres.js transactions](https://github.com/porsager/postgres#transactions).
 
 | DB/schema outcome | HTTP | `db` | `pending_migrations` | Top-level `status` |
 | --- | --- | --- | --- | --- |
@@ -181,7 +191,7 @@ Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready*
 | --- | --- | --- |
 | Read succeeds, `pending < 20` | `healthy` | `healthy`, measured values |
 | `pending >= 20` (including `>= 100`) | `degraded` | `degraded`, measured values |
-| Read rejects or takes over 3 seconds | `healthy` | `unknown`, all six measurements `null`, `detail: null` |
+| Read rejects or reaches a server/response limit | `healthy` | `unknown`, all six measurements `null`, `detail: null` |
 | No usable queue client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
 
 The deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`** and the
@@ -225,8 +235,9 @@ Do not remove the binding or inject an alternate credential to mask a configured
 outage: **missing configuration is not the same as an unreachable database**.
 Normal web stores prefer `DATABASE_URL`, otherwise `DB.connectionString`
 ([src/db/connection.ts](../src/db/connection.ts)); failure does not try the
-other connection. `/up` prefers `DB`; jobs prefer `HYPERDRIVE`, then `DB`, then
-`DATABASE_URL`. The removed `/db-ping`, `/health` and `/healthz` routes are
+other connection. `/up` DB/schema readiness uses that same web-store selection;
+only its queue slice prefers `DB`, then `DATABASE_URL`. Jobs prefer `HYPERDRIVE`,
+then `DB`, then `DATABASE_URL`. The removed `/db-ping`, `/health` and `/healthz` routes are
 ordinary unknown paths (404), not diagnostics. Never test production; staging
 E2E needs verified staging bindings.
 

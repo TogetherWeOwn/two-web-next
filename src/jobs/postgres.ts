@@ -145,7 +145,7 @@ export type QueueDepth = {
  * counted even when claimed, same as legacy). Throws on driver/table error — the
  * caller maps that to `queue.status: unknown`, never a 500.
  */
-export async function pgQueueDepth(sql: Sql): Promise<QueueDepth> {
+export async function pgQueueDepth(sql: Sql | postgres.TransactionSql): Promise<QueueDepth> {
   const [row] = await sql`
     select
       count(*) filter (where available_at <= now() and reserved_at is null)::int as pending,
