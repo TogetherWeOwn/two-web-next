@@ -6,6 +6,8 @@ bytes even with an understated or invalid `Content-Length`, and cancels the
 source upload on overflow. An advertised over-budget length is rejected without
 reading the body. Existing authentication, field validation and throttles remain
 in place; authenticated-only route groups may reject a guest before the limiter.
+The global trusted-host and same-origin gates run before route admission or
+buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
 Shared throttles run before buffering: oversized attempts consume admission
 budget and an exhausted bucket returns 429 without pulling the upload. The QA
 environment gate runs first, so a disabled seam always returns 404 without reads
@@ -25,7 +27,7 @@ including field names, escaping, multipart boundaries and metadata:
 | `form` | 65,536 | Profile PATCH/form POST; admin event create/update | Profile bio 1,000 code points, games_text 1,700 (20 games × 80 plus separators), per legacy UpdateProfileRequest (`src/profiles/validation.ts`, `docs/w10-islands-respec.md`). 2,700 four-byte Unicode code points need at most 32,400 bytes when percent-encoded; 64 KiB accommodates form keys, `_method`, trap fields and multipart framing. Also covers the smaller admin event form. |
 | `agent` | 32,768 | `/api/agent-events` | StoreEventRequest maxima: title/game 100, description 1,000, location 255, timezone 64 code points (`src/agent-events/service.ts`, `validateFields`), plus idempotency_key 255 UTF-16 units. Even JSON-escaped surrogate pairs fit well below 32 KiB with the operation/version/key envelope. |
 | `featured` | 262,144 | Admin featured create/update | The four bounded title/URL/image/alt strings are 255 code units each (`src/admin/validation.ts`, `parseFeaturedForm`), but featured `body` has **no legacy field maximum in this port**. 256 KiB is an explicit new total editorial-body transport allowance, not a claim of legacy equivalence; large submissions receive 413 instead of consuming unbounded memory. |
-| `action` | 4,096 | Logout, QA login, publish/cancel, featured delete, RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. |
+| `action` | 4,096 | Logout, QA login, publish/cancel, RSVP pause/reopen (public and admin), featured delete, RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. |
 
 Validation still determines which inputs are legitimate. Trimming, game
 normalization, unknown fields and some unrestricted ancillary fields mean there
@@ -56,5 +58,7 @@ not an exception to bounded bodies.
 uncapped registration and pins the existing ALL-method middleware/fallback
 paths. It tests every shared class at limit and limit+1, every registered limited
 endpoint at both boundaries, misleading lengths, UTF-8 bytes and unbounded
-chunked streams using memory sessions/local fixtures only. The separate local
+chunked streams using memory sessions/local fixtures only. Admission regressions
+also assert zero upload pulls and no throttle queries when trusted-host or
+same-origin gates refuse advertised and chunked overflow. The separate local
 `spike/hyperdrive-semantics` probe Worker is not a deployed app write route.

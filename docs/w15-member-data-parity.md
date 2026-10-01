@@ -21,8 +21,21 @@ Test aliases:
 | `/profile`, `/members/:user` | OAuth 302, no contents | 403, no contents | Same profile fields; owner-only form | Identical fields, no added edit privilege |
 | Profile PATCH / POST `_method=PATCH` | OAuth 302, no write | 403, no write | Owner only; other member 403 | Owner only; other member 403 |
 | Every registered admin GET | OAuth 302 | 403, no login loop | 403, no login loop | 200 (missing resource 404), private/no-store |
-| Public pages/event page | Public event/aggregate data only | Same public representation | Same public representation | Same published-event representation |
+| Other public pages | Public event/aggregate data only | Same public representation | Same public representation | Same published-event representation |
+| `/e/:key` attendee list | No names/links/list count | No names/links/list count | Going names + profile links, logged, private/no-store | Same member representation; draft view allowed |
 | `/events.json` | 401 | W8 session gate; no attendee representation | Event data/counts, not attendee names | W8 includes drafts; no attendee representation |
+
+`test/event-attendees.test.ts` covers the mounted event page's four roles,
+original RSVP `created_at ASC` ordering (ID tie-break), status/event filtering,
+escaping, missing users, empty names, self-exclusion and real failed access-log
+INSERTs (enforced 503, explicitly disabled enforcement 200). One access-log row
+names all rendered subjects except the viewer; guests never query the identity
+projection. All normal event HTML is `private, no-store` because the guest join
+pitch also depends on the session; `Vary: Cookie` preserves explicit viewer
+separation. State banners and canonical sharing coexist with the logged list.
+The next roster has `username`, not a separate `display_name`; the list uses that
+same visible name as profiles. Profile links are an explicit addition in this
+slice; the legacy markup displayed names only.
 
 E asserts all private reads on the **mounted application**, all registered admin
 GETs across the four roles, direct/form outsider writes, and public HTML/source

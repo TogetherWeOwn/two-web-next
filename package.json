@@ -8,7 +8,10 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm run test",
+    "test:coverage": "vitest run --coverage",
+    "test:admin-properties": "vitest run test/admin-validation.property.test.ts",
+    "check": "npm run typecheck && npm run config:check && npm run test",
+    "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check"
@@ -21,8 +24,10 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260929.1",
     "@types/node": "^26.6.3",
+    "@vitest/coverage-v8": "^5.0.2",
     "drizzle-kit": "^0.31.11",
     "esbuild": "0.28.1",
+    "fast-check": "4.10.2",
     "miniflare": "5.20260926.1-alpha",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",

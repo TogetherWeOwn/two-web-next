@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { BODY_LIMIT_BYTES, bodyLimitClass, requestBodyLimit, type BodyClass } from "../src/body-limit";
-import app from "../src/index";
+import rawApp from "../src/index";
+import app from "./app";
 import { cspReportsRoute, MAX_CSP_REPORT_BYTES } from "../src/csp-reports";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { serializeSigned } from "hono/utils/cookie";
@@ -12,7 +13,7 @@ const encoder = new TextEncoder();
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const writeRoutes = new Map<string, BodyClass | undefined>();
-for (const route of app.routes.filter((r) => MUTATING.has(r.method))) {
+for (const route of rawApp.routes.filter((r) => MUTATING.has(r.method))) {
   const key = `${route.method} ${route.path}`;
   writeRoutes.set(key, bodyLimitClass(route.handler) ?? writeRoutes.get(key));
 }
@@ -25,10 +26,10 @@ describe("every registered write route is body-limited", () => {
   it("has a route limiter everywhere except the already-capped CSP sink", () => {
     expect(writeRoutes.size).toBeGreaterThan(10);
     expect([...writeRoutes].filter(([key, kind]) => !kind && key !== CSP_ROUTE)).toEqual([]);
-    expect(app.routes.some((r) => `${r.method} ${r.path}` === CSP_ROUTE && r.handler === cspReportsRoute)).toBe(true);
+    expect(rawApp.routes.some((r) => `${r.method} ${r.path}` === CSP_ROUTE && r.handler === cspReportsRoute)).toBe(true);
     expect(MAX_CSP_REPORT_BYTES).toBe(8192);
     // ALL handlers must not become a back door for a new write endpoint.
-    const allPaths = [...new Set(app.routes.filter((r) => r.method === "ALL").map((r) => r.path))];
+    const allPaths = [...new Set(rawApp.routes.filter((r) => r.method === "ALL").map((r) => r.path))];
     expect(allPaths.sort()).toEqual(["/*", "/admin/*", "/events/:key/rsvp", "/members/*", "/profile"].sort());
   });
 
@@ -52,7 +53,7 @@ describe("every registered write route is body-limited", () => {
         } as unknown as Env;
         const cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, { path: "/", secure: true })).split(";")[0]!;
         const response = await app.request(path, {
-          method, body: "x".repeat(bytes), headers: { cookie, accept: "application/json", "content-type": "application/json" },
+          method, body: "x".repeat(bytes), headers: { cookie, origin: env.APP_URL, accept: "application/json", "content-type": "application/json" },
         }, env);
         if (bytes === max) expect(response.status).not.toBe(413);
         else {

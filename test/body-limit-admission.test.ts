@@ -1,7 +1,8 @@
 import { Hono, type Context } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import rawApp from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { BODY_LIMIT_BYTES, bodyLimitClass, requestBodyLimit, type BodyClass } from "../src/body-limit";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, isThrottleMiddleware, type EnvWithThrottle } from "../src/throttle";
@@ -10,11 +11,11 @@ import { createMemorySessionStore, hashToken, newSessionToken, type Sql } from "
 
 const ERROR = { reason: "payload_too_large", message: "Reduce the size of your request and try again." };
 const mutating = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const sharedRoutes = [...new Set(app.routes.filter((r) => mutating.has(r.method) && isThrottleMiddleware(r.handler)).map((r) => `${r.method} ${r.path}`))];
+const sharedRoutes = [...new Set(rawApp.routes.filter((r) => mutating.has(r.method) && isThrottleMiddleware(r.handler)).map((r) => `${r.method} ${r.path}`))];
 
 function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");
-  const kind = app.routes.filter((r) => `${r.method} ${r.path}` === key).map((r) => bodyLimitClass(r.handler)).find(Boolean) as BodyClass;
+  const kind = rawApp.routes.filter((r) => `${r.method} ${r.path}` === key).map((r) => bodyLimitClass(r.handler)).find(Boolean) as BodyClass;
   const path = pattern!.replace(":key", "test-event").replace(":id", "1").replace(":identity", "qa-member");
   const budget = path.startsWith("/auth/qa/") ? AUTH_THROTTLE_PER_MINUTE : WRITE_THROTTLE_PER_MINUTE;
   return { method: method!, path, max: BODY_LIMIT_BYTES[kind], budget };
@@ -48,12 +49,12 @@ async function sessionEnv(sql: Sql) {
   return { env, cookie };
 }
 
-function upload(path: string, method: string, cookie: string, max: number, advertised: boolean) {
+function upload(path: string, method: string, cookie: string, max: number, advertised: boolean, appUrl: string = STAGING_APP_URL) {
   const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => controller.enqueue(new Uint8Array(1024)));
   const body = new ReadableStream({ pull }, { highWaterMark: 0 });
-  const headers: Record<string, string> = { cookie, accept: "application/json" };
+  const headers: Record<string, string> = { cookie, origin: appUrl, accept: "application/json" };
   if (advertised) headers["content-length"] = String(max + 1);
-  const request = new Request(`http://localhost${path}`, { method, body, headers, duplex: "half" } as RequestInit);
+  const request = new Request(new URL(path, appUrl), { method, body, headers, duplex: "half" } as RequestInit);
   return { request, pull };
 }
 
@@ -62,7 +63,7 @@ describe("shared throttles admit before buffering", () => {
     const { method, path, max, budget } = routeInfo(key);
     const { sql, count } = throttleFixture(budget);
     const { env, cookie } = await sessionEnv(sql as unknown as Sql);
-    const empty = await app.request(path, { method, headers: { cookie, accept: "application/json" } }, env);
+    const empty = await app.request(path, { method, headers: { cookie, origin: env.APP_URL, accept: "application/json" } }, env);
     expect(empty.status).toBe(429);
     for (const advertised of [false, true]) {
       const { request, pull } = upload(path, method, cookie, max, advertised);
@@ -97,6 +98,28 @@ describe("shared throttles admit before buffering", () => {
   });
 });
 
+describe("global gates reject before admission or buffering", () => {
+  it.each(sharedRoutes)("%s never pulls an upload rejected by host or origin", async (key) => {
+    const { method, path, max } = routeInfo(key);
+    const { sql } = throttleFixture(0);
+    const { env, cookie } = await sessionEnv(sql as unknown as Sql);
+    for (const gate of ["host", "origin", "missing-origin"] as const) {
+      for (const advertised of [false, true]) {
+        const { request, pull } = upload(path, method, cookie, max, advertised,
+          gate === "host" ? "https://untrusted.example.test" : env.APP_URL);
+        if (gate === "origin") request.headers.set("origin", "https://untrusted.example.test");
+        if (gate === "missing-origin") request.headers.delete("origin");
+        const response = await app.request(request, undefined, env);
+        expect(response.status).toBe(gate === "host" ? 404 : 403);
+        if (gate !== "host") expect(await response.json()).toEqual({ error: "cross_origin" });
+        expect(pull).not.toHaveBeenCalled();
+        expect(sql).not.toHaveBeenCalled();
+        await request.body?.cancel().catch(() => {});
+      }
+    }
+  });
+});
+
 describe("disabled QA seam rejects before admission or buffering", () => {
   it.each([
     { APP_URL: "https://next.example.test", QA_AUTH_TOKEN: "test-only-qa-token" },
@@ -105,7 +128,7 @@ describe("disabled QA seam rejects before admission or buffering", () => {
     const store = vi.fn(async () => null);
     const env = { ...config, THROTTLE_STORE: store } as unknown as EnvWithThrottle;
     for (const advertised of [false, true]) {
-      const { request, pull } = upload("/auth/qa/qa-member", "POST", "", BODY_LIMIT_BYTES.action, advertised);
+      const { request, pull } = upload("/auth/qa/qa-member", "POST", "", BODY_LIMIT_BYTES.action, advertised, config.APP_URL);
       const response = await app.request(request, undefined, env);
       expect(response.status).toBe(404);
       expect(pull).not.toHaveBeenCalled();
