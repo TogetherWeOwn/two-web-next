@@ -3,7 +3,8 @@
 
 Dispatches require an open PR whose base and source are this repository and
 whose current head is GITHUB_SHA. PR events also allow forks, but bind their
-source identity/head to the event and checked head, or a proven base/head merge.
+source identity/head to the event and to the checked merge commit's immutable
+GitHub record. PR base snapshots can lag or advance independently of that merge.
 Convention rules and Actions output transport remain separate from this helper.
 """
 
@@ -47,7 +48,7 @@ def requested_number(event_name, event, dispatch_number):
 
 
 def resolve_metadata(event_name, repository, workflow_sha, checked_sha, parents,
-                     event, pull_request, dispatch_number=""):
+                     event, pull_request, dispatch_number="", merge_commit=None):
     """Pure binding validator: no API, git, file or output side effects."""
     if event_name == "push":
         return {"title": "", "body": "", "author": "", "event": "push"}
@@ -55,10 +56,9 @@ def resolve_metadata(event_name, repository, workflow_sha, checked_sha, parents,
     repo = repository_name(repository)
     require(repository_name(event.get("repository", {}).get("full_name")) == repo,
             "Event repository differs from the workflow repository")
-    require(isinstance(workflow_sha, str) and re.fullmatch(r"[0-9a-f]{40}", workflow_sha),
-            "Missing or malformed workflow SHA")
-    require(isinstance(checked_sha, str) and re.fullmatch(r"[0-9a-f]{40}", checked_sha),
-            "Missing or malformed checkout SHA")
+    require(isinstance(workflow_sha, str) and
+            re.fullmatch(r"[0-9a-f]{40}", workflow_sha) and checked_sha == workflow_sha,
+            "Checkout does not match the workflow SHA")
     require(isinstance(pull_request, dict), "Malformed PR API snapshot")
     require(type(pull_request.get("number")) is int and pull_request["number"] == number,
             "API PR number differs from the requested PR")
@@ -70,7 +70,6 @@ def resolve_metadata(event_name, repository, workflow_sha, checked_sha, parents,
     require(isinstance(head.get("sha"), str) and re.fullmatch(r"[0-9a-f]{40}", head["sha"]),
             "Missing or malformed PR head SHA")
     if event_name == "workflow_dispatch":
-        require(checked_sha == workflow_sha, "Checkout does not match the workflow SHA")
         require(source == repo, "Dispatches do not accept fork PR metadata")
         require(head["sha"] == workflow_sha, "Dispatch SHA differs from the current PR head")
     else:
@@ -81,12 +80,21 @@ def resolve_metadata(event_name, repository, workflow_sha, checked_sha, parents,
                 ref_repository(snapshot.get("head")) == source,
                 "Event PR repository identities differ from the current PR")
         require(snapshot["head"].get("sha") == head["sha"], "PR head moved since the event")
-        # Explicit head checkout leaves GITHUB_SHA at the synthetic merge SHA.
-        # Bind the checked head directly; legacy merge checkout still needs proof.
-        require(checked_sha == head["sha"] or
-                (checked_sha == workflow_sha and len(parents) == 2 and
-                 parents[1] == head["sha"] and parents[0] == snapshot["base"].get("sha")),
-                "Checked revision is not the event's head or base/head merge")
+        # GITHUB_SHA pins the GitHub-generated merge, not a moving base ref.
+        # Event/API base.sha and live merge_commit_sha can describe a different
+        # merge after base advancement. Verify the exact immutable commit instead.
+        if workflow_sha != head["sha"]:
+            require(len(parents) == 2 and parents[1] == head["sha"] and
+                    all(isinstance(parent, str) and re.fullmatch(r"[0-9a-f]{40}", parent)
+                        for parent in parents),
+                    "Checked revision is not the event's head or base/head merge")
+            require(isinstance(merge_commit, dict) and merge_commit.get("sha") == workflow_sha,
+                    "Merge API commit differs from the workflow SHA")
+            api_parents = merge_commit.get("parents")
+            require(isinstance(api_parents, list) and len(api_parents) == 2 and
+                    all(isinstance(parent, dict) for parent in api_parents) and
+                    [parent.get("sha") for parent in api_parents] == parents,
+                    "Checked merge parents differ from the immutable GitHub commit")
     title = pull_request.get("title")
     body = pull_request.get("body")
     author = pull_request.get("user", {}).get("login")
@@ -119,8 +127,15 @@ def main():
         # One REST snapshot includes identity, current state/head and metadata;
         # separate gh title/body/author requests could mix different revisions.
         pull_request = json.loads(command(["gh", "api", f"repos/{repository}/pulls/{number}"]))
-        metadata = resolve_metadata(event_name, repository, os.environ["GITHUB_SHA"],
-                                    checked_sha, parents, event, pull_request, dispatch_number)
+        workflow_sha = os.environ["GITHUB_SHA"]
+        require(re.fullmatch(r"[0-9a-f]{40}", workflow_sha) and checked_sha == workflow_sha,
+                "Checkout does not match the workflow SHA")
+        merge_commit = None
+        if event_name == "pull_request" and workflow_sha != pull_request.get("head", {}).get("sha"):
+            merge_commit = json.loads(command([
+                "gh", "api", f"repos/{repository}/git/commits/{workflow_sha}"]))
+        metadata = resolve_metadata(event_name, repository, workflow_sha, checked_sha, parents,
+                                    event, pull_request, dispatch_number, merge_commit)
     print(json.dumps(metadata))
 
 

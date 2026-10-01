@@ -45,6 +45,9 @@ type Fixture = {
   live: Pr;
   apiExit?: number;
   apiRaw?: string;
+  mergeCommit?: { sha: string; parents: { sha: string }[] };
+  mergeApiExit?: number;
+  mergeApiRaw?: string;
 };
 
 function dispatch(): Fixture {
@@ -62,14 +65,8 @@ function pullRequest(fork = false): Fixture {
     eventName: "pull_request", workflowSha: mergeSha, checkedSha: mergeSha, parents: [baseSha, headSha],
     dispatchNumber: "", event: { repository: { full_name: repository }, number: 28, pull_request: structuredClone(pr) },
     live: pr,
+    mergeCommit: { sha: mergeSha, parents: [{ sha: baseSha }, { sha: headSha }] },
   };
-}
-
-function pullRequestHead(fork = false): Fixture {
-  const fixture = pullRequest(fork);
-  fixture.checkedSha = headSha;
-  fixture.parents = [baseSha];
-  return fixture;
 }
 
 // Execute the actual workflow resolver and unchanged checker. Both gh and git
@@ -88,6 +85,10 @@ if f.get('apiExit'):
     sys.exit(f['apiExit'])
 if args == ['api', 'repos/TogetherWeOwn/two-web-next/pulls/28']:
     print(f.get('apiRaw', json.dumps(f['live'])))
+elif args == ['api', 'repos/TogetherWeOwn/two-web-next/git/commits/' + f['workflowSha']]:
+    if f.get('mergeApiExit'):
+        sys.exit(f['mergeApiExit'])
+    print(f.get('mergeApiRaw', json.dumps(f.get('mergeCommit'))))
 elif args[:3] == ['pr', 'view', '28']:
     assert args[3:6] == ['--repo', 'TogetherWeOwn/two-web-next', '--json']
     field = args[6]
@@ -166,10 +167,6 @@ function expectRejected(fixture: Fixture) {
 }
 
 describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
-  it("checks out the event PR head while dispatch and push retain the workflow SHA", () => {
-    expect(workflow).toContain("ref: ${{ github.event.pull_request.head.sha || github.sha }}");
-  });
-
   it("validates actual current metadata of a matching open release PR in one API snapshot", () => {
     const fixture = dispatch();
     fixture.live.title = "chore(main): release '0.3.0'";
@@ -241,8 +238,60 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     expect(result.stdout).toContain("PR conventions OK");
   });
 
-  it("accepts an explicit PR head checkout with synthetic workflow SHA and case-insensitive repo identities", () => {
-    const fixture = pullRequestHead(true);
+  describe.each([false, true])("base snapshot timing (fork: %s)", (fork) => {
+    it.each([
+      ["event lags the checked merge", "d".repeat(40), baseSha],
+      ["live base advances after checkout", baseSha, "e".repeat(40)],
+      ["event and live base both differ", "d".repeat(40), "e".repeat(40)],
+    ])("binds the immutable merge when %s", (_schedule, eventBase, liveBase) => {
+      const fixture = pullRequest(fork);
+      // These snapshots are not the immutable first parent of this workflow.
+      fixture.event.pull_request!.base.sha = eventBase;
+      fixture.live.base.sha = liveBase;
+      const result = runWorkflow(fixture);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("PR conventions OK");
+      expect(result.calls.trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+        ["api", "repos/TogetherWeOwn/two-web-next/pulls/28"],
+        ["api", `repos/TogetherWeOwn/two-web-next/git/commits/${mergeSha}`],
+      ]);
+    });
+  });
+
+  it("does not bind to a newer live merge after the workflow was queued", () => {
+    const fixture = pullRequest();
+    Object.assign(fixture.live, { merge_commit_sha: "d".repeat(40) });
+    Object.assign(fixture.event.pull_request!, { merge_commit_sha: mergeSha });
+    fixture.live.base.sha = "e".repeat(40);
+    const result = runWorkflow(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("PR conventions OK");
+  });
+
+  it.each([
+    ["unrelated API commit", (f: Fixture) => { f.mergeCommit!.sha = "d".repeat(40); }],
+    ["unrelated API base parent", (f: Fixture) => { f.mergeCommit!.parents[0]!.sha = "d".repeat(40); }],
+    ["unrelated API head parent", (f: Fixture) => { f.mergeCommit!.parents[1]!.sha = "d".repeat(40); }],
+    ["reordered API parents", (f: Fixture) => { f.mergeCommit!.parents.reverse(); }],
+    ["missing API parents", (f: Fixture) => { f.mergeCommit!.parents = []; }],
+    ["extra API parent", (f: Fixture) => { f.mergeCommit!.parents.push({ sha: "d".repeat(40) }); }],
+    ["merge API failure", (f: Fixture) => { f.mergeApiExit = 1; }],
+    ["malformed merge API JSON", (f: Fixture) => { f.mergeApiRaw = "{"; }],
+    ["null merge API record", (f: Fixture) => { f.mergeApiRaw = "null"; }],
+    ["malformed merge API parents", (f: Fixture) => { f.mergeApiRaw = JSON.stringify({ sha: mergeSha, parents: [null, { sha: headSha }] }); }],
+  ] as const)("rejects %s even when base snapshots differ", (_name, modify) => {
+    const fixture = pullRequest(true);
+    fixture.event.pull_request!.base.sha = "e".repeat(40);
+    fixture.live.base.sha = "f".repeat(40);
+    modify(fixture);
+    expectRejected(fixture);
+  });
+
+  it("accepts a supported PR head checkout and case-insensitive GitHub repo identities", () => {
+    const fixture = pullRequest(true);
+    fixture.workflowSha = headSha;
+    fixture.checkedSha = headSha;
+    fixture.parents = [baseSha];
     fixture.live.base.repo.full_name = repository.toLowerCase();
     fixture.live.head.repo.full_name = fixture.live.head.repo.full_name.toUpperCase();
     const result = runWorkflow(fixture);
@@ -250,37 +299,13 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     expect(result.stdout).toContain("PR conventions OK");
   });
 
-  it.each([false, true])("binds exact PR head despite base drift and synthetic workflow SHA (fork: %s)", (fork) => {
-    const fixture = pullRequestHead(fork);
-    fixture.event.pull_request!.base.sha = "d".repeat(40);
-    fixture.live.base.sha = "e".repeat(40);
-    const result = runWorkflow(fixture);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("PR conventions OK");
-    expect(JSON.parse(result.output).title).toBe(fixture.live.title);
-  });
-
-  it.each([
-    ["unrelated checkout with otherwise valid merge parents", (f: Fixture) => { f.checkedSha = "d".repeat(40); f.parents = [baseSha, headSha]; }],
-    ["malformed workflow SHA", (f: Fixture) => { f.workflowSha = "not-a-sha"; }],
-    ["malformed checkout SHA", (f: Fixture) => { f.checkedSha = "not-a-sha"; }],
-    ["moved live head", (f: Fixture) => { f.live.head.sha = "d".repeat(40); }],
-    ["different event head", (f: Fixture) => { f.event.pull_request!.head.sha = "d".repeat(40); }],
-    ["foreign live base repository", (f: Fixture) => { f.live.base.repo.full_name = "other/repo"; }],
-    ["different live source identity", (f: Fixture) => { f.live.head.repo.full_name = "other/repo"; }],
-    ["foreign event repository", (f: Fixture) => { f.event.repository.full_name = "other/repo"; }],
-    ["foreign snapshot base repository", (f: Fixture) => { f.event.pull_request!.base.repo.full_name = "other/repo"; }],
-    ["wrong event PR number", (f: Fixture) => { f.event.pull_request!.number = 29; }],
-    ["closed current PR", (f: Fixture) => { f.live.state = "closed"; }],
-  ] as const)("rejects explicit PR head checkout with %s before output", (_name, modify) => {
-    const fixture = pullRequestHead(true);
-    modify(fixture);
-    expectRejected(fixture);
-  });
-
   it.each([
     ["moved live head", (f: Fixture) => { f.live.head.sha = "d".repeat(40); }],
     ["missing merge parents", (f: Fixture) => { f.parents = []; }],
+    ["extra checked parent", (f: Fixture) => { f.parents.push("d".repeat(40)); }],
+    ["checkout differs from workflow SHA", (f: Fixture) => { f.checkedSha = "d".repeat(40); }],
+    ["malformed workflow SHA", (f: Fixture) => { f.workflowSha = f.checkedSha = "../main"; }],
+    ["malformed base parent", (f: Fixture) => { f.parents[0] = "../main"; f.mergeCommit!.parents[0]!.sha = "../main"; }],
     ["wrong current base repository", (f: Fixture) => { f.live.base.repo.full_name = "other/repo"; }],
     ["wrong merge head parent", (f: Fixture) => { f.parents[1] = "d".repeat(40); }],
     ["wrong merge base parent", (f: Fixture) => { f.parents[0] = "d".repeat(40); }],
