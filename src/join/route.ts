@@ -20,10 +20,12 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { authorizeUrl, exchangeCode, failureMeta, fetchUser } from "../discord";
+import { discordWidgetUrl } from "../discord-widget";
 import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { inviteDestination } from "../invite";
+import { recordJoinResult } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
 import type { SessionStore, Sql } from "../sessions";
 import {
@@ -124,11 +126,7 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
   // `/join` — the journey page. Database-free leaf like /about: it must stay
   // 200 when everything behind it is down (a 500 here loses the member).
   app.get("/join", (c) => {
-    const guildId = c.env.DISCORD_GUILD_ID;
-    const widgetUrl =
-      typeof guildId === "string" && /^\d{10,25}$/.test(guildId)
-        ? `https://discord.com/widget?id=${guildId}&theme=dark`
-        : null;
+    const widgetUrl = discordWidgetUrl(c.env.DISCORD_GUILD_ID);
     // A safe `?next=` survives onto the one-click link; a hostile one leaves
     // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
     const next = safeNext(c.req.query("next"));
@@ -277,6 +275,11 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
       member: true,
       moderator,
     });
+    // One-shot confirmation (legacy join_result flash): the first of /, /join
+    // or /profile renders the added/already-member banner and consumes it.
+    if (done.outcome === "added" || done.outcome === "already_member") {
+      await recordJoinResult(c, done.outcome);
+    }
     return c.redirect(done.redirect, 302);
   });
 }
