@@ -99,9 +99,14 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Dependency audit selftest (local fixtures)
+        run: npm run deps:audit:selftest
+      - name: Dependency audit (lockfile, including dev dependencies)
+        run: npm run deps:audit
       - run: npm ci
       - name: Seeded admin properties (10s budget, local fixtures)
-        run: timeout 10s npm run test:admin-properties
+        # Skip npm's extra process startup; keep the same suite and hard budget.
+        run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
       - name: Public-route smoke selftest (loopback fixtures)
         run: npm run test:smoke
       - name: Apply migrations

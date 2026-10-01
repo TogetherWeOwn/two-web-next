@@ -216,15 +216,15 @@ export function parseEventForm(
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give the event a title.";
-  else if (title.length > 100) fields.title = "Keep the title to 100 characters.";
+  else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
   const game = str(data.game);
-  if (game && game.length > 100) fields.game = "Keep the game to 100 characters.";
+  if (game && [...game].length > 100) fields.game = "Keep the game to 100 characters.";
   const description = str(data.description);
-  if (description && description.length > 1000) fields.description = "Keep the description to 1000 characters.";
+  if (description && [...description].length > 1000) fields.description = "Keep the description to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
-  if (location && location.length > 255) fields.location = "Keep the location to 255 characters.";
+  if (location && [...location].length > 255) fields.location = "Keep the location to 255 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
   for (const field of ["title", "description", "location"] as const) {
     const raw = data[field];
