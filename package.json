@@ -8,7 +8,7 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --pool=threads",
     "test:admin-properties": "vitest run test/admin-validation.property.test.ts",
     "check": "npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover",
     "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
