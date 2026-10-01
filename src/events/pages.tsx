@@ -83,7 +83,10 @@ import {
   type CalendarState,
 } from "../islands/contracts";
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
+import { loginUrl } from "../islands/contracts";
 import type { Session } from "../env";
+import { JoinResultBanner } from "../pages";
+import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent } from "./reads";
 
@@ -126,10 +129,10 @@ const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: 
 );
 
 const ScheduleShell: FC<PropsWithChildren<{
-  title: string; canonical: string; description?: string; robots?: string; member?: boolean;
-}>> = ({ title, canonical, description, robots, member, children }) => (
+  title: string; canonical: string; description?: string; robots?: string; member?: boolean; loginReturnTo?: string | null;
+}>> = ({ title, canonical, description, robots, member, loginReturnTo, children }) => (
   <Layout title={`${title} — Together We Own`} canonical={canonical} shareDescription={description} robots={robots} theme="home">
-    <SiteHeader active="events">
+    <SiteHeader active="events" loginReturnTo={loginReturnTo}>
       {member ? <a class="btn" href="/discord">Open Discord</a> : undefined}
     </SiteHeader>
     <main class="events-page" id="main" tabindex={-1}>{children}</main>
@@ -178,12 +181,13 @@ const rowLocation = (e: CalRow): string | null => e.location;
  * Discord-native rows get "RSVP in Discord" and no going count (there are no
  * local answers to count). `isPast` suppresses the action area entirely.
  */
-const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; inviteUrl: string }> = ({
+const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; inviteUrl: string; loginReturnTo: string | null }> = ({
   e,
   zone,
   isPast,
   member,
   inviteUrl,
+  loginReturnTo,
 }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
@@ -211,7 +215,7 @@ const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; i
           {isPast ? null : transient ? (
             <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>{EVENTS_EMPTY_COPY.discordRsvp}</a>
           ) : member ? null : (
-            <a href="/auth/discord" data-testid="signin">{EVENTS_EMPTY_COPY.signIn}</a>
+            <a href={loginUrl(loginReturnTo)} data-testid="signin">{EVENTS_EMPTY_COPY.signIn}</a>
           )}
         </div>
       </article>
@@ -357,7 +361,11 @@ export const EventsCalendarPage: FC<{
   member: boolean;
   inviteUrl: string;
   appUrl: string;
-}> = ({ state, upcoming, past, zone, now, emptyState, discordFailed, member, inviteUrl, appUrl }) => {
+  /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
+  loginReturnTo?: string | null;
+  /** One-shot join confirmation when this page is the join landing (TOG-10356). */
+  joinResult?: JoinResult | null;
+}> = ({ state, upcoming, past, zone, now, emptyState, discordFailed, member, inviteUrl, appUrl, loginReturnTo = null, joinResult = null }) => {
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
@@ -374,7 +382,7 @@ export const EventsCalendarPage: FC<{
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
   return (
-    <ScheduleShell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on." member={member}>
+    <ScheduleShell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on." member={member} loginReturnTo={loginReturnTo}>
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
@@ -390,6 +398,10 @@ export const EventsCalendarPage: FC<{
           <p>Game nights, tournaments and whatever else the community puts on.</p>
           {!member ? <a class="btn" href="/join">Join the Discord</a> : null}
         </div>
+        {/* One-shot join confirmation (legacy join_result): /events is the
+            join landing when the CTA carried next=/events. Renders outside the
+            island zones so fragment swaps never swallow it. */}
+        {joinResult ? <JoinResultBanner result={joinResult} /> : null}
 
         {/* Live regions OUTSIDE the swapped zones (legacy TOG-5416): they must
             announce without being re-created. */}
@@ -483,7 +495,7 @@ export const EventsCalendarPage: FC<{
               <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
               <ul data-testid={EVENTS_LIST_TESTID}>
                 {upcoming.map((e) => (
-                  <CalCard e={e} zone={zone} isPast={false} member={member} inviteUrl={inviteUrl} />
+                  <CalCard e={e} zone={zone} isPast={false} member={member} inviteUrl={inviteUrl} loginReturnTo={loginReturnTo} />
                 ))}
               </ul>
               {showPast && past.length > 0 ? (
@@ -491,7 +503,7 @@ export const EventsCalendarPage: FC<{
                   <h2>{EVENTS_PAST_LIST_HEADING}</h2>
                   <ul data-testid={EVENTS_PAST_LIST_TESTID}>
                     {past.map((e) => (
-                      <CalCard e={e} zone={zone} isPast member={member} inviteUrl={inviteUrl} />
+                      <CalCard e={e} zone={zone} isPast member={member} inviteUrl={inviteUrl} loginReturnTo={loginReturnTo} />
                     ))}
                   </ul>
                 </div>
@@ -552,6 +564,11 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </ScheduleShell>
 );
 
+// Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
+// the blade wraps it in @guest, so any signed-in viewer (member or
+// non-member) never sees it. The pitch carries this page as ?next= so the
+// journey lands the guest back here after joining. The one-shot join
+// confirmation still renders for the newly authenticated member.
 export const EventPage: FC<{
   e: PublicEvent;
   neighbors: EventNeighbors;
@@ -560,8 +577,9 @@ export const EventPage: FC<{
   appUrl: string;
   jsonLd: string;
   session?: Session | null;
+  joinResult?: JoinResult | null;
   waitlistPosition?: number | null;
-}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, waitlistPosition }) => {
+}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, joinResult, waitlistPosition }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -572,6 +590,7 @@ export const EventPage: FC<{
       {e.status === "past" ? <p class="notice" data-testid="event-past">Past event</p> : null}
       {e.status === "cancelled" ? <p class="notice" data-testid="event-cancelled">Cancelled</p> : null}
       <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
+      {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <p>
         <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
       </p>
@@ -588,7 +607,11 @@ export const EventPage: FC<{
       {!session ? (
         <section data-testid="event-join-pitch" aria-label="Join the community">
           <p>Game nights get posted here first. Join the Discord and you&apos;ll see them before they land on this page.</p>
-          <a class="btn" data-testid="discord-join" href={`/join?next=${encodeURIComponent(path)}`}>Join the Discord</a>
+          <p>
+            <a class="btn" href={`/join?next=${encodeURIComponent(path)}`} data-testid="discord-join">
+              Join the Discord
+            </a>
+          </p>
         </section>
       ) : null}
       <p>
