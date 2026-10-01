@@ -148,6 +148,13 @@ prove deployment readiness. `/health` and `/healthz` are removed (404).
 plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
 
+DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty
+`DATABASE_URL`, otherwise `DB.connectionString`. If that selected database fails,
+readiness fails; it never substitutes the other target. The queue retains its
+existing `DB.connectionString ?? DATABASE_URL` selection. When both reads select
+the same URL, they share a two-slot client; otherwise each uses a one-slot client
+and is independently measured and cleaned up within the same response deadline.
+
 The journal (`drizzle/meta/_journal.json`) is embedded in the Worker at build
 time. Only web tags `1000–1999` are checked against exact `created_at` timestamps
 in `drizzle.__drizzle_migrations`; bot rows and grandfathered `0000/0001` tags do

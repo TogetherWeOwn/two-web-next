@@ -77,6 +77,7 @@ describe("GET /up", () => {
   it("answers 200 fully migrated with the existing queue payload unchanged", async () => {
     const res = await app.request("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(await res.json()).toEqual({ status: "healthy", db: "ok", pending_migrations: 0, queue: healthyQueue });
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.getSetCookie()).toEqual([]);
@@ -84,16 +85,20 @@ describe("GET /up", () => {
   it("answers 200 for queue-only degradation", async () => {
     const res = await app.request("/up", {}, withStore(healthSql({ queue: [depthRow({ pending: 25, total: 26 })] })));
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ status: "degraded", db: "ok", pending_migrations: 0, queue: { status: "degraded" } });
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
+    expect(await res.json()).toMatchObject({ status: "degraded", db: "ok", pending_migrations: 0,
+      queue: { status: "degraded", warn_at: QUEUE_WARN_AT, critical_at: QUEUE_CRITICAL_AT } });
   });
   it("stays 200 when only the queue ledger fails", async () => {
     const res = await app.request("/up", {}, withStore(healthSql({ queue: new Error("queue table missing") })));
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(await res.json()).toEqual({ status: "healthy", db: "ok", pending_migrations: 0, queue: unknownQueue });
   });
   it("answers 503 without DB configuration", async () => {
     const res = await app.request("/up", {}, env);
     expect(res.status).toBe(503);
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(await res.json()).toEqual({ status: "degraded", db: "error", pending_migrations: null,
       queue: { ...unknownQueue, detail: "queue ledger is not configured." } });
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -123,6 +128,7 @@ describe("GET /up", () => {
     const res = await app.request("/up", {}, { ...env, DATABASE_URL: "not a url" });
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ db: "error", pending_migrations: null, queue: { status: "unknown" } });
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
   });
 });
 

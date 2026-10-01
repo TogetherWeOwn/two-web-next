@@ -280,7 +280,7 @@ app.get("/discord", (c) => {
 for (const path of ["/about", "/faq"] as const) {
   app.get(path, (c) => {
     c.header("cache-control", "public, max-age=3600");
-    return c.html(path === "/about" ? <About /> : <Faq />);
+    return c.html(path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />);
   });
 }
 
@@ -313,7 +313,7 @@ export function rulesLastUpdated(raw: string | undefined): { iso: string; label:
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules lastUpdated={stamp} />);
+  return c.html(<Rules appUrl={c.env.APP_URL} lastUpdated={stamp} />);
 });
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
@@ -327,7 +327,7 @@ const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
 
 app.get("/privacy", (c) => {
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Privacy version={POLICY_VERSION} html={PRIVACY_HTML} />);
+  return c.html(<Privacy appUrl={c.env.APP_URL} version={POLICY_VERSION} html={PRIVACY_HTML} />);
 });
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;
@@ -393,29 +393,38 @@ app.post("/api/agent-events", agentEventsRoute);
 type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
 
 app.get("/up", async (c) => {
+  // Fixed app identity for the cutover probe, including unknown/degraded reads.
+  c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
-  // The queue ledger lives in the same Postgres as the rest of the W13 backend:
-  // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
-  const url = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
-  let sql: EnvWithDepth["QUEUE_DEPTH_STORE"] | null = injected ?? null;
+  // Readiness must probe the database selected by the web stores. Preserve the
+  // queue's existing Hyperdrive-first selection without falling back on failure.
+  const url = databaseUrl(c.env);
+  const queueUrl = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
+  const shared = url === queueUrl;
+  const owned = new Set<ReturnType<typeof postgres>>();
+  const connect = (target: string | undefined, max: number) => {
+    if (injected) return injected;
+    if (!target) return null;
+    try {
+      const client = postgres(target, { max, idle_timeout: 10, connect_timeout: 3, fetch_types: false });
+      owned.add(client);
+      return client;
+    } catch (err) {
+      console.warn("Health check could not build the database client.", { exception: err instanceof Error ? err.name : typeof err });
+      return null;
+    }
+  };
   try {
     c.header("cache-control", "no-store");
-    // Malformed configuration is DB-not-ready, never an unhandled 500.
-    if (!sql && url) {
-      try {
-        // A blocked queue query must not starve the independent DB/schema read.
-        sql = postgres(url, { max: 2, idle_timeout: 10, connect_timeout: 3, fetch_types: false });
-      } catch (err) {
-        console.warn("Health check could not build the database client.", { exception: err instanceof Error ? err.name : typeof err });
-      }
-    }
-    const client = sql;
-    const body = await upBody(client ? () => pgQueueDepth(client) : null, client);
+    // Two slots when shared, one per client otherwise: queue cannot starve DB.
+    const sql = connect(url, shared ? 2 : 1);
+    const queueSql = shared ? sql : connect(queueUrl, 1);
+    const body = await upBody(queueSql ? () => pgQueueDepth(queueSql) : null, sql);
     return c.json(body, upHttpStatus(body));
   } finally {
     // Terminate request-owned work on timeout without extending the response
     // deadline to drain it. An injected client owns its own lifecycle.
-    if (sql && !injected) {
+    for (const sql of owned) {
       const closed = sql.end({ timeout: 0 }).catch(() => {});
       try { c.executionCtx.waitUntil(closed); } catch { void closed; }
     }
