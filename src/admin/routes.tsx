@@ -24,6 +24,7 @@
 // store (M7) and dispatch the write-back seam where one is due (M3).
 
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
+import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
@@ -209,7 +210,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<EventFormPage mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("form"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -268,7 +269,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     );
   });
 
-  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("form"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const key = c.req.param("key");
@@ -314,7 +315,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   });
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
       try {
@@ -328,7 +329,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
         if (err instanceof ValidationError) {
-          return errorPage(c, 422, "That transition is not allowed", err.fields.status ?? err.fields.rsvp_open);
+          return errorPage(c, 422, "That transition is not allowed", err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open);
         }
         throw err;
       }
@@ -351,10 +352,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.get("/featured/new", (c) => {
     declareAccess(c, { resource: "featured_contents", action: "view", route: "admin.featured.create", subjects: [] });
-    return c.html(<FeaturedFormPage mode="new" values={{}} errors={{}} />);
+    return c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -366,7 +367,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return formError(
           c,
           err,
-          (errors, v) => c.html(<FeaturedFormPage mode="new" values={v} errors={errors} />),
+          (errors, v) => c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="new" values={v} errors={errors} />),
           values,
         );
       }
@@ -389,10 +390,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       route: "admin.featured.edit",
       subjects: [String(row.id)],
     });
-    return c.html(<FeaturedFormPage mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
+    return c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
   });
 
-  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
@@ -408,7 +409,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return formError(
           c,
           err,
-          (errors, v) => c.html(<FeaturedFormPage mode="edit" row={existing} values={v} errors={errors} />),
+          (errors, v) => c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="edit" row={existing} values={v} errors={errors} />),
           values,
         );
       }
@@ -423,7 +424,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
   });
 
-  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
