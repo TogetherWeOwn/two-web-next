@@ -26,7 +26,7 @@ const binder = readFileSync(new NodeURL("../public/islands/past-events.js", impo
 function eventRow(n: number): typeof events.$inferSelect {
   const date = new Date(Date.UTC(2020, 0, n + 1));
   return {
-    id: n, eventKey: `archive-${n}`, title: `Past game ${n}`, game: "Chess", description: null,
+    id: n, icsSequence: 1n, eventKey: `archive-${n}`, title: `Past game ${n}`, game: "Chess", description: null,
     startsAt: date, endsAt: date, timezone: "UTC", location: null, capacity: 10, status: "past",
     discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
