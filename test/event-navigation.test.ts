@@ -20,6 +20,7 @@ const row = (id: number, over: Partial<EventRow> = {}): EventRow => ({
   startsAt: NOW, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "Europe/London",
   location: "Voice", capacity: null, status: "published", discordEventId: null,
   discordSyncFailedAt: null, discordSyncFailureCode: null,
+  agentGrantId: null, proofMarker: null, agentVersion: 1,
   createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
   recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
   createdAt: NOW, updatedAt: NOW, ...over,

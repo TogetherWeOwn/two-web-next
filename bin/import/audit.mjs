@@ -137,7 +137,7 @@ export async function importAudit({ legacy, target, legacySchema = 'public', tar
         const expiry = isReplay
           ? ', (created_at IS NULL OR NOT isfinite(created_at) OR created_at < $1::timestamp) AS import_expired'
           : '';
-        // Ownership is not copied into Next agent_events by this importer.
+        // Ownership is not copied into Next events by this importer.
         // Admit only demonstrably untouched grants; any history (including
         // expired replay keys) is conservatively spent/unknown, not new quota.
         const admission = table.name === 'agent_event_grants'

@@ -263,7 +263,7 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     }
     expect(await target`select * from events order by id`).toEqual(before);
     expect(await target`select * from rsvps`).toHaveLength(0);
-    expect(await target`select * from agent_events`).toHaveLength(0);
+    expect(await target`select * from events where agent_grant_id is not null or proof_marker is not null`).toHaveLength(0);
     expect(await target`select * from agent_event_grants`).toHaveLength(0);
   });
 

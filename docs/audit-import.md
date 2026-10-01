@@ -20,7 +20,7 @@ It is an operator cutover tool, not a scheduled job or a Workers endpoint.
   replay key for that grant. All history is checked, including replay keys too
   old to import. A missing ownership contract or any history leaves the grant
   disabled. This conservative rule avoids restoring spent quota: this tool does
-  not copy ownership into Next `agent_events`. Supply a complete frozen source,
+  not copy ownership into Next `events` (the temporary `agent_events` table is retired). Supply a complete frozen source,
   not a filtered export, when requesting enabled grants.
   The flag preserves legacy disabled/expiry state; it never re-enables a grant
   already disabled in legacy or an existing Next grant. Enabling grants requires
