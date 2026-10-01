@@ -45,7 +45,9 @@ async function cookieFor(store: SessionStore, moderator: boolean): Promise<strin
   const token = newSessionToken();
   await store.create({
     tokenHash: await hashToken(token),
-    userId: moderator ? "gone-mod" : "gone-member",
+    // Keyed member reads authorize only digit viewers (src/member-reads.ts),
+    // so the synthetic identities keep their names in `username` alone.
+    userId: moderator ? "108450000000000001" : "108450000000000002",
     username: moderator ? "gone-mod" : "gone-member",
     avatar: null,
     member: true,

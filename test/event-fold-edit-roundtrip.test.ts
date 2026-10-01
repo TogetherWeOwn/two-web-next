@@ -52,7 +52,8 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "fold-roundtrip-mod", username: "mod", avatar: null,
+      // Keyed member reads authorize only digit viewers (src/member-reads.ts).
+      tokenHash: await hashToken(token), userId: "108450000000000003", username: "mod", avatar: null,
       member: true, moderator: true, expiresAt: new Date(Date.now() + 3600_000),
     });
     cookie = (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
