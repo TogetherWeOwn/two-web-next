@@ -21,7 +21,8 @@ export function parseEventListQuery(params: EventListParams): EventListQuery {
   const sort = params.sort;
   const page = Number(params.page);
   return {
-    q: (params.q ?? "").trim(),
+    // PostgreSQL text cannot contain NUL; retain the rest as literal input.
+    q: (params.q ?? "").replaceAll("\u0000", "").trim(),
     status: status === "draft" || status === "published" || status === "cancelled" || status === "past" ? status : "",
     series: series === "parent" || series === "child" || series === "standalone" ? series : "",
     fill: fill === "full" || fill === "has_seats" || fill === "unlimited" ? fill : "",
