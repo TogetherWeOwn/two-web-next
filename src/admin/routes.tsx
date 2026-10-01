@@ -112,6 +112,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
   admin.use("/*", adminGuard(overrides));
 
+  // Legacy Filament bookmarks: guard first, no resource reads or query forwarding.
+  // Keep the literal create alias ahead of /events/:key.
+  admin.get("/events/create", (c) => c.redirect("/admin/events/new", 301));
+  admin.get("/events/:key/edit", (c) => c.redirect(`/admin/events/${encodeURIComponent(c.req.param("key"))}`, 301));
+  admin.get("/featured-contents", (c) => c.redirect("/admin/featured", 301));
+  admin.get("/featured-contents/create", (c) => c.redirect("/admin/featured/new", 301));
+  admin.get("/featured-contents/:id/edit", (c) => c.redirect(`/admin/featured/${encodeURIComponent(c.req.param("id"))}`, 301));
+
   admin.get("/", async (c) => {
     declareAccess(c, { resource: "dashboard", action: "view", route: "admin.dashboard", subjects: [] });
     // Funnel counts are outcomes only (no member data): no access-log subjects.

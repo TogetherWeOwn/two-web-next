@@ -43,6 +43,34 @@ Note: legacy `/join*` is the one-click OAuth journey; this repo's equivalent
 scopes. The `/join` paths landed with W6 alongside it (same scopes, same
 synchronous bot add); both stay until the strangler cutover retires one.
 
+## Redirect map
+
+Legacy-only aliases ([TOG-11156](/TOG/issues/TOG-11156)); request proof:
+`test/legacy-redirects.test.ts`. GET and automatic HEAD share this behavior.
+
+| Legacy method + Hono pattern | Status | Location | Query policy |
+|---|---|---|---|
+| `GET /admin/events/create` | 301 | `/admin/events/new` | Drop all |
+| `GET /admin/events/:key/edit` | 301 | `/admin/events/:key` | Drop all |
+| `GET /admin/featured-contents` | 301 | `/admin/featured` | Drop all |
+| `GET /admin/featured-contents/create` | 301 | `/admin/featured/new` | Drop all |
+| `GET /admin/featured-contents/:id/edit` | 301 | `/admin/featured/:id` | Drop all |
+| `GET /auth/discord/redirect` | 302 | `/auth/discord` | Preserve only `next` accepted by `safeNext` (`src/join/service.ts`), URL-encoded; otherwise no query |
+
+Admin aliases run behind the same moderator guard as their targets: guests
+302 to `/auth/discord`, signed-in non-moderators receive the same 403. They
+read no resource/database binding and return `private, no-store` after the
+guard. Dynamic keys/IDs are encoded as one path segment; the literal create
+alias is registered before the event-key route. `/admin/join-attempts/:id`
+already matches the legacy path and needs no redirect.
+
+Login uses a temporary, `no-store` redirect rather than a permanent OAuth
+cache entry. Invalid `next` (including `//evil`), `state`, `code`, and all
+other query keys are discarded. This alias does not start OAuth or issue a
+cookie; `/auth/discord` remains responsible for fresh state. Forwarding a
+safe `next` is not a claim that ordinary login resumes it after the callback:
+that existing gap remains recorded in `docs/w15-auth-tests.md`.
+
 ## Discord redirect-URI discipline (W6)
 
 Discord answers `redirect_uri` values that are not registered on the
@@ -113,7 +141,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/featured/new` | moderator | admin: create form |
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
-| `GET /auth/discord` | public | app: current equivalent of legacy `/auth/discord/redirect` |
+| `GET /auth/discord` | public | app: OAuth start; legacy `/auth/discord/redirect` now temporarily redirects here |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
 | `GET /discord` | public | seo: invite redirect |
 | `GET /e/:key` | public-draft-moderator | events: legacy `/e/{event}` |
