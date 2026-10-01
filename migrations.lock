@@ -72,6 +72,10 @@
     {
       "path": "drizzle/1016_job-lock-ownership.sql",
       "sha256": "49f191d69fc38303b59fa6d649f741d426a9c0457bf950771a2f2512a4792b58"
+    },
+    {
+      "path": "drizzle/1017_queue_failed_job_identity.sql",
+      "sha256": "0d9ff9974410a51c700904c24b2e1e5cb178287048a5053b2e70541abf4ac6b5"
     }
   ]
 }

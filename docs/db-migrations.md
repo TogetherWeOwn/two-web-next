@@ -53,7 +53,7 @@ Rules:
   **not evidence that a migration has been applied to any database**. Do not edit,
   remove or rename historical migrations, move them between directories, or
   reuse their numbers. New migrations append above the highest reserved web
-  number (currently `1014`) within `1000–1999`; gaps are not reusable slots.
+  number (the last web entry in `migrations.lock` on fetched main) within `1000–1999`; gaps are not reusable slots.
 - Web migrations must keep the C1 zero-replatform constraints: `jsonb`
   operators, the GIN index on `member_data_access_logs`, and
   `SELECT … FOR UPDATE` row locks stay working through Hyperdrive
@@ -88,7 +88,7 @@ hashed by this guard.
    this repo's snapshot naming. Preserve the generated journal `idx`, `when`,
    `version` and `breakpoints`, and the snapshot `id`/`prevId` chain. Do not
    renumber/edit any historical SQL or rewrite existing journal entries or
-   snapshots. The example assumes `1014` is still the highest reserved number;
+   snapshots. The example number is illustrative; use the next number above the highest reserved one;
    recompute it from fetched main. Commit the new SQL and matching metadata
    together, reviewing SQL and `--> statement-breakpoint` boundaries.
 4. Run `node ci/check-migration-history.mjs --write-lock`. This deterministically
