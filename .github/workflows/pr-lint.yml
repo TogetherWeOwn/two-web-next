@@ -45,6 +45,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Bind PR metadata to its head, not a merge whose base may have advanced.
+          # https://github.com/actions/checkout/blob/v7.0.1/README.md#checkout-pull-request-head-commit-instead-of-merge-commit
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Resolve PR title/body
         id: pr

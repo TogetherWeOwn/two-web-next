@@ -36,7 +36,7 @@ import { registerJoinRoutes } from "./join/route";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
-import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
+import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
@@ -81,10 +81,11 @@ const staticSecurityHeaders = secureHeaders({
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
-    // Only the join page embeds Discord; OAuth/recovery/admin routes cannot frame anything.
-    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com" : "'none'"],
+    // Only join reads embed the widget; other routes cannot frame anything.
+    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com/widget" : "'none'"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
+    fontSrc: ["'self'"],
     frameAncestors: ["'none'"],
     formAction: ["'self'"],
     reportUri: CSP_REPORT_ENDPOINT,
@@ -526,7 +527,7 @@ app.post("/auth/qa/:identity", async (c, next) => {
 }, throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
-  const fixture = QA_IDENTITIES[c.req.param("identity") ?? ""];
+  const fixture = qaIdentity(c.req.param("identity") ?? "");
   if (!ok || !fixture) return c.notFound();
   const store = await storeFor(c);
   await issueSession(c, store, {

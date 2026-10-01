@@ -65,6 +65,13 @@ function pullRequest(fork = false): Fixture {
   };
 }
 
+function pullRequestHead(fork = false): Fixture {
+  const fixture = pullRequest(fork);
+  fixture.checkedSha = headSha;
+  fixture.parents = [baseSha];
+  return fixture;
+}
+
 // Execute the actual workflow resolver and unchanged checker. Both gh and git
 // are fixture executables; the minimal child env cannot inherit credentials/DBs.
 function runWorkflow(fixture: Fixture) {
@@ -159,6 +166,10 @@ function expectRejected(fixture: Fixture) {
 }
 
 describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
+  it("checks out the event PR head while dispatch and push retain the workflow SHA", () => {
+    expect(workflow).toContain("ref: ${{ github.event.pull_request.head.sha || github.sha }}");
+  });
+
   it("validates actual current metadata of a matching open release PR in one API snapshot", () => {
     const fixture = dispatch();
     fixture.live.title = "chore(main): release '0.3.0'";
@@ -230,16 +241,41 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     expect(result.stdout).toContain("PR conventions OK");
   });
 
-  it("accepts a supported PR head checkout and case-insensitive GitHub repo identities", () => {
-    const fixture = pullRequest(true);
-    fixture.workflowSha = headSha;
-    fixture.checkedSha = headSha;
-    fixture.parents = [baseSha];
+  it("accepts an explicit PR head checkout with synthetic workflow SHA and case-insensitive repo identities", () => {
+    const fixture = pullRequestHead(true);
     fixture.live.base.repo.full_name = repository.toLowerCase();
     fixture.live.head.repo.full_name = fixture.live.head.repo.full_name.toUpperCase();
     const result = runWorkflow(fixture);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("PR conventions OK");
+  });
+
+  it.each([false, true])("binds exact PR head despite base drift and synthetic workflow SHA (fork: %s)", (fork) => {
+    const fixture = pullRequestHead(fork);
+    fixture.event.pull_request!.base.sha = "d".repeat(40);
+    fixture.live.base.sha = "e".repeat(40);
+    const result = runWorkflow(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("PR conventions OK");
+    expect(JSON.parse(result.output).title).toBe(fixture.live.title);
+  });
+
+  it.each([
+    ["unrelated checkout with otherwise valid merge parents", (f: Fixture) => { f.checkedSha = "d".repeat(40); f.parents = [baseSha, headSha]; }],
+    ["malformed workflow SHA", (f: Fixture) => { f.workflowSha = "not-a-sha"; }],
+    ["malformed checkout SHA", (f: Fixture) => { f.checkedSha = "not-a-sha"; }],
+    ["moved live head", (f: Fixture) => { f.live.head.sha = "d".repeat(40); }],
+    ["different event head", (f: Fixture) => { f.event.pull_request!.head.sha = "d".repeat(40); }],
+    ["foreign live base repository", (f: Fixture) => { f.live.base.repo.full_name = "other/repo"; }],
+    ["different live source identity", (f: Fixture) => { f.live.head.repo.full_name = "other/repo"; }],
+    ["foreign event repository", (f: Fixture) => { f.event.repository.full_name = "other/repo"; }],
+    ["foreign snapshot base repository", (f: Fixture) => { f.event.pull_request!.base.repo.full_name = "other/repo"; }],
+    ["wrong event PR number", (f: Fixture) => { f.event.pull_request!.number = 29; }],
+    ["closed current PR", (f: Fixture) => { f.live.state = "closed"; }],
+  ] as const)("rejects explicit PR head checkout with %s before output", (_name, modify) => {
+    const fixture = pullRequestHead(true);
+    modify(fixture);
+    expectRejected(fixture);
   });
 
   it.each([
