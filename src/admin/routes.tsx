@@ -329,7 +329,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
         if (err instanceof ValidationError) {
-          return errorPage(c, 422, "That transition is not allowed", err.fields.status ?? err.fields.rsvp_open);
+          return errorPage(c, 422, "That transition is not allowed", err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open);
         }
         throw err;
       }

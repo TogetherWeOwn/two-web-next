@@ -55,7 +55,9 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 ## Develop and test safely
 
-Use Node **22+** (CI uses Node 24). Install development dependencies even when
+Use Node **22.18.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
+require default native TypeScript stripping, not early Node 22/23 releases).
+Install development dependencies even when
 `NODE_ENV` is inherited as `production`:
 
 ```sh
@@ -289,6 +291,48 @@ Only GET/HEAD `/join` permits frames, and only from `https://discord.com` for
 the widget. Other routes have `frame-src 'none'`; `frame-ancestors 'none'` and
 `X-Frame-Options: DENY` still prevent framing this site. CSP continues reporting
 to `/csp-reports` via both `report-uri` and the `csp-endpoint` reporting group.
+
+## Pre-flip probes (W16 rehearsal)
+
+Ports of legacy `discord:check-moderators` and `bot:internal-action-smoke`
+(`docs/parity.md` §7). Neither ever targets production — the role probe is
+network-free (it checks resolved config) and the smoke requires a valid
+`BOT_PRODUCTION_URL`, refuses that entire hostname regardless of port or DNS
+root dot, and rejects redirects. Both URLs must be HTTP(S), without credentials,
+query strings or fragments. A distinct hostname alone does not prove staging
+isolation: the runtime/receiver/custody holds still apply.
+
+```sh
+npm run check:worker-moderators                   # source deployment preflight
+npm run check:moderators -- --require-configured   # process-env fixture/local probe
+npm run smoke:internal-action -- \
+  --discord-id=<snowflake> --role-key=<key> --channel-key=<throwaway>
+```
+
+The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
+in `wrangler.jsonc` and requires exactly the approved SySOp ID, before any queue
+creation or deployment. `wrangler deploy --config wrangler.jsonc` consumes that
+same source value, without `--env`/`--var` overrides; a separate GitHub moderator
+secret cannot make the gate pass. `keep_vars` retains unrelated remote plaintext
+vars, and Wrangler retains remote secrets. No binding values are read back or
+copied. The preflight proves source configuration, **not live isolation or a
+successful deployment**. Blank config remains a valid local revocation state,
+but unapproved extra roles (including duplicates) fail the probe.
+
+The live smoke runs manually via the `staging-smoke` workflow on
+`[self-hosted, two-selfhosted]` in a job container (it posts a real announcement
+to a throwaway channel and creates a real staging event). Dispatch only after
+the existing staging isolation/HMAC prerequisites and independent review clear.
+Both probes are fixture-tested in `check` without real secrets.
+
+These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
+
+| Name | Kind | Notes |
+| --- | --- | --- |
+| `BOT_ENDPOINT_URL` | secret (staging bot) | Base URL of the staging bot's internal-actions endpoint. The smoke refuses to run without an explicit target. |
+| `BOT_SHARED_SECRET` | secret | HMAC secret the staging bot holds for our key id. Env only; never printed or logged. |
+| `BOT_KEY_ID` | var | Which shared secret signs the smoke (lets the bot rotate per caller). |
+| `BOT_PRODUCTION_URL` | var, required | Valid production bot URL. Missing/malformed exclusion fails closed before actions; the entire hostname is refused regardless of port. |
 
 ## Contributing
 
