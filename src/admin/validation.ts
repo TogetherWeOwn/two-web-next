@@ -317,7 +317,7 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give it a headline.";
-  else if (title.length > 255) fields.title = "Keep the headline to 255 characters.";
+  else if ([...title].length > 255) fields.title = "Keep the headline to 255 characters.";
   const body = str(data.body);
   const url = str(data.url);
   if (url && (url.length > 255 || !isHttpUrl(url))) fields.url = "Link is a full http(s) URL, or empty for no link.";
@@ -329,7 +329,7 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   // TOG-8707: an image with no description is silent for screen-reader
   // visitors — the URL and its description arrive together or not at all.
   if (imageUrl && !imageAlt) fields.image_alt = "Describe the photo in one plain sentence for screen-reader visitors.";
-  if (imageAlt && imageAlt.length > 255) fields.image_alt = "Keep the alt text to 255 characters.";
+  if (imageAlt && [...imageAlt].length > 255) fields.image_alt = "Keep the alt text to 255 characters.";
 
   let position = 0;
   const posRaw = str(data.position);
