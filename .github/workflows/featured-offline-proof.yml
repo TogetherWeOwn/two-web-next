@@ -108,7 +108,7 @@ jobs:
           npm ci --ignore-scripts --include=dev --no-audit --no-fund
           ./node_modules/.bin/esbuild ci/featured-proof/current-fixtures.ts --bundle --platform=node --format=cjs --outfile="$RUNNER_TEMP/featured-fixtures.cjs"
           node "$RUNNER_TEMP/featured-fixtures.cjs" "$RUNNER_TEMP/featured-current-fixtures"
-      - name: Capture eight current-source views with no app, database or network
+      - name: Capture twelve current-source views with no app, database or network
         run: |
           npm install --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2
           export NODE_PATH="$RUNNER_TEMP/featured-runtime/node_modules"

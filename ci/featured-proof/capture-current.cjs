@@ -88,9 +88,16 @@ async function main() {
             }
             const scroll = page.locator('[data-testid="featured-table-scroll"]');
             await scroll.focus();
+            check('keyboard scroll region receives focus', await scroll.evaluate(el => document.activeElement === el));
             await page.keyboard.press('ArrowRight');
-            await page.waitForFunction(() => document.querySelector('[data-testid="featured-table-scroll"]').scrollLeft > 0);
-            check('keyboard can scroll the list', await scroll.evaluate(el => el.scrollLeft > 0));
+            // Poll from Node: page-side animation-frame waits cannot run with JavaScript disabled.
+            let keyboardScrollPx = 0;
+            for (let attempt = 0; attempt < 10; attempt++) {
+              keyboardScrollPx = await scroll.evaluate(el => el.scrollLeft);
+              if (keyboardScrollPx > 0) break;
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            check('keyboard can scroll the list', keyboardScrollPx > 0);
             await scroll.evaluate(el => { el.scrollLeft = 0; });
           } else {
             check('scheduled label', await page.locator('[data-status="scheduled"]').isVisible());
