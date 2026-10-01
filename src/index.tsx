@@ -81,10 +81,11 @@ const staticSecurityHeaders = secureHeaders({
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
-    // Only the join page embeds Discord; OAuth/recovery/admin routes cannot frame anything.
-    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com" : "'none'"],
+    // Only join reads embed the widget; other routes cannot frame anything.
+    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com/widget" : "'none'"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
+    fontSrc: ["'self'"],
     frameAncestors: ["'none'"],
     formAction: ["'self'"],
     reportUri: CSP_REPORT_ENDPOINT,
