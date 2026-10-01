@@ -8,7 +8,7 @@ const member: Session = {
   id: "member-1", username: "Member", avatar: null, member: true, moderator: false,
 };
 
-async function render(inviteUrl: string, session: Session | null, notice: Notice) {
+async function render(inviteUrl: string | undefined, session: Session | null, notice: Notice) {
   return await jsx(Home, {
     session, notice, inviteUrl, appUrl: "https://next.example.test",
     counts: { memberCount: null, onlineCount: null, ranks: [] },
@@ -17,7 +17,8 @@ async function render(inviteUrl: string, session: Session | null, notice: Notice
 }
 
 const destinations = [
-  { name: "missing configuration", url: "" },
+  { name: "missing configuration", url: undefined },
+  { name: "blank configuration", url: "" },
   { name: "whitespace", url: " \t\n " },
   { name: "malformed URL", url: "not an invite" },
   { name: "JavaScript scheme", url: "javascript:alert(1)" },
@@ -40,13 +41,19 @@ describe.each([
   { name: "member recovery", session: member, notice: "join_failed" as const, links: 2 },
 ])("Home invite policy: $name", ({ session, notice, links }) => {
   it.each(destinations)("uses the existing destination for $name", async ({ url }) => {
-    const destination = inviteDestination(url);
+    const destination = url === undefined ? FALLBACK_INVITE : inviteDestination(url);
+    if (url?.includes("?utm_source=web")) expect(destination).toBe(url);
     const html = await render(url, session, notice);
     const inviteLinks = [...html.matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>(Open Discord|Join with an invite link instead)<\/a>/g)];
     expect(inviteLinks).toHaveLength(links);
     expect(inviteLinks.map((link) => link[1])).toEqual(Array(links).fill(destination.replaceAll("&", "&amp;")));
     if (destination === FALLBACK_INVITE) expect(html).not.toContain(`href="${url}"`);
   });
+});
+
+it("normalizes once when both member invite links are visible", async () => {
+  await render("javascript:alert(1)", member, "join_failed");
+  expect(console.error).toHaveBeenCalledTimes(1);
 });
 
 it.each([
