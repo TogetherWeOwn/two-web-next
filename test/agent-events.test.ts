@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
+// route-inventory: POST /api/agent-events
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { DEFAULT_CONFIG, type IngressConfig, digest, handleAgentEvent, validateFields } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 import users from "../drizzle/0000_init-users.sql?raw";
@@ -32,12 +33,12 @@ describe("validateFields / digest (pure)", () => {
 
 describe("worker route without a store", () => {
   it("answers 404 ingress_disabled by default and never touches a database", async () => {
-    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, {} as never);
+    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, { APP_URL: "https://next.example.test" } as never);
     expect(res.status).toBe(404);
     expect((await res.json()) as { reason: string }).toMatchObject({ reason: "ingress_disabled" });
   });
   it("answers 503 when enabled but no store is bound", async () => {
-    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, { AGENT_EVENTS_ENABLED: "true" } as never);
+    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, { APP_URL: "https://next.example.test", AGENT_EVENTS_ENABLED: "true" } as never);
     expect(res.status).toBe(503);
   });
 });

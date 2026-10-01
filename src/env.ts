@@ -2,6 +2,8 @@ import type { QueueMessage } from "./jobs/types";
 
 export type Env = AgentEventsEnv & {
   APP_URL: string;
+  // Worker-first static assets: fetched only after the host guard admits the request.
+  ASSETS?: Pick<Fetcher, "fetch">;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
   DISCORD_INVITE_URL: string;
@@ -9,7 +11,7 @@ export type Env = AgentEventsEnv & {
   // hides the stamp instead of 500ing (ports two-web TOG-7323).
   RULES_LAST_UPDATED?: string;
   // Hyperdrive → shared Postgres for web DB reads, sessions, roster writes,
-  // and /db-ping. DATABASE_URL overrides it for local/dev use. Same shape as
+  // and /up. DATABASE_URL overrides it for local/dev use. Same shape as
   // AGENT_DB below; the ingress binding remains independent.
   DB?: { connectionString: string };
   // Secrets (wrangler secret put). The bot token must belong to the same Discord application as

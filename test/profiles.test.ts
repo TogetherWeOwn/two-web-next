@@ -1,3 +1,7 @@
+// route-inventory: GET /profile
+// route-inventory: GET /members/:user
+// route-inventory: PATCH /members/:user
+// route-inventory: POST /members/:user
 // W7 member journeys: /profile, /members/:user, PATCH /members/:user (TOG-9686).
 //
 // Exposure tests come first by design: the matrix pins what a guest, a signed-in
@@ -8,6 +12,7 @@
 // - Live (agent-testdb, skipped without DATABASE_URL): real users/profiles/
 //   member_data_access_logs rows through the drizzle store.
 
+import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import type { AccessEntry } from "../src/access-log";
@@ -15,6 +20,7 @@ import { memberDataAccessLogs } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import { profiles, users } from "../src/db/schema";
 import type { Env } from "../src/env";
+import { sameOrigin } from "../src/same-origin";
 import { recordAccess } from "../src/admin/store";
 import { profilesApp, PROFILE_WRITE_THROTTLE_PER_MINUTE } from "../src/profiles/routes";
 import { createDbProfileStore, createMemoryProfileStore, type MemberView } from "../src/profiles/store";
@@ -256,7 +262,8 @@ describe("PATCH /members/:user (memory doubles)", () => {
 
   it("wrong origin is refused before anything else", async () => {
     const { app, sessions, store } = harness();
-    const res = await app.request(
+    const mounted = new Hono<{ Bindings: Env }>().use("*", sameOrigin).route("/", app);
+    const res = await mounted.request(
       `/members/${ALICE.userId}`,
       form(await cookieFor(sessions, ALICE), { bio: "x", games_text: "" }, { origin: "https://evil.example" }),
       env,
