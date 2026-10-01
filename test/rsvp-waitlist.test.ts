@@ -92,7 +92,8 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
   async function assertTracked(eventKeys: string[]) {
     // The carrier contains identity only; action/payload are chosen at consumption.
     expect(sent).toEqual(eventKeys.map((eventKey) => ({
-      body: { kind: "sync-event", eventKey, idempotencyKey: expect.any(String), jobId: expect.any(String) },
+      body: { kind: "sync-event", eventKey, idempotencyKey: expect.any(String), jobId: expect.any(String),
+        leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) },
       options: { delaySeconds: 10 },
     })));
     for (const { body } of sent) {
@@ -104,8 +105,12 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(tracked).toEqual(expect.arrayContaining(sent.map(({ body }) => ({
       job_id: body.jobId, kind: "sync-event", key: uniqueKey(body.eventKey), delayed: true,
     }))));
-    const locks = await client`select key from job_unique_locks`;
+    const locks = await client`select key, owner_token from job_unique_locks`;
     expect(locks.map((row) => row.key).sort()).toEqual(eventKeys.map(uniqueKey).sort());
+    for (const { body } of sent) {
+      expect(locks.find((row) => row.key === uniqueKey(body.eventKey)))
+        .toEqual({ key: uniqueKey(body.eventKey), owner_token: body.leaseToken });
+    }
     return sent.map(({ body }) => body);
   }
 

@@ -96,13 +96,15 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   async function assertTracked() {
     expect(sent).toHaveLength(1);
     const { body, options } = sent[0]!;
-    expect(body).toEqual({ kind: "sync-event", eventKey, idempotencyKey: expect.any(String), jobId: expect.any(String) });
+    expect(body).toEqual({ kind: "sync-event", eventKey, idempotencyKey: expect.any(String), jobId: expect.any(String),
+      leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) });
     expect(body.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.jobId).toMatch(/^[0-9a-f-]{36}$/);
     expect(options).toEqual({ delaySeconds: 10 });
     const rows = await sql`select job_id, key, available_at > created_at as delayed from queue_jobs`;
     expect(rows).toEqual([{ job_id: body.jobId, key: uniqueKey(eventKey), delayed: true }]);
-    expect(await sql`select key from job_unique_locks`).toEqual([{ key: uniqueKey(eventKey) }]);
+    expect(await sql`select key, owner_token from job_unique_locks`)
+      .toEqual([{ key: uniqueKey(eventKey), owner_token: body.leaseToken }]);
     return body;
   }
   function botDouble() {

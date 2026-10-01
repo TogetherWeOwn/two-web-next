@@ -101,9 +101,12 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP pause/reopen (isolated agent-te
   async function assertTracked(eventKey: string) {
     const delivery = sent.at(-1)!;
     expect(delivery).toEqual({ kind: "sync-event", eventKey,
-      idempotencyKey: expect.any(String), jobId: expect.any(String) });
+      idempotencyKey: expect.any(String), jobId: expect.any(String),
+      leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) });
     const [job] = await fixture.client`select job_id, kind, key, available_at > created_at as delayed from queue_jobs`;
     expect(job).toEqual({ job_id: delivery.jobId, kind: "sync-event", key: uniqueKey(eventKey), delayed: true });
+    expect(await fixture.client`select key, owner_token from job_unique_locks`)
+      .toEqual([{ key: uniqueKey(eventKey), owner_token: delivery.leaseToken }]);
   }
 
   const seed = async (over: Partial<typeof events.$inferInsert> = {}) => {
