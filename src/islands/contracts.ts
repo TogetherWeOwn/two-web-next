@@ -297,10 +297,13 @@ function partsIn(instant: Date, zone: string, opts: Intl.DateTimeFormatOptions):
   return new Map(parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
 }
 
-/** "YYYY-MM-DD" wall date in `zone` (invalid zones read as UTC). */
+/** Canonical ISO wall date, including expanded years (invalid zones read as UTC). */
 export function wallDateIso(instant: Date, zone: string): string {
-  const p = partsIn(instant, zone, { year: "numeric", month: "2-digit", day: "2-digit" });
-  return `${p.get("year")!.padStart(4, "0")}-${p.get("month")}-${p.get("day")}`;
+  const p = partsIn(instant, zone, { era: "short", year: "numeric", month: "2-digit", day: "2-digit" });
+  // Intl's Gregorian year is era-relative: 1 BC is astronomical year zero.
+  const year = Number(p.get("year"));
+  const isoYear = p.get("era") === "BC" ? 1 - year : year;
+  return calendarDate(isoYear, Number(p.get("month")) - 1, Number(p.get("day"))).toISOString().split("T")[0]!;
 }
 
 /** "HH:mm" 24-hour wall time in `zone` (invalid zones read as UTC). */
@@ -309,9 +312,9 @@ export function wallTimeHm(instant: Date, zone: string): string {
   return `${p.get("hour")}:${p.get("minute")}`;
 }
 
-/** "YYYY-MM" wall month in `zone`. */
+/** ISO wall month in `zone`; unsupported years remain rejectable by the parser. */
 export function wallMonth(instant: Date, zone: string): string {
-  return wallDateIso(instant, zone).slice(0, 7);
+  return wallDateIso(instant, zone).slice(0, -3);
 }
 
 /** "Fri 4 Nov, 20:00" — the card's human time in the host zone (legacy 'D j M, H:i'). */

@@ -1,7 +1,9 @@
 // Calendar-year contract and real Hono /events SSR on synthetic sources only.
+import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { registerEventRoutes } from "../src/events/routes";
@@ -29,9 +31,25 @@ function expectFullWeeks(days: CalendarDay[]) {
   }
 }
 
-// Active Discord rows can have no announced end. Empty pg-proxy answers ensure
-// this fixture exercises routing/rendering without any DB or Discord connection.
-function calendarFixture(startsAt: Date) {
+// Active Discord rows can have no announced end. A synthetic past local row
+// supplies the host zone when requested; pg-proxy never connects to a real DB.
+function calendarFixture(startsAt: Date, zone?: string) {
+  const pastStart = new Date("2025-01-15T12:00:00Z");
+  const past: typeof events.$inferSelect = {
+    id: 1, icsSequence: 1n, eventKey: "zone-fixture", title: "Past zone fixture", game: null, description: null,
+    startsAt: pastStart, endsAt: new Date("2025-01-15T13:00:00Z"), timezone: zone ?? "UTC",
+    location: null, capacity: null, status: "published", discordEventId: null,
+    discordSyncFailedAt: null, discordSyncFailureCode: null, createdBy: null, rsvpOpen: true,
+    recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
+    parentEventId: null, recurrenceIndex: null, createdAt: pastStart, updatedAt: pastStart,
+  };
+  const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
+  const db = drizzle(async (sql) => ({
+    rows: zone && /"ends_at" </.test(sql) ? [columns.map((key) => {
+      const value = past[key];
+      return value instanceof Date ? value.toISOString() : value;
+    })] : [],
+  }));
   const event: DiscordTransient = {
     discordId: "123456789",
     status: "active",
@@ -44,7 +62,7 @@ function calendarFixture(startsAt: Date) {
   const env = {
     APP_URL: "https://calendar.example.test",
     DISCORD_INVITE_URL: "https://discord.gg/example",
-    ADMIN_DB: drizzle(async () => ({ rows: [] })) as unknown as Db,
+    ADMIN_DB: db as unknown as Db,
     DISCORD_EVENTS: { upcoming: async () => [event], lastReadFailed: () => false },
   } as unknown as Env;
   const app = new Hono<{ Bindings: Env }>();
@@ -125,6 +143,27 @@ describe("bounded calendar years", () => {
     ]);
   });
 
+  it.each<[string, string, string, string, string | null]>([
+    ["9999-12-31T23:30:00Z", "Etc/GMT-1", "+010000-01-01", "+010000-01", "9999-12"],
+    ["0001-01-01T00:30:00Z", "Etc/GMT+1", "0000-12-31", "0000-12", null],
+    ["0000-01-01T00:30:00Z", "Etc/GMT+1", "-000001-12-31", "-000001-12", null],
+    ["2026-12-31T23:30:00Z", "Etc/GMT-1", "2027-01-01", "2027-01", "2027-01"],
+    ["0099-12-31T23:30:00Z", "Etc/GMT-1", "0100-01-01", "0100-01", "0100-01"],
+    ["2026-01-15T12:00:00Z", "invalid-zone", "2026-01-15", "2026-01", "2026-01"],
+  ])("uses canonical host-zone years for %s in %s", (start, zone, date, month, gridMonth) => {
+    const instant = new Date(start);
+    const bucket = wallDateIso(instant, zone);
+    expect(bucket).toBe(date);
+    expect(wallMonth(instant, zone)).toBe(month);
+    expect(parseCalendarMonth(wallMonth(instant, zone))).toBe(gridMonth === month ? month : null);
+    if (gridMonth) {
+      const event = { title: "Host-zone boundary" };
+      const days = monthGrid(gridMonth, bucket, new Map([[bucket, [event]]])).flat();
+      expect(days.find((day) => day.iso === date)!.events).toEqual([event]);
+      expect(days.filter((day) => day.isToday).map((day) => day.iso)).toEqual([date]);
+    }
+  });
+
   it.each(["0001", "0099", "0100", "2026", "9999"])("pads host-zone event bucket and default month for year %s", (year) => {
     const instant = new Date(`${year}-01-15T12:00:00Z`);
     expect(wallDateIso(instant, "UTC")).toBe(`${year}-01-15`);
@@ -183,6 +222,31 @@ describe("calendar year-boundary Hono SSR", () => {
     expect(response.status).toBe(200);
     const expected = start.startsWith("0099") ? "0099-01" : "2026-01";
     expect(await response.text()).toContain(`data-month="${expected}"`);
+  });
+
+  it("renders a host-year-10000 event and today in the expanded trailing cell", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const instant = new Date("9999-12-31T23:30:00Z");
+    vi.setSystemTime(instant);
+    const response = await calendarFixture(instant, "Etc/GMT-1")("/events?view=calendar&month=9999-12");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    const cell = /<td[^>]*data-date="\+010000-01-01"[^>]*>([\s\S]*?)<\/td>/.exec(html)![1]!;
+    expect(cell).toContain('data-cal-jump="true">00:30 Boundary fixture');
+    expect(renderedDays(html).filter((day) => day.isToday).map((day) => day.iso)).toEqual(["+010000-01-01"]);
+  });
+
+  it("falls back for host year zero without aliasing the event into December 0001", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-15T12:00:00Z"));
+    const request = calendarFixture(new Date("0001-01-01T00:30:00Z"), "Etc/GMT+1");
+    const response = await request("/events?view=calendar");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('data-month="2026-01"');
+    const december = await request("/events?view=calendar&month=0001-12");
+    expect(december.status).toBe(200);
+    const cell = /<td[^>]*data-date="0001-12-31"[^>]*>([\s\S]*?)<\/td>/.exec(await december.text())![1]!;
+    expect(cell).not.toContain("Boundary fixture");
   });
 
   it("preserves ordinary 2026 today highlighting and Monday-first rendered weeks", async () => {
