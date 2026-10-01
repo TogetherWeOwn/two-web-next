@@ -7,7 +7,7 @@ const event: PublicEvent = {
   id: 1, eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAV", title: "Chess & <friends>", game: "Chess",
   description: "Bring a board & <snacks>.", location: "Lobby & lounge",
   startsAt: start, endsAt: new Date("2026-10-10T22:00:00Z"), timezone: "UTC",
-  capacity: 10, status: "published", rsvpOpen: true, goingCount: 3,
+  capacity: 10, status: "published", rsvpOpen: true, goingCount: 3, icsSequence: 1n,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
   recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
