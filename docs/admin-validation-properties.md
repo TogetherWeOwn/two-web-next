@@ -17,7 +17,7 @@ the previously untested pure input invariants.
 ```sh
 npm ci --include=dev
 # Unset inherited DB/service bindings; these properties only use local fixtures.
-env -u DATABASE_URL -u REDIS_URL timeout 10s npm run test:admin-properties
+env -u DATABASE_URL -u REDIS_URL timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
 env -u DATABASE_URL -u REDIS_URL npm run check
 ```
 
@@ -25,8 +25,12 @@ Every fast-check assertion uses seed **10849** and **100 runs**. Important bound
 and failing inputs are explicit examples, not left to random chance. The suite
 contains 25 tests / 26 property assertions. Vitest prints the seed, shrink path
 and counterexample on failure. CI runs the suite under a whole-process `timeout
-10s` before migrations, and the ordinary `check` also discovers the file. The
-first passing local run on Node 24.21.0 / Vitest 5.0.2 took **1.58 s**.
+10s` before migrations, and the ordinary `check` also discovers the file. CI
+launches Vitest directly with an isolated thread worker to avoid npm and fork
+startup overhead on shared self-hosted runners; the seed, run count, examples,
+assertions and whole-process budget are unchanged. `npm run test:admin-properties`
+remains available for untimed local reproduction. The first passing local run on
+Node 24.21.0 / Vitest 5.0.2 took **1.58 s**.
 
 ## Coverage matrix
 

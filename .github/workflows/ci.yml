@@ -101,7 +101,8 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Seeded admin properties (10s budget, local fixtures)
-        run: timeout 10s npm run test:admin-properties
+        # Skip npm's extra process startup; keep the same suite and hard budget.
+        run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
       - name: Apply migrations
         run: npm run db:migrate
         env:
