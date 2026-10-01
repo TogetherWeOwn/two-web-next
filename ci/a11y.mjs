@@ -12,7 +12,7 @@ import { assertNoViolations, auditCases, redactAuditLog, WCAG_AA_TAGS } from "./
 import { AUDIT_BROWSER_OPTIONS, createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 import { buildAuditWorker } from "./a11y-build.mjs";
 import { assertAuditContent } from "./a11y-content.mjs";
-import { assertHomeInteractions } from "./a11y-interactions.mjs";
+import { assertHomeInteractions, assertProfileInteractions } from "./a11y-interactions.mjs";
 
 const output = resolve("artifacts/a11y");
 const lifecycle = createAuditLifecycle();
@@ -125,7 +125,7 @@ try {
         assert(await page.evaluate(() => document.styleSheets.length > 0), "Stylesheet must be loaded for contrast checks");
         assert.deepEqual(resourceErrors, [], "Unexpected script/stylesheet failures");
         result.contentAssertions = await assertAuditContent(page, scenario);
-        result.interactionAssertions = await assertHomeInteractions(page, scenario);
+        result.interactionAssertions = [...await assertHomeInteractions(page, scenario), ...await assertProfileInteractions(page, scenario)];
         const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
         result.violations = results.violations;
         result.incomplete = results.incomplete;

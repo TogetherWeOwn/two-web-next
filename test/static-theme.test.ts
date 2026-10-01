@@ -67,7 +67,9 @@ it("keeps the join targets, guarded return path, widget and fallback in the auth
   expect(fallback).not.toContain("<iframe");
 });
 
-it.each(["/events", "/join/callback?error=access_denied", "/missing-page"])("%s stays outside this styling slice", async (path) => {
+it.each(["/events"])("%s stays outside this styling slice", async (path) => {
+  // The denied OAuth callback and unknown pages render the themed recovery
+  // shell (base-theme homepage-theme), so only truly unthemed routes belong here.
   const html = await (await app.request(path, {}, env)).text();
   expect(html).not.toContain('href="/theme.css"');
   expect(html).not.toContain('class="base-theme');

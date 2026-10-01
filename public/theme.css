@@ -1,4 +1,4 @@
-/* Base theme for the homepage, static content and join landing only. */
+/* Base theme for home, profiles, static, join and recovery. */
 @font-face { font-family: Display; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/display-latin-500.woff2') format('woff2'); }
 @font-face { font-family: Display; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/display-latin-700.woff2') format('woff2'); }
 .base-theme {
@@ -76,7 +76,6 @@
 .base-theme footer { border-top: 1px solid var(--line); color: var(--muted); }
 .base-theme footer nav { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem 1.5rem; margin-top: .75rem; }
 .base-theme footer a { min-height: 44px; display: inline-flex; align-items: center; }
-/* Content-page rhythm: compact navigation, readable policy text, open answers. */
 .content-layout { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 4rem; padding-top: 3rem; }
 .content-nav { display: flex; flex-direction: column; align-self: start; border-top: 1px solid var(--line); padding-top: 1rem; }
 .content-nav a { display: flex; align-items: center; min-height: 44px; padding: .5rem 0; }
@@ -97,7 +96,6 @@
 .base-theme [data-testid='faq-list'] .card:last-child { padding-bottom: 0; }
 .base-theme [data-testid='privacy-policy'] h2 { font-size: 1.8rem; margin-top: 2.5rem; }
 [data-testid='privacy-policy'] { max-width: 65ch; overflow-wrap: anywhere; }
-/* The Discord iframe stays join-only and retains its existing privacy attributes. */
 .base-theme .join-layout { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 4rem; align-items: center; margin-top: 2rem; }
 .join-panel { min-width: 0; padding: 2rem; border: 1px solid var(--line); background: var(--surface); border-top: 3px solid var(--brand); }
 .join-actions { display: flex; flex-direction: column; align-items: start; gap: 1.25rem; margin: 2rem 0 0; }
@@ -141,6 +139,17 @@
   .base-theme .community-grid { grid-template-columns: 1fr; gap: 0; }
   .base-theme section { padding: 2rem 0; }
 }
+.base-theme .recovery-hero h1 { font-size: clamp(2.3rem, 5vw, 4rem); max-width: 22ch; text-wrap: balance; }
+.base-theme .recovery-code { font: 700 clamp(7rem, 15vw, 12rem)/.9 Display, 'Arial Narrow', sans-serif; letter-spacing: -.05em; color: var(--brand); margin: 0 0 1rem; font-variant-numeric: tabular-nums; }
+.base-theme .recovery-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 1rem 1.5rem; margin: 0; max-width: 100%; }
+.base-theme .recovery-actions a { overflow-wrap: anywhere; }
+.base-theme .recovery-events { max-width: 52rem; margin: auto; }
+.base-theme .recovery-events .facts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); }
+.base-theme .recovery-events .card > a { font: 700 1.5rem/1.2 Display, 'Arial Narrow', sans-serif; }
+.base-theme .error-events-search { margin-top: 2rem; }
+.base-theme .error-events-search input { background: var(--surface); color: var(--ink); border-color: var(--muted); min-height: 52px; }
+.base-theme .error-events-search input::placeholder { color: var(--muted); opacity: 1; }
+.base-theme .error-events-search button { font: 700 1.1rem/1.2 Display, 'Arial Narrow', sans-serif; }
 @media (prefers-reduced-motion: no-preference) {
   .base-theme .btn { transition: background-color .15s ease, color .15s ease, transform .15s ease; }
 }

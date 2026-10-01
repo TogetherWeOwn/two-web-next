@@ -6,6 +6,7 @@ import type { Session } from "./env";
 import type { JoinResult } from "./return-journey";
 import type { HomeEvent } from "./events/reads";
 import { cardTimeLabel, isValidZone } from "./islands/contracts";
+import { inviteDestination } from "./invite";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
@@ -41,7 +42,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home" | "content" | "join";
+    theme?: "home" | "content" | "join" | "profile";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -74,6 +75,7 @@ export const Layout: FC<
         <>
           <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
           <link rel="stylesheet" href="/theme.css" />
+          {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
         </>
       ) : null}
     </head>
@@ -81,8 +83,17 @@ export const Layout: FC<
   </html>
 );
 
+type HeaderCta = { href: string; label: string };
+
 // Static pages pass no session: shared chrome never reads account persistence.
-export const SiteHeader: FC<{ session?: Session | null; home?: boolean; joinAction?: boolean }> = ({ session, home, joinAction }) => (
+// joinAction renders the join-funnel entry on the static leaves; an explicit
+// cta overrides the guest action (recovery shells pass their way back in).
+export const SiteHeader: FC<{
+  session?: Session | null;
+  home?: boolean;
+  joinAction?: boolean;
+  cta?: HeaderCta;
+}> = ({ session, home, joinAction, cta }) => (
   <header class="bar site-header">
     <nav class="main-nav" aria-label="Primary">
       <a href="/" aria-current={home ? "page" : undefined}>Home</a>
@@ -101,7 +112,9 @@ export const SiteHeader: FC<{ session?: Session | null; home?: boolean; joinActi
       ) : (
         <div>
           <span class="account-caption">Welcome, guest</span>
-          {joinAction ? (
+          {cta ? (
+            <a class="btn" href={cta.href} data-testid="signin">{cta.label}</a>
+          ) : joinAction ? (
             <a class="btn" href="/join">Join with Discord</a>
           ) : (
             <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
@@ -125,6 +138,32 @@ export const SiteFooter: FC = () => (
       <a href="/privacy">Privacy</a>
     </nav>
   </footer>
+);
+
+// Presentational only: error and OAuth recovery routes must not read sessions
+// or require a database just to render a way back into the community.
+export const RecoveryShell: FC<PropsWithChildren<{
+  title: string;
+  headingId: string;
+  code?: string;
+  robots?: string;
+  headerCta?: HeaderCta;
+  supportingContent?: PropsWithChildren["children"];
+}>> = ({ title, headingId, code, robots, headerCta, supportingContent, children }) => (
+  <Layout title={`${title} — Together We Own`} robots={robots} theme="home">
+    <SiteHeader cta={headerCta} />
+    <main id="main" tabindex={-1}>
+      <section class="hero recovery-hero" aria-labelledby={headingId}>
+        <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
+        {code ? <p class="recovery-code" aria-hidden="true">{code}</p> : <p class="strap">Let&apos;s get you back to the lobby</p>}
+        <h1 id={headingId}>{title}</h1>
+        {children}
+      </section>
+      {supportingContent}
+    </main>
+    <SiteFooter />
+  </Layout>
 );
 
 export type Notice =
@@ -234,25 +273,13 @@ export const Recovery: FC<{
   retryLabel: string;
   inviteUrl: string;
 }> = ({ title, message, retryUrl, retryLabel, inviteUrl }) => (
-  <Layout title={`${title} — Together We Own`}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="btn" href="/join">Join with Discord</a>
-      </nav>
-    </header>
-    <main id="main" tabindex={-1}>
-      <section aria-labelledby="recovery-heading">
-        <h1 id="recovery-heading">{title}</h1>
-        <p class="lead">{message}</p>
-        <p>
-          <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
-          <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
-        </p>
-      </section>
-    </main>
-    <SiteFooter />
-  </Layout>
+  <RecoveryShell title={title} headingId="recovery-heading" headerCta={{ href: "/join", label: "Join with Discord" }}>
+    <p class="lead">{message}</p>
+    <p class="recovery-actions">
+      <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
+      <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
+    </p>
+  </RecoveryShell>
 );
 
 const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map((label) => ({
@@ -270,7 +297,9 @@ export const Home: FC<{
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
   imageHosts?: string;
-}> = ({ session, notice, joinResult, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
+}> = ({ session, notice, joinResult, inviteUrl: configuredInviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => {
+  const inviteUrl = inviteDestination(configuredInviteUrl);
+  return (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -382,7 +411,8 @@ export const Home: FC<{
     </main>
     <SiteFooter />
   </Layout>
-);
+  );
+};
 
 const Leaf: FC<PropsWithChildren<{ title: string; canonical: string; headingId: string; heading: string }>> = ({
   title,
