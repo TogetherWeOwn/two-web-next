@@ -6,6 +6,7 @@ import type { Session } from "./env";
 import type { JoinResult } from "./return-journey";
 import type { HomeEvent } from "./events/reads";
 import { cardTimeLabel, isValidZone } from "./islands/contracts";
+import { inviteDestination } from "./invite";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
@@ -41,7 +42,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home";
+    theme?: "home" | "profile";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -70,14 +71,15 @@ export const Layout: FC<
       ) : null}
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
-      {theme === "home" ? (
+      {theme ? (
         <>
           <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
           <link rel="stylesheet" href="/theme.css" />
+          {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
         </>
       ) : null}
     </head>
-    <body class={theme === "home" ? "homepage-theme" : undefined}><SkipLink />{children}</body>
+    <body class={theme === "home" ? "homepage-theme" : theme === "profile" ? "profile-theme" : undefined}><SkipLink />{children}</body>
   </html>
 );
 
@@ -286,7 +288,9 @@ export const Home: FC<{
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
   imageHosts?: string;
-}> = ({ session, notice, joinResult, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
+}> = ({ session, notice, joinResult, inviteUrl: configuredInviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => {
+  const inviteUrl = inviteDestination(configuredInviteUrl);
+  return (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -398,7 +402,8 @@ export const Home: FC<{
     </main>
     <SiteFooter />
   </Layout>
-);
+  );
+};
 
 const Leaf: FC<PropsWithChildren<{ title: string; canonical: string; headingId: string; heading: string }>> = ({
   title,
