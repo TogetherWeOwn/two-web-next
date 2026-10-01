@@ -1,8 +1,9 @@
 // Staging regression (TOG-11700): PostgreSQL accepts finite timestamps far
 // outside the JS Date range (up to year 294276, e.g. legacy imports); the
 // driver decodes those to invalid Dates whose `toISOString()`/formatting
-// throws RangeError, which 500s /events, /events.rss, /events.ics and /e/:key
-// even though #232's `isfinite()` guard passes them. Served reads refuse such
+// throws RangeError, which 500s /events and /e/:key even though #232's
+// `isfinite()` guard passes them (feeds don't throw — they serve corrupt
+// `NaN` instants as 200, also refused here). Served reads refuse such
 // windows the same way 404 suggestions and related links already do. The
 // write path caps years at four digits, so only imports can carry such rows.
 // Isolated test DB only.
