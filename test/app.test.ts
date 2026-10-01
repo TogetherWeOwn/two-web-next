@@ -4,7 +4,7 @@
 // route-inventory: POST /logout
 // route-inventory: POST /auth/qa/:identity
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { createMemorySessionStore, type SessionStore } from "../src/sessions";
 import type { Env } from "../src/env";
 import { QA_HEADER } from "../src/qa";

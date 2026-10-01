@@ -83,11 +83,11 @@ assets. Its 19-case selftest isolates raw/gzip breaches, exact boundaries,
 missing files, malformed/empty/invalid budgets and newly unbudgeted assets,
 including imported nested helpers. The newly landed `copy-link` island has an
 initial ceiling based on its measured size. Island ceilings stay unchanged.
-The stylesheet ceiling moved once, 3072/1280 → 4096/1792 raw/gzip: main's
-error-search rules (`.error-events-search`, TOG-10824) are legitimate growth
-that no whitespace compaction can fit — fully minified the sheet is 3220 raw
-bytes against the old 3072 ceiling. Declarations remain whitespace-compacted
-(identical parsed CSS); Lighthouse thresholds and island ceilings are untouched.
+The stylesheet ceilings remain **3072/1280 raw/gzip bytes**. Main's home-event
+and error-search rules must be preserved while reducing asset size; whitespace
+compaction alone does not fit those additions. Do not raise the ceilings in this
+PR to hide that failure. Declarations remain whitespace-compacted (identical
+parsed CSS); Lighthouse thresholds and island ceilings are untouched.
 
 Never relax a Lighthouse threshold to turn a build green. Threshold changes
 require a separate owner-approved PR. Byte-ceiling increases must likewise be a

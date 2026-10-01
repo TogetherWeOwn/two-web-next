@@ -2,7 +2,7 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -20,7 +20,8 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     id: 1, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
     startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC",
     location: "The lobby & voice channel", capacity: 10, status: "published", rsvpOpen: true,
-    discordEventId: null, createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
+    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
     ...over,
   };

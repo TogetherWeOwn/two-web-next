@@ -26,7 +26,7 @@ import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { sitemapEvents } from "./events/reads";
+import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
@@ -38,6 +38,7 @@ import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
 import { sameOrigin } from "./same-origin";
+import { trustHosts } from "./trust-hosts";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -96,6 +97,11 @@ app.use("*", async (c, next) => {
   await staticSecurityHeaders(c, next);
   await robotsTag(c, async () => {});
 });
+
+// TrustHosts re-expression (W16: TOG-10110): refuse foreign Host values
+// before routing. Mounted after secureHeaders (refusals leave hardened) and
+// before every route; absolute URLs never derive from Host (all from APP_URL).
+app.use("*", trustHosts());
 
 // Before throttles, session rotation, body parsing, or any mounted handler.
 app.use("*", sameOrigin);
@@ -232,17 +238,25 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
 const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
 
 app.get("/", async (c) => {
-  // Optional homepage data must not take down the funnel during a DB outage.
-  const session = await readSession(c).catch(() => null);
+  // A DB outage must not break the funnel, including session setup. Fail closed to guest.
+  const session = await readSession(c).catch(() => {
+    // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
+    console.warn("Home session unavailable; serving as guest.", { exception: "SessionReadFailure" });
+    return null;
+  });
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
   const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
-  const featured = await dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []);
+  const [upcomingEvents, featured] = await Promise.all([
+    loadHomeUpcoming(() => dbFor(c)),
+    dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),
+  ]);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} featured={featured} />,
+    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
+      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured} />,
   );
 });
 

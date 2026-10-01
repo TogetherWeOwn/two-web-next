@@ -1,6 +1,7 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import rawApp from "../src/index";
+import app from "./app";
 import { robotsTagFor, SECURITY_HEADERS } from "../src/headers";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
@@ -349,30 +350,41 @@ describe("security headers per route class", () => {
     expect(robotsTagFor("https://togetherweown.com")).toBeNull();
     expect(robotsTagFor(APP_URL)).toBe("noindex, nofollow");
     expect((await app.request("/", {}, env)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
-    // Absolute URL: the in-process default host is localhost, so a bare "/"
-    // would conflate config and serving host. Apex config + apex serving host
-    // is the only clean combination.
+    // Explicit absolute URL pins apex config + apex serving host; the test
+    // helper resolves relative requests to APP_URL, never Hono's localhost.
     const apex = await app.request("https://togetherweown.com/", {}, { ...env, APP_URL: "https://togetherweown.com" });
     expect(apex.headers.get("X-Robots-Tag")).toBeNull();
   });
 
-  it("noindexes by the serving host, not just APP_URL: an apex build on a preview alias stays noindex", async () => {
+  it("noindexes foreign-host refusals while trusted apex HTML and preview JSON keep their header policy", async () => {
     // Unit: config-only call keeps the old verdict; a serving host refines it.
     expect(robotsTagFor("https://togetherweown.com", "togetherweown.com")).toBeNull();
     expect(robotsTagFor("https://togetherweown.com", "preview.example.test")).toBe("noindex, nofollow");
     expect(robotsTagFor("not-a-url", "togetherweown.com")).toBe("noindex, nofollow");
-    // Request-level: APP_URL is apex, but the Worker answers on other hosts.
+    // W16 TrustHosts refuses aliases outside this environment's APP_URL before
+    // routing. Use the raw app so these explicit foreign authorities stay intact.
     const apex = { ...env, APP_URL: "https://togetherweown.com" };
     for (const url of ["https://preview.example.test/", "https://two-web-next.example.workers.dev/", "http://localhost/"]) {
-      const res = await app.request(url, {}, apex);
-      expect(res.status, url).toBe(200);
+      const res = await rawApp.request(url, {}, apex);
+      expect(res.status, url).toBe(404);
+      expect(res.headers.get("content-type"), url).toContain("text/html");
+      expect(res.headers.get("cache-control"), url).toBe("no-store, private");
       expect(res.headers.get("X-Robots-Tag"), url).toBe("noindex, nofollow");
     }
-    const prod = await app.request("https://togetherweown.com/", {}, apex);
+    const prod = await rawApp.request("https://togetherweown.com/", {}, apex);
+    expect(prod.status).toBe(200);
     expect(prod.headers.get("X-Robots-Tag")).toBeNull();
-    // JSON stays untagged even on a preview host.
-    const json = await app.request("https://preview.example.test/up", {}, apex);
+    // Trusted preview JSON stays untagged; the same URL with apex config is
+    // instead a branded HTML refusal and must carry the noindex header.
+    const preview = { ...env, APP_URL: "https://preview.example.test" };
+    const json = await app.request("/up", {}, preview);
+    expect(json.status).toBe(200);
+    expect(json.headers.get("content-type")).toContain("application/json");
     expect(json.headers.get("X-Robots-Tag")).toBeNull();
+    const refused = await rawApp.request("https://preview.example.test/up", {}, apex);
+    expect(refused.status).toBe(404);
+    expect(refused.headers.get("content-type")).toContain("text/html");
+    expect(refused.headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
   });
 
   it("never emits Strict-Transport-Security from the app: the edge owns HSTS (TOG-8729)", async () => {

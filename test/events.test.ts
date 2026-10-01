@@ -10,7 +10,7 @@
 // (agent-testdb; skipped without DATABASE_URL like test/admin.test.ts).
 import { serializeSigned } from "hono/utils/cookie";
 import { beforeEach, describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
