@@ -41,7 +41,12 @@ const baseEnv: Env & { DISCORD_EVENTS: DiscordEventsSource } = {
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
   QA_AUTH_TOKEN: "test-only-qa-token",
 };
-const cookieFrom = (res: Response) => res.headers.get("set-cookie")!.split(";")[0]!;
+const cookieFrom = (res: Response) => {
+  // Status liveness is not authentication; never rely on Set-Cookie ordering.
+  const sessions = res.headers.getSetCookie().filter((cookie) => cookie.startsWith("__Host-two_session="));
+  expect(sessions).toHaveLength(1);
+  return sessions[0]!.split(";")[0]!;
+};
 const memberId = QA_IDENTITIES["qa-member"]!.discordId;
 
 describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", () => {

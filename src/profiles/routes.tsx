@@ -16,6 +16,7 @@
 // Session seam mirrors the admin guard: a row read, never a rotation.
 
 import { getSignedCookie } from "hono/cookie";
+import { enableAuthStatus } from "../auth-status";
 import { type Context, type Next, Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -104,7 +105,10 @@ export function profilesApp(deps: ProfileDeps = {}) {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
       if (!sessions) throw new Error("no session store");
       const row = await sessions.get(await hashToken(token));
-      if (row) viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
+      if (row) {
+        viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
+        if (row.member && c.req.method === "GET") await enableAuthStatus(c, sessions, await hashToken(token));
+      }
     } catch (err) {
       // Bounded like every other session-failure log: class name only — driver
       // messages can carry DSN fragments (TOG-10355).
