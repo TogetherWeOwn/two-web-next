@@ -93,7 +93,13 @@ describe("factored stylesheet", () => {
           expect(await snapshot(newPage), `${width} ${row.name} default`).toEqual(await snapshot(oldPage));
           for (const page of [oldPage, newPage]) await page.keyboard.press("Tab");
           expect(await snapshot(newPage), `${width} ${row.name} keyboard focus`).toEqual(await snapshot(oldPage));
-          for (const page of [oldPage, newPage]) await page.locator('a[href]:not([href="#main"])').first().hover();
+          for (const page of [oldPage, newPage]) {
+            // The focused skip link overlays the brand; compare hover as a separate state.
+            await page.evaluate("() => document.activeElement.blur()");
+            const link = page.locator('a[href]:not([href="#main"])').first();
+            await link.hover();
+            expect(await link.evaluate("element => element.matches(':hover')")).toBe(true);
+          }
           expect(await snapshot(newPage), `${width} ${row.name} hover`).toEqual(await snapshot(oldPage));
           if (row.name === "avatar-abc") {
             for (const page of [oldPage, newPage]) await page.evaluate(`() => {

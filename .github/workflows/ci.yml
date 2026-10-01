@@ -178,7 +178,9 @@ jobs:
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
       - name: Rendered stylesheet equivalence (offline fixtures)
-        run: CSS_BROWSER_TESTS=true npx vitest run test/style-equivalence.test.ts
+        run: |
+          mkdir -p .lighthouseci
+          CSS_BROWSER_TESTS=true npx vitest run test/style-equivalence.test.ts --reporter=default --reporter=junit --outputFile=.lighthouseci/style-equivalence.xml
       - name: Lighthouse (local fixture worker, no database or Discord)
         run: npm run lighthouse
       - name: Performance evidence (including failures)
