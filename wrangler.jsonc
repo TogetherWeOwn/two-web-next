@@ -38,6 +38,8 @@
   // `wrangler secret put` and never live in this file.
   "vars": {
     "APP_URL": "https://next.togetherweown.com",
+    // Extra approved image hosts (comma-separated exact DNS names). Empty = Discord CDN only.
+    "FEATURED_IMAGE_HOSTS": "",
     "DISCORD_CLIENT_ID": "1539711683898118154",
     "DISCORD_GUILD_ID": "326474832151838730",
     // WEB-HOMEPAGE campaign invite (never expires, unlimited); the fallback when auto-join fails.
