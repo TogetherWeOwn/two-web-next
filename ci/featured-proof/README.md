@@ -2,7 +2,7 @@
 
 This is the bounded offline CI lane authorized by [TOG-11003](/TOG/issues/TOG-11003), following [TOG-10986](/TOG/issues/TOG-10986). The installed GitHub company-bot connection `73e50cff-255d-4fc3-9ec1-8553a8984cfd` successfully listed this repository's workflows; the documented project-scoped git credential helper successfully read `main` before implementation. Neither the stopped `gh` shim nor runtime-tools transport is used. No connection, credential, paid runner or capacity provisioning is involved.
 
-Existing capacity evidence: `.github/workflows/ci.yml` uses `ubuntu-latest`; main `e931fc0871db1d30aa5f2324bdb1f31a2c6b581a` passed [CI run 36788936353](https://github.com/TogetherWeOwn/two-web-next/actions/runs/36788936353). The current main workflow directory did not expose a reusable saved-fixture capture entry point. This does not claim no browser runner exists globally.
+Existing capacity evidence: `.github/workflows/ci.yml` uses `ubuntu-latest`; main `8dedb9afa6aa64532e8fe9f956ff14006f9787d3` passed [CI run 36795810399](https://github.com/TogetherWeOwn/two-web-next/actions/runs/36795810399). This branch is rebased onto that green main, integrating the diagnostics-parity repair (PR #100) without touching its assertions. The current main workflow directory did not expose a reusable saved-fixture capture entry point. This does not claim no browser runner exists globally.
 
 ## Invocation and containment
 
