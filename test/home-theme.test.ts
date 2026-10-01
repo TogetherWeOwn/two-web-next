@@ -26,7 +26,7 @@ afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); }
 describe("homepage theme", () => {
   it("opts the homepage into the theme without changing unthemed leaf layouts", () => {
     const html = render();
-    expect(html).toContain('<body class="homepage-theme"><a class="skip-link"');
+    expect(html).toContain('<body class="homepage-theme"><a class="sl bd"');
     expect(html).toContain('href="/theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
@@ -74,7 +74,7 @@ describe("homepage theme", () => {
     expect(html).toContain("2 going");
     expect(html).toContain('aria-label="Community ladder"');
     expect(html).toContain('data-testid="rank-stack"');
-    expect(html).toContain('data-rank="legend"><dt>Legend</dt><dd>unclaimed</dd>');
+    expect(html).toContain('data-rank="legend"><dt>Legend</dt><dd class="mt">unclaimed</dd>');
   });
 
   it.each([null, session, { ...session, member: true }])("links every account state to the existing join preview (%#)", (session) => {

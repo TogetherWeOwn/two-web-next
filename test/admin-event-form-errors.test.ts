@@ -32,7 +32,7 @@ function expectFormErrors(html: string, values: Record<string, string>, errors: 
     const field = [...html.matchAll(/<div class="fd">([\s\S]*?)<\/div>/g)]
       .find((m) => m[1]!.includes(`name="${name}"`))?.[1];
     expect(field, name).toBeDefined();
-    expect(field).toContain(`<label for="${id}" class="bk bd">`);
+    expect(field).toContain(`<label for="${id}">`);
     const input = field!.match(/<input\b[^>]*>/)?.[0];
     expect(input).toContain(`id="${id}"`);
     expect(input).toContain(`value="${escape(values[name]!)}"`);

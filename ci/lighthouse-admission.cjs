@@ -31,7 +31,7 @@ function assertFixtureContent(path, response, html, before, after) {
     populated = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/)?.[1];
     assert.ok(populated, 'Event detail main content required');
     assert.match(populated, /<h1\b[^>]*>Lighthouse fixture game night<\/h1>/, 'Event detail fixture heading');
-    assert.match(populated, /data-testid="going-count"[^>]*>3 of 20 going/, 'Event detail aggregate required');
+    assert.match(populated, /data-testid="event-going-count"[\s\S]*?<span data-count>3 of 20 going/, 'Event detail aggregate required');
     assert.match(populated, /A local-only community game night used to measure the real event page\./, 'Event detail description required');
     assert.match(populated, /data-testid="event-join-pitch"/, 'Anonymous detail fixture required');
   } else {

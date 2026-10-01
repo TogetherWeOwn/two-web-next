@@ -317,7 +317,9 @@ describe("performance CI", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     expect(pkg.devDependencies["@lhci/cli"]).toBe("0.15.1");
     expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
-    expect(pkg.engines.node).toBe(">=22.12.0");
+    // Main's engines floor (^22.18.0 || >=24) satisfies the ESM-only browser
+    // helper's own >=22.12.0 requirement; pin the merged value, not the floor.
+    expect(pkg.engines.node).toBe("^22.18.0 || >=24");
     // Exercise both module entry points used by LHCI and Lighthouse, without Chrome/network.
     const loaded = spawnSync(process.execPath, ["--input-type=module", "-e", `
       import assert from "node:assert/strict";

@@ -105,7 +105,7 @@ describe("featured publish-window status", () => {
   it("captures one clock for every row in the table and adds the bounded-width table class", () => {
     const html = String(jsx(FeaturedPage, { rows: [row, { ...row, id: 2 }], query, now }));
     expect(html.match(/data-status="live"/g)).toHaveLength(2);
-    expect(html).toContain('class="admin-table featured-table"');
+    expect(html).toContain('class="tbl featured-table"');
   });
 });
 
@@ -126,7 +126,7 @@ describe("featured SSR preview", () => {
     expect(html).toContain('class="featured-preview"');
     expect(articles(html)).toEqual(articles(home(saved)));
     expect(articles(html)?.[0]).toContain(saved.title);
-    expect(articles(html)?.[0]).toContain(`<p>${saved.body}</p>`);
+    expect(articles(html)?.[0]).toContain(`<p class="mt">${saved.body}</p>`);
     expect(html).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
   });
 

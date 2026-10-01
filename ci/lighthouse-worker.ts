@@ -68,11 +68,11 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         if (sql === `${eventSelect} where "events"."event_key" = $1` && sameParams(params, [fixtureKey])) {
           return { rows: [encoded] };
         }
-        if (sql === `${eventSelect} where ("events"."status" != 'draft' and "events"."ends_at" >= $1) order by "events"."starts_at" asc` &&
+        if (sql === `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc` &&
           params.length === 1 && isInstant(params[0])) {
           return { rows: fixture.endsAt >= new Date(params[0]) ? [encoded] : [] };
         }
-        if (inTransaction && sql === `${eventSelect} where ("events"."status" = $1 and "events"."ends_at" >= $2) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
+        if (inTransaction && sql === `${eventSelect} where ("events"."status" = $1 and "events"."ends_at" >= $2 and isfinite("events"."starts_at")) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
           params.length === 3 && params[0] === "published" && isInstant(params[1]) && params[2] === 3) {
           return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
         }
