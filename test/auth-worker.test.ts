@@ -12,6 +12,9 @@ describe("W15 auth/join in Miniflare", () => {
   const calls: { path: string; method: string; auth: string | null; body: string }[] = [];
   const unexpected: string[] = [];
   let joinStatus: 201 | 204 = 201;
+  // TOG-10355: when set, the token endpoint answers with this instead of the
+  // success body — the workerd fixture for expired-grant / outage responses.
+  let tokenFailure: (() => WorkerResponse) | null = null;
   const cookie = (res: { headers: { getSetCookie(): string[] } }) =>
     res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
   // Send the configured Host on the local HTTP socket. Miniflare's fetch/RPC
@@ -52,6 +55,7 @@ describe("W15 auth/join in Miniflare", () => {
         calls.push(call);
         if (url.origin === "https://discord.com") {
           if (call.path === "/api/v10/oauth2/token" && call.method === "POST") {
+            if (tokenFailure) return tokenFailure();
             return WorkerResponse.json({ access_token: "test-member-token" });
           }
           if (call.path === "/api/v10/users/@me" && call.auth === "Bearer test-member-token") {
@@ -74,7 +78,7 @@ describe("W15 auth/join in Miniflare", () => {
     }));
     await mf.ready;
   }, 30_000);
-  beforeEach(() => { calls.length = 0; unexpected.length = 0; joinStatus = 201; });
+  beforeEach(() => { calls.length = 0; unexpected.length = 0; joinStatus = 201; tokenFailure = null; });
   afterEach(() => expect(unexpected).toEqual([]));
   afterAll(async () => { await mf?.dispose(); });
 
@@ -145,6 +149,62 @@ describe("W15 auth/join in Miniflare", () => {
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
     expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
     expect(calls).toHaveLength(0);
+  });
+
+  // TOG-10355 worker-boundary fixtures: the classification contract holds in
+  // workerd, not only in the raw-app suite. The provider body carries a
+  // synthetic secret; it must never reach any response surface.
+  const boundarySecret = "***synthetic-boundary-5e2c***";
+  const grantAnswer = (status: number) =>
+    () => new WorkerResponse(
+      JSON.stringify({ error: "invalid_grant", error_description: `refresh ${boundarySecret} revoked` }),
+      { status, headers: { "content-type": "application/json" } },
+    );
+
+  it("expired grant in workerd: 400 invalid_grant renders the immediate-retry recovery", async () => {
+    tokenFailure = grantAnswer(400);
+    const start = await request("/join/discord");
+    const res = await request(`/join/callback?code=test-code&state=${new URL(start.headers.get("location")!).searchParams.get("state")}`,
+      { headers: { cookie: cookie(start) } });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Join approval expired");
+    expect(html).toContain('data-testid="recovery-retry"');
+    expect(html).not.toContain("Discord is unreachable");
+    expect(html).not.toContain(boundarySecret);
+    expect(calls.map((c) => c.path)).toEqual(["/api/v10/oauth2/token"]);
+  });
+
+  it("outage in workerd: 503 whose body says invalid_grant still answers the discord-down 503", async () => {
+    tokenFailure = grantAnswer(503);
+    const start = await request("/join/discord");
+    const res = await request(`/join/callback?code=test-code&state=${new URL(start.headers.get("location")!).searchParams.get("state")}`,
+      { headers: { cookie: cookie(start) } });
+    expect(res.status).toBe(503);
+    const html = await res.text();
+    expect(html).toContain("Discord is unreachable");
+    expect(html).not.toContain("approval expired");
+    expect(html).not.toContain(boundarySecret);
+    expect(calls.map((c) => c.path)).toEqual(["/api/v10/oauth2/token"]);
+  });
+
+  it("expired grant on login in workerd maps to the generic banner; outage to unavailable", async () => {
+    tokenFailure = grantAnswer(400);
+    const start = await request("/auth/discord");
+    const expired = await request(`/auth/discord/callback?code=test-code&state=${new URL(start.headers.get("location")!).searchParams.get("state")}`,
+      { headers: { cookie: cookie(start) } });
+    expect(expired.headers.get("location")).toBe("/?n=signin_failed");
+    expect(await (await request("/?n=signin_failed")).text()).not.toContain(boundarySecret);
+
+    tokenFailure = grantAnswer(503);
+    const start2 = await request("/auth/discord");
+    const outage = await request(`/auth/discord/callback?code=test-code&state=${new URL(start2.headers.get("location")!).searchParams.get("state")}`,
+      { headers: { cookie: cookie(start2) } });
+    expect(outage.headers.get("location")).toBe("/?n=signin_unavailable");
+    const home = await request("/?n=signin_unavailable");
+    const html = await home.text();
+    expect(html).toContain("This is on Discord, not you");
+    expect(html).not.toContain(boundarySecret);
   });
 
   it("renders consent-denial recovery with no upstream error echo", async () => {
