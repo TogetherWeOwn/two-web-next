@@ -37,8 +37,10 @@ export default class TestTimingReporter {
   }
 
   onTestRunEnd(modules, errors, reason) {
-    this.emit("run-end", { files: modules.length, errorCount: errors.length, reason,
-      coverageReadyToRunEndMs: this.coverageReady === undefined ? null : performance.now() - this.coverageReady,
+    // Vitest 5.0.2 calls this before provider reporting and threshold checks.
+    // A passed test-run reason is not terminal coverage acceptance.
+    this.emit("test-run-end", { files: modules.length, errorCount: errors.length, testRunReason: reason,
+      coverageReadyToTestRunEndMs: this.coverageReady === undefined ? null : performance.now() - this.coverageReady,
     });
   }
 }
