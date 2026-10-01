@@ -6,6 +6,7 @@ import { featuredContents, memberDataAccessLogs, rsvps } from "../src/db/admin-s
 import type { Db } from "../src/db/index";
 import { joinAttempts, users } from "../src/db/schema";
 import * as memberReads from "../src/member-reads";
+import { notFoundResponse } from "../src/errors";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
@@ -134,6 +135,25 @@ describe.skipIf(!process.env.DATABASE_URL)("mounted keyed admin reads (isolated 
     expect(pulls).toBe(0);
   });
 
+  it("a controlled not-found shell cannot erase a prior unwrapped sensitive read", async () => {
+    const original = reads.listRoster;
+    vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
+      const rows = await original(db, key);
+      try { await db.select().from(users); } catch {}
+      return rows;
+    });
+    vi.spyOn(memberReads, "bufferedMemberHtml").mockImplementationOnce(async (c) => notFoundResponse(c));
+    await denial(await request(`/events/${EVENT_KEY}`));
+  });
+
+  it("an arbitrary 404 replacement cannot inherit buffered approval", async () => {
+    vi.spyOn(memberReads, "bufferedMemberHtml").mockImplementationOnce(async (c) => {
+      c.res = new Response(PERSONAL_STRINGS[1], { status: 404 });
+      return c.res;
+    });
+    await denial(await request(`/events/${EVENT_KEY}`));
+  });
+
   it("a REAL failed roster audit INSERT still refuses contents with enforcement flag off", async () => {
     const rollback = new Error("rollback admin failed INSERT");
     await fixture.db.transaction(async (tx) => {
@@ -144,6 +164,53 @@ describe.skipIf(!process.env.DATABASE_URL)("mounted keyed admin reads (isolated 
       for (const token of [...PERSONAL_STRINGS, SUBJECT.userId, MODERATOR.userId, "insert into", "subject_count"]) expect(diagnostics).not.toContain(token);
       throw rollback;
     }).catch((error: unknown) => { if (error !== rollback) throw error; });
+    expect(await logs()).toHaveLength(0);
+  });
+
+  it.each([`/admin/events/${EVENT_KEY}`, `/members/${SUBJECT.userId}`])("HEAD captures actual subjects on %s, even with an empty response body", async (path) => {
+    const response = await app.request(path, { method: "HEAD", headers: { cookie } }, {
+      ...env, ADMIN_DB: fixture.db, SESSION_STORE: sessions,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
+    expect(await logs()).toMatchObject([{ viewerDiscordId: MODERATOR.userId, subjectUserIds: [SUBJECT.userId], subjectCount: 1 }]);
+  });
+
+  it.each([`/admin/events/${EVENT_KEY}`, `/members/${SUBJECT.userId}`])("HEAD refuses %s when the real audit INSERT fails", async (path) => {
+    const rollback = new Error("rollback HEAD failed INSERT");
+    await fixture.db.transaction(async (tx) => {
+      await tx.execute(sql`alter table member_data_access_logs drop column subject_count`);
+      const response = await app.request(path, { method: "HEAD", headers: { cookie } }, {
+        ...env, ADMIN_DB: tx as unknown as Db, SESSION_STORE: sessions,
+      });
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.text()).toBe("");
+      throw rollback;
+    }).catch((error: unknown) => { if (error !== rollback) throw error; });
+    expect(await logs()).toHaveLength(0);
+  });
+
+  it("a REAL failed admin SELECT sanitizes diagnostics before the global handler", async () => {
+    const rollback = new Error("rollback admin failed SELECT");
+    await fixture.db.transaction(async (tx) => {
+      await tx.execute(sql`alter table join_attempts drop column request_id`);
+      await denial(await request(`/join-attempts?q=${SUBJECT.userId}`, tx as unknown as Db), false);
+      const diagnostics = JSON.stringify(vi.mocked(console.error).mock.calls);
+      expect(diagnostics).toContain("DrizzleQueryError");
+      for (const token of [...PERSONAL_STRINGS, SUBJECT.userId, MODERATOR.userId, "select", "request_id", "params:"]) expect(diagnostics).not.toContain(token);
+      throw rollback;
+    }).catch((error: unknown) => { if (error !== rollback) throw error; });
+    expect(await logs()).toHaveLength(0);
+  });
+
+  it.each(["/admin/does-not-exist", "/members/does/not/exist"])("%s keeps a controlled branded 404", async (path) => {
+    const response = await app.request(path, { headers: { cookie } }, {
+      ...env, ADMIN_DB: fixture.db, SESSION_STORE: sessions,
+    });
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.text()).toContain("We cannot find that page");
     expect(await logs()).toHaveLength(0);
   });
 

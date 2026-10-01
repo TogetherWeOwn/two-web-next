@@ -5,7 +5,9 @@ import type { Env } from "../src/env";
 
 const { makeSql, makeDb } = vi.hoisted(() => ({ makeSql: vi.fn(), makeDb: vi.fn() }));
 vi.mock("postgres", () => ({ default: makeSql }));
-vi.mock("drizzle-orm/postgres-js", () => ({ drizzle: makeDb }));
+vi.mock("drizzle-orm/postgres-js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("drizzle-orm/postgres-js")>(), drizzle: makeDb,
+}));
 
 beforeEach(() => {
   vi.resetAllMocks();

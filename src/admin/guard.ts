@@ -7,7 +7,7 @@
 //   click. Per-click Discord lookups were deliberately not ported: main's
 //   settled design recomputes at login, and an extra Discord round-trip on
 //   every admin click would gate the panel on Discord availability.
-// - Access log: every admin GET runs inside the keyed read boundary. Stable
+// - Access log: every admin GET/HEAD runs inside the keyed read boundary. Stable
 //   route metadata does not authorize SQL or supply subjects. One row per
 //   request (CISO condition TOG-355); failed attribution or audit always
 //   refuses the buffered contents, even with the legacy enforcement flag off.
@@ -40,6 +40,7 @@ import {
 import { dbFor } from "./db";
 import { recordAccess } from "./store";
 import { memberReadBoundary } from "../member-reads";
+import { notFoundHandler } from "../errors";
 
 export type Actor = { id: string; username: string };
 
@@ -128,7 +129,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     if (!actor) return c.text("Forbidden", 403);
     c.set("adminActor", actor);
 
-    if (c.req.method === "GET") {
+    if (c.req.method === "GET" || c.req.method === "HEAD") {
       // Every admin read is observed, including a query added to an existing
       // non-sensitive screen. Route metadata never supplies the subject keys.
       await memberReadBoundary(c, () => {
@@ -138,7 +139,12 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         const db = dbOverride ?? await dbFor(c);
         if (!db) throw new Error("Admin audit database unavailable");
         return recordAccess(db, entry);
-      }, next);
+      }, async () => {
+        if (c.req.matchedRoutes.length > 1) await next();
+        // Only this guard matched. Render here: Hono's single-middleware path
+        // otherwise reassigns/clones a finalized not-found buffer after next().
+        else await notFoundHandler(c);
+      });
     } else {
       await next();
     }

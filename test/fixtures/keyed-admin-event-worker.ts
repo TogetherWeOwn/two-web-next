@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import { getSignedCookie } from "hono/cookie";
 import { serializeSigned } from "hono/utils/cookie";
 import { adminApp } from "../../src/admin/routes";
+import { registerErrorHandlers } from "../../src/errors";
 import { adminSchema, schema, type Db } from "../../src/db/index";
 import type { SelectedField } from "../../src/db/read-classification";
 import type { Env } from "../../src/env";
@@ -90,6 +91,7 @@ app.get("/fixture/:surface/:mode", async (c) => {
     DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture", DISCORD_GUILD_ID: "fixture", DISCORD_BOT_TOKEN: "fixture",
     DISCORD_INVITE_URL: "https://discord.gg/fixture", MEMBER_ACCESS_LOG_ENFORCE: "false" };
   const router = new Hono<{ Bindings: Env }>();
+  registerErrorHandlers(router);
   router.route("/admin", adminApp());
   const reader: SessionReader = async (ctx) => {
     const token = await getSignedCookie(ctx, secret, "__Host-two_session");
@@ -97,8 +99,8 @@ app.get("/fixture/:surface/:mode", async (c) => {
     return row ? { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator } : null;
   };
   registerEventRoutes(router, reader, reader);
-  const path = surface === "event" ? `/e/${eventKey}` : surface === "roster" ? `/admin/events/${eventKey}` : surface === "joins" ? "/admin/join-attempts" : "/admin/events/new";
-  const response = await router.request(path, { headers: { cookie } }, bindings);
+  const path = surface === "event" ? `/e/${eventKey}` : surface === "roster" ? `/admin/events/${eventKey}` : surface === "joins" ? "/admin/join-attempts" : surface === "missing" ? "/admin/does-not-exist" : "/admin/events/new";
+  const response = await router.request(path, { method: c.req.method, headers: { cookie } }, bindings);
   const copy = new Response(response.body, response);
   copy.headers.set("x-fixture-audit", JSON.stringify(entries));
   return copy;

@@ -19,7 +19,7 @@ describe("keyed admin/event handlers in workerd", () => {
     await mf.ready;
   }, 30_000);
   afterAll(() => mf?.dispose());
-  const request = (surface: string, mode: string) => mf.dispatchFetch(`https://runtime.test/fixture/${surface}/${mode}`, { redirect: "manual" });
+  const request = (surface: string, mode: string, method = "GET") => mf.dispatchFetch(`https://runtime.test/fixture/${surface}/${mode}`, { method, redirect: "manual" });
   const entries = (res: { headers: { get: (name: string) => string | null } }) => JSON.parse(res.headers.get("x-fixture-audit")!);
 
   it.each(["roster", "joins", "form"])("%s preserves guest/non-moderator gates without exposing contents", async (surface) => {
@@ -70,6 +70,23 @@ describe("keyed admin/event handlers in workerd", () => {
     const subsequent = await request(surface, "moderator");
     expect(subsequent.status).toBe(200);
     expect(entries(subsequent)).toHaveLength(1);
+  });
+  it.each(["roster", "joins", "event"])("HEAD %s records the actual owner and refuses memory audit failures", async (surface) => {
+    const allowed = await request(surface, "moderator", "HEAD");
+    expect(allowed.status).toBe(200);
+    expect(await allowed.text()).toBe("");
+    expect(entries(allowed)).toHaveLength(1);
+    const denied = await request(surface, "audit-failure", "HEAD");
+    expect(denied.status).toBe(503);
+    expect(await denied.text()).toBe("");
+    expect(entries(denied)).toEqual([]);
+  });
+  it("unmatched admin paths retain a controlled branded 404", async () => {
+    const response = await request("missing", "moderator");
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.text()).toContain("We cannot find that page");
+    expect(entries(response)).toEqual([]);
   });
   it("an explicitly non-sensitive admin form has no member-key row", async () => {
     const res = await request("form", "moderator");

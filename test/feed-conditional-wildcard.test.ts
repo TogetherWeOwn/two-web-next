@@ -18,13 +18,13 @@ vi.mock("../src/events/reads", async (importOriginal) => ({
 const KEY = "01J0000000000000000000ABCD";
 const EVENT_PATH = `/events/${KEY}.ics`;
 const row = {
-  id: 1, eventKey: KEY, title: "Synthetic calendar event", game: null,
+  id: 1, icsSequence: 1782907200n, eventKey: KEY, title: "Synthetic calendar event", game: null,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
   parentEventId: null, recurrenceIndex: null,
   description: "Bring stims.", startsAt: new Date("2026-07-15T18:00:00Z"),
   endsAt: new Date("2026-07-15T20:00:00Z"), timezone: "UTC", location: null,
-  capacity: null, status: "published", rsvpOpen: true, createdBy: null, icsSequence: 0n,
+  capacity: null, status: "published", rsvpOpen: true, createdBy: null,
   createdAt: new Date("2026-07-01T12:00:00Z"), updatedAt: new Date("2026-07-01T12:00:00Z"),
 } satisfies typeof events.$inferSelect;
 const dbIdentity = Symbol("fixture database");

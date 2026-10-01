@@ -124,16 +124,32 @@ npm run typecheck
 
 Other pre-existing suites still delete shared tables; serial files do not
 serialize other agents. Broad local tests must use a run-owned migrated test DB.
-Three importer suites additionally pin the local database name to `two_web_next`,
+Six importer suites additionally pin the local database name to `two_web_next`,
 but create and drop only their own disposable schemas; run those separately
-rather than weakening their guards or pointing destructive suites at that DB:
+rather than weakening their guards or pointing destructive suites at that DB.
+The audit suites require their own explicit URL opt-in. Exclude the fixed-name
+agent-testdb staging control too: it uses a different database and is not part of
+this run-owned lane. Staging-named mocked/loopback unit tests are not authorization
+to execute a staging probe.
 
 ```sh
 # Create this run-owned DB on agent-testdb first; validate the run UUID/name.
 TEST_DB="w15_${PAPERCLIP_RUN_ID//-/}"
 DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" npm run db:migrate
-DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" npm run test:coverage -- --exclude test/import-content-funnel.test.ts --exclude test/import-events-rsvps-db.test.ts --exclude test/import-users-profiles.test.ts
-DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next npx vitest run test/import-content-funnel.test.ts test/import-events-rsvps-db.test.ts test/import-users-profiles.test.ts
+DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" \
+  AUDIT_IMPORT_TEST_DATABASE_URL= W1_AGENT_TESTDB=0 npm run test:coverage -- \
+  --exclude test/import-content-funnel.test.ts \
+  --exclude test/import-events-rsvps-db.test.ts \
+  --exclude test/import-users-profiles.test.ts \
+  --exclude test/import-users-profiles-encoding.test.ts \
+  --exclude test/import-audit-db.test.ts \
+  --exclude test/import-audit-datestyle-db.test.ts \
+  --exclude test/staging-fixed-agent-testdb.test.ts
+DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
+  AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
+  npx vitest run test/import-content-funnel.test.ts test/import-events-rsvps-db.test.ts \
+  test/import-users-profiles.test.ts test/import-users-profiles-encoding.test.ts \
+  test/import-audit-db.test.ts test/import-audit-datestyle-db.test.ts
 npm run typecheck
 npm run config:check
 node --test ci/a11y-*.test.mjs
@@ -159,15 +175,25 @@ unavailable bot-owned views still hide the stats block within the existing budge
 
 ## Scoped runtime control and evidence split
 
-Existing profile/member handlers, every authorized admin GET, and the entire
-`/e/:key` handler execute inside a sensitive-read boundary. The borrowed Drizzle
-adapter observes prepared execution and transaction descendants. One permit
-allows one statement; keyed results must provide each selected sensitive table's
-actual owner Column. Contract refusals poison the request even if caught.
-Comment-prefixed statements and RETURNING mutations cannot evade SELECT-prefix
-inspection; raw and fluent mutation builders refuse before execution (the mounted
-UPDATE regression also verifies the stored username remains unchanged). Only the final audit
-sink exits capture, and its failed INSERT still refuses contents.
+Existing profile/member handlers, every authorized admin GET/HEAD, and the entire
+`/e/:key` handler execute inside a sensitive-read boundary. HEAD still retrieves
+rows through the GET handler: its empty final body does not waive attribution or
+the audit INSERT. The borrowed postgres-js adapter retains observing sessions on
+lazy/prepared builders constructed before capture and observes execution and
+transaction descendants. One permit allows one statement; keyed results must
+provide each selected sensitive relation's actual owner Column. Drizzle aliases
+resolve physical table ownership through OriginalName and are grouped separately:
+an unaliased/self key cannot satisfy another alias's contents. Contract refusals
+poison the request even if caught.
+
+Only supported SELECT shapes are reads. A WITH prefix can conceal modifying CTEs,
+even when the final SELECT never references them; all unsupported CTE shapes are
+refused before execution. Comment-prefixed statements and RETURNING mutations
+also cannot evade inspection. Real-row regressions verify stored values remain
+unchanged after both fluent UPDATE and modifying-CTE denial. Native `$count`
+execution retains the proxy session receiver; an unattributable member count is
+not automatically classified or authorized by a keyed permit. Only the final
+audit sink exits capture, and its failed INSERT still refuses contents.
 
 Explicit non-sensitive classifications permit mapped event/featured records and
 fixed funnel, going-count, search-widget and timeout SQL shapes. The dashboard's
@@ -191,16 +217,33 @@ route-declared subjects, slicing the HTML rows cannot erase a retrieved owner.
 both pages and refuses the whole response for missing, malformed or short
 lookahead keys. Workerd's existing single-row fixture does not prove pagination.
 
+The shared error renderer recognizes an active sensitive-read boundary before
+ordinary logging/alerts: a failed SELECT emits only the exception class, never SQL,
+bindings, messages or causes. The known branded not-found shell is explicitly
+buffered inside protected boundaries. If only the admin guard matches, it renders
+that shell directly rather than letting Hono's single-handler next callback clone
+the classified response. This is not a status-based exemption: prior unwrapped
+queries and arbitrary 404 replacements still refuse the whole response.
+
 - **Real PostgreSQL:** keyed/mounted suites execute actual SELECTs and INSERTs,
   prove real audit failures with isolated rollback-only DDL/check constraints,
   partial/invalid keys, IDs-only rows, departed subjects, role gates, additional
   sensitive queries in existing handlers, stream refusal, and request isolation.
-- **workerd/Miniflare:** keyed member/profile/admin-event suites run actual
-  boundary/rendering/session code (admin/event also use real Drizzle builders,
-  provenance metadata and observation). Row execution and audit storage are
-  deterministic memory. They prove runtime roles, buffers, refusal, one-entry
-  attribution and isolation, **not PostgreSQL persistence or a real failed INSERT**.
-  All external network access is forbidden by these fixtures.
+  `test/keyed-member-reads.test.ts` also proves public prebuilt lazy/prepared
+  execution, per-alias owners, modifying-CTE mutation refusal and native count
+  refusal. `test/admin-keyed-mounted.test.ts` proves HEAD's actual subject row,
+  HEAD denial on a real failed INSERT, real failed-SELECT diagnostic sanitization,
+  protected branded 404s and refusal despite a known-shell/arbitrary-404 replacement.
+- **workerd/Miniflare:** keyed member/profile/admin-event and DB-execution suites
+  run actual boundary/rendering/session code (admin/event/execution also use real
+  Drizzle builders, provenance metadata and observation). Row execution and audit
+  storage are deterministic memory. They prove runtime roles, buffers, refusal,
+  one-entry attribution, isolation, HEAD and minimal unmatched-admin handling,
+  **not PostgreSQL persistence or a real failed INSERT**.
+  `test/keyed-db-execution-worker.test.ts` verifies prebuilt/alias/CTE/count denials
+  before the memory execution adapter is called. All external network access is
+  forbidden by these fixtures. Public non-postgres-js test adapters remain unchanged
+  outside capture; there is no generic-driver/prebuilt-builder protection claim.
 
 No protection is claimed for arbitrary unwrapped drivers, new data stores/tables,
 production scheduler health, production deployment, or supported member streams.

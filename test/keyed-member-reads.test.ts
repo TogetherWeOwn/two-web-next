@@ -7,7 +7,10 @@ import { memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { bufferedMemberText, keyedMemberRead, memberReadBoundary } from "../src/member-reads";
-import { observeMemberReads } from "../src/db/member-reads";
+import { memberReadDb, observeMemberReads } from "../src/db/member-reads";
+import { alias } from "drizzle-orm/pg-core";
+import { events } from "../src/db/admin-schema";
+import { nonSensitiveRead } from "../src/member-reads";
 import { env, MEMBER, MODERATOR, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -165,6 +168,67 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
     const app = router(async (c) => {
       await keyedMemberRead(() => prepared.execute());
       try { await prepared.execute(); } catch {}
+      return bufferedMemberText(c, PERSONAL_STRINGS[1]!);
+    });
+    await deny(await app.request("/existing", {}, env));
+  });
+
+  it.each([["prepared", true], ["prepared", false], ["lazy", true], ["lazy", false]] as const)("public borrowed seam observes prebuilt %s queries at execution (keyed=%s)", async (mode, keyed) => {
+    const connection = memberReadDb(fixture.db);
+    const query = connection.select({ id: users.id, name: users.username }).from(users).where(eq(users.id, SUBJECT.userId));
+    const prepared = query.prepare("public_seam_prebuilt");
+    const execute = () => mode === "prepared" ? prepared.execute() : query;
+    // Outside capture this remains an ordinary borrowed adapter.
+    expect((await execute())[0]!.name).toBe(SUBJECT.username);
+    const allowed = router(async (c) => {
+      const rows = await (keyed ? keyedMemberRead(execute) : execute());
+      return bufferedMemberText(c, rows[0]!.name!);
+    });
+    const response = await allowed.request("/existing", {}, env);
+    if (!keyed) return deny(response);
+    expect(response.status).toBe(200);
+    expect(await logs()).toMatchObject([{ subjectUserIds: [SUBJECT.userId] }]);
+    await fixture.db.delete(memberDataAccessLogs);
+    const unwrapped = router(async (c) => {
+      const rows = await execute();
+      return bufferedMemberText(c, rows[0]!.name!);
+    });
+    await deny(await unwrapped.request("/existing", {}, env));
+  });
+
+  it.each([false, true])("an aliased relation requires its own owner (projected=%s)", async (projectOwner) => {
+    const other = alias(users, "other");
+    const app = router(async (c) => {
+      const rows = await keyedMemberRead(() => db().select({
+        viewerId: users.id, name: other.username,
+        ...(projectOwner ? { otherId: other.id } : {}),
+      }).from(users).innerJoin(other, eq(other.id, SUBJECT.userId)).where(eq(users.id, MEMBER.userId)));
+      return bufferedMemberText(c, rows[0]!.name!);
+    });
+    const response = await app.request("/existing", {}, env);
+    if (!projectOwner) return deny(response);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(SUBJECT.username);
+    expect(await logs()).toMatchObject([{ subjectUserIds: [SUBJECT.userId], subjectCount: 1 }]);
+  });
+
+  it("refuses modifying CTEs before execution and preserves stored event data", async () => {
+    const original = (await fixture.db.select().from(events))[0]!;
+    const app = router(async (c) => {
+      const connection = db();
+      const change = connection.$with("change").as(connection.update(events).set({ title: "mutated-private-name" }).returning({ id: events.id }));
+      try { await nonSensitiveRead("events", () => connection.with(change).select().from(events)); } catch {}
+      return bufferedMemberText(c, PERSONAL_STRINGS[1]!);
+    });
+    await deny(await app.request("/existing", {}, env));
+    expect((await fixture.db.select().from(events))[0]!.title).toBe(original.title);
+  });
+
+  it.each([false, true])("native $count cannot bypass observation (keyed=%s)", async (keyed) => {
+    const connection = memberReadDb(fixture.db);
+    const count = connection.$count(users, eq(users.id, SUBJECT.userId));
+    const app = router(async (c) => {
+      try { await (keyed ? keyedMemberRead(() => count) : count); } catch {}
       return bufferedMemberText(c, PERSONAL_STRINGS[1]!);
     });
     await deny(await app.request("/existing", {}, env));

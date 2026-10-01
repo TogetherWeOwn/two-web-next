@@ -108,7 +108,11 @@ export function profilesApp(deps: ProfileDeps = {}) {
       const row = await sessions.get(await hashToken(token));
       if (row) viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
     } catch (err) {
-      console.error("profiles could not resolve the session; refusing.", { exception: err instanceof Error ? err.constructor.name : "UnknownFailure" });
+      // Bounded like every other session-failure log: class name only — driver
+      // messages can carry DSN fragments (TOG-10355).
+      console.error("profiles could not resolve the session; refusing.", {
+        exception: err instanceof Error ? err.constructor.name : "unknown",
+      });
       return c.text("Profiles temporarily unavailable", 503);
     }
     // A cookie whose row is gone (revoked/expired/rotated) is a guest.
@@ -125,7 +129,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
   for (const path of ["/profile", "/members/*"]) {
     app.use(path, gate);
     app.use(path, async (c, next) => {
-      if (c.req.method !== "GET") return next();
+      if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
       await memberReadBoundary(c, {
         viewer: c.get("viewer").id, resource: "profile", action: "view",
         route: path === "/profile" ? "profile" : "profiles.show",
