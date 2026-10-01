@@ -50,12 +50,6 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT: ${{ github.event_name }}
-          # Passed via env (not inlined into the script) so titles/bodies
-          # containing quotes can't break shell parsing.
-          EVENT_TITLE: ${{ github.event.pull_request.title }}
-          EVENT_BODY: ${{ github.event.pull_request.body }}
-          EVENT_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python3 ci/pr-lint-output.py resolve
 

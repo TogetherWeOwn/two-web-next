@@ -1,6 +1,103 @@
-# TOG-9680 findings (updated 2026-09-30, review-fix leg)
+# TOG-9680 / TOG-10478 findings (updated 2026-10-01)
 
-## Evidence boundary
+## Live staging attempt: pre-SQL refusal (2026-10-01)
+
+**Acceptance remains NOT VERIFIED.** The authorized bounded command
+`bash spike/hyperdrive-semantics/remote-checks.sh` ran once and exited **1**.
+Its validated Worker result was:
+
+```json
+{"ok":false,"cleanup":true,"error":"remote_staging_preflight_refused"}
+```
+
+The ephemeral remote preview reached the nonce-protected execution endpoint,
+but its preflight gate refused before `runFixedStagingChecks` or database-client
+construction. This is a failed acceptance attempt, **not a PostgreSQL lock/GIN
+failure** and not a passing integration result. No retry or gate relaxation was
+performed.
+
+### Authorization and tested inputs
+
+- [TOG-10479](/TOG/issues/TOG-10479) resolved the earlier staging-policy conflict;
+  it permits [TOG-10478](/TOG/issues/TOG-10478) staging acceptance. CI/unit/integration
+  controls remain disposable-container-only; production remains off-limits.
+- Tested committed revision: `ea296c10cff48f4efd8fb90cdb4980f721c9cd67`.
+  The supervisor bundled immutable Git-object source from the clean execution
+  worktree. No source or dependency changes preceded this attempt.
+- [PR #101](https://github.com/TogetherWeOwn/two-web-next/pull/101) had exact-head
+  independent security and correctness APPROVE verdicts and green required
+  `check`, `a11y`, `gitleaks`, and `pr-lint` checks before activation. The review
+  lane squash-merged it at `2026-10-01T11:08:49Z` as
+  `244551a43c2e949c977f7d8ac6ac8cff0ac04293`. Harness and package inputs at the
+  tested revision were verified identical to that merge commit; the execution
+  branch was not switched or repointed.
+- Wrangler: **4.143.1**. Installed/lockfile-pinned Postgres.js: **3.4.9**.
+  PostgreSQL server version: **NOT OBSERVED**; database connection never started.
+- Executor: Automation Engineer `ed85a5ea-b0ff-4992-bb31-acf7872531b2`.
+  Paperclip run: `f8453ef6-5611-490b-ae1d-7deedb55b86d`.
+
+### Actual fresh binding/origin provenance
+
+The assigned Cloudflare token successfully read current resource metadata. The
+sanitized receipt was observed at `2026-10-01T11:15:10.902Z`:
+
+- Account: `209cf7dd678adfb683947dd7874d05af`.
+- Source application Worker: `two-web-next`, `APP_URL=https://next.togetherweown.com`.
+  Current deployed source version: `d4c935f6-abd9-48cd-a966-26b3c5262923`.
+  This identifies the source deployment, **not the executed preview version**.
+- Unique `DB` Hyperdrive binding: `1d48a54abd3444009b7067c03c63ff9f`,
+  name `two-web-next-staging`.
+- Origin: `ep-raspy-math-b1m3quxu-pooler.c-5.eu-central-1.aws.neon.tech:5432`;
+  database `two`; role `two_app`.
+- Caching was enabled (`cachingDisabled:false`); no configuration mutation.
+- Neon project **`two-web-next`**, branch **`staging`**: operator-derived mapping
+  from [TOG-9836](/TOG/issues/TOG-9836#comment-8f2a94fd-5663-4a0a-9087-42bfe94fae43),
+  corroborated by the exact current Cloudflare binding/origin match. No
+  independent Neon API project/branch-ID read was performed; those IDs are not
+  claimed.
+
+### Per-check and teardown results
+
+| Criterion | Actual result | Evidence boundary |
+| --- | --- | --- |
+| (a) FOR UPDATE contention and RSVP capacity refusal | NOT ATTEMPTED / NOT VERIFIED | Worker preflight refused before SQL |
+| (b) Transaction advisory single-flight and reacquisition | NOT ATTEMPTED / NOT VERIFIED | Worker preflight refused before SQL |
+| (c) Native jsonb containment and unforced GIN selection | NOT ATTEMPTED / NOT VERIFIED | Worker preflight refused before SQL |
+
+The result's `cleanup:true` is the supported **pre-SQL refusal state**, not a
+successful DROP assertion. No owned-schema identity or `W1_SCHEMA` marker was
+produced; this gate precedes schema creation. The independent supervisor exited
+normally with the failure status after process-group teardown/reaping. A
+post-run `/proc` check found no process referencing the run-owned preview path.
+Local process teardown is not database cleanup proof.
+
+The combined refusal does not identify which receipt/runtime-binding predicate
+failed. Its cause remains **UNDETERMINED**; the successful Cloudflare metadata
+match does not prove the runtime binding satisfies the Worker gate. Diagnose
+with offline contract inspection and fixed, non-secret evidence only. Any
+harness change requires exact-head security/correctness review, green required
+CI and non-author merge before a later authorized attempt. Do not substitute
+credentials, relax the target gate, deploy a persistent Worker, or infer PASS.
+This failed attempt is a blocking finding for W8/W9/W13 acceptance.
+
+### Durable evidence
+
+Only the two sanitized runner deliverables were uploaded; no config, nonce,
+private Wrangler/build logs, credentials, or source snapshot was published.
+
+- [Live preflight receipt](/api/attachments/c91fa946-bf2f-49a2-8d60-fd82942996f2/content)
+  — SHA-256 `318ee563dc1071f7eaa7af749d44d324baae04667efcf292d8c6482fdeac3eb0`.
+- [Live failure result](/api/attachments/73595805-6702-4147-9077-60061d478636/content)
+  — SHA-256 `72a38a55225b80cb8b5d6552d95a6f40a5c7c068751065d1d2ea7a16b525c719`.
+
+## Historical evidence (through 2026-09-30)
+
+The sections below retain their original control results, failures and policy
+statements as historical evidence. Their earlier blanket staging ban and
+pending-policy/PR descriptions are **not the current disposition**; the dated
+live attempt above supersedes them. No historical failure is relabeled PASS.
+
+### Historical evidence boundary
 
 The direct-PostgreSQL results below are historical control evidence, not proof
 of Hyperdrive→Neon behavior. This heartbeat uses only local tests and
@@ -159,3 +256,21 @@ is the staging-acceptance/test-policy conflict. A CTO-directed confirmation
 [TOG-9680](/TOG/issues/TOG-9680). No downstream W8/W9/W13 gate is approved by
 these local controls. Any required integration failure finding must be routed
 before those gates proceed; missing integration evidence is not a passing test.
+
+## Live Hyperdrive → Neon staging result (2026-10-01)
+
+Executed `remote-checks.sh` once at revision `5b82b59af58149734316695e14238042ca4c22f8`
+(Wrangler 4.143.1, ephemeral remote preview, not a deployed Worker) through staging Hyperdrive
+`1d48a54abd3444009b7067c03c63ff9f` (`two-web-next-staging`) to the pooled Neon origin, database `two`
+(operator-mapped project `two-web-next` / branch `staging`; not an independent Neon API branch-ID read).
+Server: PostgreSQL 17.11. Earlier attempts were refused pre-SQL by the preflight (the binding
+database/user were compared with origin values; a Hyperdrive binding exposes proxy-issued ones, fixed in #234).
+
+| Check | Result | Detail |
+| --- | --- | --- |
+| (a) SELECT … FOR UPDATE contention | PASS | blocked_55P03=true second_seat_refused=true going=1 |
+| (b) `pg_advisory_xact_lock` single-flight | PASS | concurrent_refused=true reacquired=true |
+| (c) jsonb + GIN | PASS | uses_gin=true rows=2001 hits=1 |
+
+3/3 passed; cleanup true, `teardownFailures: []` (synthetic schema `w1_staging_75546283…` dropped).
+No production target. This clears the W1 integration-leg blocker for W8/W9/W13.

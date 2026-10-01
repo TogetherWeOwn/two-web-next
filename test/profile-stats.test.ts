@@ -168,7 +168,9 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     expect(html).toContain("637 days");
     expect(html).toContain("1 Jan 2025");
     expect(html).toContain("Current member");
-    expect(html.indexOf("First Event")).toBeLessThan(html.indexOf(">Joined ·"));
+    expect(html).toContain('<dl class="profile-stats-grid">');
+    expect(html).toContain("<dt>Milestones</dt><dd>2</dd>");
+    expect(html.indexOf("<strong>First Event</strong>")).toBeLessThan(html.indexOf("<strong>Joined</strong>"));
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(res.headers.get("cache-control")).toBe("private, no-store");

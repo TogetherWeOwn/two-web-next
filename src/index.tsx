@@ -3,7 +3,8 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
-import { agentEventsRoute } from "./agent-events/route";
+import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
+import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import { cspReportsRoute } from "./csp-reports";
 import {
@@ -35,8 +36,9 @@ import { registerJoinRoutes } from "./join/route";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
-import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
+import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
+import { consumeLoginReturn, LOGIN_INTENDED_COOKIE, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
 import { sameOrigin } from "./same-origin";
@@ -80,10 +82,11 @@ const staticSecurityHeaders = secureHeaders({
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
-    // Only the join page embeds Discord; OAuth/recovery/admin routes cannot frame anything.
-    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com" : "'none'"],
+    // Only join reads embed the widget; other routes cannot frame anything.
+    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com/widget" : "'none'"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
+    fontSrc: ["'self'"],
     frameAncestors: ["'none'"],
     formAction: ["'self'"],
     reportUri: CSP_REPORT_ENDPOINT,
@@ -268,13 +271,18 @@ app.get("/", async (c) => {
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
   const counts = await readCounts(c.env);
+  // One-shot join confirmation (legacy join_result flash): first render consumes it.
+  // A failure landing drops a stale success flash instead — the current failure
+  // explanation wins over an older journey's success (TOG-10356 review).
+  const flashed = await takeJoinResult(c);
+  const joinResult = ["join_failed", "signin_failed", "signin_denied", "signin_unavailable"].includes(notice ?? "") ? null : flashed;
   const [upcomingEvents, featured] = await Promise.all([
     loadHomeUpcoming(() => dbFor(c)),
     dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),
   ]);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
+    <Home session={session} notice={notice} joinResult={joinResult} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
       counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
       imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
   );
@@ -328,9 +336,18 @@ app.get("/privacy", (c) => {
 // synchronous bot add. JoinAttempt rows land in Postgres when DATABASE_URL is
 // set; without it the journey degrades to no persistence (never a 500).
 registerJoinRoutes(app, { storeFor, issueSession }, {
-  joinPage: (c, props) => {
-    c.header("cache-control", "public, max-age=3600");
-    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} />);
+  joinPage: async (c, props) => {
+    // Carrying the join-result flash makes the response viewer-specific:
+    // the static page keeps its shared-cache TTL only when there is nothing
+    // to consume (otherwise a guest could read another member's banner).
+    // Vary stays on every variant: the representation depends on the flash
+    // cookie even when this view has nothing to consume.
+    const joinResult = await takeJoinResult(c);
+    c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=3600");
+    c.header("vary", "Cookie");
+    return c.html(
+      <Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} joinResult={joinResult} />,
+    );
   },
   recovery: (c, props, status = 200) => {
     c.header("cache-control", "no-store, private");
@@ -376,7 +393,7 @@ app.get("/robots.txt", (c) => {
 // `/discord`. Flood control lives in the handler instead.
 app.post("/csp-reports", cspReportsRoute);
 
-app.post("/api/agent-events", agentEventsRoute);
+app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
 // `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
 // ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
@@ -426,6 +443,9 @@ app.get("/auth/discord/redirect", (c) => {
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
+  // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
+  // OAuth round trip in a signed cookie; a hostile value leaves no trace.
+  await rememberLoginNext(c, c.req.query("next"));
   await setSignedCookie(c, STATE_COOKIE, state, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -441,6 +461,9 @@ app.get("/auth/discord/callback", async (c) => {
   if (limited) return limited;
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
   deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
+  // Consume the return journey on every terminal path — success, denial and
+  // failure all clear it (legacy forget on login_next + url.intended).
+  const returnTo = await consumeLoginReturn(c);
   const code = c.req.query("code");
   const state = c.req.query("state");
   // A consent-screen refusal arrives as an `error` param before any code
@@ -491,7 +514,25 @@ app.get("/auth/discord/callback", async (c) => {
     member: join !== "failed",
     moderator,
   });
-  return c.redirect(`/?n=${join === "failed" ? "join_failed" : join}`, 302);
+  // A failed auto-join keeps the recovery landing even when a destination
+  // was remembered: the session is a non-member one, so a member-only gate
+  // (/profile, /members/*) would answer bare 403 and swallow the failure
+  // explanation plus the invite fallback. The intended destination is
+  // re-recorded for the retry instead of being lost. Successful joins keep
+  // the legacy precedence: explicit next, then intended page, then notice.
+  if (join === "failed") {
+    if (returnTo) {
+      await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+        maxAge: 600,
+      });
+    }
+    return c.redirect("/?n=join_failed", 302);
+  }
+  return c.redirect(returnTo ?? `/?n=${join}`, 302);
 });
 
 // Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard
@@ -509,7 +550,7 @@ registerEventRoutes(
   async (c) => readSession(c, false),
 );
 
-app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (token) await store.revoke(await hashToken(token)).catch(() => {});
@@ -519,11 +560,13 @@ app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => 
 
 // Staging-only QA seam. 404 everywhere that is not the staging host with
 // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post("/auth/qa/:identity", throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), async (c) => {
+app.post("/auth/qa/:identity", async (c, next) => {
   if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
+  await next();
+}, throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
-  const fixture = QA_IDENTITIES[c.req.param("identity") ?? ""];
+  const fixture = qaIdentity(c.req.param("identity") ?? "");
   if (!ok || !fixture) return c.notFound();
   const store = await storeFor(c);
   await issueSession(c, store, {
