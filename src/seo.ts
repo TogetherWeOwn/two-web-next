@@ -36,7 +36,14 @@ export function crawlableEvents(candidates: SitemapEventCandidate[]): SitemapEve
     .map((e) => ({ key: e.key, updatedAt: e.updatedAt }));
 }
 
-const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
+export const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
+
+// Canonical builder for the funnel + profile page components (home, join,
+// member profile): APP_URL is an unconstrained string binding, so a trailing
+// slash must never leak a double-slash canonical (TOG-10118 review: such
+// canonicals 404). Events shells build their own canonicals in W8.
+export const canonicalUrl = (appUrl: string, path: string): string =>
+  `${stripTrailingSlash(appUrl)}${path}`;
 
 // Static entries for the routes live in W4. /join, /events and friends join
 // the index in their own slices (see docs/url-freeze.md) — a sitemap must

@@ -17,8 +17,8 @@
 //
 // Session seam: the cookie carries a random token; the row in the session
 // store is the session (same contract as src/index.tsx: tests inject a
-// SessionStore on the env as SESSION_STORE, local/dev builds a postgres
-// store from DATABASE_URL, no binding fails closed to 503). The guard reads
+// SessionStore on the env as SESSION_STORE, runtime builds a postgres store
+// from DATABASE_URL or DB.connectionString, no binding fails closed to 503). The guard reads
 // the row — it never rotates: rotation is the site's per-view concern, and
 // an admin read must not invalidate the cookie the moderator's other tab
 // holds. Never trust a role bit from the cookie: the moderator decision is
@@ -28,6 +28,7 @@ import { getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
+import { databaseOptions, databaseUrl } from "../db/connection";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -51,9 +52,9 @@ const migratedUrls = new Set<string>();
 export async function sessionStoreFor(c: { env: Env }): Promise<SessionStore | null> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
-  const url = c.env.DATABASE_URL;
+  const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migratedUrls.has(url)) {
     await migrate(sql);
     migratedUrls.add(url);
@@ -75,8 +76,8 @@ export function enforceEnabled(env: Env): boolean {
 }
 
 /**
- * The whole guard as one ordered middleware: origin check (POST) → guest
- * redirect → moderator 403 → handler → access-log flush → no-store.
+ * Panel authorization: guest redirect → moderator 403 → handler →
+ * access-log flush → no-store. The outer app enforces same-origin writes.
  *
  * Read routes declare what member data they surfaced via `c.set("access",
  * {...})`; the guard writes the row after the handler. Writes do not log
@@ -102,11 +103,6 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
     next: Next,
   ) => {
-    if (c.req.method === "POST") {
-      const origin = c.req.header("origin");
-      if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-    }
-
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
     // Guest: into the site Discord OAuth flow, like everyone else. There is
     // no panel login page.
@@ -167,7 +163,10 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
       if (enforceEnabled(c.env)) {
-        return c.text("Member data is temporarily unavailable.", 503);
+        // The handler already finalized its response. Returning a new response
+        // here is ignored by Hono's compose; replace it before it leaves.
+        c.res = c.text("Member data is temporarily unavailable.", 503);
+        c.header("cache-control", "private, no-store");
       }
     }
   };

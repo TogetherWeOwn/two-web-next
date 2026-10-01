@@ -66,6 +66,9 @@ export const agentEventGrants = pgTable(
     verifierHash: varchar("verifier_hash", { length: 64 }).notNull().unique(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    // Legacy cutover evidence; ingress still enforces its own one-event quota.
+    maxEvents: integer("max_events").notNull().default(1),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("agent_event_grants_agent_id_idx").on(t.agentId)],
@@ -83,10 +86,16 @@ export const agentEventIdempotencyKeys = pgTable(
     status: smallint("status").notNull(),
     body: jsonb("body").notNull(),
     eventKey: varchar("event_key", { length: 26 }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   // The replay store is unique on (grant, key); rows are never deleted by the request path.
-  (t) => [unique("agent_event_idempotency_grant_key").on(t.grantId, t.key)],
+  (t) => [
+    unique("agent_event_idempotency_grant_key").on(t.grantId, t.key),
+    // Retention prune (W13 model:prune) deletes by age; without this the daily
+    // mass delete scans.
+    index("agent_event_idempotency_created_at_idx").on(t.createdAt),
+  ],
 );
 
 export const agentEventAudits = pgTable(
@@ -101,6 +110,8 @@ export const agentEventAudits = pgTable(
     requestId: text("request_id").notNull(),
     result: varchar("result", { length: 16 }).notNull(),
     reasonCode: varchar("reason_code", { length: 64 }),
+    discordEventId: text("discord_event_id"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("agent_event_audits_grant_created_idx").on(t.grantId, t.createdAt), index("agent_event_audits_event_key_idx").on(t.eventKey)],
@@ -165,4 +176,36 @@ export type ProfileRow = typeof profiles.$inferSelect;
 export const jobUniqueLocks = pgTable("job_unique_locks", {
   key: text("key").primaryKey(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+// N3 (TOG-9895): the countable queue ledger behind GET /up. Cloudflare Queues holds the
+// messages but exposes no depth API on the binding, so dispatch and consume keep this
+// ledger in step — the same `jobs`/`failed_jobs` pair the legacy `queue:check-depth`
+// probe counted. `available_at`/`reserved_at`/`created_at` carry the exact legacy
+// bucket semantics (pending/delayed/reserved/oldest-pending-age).
+//
+// One row per accepted transport message (keyed by the minted jobId, never the
+// event key): a retry delay (up to 3600s) outlives the 300s uniqueness lock, so
+// a re-dispatch while an earlier message is still live must not clobber that
+// row — an upsert on the event key loses the first message's transitions and
+// undercounts depth. `key` stays as a diagnostic tag (which event the row
+// belongs to); dedupe of same-key dispatches is the unique lock's job, not the
+// ledger's.
+export const queueJobs = pgTable("queue_jobs", {
+  jobId: uuid("job_id").primaryKey(),
+  kind: text("kind").notNull(),
+  key: text("key"),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull(),
+  reservedAt: timestamp("reserved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Terminal failures, mirroring legacy `failed_jobs`: reported by /up, never thresholded.
+export const queueFailedJobs = pgTable("queue_failed_jobs", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  jobId: uuid("job_id").notNull(),
+  kind: text("kind").notNull(),
+  key: text("key"),
+  reason: text("reason").notNull(),
+  failedAt: timestamp("failed_at", { withTimezone: true }).notNull().defaultNow(),
 });

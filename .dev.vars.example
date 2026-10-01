@@ -1,4 +1,6 @@
 # Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
+# TrustHosts has no loopback exemption: local requests must match this hostname.
+APP_URL=http://localhost:8787
 DISCORD_CLIENT_SECRET=
 DISCORD_BOT_TOKEN=
 # 32+ random bytes, e.g. `openssl rand -base64 48`
@@ -20,3 +22,7 @@ BOT_ENDPOINT_URL=
 BOT_SHARED_SECRET=
 BOT_KEY_ID=
 BOT_PRODUCTION_URL=
+# CSP violation sink sampling (TOG-10107): fraction of valid reports logged.
+# Unset or unparseable = 1.0 (log everything). Lower it if report volume
+# ever outweighs the signal.
+# CSP_REPORT_SAMPLE_RATE=1.0

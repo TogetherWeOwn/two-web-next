@@ -6,7 +6,7 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  "workers_dev": true,
+  "workers_dev": false,
   // Staging host. The Discord application must list ${APP_URL}/auth/discord/callback as a redirect URI.
   "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],
   // W13: Laravel queue + scheduler parity (TOG-9692). Cron expressions are pinned to
@@ -23,7 +23,13 @@
       { "queue": "two-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
     ]
   },
-  "assets": { "directory": "./public" },
+  // W8 write-back carrier. Still NOT bound: a producer binding to a queue that does not exist fails
+  // `wrangler deploy`, and the W8 SyncMessage shape differs from W13's QueueMessage above. After the
+  // operator runs `wrangler queues create two-web-next-event-sync`, append
+  //   { "binding": "EVENT_SYNC_QUEUE", "queue": "two-web-next-event-sync" }
+  // to producers. Until then src/events/sync.ts logs each due write-back (never silent, never throws).
+  // Every host, including static requests, must pass the Worker's host guard.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
   // project two-web-next, staging branch (pooled endpoint). Local dev sets
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB to agent-testdb.

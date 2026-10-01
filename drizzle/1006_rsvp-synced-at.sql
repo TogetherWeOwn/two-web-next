@@ -1,0 +1,1 @@
+ALTER TABLE "rsvps" ADD COLUMN "synced_to_discord_at" timestamp with time zone;
