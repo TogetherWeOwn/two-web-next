@@ -25,6 +25,7 @@ class Element {
   attributes: Record<string, string> = {};
   listeners: Record<string, ((event: { preventDefault: () => void }) => void)[]> = {};
   hidden = false;
+  href = "";
   value = "";
   defaultValue = "";
   private text = "";
@@ -63,7 +64,7 @@ class Element {
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
 }
 
-function fixture() {
+function fixture(search = "") {
   const document = {
     activeElement: null as Element | null,
     createElement: (tag: string): Element => new Element(tag, document),
@@ -100,7 +101,8 @@ function fixture() {
   const requests: ReturnType<typeof deferred<ResponseFixture>>[] = [];
   const fetch = vi.fn(() => { const request = deferred<ResponseFixture>(); requests.push(request); return request.promise; });
   const timers: (() => void)[] = [];
-  runInNewContext(binder, { document, fetch, location: { pathname: "/members/100000000000000001" }, setTimeout: (callback: () => void) => timers.push(callback), Intl });
+  const window = new EventTarget();
+  runInNewContext(binder, { document, window, fetch, location: { pathname: "/members/100000000000000001", search }, setTimeout: (callback: () => void) => timers.push(callback), Intl });
   const enter = (values: Partial<Record<"bio" | "games_text" | "timezone", string>>) => {
     for (const [key, value] of Object.entries(values)) form.elements[key]!.value = value;
   };
@@ -110,7 +112,7 @@ function fixture() {
     timers.splice(0).forEach((callback) => callback());
   };
   const notice = (id: string) => root.querySelector(`[data-testid="${id}"]`);
-  return { document, root, name, heading, bio, games, timezone, form, edit, editControl, fetch, requests, enter, cancel, notice };
+  return { document, window, root, name, heading, bio, games, timezone, form, edit, editControl, fetch, requests, enter, cancel, notice };
 }
 
 describe("shipped member-profile edit lifecycle", () => {
@@ -298,16 +300,77 @@ describe("shipped member-profile edit lifecycle", () => {
     expect(f.form.elements.games_text!.value).toBe("");
   });
 
-  it.each([401, 419, 302, 0])("preserves the session-expired notice for a current response %s", async (status) => {
-    const f = fixture();
-    f.enter({ bio: "Keep this draft" });
+  it.each([401, 419, 302, 0])("keeps expiry durable after response %s, blocks repeat PATCHes and preserves every draft field until reset", async (status) => {
+    const f = fixture("?edit=1&tab=games");
+    const draft = { bio: "  Keep this draft  ", games_text: " Go \nChess\nGo", timezone: "Asia/Tokyo" };
+    f.enter(draft);
     f.form.dispatch("submit");
     f.requests[0]!.resolve({ ok: false, status, type: status === 0 ? "opaqueredirect" : "basic" });
     await flush();
-    expect(f.notice("profile-session-expired")?.getAttribute("role")).toBe("alert");
-    expect(f.form.elements.bio!.value).toBe("Keep this draft");
+    const expired = f.notice("profile-session-expired")!;
+    expect(expired.getAttribute("role")).toBe("alert");
+    expect(expired.textContent).toContain("Your session expired. Your changes are still here.");
+    expect(expired.querySelector("a")?.href).toBe(`/auth/recover?next=${encodeURIComponent("/members/100000000000000001?edit=1&tab=games")}`);
+    expect(f.document.activeElement).toBe(expired);
+    f.edit.dispatch("click");
+    expect(f.notice("profile-session-expired")).toBe(expired);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(f.form.dispatch("submit").preventDefault).toHaveBeenCalledOnce();
+      expect(f.notice("profile-session-expired")?.getAttribute("role")).toBe("alert");
+      expect(f.document.activeElement).toBe(f.notice("profile-session-expired"));
+    }
+    expect(f.root.querySelectorAll('[data-testid="profile-session-expired"]')).toHaveLength(1);
+    expect(f.fetch).toHaveBeenCalledOnce();
+    expect(f.form.hidden).toBe(false);
+    for (const [key, value] of Object.entries(draft)) expect(f.form.elements[key]!.value).toBe(value);
+    expect(f.form.elements.bio!.defaultValue).toBe("Original bio");
+    expect(f.form.elements.games_text!.defaultValue).toBe("Chess");
+    expect(f.form.elements.timezone!.defaultValue).toBe("UTC");
+    expect(f.bio.textContent).toBe("Original bio");
+    expect(f.games.textContent).toBe("Chess");
+    expect(f.timezone.textContent).toBe("Timezone: UTC");
+    expect(f.notice("profile-saved")).toBeNull();
+
     f.cancel();
     expect(f.notice("profile-session-expired")).toBeNull();
+    expect(f.form.elements.bio!.value).toBe("Original bio");
+    expect(f.form.elements.games_text!.value).toBe("Chess");
+    expect(f.form.elements.timezone!.value).toBe("UTC");
+    expect(f.document.activeElement).toBe(f.name);
+    expect(f.fetch).toHaveBeenCalledOnce();
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+    f.requests[1]!.resolve(success());
+    await flush();
+    expect(f.notice("profile-saved")?.getAttribute("role")).toBe("status");
+  });
+
+  it("handles a cancelable window expiry event locally without sending or losing the draft", () => {
+    const f = fixture("?tab=games");
+    const draft = { bio: "Event-expired draft", games_text: "Go\nChess", timezone: "Europe/London" };
+    f.enter(draft);
+    const event = new Event("two:session-expired", { cancelable: true });
+    // Native dispatch returns false when this island handles the global notice.
+    expect(f.window.dispatchEvent(event)).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    const expired = f.notice("profile-session-expired")!;
+    expect(expired.getAttribute("role")).toBe("alert");
+    expect(f.document.activeElement).toBe(expired);
+    expect(expired.querySelector("a")?.href).toBe(`/auth/recover?next=${encodeURIComponent("/members/100000000000000001?tab=games")}`);
+    f.edit.dispatch("click");
+    expect(f.notice("profile-session-expired")).toBe(expired);
+    f.form.dispatch("submit");
+    f.form.dispatch("submit");
+    expect(f.fetch).not.toHaveBeenCalled();
+    expect(f.root.querySelectorAll('[data-testid="profile-session-expired"]')).toHaveLength(1);
+    for (const [key, value] of Object.entries(draft)) expect(f.form.elements[key]!.value).toBe(value);
+    expect(f.form.hidden).toBe(false);
+    f.cancel();
+    expect(f.notice("profile-session-expired")).toBeNull();
+    expect(f.form.elements.bio!.value).toBe("Original bio");
+    expect(f.form.elements.games_text!.value).toBe("Chess");
+    expect(f.form.elements.timezone!.value).toBe("UTC");
+    expect(f.fetch).not.toHaveBeenCalled();
   });
 
   it("keeps client validation and the submitted request contract intact", () => {

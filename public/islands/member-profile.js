@@ -22,6 +22,16 @@
   // older write that may still commit. Not solved: cross-tab or unknown-outcome races.
   var pending = false;
   var generation = 0;
+  var sessionExpired = false;
+
+  function expiredNotice() {
+    sessionExpired = true;
+    notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
+  }
+  if (typeof window !== "undefined") window.addEventListener("two:session-expired", function (event) {
+    event.preventDefault();
+    expiredNotice();
+  });
 
   function accepted(body) {
     // Match the server's normalization; success returns no profile fields.
@@ -102,7 +112,7 @@
     if (loginLink) {
       el.appendChild(document.createTextNode(" "));
       var a = document.createElement("a");
-      a.href = "/auth/discord?next=" + encodeURIComponent(location.pathname);
+      a.href = "/auth/recover?next=" + encodeURIComponent(location.pathname + (location.search || ""));
       a.textContent = "Log in with Discord";
       el.appendChild(a);
     }
@@ -113,6 +123,7 @@
   function clearNotices() {
     root.querySelectorAll("[data-testid^='profile-']").forEach(function (n) {
       var t = n.getAttribute("data-testid");
+      if (t === "profile-session-expired" && sessionExpired) return;
       if (t === "profile-error" || t === "profile-save-failed" || t === "profile-session-expired" || t === "profile-saved") n.remove();
     });
   }
@@ -147,6 +158,7 @@
     // Cancel discards the draft, not an already accepted server write. A late
     // completion must not change this UI; the pending guard stays until it settles.
     var cancelled = ++generation;
+    sessionExpired = false;
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
@@ -160,6 +172,7 @@
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
     if (pending) return;
+    if (sessionExpired) return expiredNotice();
     var f = form.elements;
     var body = {
       bio: f.bio.value,
@@ -194,7 +207,7 @@
           });
         }
         if (res.status === 401 || res.status === 419 || res.type === "opaqueredirect" || res.status === 302) {
-          return notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
+          return expiredNotice();
         }
         notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
       })
