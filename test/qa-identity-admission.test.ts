@@ -110,8 +110,11 @@ describe("QA identity admission before session issuance", () => {
     expect(fixture.selectRosterStore).toHaveBeenCalledTimes(1);
     expect(fixture.create).toHaveBeenCalledTimes(1);
     const cookies = response.headers.getSetCookie();
-    expect(cookies).toHaveLength(1);
-    const cookie = cookies[0]!;
+    expect(cookies).toHaveLength(2);
+    const cookie = cookies.find(c => c.startsWith(SESSION_COOKIE + "="))!;
+    const status = cookies.find(c => c.startsWith("__Host-two_session_status="))!;
+    for (const flag of ["Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=2592000"]) expect(status).toContain(flag);
+    expect(status).not.toMatch(/Domain=/i);
     for (const flag of [`${SESSION_COOKIE}=`, "Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=2592000"]) {
       expect(cookie).toContain(flag);
     }

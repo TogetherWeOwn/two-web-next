@@ -201,8 +201,16 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
     expect(byReq).not.toContain("req-a");
 
     const logs = await db.select().from(memberDataAccessLogs);
+    // SQL without ORDER BY has no first-row contract. Require exactly one
+    // audit row per request and all four exact subject sets, in any row order.
+    expect(logs).toHaveLength(4);
     expect(logs.every((l) => l.route === "admin.join-attempts.index")).toBe(true);
-    expect(logs[0]?.subjectUserIds).toEqual(["100000000000001001", "1000000000000010020", "100000000000001002"].sort());
+    expect(logs).toEqual(expect.arrayContaining([
+      ["100000000000001001", "100000000000001002", "1000000000000010020"].sort(), // All attempts.
+      ["100000000000001002", "1000000000000010020"].sort(), // Outcome filter.
+      ["100000000000001002"], // Exact Discord id.
+      ["1000000000000010020"], // Exact request id.
+    ].map((subjectUserIds) => expect.objectContaining({ subjectUserIds }))));
   });
 
   it("join viewer hides rows past the retention window and never writes", async () => {

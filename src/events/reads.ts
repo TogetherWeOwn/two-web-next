@@ -62,6 +62,13 @@ export async function listUpcoming(db: Db, now = new Date(), opts: CalendarReadO
   return withGoing(db, rows);
 }
 
+// Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.
+const finiteEventStart = sql`isfinite(${events.startsAt})`;
+
+// Rendered boundaries decode PostgreSQL infinity to invalid Dates whose
+// `toISOString()`/formatting throws, so upcoming reads refuse either one.
+const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
+
 export const HOME_EVENTS_DEADLINE_MS = 1000;
 // Each of the two reads is cancelled server-side before the response deadline.
 export const HOME_EVENTS_DB_TIMEOUT_MS = 400;
@@ -75,7 +82,7 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
     const rows = await tx
       .select()
       .from(events)
-      .where(and(eq(events.status, "published"), gte(events.endsAt, now)))
+      .where(and(eq(events.status, "published"), gte(events.endsAt, now), finiteEventStart))
       .orderBy(asc(events.startsAt), asc(events.id))
       .limit(3);
     // The homepage gets public signposts and an aggregate, never creator or RSVP identities.
@@ -181,13 +188,6 @@ const eventLinkColumns = {
   timezone: events.timezone,
   location: events.location,
 };
-
-// Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.
-const finiteEventStart = sql`isfinite(${events.startsAt})`;
-
-// Rendered boundaries decode PostgreSQL infinity to invalid Dates whose
-// `toISOString()`/formatting throws, so upcoming reads refuse either one.
-const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
 
 /** Published links only, even for moderators. Equal starts use id as the legacy tiebreak. */
 export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id">): Promise<EventNeighbors> {

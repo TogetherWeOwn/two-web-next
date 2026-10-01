@@ -87,8 +87,8 @@ describe("private fixed-probe entrypoint", () => {
     if (kind === "receipt") env.PREFLIGHT = "not JSON";
     if (kind === "direct") env.DB = { ...env.DB, host: REMOTE_TARGET.host };
     if (kind === "missing") env.DB = undefined as unknown as Hyperdrive;
-    if (kind === "role") env.DB = { ...env.DB, user: "production" };
-    if (kind === "database") env.DB = { ...env.DB, database: "production" };
+    if (kind === "role") env.DB = { ...env.DB, user: "" };
+    if (kind === "database") env.DB = { ...env.DB, database: "" };
     if (kind === "password") env.DB = { ...env.DB, password: "" };
     if (kind === "port") env.DB = { ...env.DB, port: 0 };
     expect((await createRemoteProbe().fetch(request(), env)).status).toBe(412);
@@ -110,7 +110,7 @@ describe("preflight refusal diagnosis", () => {
     const env = environment();
     expect(refusalReasons(env)).toEqual([]);
     expect(refusalReasons(env, Date.now() + 301_000)).toEqual(["receipt_stale_or_unparseable_time"]);
-    const bad = { ...env, DB: { ...env.DB, user: "x", password: "" } } as unknown as ReturnType<typeof environment>;
+    const bad = { ...env, DB: { ...env.DB, user: "", password: "" } } as unknown as ReturnType<typeof environment>;
     expect(refusalReasons(bad)).toEqual(["binding_user_mismatch", "binding_password_missing"]);
     expect(refusalReasons({ ...env, PREFLIGHT: "{" })).toContain("receipt_unparseable");
   });

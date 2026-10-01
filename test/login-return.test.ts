@@ -584,6 +584,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const failing: SessionStore = {
       create: async () => { throw new Error("store down"); },
       get: async () => { throw new Error("store down"); },
+      statusHash: async () => { throw new Error("store down"); },
+      isActive: async () => { throw new Error("store down"); },
       rotate: async () => { throw new Error("store down"); },
       revoke: async () => { throw new Error("store down"); },
       sweepExpired: async () => { throw new Error("store down"); },
