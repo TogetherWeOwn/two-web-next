@@ -11,6 +11,17 @@ export function contentExpectations(scenario) {
       ...["prospect", "member", "soldier", "veteran", "legend"].map((rank, i) => ({ selector: `[data-rank="${rank}"] dd`, text: values[i] })),
     ];
   }
+  if (["/__a11y/404", "/__a11y/404-empty"].includes(scenario.route)) {
+    const empty = scenario.route === "/__a11y/404-empty";
+    const suggestions = '[data-testid="error-event-suggestions"]';
+    return [
+      { selector: `${suggestions} .card`, count: empty ? 0 : 1 },
+      ...(empty ? [{ selector: '[data-testid="error-events-empty"]', text: "Nothing is on the calendar right now — check back soon." }] : [
+        { selector: `${suggestions} .card > a`, text: "Friday night games", attributes: { href: "/e/01J00000000000000000000015" } },
+      ]),
+      { selector: '.error-events-search input', attributes: { name: "q" } },
+    ];
+  }
   if (!["/profile", "/members/:user"].includes(scenario.route) || scenario.status !== 200) return [];
   const stats = '[data-testid="profile-stats"]';
   if (unavailable) return [{ selector: stats, count: 0 }];

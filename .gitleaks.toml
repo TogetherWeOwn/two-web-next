@@ -35,8 +35,13 @@ paths = ['''^test/auth-admission\.test\.ts$''']
 regexes = ['''^fixture-signing-secret-at-least-32-bytes$''']
 
 [[allowlists]]
-description = "Synthetic event ULID in the historical login-return DB fixture; not a credential"
+description = "Synthetic ULID event key in the W15 login-return DB fixture, not a credential"
 targetRules = ["generic-api-key"]
+regexes = ['''01J0AABBCCDDEEFFGGHHMMNNPP''']
+
+[[allowlists]]
+description = "Synthetic sequential guild id in offline homepage widget fixtures, not an OAuth credential"
+targetRules = ["discord-client-id"]
 condition = "AND"
-paths = ['''^test/login-return\.test\.ts$''']
-regexes = ['''^01J0AABBCCDDEEFFGGHHMMNNPP$''']
+paths = ['''^test/home-theme\.test\.ts$''']
+regexes = ['''123456789012345678''']

@@ -72,14 +72,15 @@
 
   link.setAttribute("role", "button");
   link.addEventListener("click", (event) => {
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+    if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
       return;
     event.preventDefault();
     void copy();
   });
   link.addEventListener("keydown", (event) => {
-    if (event.key !== " ") return;
+    if (event.defaultPrevented || event.key !== " ") return;
     event.preventDefault();
+    if (event.repeat) return;
     void copy();
   });
 })();
