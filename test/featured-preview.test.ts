@@ -88,6 +88,20 @@ describe("featured publish-window status", () => {
     expect(empty).toContain("No featured content matches these filters.");
   });
 
+  it("keeps the native table in a named keyboard-focusable scroll region with complete UTC bounds", () => {
+    const html = String(jsx(FeaturedPage, { rows: [row], query, now }));
+    expect(html).toContain('class="featured-table-scroll" role="region" aria-label="Featured content list" aria-describedby="featured-scroll-hint" tabindex="0"');
+    expect(html).toContain('id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.');
+    expect(html).toContain(`<span class="featured-window-bound"><time datetime="${before.toISOString()}">${before.toISOString()}</time></span>`);
+    expect(html).toContain(`<span class="featured-window-bound">→ <time datetime="${after.toISOString()}">${after.toISOString()}</time></span>`);
+    expect(html).toContain('href="/admin/featured/1">Friday games</a>');
+    expect(html.match(/<th\b/g)).toHaveLength(5);
+    expect(html.match(/<time\b/g)).toHaveLength(3);
+    const open = String(jsx(FeaturedPage, { rows: [{ ...row, startsAt: null, endsAt: null }], query, now }));
+    expect(open).toContain('<span class="featured-window-bound">—</span>');
+    expect(open).toContain('<span class="featured-window-bound">→ —</span>');
+  });
+
   it("captures one clock for every row in the table and adds the bounded-width table class", () => {
     const html = String(jsx(FeaturedPage, { rows: [row, { ...row, id: 2 }], query, now }));
     expect(html.match(/data-status="live"/g)).toHaveLength(2);

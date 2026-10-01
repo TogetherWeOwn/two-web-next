@@ -19,7 +19,7 @@ async function main() {
     endsAt: new Date("2026-09-30T21:00:00Z"), createdBy: "fixture",
     createdAt: now, updatedAt: now,
   };
-  const scheduled = { ...row, id: 2, title: "Next games", startsAt: new Date("2026-10-01T20:00:00Z"), endsAt: null };
+  const scheduled = { ...row, id: 2, title: "Next games and community workshops for newcomers", startsAt: new Date("2026-10-01T20:00:00Z"), endsAt: null };
   const longContent = { ...row, title: "a".repeat(255), body: `https://example.test/${"a".repeat(400)}` };
   const rows = [
     row, scheduled,

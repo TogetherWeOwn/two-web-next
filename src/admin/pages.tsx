@@ -552,6 +552,8 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; n
         </div>
         <div class="field"><button type="submit" class="btn">Filter</button></div>
       </form>
+      <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="featured-table-scroll" role="region" aria-label="Featured content list" aria-describedby="featured-scroll-hint" tabindex={0} data-testid="featured-table-scroll">
       <table class="admin-table featured-table" data-testid="featured-table">
         <thead>
           <tr>
@@ -578,7 +580,8 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; n
                 <td data-testid={`featured-status-${r.id}`}><FeaturedStatusBadge row={r} now={now} /></td>
                 <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
                 <td>
-                  {r.startsAt ? r.startsAt.toISOString() : "—"} → {r.endsAt ? r.endsAt.toISOString() : "—"}
+                  <span class="featured-window-bound">{r.startsAt ? <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time> : "—"}</span>
+                  <span class="featured-window-bound">→ {r.endsAt ? <time datetime={r.endsAt.toISOString()}>{r.endsAt.toISOString()}</time> : "—"}</span>
                 </td>
                 <td><time datetime={r.updatedAt.toISOString()}>{r.updatedAt.toISOString()}</time></td>
               </tr>
@@ -586,6 +589,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; n
           )}
         </tbody>
       </table>
+      </div>
     </section>
   </Shell>
 );
