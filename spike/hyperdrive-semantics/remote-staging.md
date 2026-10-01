@@ -117,8 +117,14 @@ cleanup state. Wrangler inherits the runner's supervisor-owned process group
 or forced timeout, the independent supervisor terminates that group (TERM,
 bounded wait, KILL) and reaps orphaned descendants. Worker JSON is validated before
 replacing the canonical unknown-cleanup failure; null, non-object, malformed and
-incomplete responses cannot erase attempted-schema recovery. Only supported
-check/error fields are copied into evidence, never arbitrary upstream fields.
+incomplete or contradictory responses cannot erase attempted-schema recovery.
+Unknown CREATE cannot claim verified cleanup; passing lock/GIN details must
+corroborate every pass flag and count. Supported normal completion, stage failure,
+checkless failure and preflight refusal variants enforce their state, stage,
+teardown and HTTP relationships. Genuine semantic failures retain the normal
+completion path; an explicit CREATE refusal and a close error after verified DROP
+remain distinct from uncertain cleanup. Only supported check/error fields are
+copied into evidence, never arbitrary upstream fields.
 The runner atomically publishes `result.json`. After reaping, the supervisor
 preserves an existing valid final result; otherwise it atomically writes a
 sanitized failure with revision, exit status, Wrangler version when available,

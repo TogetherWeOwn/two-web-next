@@ -113,36 +113,54 @@ export function parseRemoteResult(value: unknown): RemoteResult {
     if (typeof value.error !== "string" || !["remote_staging_preflight_refused", "remote_staging_probe_failed"].includes(value.error)) return invalid();
     result.error = value.error as string;
   }
+  const checkFields = ["checks", "passed", "total", "version", "failedStage", "teardownFailures", "path"];
   if (result.error === "remote_staging_preflight_refused") {
-    if (result.ok || result.cleanup !== true || value.schema !== undefined || value.created !== undefined) return invalid();
+    if (result.ok || result.cleanup !== true || value.schema !== undefined || value.created !== undefined ||
+        checkFields.some((field) => value[field] !== undefined)) return invalid();
     return result;
   }
   if (![true, false, "not_verified"].includes(value.created as boolean | string)) return invalid();
   result.created = value.created as RemoteResult["created"];
+  // Acknowledged ownership is required for verified DROP. Explicit refusal is
+  // the other clean state; unknown CREATE must retain unknown cleanup.
+  if ((result.created === false && result.cleanup !== true) ||
+      (result.created === "not_verified" && result.cleanup !== "not_verified") ||
+      (result.created === true && result.cleanup !== true && result.cleanup !== "not_verified")) return invalid();
   if (value.schema !== undefined) {
     if (typeof value.schema !== "string" || !schemaPattern.test(value.schema)) return invalid();
     result.schema = value.schema;
   } else if (result.created !== false) return invalid();
   if (value.checks === undefined) {
-    // An unexpected pre-check exception has only the last schema state.
-    if (result.ok || result.error !== "remote_staging_probe_failed") return invalid();
+    // An unexpected pre-check exception has only the last schema state, never
+    // orphan counts, stages or a completion path.
+    if (result.ok || result.error !== "remote_staging_probe_failed" ||
+        checkFields.some((field) => value[field] !== undefined)) return invalid();
     return result;
   }
+  if (!result.schema) return invalid();
   const names = ["(a) FOR UPDATE", "(b) advisory xact lock", "(c) jsonb+GIN"];
   const details = [
-    /^blocked_55P03=(true|false) second_seat_refused=(true|false) going=\d+$/,
+    /^blocked_55P03=(true|false) second_seat_refused=(true|false) going=(0|[1-9]\d*)$/,
     /^concurrent_refused=(true|false) reacquired=(true|false)$/,
-    /^uses_gin=(true|false) rows=2001 hits=\d+$/,
+    /^uses_gin=(true|false) rows=2001 hits=(0|[1-9]\d*)$/,
   ];
   if (!Array.isArray(value.checks) || value.checks.length !== 3 || value.total !== 3 ||
       !Array.isArray(value.teardownFailures) || value.teardownFailures.some((stage) => !["cleanup", "close"].includes(stage)) ||
       (value.failedStage !== undefined && (typeof value.failedStage !== "string" || !stages.includes(value.failedStage)))) return invalid();
+  const passingDetails = [
+    "blocked_55P03=true second_seat_refused=true going=1",
+    "concurrent_refused=true reacquired=true",
+    "uses_gin=true rows=2001 hits=1",
+  ];
   result.checks = value.checks.map((check: unknown, index) => {
     if (!isRecord(check) || check.name !== names[index] || typeof check.pass !== "boolean" ||
-        typeof check.status !== "string" || !["passed", "failed", "not_attempted"].includes(check.status) || check.pass !== (check.status === "passed") ||
-        typeof check.detail !== "string" || !(details[index]!.test(check.detail) ||
-          (check.status === "failed" && check.detail === "stage_exception") ||
-          (check.status === "not_attempted" && check.detail === "not_attempted"))) return invalid();
+        typeof check.status !== "string" || !["passed", "failed", "not_attempted"].includes(check.status) ||
+        check.pass !== (check.status === "passed") || typeof check.detail !== "string") return invalid();
+    if (check.status === "not_attempted") {
+      if (check.detail !== "not_attempted") return invalid();
+    } else if (check.detail === "stage_exception") {
+      if (check.status !== "failed") return invalid();
+    } else if (!details[index]!.test(check.detail) || check.pass !== (check.detail === passingDetails[index])) return invalid();
     return { name: names[index]!, pass: check.pass, status: check.status as "passed" | "failed" | "not_attempted", detail: check.detail };
   });
   const passed = result.checks.filter((check) => check.pass).length;
@@ -154,10 +172,30 @@ export function parseRemoteResult(value: unknown): RemoteResult {
     if (typeof value.version !== "string" || !/^PostgreSQL \d+(?:\.\d+)*(?: [^\r\n]{1,300})?$/.test(value.version)) return invalid();
     result.version = value.version;
   }
-  if (result.ok) {
-    if (passed !== 3 || result.created !== true || result.cleanup !== true || result.failedStage || result.error ||
-        result.teardownFailures.length || value.path !== "wrangler-remote-hyperdrive-neon-staging") return invalid();
+  const teardown = result.teardownFailures;
+  if (!["[]", '["cleanup"]', '["close"]', '["cleanup","close"]'].includes(JSON.stringify(teardown)) ||
+      (teardown.includes("cleanup") && result.created !== true) ||
+      (result.created === true && result.cleanup === "not_verified" && !teardown.includes("cleanup"))) return invalid();
+  const completed = (index: number) => result.checks![index]!.status !== "not_attempted" &&
+    result.checks![index]!.detail !== "stage_exception";
+  if (result.error === undefined) {
+    // Semantic failures complete normally (HTTP 200), but cannot claim success.
+    if (result.failedStage || result.created !== true || result.cleanup !== true || teardown.length ||
+        ![0, 1, 2].every(completed) || result.ok !== (passed === 3) ||
+        value.path !== "wrangler-remote-hyperdrive-neon-staging") return invalid();
     result.path = "wrangler-remote-hyperdrive-neon-staging";
+  } else {
+    if (result.ok || !result.failedStage || value.path !== undefined) return invalid();
+    const stage = result.failedStage;
+    if ((stage === "connect" && result.created !== false) ||
+        (!["connect", "create_schema"].includes(stage) && result.created !== true)) return invalid();
+    const failedIndex = ["a", "b", "c"].indexOf(stage);
+    if (failedIndex >= 0) {
+      if (!result.checks.every((check, index) => index < failedIndex ? completed(index) :
+        index === failedIndex ? check.detail === "stage_exception" || completed(index) : check.status === "not_attempted")) return invalid();
+    } else if (["connect", "create_schema", "setup"].includes(stage)) {
+      if (result.checks.some((check) => check.status !== "not_attempted")) return invalid();
+    } else if (teardown[0] !== stage || ![0, 1, 2].every(completed)) return invalid();
   }
   return result;
 }
@@ -219,8 +257,9 @@ export async function main() {
     if (current.hyperdriveId !== receipt.hyperdriveId || JSON.stringify(current.origin) !== JSON.stringify(receipt.origin)) throw new Error("remote_binding_changed");
     requireRemoteReceipt(receipt);
     const response = await fetch(url + "/run", { method: "POST", headers, signal: abort.signal });
-    result = parseRemoteResult(await response.json());
-    if (!response.ok) result.ok = false;
+    const parsed = parseRemoteResult(await response.json());
+    if (response.ok !== (parsed.error === undefined)) throw new Error("remote_preview_invalid_result");
+    result = parsed;
   } catch (err) {
     // Only known local/provider code strings, never arbitrary driver/network errors.
     const message = err instanceof Error ? err.message : "";

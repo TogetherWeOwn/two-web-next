@@ -1,15 +1,16 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { REMOTE_TARGET } from "../spike/hyperdrive-semantics/remote-target";
+import { parseRemoteResult } from "../spike/hyperdrive-semantics/remote-runner";
 import type { StagingResult } from "../spike/hyperdrive-semantics/staging-checks";
 const driver = vi.hoisted(() => vi.fn());
 vi.mock("postgres", () => ({ default: driver }));
 import { createRemoteProbe } from "../spike/hyperdrive-semantics/remote-worker";
 
 const nonce = "b".repeat(64);
-function fixture(failAt: string, code = "08006", closeFailure = false, dropFailure = false) {
+function fixture(failAt: string, code = "08006", closeFailure = false, dropFailure = false, rollbackFailure = false) {
   const schemas = new Set<string>();
   const statements: string[] = [];
-  let eventReads = 0; let advisoryReads = 0;
+  let eventReads = 0; let advisoryReads = 0; let rollbacks = 0;
   driver.mockImplementation(() => {
     const execute = async (statement: string) => {
       statements.push(statement);
@@ -17,11 +18,12 @@ function fixture(failAt: string, code = "08006", closeFailure = false, dropFailu
         // A duplicate-schema refusal means the requested name already exists.
         if (code !== "42501" || failAt !== "CREATE SCHEMA") schemas.add(statement.split(" ")[2]!);
       }
-      if (statement.includes(failAt) || (dropFailure && statement.startsWith("DROP SCHEMA"))) {
+      if (statement.includes(failAt) || (dropFailure && statement.startsWith("DROP SCHEMA")) ||
+          (rollbackFailure && statement === "ROLLBACK" && ++rollbacks >= 2)) {
         throw Object.assign(new Error("password=fixture-secret arbitrary SQL"), { code });
       }
       if (statement.startsWith("DROP SCHEMA")) schemas.delete(statement.split(" ")[2]!);
-      if (statement.includes("version()")) return [{ version: "fixture-version" }];
+      if (statement.includes("version()")) return [{ version: "PostgreSQL 17.11" }];
       if (statement.includes("SELECT id,") && statement.includes("FOR UPDATE")) {
         if (++eventReads === 2) throw Object.assign(new Error("fixture contention"), { code: "55P03" });
         return [{ id: 1 }];
@@ -57,6 +59,9 @@ async function run() {
   const result = await response.json() as StagingResult;
   expect(JSON.stringify(result)).not.toContain("fixture-secret");
   expect(JSON.stringify(result)).not.toContain("arbitrary SQL");
+  const { preflight, ...supported } = result as StagingResult & { preflight: unknown };
+  expect(preflight).toBeDefined();
+  expect(parseRemoteResult(result)).toEqual(supported);
   return result;
 }
 beforeEach(() => vi.clearAllMocks());
@@ -79,6 +84,8 @@ it.each(["42P06", "42501"])("distinguishes definite CREATE refusal %s from ackno
   expect(f.statements.some((s) => s.startsWith("DROP SCHEMA"))).toBe(false);
 });
 it.each([
+  ["SELECT version", "connect", ["not_attempted", "not_attempted", "not_attempted"], 0],
+  ["CREATE TABLE", "setup", ["not_attempted", "not_attempted", "not_attempted"], 0],
   ["SELECT capacity", "a", ["failed", "not_attempted", "not_attempted"], 0],
   ["pg_advisory_xact_lock", "b", ["passed", "failed", "not_attempted"], 1],
   ["EXPLAIN", "c", ["passed", "passed", "failed"], 2],
@@ -96,6 +103,24 @@ it("retains the primary failed stage through DROP and close failures", async () 
   expect(result).toMatchObject({ failedStage: "b", passed: 1, cleanup: "not_verified", teardownFailures: ["cleanup", "close"] });
   expect(result.checks.map((c) => c.status)).toEqual(["passed", "failed", "not_attempted"]);
   expect(f.schemas.has(result.schema)).toBe(true);
+});
+it("retains completed advisory evidence when its following rollback throws", async () => {
+  fixture("never-match", "08006", false, false, true);
+  const result = await run();
+  expect(result).toMatchObject({ ok: false, passed: 2, cleanup: true, failedStage: "b", teardownFailures: [] });
+  expect(result.checks.map((c) => c.status)).toEqual(["passed", "passed", "not_attempted"]);
+});
+it.each(["create_schema", "cleanup"])("retains acknowledged state after the %s reporting callback throws", async (stage) => {
+  fixture("never-match");
+  const report = vi.spyOn(console, "info").mockImplementation((marker: string) => {
+    const state = JSON.parse(marker.slice("W1_SCHEMA ".length));
+    if (state.created === true && state.cleanup === (stage === "cleanup" ? true : "not_verified")) throw new Error("synthetic-report-error");
+  });
+  try {
+    const result = await run();
+    expect(result).toMatchObject({ created: true, cleanup: true, failedStage: stage,
+      teardownFailures: stage === "cleanup" ? ["cleanup"] : [] });
+  } finally { report.mockRestore(); }
 });
 it("preserves all completed checks and verified schema cleanup after close throws", async () => {
   fixture("never-match", "08006", true);
