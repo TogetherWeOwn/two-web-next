@@ -1,9 +1,10 @@
 // route-inventory: GET /auth/status
 // route-inventory: GET /auth/recover
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
-import { AUTH_STATUS_COOKIE } from "../src/auth-status";
-import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
+import { AUTH_STATUS_COOKIE, authStatusScript } from "../src/auth-status";
+import { EXPIRED_WRITE_COOKIE, expiredWriteBanner } from "../src/write-recovery";
 import { fixtureDiscord, MEMBER, mergeCookies, recoveryFixture, SECRET } from "./fixtures/session-recovery";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -135,6 +136,41 @@ describe("explicit expired-write recovery, never replay", () => {
     const failed = await f.request("/auth/discord/callback?" + query, { headers: { cookie: jar } });
     expect(failed.headers.getSetCookie().some(c => c.startsWith(EXPIRED_WRITE_COOKIE + "=") && c.includes("Max-Age=0"))).toBe(true);
     expect(mergeCookies(jar, failed)).not.toContain(EXPIRED_WRITE_COOKIE);
+  });
+
+  it("logout clears the pending/restored recovery notice only after successful revocation", async () => {
+    const f = recoveryFixture();
+    const login = await f.login();
+    const jar = login.cookie + "; " + await signed(EXPIRED_WRITE_COOKIE, "restored|/profile");
+    vi.spyOn(f.sessions, "revoke").mockRejectedValueOnce(new Error("storage unavailable"));
+    const failed = await f.request("/logout", { method: "POST", headers: { cookie: jar, origin: f.env.APP_URL } });
+    expect(failed.status).toBe(503);
+    expect(failed.headers.getSetCookie()).toEqual([]);
+    expect(await f.sessions.get(login.tokenHash)).not.toBeNull();
+    const success = await f.request("/logout", { method: "POST", headers: { cookie: jar, origin: f.env.APP_URL } });
+    expect(success.status).toBe(303);
+    const cleared = mergeCookies(jar, success);
+    expect(cleared).not.toContain(EXPIRED_WRITE_COOKIE);
+    expect(await (await f.request("/", { headers: { cookie: cleared } })).text()).not.toContain('data-testid="auth-error"');
+  });
+
+  it("fragments neither start a controller nor consume the restored banner", async () => {
+    const app = new Hono<{ Variables: { authStatusEnabled: boolean } }>();
+    app.use("*", authStatusScript);
+    app.use("*", expiredWriteBanner);
+    app.use("*", async (c, next) => { c.set("authStatusEnabled", true); await next(); });
+    app.get("/fragment", c => c.html("<main>Fragment only</main>"));
+    app.get("/document", c => c.html("<html><body><main>Document</main></body></html>"));
+    const cookie = await signed(EXPIRED_WRITE_COOKIE, "restored|/profile");
+    const env = { SESSION_SECRET: SECRET };
+    const fragment = await app.request("/fragment", { headers: { cookie } }, env);
+    expect(await fragment.text()).toBe("<main>Fragment only</main>");
+    expect(fragment.headers.getSetCookie()).toEqual([]);
+    const document = await app.request("/document", { headers: { cookie } }, env);
+    const html = await document.text();
+    expect(html).toContain('data-testid="auth-error"');
+    expect(html.match(/data-testid="auth-tab-sync"/g)).toHaveLength(1);
+    expect(document.headers.getSetCookie().some(c => c.startsWith(EXPIRED_WRITE_COOKIE + "=") && c.includes("Max-Age=0"))).toBe(true);
   });
 
   it("signed hostile and tampered notice values cannot inject markup or produce a success banner", async () => {

@@ -51,6 +51,16 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Chromium cancellation regressions
         run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
+      - name: Session recovery (local two-tab fixture, mocked OAuth)
+        run: timeout 120s npm run test:auth-browser
+      - name: Session recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: session-recovery-evidence
+          path: artifacts/session-recovery/
+          if-no-files-found: warn
+          retention-days: 14
       - name: WCAG 2.2 AA (local fixtures, no external services)
         run: npm run a11y
       - name: Accessibility evidence

@@ -564,9 +564,13 @@ registerEventRoutes(
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (token) await store.revoke(await hashToken(token)).catch(() => {});
+  if (token) {
+    try { await store.revoke(await hashToken(token)); }
+    catch { return c.text("Sign-out temporarily unavailable", 503); }
+  }
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
   clearAuthStatus(c);
+  await consumeExpiredWrite(c);
   return c.redirect("/", 303);
 });
 
