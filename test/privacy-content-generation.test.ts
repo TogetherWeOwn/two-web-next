@@ -21,19 +21,20 @@ function assertNoPolicyDrift(sourceBytes: Buffer, bundledMarkdown: string): void
   ).toBe(true);
 }
 
-function regenerate(sourceBytes: Buffer): string {
-  if (!command?.[1]) throw new Error(`Missing documented regeneration command in ${bundleFile}`);
+function regenerate(sourceBytes: Buffer, bundleText = bundle): { bundle: string; markdown: string } {
+  const fixtureCommand = bundleText.match(/^\/\/ Regen[^\n]*: node -e '(.+)' (\S+)$/m);
+  if (!fixtureCommand?.[1]) throw new Error(`Missing documented regeneration command in ${bundleFile}`);
   const scratch = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "privacy-generation-"));
   try {
     mkdirSync(join(scratch, dirname(POLICY_FILE)), { recursive: true });
     mkdirSync(join(scratch, dirname(bundleFile)), { recursive: true });
     writeFileSync(join(scratch, POLICY_FILE), sourceBytes);
     // Run the documented relative-path command in the fixture, never in the repository.
-    execFileSync(process.execPath, ["-e", command[1], POLICY_FILE], { cwd: scratch, timeout: 5000 });
+    execFileSync(process.execPath, ["-e", fixtureCommand[1], POLICY_FILE], { cwd: scratch, timeout: 5000 });
     const generated = readFileSync(join(scratch, bundleFile), "utf8");
     const literal = generated.match(/export const POLICY_MARKDOWN: string =\s*("(?:[^"\\]|\\.)*");/);
     if (!literal?.[1]) throw new Error(`Missing POLICY_MARKDOWN export in regenerated ${bundleFile}`);
-    return JSON.parse(literal[1]) as string;
+    return { bundle: generated, markdown: JSON.parse(literal[1]) as string };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -47,9 +48,17 @@ describe("privacy policy generation drift gate", () => {
   });
 
   it("byte-matches the selected source, documented generator output, and committed bundle", () => {
-    // Compare Markdown bytes, not TS formatting: the generator omits its own command comment.
-    assertNoPolicyDrift(source, regenerate(source));
+    // Compare Markdown bytes, not TypeScript formatting.
+    assertNoPolicyDrift(source, regenerate(source).markdown);
     assertNoPolicyDrift(source, POLICY_MARKDOWN);
+  });
+
+  it("preserves its documented command when regenerating and reloading the bundle", () => {
+    const generated = regenerate(source);
+    const reloaded = regenerate(source, generated.bundle);
+    expect(generated.bundle.split("\n")[1]).toBe(bundle.split("\n")[1]);
+    expect(reloaded.bundle).toBe(generated.bundle);
+    assertNoPolicyDrift(source, reloaded.markdown);
   });
 
   it.each([
@@ -57,12 +66,12 @@ describe("privacy policy generation drift gate", () => {
     ["CRLF", "\r\n"],
   ])("preserves Unicode, JSON escapes, and %s newlines without trimming", (_label, newline) => {
     const fixture = Buffer.from(`## Fixture${newline}${newline}  "café" — 😀 \\path  ${newline}${newline}`, "utf8");
-    assertNoPolicyDrift(fixture, regenerate(fixture));
+    assertNoPolicyDrift(fixture, regenerate(fixture).markdown);
   });
 
   it("preserves a source without a final newline", () => {
     const fixture = Buffer.from("## Fixture\n\nUnicode — 😀", "utf8");
-    assertNoPolicyDrift(fixture, regenerate(fixture));
+    assertNoPolicyDrift(fixture, regenerate(fixture).markdown);
   });
 
   it("rejects a modified source fixture even when its opening heading is unchanged", () => {
@@ -79,10 +88,10 @@ describe("privacy policy generation drift gate", () => {
   });
 
   it.each([
-    ["a missing final newline", () => POLICY_MARKDOWN.replace(/\n$/, "")],
-    ["an extra final newline", () => `${POLICY_MARKDOWN}\n`],
-    ["normalized CRLF newlines", () => POLICY_MARKDOWN.replace(/\n/g, "\r\n")],
-  ])("rejects %s in a bundle fixture", (_label, modifiedBundle) => {
-    expect(() => assertNoPolicyDrift(source, modifiedBundle())).toThrow(/Privacy policy v\d+ drift/);
+    ["a missing final newline", "## Fixture\n", "## Fixture"],
+    ["an extra final newline", "## Fixture", "## Fixture\n"],
+    ["normalized CRLF newlines", "## Fixture\n\nUnicode — 😀\n", "## Fixture\r\n\r\nUnicode — 😀\r\n"],
+  ])("rejects %s in a bundle fixture", (_label, fixture, modifiedBundle) => {
+    expect(() => assertNoPolicyDrift(Buffer.from(fixture, "utf8"), modifiedBundle)).toThrow(/Privacy policy v\d+ drift/);
   });
 });
