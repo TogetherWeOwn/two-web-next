@@ -6,7 +6,7 @@ import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
 import { memberAccessLog } from "../access-log";
-import { ValidationError, parseEventForm } from "../admin/validation";
+import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
@@ -314,6 +314,17 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   }
 
+  async function eventBody(c: Ctx): Promise<Record<string, unknown>> {
+    // Event edits must not turn malformed/non-object JSON into an empty PATCH.
+    // Keep the RSVP trap's permissive body parsing independent of this admission.
+    if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json")) return body(c);
+    const input: unknown = await c.req.json().catch(() => null);
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new ValidationError({ body: "Send a JSON object." });
+    }
+    return input as Record<string, unknown>;
+  }
+
   const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
 
   app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
@@ -322,7 +333,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     try {
-      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await body(c)));
+      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await eventBody(c)));
       return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);
@@ -338,22 +349,24 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const key = c.req.param("key");
     const existing = await getEvent(db, key);
     if (!existing) return c.json({ error: "not_found" }, 404);
-    // PATCH: unspecified fields keep their stored value.
-    const patch = await body(c);
-    const merged = {
-      title: existing.title,
-      game: existing.game,
-      description: existing.description,
-      timezone: existing.timezone,
-      location: existing.location,
-      capacity: existing.capacity,
-      ...patch,
-    } as Record<string, unknown>;
-    const tz = String(merged.timezone);
-    const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
-    merged.starts_at ??= wall(existing.startsAt);
-    merged.ends_at ??= wall(existing.endsAt);
     try {
+      // PATCH: unspecified fields keep their stored value.
+      const patch = await eventBody(c);
+      const merged = {
+        title: existing.title,
+        game: existing.game,
+        description: existing.description,
+        timezone: existing.timezone,
+        location: existing.location,
+        capacity: existing.capacity,
+        ...patch,
+      } as Record<string, unknown>;
+      // Match parseEventForm's zone default before deriving omitted wall times.
+      const tz = typeof merged.timezone === "string" ? merged.timezone.trim() || "Europe/London" : "Europe/London";
+      if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
+      const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
+      merged.starts_at ??= wall(existing.startsAt);
+      merged.ends_at ??= wall(existing.endsAt);
       const input = parseEventForm(merged, {
         startsAtUtc: existing.startsAt.toISOString(),
         endsAtUtc: existing.endsAt.toISOString(),
