@@ -111,6 +111,28 @@ describe.skipIf(!process.env.DATABASE_URL)("mounted keyed admin reads (isolated 
     expect(await logs()).toHaveLength(0);
   });
 
+  it.each([true, false])("saved featured preview stays buffered and classified without resource-id subjects (published: %s)", async (published) => {
+    const [featured] = await fixture.db.insert(featuredContents).values({
+      title: "Saved public preview", body: "Saved editorial body", isPublished: published,
+      imageUrl: "https://cdn.discordapp.com/preview.png",
+    }).returning();
+    const response = await request(`/featured/${featured!.id}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const body = await response.text();
+    expect(body).toContain('data-testid="featured-preview"');
+    expect(body).toContain("Last saved content");
+    if (published) {
+      expect(body).toContain('data-testid="featured-item"');
+      expect(body).toContain('src="https://cdn.discordapp.com/preview.png"');
+      expect(body).not.toContain('data-testid="featured-preview-hidden"');
+    } else {
+      expect(body).toContain('data-testid="featured-preview-hidden"');
+      expect(body).not.toContain('data-testid="featured-item"');
+    }
+    expect(await logs()).toHaveLength(0);
+  });
+
   it.each(["literal", "member"])("precision classification cannot authorize an added %s SQL projection in the existing featured handler", async (mode) => {
     const [featured] = await fixture.db.insert(featuredContents).values({ title: "Public editorial card" }).returning();
     const original = store.getFeatured;

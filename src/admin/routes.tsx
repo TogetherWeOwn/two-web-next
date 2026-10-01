@@ -334,7 +334,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.get("/featured/new", (c) => {
     declareAccess(c, { resource: "featured_contents", action: "view", route: "admin.featured.create" });
-    return bufferedMemberHtml(c, <FeaturedFormPage mode="new" values={{}} errors={{}} />);
+    return bufferedMemberHtml(c, <FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="new" values={{}} errors={{}} />);
   });
 
   admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
@@ -349,7 +349,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return formError(
           c,
           err,
-          (errors, v) => c.html(<FeaturedFormPage mode="new" values={v} errors={errors} />),
+          (errors, v) => c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="new" values={v} errors={errors} />),
           values,
         );
       }
@@ -367,7 +367,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!Number.isInteger(id)) return errorPage(c, 404, "Featured content not found");
     const row = await getFeatured(db, id);
     if (!row) return errorPage(c, 404, "Featured content not found");
-    return bufferedMemberHtml(c, <FeaturedFormPage mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
+    return bufferedMemberHtml(c, <FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
   });
 
   admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
@@ -386,7 +386,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return formError(
           c,
           err,
-          (errors, v) => c.html(<FeaturedFormPage mode="edit" row={existing} values={v} errors={errors} />),
+          (errors, v) => c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="edit" row={existing} values={v} errors={errors} />),
           values,
         );
       }
