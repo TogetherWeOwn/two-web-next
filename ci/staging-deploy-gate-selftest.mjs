@@ -44,7 +44,8 @@ function step(name) {
 }
 const gateCommand = step("Require successful exact-SHA full CI");
 const queueCommand = step("Ensure queues exist");
-const deployCommand = step("Deploy to Cloudflare Workers");
+const deployGateCommand = step("Re-verify exact-SHA full CI before Worker deploy");
+const deployCommand = `${deployGateCommand}\n${step("Deploy to Cloudflare Workers")}`;
 
 function executeStaging(ctx, evidence, changes = {}) {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-"));
@@ -285,6 +286,8 @@ test("workflow wires the tested gate before both mutations and preserves staging
   const gateOffset = workflow.indexOf("- name: Require successful exact-SHA full CI");
   assert.ok(gateOffset < workflow.indexOf("- name: Ensure queues exist"));
   assert.ok(gateOffset < workflow.indexOf("- name: Deploy to Cloudflare Workers"));
+  assert.equal(deployGateCommand, "node ci/staging-deploy-gate.mjs");
+  assert.match(workflow, /- name: Re-verify exact-SHA full CI before Worker deploy\n(?:(?!      - ).*\n)*      - name: Deploy to Cloudflare Workers\n/, "Deploy gate must be the step immediately before the deploy");
   assert.equal((workflow.match(/npx wrangler/g) ?? []).length, 2, "No additional ungated mutations");
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
