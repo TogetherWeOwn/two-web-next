@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -192,7 +192,7 @@ for (const path of ["db", "db/migrations", "drizzle"]) {
     assert.throws(f.check, /ancestor must be/);
     git(f.root, "add", ".");
     git(f.root, "commit", "-qm", "synthetic linked base");
-    rmSync(join(f.root, path));
+    unlinkSync(join(f.root, path));
     renameSync(target, join(f.root, path));
     assert.throws(() => checkMigrations(f.root, "HEAD"), /Git migration ancestor must be/);
   });
