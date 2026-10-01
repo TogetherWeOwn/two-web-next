@@ -2,7 +2,7 @@
 // routes and EventPolicy: drafts 403 for non-moderators, cancelled 410 + noindex,
 // /events.json needs a session, writes are moderator-only and enqueue the Discord
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
@@ -302,7 +302,15 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  async function body(c: Ctx): Promise<Record<string, unknown>> {
+  const moderatorGate: MiddlewareHandler<{ Bindings: Env; Variables: { eventModerator: Session } }> = async (c, next) => {
+    // The session reader uses only bindings/cookies, not this gate's variables.
+    const who = await moderator(c as unknown as Ctx);
+    if (who instanceof Response) return who;
+    c.set("eventModerator", who);
+    await next();
+  };
+
+  async function body(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
     // Media types are case-insensitive (RFC 2045 §5.1): normalize before the
     // JSON check so `Application/Json` cannot smuggle a body past the trap.
     // Forms parse with all values preserved: duplicate keys arrive as arrays
@@ -315,11 +323,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   }
 
-  const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
+  const invalid = (c: Pick<Ctx, "json">, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
 
-  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("json"), async (c) => {
-    const who = await moderator(c);
-    if (who instanceof Response) return who;
+  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
+    const who = c.get("eventModerator");
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     try {
@@ -331,9 +338,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("json"), async (c) => {
-    const who = await moderator(c);
-    if (who instanceof Response) return who;
+  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
+    const who = c.get("eventModerator");
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     const key = c.req.param("key");
@@ -372,9 +378,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
-      const who = await moderator(c);
-      if (who instanceof Response) return who;
+    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("action"), async (c) => {
+      const who = c.get("eventModerator");
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       try {

@@ -8,11 +8,17 @@ reading the body. Existing authentication, field validation and throttles remain
 in place; authenticated-only route groups may reject a guest before the limiter.
 The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
-Shared throttles run before buffering: oversized attempts consume admission
-budget and an exhausted bucket returns 429 without pulling the upload. The QA
-environment gate runs first, so a disabled seam always returns 404 without reads
-or throttle queries. Source-read failures return a static 400; downstream route
-and store exceptions still reach their existing handlers.
+Shared throttles and the profile write throttle run before buffering: oversized
+attempts consume admission budget and an exhausted bucket returns 429 without
+pulling the upload. Profile owner policy and moderator write authentication also
+run before buffering; moderator authentication is read once, without rotation.
+Agent ingress checks enabled/store configuration first (404/503 without body
+reads or SQL), then its credential/IP shield admits once before the limiter.
+Its bound service handler does not charge a second shield hit; the SQL client is
+closed on shield refusals, overflow and parse failures as well as normal replies.
+The QA environment gate runs first, so a disabled seam always returns 404 without
+reads or throttle queries. Source-read failures return a static 400; downstream
+route and store exceptions still reach their existing handlers.
 
 ## Classes and derivation
 

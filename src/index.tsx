@@ -3,7 +3,7 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
-import { agentEventsRoute } from "./agent-events/route";
+import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
 import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import { cspReportsRoute } from "./csp-reports";
@@ -384,7 +384,7 @@ app.get("/robots.txt", (c) => {
 // `/discord`. Flood control lives in the handler instead.
 app.post("/csp-reports", cspReportsRoute);
 
-app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsRoute);
+app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
 // `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
 // ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty

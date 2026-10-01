@@ -33,7 +33,9 @@ describe("every registered write route is body-limited", () => {
     expect(allPaths.sort()).toEqual(["/*", "/admin/*", "/events/:key/rsvp", "/members/*", "/profile"].sort());
   });
 
-  it.each([...writeRoutes].filter((entry): entry is [string, BodyClass] => entry[1] !== undefined))(
+  // Agent ingress needs its SQL admission fixture; its HTTP cap/cap+1 and
+  // environment-gate precedence are pinned in body-limit-route-admission.test.ts.
+  it.each([...writeRoutes].filter((entry): entry is [string, BodyClass] => entry[1] !== undefined && entry[0] !== "POST /api/agent-events"))(
     "%s accepts its cap and refuses cap+1 before parsing or writing",
     async (key, kind) => {
       const [method, pattern] = key.split(" ");
