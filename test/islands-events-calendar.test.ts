@@ -9,7 +9,8 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import rawApp from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -95,7 +96,8 @@ function eventRow(over: Partial<typeof events.$inferSelect> = {}): typeof events
   return {
     id: n, eventKey: `ev-${n}`, title: `Game night ${n}`, game: null, description: null,
     startsAt: start, endsAt: end, timezone: "Europe/London", location: null, capacity: null,
-    status: "published", discordEventId: null, createdBy: null, rsvpOpen: true,
+    status: "published", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    createdBy: null, rsvpOpen: true,
     recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
     parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
     ...over,
@@ -296,6 +298,13 @@ describe("EventsCalendar review regressions", () => {
     expect(grid).toContain('href="/events?past=1#event-grid-link" data-cal-jump');
     const list = await (await src.request("/events?past=1")).text();
     expect(list).toContain('id="event-grid-link"');
+  });
+
+  it.each(["list", "calendar"])("marks the active %s navigation link with valid link ARIA", async (view) => {
+    const html = await (await calendar([eventRow()], [], okSource()).request(`/events?view=${view}`)).text();
+    expect(html).not.toContain("aria-pressed");
+    expect(html).toContain(`aria-current="page" data-testid="events-view-${view}"`);
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
   });
 
   it("suppresses both the visible and live search miss when the read fails", async () => {
@@ -624,14 +633,13 @@ describe("EventsCalendar SSR drift", () => {
   it.each([
     [APP_URL, APP_URL, "noindex, nofollow"],
     ["https://togetherweown.com", "https://togetherweown.com", "noindex, follow"],
-    ["https://togetherweown.com", APP_URL, "noindex, nofollow"],
-    [APP_URL, "https://togetherweown.com", "noindex, nofollow"],
-  ])("preserves search analytics, no-store and NUL sanitization with APP_URL=%s on %s", async (appUrl, servingUrl, robotsTag) => {
+  ])("preserves search analytics, no-store and NUL sanitization with trusted APP_URL=%s on %s", async (appUrl, servingUrl, robotsTag) => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     const src = calendar([eventRow({ title: "Chess  night" })], [], okSource(), { APP_URL: appUrl });
     const res = await src.request(`${servingUrl}/events?q=%20CHESS%20%20night%20`);
+    expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
-    // Non-apex config or serving hosts keep the middleware's staging posture.
+    // Non-apex trusted hosts keep the middleware's staging posture.
     expect(res.headers.get("x-robots-tag")).toBe(robotsTag);
     expect(await res.text()).toContain("Chess  night");
     expect(src.logs).toEqual([{ normalizedQuery: "chess night", resultCount: 1 }]);
@@ -642,6 +650,32 @@ describe("EventsCalendar SSR drift", () => {
       { normalizedQuery: "chess night", resultCount: 1 },
     ]);
     expect(src.queries.flatMap((q) => q.params).some((p) => typeof p === "string" && p.includes("\u0000"))).toBe(false);
+  });
+
+  it.each([
+    ["https://togetherweown.com", APP_URL],
+    [APP_URL, "https://togetherweown.com"],
+  ])("refuses searches on a foreign serving host before reads or analytics with APP_URL=%s on %s", async (appUrl, servingUrl) => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const source = okSource();
+    const upcoming = vi.spyOn(source, "upcoming");
+    const src = calendar([eventRow({ title: "Chess  night" })], [], source, { APP_URL: appUrl });
+    // Keep the original mismatched-host cases; W16 now deliberately refuses
+    // them before the event route, not just with a different robots header.
+    for (const query of ["%20CHESS%20%20night%20", "%00", "Chess%00%20%20night"]) {
+      const res = await rawApp.request(`${servingUrl}/events?q=${query}`, {}, src.env);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
+      expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(res.headers.getSetCookie()).toHaveLength(0);
+      const html = await res.text();
+      expect(html).toContain("We cannot find that page");
+      expect(html).not.toContain("Chess  night");
+    }
+    expect(src.queries).toEqual([]);
+    expect(src.logs).toEqual([]);
+    expect(upcoming).not.toHaveBeenCalled();
+    expect(info.mock.calls.filter((c) => c[0] === "event_search")).toHaveLength(0);
   });
 
   it("logs a normalized search with the visible count and nothing else", async () => {

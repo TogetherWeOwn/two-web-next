@@ -99,6 +99,29 @@ describe("member-profile states rendered", () => {
     expect(profileAvatarSrcset(ALICE, "../x")).toBeNull();
     expect(profileJoinedMonth(new Date("2024-03-15T00:00:00Z"))).toBe("March 2024");
   });
+  it.each([ALICE, BOB])("SSR avatar drift: image and hidden initial with external binder for member %s", async (id) => {
+    const { app, store, cookie } = await setup();
+    store.rows.get(id)!.avatar = "abc";
+    const response = await app.request(`/members/${id}`, { headers: { cookie: await cookie(ALICE, "alice") } }, env);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain('data-testid="profile-avatar" data-avatar="" aria-hidden="true" class="avatar"');
+    expect(html).toContain(`src="${profileAvatarSrcset(id, "abc")!.src}"`);
+    expect(html).toContain(`srcset="${profileAvatarSrcset(id, "abc")!.srcset}"`);
+    expect(html).toContain('alt="" width="64" height="64" loading="eager"');
+    expect(html).toContain(`<span data-avatar-initial="" class="avatar-initial" hidden="">${id === ALICE ? "A" : "B"}</span>`);
+    expect(html).toContain('<script src="/islands/avatar.js" defer=""></script>');
+    expect(html).not.toMatch(/\son(?:error|load)=/i);
+    if (id === BOB) expect(html).not.toContain('/islands/member-profile.js');
+  });
+  it.each([null, "../invalid"])("SSR initial stays visible for absent/invalid avatar %s", async (avatar) => {
+    const { app, store, cookie } = await setup();
+    store.rows.get(ALICE)!.avatar = avatar;
+    store.rows.get(ALICE)!.username = "<script>";
+    const html = await (await app.request("/profile", { headers: { cookie: await cookie(ALICE, "alice") } }, env)).text();
+    expect(html).toContain('<span data-avatar-initial="" class="avatar-initial">&lt;</span>');
+    expect(html).not.toContain('cdn.discordapp.com/avatars/');
+  });
   it("SSR view: avatar fallback, name, joined month, honeypot + opened-at", async () => {
     const { app, cookie } = await setup();
     const html = await (await app.request("/profile", { headers: { cookie: await cookie(ALICE, "alice") } }, env)).text();

@@ -2,7 +2,7 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import app from "../../src/index";
+import app from "../app";
 import { events, featuredContents } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import { joinAttempts } from "../../src/db/schema";
@@ -35,17 +35,18 @@ export function pageShellFixture(status = "published") {
   const event: typeof events.$inferSelect = {
     id: 1, eventKey: EVENT_KEY, title: "Fixture game night", game: "Chess", description: "Play together.",
     startsAt: now, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "UTC", location: "Lobby",
-    capacity: null, status, discordEventId: null, createdBy: MEMBER_ID, rsvpOpen: true,
+    capacity: null, status, discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    createdBy: MEMBER_ID, rsvpOpen: true,
     recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
     parentEventId: null, recurrenceIndex: null, createdAt: now, updatedAt: now,
   };
   const featured: typeof featuredContents.$inferSelect = {
-    id: 1, title: "Fixture featured slot", body: null, url: null, imageUrl: null, imageAlt: null,
+    id: 1, legacyId: null, title: "Fixture featured slot", body: null, url: null, imageUrl: null, imageAlt: null,
     isPublished: false, position: 0, startsAt: null, endsAt: null, createdBy: MEMBER_ID,
     createdAt: now, updatedAt: now,
   };
   const attempt: typeof joinAttempts.$inferSelect = {
-    id: 1, outcome: "added", source: "join", requestId: "page-shell-join-request", discordId: MEMBER_ID,
+    id: 1, legacyId: null, outcome: "added", source: "join", requestId: "page-shell-join-request", discordId: MEMBER_ID,
     createdAt: now,
   };
   const encode = <T extends Record<string, unknown>>(columns: Record<string, unknown>, row: T) =>
@@ -56,20 +57,34 @@ export function pageShellFixture(status = "published") {
         ? [[MEMBER_ID, "Fixture member", null, "A local bio.", ["Chess"], "UTC", now.toISOString()]] : [] };
     }
     if (sql.includes('from "events"')) {
+      if (sql.includes('"events"."id" <>')) return { rows: [] }; // No neighboring/related fixture rows.
       if (sql.includes("count(*)")) return { rows: [[1]] };
       if (sql.includes('"event_key" =') && !params.includes(EVENT_KEY)) return { rows: [] };
       return { rows: [encode(getTableColumns(events), event)] };
     }
     if (sql.includes('from "featured_contents"')) {
       if (sql.includes('"id" =') && !params.includes(1)) return { rows: [] };
+      // listVisibleFeatured selects an explicit 6-column projection without
+      // legacy_id so it stays readable on pre-1012 shapes; SELECT * includes it.
+      if (!sql.includes("legacy_id")) {
+        return { rows: [[featured.id, featured.title, featured.body, featured.url, featured.imageUrl, featured.imageAlt]] };
+      }
       return { rows: [encode(getTableColumns(featuredContents), featured)] };
     }
     if (sql.includes('from "join_attempts"')) {
       if (sql.includes("count(*)")) return { rows: [[attempt.outcome, 1]] };
       if (sql.includes('"join_attempts"."id" =') && params[0] !== attempt.id) return { rows: [] };
+      // List and detail select the same explicit 6 columns (no legacy_id) so
+      // both stay readable on migrateJoin() bootstraps (drizzle/1000 shape).
+      if (!sql.includes("legacy_id")) {
+        const row = [attempt.id, attempt.outcome, attempt.source, attempt.requestId, attempt.discordId, attempt.createdAt.toISOString()];
+        return { rows: [sql.includes('left join "users"') ? [...row, MEMBER_ID] : row] };
+      }
       const row = encode(getTableColumns(joinAttempts), attempt);
       return { rows: [sql.includes('left join "users"') ? [...row, MEMBER_ID] : row] };
     }
+    if (sql.includes("row_number() over (partition by event_id order by created_at, coalesce(legacy_id, id), id)")
+      && sql.includes("from rsvps")) return { rows: [] };
     if (sql.includes('from "rsvps"') || sql.includes('from "event_search_log"')
       || sql.startsWith('insert into "member_data_access_logs"') || sql.startsWith("SET LOCAL")) return { rows: [] };
     throw new Error(`Unexpected page-shell fixture query: ${sql}`);
