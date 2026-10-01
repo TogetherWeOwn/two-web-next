@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Backup target regressions: synthetic URLs, stub clients/storage, no network."""
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from urllib.parse import quote
+
+ROOT = Path(__file__).resolve().parents[1]
+PASSWORD = "synthetic-password-not-for-logs"
+
+
+class BackupTargetTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(
+            dir=os.environ.get("PAPERCLIP_RUN_SCRATCH_DIR") or os.environ.get("TMPDIR")
+        )
+        self.addCleanup(self.temp.cleanup)
+        self.fixture = Path(self.temp.name)
+        fakebin = self.fixture / "bin"
+        fakebin.mkdir()
+        client = fakebin / "pg_dump"
+        client.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+fixture = pathlib.Path(os.environ["FIXTURE"])
+(fixture / "client.json").write_text(json.dumps({"argv": sys.argv[1:], "env": dict(os.environ)}))
+if os.environ.get("CLIENT_FAIL"):
+    sys.exit(42)
+pathlib.Path(sys.argv[sys.argv.index("-f") + 1]).write_bytes(b"synthetic-dump")
+''')
+        client.chmod(0o755)
+        storage = fakebin / "storage"
+        storage.write_text('''#!/usr/bin/env python3
+import os, pathlib, shutil, sys
+fixture = pathlib.Path(os.environ["FIXTURE"])
+with (fixture / "storage-calls").open("a") as log:
+    log.write("called\\n")
+args = sys.argv[1:]
+assert args[:2] == ["r2", "object"]
+dest = fixture / "store" / args[3]
+file = pathlib.Path(args[args.index("--file") + 1])
+if args[2] == "put":
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(file, dest)
+elif args[2] == "get":
+    if not dest.is_file():
+        sys.exit(1)
+    shutil.copyfile(dest, file)
+else:
+    sys.exit(2)
+''')
+        storage.chmod(0o755)
+        # Do not inherit a real URL, credential, libpq setting or service file.
+        self.env = {
+            "PATH": str(fakebin) + os.pathsep + os.defpath,
+            "HOME": str(self.fixture),
+            "TMPDIR": str(self.fixture),
+            "FIXTURE": str(self.fixture),
+            "WRANGLER_BIN": str(storage),
+            "BACKUP_BUCKET": "synthetic-bucket",
+            "PGHOST": "ambient-host",
+            "PGPORT": "6543",
+            "PGUSER": "ambient-user",
+            "PGPASSWORD": "ambient-password",
+            "PGDATABASE": "ambient-db",
+            "PGHOSTADDR": "192.0.2.7",
+            "PGSERVICE": "ambient-service",
+            "PGSERVICEFILE": str(self.fixture / "ambient-service.conf"),
+            "PGSYSCONFDIR": str(self.fixture),
+            "PGOPTIONS": "-c search_path=ambient",
+            "PGPASSFILE": str(self.fixture / "ambient-passfile"),
+            "PGSSLMODE": "disable",
+            "PGCHANNELBINDING": "disable",
+            "PGCONNECT_TIMEOUT": "1",
+            "PG_FUTURE_OVERRIDE": "ambient",
+        }
+
+    def backup(self, url, **extra):
+        return subprocess.run(
+            ["bash", str(ROOT / "bin/neon-backup.sh"), "backup", "staging"],
+            env={**self.env, "DATABASE_URL": url, **extra},
+            capture_output=True, text=True, timeout=10,
+        )
+
+    def assert_refused(self, url):
+        # Each subcase must detect its own calls, even after an earlier failure.
+        (self.fixture / "client.json").unlink(missing_ok=True)
+        (self.fixture / "storage-calls").unlink(missing_ok=True)
+        result = self.backup(url)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.fixture / "client.json").exists(), "client ran")
+        self.assertFalse((self.fixture / "storage-calls").exists(), "storage ran")
+        self.assertNotIn(PASSWORD, result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(list(self.fixture.glob("tmp*")), [], "temporary dump leaked")
+
+    def client(self):
+        return json.loads((self.fixture / "client.json").read_text())
+
+    def assert_target(self, result, expected):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.startswith("backup: "))
+        self.assertNotIn(PASSWORD, result.stdout + result.stderr)
+        client = self.client()
+        actual = {k: v for k, v in client["env"].items() if k.startswith("PG")}
+        self.assertEqual(actual, {**expected, "PGPASSFILE": "/dev/null"})
+        self.assertNotIn("DATABASE_URL", client["env"])
+        argv = client["argv"]
+        self.assertIn("-Fc", argv)
+        self.assertIn("-w", argv)
+        self.assertIn("-f", argv)
+        self.assertNotIn(PASSWORD, " ".join(argv))
+        self.assertTrue((self.fixture / "storage-calls").exists())
+
+    def test_invalid_targets_fail_before_client_or_storage(self):
+        authority = "agent_test:" + PASSWORD + "@agent-testdb"
+        urls = [
+            "", "not-a-url", "host=agent-testdb dbname=fixture",
+            "https://" + authority + "/fixture",
+            "postgres:" + authority + "/fixture",
+            "postgres:///fixture", "postgres://agent_test@/fixture",
+            "postgres://agent-testdb/fixture", "postgres://@agent-testdb/fixture",
+            "postgres://" + authority, "postgres://" + authority + "/",
+            "postgres://" + authority + "/fixture/other",
+            "postgres://" + authority + "/%00", "postgres://" + authority + "/%ZZ",
+            "postgres://" + authority + "/%FF", "postgres://" + authority + "/%0A",
+            "postgres://" + authority + "/host%3Devil",
+            "postgres://" + authority + "/postgres%3A%2F%2Fevil%2Fdb",
+            "postgres://" + authority + "/fixture#fragment",
+            "postgres://" + authority + "/fixture?host=evil",
+            "postgres://" + authority + "/fixture?service=ambient",
+            "postgres://" + authority + "/fixture?sslmode=disable&sslmode=require",
+            "postgres://" + authority + "/fixture?sslmode=invalid",
+            "postgres://" + authority + "/fixture?sslmode",
+            "postgres://" + authority + "/fixture?sslmode=",
+            " postgres://" + authority + "/fixture",
+            "postgres://" + authority + "/fix\nture",
+            "postgres://agent_test@host,evil/fixture",
+            "postgres://agent_test@%2Fvar%2Frun/fixture",
+            "postgres://agent_test@[broken/fixture",
+            "postgres://agent_test@[not-ipv6]/fixture",
+            "postgres://agent_test@host:5432:6543/fixture",
+            "postgres://agent_test@host:/fixture",
+        ]
+        urls += ["postgres://" + authority + ":" + port + "/fixture"
+                 for port in ["oops", "0", "-1", "65536", "5432x", "+5432", "%35"]]
+        for url in urls:
+            with self.subTest(url_index=urls.index(url)):
+                self.assert_refused(url)
+
+    def test_ipv6_scope_cannot_select_multiple_hosts(self):
+        for host in ["::1%25,alternate.example", "fe80::1%25eth0,alternate.example",
+                     "::1%25,,alternate.example"]:
+            with self.subTest(host=host):
+                self.assert_refused(
+                    "postgres://agent_test:" + PASSWORD + "@[" + host + "]:5433/fixture"
+                )
+
+    def test_explicit_target_overrides_all_ambient_pg_settings(self):
+        result = self.backup(
+            "postgresql://agent_test:" + PASSWORD + "@agent-testdb:5444/fixture"
+            "?sslmode=require&channel_binding=require"
+        )
+        self.assert_target(result, {
+            "PGHOST": "agent-testdb", "PGPORT": "5444", "PGUSER": "agent_test",
+            "PGPASSWORD": PASSWORD, "PGDATABASE": "fixture",
+            "PGSSLMODE": "require", "PGCHANNELBINDING": "require",
+        })
+
+    def test_passwordless_url_does_not_inherit_password_or_passfile(self):
+        result = self.backup("postgres://agent_test@agent-testdb/fixture")
+        self.assert_target(result, {
+            "PGHOST": "agent-testdb", "PGPORT": "5432", "PGUSER": "agent_test",
+            "PGPASSWORD": "", "PGDATABASE": "fixture",
+        })
+
+    def test_ipv6_and_percent_encoded_values_are_literal(self):
+        marker = self.fixture / "must-not-exist"
+        adversarial = "' ; $(touch " + str(marker) + ") `touch " + str(marker) + "` &"
+        result = self.backup(
+            "postgres://" + quote(adversarial, safe="") + ":"
+            + quote(PASSWORD + adversarial, safe="") + "@[::1]:5433/"
+            + quote("fixture' ; $() `literal` &", safe="")
+        )
+        self.assert_target(result, {
+            "PGHOST": "::1", "PGPORT": "5433", "PGUSER": adversarial,
+            "PGPASSWORD": PASSWORD + adversarial,
+            "PGDATABASE": "fixture' ; $() `literal` &",
+        })
+        self.assertFalse(marker.exists(), "shell metacharacters executed")
+
+    def test_client_failure_stops_storage_and_propagates_status(self):
+        result = self.backup("postgres://agent_test@agent-testdb/fixture", CLIENT_FAIL="1")
+        self.assertEqual(result.returncode, 42)
+        self.assertTrue((self.fixture / "client.json").exists())
+        self.assertFalse((self.fixture / "storage-calls").exists())
+        self.assertEqual(list(self.fixture.glob("tmp*")), [], "temporary dump leaked")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
