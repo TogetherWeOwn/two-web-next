@@ -153,7 +153,7 @@ describe("admin guard pins (memory store, no DB)", () => {
 
 describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", () => {
   const db = createDb(process.env.DATABASE_URL!);
-  const store = createMemorySessionStore();
+  const store = createMemorySessionStore(() => Date.now());
   const modId = `admintest-mod-${Date.now()}`;
   let cookie = "";
   // Sessions resolve through the memory store; admin tables through ADMIN_DB.
@@ -175,6 +175,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await db.delete(memberDataAccessLogs);
     await db.delete(activityLog);
     await db.delete(events);
@@ -285,6 +286,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
   });
 
   it("scheduled featured content preserves links, images and UTC dates in list/edit reads", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T20:00:00Z"));
+    cookie = await cookieFor(store, { userId: modId, username: "mod", moderator: true });
     const fields = {
       title: "Scheduled game night",
       body: "Bring your board",
@@ -320,7 +324,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(list.status).toBe(200);
     const listHtml = await list.text();
     expect(listHtml).toContain(`href="/admin/featured/${id}">${fields.title}</a>`);
-    expect(listHtml).toContain(`data-testid="featured-published-${id}">yes</td>`);
+    expect(listHtml).toContain(`data-testid="featured-status-${id}"><span class="featured-status featured-status-scheduled" data-status="scheduled">scheduled</span></td>`);
     expect(listHtml).toContain(`data-testid="featured-position-${id}">2</td>`);
     expect(listHtml).toContain("2026-11-04T09:05:00.000Z");
     expect(listHtml).toContain("2026-11-04T11:15:00.000Z");
@@ -328,6 +332,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const edit = await app().request(`/featured/${id}`, { headers: { cookie } }, liveEnv);
     expect(edit.status).toBe(200);
     const editHtml = await edit.text();
+    expect(editHtml).toContain('data-status="scheduled">scheduled</span>');
+    expect(editHtml).toContain('data-testid="featured-preview-hidden"');
+    expect(editHtml).not.toContain('data-testid="featured-item"');
     expect(editHtml).toContain(`action="/admin/featured/${id}"`);
     expect(editHtml).toContain(`action="/admin/featured/${id}/delete"`);
     expect(editHtml).toContain(`name="title" type="text" value="${fields.title}"`);
@@ -337,8 +344,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(editHtml).toContain(`name="image_alt" type="text" value="${fields.image_alt}"`);
     expect(editHtml).toMatch(/name="is_published"[^>]*checked/);
     expect(editHtml).toContain('name="position" type="text" inputmode="numeric" value="2"');
-    expect(editHtml).toContain(`name="starts_at" type="text" value="${fields.starts_at}"`);
-    expect(editHtml).toContain(`name="ends_at" type="text" value="${fields.ends_at}"`);
+    expect(editHtml).toContain(`name="starts_at" type="text" value="${fields.starts_at}:00.000000"`);
+    expect(editHtml).toContain(`name="ends_at" type="text" value="${fields.ends_at}:00.000000"`);
     expect(await db.select().from(activityLog)).toEqual(auditsBeforeReads);
     expect(dispatchWriteBack).not.toHaveBeenCalled();
   });
