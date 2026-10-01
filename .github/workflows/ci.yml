@@ -51,6 +51,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Chromium cancellation regressions
         run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
+      - name: Profile native and island Unicode regressions (memory fixtures)
+        run: A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts
       - name: WCAG 2.2 AA (local fixtures, no external services)
         run: npm run a11y
       - name: Accessibility evidence
@@ -69,7 +71,9 @@ jobs:
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
     runs-on: [self-hosted, two-selfhosted]
-    timeout-minutes: 10
+    # Container setup and serial SQL coverage exceeded 10m on shared runners.
+    # Keep the job bounded; the seeded property suite retains its hard 10s limit.
+    timeout-minutes: 20
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -99,9 +103,16 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Dependency audit selftest (local fixtures)
+        run: npm run deps:audit:selftest
+      - name: Dependency audit (lockfile, including dev dependencies)
+        run: npm run deps:audit
       - run: npm ci
       - name: Seeded admin properties (10s budget, local fixtures)
-        run: timeout 10s npm run test:admin-properties
+        # Skip npm's extra process startup; keep the same suite and hard budget.
+        run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
+      - name: Public-route smoke selftest (loopback fixtures)
+        run: npm run test:smoke
       - name: Apply migrations
         run: npm run db:migrate
         env:
@@ -131,5 +142,9 @@ jobs:
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
         run: bash ci/check-migration-numbers.sh
+      - name: Production deploy gate selftest (fixtures, no secrets or network)
+        run: node --test ci/production-deploy-gate.test.mjs
       - name: Build (wrangler dry run)
         run: npx wrangler deploy --dry-run --outdir dist
+      - name: Production build (wrangler dry run, no deployment)
+        run: npx wrangler deploy --dry-run --env production --outdir dist-production
