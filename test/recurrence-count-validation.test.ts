@@ -24,6 +24,15 @@ describe("recurrence occurrence count validation", () => {
     expect(fieldsOf({ ...weekly, recurrence_count })).toEqual(rangeError);
   });
 
+  // Number() rounds each of these to an integer in range before isInteger sees
+  // it; the literal still names a fraction, so it is refused.
+  it.each([
+    "3.0000000000000001", "52.0000000000000001", "0.99999999999999999",
+    "51.99999999999999999", "1.0000000000000000001", "5.2000000000000001e1",
+  ])("refuses %j, which Number() rounds to a whole number", (recurrence_count) => {
+    expect(fieldsOf({ ...weekly, recurrence_count })).toEqual(rangeError);
+  });
+
   it.each(["1.5", "3.9", `${MAX_OCCURRENCES}.9`, "Infinity", "0", String(MAX_OCCURRENCES + 1)])(
     "does not let a valid ends-on date mask invalid count %j",
     (recurrence_count) => {
@@ -42,6 +51,7 @@ describe("recurrence occurrence count validation", () => {
     ["3", 3], [" 3\t", 3], ["03", 3], ["+3", 3], ["3.0", 3], ["3e0", 3],
     ["30e-1", 3], ["0x3", 3], ["0b11", 3], ["0o3", 3],
     ["1.0", 1], ["52.0", MAX_OCCURRENCES], ["5.2e1", MAX_OCCURRENCES],
+    ["52.00000000000000000", MAX_OCCURRENCES], ["1.0000000000000000e1", 10],
   ])("preserves whole-number lexical form %j as %i", (recurrence_count, count) => {
     expect(parseRecurrenceForm({ ...weekly, recurrence_count })).toEqual({
       frequency: "weekly", count, endsOn: null,
