@@ -281,6 +281,9 @@ async function replayAnswer(sql: Tx, grant: Grant, op: string, replay: Row, dig:
     await audit(sql, grant, op, replay.event_key, key, dig, requestId, "conflict", "idempotency_conflict");
     return { status: 409, body: { reason: "idempotency_conflict", message: "This idempotency key was already used with a different payload. A key identifies one operation.", request_id: requestId } };
   }
+  // A delivery receipt, not another successful operation: keep stored evidence
+  // untouched and distinguish replays from the original mutation/read.
+  await audit(sql, grant, op, replay.event_key, key, dig, requestId, "replayed", null);
   return { status: replay.status, body: { ...(replay.body as Record<string, unknown>), replayed: true, request_id: requestId } };
 }
 
