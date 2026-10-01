@@ -57,9 +57,11 @@ Install development tools even when the shell defaults to production mode:
 
 `check:offline` runs typecheck, config checks, fixture Vitest tests, a11y policy
 self-tests and cutover self-tests. It unsets `DATABASE_URL`,
-`AUDIT_IMPORT_TEST_DATABASE_URL`, all
+`AUDIT_IMPORT_TEST_DATABASE_URL`, `W1_AGENT_TESTDB`, all
 `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_*` variables and `PG*` settings
-for every child. Conditional SQL suites then skip. Only Vitest receives the
+for every child. Conditional SQL suites then skip, including the fixed
+agent-testdb control in `test/staging-fixed-agent-testdb.test.ts` enabled solely
+by `W1_AGENT_TESTDB=1`. Only Vitest receives the
 fixed `--exclude test/review-p1-verify.test.ts`; this file has unconditional SQL
 cases and a fallback to `agent-testdb` database `postgres`. Unset `DATABASE_URL`
 alone is **not** fixture-only. The command accepts no extra arguments, and

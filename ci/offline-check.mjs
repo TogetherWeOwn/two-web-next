@@ -10,7 +10,7 @@ if (process.argv.length > 2) {
 const cwd = fileURLToPath(new URL("../", import.meta.url));
 const env = { ...process.env };
 for (const key of Object.keys(env)) {
-  if (key === "DATABASE_URL" || key === "AUDIT_IMPORT_TEST_DATABASE_URL" || key.startsWith("CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_") || key.startsWith("PG")) {
+  if (key === "DATABASE_URL" || key === "AUDIT_IMPORT_TEST_DATABASE_URL" || key === "W1_AGENT_TESTDB" || key.startsWith("CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_") || key.startsWith("PG")) {
     delete env[key];
   }
 }
