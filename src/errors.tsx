@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { accepts } from "hono/accepts";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
@@ -180,13 +181,41 @@ function jsonOnlyEventRequest(c: Context): boolean {
   return false;
 }
 
+function outageRepresentation(c: Context): string {
+  return accepts(c, {
+    header: "Accept", supports: ["text/html", "application/json"], default: "text/html",
+    match: (ranges, config) => {
+      // The most specific range determines each representation's quality,
+      // including q=0 exclusions; only then compare the supported responses.
+      const candidates = config.supports.map((type) => {
+        let specificity = -1;
+        let q = 0;
+        let order = ranges.length;
+        ranges.forEach((range, index) => {
+          const media = range.type.toLowerCase();
+          const rank = media === type ? 2 : media === `${type.split("/")[0]}/*` ? 1 : media === "*/*" ? 0 : -1;
+          if (rank > specificity) {
+            specificity = rank;
+            q = range.q;
+            order = index;
+          }
+        });
+        return { type, q, specificity, order };
+      });
+      candidates.sort((a, b) => b.q - a.q || b.specificity - a.specificity || a.order - b.order);
+      const preferred = candidates[0]!;
+      return preferred.q > 0 ? preferred.type : config.default;
+    },
+  });
+}
+
 // Shared outage envelope: no session/data reads, no driver details. Explicit
-// JSON endpoints (e.g. ingress) may opt in even without an Accept header.
+// JSON endpoints may opt in even without an Accept header.
 export function databaseUnavailable(c: Context, jsonOnly = false): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   c.header("Vary", "Accept");
   c.status(503);
-  if (jsonOnly || jsonOnlyEventRequest(c) || c.req.header("accept")?.includes("application/json")) {
+  if (jsonOnly || jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
     return c.json({ error: "db_unavailable", message: "The service is temporarily unavailable. Try again shortly." });
   }
   return c.html(<MaintenancePage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);

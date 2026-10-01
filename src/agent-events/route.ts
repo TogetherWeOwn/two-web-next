@@ -2,7 +2,6 @@ import type { Context } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
 import { isDatabaseUnavailable } from "../db/errors";
-import { databaseUnavailable } from "../errors";
 import { DEFAULT_CONFIG, type IngressConfig, handleAgentEvent } from "./service";
 
 export function ingressConfig(env: Env): IngressConfig {
@@ -47,7 +46,11 @@ export async function agentEventsRoute(c: Context<{ Bindings: Env }>): Promise<R
     return c.json(a.body, a.status as 200, a.headers);
   } catch (err) {
     console.error("agent-events failed", (err as Error).name);
-    if (isDatabaseUnavailable(err)) return databaseUnavailable(c, true);
+    if (isDatabaseUnavailable(err)) {
+      c.header("cache-control", "no-store, private");
+      c.header("Vary", "Accept");
+      return c.json({ reason: "ingress_unavailable", message: "The agent event store is temporarily unavailable. Try again shortly." }, 503);
+    }
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   } finally {
     c.executionCtx.waitUntil(sql.end({ timeout: 2 }));

@@ -193,14 +193,36 @@ describe("configured Postgres outage: production session store", () => {
   );
 });
 
-it("enabled agent ingress fails closed when its separate binding is down", async () => {
-  const pending: Promise<unknown>[] = [];
-  const bindings = { ...outageEnv(), AGENT_EVENTS_ENABLED: "true" };
-  const res = await testApp.request("/api/agent-events", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, bindings, {
-    waitUntil: (promise: Promise<unknown>) => { pending.push(promise); }, passThroughOnException: () => {}, props: {},
+it.each([undefined, "*/*", "text/html", "application/json", "text/html, application/json;q=0", "text/html;q=1, application/json;q=0.1"])(
+  "enabled agent ingress keeps its reason envelope when its binding is down, Accept %s", async (accept) => {
+    const pending: Promise<unknown>[] = [];
+    const bindings = { ...outageEnv(), AGENT_EVENTS_ENABLED: "true" };
+    const res = await testApp.request("/api/agent-events", {
+      method: "POST", headers: { "content-type": "application/json", ...(accept ? { accept } : {}) }, body: "{}",
+    }, bindings, {
+      waitUntil: (promise: Promise<unknown>) => { pending.push(promise); }, passThroughOnException: () => {}, props: {},
+    });
+    try {
+      await assertResponse(res.clone(), { method: "POST", route: "/api/agent-events", status: 503, format: "json" });
+      expect(res.headers.get("cache-control")).toContain("private");
+      expect(res.headers.get("cache-control")).toContain("no-store");
+      expect(res.headers.getSetCookie()).toEqual([]);
+      expect(await res.json()).toEqual({
+        reason: "ingress_unavailable", message: "The agent event store is temporarily unavailable. Try again shortly.",
+      });
+    } finally {
+      await Promise.allSettled(pending);
+    }
+  },
+);
+
+it("enabled agent ingress retains its reason envelope without a configured binding", async () => {
+  const res = await testApp.request("/api/agent-events", { method: "POST", body: "{}" }, {
+    ...env, AGENT_EVENTS_ENABLED: "true",
   });
-  await assertResponse(res, { method: "POST", route: "/api/agent-events", status: 503, format: "json" });
-  await Promise.allSettled(pending);
+  expect(res.status).toBe(503);
+  expect(await res.json()).toEqual({ reason: "ingress_unavailable", message: "The agent event store is not configured." });
+  expect(clients).toHaveLength(0);
 });
 
 it("valid login callback fails closed at session persistence, not OAuth validation", async () => {

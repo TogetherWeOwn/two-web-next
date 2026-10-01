@@ -58,6 +58,33 @@ describe("narrow database outage classification", () => {
     if (accept === "text/html") expect(body).toContain("Together We Own");
     else expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
   });
+  it.each([
+    { accept: "text/html, application/json;q=0", format: "text/html" },
+    { accept: "text/html;q=1, application/json;q=0.1", format: "text/html" },
+    { accept: "text/html;q=0.1, application/json;q=1", format: "application/json" },
+    { accept: "text/html;q=0, application/json;q=0.5", format: "application/json" },
+    { accept: "application/json;q=0, */*;q=1", format: "text/html" },
+    { accept: "text/html;q=0, */*;q=1", format: "application/json" },
+    { accept: "application/*;q=0.9, text/*;q=0.1", format: "application/json" },
+    { accept: "application/json;q=0.1, application/*;q=1, text/html;q=0.5", format: "text/html" },
+    { accept: "*/*", format: "text/html" },
+    { accept: "text/html, application/json", format: "text/html" },
+    { accept: "application/json, text/html", format: "application/json" },
+    { accept: "Application/JSON;Q=0.9, text/html;q=0.1", format: "application/json" },
+  ])("honors media quality, specificity and preference for $accept", async ({ accept, format }) => {
+    const scratch = new Hono();
+    scratch.onError(internalErrorHandler);
+    scratch.get("/profile", () => { throw refused(); });
+    const res = await scratch.request("/profile", { headers: { accept } }, env);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("content-type")).toContain(format);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.get("vary")).toContain("Accept");
+    const body = await res.text();
+    expect(body).not.toMatch(/private|ECONNREFUSED/);
+    if (format === "text/html") expect(body).toContain('<a class="brand" href="/">TWO</a>');
+    else expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
+  });
   it.each(["/events", "/events.json"])("preserves the %s endpoint format for query outages without Accept", async (path) => {
     const scratch = new Hono();
     scratch.onError(internalErrorHandler);
@@ -141,6 +168,19 @@ describe("profile failures after a successful session and data read", () => {
     if (accept === "text/html") expect(body).toContain("Together We Own");
     else expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
   });
+  it.each(["text/html, application/json;q=0", "text/html;q=1, application/json;q=0.1"])(
+    "honors HTML preference when replacing an unaudited profile: %s", async (accept) => {
+      const { cookie, profile } = await fixture();
+      const res = await profile.request("/profile", { headers: { cookie, accept } }, env);
+      expect(res.status).toBe(503);
+      expect(res.headers.get("content-type")).toContain("text/html");
+      expect(res.headers.get("cache-control")).toContain("no-store");
+      expect(res.headers.get("vary")).toContain("Accept");
+      const body = await res.text();
+      expect(body).not.toContain("private profile fixture");
+      expect(body).toContain('<a class="brand" href="/">TWO</a>');
+    },
+  );
   it.each(["text/html", "application/json"])("classifies a save outage after a successful lookup for %s", async (accept) => {
     const { cookie, store, profile } = await fixture();
     vi.spyOn(store, "save").mockRejectedValue(refused());
@@ -199,7 +239,7 @@ describe("public session failure boundaries", () => {
       for (const flag of ["__Host-two_session=;", "Max-Age=0", "Path=/", "Secure"]) expect(cleared).toContain(flag);
     },
   );
-  it.each([undefined, "*/*", "text/html", "application/json"])(
+  it.each([undefined, "*/*", "text/html", "application/json", "text/html, application/json;q=0", "text/html;q=1, application/json;q=0.1"])(
     "keeps events.json session outages JSON-only with Accept %s", async (accept) => {
       const { store, cookie, bindings } = await fixture();
       vi.spyOn(store, "get").mockRejectedValue(refused());
@@ -217,7 +257,7 @@ describe("public session failure boundaries", () => {
     },
   );
   describe.each(EVENT_WRITES)("JSON-only $method $path", ({ method, path }) => {
-    it.each([undefined, "*/*", "text/html", "application/json"])("keeps pre-handler session outages JSON-only with Accept %s", async (accept) => {
+    it.each([undefined, "*/*", "text/html", "application/json", "text/html, application/json;q=0", "text/html;q=1, application/json;q=0.1"])("keeps pre-handler session outages JSON-only with Accept %s", async (accept) => {
       const store = createMemorySessionStore();
       const cookie = await cookieFor(store, MODERATOR);
       vi.spyOn(store, "get").mockRejectedValue(refused());

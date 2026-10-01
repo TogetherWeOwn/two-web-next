@@ -59,7 +59,15 @@ SQL syntax/constraint failures and ordinary programming errors retain 500.
 The shared error boundary and profile-save/ingress catches use this classifier;
 existing session and mandatory-audit guards retain their fail-closed policy.
 The 503 envelope is branded HTML for browsers and sanitized JSON for JSON
-callers (always JSON for ingress), private/no-store and varied on Accept.
+callers, private/no-store and varied on Accept. Negotiated routes compare the
+quality of HTML and JSON using the most-specific matching media range; an
+explicit `q=0` cannot be overridden by a wildcard. Equal-quality choices use
+specificity, then header order, with HTML as the default/fallback. JSON-only
+event methods and `/events.json` retain their `{error, message}` JSON envelope
+regardless of Accept, including pre-handler session failures. Machine ingress
+also remains JSON-only but preserves its separate `{reason, message}` contract:
+configured store outages return `reason: ingress_unavailable`, never driver
+details or the event API's `error` field.
 Post-handler audit failure replaces the finalized response: protected data is
 not served if its mandatory record cannot be written.
 
