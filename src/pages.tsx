@@ -18,7 +18,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home";
+    theme?: "home" | "content" | "join";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -47,15 +47,46 @@ export const Layout: FC<
       ) : null}
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
-      {theme === "home" ? (
+      {theme ? (
         <>
           <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
           <link rel="stylesheet" href="/theme.css" />
         </>
       ) : null}
     </head>
-    <body class={theme === "home" ? "homepage-theme" : undefined}><SkipLink />{children}</body>
+    <body class={theme ? `base-theme ${theme === "home" ? "homepage-theme" : `${theme}-theme`}` : undefined}><SkipLink />{children}</body>
   </html>
+);
+
+// Static pages pass no session: shared chrome never reads account persistence.
+export const SiteHeader: FC<{ session?: Session | null; home?: boolean; joinAction?: boolean }> = ({ session, home, joinAction }) => (
+  <header class="bar site-header">
+    <nav class="main-nav" aria-label="Primary">
+      <a href="/" aria-current={home ? "page" : undefined}>Home</a>
+      <a href="/events">Events</a>
+    </nav>
+    <a class="brand" href="/" aria-label="Together We Own homepage">
+      <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+    </a>
+    <nav class="header-account" aria-label="Account">
+      {session ? (
+        <form method="post" action="/logout">
+          <span class="account-caption">Signed in</span>
+          <span class="who">{session.username}</span>
+          <button type="submit" class="link">Sign out</button>
+        </form>
+      ) : (
+        <div>
+          <span class="account-caption">Welcome, guest</span>
+          {joinAction ? (
+            <a class="btn" href="/join">Join with Discord</a>
+          ) : (
+            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+          )}
+        </div>
+      )}
+    </nav>
+  </header>
 );
 
 // The site footer carries the static-leaf links on the funnel + leaf + error
@@ -108,44 +139,43 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
   next,
   appUrl,
 }) => (
-  <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
-      </nav>
-    </header>
+  <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO} theme="join">
+    <SiteHeader />
     <main id="main" tabindex={-1}>
-      <section aria-labelledby="join-heading">
-        <h1 id="join-heading">Join Together We Own</h1>
-        <p class="lead">{JOIN_INTRO}</p>
-        <p>One click with Discord and we&apos;ll add you to the server — no invite link, no waiting.</p>
-        <p>
-          <a
-            class="btn"
-            href={next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord"}
-            data-testid="join-oneclick"
-          >
-            Join with Discord
-          </a>{" "}
-          <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
-        </p>
-        {widgetUrl ? (
-          <iframe
-            title="TWO Discord server preview"
-            src={widgetUrl}
-            width="350"
-            height="500"
-            sandbox="allow-scripts allow-same-origin"
-            loading="lazy"
-            referrerpolicy="no-referrer"
-            data-testid="join-widget"
-          />
-        ) : (
-          <p class="strap" data-testid="join-widget-fallback">
-            Live server preview is unavailable — the join button above still works.
+      <section class="join-layout" aria-labelledby="join-heading">
+        <div class="join-panel">
+          <h1 id="join-heading">Join Together We Own</h1>
+          <p class="lead">{JOIN_INTRO}</p>
+          <p>One click with Discord and we&apos;ll add you to the server — no invite link, no waiting.</p>
+          <p class="join-actions">
+            <a
+              class="btn"
+              href={next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord"}
+              data-testid="join-oneclick"
+            >
+              Join with Discord
+            </a>{" "}
+            <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
           </p>
-        )}
+        </div>
+        <div class="join-preview">
+          {widgetUrl ? (
+            <iframe
+              title="TWO Discord server preview"
+              src={widgetUrl}
+              width="350"
+              height="500"
+              sandbox="allow-scripts allow-same-origin"
+              loading="lazy"
+              referrerpolicy="no-referrer"
+              data-testid="join-widget"
+            />
+          ) : (
+            <p class="strap" data-testid="join-widget-fallback">
+              Live server preview is unavailable — the join button above still works.
+            </p>
+          )}
+        </div>
       </section>
     </main>
     <SiteFooter />
@@ -201,29 +231,7 @@ export const Home: FC<{
     shareDescription="We spent most of our life private. Now you can just turn up."
     theme="home"
   >
-    <header class="bar site-header">
-      <nav class="main-nav" aria-label="Primary">
-        <a href="/" aria-current="page">Home</a>
-        <a href="/events">Events</a>
-      </nav>
-      <a class="brand" href="/" aria-label="Together We Own homepage">
-        <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
-      </a>
-      <nav class="header-account" aria-label="Account">
-        {session ? (
-          <form method="post" action="/logout">
-            <span class="account-caption">Signed in</span>
-            <span class="who">{session.username}</span>
-            <button type="submit" class="link">Sign out</button>
-          </form>
-        ) : (
-          <div>
-            <span class="account-caption">Welcome, guest</span>
-            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
-          </div>
-        )}
-      </nav>
-    </header>
+    <SiteHeader session={session} home />
     <main id="main" tabindex={-1}>
       {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
       <section class="hero" aria-labelledby="home-heading">
@@ -347,18 +355,21 @@ const Leaf: FC<PropsWithChildren<{ title: string; canonical: string; headingId: 
   heading,
   children,
 }) => (
-  <Layout title={title} canonical={canonical}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="btn" href={JOIN_HREF}>Join with Discord</a>
-      </nav>
-    </header>
+  <Layout title={title} canonical={canonical} theme="content">
+    <SiteHeader joinAction />
     <main id="main" tabindex={-1}>
-      <section aria-labelledby={headingId}>
-        <h1 id={headingId}>{heading}</h1>
-        {children}
-      </section>
+      <div class="content-layout">
+        <nav class="content-nav" aria-label="Community information">
+          <a href="/about" aria-current={headingId === "about-heading" ? "page" : undefined}>About</a>
+          <a href="/faq" aria-current={headingId === "faq-heading" ? "page" : undefined}>FAQ</a>
+          <a href="/rules" aria-current={headingId === "rules-heading" ? "page" : undefined}>House rules</a>
+          <a href="/privacy" aria-current={headingId === "privacy-heading" ? "page" : undefined}>Privacy</a>
+        </nav>
+        <section class="content-page" aria-labelledby={headingId}>
+          <h1 id={headingId}>{heading}</h1>
+          {children}
+        </section>
+      </div>
     </main>
     <SiteFooter />
   </Layout>
@@ -561,12 +572,14 @@ export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
       {FAQS.map((group) => (
         <section aria-labelledby={group.sectionId} key={group.sectionId}>
           <h2 id={group.sectionId}>{group.section}</h2>
-          {group.items.map(([q, a]) => (
-            <div class="card" key={q}>
-              <h3>{q}</h3>
-              <p>{a}</p>
-            </div>
-          ))}
+          <div>
+            {group.items.map(([q, a]) => (
+              <div class="card" key={q}>
+                <h3>{q}</h3>
+                <p>{a}</p>
+              </div>
+            ))}
+          </div>
         </section>
       ))}
     </div>

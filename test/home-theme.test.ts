@@ -24,9 +24,9 @@ beforeEach(() => vi.stubGlobal("fetch", vi.fn(() => { throw new Error("theme tes
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
 
 describe("homepage theme", () => {
-  it("opts only the homepage into the theme and self-hosted font preload", () => {
+  it("opts the homepage into the theme without changing unthemed layouts", () => {
     const html = render();
-    expect(html).toContain('<body class="homepage-theme"><a class="skip-link"');
+    expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
     expect(html).toContain('href="/theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
@@ -136,7 +136,7 @@ describe("homepage theme", () => {
 
   it("keeps the responsive, focus and reduced-motion rules external and compact", () => {
     const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
-    expect(css).toContain(".homepage-theme :focus-visible");
+    expect(css).toContain(".base-theme :focus-visible");
     expect(css).toContain("@media (max-width: 48rem)");
     expect(css).toContain("prefers-reduced-motion: no-preference");
     expect(css).not.toContain("@import");
