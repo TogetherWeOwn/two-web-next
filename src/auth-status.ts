@@ -43,7 +43,7 @@ export async function authStatusScript(c: Ctx, next: Next): Promise<void> {
   await next();
   if (!c.get("authStatusEnabled") || c.req.method !== "GET" || c.res.status !== 200 ||
       !c.res.headers.get("content-type")?.includes("text/html")) return;
-  const html = await c.res.text();
+  const html = await c.res.clone().text();
   // Fragments have no document and must never start a second sync controller.
   c.res = new Response(html.includes("</body>") ? html.replace("</body>",
     '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script></body>') : html,

@@ -60,7 +60,8 @@ export async function expiredWriteBanner(c: Ctx, next: Next): Promise<void> {
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, EXPIRED_WRITE_COOKIE);
   const destination = typeof raw === "string" && raw.startsWith("restored|") ? safeNext(raw.slice(9)) : null;
   if (!destination) return;
-  const html = await c.res.text();
+  // Keep the original stream usable while Hono rebuilds headers for deletion.
+  const html = await c.res.clone().text();
   if (!html.includes("</body>") || !/<main\b[^>]*>/.test(html)) {
     c.res = new Response(html, { status: c.res.status, headers: c.res.headers });
     return;
