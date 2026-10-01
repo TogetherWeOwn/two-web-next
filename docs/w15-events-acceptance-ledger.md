@@ -63,6 +63,15 @@ It reuses main's locked Going count and preserves waitlist promotion, recurrence
 and RSVP pause/reopen behavior. Reviewed QA coverage and the G1 fold divergence
 above are unchanged; this application proof is not a full W15/W16 parity pass.
 
+Author-repair verification (2026-10-01, merged main `2618adce`): **11 targeted
+files, 217 passed, zero skipped**, using `agent-testdb` disposable fixture schemas.
+The first run covered mutation invariants, event-time validation, RSVP, waitlist,
+RSVP toggles and admin validation properties (146); the second covered admin
+form errors, recurrence, sub-minute recurrence, gap duration and ICS revisions
+(71). `npm run typecheck` and the application diff check against that main
+baseline passed. Exact-head CI and independent merge approval remain on
+[TOG-10929](/TOG/issues/TOG-10929), not inferred from local tests.
+
 | Row | Gap | Evidence |
 |---|---|---|
 | A1 | **Ported:** ended-draft publish refusal | `transitionEvent` in `src/admin/store.ts` checks persisted `endsAt < Date.now()` after acquiring the event-row lock, with the exact legacy "An event that has already ended cannot be published. Update its dates first." error. `test/event-mutation-invariants.test.ts` proves JSON/admin 422, unchanged event/RSVP/audit rows and no announcement, equality/future publication, legal ended-draft cancellation, a clock advancing during a real lock wait, and a concurrently committed end-time edit. |
