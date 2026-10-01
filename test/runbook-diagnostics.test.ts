@@ -17,11 +17,11 @@ function routeRow(path: string) {
 }
 
 describe("runbook diagnostic and homepage contract", () => {
-  it("documents the deployed /up smoke, not removed diagnostic probes", () => {
-    expect(deploy).toMatch(/final `\/up` check/);
+  it("documents the deployed public-route smoke, not removed diagnostic probes", () => {
+    expect(deploy).toMatch(/node bin\/smoke\.mjs https:\/\/next\.togetherweown\.com/);
     for (const path of retired) expect(deploy).not.toContain(`\`${path}\``);
     const workflow = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
-    expect(workflow).toContain("https://next.togetherweown.com/up");
+    expect(workflow).toContain("node bin/smoke.mjs https://next.togetherweown.com");
   });
 
   it("explicitly retires all removed routes instead of listing them as outage diagnostics", () => {

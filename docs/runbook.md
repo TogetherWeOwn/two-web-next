@@ -106,8 +106,12 @@ approved account and binding isolation before any remote mutation.
    migrations **only to its disposable Postgres**, runs `npm run check`, ensures
    `two-sync-event` and `two-internal-action` exist, then deploys. The queue-create
    step currently suppresses errors; it is not permission/provisioning evidence.
-   The final `/up` check requires HTTP 200 and the expected status/queue JSON
-   envelope; queue `degraded` or `unknown` is allowed. This is liveness only,
+   The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
+   ([smoke checker](../bin/smoke.mjs)), covering 16 public routes: `/up`
+   (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
+   healthy/degraded/unknown) plus HTML/RSS/iCal/sitemap/robots/redirect/404
+   routes with CSP/nosniff/content-type/noindex/redirect assertions; queue
+   `degraded` or `unknown` is allowed. This is public-route liveness only,
    not DB/schema readiness or queue-drain acceptance.
 4. An explicitly authorized manual deployment of the reviewed release uses:
 
@@ -171,13 +175,14 @@ env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
     test/db-ping.test.ts test/runbook-diagnostics.test.ts
 ```
 
-Source snapshot: [main `d136ccd`](https://github.com/TogetherWeOwn/two-web-next/tree/d136ccdb0cabc5766672ae5a1d34252cedb72877)
+Source snapshot: [main `7bbaa53`](https://github.com/TogetherWeOwn/two-web-next/tree/7bbaa53a5f953fbec44ccc40ec22073cb6137aff)
 (2026-10-01), [current health implementation](../src/up.ts) and
 [deploy smoke](../.github/workflows/deploy.yml).
 Pending [#111](https://github.com/TogetherWeOwn/two-web-next/pull/111), inspected at
-[`624f6e6`](https://github.com/TogetherWeOwn/two-web-next/commit/624f6e63d6f46635c4b33187597d475837264e8f),
-proposes DB/schema readiness (`db`, `pending_migrations`, HTTP 503 on DB/schema
-failure) and a stricter deploy smoke. It is **not shipped in this snapshot**;
+[`614b712`](https://github.com/TogetherWeOwn/two-web-next/commit/614b712dec3bb98b0f5c355b69ef4bea98fb4cd4),
+proposes DB/schema readiness (`db: ok|error`, `pending_migrations`, HTTP 503 on
+DB/schema/pending-migration failure, smoke failing anything but `db:ok` /
+`pending_migrations:0`). It is **not shipped in this snapshot**;
 reconcile this section with its merged contract before relying on those fields.
 
 | Ledger outcome | Top-level `status` | `queue.status` / measurements |
@@ -243,7 +248,7 @@ Sources: [src/index.tsx](../src/index.tsx), [join routes](../src/join/route.ts),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
 [error handler](../src/errors.tsx). The homepage fallback is already present at
-[`d136ccd`, `src/index.tsx:244–265`](https://github.com/TogetherWeOwn/two-web-next/blob/d136ccdb0cabc5766672ae5a1d34252cedb72877/src/index.tsx#L244-L265),
+[`7bbaa53`, `src/index.tsx:271–277`](https://github.com/TogetherWeOwn/two-web-next/blob/7bbaa53a5f953fbec44ccc40ec22073cb6137aff/src/index.tsx#L271-L277),
 not conditional on an unmerged outage fix. Offline evidence:
 [session/event failure fixtures](../test/home-events.test.ts),
 [counts failure fixtures](../test/home-counts.test.ts) and
@@ -251,7 +256,7 @@ not conditional on an unmerged outage fix. Offline evidence:
 These are local doubles, not deployed outage acceptance.
 
 Pending [#92](https://github.com/TogetherWeOwn/two-web-next/pull/92), inspected at
-[`7ad44fc`](https://github.com/TogetherWeOwn/two-web-next/commit/7ad44fc73622816f76b122dc3c60534c6536e79d),
+[`826e77d`](https://github.com/TogetherWeOwn/two-web-next/commit/826e77d535325624b00d01c2a702d0617f26323a),
 adds broader sanitized DB-outage 503 responses, homepage session-unavailable UI
 and best-effort logout setup. Those changes are **not shipped in this snapshot**;
 retain the current private-route 500/503 distinctions above until it merges.
