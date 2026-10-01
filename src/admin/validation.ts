@@ -39,6 +39,9 @@ export type FeaturedFormInput = {
   position: number;
   startsAtUtc: Date | null;
   endsAtUtc: Date | null;
+  // Dates serve existing callers; canonical UTC text carries PostgreSQL microseconds.
+  startsAtUtcText?: string | null;
+  endsAtUtcText?: string | null;
 };
 
 /** Field errors keyed by field name, in the form's own terms. */
@@ -342,16 +345,34 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   const endsRaw = str(data.ends_at);
   let startsAtUtc: Date | null = null;
   let endsAtUtc: Date | null = null;
+  let startsAtUtcText: string | null = null;
+  let endsAtUtcText: string | null = null;
   // The show-window is UTC on both sides (legacy labels it "(UTC)").
   for (const [raw, key] of [[startsRaw, "starts_at"], [endsRaw, "ends_at"]] as const) {
     if (raw !== null) {
-      const wall = parseWall(raw);
-      if (!wall) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm, UTC).";
-      else if (key === "starts_at") startsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
-      else endsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
+      if (/\sBC$/i.test(raw)) {
+        fields[key] = "BC dates are not supported. Clear or replace this window bound with an AD date.";
+        continue;
+      }
+      // Featured windows support PostgreSQL precision; event wall times still speak minutes.
+      const match = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/.exec(raw);
+      const wall = match && parseWall(match[1]!);
+      const seconds = Number(match?.[2] ?? 0);
+      const fraction = (match?.[3] ?? "").padEnd(6, "0");
+      if (!wall || wall.y === 0 || seconds > 59) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm[:ss[.ffffff]], UTC; up to 6 fractional digits).";
+      else {
+        // Date.UTC maps years 0–99 to 1900–1999; featured years must stay literal.
+        const instant = new Date(0);
+        instant.setUTCFullYear(wall.y, wall.mo - 1, wall.d);
+        instant.setUTCHours(wall.h, wall.mi, seconds, Number(fraction.slice(0, 3)));
+        const text = `${instant.toISOString().slice(0, 19)}.${fraction}Z`;
+        if (key === "starts_at") { startsAtUtc = instant; startsAtUtcText = text; }
+        else { endsAtUtc = instant; endsAtUtcText = text; }
+      }
     }
   }
-  if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The window ends after it starts.";
+  // Fixed-width UTC strings sort chronologically, even within one Date millisecond.
+  if (startsAtUtcText && endsAtUtcText && endsAtUtcText <= startsAtUtcText) fields.ends_at = "The window ends after it starts.";
 
   if (Object.keys(fields).length > 0) fail(fields);
   return {
@@ -364,6 +385,8 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
     position,
     startsAtUtc,
     endsAtUtc,
+    startsAtUtcText,
+    endsAtUtcText,
   };
 }
 
