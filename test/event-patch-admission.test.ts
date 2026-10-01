@@ -133,7 +133,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
       timezone: "Europe/London", capacity: 8, rsvp_open: false,
     } });
     const after = await snapshot();
-    expect(after.events[0]).toEqual({ ...before.events[0], title: "Renamed", updatedAt: after.events[0]!.updatedAt });
+    expect(after.events[0]).toEqual({ ...before.events[0], title: "Renamed", updatedAt: after.events[0]!.updatedAt, icsSequence: after.events[0]!.icsSequence });
+    expect(after.events[0]!.icsSequence).toBeGreaterThan(before.events[0]!.icsSequence);
     expect(after.audit).toHaveLength(before.audit.length + 1);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ eventKey: EVENT_KEY, action: "event.upsert" });
@@ -144,7 +145,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     const res = await patch({});
     expect(res.status).toBe(200);
     const after = await snapshot();
-    expect(after.events[0]).toEqual({ ...before.events[0], updatedAt: after.events[0]!.updatedAt });
+    expect(after.events[0]).toEqual({ ...before.events[0], updatedAt: after.events[0]!.updatedAt, icsSequence: after.events[0]!.icsSequence });
+    expect(after.events[0]!.icsSequence).toBeGreaterThan(before.events[0]!.icsSequence);
     expect(after.audit).toHaveLength(before.audit.length + 1);
     expect(after.audit.at(-1)!.properties).toEqual({ updatedAt: {
       before: before.events[0]!.updatedAt.toISOString(), after: after.events[0]!.updatedAt.toISOString(),
@@ -168,7 +170,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
       timezone: "America/New_York", starts_at: "2026-10-25T01:30:17.000Z", ends_at: "2026-10-25T01:50:29.000Z",
     } });
     const after = await snapshot();
-    expect(after.events[0]).toEqual({ ...before.events[0], timezone: "America/New_York", updatedAt: after.events[0]!.updatedAt });
+    expect(after.events[0]).toEqual({ ...before.events[0], timezone: "America/New_York", updatedAt: after.events[0]!.updatedAt, icsSequence: after.events[0]!.icsSequence });
+    expect(after.events[0]!.icsSequence).toBeGreaterThan(before.events[0]!.icsSequence);
     expect(sent).toHaveLength(1);
   });
 
