@@ -55,6 +55,21 @@ describe.skipIf(!process.env.DATABASE_URL)("mounted keyed admin reads (isolated 
     await denial(await request(surface === "roster" ? `/events/${EVENT_KEY}` : "/"));
   });
 
+  it.each(["comment", "mutation"])("a %s statement cannot evade the read prefix inside an existing roster handler", async (mode) => {
+    const original = reads.listRoster;
+    vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
+      const rows = await original(db, key);
+      try {
+        await memberReads.keyedMemberRead(() => db.execute(mode === "comment"
+          ? sql`/* added query */ select id, username from users`
+          : sql`update users set username = 'mutated-private-name' returning id, username`));
+      } catch {}
+      return rows;
+    });
+    await denial(await request(`/events/${EVENT_KEY}`));
+    expect((await fixture.db.select().from(users).where(eq(users.id, SUBJECT.userId)))[0]!.username).toBe(SUBJECT.username);
+  });
+
   it.each(["events", "featured", "join-funnel", "going-counts", "search-widget", "timeouts"] as const)("%s classification cannot authorize a sensitive projection", async (classification) => {
     const original = reads.listRoster;
     vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {

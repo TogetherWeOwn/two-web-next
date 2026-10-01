@@ -67,7 +67,11 @@ export function observeMemberReads(db: Db): Db {
               const original = Reflect.get(query, method, queryReceiver);
               if ((method === "execute" || method === "all") && typeof original === "function") {
                 return async (...values: unknown[]) => {
-                  const permit = readStatement(statement) ? memberQueryPermit() : undefined;
+                  // A leading SQL comment or RETURNING mutation must not bypass
+                  // observation merely by missing the SELECT prefix. The audit
+                  // sink runs outside capture; handlers may only consume reads.
+                  const permit = memberReadActive() ? memberQueryPermit() : undefined;
+                  if (permit && !readStatement(statement)) refuseMemberRead();
                   if (permit?.classification) validateNonSensitiveRead(permit.classification, statement, fields);
                   const capture = permit && !permit.classification ? permit.capture : undefined;
                   const rawOwner = capture && !fields?.length ? rawMemberOwner(statement) : undefined;

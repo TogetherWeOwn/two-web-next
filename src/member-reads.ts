@@ -122,11 +122,11 @@ export async function memberReadBoundary(
     const subjects = [...capture.subjects].filter((key) => key !== declared!.viewer).sort();
     if (subjects.length === 0) return;
     try {
-      const recorded = await write({
+      const recorded = await captures.exit(() => write({
         viewerDiscordId: declared!.viewer!, viewerUserId: declared!.viewer!,
         resource: declared!.resource, action: declared!.action,
         route: declared!.route, subjectUserIds: subjects,
-      });
+      }));
       if (!recorded) throw new MemberReadRefused();
     } catch (error) {
       // No SQL, parameters, route URL, subject keys or exception messages.
