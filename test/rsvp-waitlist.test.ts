@@ -475,12 +475,14 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     const res = await app.request(`/e/${ev.eventKey}`, { headers: { cookie } }, { ...env, SESSION_STORE: sessions });
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
-    const replacement = res.headers.get("set-cookie")!;
-    expect(replacement).toContain("__Host-two_session=");
-    expect(replacement.split(";")[0]).not.toBe(cookie);
+    // The status hash is liveness-only; select the actual rotating login cookie.
+    const replacements = res.headers.getSetCookie().filter((value) => value.startsWith("__Host-two_session="));
+    expect(replacements).toHaveLength(1);
+    const replacement = replacements[0]!.split(";")[0]!;
+    expect(replacement).not.toBe(cookie);
     expect(await sessions.get(tokenHash)).toBeNull();
     now += 1100;
-    const again = await app.request(`/e/${ev.eventKey}`, { headers: { cookie: replacement.split(";")[0]! } }, { ...env, SESSION_STORE: sessions });
+    const again = await app.request(`/e/${ev.eventKey}`, { headers: { cookie: replacement } }, { ...env, SESSION_STORE: sessions });
     expect(again.status).toBe(200);
   });
 

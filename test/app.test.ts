@@ -243,6 +243,8 @@ describe("DB-backed sessions and rotation", () => {
         return inner.create(s);
       },
       get: (h) => inner.get(h),
+      statusHash: (h) => inner.statusHash(h),
+      isActive: (h) => inner.isActive(h),
       rotate: (o, r) => {
         seen.push(r.tokenHash);
         return inner.rotate(o, r);

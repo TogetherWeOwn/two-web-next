@@ -24,6 +24,8 @@
   { "method": "GET", "path": "/auth/discord", "auth": "public" },
   { "method": "GET", "path": "/auth/discord/callback", "auth": "oauth-state" },
   { "method": "GET", "path": "/auth/discord/redirect", "auth": "public" },
+  { "method": "GET", "path": "/auth/recover", "auth": "public" },
+  { "method": "GET", "path": "/auth/status", "auth": "public" },
   { "method": "GET", "path": "/discord", "auth": "public" },
   { "method": "GET", "path": "/e/:key", "auth": "public-draft-moderator" },
   { "method": "GET", "path": "/events", "auth": "public" },
