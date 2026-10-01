@@ -164,12 +164,12 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
     expect(created.status).toBe(201);
     const ek = created.body.event_key as string;
     const base = Date.now();
-    for (let i = 0; i < 55; i++) {
-      const id = `01WINDOW${String(i).padStart(4, "0")}000000000000`;
-      const at = new Date(base + i * 1000).toISOString();
-      await sql`INSERT INTO agent_event_audits (grant_id, event_key, operation, request_id, result, created_at)
-                VALUES ((SELECT id FROM agent_event_grants WHERE verifier_hash = ${await sha256Hex(t)}), ${ek}, 'update', ${id}, 'ok', ${at})`;
-    }
+    const verifierHash = await sha256Hex(t);
+    await sql`INSERT INTO agent_event_audits (grant_id, event_key, operation, request_id, result, created_at)
+              SELECT (SELECT id FROM agent_event_grants WHERE verifier_hash = ${verifierHash}),
+                     ${ek}, 'update', '01WINDOW' || lpad(i::text, 4, '0') || '000000000000',
+                     'ok', ${new Date(base).toISOString()}::timestamptz + i * interval '1 second'
+              FROM generate_series(0, 54) AS seed(i) ORDER BY i`;
     // Newer foreign rows must not occupy the bounded window. Each matches
     // only one of the two scope filters, so neither filter can be dropped.
     const foreign = "tok-window-foreign-" + schemaName;
