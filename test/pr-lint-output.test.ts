@@ -60,32 +60,21 @@ Path("received.json").write_text(json.dumps({k: os.environ.get(k, "") for k in k
 runpy.run_path("ci/conventions.py", run_name="__main__")
 `);
     writeFileSync(join(scratch, "fixture.json"), JSON.stringify({ title, body, author: { login: author } }));
-    writeFileSync(join(scratch, "bin/gh"), `#!/usr/bin/env python3
-import json, sys
+    // Isolate transport with already-resolved fixture metadata. The binding
+    // suite executes both real helpers with fake git/API and checks admission.
+    writeFileSync(join(scratch, "ci/resolve-pr-metadata.py"), `import json, os
 from pathlib import Path
-args = sys.argv[1:]
-assert args[:3] == ["pr", "view", "28"]
-assert args[3:5] == ["--repo", "TogetherWeOwn/fixture"]
-with Path("gh-calls").open("a") as calls:
-    calls.write(json.dumps(args) + "\\n")
 pr = json.loads(Path("fixture.json").read_text())
-fields = args[args.index("--json") + 1]
-if "--jq" in args:
-    value = pr[fields]
-    print(value["login"] if fields == "author" else value)
-else:
-    assert fields == "title,body,author"
-    print(json.dumps(pr))
-`, { mode: 0o700 });
+event = os.environ["GITHUB_EVENT_NAME"]
+print(json.dumps({"event": "pull_request" if event == "workflow_dispatch" else event,
+                  "title": pr["title"], "body": pr["body"], "author": pr["author"]["login"]}))
+`);
     const env = {
       PATH: join(scratch, "bin"),
       GITHUB_OUTPUT: join(scratch, "output"),
       RUNNER_TEMP: scratch,
       GITHUB_REPOSITORY: "TogetherWeOwn/fixture",
-      EVENT: event,
-      EVENT_TITLE: event === "workflow_dispatch" ? "stale title" : title,
-      EVENT_BODY: event === "workflow_dispatch" ? "stale body" : body,
-      EVENT_AUTHOR: event === "workflow_dispatch" ? "stale author" : author,
+      GITHUB_EVENT_NAME: event,
       PR_NUMBER: "28",
       REQUIRE_CARD_REF: "true",
       COMMITS: JSON.stringify(commits),
@@ -136,7 +125,7 @@ describe.each(["pull_request", "workflow_dispatch"])("PR metadata transport (%s,
     const result = transport(event, title, body);
     expect(result.received).toMatchObject({ EVENT: "pull_request", TITLE: title, BODY: body, AUTHOR: "fixture-author" });
     expect(result.status, result.output).toBe(body ? 0 : 1);
-    expect(result.calls).toHaveLength(event === "workflow_dispatch" ? 1 : 0);
+    expect(result.calls).toHaveLength(0);
     expect(result.encoded.trim().split("\n")).toHaveLength(1);
   });
 
@@ -192,10 +181,8 @@ describe("unchanged convention policy and workflow gates", () => {
 
   it("retains the required check name, metadata sources, self-hosted runners and read-only permissions", () => {
     const resolve = step("Resolve PR title/body");
-    expect(resolve.text).toContain("          EVENT: ${{ github.event_name }}\n");
-    expect(resolve.text).toContain("          EVENT_TITLE: ${{ github.event.pull_request.title }}\n");
-    expect(resolve.text).toContain("          EVENT_BODY: ${{ github.event.pull_request.body }}\n");
-    expect(resolve.text).toContain("          EVENT_AUTHOR: ${{ github.event.pull_request.user.login }}\n");
+    expect(resolve.run).toBe("python3 ci/pr-lint-output.py resolve");
+    expect(readFileSync(helper, "utf8")).toContain('with_name("resolve-pr-metadata.py")');
     expect(resolve.text).toContain("          PR_NUMBER: ${{ inputs.pr_number }}\n");
     expect(workflow).toContain("    name: pr-lint\n");
     expect(workflow).toContain("    runs-on: [self-hosted, two-selfhosted]\n");
