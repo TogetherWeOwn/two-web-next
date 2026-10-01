@@ -78,7 +78,7 @@ test("audit artifacts omit Wrangler's synthetic session and DB configuration val
 test("the required CI job runs after a non-green audit and rejects every non-success result", async () => {
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.slice(workflow.indexOf("\n  check:\n"));
-  assert.match(check, /\n    needs: a11y\n/);
+  assert.match(check, /\n    needs: \[a11y, lighthouse, bundle-budget\]\n/);
   assert.match(check, /\n    if: always\(\)\n/);
   assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
   const guard = check.match(/steps:\n      - name: Require successful accessibility audit\n        env:\n          A11Y_RESULT: [^\n]+\n        run: ([^\n]+)/);
