@@ -141,6 +141,11 @@ describe("factored stylesheet", () => {
                 (element) => getComputedStyle(element).color)`)).toEqual(["rgb(107, 98, 87)", "rgb(107, 98, 87)"]);
             }
           }
+          if (row.html.includes('data-testid="profile-edit-control"')) {
+            for (const page of [oldPage, newPage]) {
+              expect(await page.evaluate(`getComputedStyle(document.querySelector('[data-testid="profile-edit-control"]')).display`)).toBe("none");
+            }
+          }
           expect(await snapshot(newPage), `${width} ${row.name} default`).toEqual(await snapshot(oldPage));
           for (const page of [oldPage, newPage]) {
             await page.keyboard.press("Tab");
@@ -156,6 +161,13 @@ describe("factored stylesheet", () => {
             expect(await page.evaluate(`document.querySelector('a[href]:not([href="#main"])').matches(':hover')`)).toBe(true);
           }
           expect(await snapshot(newPage), `${width} ${row.name} hover`).toEqual(await snapshot(oldPage));
+          if (row.html.includes('data-testid="profile-edit-control"')) {
+            for (const page of [oldPage, newPage]) {
+              await page.evaluate(`document.querySelector('[data-testid="profile-edit-control"]').hidden = false`);
+              expect(await page.evaluate(`getComputedStyle(document.querySelector('[data-testid="profile-edit-again"]')).display`)).toBe("inline-flex");
+            }
+            expect(await snapshot(newPage), `${width} ${row.name} re-edit control`).toEqual(await snapshot(oldPage));
+          }
           if (row.name === "avatar-abc") {
             for (const page of [oldPage, newPage]) {
               await page.evaluate(`(() => {
