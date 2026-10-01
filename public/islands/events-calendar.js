@@ -28,6 +28,7 @@
 
   var DEBOUNCE_MS = 300;
   var active = null;
+  var activeIsSearch = false;
   var debounceTimer = null;
   // Back changes the address before its fetch commits. Replacing that request
   // must not lose the obligation to reconcile the address with the rendered page.
@@ -66,13 +67,15 @@
   // opts.focus: a selector to focus after the swap (grid day jumps land on the card).
   // opts.skeleton: member-started actions show it; a settled search does not.
   // opts.syncInput: explicit navigation rewrites the box unless newer typing began.
+  // opts.search: newer input invalidates this request before its debounce fires.
   async function load(url, push, opts) {
     opts = opts || {};
     var inputAtStart = input.value;
     if (active) active.abort();
     var controller = new AbortController();
     active = controller;
-    if (opts.skeleton) setLoading(true);
+    activeIsSearch = !!opts.search;
+    setLoading(!!opts.skeleton);
     try {
       var response = await fetch(url.pathname + url.search, {
         method: "GET",
@@ -94,21 +97,29 @@
       ) {
         throw new Error("Invalid calendar page");
       }
-      // Zones are positionally paired with the fetched source of the same name.
-      var byName = {};
-      sources.forEach(function (s) {
-        byName[s.getAttribute("data-cal-zone")] = s;
+      // Admit every expected name exactly once before touching the live zones.
+      var byName = new Map();
+      sources.forEach(function (source) {
+        var name = source.getAttribute("data-cal-zone");
+        if (byName.has(name)) throw new Error("Invalid calendar page");
+        byName.set(name, source);
       });
-      zones.forEach(function (target) {
-        var source = byName[target.getAttribute("data-cal-zone")];
-        if (!source) return;
-        target.replaceChildren.apply(
-          target,
-          Array.from(source.childNodes).map(function (n) {
-            return document.importNode(n, true);
-          })
-        );
-        target.hidden = source.hidden;
+      var swaps = zones.map(function (target) {
+        var name = target.getAttribute("data-cal-zone");
+        var source = byName.get(name);
+        if (!source) throw new Error("Invalid calendar page");
+        byName.delete(name);
+        return { target: target, source: source };
+      });
+      // Import failures must also leave every last-good zone intact.
+      swaps.forEach(function (swap) {
+        swap.children = Array.from(swap.source.childNodes).map(function (node) {
+          return document.importNode(node, true);
+        });
+      });
+      swaps.forEach(function (swap) {
+        swap.target.replaceChildren.apply(swap.target, swap.children);
+        swap.target.hidden = swap.source.hidden;
       });
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
@@ -144,6 +155,7 @@
       if (active === controller) {
         setLoading(false);
         active = null;
+        activeIsSearch = false;
       }
     }
   }
@@ -182,18 +194,50 @@
     load(target, true, { skeleton: true, syncInput: true });
   });
 
-  input.addEventListener("input", function () {
+  // IME composition: partial text is not a query. While composing, typing still
+  // supersedes an active search but schedules nothing; compositionend schedules
+  // the single search from the committed value (a trailing input event only
+  // reschedules that same timer, so it cannot double-submit).
+  var composing = false;
+
+  function scheduleSearch() {
     cancelDebounce();
+    // Typing supersedes a search immediately, not just when the next fetch starts.
+    // Explicit navigation may still commit while newer text remains in the box.
+    if (active && activeIsSearch) {
+      active.abort();
+      active = null;
+      activeIsSearch = false;
+      // Revoked owners cannot release loading inherited from navigation in finally.
+      setLoading(false);
+    }
+    if (composing) return;
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
-      load(searchUrl(input.value), true, {});
+      load(searchUrl(input.value), true, { search: true });
     }, DEBOUNCE_MS);
+  }
+
+  input.addEventListener("compositionstart", function () {
+    composing = true;
+    scheduleSearch();
+  });
+
+  input.addEventListener("compositionend", function () {
+    composing = false;
+    scheduleSearch();
+  });
+
+  input.addEventListener("input", function (event) {
+    if (event && event.isComposing) composing = true;
+    scheduleSearch();
   });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     cancelDebounce();
-    load(searchUrl(input.value), true, {});
+    if (composing || (event && event.isComposing)) return;
+    load(searchUrl(input.value), true, { search: true });
   });
 
   window.addEventListener("popstate", function () {

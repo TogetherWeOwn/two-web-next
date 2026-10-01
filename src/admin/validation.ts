@@ -19,6 +19,9 @@ import { isFeaturedImageUrl } from "../image-policy";
 export type EventStatus = "draft" | "published" | "cancelled" | "past";
 
 export type EventFormInput = {
+  // Deliberately no event key: the route key is minted server-side
+  // (newEventKey) at create and immutable once written. parseEventForm
+  // refuses forged event_key/eventKey input (legacy EventKeyTest).
   title: string;
   game: string | null;
   description: string | null;
@@ -39,6 +42,9 @@ export type FeaturedFormInput = {
   position: number;
   startsAtUtc: Date | null;
   endsAtUtc: Date | null;
+  // Dates serve existing callers; canonical UTC text carries PostgreSQL microseconds.
+  startsAtUtcText?: string | null;
+  endsAtUtcText?: string | null;
 };
 
 /** Field errors keyed by field name, in the form's own terms. */
@@ -52,10 +58,25 @@ export class ValidationError extends Error {
 
 const WALL_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})$/;
 
+// Intl construction dominates repeated wall-time validation. Bound shared
+// formatter reuse so request-supplied zones cannot grow isolate memory forever.
+const FORMATTER_CACHE_LIMIT = 64;
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = JSON.stringify([locale, options]);
+  const cached = formatters.get(key);
+  if (cached) return cached;
+  const value = new Intl.DateTimeFormat(locale, options);
+  if (formatters.size >= FORMATTER_CACHE_LIMIT) formatters.delete(formatters.keys().next().value!);
+  formatters.set(key, value);
+  return value;
+}
+
 /** Whether the string names an IANA zone the runtime knows. */
 export function isKnownTimezone(tz: string): boolean {
   try {
-    new Intl.DateTimeFormat("en", { timeZone: tz });
+    formatter("en", { timeZone: tz });
     return true;
   } catch {
     return false;
@@ -76,7 +97,7 @@ function parseWall(raw: string): WallParts | null {
 }
 
 const dtf = (tz: string) =>
-  new Intl.DateTimeFormat("en-GB", {
+  formatter("en-GB", {
     timeZone: tz,
     year: "numeric",
     month: "2-digit",
@@ -199,17 +220,23 @@ export function parseEventForm(
   carriers?: { startsAtUtc?: string; endsAtUtc?: string },
 ): EventFormInput {
   const fields: FieldErrors = {};
+  // The route key is minted server-side and immutable once written (legacy
+  // EventKeyTest): a forged key is refused with 422 rather than applied or
+  // silently ignored. Both spellings are refused; no caller sends a key.
+  if (data.event_key !== undefined || data.eventKey !== undefined) {
+    fields.event_key = "The event key is assigned when the event is created and cannot be changed.";
+  }
   const title = str(data.title);
   if (!title) fields.title = "Give the event a title.";
-  else if (title.length > 100) fields.title = "Keep the title to 100 characters.";
+  else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
   const game = str(data.game);
-  if (game && game.length > 100) fields.game = "Keep the game to 100 characters.";
+  if (game && [...game].length > 100) fields.game = "Keep the game to 100 characters.";
   const description = str(data.description);
-  if (description && description.length > 1000) fields.description = "Keep the description to 1000 characters.";
+  if (description && [...description].length > 1000) fields.description = "Keep the description to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
-  if (location && location.length > 255) fields.location = "Keep the location to 255 characters.";
+  if (location && [...location].length > 255) fields.location = "Keep the location to 255 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
   for (const field of ["title", "description", "location"] as const) {
     const raw = data[field];
@@ -238,17 +265,27 @@ export function parseEventForm(
 
   let startsAtUtc: Date | null = null;
   let endsAtUtc: Date | null = null;
-  if (startsRaw && endsRaw && !fields.timezone) {
+  if (!fields.timezone) {
     // Untouched fold/gap-ambiguous wall text keeps the exact instant the
     // form rendered (TOG-6805): the carrier rides in the hidden field, and a
     // match on minute precision means "no keystroke", so the stored instant
     // wins over a re-parse that could land on the other side of the fold.
-    try {
-      startsAtUtc = preservedOrParsed(startsRaw, carriers?.startsAtUtc, timezone);
-      endsAtUtc = preservedOrParsed(endsRaw, carriers?.endsAtUtc, timezone);
-    } catch (e) {
-      if (e instanceof ValidationError) Object.assign(fields, e.fields);
-      else throw e;
+    for (const [raw, carrier, field] of [
+      [startsRaw, carriers?.startsAtUtc, "starts_at"],
+      [endsRaw, carriers?.endsAtUtc, "ends_at"],
+    ] as const) {
+      if (!raw) continue;
+      try {
+        const instant = preservedOrParsed(raw, carrier, timezone);
+        if (field === "starts_at") startsAtUtc = instant;
+        else endsAtUtc = instant;
+      } catch (e) {
+        if (!(e instanceof ValidationError)) throw e;
+        // The shared parser speaks "wall"; the event form needs the input's name.
+        for (const [name, message] of Object.entries(e.fields)) {
+          fields[name === "wall" ? field : name] = message;
+        }
+      }
     }
     if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The end is after the start.";
   }
@@ -292,7 +329,7 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give it a headline.";
-  else if (title.length > 255) fields.title = "Keep the headline to 255 characters.";
+  else if ([...title].length > 255) fields.title = "Keep the headline to 255 characters.";
   const body = str(data.body);
   const url = str(data.url);
   if (url && (url.length > 255 || !isHttpUrl(url))) fields.url = "Link is a full http(s) URL, or empty for no link.";
@@ -304,29 +341,49 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   // TOG-8707: an image with no description is silent for screen-reader
   // visitors — the URL and its description arrive together or not at all.
   if (imageUrl && !imageAlt) fields.image_alt = "Describe the photo in one plain sentence for screen-reader visitors.";
-  if (imageAlt && imageAlt.length > 255) fields.image_alt = "Keep the alt text to 255 characters.";
+  if (imageAlt && [...imageAlt].length > 255) fields.image_alt = "Keep the alt text to 255 characters.";
 
   let position = 0;
   const posRaw = str(data.position);
   if (posRaw !== null) {
-    if (!/^\d+$/.test(posRaw)) fields.position = "Position is 0 or more; lower numbers appear first.";
-    else position = Number(posRaw);
+    position = Number(posRaw);
+    if (!/^\d+$/.test(posRaw) || !Number.isSafeInteger(position) || position > 2147483647) {
+      fields.position = "Position is a whole number from 0 to 2147483647; lower numbers appear first.";
+    }
   }
 
   const startsRaw = str(data.starts_at);
   const endsRaw = str(data.ends_at);
   let startsAtUtc: Date | null = null;
   let endsAtUtc: Date | null = null;
+  let startsAtUtcText: string | null = null;
+  let endsAtUtcText: string | null = null;
   // The show-window is UTC on both sides (legacy labels it "(UTC)").
   for (const [raw, key] of [[startsRaw, "starts_at"], [endsRaw, "ends_at"]] as const) {
     if (raw !== null) {
-      const wall = parseWall(raw);
-      if (!wall) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm, UTC).";
-      else if (key === "starts_at") startsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
-      else endsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
+      if (/\sBC$/i.test(raw)) {
+        fields[key] = "BC dates are not supported. Clear or replace this window bound with an AD date.";
+        continue;
+      }
+      // Featured windows support PostgreSQL precision; event wall times still speak minutes.
+      const match = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/.exec(raw);
+      const wall = match && parseWall(match[1]!);
+      const seconds = Number(match?.[2] ?? 0);
+      const fraction = (match?.[3] ?? "").padEnd(6, "0");
+      if (!wall || wall.y === 0 || seconds > 59) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm[:ss[.ffffff]], UTC; up to 6 fractional digits).";
+      else {
+        // Date.UTC maps years 0–99 to 1900–1999; featured years must stay literal.
+        const instant = new Date(0);
+        instant.setUTCFullYear(wall.y, wall.mo - 1, wall.d);
+        instant.setUTCHours(wall.h, wall.mi, seconds, Number(fraction.slice(0, 3)));
+        const text = `${instant.toISOString().slice(0, 19)}.${fraction}Z`;
+        if (key === "starts_at") { startsAtUtc = instant; startsAtUtcText = text; }
+        else { endsAtUtc = instant; endsAtUtcText = text; }
+      }
     }
   }
-  if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The window ends after it starts.";
+  // Fixed-width UTC strings sort chronologically, even within one Date millisecond.
+  if (startsAtUtcText && endsAtUtcText && endsAtUtcText <= startsAtUtcText) fields.ends_at = "The window ends after it starts.";
 
   if (Object.keys(fields).length > 0) fail(fields);
   return {
@@ -339,6 +396,8 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
     position,
     startsAtUtc,
     endsAtUtc,
+    startsAtUtcText,
+    endsAtUtcText,
   };
 }
 

@@ -2,15 +2,19 @@
 // routes and EventPolicy: drafts 403 for non-moderators, cancelled 410 + noindex,
 // /events.json needs a session, writes are moderator-only and enqueue the Discord
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import { dbFor } from "../admin/db";
+import { requestBodyLimit } from "../body-limit";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
-import { memberAccessLog } from "../access-log";
-import { ValidationError, parseEventForm } from "../admin/validation";
+import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
+import { notFoundSuggestions } from "./suggestions";
+import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
+import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
-import { rateLimitExceeded } from "../errors";
+import { NotFoundPage, rateLimitExceeded } from "../errors";
+import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
@@ -84,14 +88,14 @@ async function sha256Etag(body: string): Promise<string> {
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }
 
-/** Strong validator over the bytes; 304 on a matching If-None-Match. Sessionless: sets no cookie. */
+/** Strong validator over the bytes; preserve queued headers, but never read or issue a session here. */
 async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
   const etag = await sha256Etag(body);
   const inm = c.req.header("if-none-match");
   if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))) {
-    return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
+    return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }
-  return new Response(body, { status: 200, headers: { ...headers, etag } });
+  return c.body(body, 200, { ...headers, etag });
 }
 
 async function calendarFeedResponse(c: Ctx, build: () => string, headers: Record<string, string>): Promise<Response> {
@@ -150,7 +154,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // this month. An unparseable month is a page, never a 500.
     const month =
       parseCalendarMonth(c.req.query("month")) ??
-      (upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
+      parseCalendarMonth(upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
       currentCalendarMonth(now);
 
     const state = { view, month, q, past };
@@ -176,10 +180,29 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       }
     }
 
+    // One-shot join confirmation (legacy join_result flash): /events is a
+    // join-CTA landing (`/join?next=/events`), so it consumes and renders the
+    // banner exactly once like /, /join, /profile and /e/:key (TOG-10356
+    // review). Island fragment swaps must not consume it: the banner renders
+    // outside the swapped zones, so a fragment would eat the flash without
+    // ever displaying it — the pending value survives for the next full load.
+    const island = c.req.header("x-two-island") === "events-calendar";
+    const joinResult = island ? null : await takeJoinResult(c);
     // Search analytics must run per request, not only on shared-cache misses.
-    c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
+    c.header("cache-control", session || searching || joinResult ? "private, no-store" : "public, max-age=60");
     if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
+    // Guest sign-in links carry this page as ?next= so the OAuth round trip
+    // lands back here (TOG-10356). Rooted pathname + search only — the
+    // journey guard re-validates before any redirect, so a hostile query can
+    // at worst fall back to the default landing, never off-app.
+    let loginReturnTo: string | null = null;
+    try {
+      const u = new URL(c.req.url);
+      loginReturnTo = u.pathname + u.search;
+    } catch {
+      loginReturnTo = "/events";
+    }
     return c.html(
       <EventsCalendarPage
         state={state}
@@ -190,8 +213,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         emptyState={emptyState}
         discordFailed={discordFailed}
         member={session?.member ?? false}
-        inviteUrl={c.env.DISCORD_INVITE_URL}
+        inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
         appUrl={c.env.APP_URL}
+        loginReturnTo={loginReturnTo}
+        joinResult={joinResult}
       />,
     );
   });
@@ -214,7 +239,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
+    const eventKey = c.req.query("event_key");
+    if (eventKey !== undefined && !KEY_RE.test(eventKey)) return c.json({ error: "invalid_event_key" }, 422);
+    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator, eventKey });
     const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
     const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
     const body = JSON.stringify({ data, page, limit });
@@ -230,7 +257,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published"]);
     const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
-    return feedResponse(c, eventsRss(rows, c.env.APP_URL, rows.length ? built : new Date()), {
+    return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
     });
@@ -266,39 +293,49 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     });
   });
 
-  app.get("/e/:key", memberAccessLog(async (c) => {
-    const db = await dbFor(c);
-    return db ? (entry) => recordAccess(db, entry) : null;
-  }), async (c) => {
-    const key = c.req.param("key") ?? "";
-    if (!KEY_RE.test(key)) return c.notFound();
-    const db = await dbFor(c);
-    if (!db) return c.text("Events temporarily unavailable", 503);
-    const e = await getPublicEvent(db, key);
-    if (!e) return c.notFound();
-    if (e.status === "cancelled") {
-      c.header("x-robots-tag", "noindex, nofollow");
-      return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
-    }
-    // The guest join pitch and waitlist position depend on the viewer; never share-cache this HTML.
-    c.header("cache-control", "private, no-store");
+  app.get("/e/:key", async (c) => {
+    let viewer: string | null = null;
+    // Observe the entire existing handler, not only the attendee helper. An
+    // anonymous viewer can release classified public records, never member keys.
     c.header("vary", "Cookie");
-    // The injected reader uses only bindings/cookies; this route additionally
-    // carries the access middleware's request-local variables.
-    const session = await readSession(c as unknown as Ctx);
-    if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
-    if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
-    const [neighbors, related, attendees, position] = await Promise.all([
-      getEventNeighbors(db, e),
-      listRelatedEvents(db, e),
-      session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
-      session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
-    ]);
-    if (attendees.length > 0 && session) {
-      c.set("viewerId", session.id);
-      c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
-    }
-    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
+    await memberReadBoundary(c, () => ({ viewer, resource: "member", action: "list", route: "events.page" }), async (entry) => {
+      const db = await dbFor(c);
+      if (!db) throw new Error("Event audit database unavailable");
+      return recordAccess(db, entry);
+    }, async () => {
+      const notFound = async () => {
+        c.header("x-robots-tag", "noindex, nofollow");
+        return bufferedMemberHtml(c, <NotFoundPage suggestions={await notFoundSuggestions(c.env)} />, 404);
+      };
+      const render = async () => {
+        const key = c.req.param("key") ?? "";
+        if (!KEY_RE.test(key)) return notFound();
+        const db = await dbFor(c);
+        if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
+        const e = await getPublicEvent(db, key);
+        if (!e) return notFound();
+        if (e.status === "cancelled") {
+          c.header("x-robots-tag", "noindex, nofollow");
+          return bufferedMemberHtml(c, <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
+        }
+        const session = await readSession(c);
+        viewer = session?.id ?? null;
+        if (e.status === "draft" && !session?.moderator) return bufferedMemberText(c, "Forbidden", 403);
+        if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
+        const joinResult = await readJoinResult(c);
+        const [neighbors, related, attendees, position] = await Promise.all([
+          getEventNeighbors(db, e),
+          listRelatedEvents(db, e),
+          session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+          session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+        ]);
+        return bufferedMemberHtml(c, <EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
+      };
+      await render();
+    });
+    // Consume only after the keyed boundary allows a visible response.
+    if (c.res.status === 200) await takeJoinResult(c);
+    return c.res;
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
@@ -310,7 +347,15 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  async function body(c: Ctx): Promise<Record<string, unknown>> {
+  const moderatorGate: MiddlewareHandler<{ Bindings: Env; Variables: { eventModerator: Session } }> = async (c, next) => {
+    // The session reader uses only bindings/cookies, not this gate's variables.
+    const who = await moderator(c as unknown as Ctx);
+    if (who instanceof Response) return who;
+    c.set("eventModerator", who);
+    await next();
+  };
+
+  async function body(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
     // Media types are case-insensitive (RFC 2045 §5.1): normalize before the
     // JSON check so `Application/Json` cannot smuggle a body past the trap.
     // Forms parse with all values preserved: duplicate keys arrive as arrays
@@ -323,15 +368,25 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   }
 
-  const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
+  async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
+    // Event edits must not turn malformed/non-object JSON into an empty PATCH.
+    // Keep the RSVP trap's permissive body parsing independent of this admission.
+    if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json")) return body(c);
+    const input: unknown = await c.req.json().catch(() => null);
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new ValidationError({ body: "Send a JSON object." });
+    }
+    return input as Record<string, unknown>;
+  }
 
-  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-    const who = await moderator(c);
-    if (who instanceof Response) return who;
+  const invalid = (c: Pick<Ctx, "json">, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
+
+  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
+    const who = c.get("eventModerator");
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     try {
-      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await body(c)));
+      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await eventBody(c)));
       return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);
@@ -339,30 +394,31 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-    const who = await moderator(c);
-    if (who instanceof Response) return who;
+  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
+    const who = c.get("eventModerator");
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     const key = c.req.param("key");
     const existing = await getEvent(db, key);
     if (!existing) return c.json({ error: "not_found" }, 404);
-    // PATCH: unspecified fields keep their stored value.
-    const patch = await body(c);
-    const merged = {
-      title: existing.title,
-      game: existing.game,
-      description: existing.description,
-      timezone: existing.timezone,
-      location: existing.location,
-      capacity: existing.capacity,
-      ...patch,
-    } as Record<string, unknown>;
-    const tz = String(merged.timezone);
-    const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
-    merged.starts_at ??= wall(existing.startsAt);
-    merged.ends_at ??= wall(existing.endsAt);
     try {
+      // PATCH: unspecified fields keep their stored value.
+      const patch = await eventBody(c);
+      const merged = {
+        title: existing.title,
+        game: existing.game,
+        description: existing.description,
+        timezone: existing.timezone,
+        location: existing.location,
+        capacity: existing.capacity,
+        ...patch,
+      } as Record<string, unknown>;
+      // Match parseEventForm's zone default before deriving omitted wall times.
+      const tz = typeof merged.timezone === "string" ? merged.timezone.trim() || "Europe/London" : "Europe/London";
+      if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
+      const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
+      merged.starts_at ??= wall(existing.startsAt);
+      merged.ends_at ??= wall(existing.endsAt);
       const input = parseEventForm(merged, {
         startsAtUtc: existing.startsAt.toISOString(),
         endsAtUtc: existing.endsAt.toISOString(),
@@ -380,9 +436,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-      const who = await moderator(c);
-      if (who instanceof Response) return who;
+    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("action"), async (c) => {
+      const who = c.get("eventModerator");
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       try {
@@ -419,7 +474,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  app.put("/events/:key/rsvp", async (c) => {
+  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
     c.header("cache-control", "private, no-store");
     const input = await body(c);
     // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
@@ -451,7 +506,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
   });
 
-  app.delete("/events/:key/rsvp", async (c) => {
+  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
     c.header("cache-control", "private, no-store");
     // Both sources are evaluated independently, with ALL values preserved:
     // `query()` is first-wins, so duplicates use `queries()` — an empty query

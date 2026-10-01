@@ -38,7 +38,8 @@ describe("featured homepage fallback (local fixtures)", () => {
   it("a database read failure omits the section, keeps the funnel and strict CSP", async () => {
     // Real Drizzle query construction with a local failing transport: no connection.
     const db = drizzle.mock();
-    vi.spyOn(db, "select").mockImplementation(() => { throw new Error("database unavailable"); });
+    const session = Reflect.get(db, "session") as { prepareQuery: () => unknown };
+    vi.spyOn(session, "prepareQuery").mockImplementation(() => { throw new Error("database unavailable"); });
     const res = await app.request("/", {}, { ...env, ADMIN_DB: db } as Env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -54,7 +55,8 @@ describe("featured homepage fallback (local fixtures)", () => {
     const db = drizzle.mock();
     let rejectRead!: (error: Error) => void;
     vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]); // only featured stalls in this test
-    const transaction = vi.spyOn(db, "transaction").mockImplementation(() => new Promise((_, reject) => { rejectRead = reject; }));
+    const session = Reflect.get(db, "session") as { transaction: () => Promise<unknown> };
+    const transaction = vi.spyOn(session, "transaction").mockImplementation(() => new Promise((_, reject) => { rejectRead = reject; }));
     vi.useFakeTimers();
     try {
       const response = app.request("/", {}, { ...env, ADMIN_DB: db } as Env);
@@ -197,10 +199,12 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     expect(html).toContain('alt="Squad &amp; friends"');
     expect(html).toContain('alt="Title fallback"');
     expect(html).toContain('alt="Blank fallback"');
-    expect(html.match(/loading="lazy"/g)).toHaveLength(3);
-    expect(html.match(/width="640" height="360"/g)).toHaveLength(3);
-    expect(html.match(/decoding="async" referrerpolicy="no-referrer"/g)).toHaveLength(3);
-    expect(html).not.toMatch(/<a[^>]*><img/);
+    const featuredHtml = html.match(/<section\b[^>]*data-testid="featured-content"[^>]*>[\s\S]*?<\/section>/)?.[0];
+    expect(featuredHtml).toBeDefined();
+    expect(featuredHtml!.match(/loading="lazy"/g)).toHaveLength(3);
+    expect(featuredHtml!.match(/width="640" height="360"/g)).toHaveLength(3);
+    expect(featuredHtml!.match(/decoding="async" referrerpolicy="no-referrer"/g)).toHaveLength(3);
+    expect(featuredHtml).not.toMatch(/<a[^>]*><img/);
     expect(res.headers.get("content-security-policy")).toContain("img-src 'self' https://cdn.discordapp.com");
   });
 

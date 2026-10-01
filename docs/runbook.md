@@ -50,17 +50,27 @@ Install development tools even when the shell defaults to production mode:
 (
   set -euo pipefail
   npm ci --include=dev
-  # Fixture-only gate: conditional SQL suites skip; exclude the unconditional one.
-  env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
-    npm run check -- -- --exclude test/review-p1-verify.test.ts
+  # Fixture-only check: limited evidence, not database acceptance.
+  npm run check:offline
 )
 ```
 
-The extra `-- --` forwards [Vitest's exclusion](https://vitest.dev/guide/cli.html#exclude)
-through the nested npm scripts. Unset `DATABASE_URL` alone is **not** fixture-only:
-`test/review-p1-verify.test.ts` has unconditional SQL cases and a fallback to
-`agent-testdb` database `postgres`. The exclusion intentionally omits those cases;
-it is not full SQL coverage. Full database verification must explicitly use
+`check:offline` runs typecheck, config checks, fixture Vitest tests, a11y policy
+self-tests, cutover self-tests and smoke self-tests. It unsets `DATABASE_URL`,
+`AUDIT_IMPORT_TEST_DATABASE_URL`, `W1_AGENT_TESTDB`, all
+`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_*` variables and `PG*` settings
+for every child. Conditional SQL suites then skip, including the fixed
+agent-testdb control in `test/staging-fixed-agent-testdb.test.ts` enabled solely
+by `W1_AGENT_TESTDB=1`. Only Vitest receives the
+fixed `--exclude test/review-p1-verify.test.ts`; this file has unconditional SQL
+cases and a fallback to `agent-testdb` database `postgres`. Unset `DATABASE_URL`
+alone is **not** fixture-only. The command accepts no extra arguments, and
+reports success as **limited evidence**, not a substitute for exact-head CI with
+service-container DB coverage. Appending flags to the full shell-chain `check`
+script sends them to its final cutover command, not the earlier Vitest command.
+
+Full `npm run check`, coverage thresholds and required CI gates are unchanged.
+Full database verification must explicitly use
 `postgres://agent_test@agent-testdb:5432/two_web_next` and the migrated schema,
 never that fallback or a live service. Required CI runs the complete suite on
 its disposable Postgres service.
@@ -305,7 +315,10 @@ age-delete old rows or clear unique locks as an outage workaround.
 `queue_failed_jobs` ([drizzle/1007_queue-ledger.sql](../drizzle/1007_queue-ledger.sql))
 has `id`, `job_id`, `kind`, `key`, `reason`, `failed_at` only. It has **no payload
 and no original bot idempotency key**, and there is no repo replay script,
-`queue:retry` command or Wrangler message-send subcommand. Terminal jobs are
+`queue:retry` command or Wrangler message-send subcommand. The operator
+inspect-list-redrive loop over these rows lives in
+[queue-redrive-runbook.md](queue-redrive-runbook.md) (proved in
+`test/queue-redrive.test.ts`). Terminal jobs are
 acknowledged, not sent to a configured dead-letter queue (none is configured).
 Failed-row deletion is diagnostic cleanup, not a replay or a drain.
 

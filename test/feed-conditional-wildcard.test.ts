@@ -18,15 +18,16 @@ vi.mock("../src/events/reads", async (importOriginal) => ({
 const KEY = "01J0000000000000000000ABCD";
 const EVENT_PATH = `/events/${KEY}.ics`;
 const row = {
-  id: 1, eventKey: KEY, title: "Synthetic calendar event", game: null,
+  id: 1, icsSequence: 1782907200n, eventKey: KEY, title: "Synthetic calendar event", game: null,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-  parentEventId: null, recurrenceIndex: null, icsSequence: 0n,
+  parentEventId: null, recurrenceIndex: null,
   description: "Bring stims.", startsAt: new Date("2026-07-15T18:00:00Z"),
   endsAt: new Date("2026-07-15T20:00:00Z"), timezone: "UTC", location: null,
   capacity: null, status: "published", rsvpOpen: true, createdBy: null,
   createdAt: new Date("2026-07-01T12:00:00Z"), updatedAt: new Date("2026-07-01T12:00:00Z"),
 } satisfies typeof events.$inferSelect;
+const dbIdentity = Symbol("fixture database");
 const env: EnvWithAdminDb = {
   APP_URL: "https://next.example.test",
   DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture",
@@ -34,6 +35,7 @@ const env: EnvWithAdminDb = {
   DISCORD_BOT_TOKEN: "fixture", SESSION_SECRET: "fixture",
   ADMIN_DB: new Proxy({} as Db, { get: (_, key) => {
     if (key === "then") return undefined;
+    if (key === dbIdentity) return dbIdentity;
     throw new Error("fixture must not query a DB");
   } }),
 };
@@ -86,7 +88,7 @@ describe("successful public feeds accept the wildcard after reading the represen
         expect(response.headers.get("set-cookie")).toBeNull();
       }
       expect(listFeed).toHaveBeenCalledTimes(3);
-      expect(vi.mocked(listFeed).mock.calls.at(-1)![0]).toBe(env.ADMIN_DB);
+      expect((vi.mocked(listFeed).mock.calls.at(-1)![0] as unknown as Record<symbol, unknown>)[dbIdentity]).toBe(dbIdentity);
       expect(vi.mocked(listFeed).mock.calls.at(-1)![1]).toEqual(path.endsWith(".rss") ? ["published"] : ["published", "cancelled"]);
       expect(readSession).not.toHaveBeenCalled();
       expect(readFragmentSession).not.toHaveBeenCalled();
@@ -105,7 +107,7 @@ describe("readable per-event ICS accepts the wildcard only after admission", () 
     if (status === "cancelled") expect(await baseline.text()).toContain("STATUS:CANCELLED");
     await expectNotModified(EVENT_PATH, "*", baseline);
     expect(getEventRow).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(getEventRow).mock.calls.at(-1)![0]).toBe(env.ADMIN_DB);
+    expect((vi.mocked(getEventRow).mock.calls.at(-1)![0] as unknown as Record<symbol, unknown>)[dbIdentity]).toBe(dbIdentity);
     expect(vi.mocked(getEventRow).mock.calls.at(-1)![1]).toBe(KEY);
     expect(readSession).toHaveBeenCalledTimes(status === "draft" ? 2 : 0);
     expect(readFragmentSession).not.toHaveBeenCalled();
