@@ -47,7 +47,7 @@ Imported content and timestamps replace the same fields on matching rows;
 unchanged rows are not rewritten. Re-runs preserve destination row IDs. No rows
 are deleted, including destination rows absent from the source.
 
-Migration `1013_event-ics-sequence` must be applied before import. The importer
+Migration `1014_event-ics-sequence` must be applied before import. The importer
 checks the source relation for `ics_sequence`: when present, it retains that
 bigint without JavaScript number rounding; older sources backfill from the
 nonnegative, floored UTC `updated_at` epoch (falling back to `created_at`). The
@@ -78,11 +78,15 @@ Ordinary application inserts/updates cannot choose a revision: the database
 trigger `events_ics_sequence` owns it. Restoring legacy counters is a separate
 cutover operation requiring the **destination table-owner principal**, not a new
 grant to the Worker. Apply locks `events` in ACCESS EXCLUSIVE mode, temporarily
-disables only that named trigger in the destination transaction, and re-enables
-it before commit. The lock prevents concurrent writes during restoration; a
-failed import rolls back both data and trigger state. Other triggers, constraints
-and replication settings are untouched. Dry-run neither locks nor disables the
-trigger and cannot prove table-owner permissions. A permission failure is a
+disables only that named trigger in the destination transaction, and restores
+its original mode before commit: ordinary enabled (`O`) stays ordinary, and
+`ENABLE ALWAYS` (`A`) stays always enabled. Apply rejects a missing, disabled
+(`D`), or replica-only (`R`) revision trigger before destination writes; it does
+not silently change those policies. The lock protects the mode check and
+prevents concurrent writes during restoration; a failed import rolls back both
+data and trigger state. Other triggers, constraints and replication settings
+are untouched. Dry-run neither locks nor disables the trigger and cannot prove
+table-owner permissions or apply-mode readiness. A permission failure is a
 blocker: stop and report it; do not substitute credentials or grant ownership to
 the application. This document does not authorize a real cutover apply.
 

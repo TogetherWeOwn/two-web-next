@@ -1,6 +1,6 @@
 {
-  "id": "11a2342b-78e6-4c85-aeb1-2185e6d39ac0",
-  "prevId": "76a3433a-b981-40fa-912c-6642beba784c",
+  "id": "2c244e22-9b9c-4ec1-8772-fa849a6aa970",
+  "prevId": "11a2342b-78e6-4c85-aeb1-2185e6d39ac0",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1255,6 +1255,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "ics_sequence": {
+          "name": "ics_sequence",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
         }
       },
       "indexes": {

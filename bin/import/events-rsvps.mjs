@@ -161,8 +161,15 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
       // Only the table-owner cutover principal may restore legacy revisions.
       // The lock excludes other writers until COMMIT; DDL rolls back on failure.
       // Never disable constraints, audit triggers, or the session's replication role.
+      let revisionTriggerMode;
       if (!dryRun) {
         await sql`lock table events in access exclusive mode`;
+        const [trigger] = await sql`select tgenabled from pg_trigger
+          where tgrelid = 'events'::regclass and tgname = 'events_ics_sequence' and not tgisinternal`;
+        revisionTriggerMode = trigger?.tgenabled;
+        if (revisionTriggerMode !== "O" && revisionTriggerMode !== "A") {
+          throw new Error("Calendar revision trigger must be enabled for origin or always; no destination writes.");
+        }
         await sql`alter table events disable trigger events_ics_sequence`;
       }
       const report = {
@@ -216,7 +223,10 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
         report.rsvps[operation]++;
         if (!dryRun && operation !== "unchanged") await upsert(sql, "rsvps", rsvpColumns, ["event_id", "user_id"], row);
       }
-      if (!dryRun) await sql`alter table events enable trigger events_ics_sequence`;
+      if (!dryRun) {
+        if (revisionTriggerMode === "A") await sql`alter table events enable always trigger events_ics_sequence`;
+        else await sql`alter table events enable trigger events_ics_sequence`;
+      }
       return report;
     });
   });

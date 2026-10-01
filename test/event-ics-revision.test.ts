@@ -134,7 +134,7 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
     await fixture.client`drop function advance_event_ics_sequence()`;
     await fixture.client`alter table events drop column ics_sequence`;
     await fixture.client`update events set updated_at = '2026-07-01 10:00:00.999999+00' where event_key = ${KEY}`;
-    const migration = readFileSync(new URL("../drizzle/1013_event-ics-sequence.sql", import.meta.url), "utf8");
+    const migration = readFileSync(new URL("../drizzle/1014_event-ics-sequence.sql", import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint")) await fixture.client.unsafe(statement);
     expect((await read()).icsSequence).toBe(1782900000n);
     await fixture.client`update events set title = 'First migrated edit' where event_key = ${KEY}`;
