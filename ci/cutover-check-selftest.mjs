@@ -159,6 +159,50 @@ test('login alias requires the temporary local no-store redirect in both phases'
   }
 });
 
+test('all no-store gates require a complete directive outside quoted values in both phases', async () => {
+  const cases = [
+    ['no-store', true],
+    ['private, no-store', true],
+    [' \tNo-StOrE\t , max-age=0', true],
+    ['note="commas, and \\"quotes\\"", no-store, private', true],
+    ['note="no-store", no-store', true],
+    ['', false],
+    ['public, max-age=3600', false],
+    ['public, max-age=3600, x-no-store', false],
+    ['public, max-age=3600, note="no-store"', false],
+    ['note="ignored, no-store, ignored"', false],
+    ['note="ignored\\", no-store, ignored"', false],
+    ['"no-store"', false],
+    ['no-store-extra', false],
+    ['no-store=1', false],
+    ['no-store="yes"', false],
+    ['note="unterminated, no-store', false],
+    ['no-store, note="unterminated', false],
+    ['no-store\n', false],
+    ['no-store\r\n', false],
+  ];
+  for (const phase of ['before', 'after']) {
+    for (const [path, id] of [['/auth/discord/redirect', 'no-store:/auth/discord/redirect'],
+      ['/up', 'target-up-no-store'], ['/discord', 'discord-no-store']]) {
+      for (const [header, expected] of cases) {
+        const result = await runChecks(options(phase), {
+          freeze, resolver: stubDns(), request: async url => {
+            const response = fixture(url, phase);
+            if (new URL(url).hostname === options(phase).target && new URL(url).pathname === path) {
+              response.headers['cache-control'] = header;
+            }
+            return { ...response, tlsVerified: true };
+          },
+        });
+        const label = `${phase} ${path} ${JSON.stringify(header)}`;
+        assert.equal(result.ok, expected, label);
+        assert.equal(result.checks.find(check => check.id === id)?.ok, expected, label);
+        assert.deepEqual(result.checks.filter(check => !check.ok).map(check => check.id), expected ? [] : [id], label);
+      }
+    }
+  }
+});
+
 test('retired diagnostics reject soft-404s and redirects in both phases', async () => {
   for (const phase of ['before', 'after']) {
     for (const path of ['/health', '/healthz', '/db-ping']) {
