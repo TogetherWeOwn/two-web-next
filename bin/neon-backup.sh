@@ -114,23 +114,10 @@ dump_to_file() {
   local out="$1"
   require_database_url
   command -v pg_dump >/dev/null || { echo "neon-backup: pg_dump not found" >&2; exit 1; }
-  eval "$(python3 -c '
-import os, shlex
-from urllib.parse import urlparse, unquote
-u = urlparse(os.environ["DATABASE_URL"])
-parts = {
-    "PGHOST": u.hostname or "",
-    "PGPORT": str(u.port or 5432),
-    "PGUSER": unquote(u.username or ""),
-    "PGPASSWORD": unquote(u.password or ""),
-    "PGDATABASE": unquote((u.path or "").lstrip("/")),
-}
-for k, v in parts.items():
-    print("%s=%s" % (k, shlex.quote(v)))
-')"
-  export PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE
-  pg_dump -Fc -f "$out"
-  unset PGPASSWORD
+  # No eval or parent-shell credential exports. The helper validates before
+  # exec and isolates libpq from ambient PG* target/service/password settings.
+  # Exit here on failure while do_backup's local temp-file trap is still in scope.
+  python3 "$ROOT/bin/backup/connection-helper" "$out" || exit "$?"
 }
 
 prefix() { printf '%s/%s-%s' "$BACKUP_PREFIX" "$BRANCH" "$BRANCH"; }
