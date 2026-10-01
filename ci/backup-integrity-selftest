@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+# Local-only archive integrity contract. No real pg_dump, Wrangler or network.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+T="$(mktemp -d "${PAPERCLIP_RUN_SCRATCH_DIR:-${TMPDIR:-/tmp}}/backup-integrity.XXXXXX")"
+trap 'rm -rf "$T"' EXIT
+PASS=0
+ok() { PASS=$((PASS + 1)); printf 'ok: %s\n' "$1"; }
+fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+BIN="$ROOT/bin/neon-backup.sh"
+HELPER="$ROOT/bin/backup/integrity-helper"
+export STUB_R2="$T/r2" STUB_PAYLOAD="$T/payload" STUB_LOG="$T/operations"
+export BACKUP_BUCKET=test-bucket BACKUP_PREFIX=neon BACKUP_JURISDICTION=eu
+export DATABASE_URL=postgres://agent_test@fake-host/fixture
+mkdir -p "$T/fakebin" "$STUB_R2"
+# Binary synthetic bytes, including a tail beyond the helper's first hash chunk.
+python3 - "$STUB_PAYLOAD" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).write_bytes(bytes(range(256)) * 4097 + b"synthetic-tail\x00\xff")
+PY
+cat > "$T/fakebin/pg_dump" <<'PY'
+#!/usr/bin/env python3
+import os, shutil, sys
+shutil.copyfile(os.environ["STUB_PAYLOAD"], sys.argv[sys.argv.index("-f") + 1])
+PY
+cat > "$T/fakebin/date" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${STUB_NOW:-20261001T000000Z}"
+SH
+cat > "$T/fakebin/wrangler" <<'PY'
+#!/usr/bin/env python3
+import os, pathlib, sys
+args = sys.argv[1:]
+assert args[:2] == ["r2", "object"]
+assert "--remote" in args
+assert args[args.index("--jurisdiction") + 1] == "eu"
+op, key = args[2:4]
+dest = pathlib.Path(os.environ["STUB_R2"]) / key
+with open(os.environ["STUB_LOG"], "a") as log:
+    log.write(f"{op} {key}\n")
+if op == os.environ.get("STUB_FAIL_OP") and key.endswith(os.environ.get("STUB_FAIL_SUFFIX", "")):
+    sys.exit(1)
+if op == "put":
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(pathlib.Path(args[args.index("--file") + 1]).read_bytes())
+elif op == "get":
+    if not dest.is_file():
+        sys.exit(1)
+    data = dest.read_bytes()
+    suffix = os.environ.get("STUB_CORRUPT_SUFFIX", ".dump")
+    match = os.environ.get("STUB_CORRUPT_MATCH", "")
+    if key.endswith(suffix) and match in key:
+        mode = os.environ.get("STUB_CORRUPTION", "exact")
+        if mode == "truncate":
+            data = data[:-1]
+        elif mode == "alter":
+            data = data[:-1] + bytes([data[-1] ^ 1])
+    if "--pipe" in args:
+        sys.stdout.buffer.write(data)
+    else:
+        pathlib.Path(args[args.index("--file") + 1]).write_bytes(data)
+elif op == "delete":
+    dest.unlink(missing_ok=True)
+else:
+    sys.exit(2)
+PY
+chmod +x "$T/fakebin/"*
+export PATH="$T/fakebin:$PATH" WRANGLER_BIN="$T/fakebin/wrangler"
+MANIFEST="$STUB_R2/$BACKUP_BUCKET/neon/staging-staging/MANIFEST.txt"
+KEY=neon/staging-staging-20261001T000000Z.dump
+ARCHIVE="$STUB_R2/$BACKUP_BUCKET/$KEY"
+RECEIPT="$ARCHIVE.digest.json"
+reset_store() { rm -rf "$STUB_R2"; mkdir -p "$STUB_R2"; }
+expect_failure() {
+  if "$@" > "$T/out" 2> "$T/err"; then fail "expected failure: $*"; fi
+}
+# EOF must not hide a final missing archive or unpaired receipt in either mode.
+for mode in compatibility strict; do
+  check_args=(check staging)
+  [ "$mode" = compatibility ] || check_args+=(--require-verified)
+  for termination in newline eof; do
+    format='%s\n'
+    [ "$termination" = newline ] || format='%s'
+    for entry in "$KEY" "$KEY.digest.json"; do
+      reset_store
+      mkdir -p "$(dirname "$MANIFEST")"
+      printf "$format" "$entry" > "$MANIFEST"
+      expect_failure "$BIN" "${check_args[@]}"
+      if [ "$entry" = "$KEY" ]; then
+        grep -qxF "missing: $KEY" "$T/err" || fail "final missing archive skipped"
+      else
+        grep -qxF "corrupt: $entry (unpaired receipt)" "$T/err" || fail "final unpaired receipt skipped"
+      fi
+      ! grep -q '^check: ' "$T/out" || fail "invalid final entry reported success"
+      ok "$mode check rejects $entry with $termination termination"
+    done
+  done
+done
+# Successful PUT/GET transport is not proof of correct bytes.
+for mode in truncate alter; do
+  reset_store
+  expect_failure env STUB_CORRUPTION="$mode" "$BIN" backup staging
+  ! grep -q '^backup: ' "$T/out" || fail "corrupt backup reported success"
+  [ ! -e "$MANIFEST" ] || fail "corrupt backup entered manifest"
+  ok "backup rejects $mode read-back before manifest publication"
+done
+reset_store
+"$BIN" backup staging > "$T/out"
+[ -f "$RECEIPT" ] || fail "exact backup missing receipt"
+cmp "$ARCHIVE" "$STUB_PAYLOAD" || fail "exact archive changed"
+python3 - "$RECEIPT" "$STUB_PAYLOAD" "$KEY" <<'PY'
+import hashlib, json, pathlib, sys
+receipt = json.loads(pathlib.Path(sys.argv[1]).read_text())
+data = pathlib.Path(sys.argv[2]).read_bytes()
+assert receipt == {"version": 1, "archiveKey": sys.argv[3], "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+PY
+grep -qxF "$KEY" "$MANIFEST" || fail "manifest missing archive"
+grep -qxF "$KEY.digest.json" "$MANIFEST" || fail "manifest missing paired receipt"
+ok "exact backup publishes archive and independently checked digest receipt"
+"$BIN" check staging > "$T/out"
+grep -qxF "verified: $KEY" "$T/out" || fail "healthy check not verified"
+ok "check reports exact stored archive as verified"
+# Put the archive after its receipt so the last unterminated entry needs hashing.
+for mode in compatibility strict; do
+  check_args=(check staging)
+  [ "$mode" = compatibility ] || check_args+=(--require-verified)
+  printf '%s\n%s' "$KEY.digest.json" "$KEY" > "$MANIFEST"
+  "$BIN" "${check_args[@]}" > "$T/out"
+  grep -qxF "verified: $KEY" "$T/out" || fail "final exact archive not verified"
+  grep -qxF 'check: all manifest archives byte-verified' "$T/out" || fail "exact EOF check failed"
+  expect_failure env STUB_CORRUPTION=alter "$BIN" "${check_args[@]}"
+  grep -q 'corrupt:' "$T/err" || fail "final corrupt archive skipped"
+  ok "$mode check hashes the final archive without a newline"
+done
+printf '%s\n%s\n' "$KEY" "$KEY.digest.json" > "$MANIFEST"
+for mode in truncate alter; do
+  expect_failure env STUB_CORRUPTION="$mode" "$BIN" check staging
+  grep -q 'corrupt:' "$T/err" || fail "check did not classify corruption"
+  ok "check rejects $mode bytes even when GET succeeds"
+done
+cp "$RECEIPT" "$T/good-receipt"
+printf '{broken json\n' > "$RECEIPT"
+expect_failure "$BIN" check staging
+grep -q 'corrupt:' "$T/err" || fail "malformed receipt not corrupt"
+ok "malformed receipt fails closed"
+cp "$T/good-receipt" "$RECEIPT"
+rm "$RECEIPT"
+expect_failure "$BIN" check staging
+grep -q 'unverified:' "$T/out" || fail "lost paired receipt not unverified"
+ok "a missing manifest-paired receipt cannot downgrade to legacy success"
+# A pre-receipt manifest is transport-only, never byte-verified.
+for termination in newline eof; do
+  format='%s\n'
+  [ "$termination" = newline ] || format='%s'
+  printf "$format" "$KEY" > "$MANIFEST"
+  "$BIN" check staging > "$T/out"
+  grep -qxF "unverified: $KEY (receipt unavailable)" "$T/out" || fail "legacy classification missing"
+  grep -qxF 'check: 1 legacy archive(s) unverified; available receipts verified' "$T/out" || fail "legacy summary missing"
+  ! grep -q '^verified:' "$T/out" || fail "legacy archive reported verified"
+  expect_failure "$BIN" check staging --require-verified
+  expect_failure "$BIN" promote-weekly staging
+  ok "legacy $termination check is explicit; strict check and promotion refuse missing receipts"
+done
+cp "$T/good-receipt" "$RECEIPT"
+printf '%s\n%s\n' "$KEY" "$KEY.digest.json" > "$MANIFEST"
+cp "$MANIFEST" "$T/manifest-before"
+expect_failure env STUB_CORRUPTION=alter "$BIN" promote-weekly staging
+cmp "$MANIFEST" "$T/manifest-before" || fail "corrupt source promoted"
+ok "promotion verifies source instead of blessing corrupt bytes with a new digest"
+expect_failure env STUB_CORRUPTION=truncate STUB_CORRUPT_MATCH=-weekly- "$BIN" promote-weekly staging
+cmp "$MANIFEST" "$T/manifest-before" || fail "corrupt weekly read-back entered manifest"
+ok "promotion verifies destination read-back before publishing its pair"
+"$BIN" promote-weekly staging > "$T/out"
+WEEKLY="${KEY%.dump}-weekly-20261001T000000Z.dump"
+python3 "$HELPER" verify "$STUB_R2/$BACKUP_BUCKET/$WEEKLY" "$WEEKLY" "$STUB_R2/$BACKUP_BUCKET/$WEEKLY.digest.json"
+grep -qxF "$WEEKLY.digest.json" "$MANIFEST" || fail "weekly receipt not paired"
+"$BIN" check staging --require-verified > /dev/null
+ok "promotion rewrites identity and preserves verified archive/receipt pairs"
+# Receipt transport must also round-trip exactly before publication.
+for op in put get; do
+  reset_store
+  expect_failure env STUB_FAIL_OP="$op" STUB_FAIL_SUFFIX=.digest.json "$BIN" backup staging
+  [ ! -e "$MANIFEST" ] || fail "failed receipt transport published backup"
+  ok "receipt $op failure prevents publication"
+done
+reset_store
+expect_failure env STUB_CORRUPTION=alter STUB_CORRUPT_SUFFIX=.digest.json "$BIN" backup staging
+[ ! -e "$MANIFEST" ] || fail "altered receipt published backup"
+ok "receipt read-back must match local receipt bytes"
+# Exercise receipt validation independently (including nonempty binary bytes).
+python3 - "$HELPER" "$T" <<'PY'
+import json, pathlib, subprocess, sys
+helper, root = sys.argv[1], pathlib.Path(sys.argv[2])
+archive, receipt = root / "payload", root / "unit-receipt"
+def run(op, key="fixture.dump", file=archive):
+    return subprocess.run([sys.executable, helper, op, str(file), key, str(receipt)], capture_output=True)
+assert run("write").returncode == 0
+assert run("verify").returncode == 0
+valid = json.loads(receipt.read_text())
+for field, value in [("version", 2), ("version", True), ("archiveKey", "other.dump"), ("sizeBytes", 1), ("sizeBytes", True), ("sha256", "0" * 64), ("sha256", "bad")]:
+    receipt.write_text(json.dumps({**valid, field: value}))
+    assert run("verify").returncode != 0, (field, value)
+receipt.write_text(json.dumps(valid))
+assert run("verify", key="other.dump").returncode != 0
+empty = root / "empty"
+empty.write_bytes(b"")
+assert run("write", file=empty).returncode != 0
+assert run("verify", file=empty).returncode != 0
+receipt.write_text('{"version":1}')
+assert run("verify").returncode != 0
+PY
+ok "helper rejects empty bytes, malformed fields, wrong identity, size and SHA-256"
+seed_retention() {
+  reset_store
+  mkdir -p "$(dirname "$MANIFEST")"
+  : > "$MANIFEST"
+  for kind in daily weekly; do
+    local count=9
+    [ "$kind" = daily ] || count=6
+    for ((i=1; i<=count; i++)); do
+      local key="neon/staging-staging-2025010${i}T000000Z.dump"
+      [ "$kind" = daily ] || key="${key%.dump}-weekly-2025010${i}T000000Z.dump"
+      cp "$STUB_PAYLOAD" "$STUB_R2/$BACKUP_BUCKET/$key"
+      python3 "$HELPER" write "$STUB_R2/$BACKUP_BUCKET/$key" "$key" "$STUB_R2/$BACKUP_BUCKET/$key.digest.json"
+      printf '%s\n%s\n' "$key" "$key.digest.json" >> "$MANIFEST"
+    done
+  done
+}
+snapshot() {
+  python3 - "$STUB_R2" <<'PY'
+import hashlib, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for path in sorted(root.rglob("*")):
+    if path.is_file():
+        print(path.relative_to(root), hashlib.sha256(path.read_bytes()).hexdigest())
+PY
+}
+seed_retention
+snapshot > "$T/before"
+"$BIN" rotate staging --dry-run > "$T/out"
+snapshot > "$T/after"
+cmp "$T/before" "$T/after" || fail "dry-run mutated pairs"
+[ "$(grep -c '^delete:' "$T/out")" = 4 ] || fail "retention dry-run count changed"
+ok "dry-run leaves all archive/receipt pairs untouched"
+"$BIN" rotate staging > /dev/null
+python3 - "$MANIFEST" "$STUB_R2/$BACKUP_BUCKET" <<'PY'
+import pathlib, sys
+manifest, root = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+keys = set(manifest.read_text().splitlines())
+archives = {key for key in keys if key.endswith(".dump")}
+assert sum("-weekly-" not in key for key in archives) == 7
+assert sum("-weekly-" in key for key in archives) == 4
+assert keys == archives | {key + ".digest.json" for key in archives}
+objects = {str(path.relative_to(root)) for path in root.rglob("*") if path.is_file() and path != manifest}
+assert objects == keys
+PY
+"$BIN" check staging --require-verified > /dev/null
+ok "rotation retains newest 7/4 with receipts and deletes both expired objects"
+seed_retention
+cp "$MANIFEST" "$T/manifest-before"
+expect_failure env STUB_FAIL_OP=delete STUB_FAIL_SUFFIX=.digest.json "$BIN" rotate staging
+cmp "$MANIFEST" "$T/manifest-before" || fail "failed paired delete rewrote manifest"
+ok "failed receipt deletion fails rotation without reporting a successful manifest"
+printf 'selftest: %s passed\n' "$PASS"
