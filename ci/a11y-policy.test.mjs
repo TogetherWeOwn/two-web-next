@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { auditCases, auditDatabaseUrl, assertNoViolations, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { coverage as appCoverage } from "./a11y-cases.mjs";
 
 const coverage = {
   "/": { cases: [{ path: "/" }] },
@@ -28,6 +29,22 @@ test("removed routes and unexplained exclusions fail", () => {
   assert.throws(() => auditCases(routes.slice(1), coverage), /stale=\//);
   assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { skip: true } }), /exclusion reason/);
   assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { cases: [] } }), /No audit cases/);
+});
+
+test("legacy aliases are non-documents while canonical admin destinations remain audited", () => {
+  const aliases = [
+    "/auth/discord/redirect", "/admin/events/create", "/admin/events/:key/edit",
+    "/admin/featured-contents", "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
+  ];
+  const destinations = ["/admin/events/new", "/admin/events/:key", "/admin/featured", "/admin/featured/new", "/admin/featured/:id"];
+  const registered = [...new Set([...Object.keys(appCoverage), ...destinations])].map((path) => ({ method: "GET", path }));
+  const cases = auditCases(registered, appCoverage);
+  for (const alias of aliases) {
+    assert.equal(appCoverage[alias]?.skip, true, alias);
+    assert.match(appCoverage[alias].reason, /alias redirects/, alias);
+    assert(!cases.some((entry) => entry.route === alias), alias);
+  }
+  for (const destination of destinations) assert(cases.some((entry) => entry.route === destination), destination);
 });
 
 test("refuse staging, production and ambiguous database configuration before connecting", () => {
