@@ -96,7 +96,9 @@ approved account and binding isolation before any remote mutation.
    migrations **only to its disposable Postgres**, runs `npm run check`, ensures
    `two-sync-event` and `two-internal-action` exist, then deploys. The queue-create
    step currently suppresses errors; it is not permission/provisioning evidence.
-   The final `/health` check is liveness only, not DB/queue acceptance.
+   The final `/up` check requires HTTP 200 and the expected status/queue JSON
+   envelope; queue `degraded` or `unknown` is allowed. This is liveness only,
+   not DB/schema readiness or queue-drain acceptance.
 4. An explicitly authorized manual deployment of the reviewed release uses:
 
    ```bash
@@ -108,9 +110,9 @@ approved account and binding isolation before any remote mutation.
    branch, and do not bypass the Environment gate to clear a blocked CI release.
    Neither path migrates the live database. Coordinate any separately approved
    schema change with both bot and web owners using `docs/db-migrations.md`.
-5. Capture the resulting deployment/version IDs and workflow URL. `/health`
-   does not exercise persistence; `/up` reports only limited dependency evidence
-   (below). Source behavior and local tests are not proof of live isolation.
+5. Capture the resulting deployment/version IDs and workflow URL. `/up`
+   reports only limited queue-ledger evidence (below), not successful private
+   persistence. Source behavior and local tests are not proof of live isolation.
 
 ### Worker rollback
 
@@ -142,16 +144,31 @@ and [rollback limits](https://developers.cloudflare.com/workers/versions-and-dep
 
 ## Read `/up` without mistaking liveness for readiness
 
-`GET /health` and `/healthz` return `200 {"ok":true}` without database work.
-`GET /up` also always returns **200**, with `Cache-Control: no-store` and no
-session/auth lookup. Read its JSON, not just HTTP status. Do not probe a live
-DB-backed `/up` as a test; use existing approved incident evidence and local
-fixtures. The contract is [src/up.ts](../src/up.ts), exercised safely by:
+`/health`, `/healthz` and `/db-ping` are **retired**, unregistered diagnostic
+paths: GET returns ordinary **404**, not health or DB evidence. The generic 404
+page may try optional event suggestions and tolerates their DB failure; it is
+not a DB-free diagnostic. See [retired-route fixtures](../test/db-ping.test.ts).
+
+`GET /up` always returns **200**, with `Cache-Control: no-store` and no
+session/auth lookup. This is HTTP liveness, **not DB/schema readiness**. Read its
+JSON, not just HTTP status. The current response has only `status` and `queue`;
+there is no DB ping or pending-migration result. Do not use a live DB-backed
+`/up` as a test; use approved incident evidence and the existing offline tools:
 
 ```bash
 env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
-  npm run test -- test/up.test.ts
+  npm run test -- test/up.test.ts test/deploy-smoke.test.ts \
+    test/db-ping.test.ts test/runbook-diagnostics.test.ts
 ```
+
+Source snapshot: [main `d136ccd`](https://github.com/TogetherWeOwn/two-web-next/tree/d136ccdb0cabc5766672ae5a1d34252cedb72877)
+(2026-10-01), [current health implementation](../src/up.ts) and
+[deploy smoke](../.github/workflows/deploy.yml).
+Pending [#111](https://github.com/TogetherWeOwn/two-web-next/pull/111), inspected at
+[`624f6e6`](https://github.com/TogetherWeOwn/two-web-next/commit/624f6e63d6f46635c4b33187597d475837264e8f),
+proposes DB/schema readiness (`db`, `pending_migrations`, HTTP 503 on DB/schema
+failure) and a stricter deploy smoke. It is **not shipped in this snapshot**;
+reconcile this section with its merged contract before relying on those fields.
 
 | Ledger outcome | Top-level `status` | `queue.status` / measurements |
 | --- | --- | --- |
@@ -181,9 +198,10 @@ Do not remove the binding or inject an alternate credential to mask a configured
 outage: **missing configuration is not the same as an unreachable database**.
 Normal web stores prefer `DATABASE_URL`, otherwise `DB.connectionString`
 ([src/db/connection.ts](../src/db/connection.ts)); failure does not try the
-other connection. `/up` prefers `DB`; jobs prefer `HYPERDRIVE`, then `DB`, then
-`DATABASE_URL`. `/db-ping` uses only `DB` and actively queries the database:
-**do not use it against staging/production for tests or probes**.
+other connection. `/up` queue measurement prefers `DB`, then `DATABASE_URL`;
+jobs prefer `HYPERDRIVE`, then `DB`, then `DATABASE_URL`. A successful public
+fallback is **not** evidence that private reads or writes are available; do not
+relax their authentication, persistence or required-audit gates.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
@@ -193,13 +211,12 @@ below, not its older `/up` row, define these outcomes.
 
 | Route(s) | Configured database outage behavior |
 | --- | --- |
-| `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join`, `/health`, `/healthz` (GET) | Stay **200**, DB-free. |
+| `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join` (GET) | Stay **200**, DB-free. |
 | `/up` (GET) | Stays **200**, queue becomes `unknown`; not readiness. |
 | `/sitemap_index.xml` (GET) | Stays **200** with static entries; event lookup failure is caught. |
 | `/discord`, `/auth/discord` (GET) | Stay **302** to invite / OAuth start, DB-free. |
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |
-| `/db-ping` (GET) | **503** `db_unavailable`; also 503 without `DB`. |
-| `/` (GET) | **Not guaranteed 200**: session-store migration/read failures can become **500**. Missing DB gives guest shell; a migration-cached guest may stay 200. Rotation failure alone falls back to guest. |
+| `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
 | `/auth/discord/callback` (GET) | Session create/store failure **500**; roster-write-only failure is caught. Invalid state/Discord exchange failure redirects **302** before persistence. |
 | `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
 | `/auth/qa/:identity` (POST) | Enabled/authorized session failure **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
@@ -215,7 +232,19 @@ Sources: [src/index.tsx](../src/index.tsx), [join routes](../src/join/route.ts),
 [event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
-[error handler](../src/errors.tsx).
+[error handler](../src/errors.tsx). The homepage fallback is already present at
+[`d136ccd`, `src/index.tsx:244–265`](https://github.com/TogetherWeOwn/two-web-next/blob/d136ccdb0cabc5766672ae5a1d34252cedb72877/src/index.tsx#L244-L265),
+not conditional on an unmerged outage fix. Offline evidence:
+[session/event failure fixtures](../test/home-events.test.ts),
+[counts failure fixtures](../test/home-counts.test.ts) and
+[DB-construction/featured failure fixtures](../test/featured-outage.test.ts).
+These are local doubles, not deployed outage acceptance.
+
+Pending [#92](https://github.com/TogetherWeOwn/two-web-next/pull/92), inspected at
+[`7ad44fc`](https://github.com/TogetherWeOwn/two-web-next/commit/7ad44fc73622816f76b122dc3c60534c6536e79d),
+adds broader sanitized DB-outage 503 responses, homepage session-unavailable UI
+and best-effort logout setup. Those changes are **not shipped in this snapshot**;
+retain the current private-route 500/503 distinctions above until it merges.
 
 Shared human throttles and profile throttles fail open on store error; the shared
 human throttle currently uses only `DATABASE_URL`, not Hyperdrive. Optional
