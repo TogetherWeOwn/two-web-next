@@ -3,7 +3,7 @@
 //
 // Routes (all behind adminGuard — moderator 403, guest OAuth redirect):
 // - GET  /admin                      dashboard (index of resources)
-// - GET  /admin/events               list (q + status filter)
+// - GET  /admin/events               list (search, status/series/fill, sort, page)
 // - GET  /admin/events/new           create form
 // - POST /admin/events               create-as-draft (no delete anywhere)
 // - GET  /admin/events/:key          edit form
@@ -28,6 +28,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
 import { dbFor } from "./db";
+import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./guard";
 import type { SessionStore } from "../sessions";
 import {
@@ -159,16 +160,17 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.get("/events", async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
-    const q = c.req.query("q") ?? undefined;
-    const status = c.req.query("status") ?? undefined;
-    const rows = await listEvents(db, { q, status });
+    const params = c.req.query();
+    const query = parseEventListQuery(params);
+    const fetched = await listEvents(db, params);
+    const rows = fetched.slice(0, EVENT_PAGE_SIZE);
     declareAccess(c, {
       resource: "events",
       action: "list",
       route: "admin.events.index",
       subjects: rows.map((r) => r.eventKey),
     });
-    return c.html(<EventsPage rows={rows} q={q ?? ""} status={status ?? ""} />);
+    return c.html(<EventsPage rows={rows} query={query} hasNext={fetched.length > EVENT_PAGE_SIZE} />);
   });
 
   admin.get("/events/new", (c) => {
