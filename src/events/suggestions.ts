@@ -30,7 +30,7 @@ export async function notFoundSuggestions(env: Env, now = new Date()): Promise<S
         return tx
           .select({ key: events.eventKey, title: events.title, startsAt: events.startsAt, location: events.location })
           .from(events)
-          .where(and(eq(events.status, "published"), gte(events.endsAt, now)))
+          .where(and(eq(events.status, "published"), gte(events.endsAt, now), sql`isfinite(${events.startsAt})`))
           .orderBy(asc(events.startsAt), asc(events.id))
           .limit(3);
       });

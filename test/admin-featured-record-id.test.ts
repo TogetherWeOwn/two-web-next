@@ -43,7 +43,7 @@ const row: FeaturedRow = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(getFeatured).mockImplementation(async (_, id) => ({ ...row, id }));
+  vi.mocked(getFeatured).mockImplementation(async (_, id) => ({ ...row, id, startsAtText: null, endsAtText: null }));
   vi.mocked(updateFeatured).mockImplementation(async (_, __, id) => ({ ...row, id }));
   vi.mocked(deleteFeatured).mockResolvedValue(undefined);
   vi.mocked(recordAccess).mockResolvedValue(true);
