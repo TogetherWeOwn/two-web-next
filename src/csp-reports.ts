@@ -19,9 +19,10 @@
 
 import type { Context } from "hono";
 import type { Env } from "./env";
+import { readCappedBody } from "./csp-report-body";
 
-/** Largest report body accepted, in bytes. Bigger bodies are dropped. */
-export const MAX_CSP_REPORT_BYTES = 8192;
+export { MAX_CSP_REPORT_BYTES, readCappedBody } from "./csp-report-body";
+export type { CappedBody } from "./csp-report-body";
 
 // The violation object after unwrapping either report shape. Values stay
 // `unknown` until the fixed-key log line coerces them to scalars — the raw
@@ -117,52 +118,6 @@ export function shouldSampleReport(rate: number, random: () => number = Math.ran
   if (rate >= 1.0) return true;
   if (rate <= 0.0) return false;
   return random() <= rate;
-}
-
-export type CappedBody = { text: string; truncated: boolean; bytes: number };
-
-/**
- * Retain at most the cap in chunks. A `content-length` over the cap
- * short-circuits before the stream is touched at all; otherwise cancel on
- * the first chunk that crosses the cap, without retaining or parsing it.
- * Reads are chunk-granular: that final chunk can exceed the remaining cap,
- * and `bytes` counts all bytes observed, not just the retained prefix.
- */
-export async function readCappedBody(req: Request, cap: number = MAX_CSP_REPORT_BYTES): Promise<CappedBody> {
-  const declared = req.headers.get("content-length");
-  if (declared !== null) {
-    const n = Number.parseInt(declared, 10);
-    if (Number.isFinite(n) && n > cap) return { text: "", truncated: true, bytes: n };
-  }
-  if (!req.body) return { text: "", truncated: false, bytes: 0 };
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > cap) {
-        // Over the cap: stop pulling and release the stream. The kept prefix
-        // is discarded by the caller (truncated bodies are never parsed).
-        await reader.cancel().catch(() => {});
-        return { text: "", truncated: true, bytes };
-      }
-      chunks.push(value);
-    }
-  } catch {
-    // An aborted stream is still a 204: the sink never fails the browser.
-    await reader.cancel().catch(() => {});
-    return { text: "", truncated: false, bytes };
-  }
-  const merged = new Uint8Array(bytes);
-  let off = 0;
-  for (const c of chunks) {
-    merged.set(c, off);
-    off += c.byteLength;
-  }
-  return { text: new TextDecoder().decode(merged), truncated: false, bytes };
 }
 
 // No session, no cookie, no DB: an unauthenticated sink that must answer when
