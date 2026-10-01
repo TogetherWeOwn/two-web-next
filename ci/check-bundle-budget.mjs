@@ -8,7 +8,30 @@ import { gzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const assetPattern = /^public\/(?:islands\/[^/]+\.js|styles\.css)$/;
+// Nested island helpers are budgeted too: an island may import a shared
+// `./vendor/*.js`, and Workers serves everything under public/. Dot segments
+// can never be valid budget keys; the regex alone would accept `..`.
+const assetPattern = /^public\/(?:islands\/(?:[^/]+\/)*[^/]+\.js|styles\.css)$/;
+
+function isBudgetKey(entry) {
+  return typeof entry === 'string' && assetPattern.test(entry) && !entry.split('/').includes('..');
+}
+
+// Every .js file served from public/islands, at any depth: a nested import
+// without an explicit ceiling fails closed instead of escaping enforcement.
+function discoverServed(root) {
+  const islands = [];
+  const walk = (dir, prefix) => {
+    for (const name of readdirSync(dir, { withFileTypes: true })) {
+      if (name.name.startsWith('.')) continue;
+      if (name.isDirectory()) walk(join(dir, name.name), `${prefix}${name.name}/`);
+      else if (name.isFile() && name.name.endsWith('.js')) islands.push(`${prefix}${name.name}`);
+    }
+  };
+  walk(join(root, 'public/islands'), 'public/islands/');
+  islands.sort();
+  return ['public/styles.css', ...islands];
+}
 
 export function run(root, output = console) {
   let budgets;
@@ -18,15 +41,13 @@ export function run(root, output = console) {
       throw new Error('budgets must be a nonempty object');
     }
     for (const [entry, ceiling] of Object.entries(budgets)) {
-      if (!assetPattern.test(entry) || !ceiling ||
+      if (!isBudgetKey(entry) || !ceiling ||
           !Number.isSafeInteger(ceiling.maxRawBytes) || ceiling.maxRawBytes <= 0 ||
           !Number.isSafeInteger(ceiling.maxGzipBytes) || ceiling.maxGzipBytes <= 0) {
         throw new Error(`invalid entry or raw/gzip ceilings: ${entry}`);
       }
     }
-    const served = ['public/styles.css', ...readdirSync(join(root, 'public/islands'))
-      .filter((name) => name.endsWith('.js')).map((name) => `public/islands/${name}`)];
-    for (const entry of served) {
+    for (const entry of discoverServed(root)) {
       if (!Object.hasOwn(budgets, entry)) throw new Error(`no budget for ${entry}`);
     }
   } catch (error) {
@@ -105,6 +126,28 @@ function selftest() {
       writeFileSync(join(root, 'public/islands/new.js'), 'export {};');
     }, 2, 'no budget for public/islands/new.js');
     rmSync(join(root, 'public/islands/new.js'));
+    // Review repro: an imported but unbudgeted nested helper must fail
+    // closed, not report 0 while Workers serves the extra bytes.
+    check('nested island import cannot escape enforcement', () => {
+      writeFileSync(join(root, 'public/islands/example.js'),
+        'import "./vendor/framework.js";\nexport const ok = 1;\n');
+      mkdirSync(join(root, 'public/islands/vendor'), { recursive: true });
+      writeFileSync(join(root, 'public/islands/vendor/framework.js'), `/* ${'x'.repeat(100000)} */\n`);
+    }, 2, 'no budget for public/islands/vendor/framework.js');
+    rmSync(join(root, 'public/islands/vendor'), { recursive: true });
+    // A budgeted nested helper fits when its ceiling covers it.
+    check('budgeted nested helper fits', (budget) => {
+      mkdirSync(join(root, 'public/islands/vendor'), { recursive: true });
+      const helper = 'export const shared = 1;\n';
+      writeFileSync(join(root, 'public/islands/vendor/shared.js'), helper);
+      const nested = `public/islands/vendor/shared.js`;
+      budget.budgets[nested] = {
+        maxRawBytes: Buffer.byteLength(helper),
+        maxGzipBytes: gzipSync(Buffer.from(helper)).length,
+      };
+      save(budget);
+    }, 0);
+    rmSync(join(root, 'public/islands/vendor'), { recursive: true, force: true });
     check('stylesheet cannot escape enforcement', (budget) => {
       delete budget.budgets['public/styles.css'];
       save(budget);

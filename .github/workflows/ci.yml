@@ -18,8 +18,12 @@ concurrency:
 
 jobs:
   # name pinned equal to the id: `check` is a required check on main.
+  # Run the required gate even when performance jobs fail or are skipped;
+  # GitHub treats a skipped required check as successful.
   check:
     name: check
+    needs: [lighthouse, bundle-budget]
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
@@ -37,6 +41,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # Only explicit success from both performance jobs may read green.
+      - name: Performance gate (lighthouse + bundle-budget must succeed)
+        if: always()
+        run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"
+      - name: Performance gate selftest
+        run: node ci/require-performance.mjs --selftest
       - run: npm ci
       - name: Seeded admin properties (10s budget, local fixtures)
         run: timeout 10s npm run test:admin-properties

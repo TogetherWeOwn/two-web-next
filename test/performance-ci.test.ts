@@ -1,5 +1,8 @@
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { URL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import worker from "../ci/lighthouse-worker";
@@ -69,6 +72,40 @@ describe("performance CI", () => {
       requestLatencyMs: 562.5, downloadThroughputKbps: 1474.56, uploadThroughputKbps: 675,
     });
     expect(config.upload.target).toBe("filesystem");
+  });
+
+  it.each([
+    ["largest-contentful-paint", 2001],
+    ["cumulative-layout-shift", 0.11],
+  ])("blocks the required check after a real LHCI %s assertion failure", (audit, numericValue) => {
+    const root = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "performance-assert-"));
+    try {
+      const audits = Object.fromEntries(Object.keys(config.assert.assertions)
+        .map((key) => [key, { numericValue: 0 }]));
+      audits[audit] = { numericValue };
+      const report = join(root, "report.json");
+      writeFileSync(report, JSON.stringify({ finalUrl: "http://127.0.0.1:8787/events", audits }));
+      // Real assertion command and production thresholds; no collection/network.
+      const assertion = spawnSync(process.execPath, [resolve("node_modules/.bin/lhci"), "assert",
+        "--config", resolve("ci/lighthouserc.cjs"), "--lhr", report], { cwd: root, encoding: "utf8" });
+      expect(assertion.status, assertion.stdout + assertion.stderr).toBe(1);
+      expect(assertion.stdout + assertion.stderr).toContain(audit);
+      const gate = spawnSync(process.execPath, [resolve("ci/require-performance.mjs"),
+        assertion.status === 0 ? "success" : "failure", "success"], { encoding: "utf8" });
+      expect(gate.status, gate.stdout + gate.stderr).toBe(1);
+      expect(gate.stderr).toContain("lighthouse did not succeed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("wires both performance results into the always-running required check", () => {
+    const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+    const check = workflow.split("\n  check:\n")[1]!.split("\n  bundle-budget:\n")[0]!;
+    expect(check).toContain("name: check");
+    expect(check).toContain("needs: [lighthouse, bundle-budget]");
+    expect(check).toContain("if: always()");
+    expect(check).toContain('node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"');
   });
 
   it("uses a standalone local-only Wrangler config", () => {
