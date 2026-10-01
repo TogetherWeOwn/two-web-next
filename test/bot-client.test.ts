@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createBotClient, retryableFallback } from "../src/bot/client";
 import { BotTerminalError, BotTransportError } from "../src/jobs/types";
@@ -37,6 +39,7 @@ describe("createBotClient (ported InternalActionClient)", () => {
     const r = await client.assignRole({ userId: "900000000000009999", roleKey: "rocketleague" });
     expect(r).toMatchObject({ ok: true, outcome: "assigned", requestId: "r1" });
     expect(seen).toHaveLength(1);
+    expect(seen[0]!.init.redirect).toBe("error");
     expect(seen[0]!.url).toBe("https://bot-staging.internal.example/internal/actions");
     const headers = seen[0]!.init.headers as Record<string, string>;
     expect(Object.keys(headers).sort()).toEqual(
@@ -152,6 +155,65 @@ describe("createBotClient (ported InternalActionClient)", () => {
     expect(h[1]!["Idempotency-Key"]).toBe(uuid);
     expect(h[0]!["X-TWO-Nonce"]).not.toBe(h[1]!["X-TWO-Nonce"]);
     expect(h[0]!["X-TWO-Signature"]).not.toBe(h[1]!["X-TWO-Signature"]);
+  });
+
+  it.each(["", " ", "\t", null, 123])("rejects unusable message/event IDs: %s", async (id) => {
+    const { client } = clientWith([
+      jsonResponse(200, { ok: true, result: { message_id: id } }),
+      jsonResponse(200, { ok: true, result: { outcome: "created", event_id: id } }),
+    ]);
+    await expect(client.postAnnouncement({ channelKey: "c", body: "b" }, uuid)).rejects.toThrow(BotTransportError);
+    await expect(client.upsertEvent(
+      { eventKey: "e", name: "n", startsAt: "2026-10-01T00:00:00Z", endsAt: "2026-10-01T01:00:00Z", location: "L", description: null }, uuid,
+    )).rejects.toThrow(BotTransportError);
+  });
+
+  it("compares offset-bearing event times as instants, not strings", async () => {
+    const { client } = clientWith([jsonResponse(200, { ok: true, result: { outcome: "created", event_id: "d1" } })]);
+    await expect(client.upsertEvent(
+      { eventKey: "e", name: "n", startsAt: "2026-10-01T10:00:00+02:00", endsAt: "2026-10-01T09:30:00Z", location: "L", description: null }, uuid,
+    )).resolves.toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ["2026-10-01T09:00:00Z", "2026-10-01T10:00:00+02:00"],
+    ["2026-10-01T08:00:00Z", "2026-10-01T10:00:00+02:00"],
+    ["not a date", "2026-10-01T10:00:00Z"],
+    ["2026-10-01T08:00:00Z", "not a date"],
+    ["2026-10-01T08:00:00Z", null],
+  ])("refuses reversed, equal or invalid event instants before network: %s / %s", async (startsAt, endsAt) => {
+    const { client, fetchFn } = clientWith([]);
+    await expect(client.upsertEvent({ eventKey: "e", name: "n", startsAt: startsAt!, endsAt, location: "L", description: null }, uuid)).rejects.toThrow(BotTerminalError);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it.each([307, 308])("never forwards a signed POST across a %s redirect (loopback only)", async (status) => {
+    let forwarded = 0;
+    const destination = createServer((_req, res) => {
+      forwarded++;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, result: { outcome: "assigned" } }));
+    });
+    destination.listen(0, "127.0.0.1");
+    await once(destination, "listening");
+    const address = destination.address() as { port: number };
+    const redirect = createServer((_req, res) => {
+      res.writeHead(status, { location: `http://127.0.0.1:${address.port}/internal/actions` });
+      res.end();
+    });
+    redirect.listen(0, "127.0.0.1");
+    await once(redirect, "listening");
+    try {
+      const source = redirect.address() as { port: number };
+      const client = createBotClient({ ...opts, url: `http://127.0.0.1:${source.port}` });
+      await expect(client.assignRole({ userId: "1", roleKey: "r" })).rejects.toThrow(BotTransportError);
+      expect(forwarded).toBe(0);
+    } finally {
+      for (const server of [redirect, destination]) {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
   });
 
   it("validates event times locally (ends after starts)", async () => {

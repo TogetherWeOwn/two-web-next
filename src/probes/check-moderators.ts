@@ -111,9 +111,9 @@ export function checkModerators(
   } else {
     const extra = configured.filter((id) => id !== SYSOP_MODERATOR_ROLE_ID).join(",");
     record(
-      "UNKNOWN",
+      "FAIL",
       "is-sysop",
-      `SySOp is present, plus ${extra}. TOG-106 signed off one ID; anything beyond it grants the panel to holders nobody approved. Deliberate, or a widening that needs sign-off?`,
+      `SySOp is present, but the list is not exactly one ID (extras: ${extra || "duplicate SySOp"}). TOG-106 signed off one ID; widening needs fresh approval.`,
     );
   }
 

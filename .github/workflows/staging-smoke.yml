@@ -5,10 +5,11 @@ name: staging-smoke
 # announcement to a throwaway channel and creates a REAL staging event, so it
 # never runs on a schedule and never against production.
 #
-# Setup (operator, once): the `staging` environment holds BOT_ENDPOINT_URL
-# (staging bot), BOT_SHARED_SECRET, BOT_KEY_ID and BOT_PRODUCTION_URL; the
-# run inputs name the throwaway channel, role key and QA user. The CLI itself
-# refuses the production host named by BOT_PRODUCTION_URL.
+# Setup: `staging` secrets BOT_ENDPOINT_URL (staging bot), BOT_SHARED_SECRET;
+# `staging` vars BOT_KEY_ID and BOT_PRODUCTION_URL. The latter is mandatory.
+# Inputs name the throwaway channel, role key and QA user, never shell source.
+# The CLI refuses the production hostname regardless of port; redirects fail.
+# This workflow is NOT permission to bypass the staging isolation/custody hold.
 
 on:
   workflow_dispatch:
@@ -36,7 +37,9 @@ concurrency:
 jobs:
   internal-action-smoke:
     name: internal-action-smoke
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
+    container:
+      image: node:24-bookworm
     timeout-minutes: 10
     environment:
       name: staging
@@ -48,17 +51,18 @@ jobs:
           cache: npm
       - run: npm ci --include=dev
       - name: Moderator role-config probe (pre-smoke gate)
-        run: npm run check:moderators -- --require-configured
-        env:
-          DISCORD_MODERATOR_ROLE_IDS: ${{ secrets.DISCORD_MODERATOR_ROLE_IDS }}
+        run: npm run check:worker-moderators
       - name: Internal-action smoke against the staging bot
         run: >-
           npm run smoke:internal-action --
-          --discord-id="${{ inputs.discord_id }}"
-          --role-key="${{ inputs.role_key }}"
-          --channel-key="${{ inputs.channel_key }}"
+          --discord-id="$SMOKE_DISCORD_ID"
+          --role-key="$SMOKE_ROLE_KEY"
+          --channel-key="$SMOKE_CHANNEL_KEY"
         env:
+          SMOKE_DISCORD_ID: ${{ inputs.discord_id }}
+          SMOKE_ROLE_KEY: ${{ inputs.role_key }}
+          SMOKE_CHANNEL_KEY: ${{ inputs.channel_key }}
           BOT_ENDPOINT_URL: ${{ secrets.BOT_ENDPOINT_URL }}
           BOT_SHARED_SECRET: ${{ secrets.BOT_SHARED_SECRET }}
-          BOT_KEY_ID: ${{ secrets.BOT_KEY_ID }}
-          BOT_PRODUCTION_URL: ${{ secrets.BOT_PRODUCTION_URL }}
+          BOT_KEY_ID: ${{ vars.BOT_KEY_ID }}
+          BOT_PRODUCTION_URL: ${{ vars.BOT_PRODUCTION_URL }}

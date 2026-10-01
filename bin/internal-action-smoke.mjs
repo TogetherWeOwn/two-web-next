@@ -8,8 +8,8 @@
 //
 // Safety: posts a REAL announcement to a throwaway channel and creates a REAL
 // staging event — --channel-key must name a throwaway channel. The script
-// refuses to run against the host named by BOT_PRODUCTION_URL, and refuses to
-// run at all without an explicit staging target. Exit codes match legacy:
+// requires valid BOT_PRODUCTION_URL and BOT_ENDPOINT_URL, refuses the entire
+// production hostname, and never follows redirects. Exit codes match legacy:
 // 0 every check passed, 1 a check failed, 2 misconfigured. Secrets come from
 // the environment only (never argv) and are never printed or logged.
 import { createBotClient } from "../src/bot/client.ts";
@@ -35,11 +35,6 @@ if (missing.length > 0) {
   process.exit(2);
 }
 
-console.log("internal actions smoke (TOG-10112)");
-console.log(`  target  ${process.env.BOT_ENDPOINT_URL ? process.env.BOT_ENDPOINT_URL : "(unset)"}`);
-console.log(`  key id  ${process.env.BOT_KEY_ID ? process.env.BOT_KEY_ID : "(unset)"}`);
-console.log("");
-
 let url;
 try {
   url = stagingEndpoint(process.env.BOT_ENDPOINT_URL, process.env.BOT_PRODUCTION_URL);
@@ -47,6 +42,10 @@ try {
   console.error(`internal-action-smoke: ${e instanceof Error ? e.message : String(e)}`);
   process.exit(2);
 }
+
+console.log("internal actions smoke (TOG-10112)");
+console.log(`  target  ${new URL(url).origin}`);
+console.log("");
 
 const bot = createBotClient({
   url,

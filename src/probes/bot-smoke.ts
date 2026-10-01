@@ -10,9 +10,9 @@
 // asserting Idempotent-Replay and the same message id) is kept.
 //
 // Safety: this posts a REAL announcement to a throwaway channel and creates a
-// REAL staging event. It refuses to run against the production bot host when
-// the operator names it (BOT_PRODUCTION_URL), and refuses to run at all
-// without an explicit staging target. Nothing here reads production creds.
+// REAL staging event. Both an explicit staging target and a valid production
+// exclusion (BOT_PRODUCTION_URL) are mandatory. The entire production hostname
+// is refused regardless of port. Nothing here reads production creds.
 
 import { BotTerminalError } from "../jobs/types";
 import type { BotFailure } from "../jobs/types";
@@ -38,27 +38,28 @@ export function stagingEndpoint(rawUrl: string | undefined, productionUrl?: stri
   if (!rawUrl || rawUrl.trim() === "") {
     throw new BotTerminalError("Bot is not configured: BOT_ENDPOINT_URL is missing (staging bot URL).");
   }
-  const url = rawUrl.trim();
-  let host: string;
-  try {
-    host = new URL(url).host.toLowerCase();
-  } catch {
-    throw new BotTerminalError("BOT_ENDPOINT_URL is not a URL.");
-  }
-  if (productionUrl && productionUrl.trim() !== "") {
+  const parse = (raw: string | undefined, name: string): URL => {
+    let url: URL;
     try {
-      if (new URL(productionUrl.trim()).host.toLowerCase() === host) {
-        throw new BotTerminalError(
-          `refusing: BOT_ENDPOINT_URL targets the production bot host. The smoke targets the staging bot only.`,
-        );
-      }
-    } catch (e) {
-      if (e instanceof BotTerminalError) throw e;
-      // A malformed optional production URL is not a reason to block staging;
-      // it just means the guard cannot compare.
+      url = new URL(raw?.trim() ?? "");
+    } catch {
+      throw new BotTerminalError(`${name} must be a valid HTTP(S) URL.`);
     }
+    if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
+      throw new BotTerminalError(`${name} must be an HTTP(S) URL without credentials, query or fragment.`);
+    }
+    return url;
+  };
+  const target = parse(rawUrl, "BOT_ENDPOINT_URL");
+  const production = parse(productionUrl, "BOT_PRODUCTION_URL");
+  // DNS names are case-insensitive, and a trailing root dot names the same host.
+  const hostname = (url: URL) => url.hostname.toLowerCase().replace(/\.$/, "");
+  if (hostname(target) === hostname(production)) {
+    throw new BotTerminalError(
+      "refusing: BOT_ENDPOINT_URL targets the production bot host. The smoke targets the staging bot only.",
+    );
   }
-  return url;
+  return target.href.replace(/\/+$/, "");
 }
 
 type SmokeClient = Pick<BotActionClient, "assignRole" | "postAnnouncement" | "upsertEvent">;
@@ -118,7 +119,7 @@ export async function runBotSmoke(
   const first = await attempt("announcement.post", () => client.postAnnouncement(announcement, key));
   if (first !== null) check("announcement.post is ok", ok(first), describe(first));
   const replay = await attempt("announcement.post retried with the same idempotency key", () =>
-    client.postAnnouncement({ channelKey: args.channelKey, body: `TOG-10112 smoke run. Ignore. ${now().toISOString()}` }, key),
+    client.postAnnouncement(announcement, key),
   );
   if (replay !== null) {
     check("retry is ok", ok(replay), describe(replay));

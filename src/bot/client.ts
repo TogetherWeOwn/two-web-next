@@ -85,8 +85,10 @@ export function validateEventUpsert(e: EventUpsert): void {
     throw new BotTerminalError(`An event description is at most 1000 characters; this one is ${charLen(e.description)}.`);
   if (e.location.trim() === "")
     throw new BotTerminalError("An event.upsert needs a location. The bot takes exactly one of channel_key or location, and this client only ever sends location.");
-  if (!(e.endsAt !== null && e.endsAt > e.startsAt))
-    throw new BotTerminalError("An event must end after it starts.");
+  const startsAt = Date.parse(e.startsAt);
+  const endsAt = e.endsAt === null ? NaN : Date.parse(e.endsAt);
+  if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || endsAt <= startsAt)
+    throw new BotTerminalError("An event needs valid timestamps and must end after it starts.");
 }
 
 export type BotClientOptions = {
@@ -185,6 +187,7 @@ async function send(
   try {
     res = await o.fetchFn(endpointOf(o.url), {
       method: "POST",
+      redirect: "error", // Never forward signed bodies/headers to an unvalidated origin.
       headers: out,
       body,
       signal: AbortSignal.timeout(o.timeoutSeconds * 1000),
@@ -265,7 +268,7 @@ export function createBotClient(opts: BotClientOptions) {
       );
       if (!answer.ok) return answer.failure;
       const messageId = str(answer.result["message_id"]);
-      if (messageId === null) throw new BotTransportError("an announcement.post success with no message_id");
+      if (messageId === null || messageId.trim() === "") throw new BotTransportError("an announcement.post success with no message_id");
       return { ok: true, requestId: answer.requestId || null, messageId, replayed: answer.replayed };
     },
 
@@ -291,7 +294,7 @@ export function createBotClient(opts: BotClientOptions) {
       if (outcome !== "created" && outcome !== "updated")
         throw new BotTransportError("an event.upsert outcome this release does not know");
       const discordEventId = str(answer.result["event_id"]);
-      if (discordEventId === null) throw new BotTransportError("an event.upsert success with no event_id");
+      if (discordEventId === null || discordEventId.trim() === "") throw new BotTransportError("an event.upsert success with no event_id");
       return { ok: true, requestId: answer.requestId || null, outcome, discordEventId, replayed: answer.replayed };
     },
   };

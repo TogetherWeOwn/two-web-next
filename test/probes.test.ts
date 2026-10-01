@@ -57,11 +57,11 @@ describe("discord:check-moderators (role-config probe)", () => {
     expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("FAIL");
   });
 
-  it("SySOp plus an extra is UNKNOWN, not FAIL — a widening that needs sign-off", () => {
-    const p = checkModerators(`${SYSOP},100000000000000001`, { requireConfigured: true });
-    expect(p.ok).toBe(true);
-    expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("UNKNOWN");
-    expect(p.unknowns).toBe(1);
+  it.each([`${SYSOP},100000000000000001`, `${SYSOP},${SYSOP}`])("refuses a list other than exactly SySOp: %s", (raw) => {
+    const p = checkModerators(raw, { requireConfigured: true });
+    expect(p.ok).toBe(false);
+    expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("FAIL");
+    expect(p.unknowns).toBe(0);
   });
 
   it("trims whitespace and drops empties", () => {
@@ -129,7 +129,18 @@ describe("smoke staging guard", () => {
     expect(stagingEndpoint("https://bot-staging.internal.example", "https://bot.internal.example")).toBe(
       "https://bot-staging.internal.example",
     );
-    expect(stagingEndpoint("https://bot-staging.internal.example")).toBe("https://bot-staging.internal.example");
+  });
+
+  it.each([undefined, "", " ", "not a url", "ftp://bot.internal.example"])("refuses missing or invalid production exclusion: %s", (production) => {
+    expect(() => stagingEndpoint("https://bot-staging.internal.example", production)).toThrow(BotTerminalError);
+  });
+
+  it.each(["http://bot.internal.example:8787", "https://BOT.internal.example:444/", "https://bot.internal.example./"])("refuses alternate spelling/port of the production hostname: %s", (target) => {
+    expect(() => stagingEndpoint(target, "https://bot.internal.example")).toThrow(/production/);
+  });
+
+  it.each(["ftp://staging.example", "https://user:password@staging.example", "https://staging.example?token=secret", "https://staging.example#secret"])("refuses unsafe target: %s", (target) => {
+    expect(() => stagingEndpoint(target, "https://bot.internal.example")).toThrow(BotTerminalError);
   });
 });
 
@@ -167,6 +178,20 @@ describe("bot:internal-action-smoke orchestration (fixture client)", () => {
     // Same idempotency key on both announcement attempts (fresh nonce is the client's job).
     expect(client.seen).toHaveLength(2);
     expect(client.seen[0]).toBe(client.seen[1]);
+  });
+
+  it("reuses byte-identical announcement payload with an advancing clock", async () => {
+    const bodies: string[] = [];
+    const client = stubClient((_key, body) => {
+      bodies.push(body);
+      return { ok: true, requestId: "r2", messageId: "m1", replayed: bodies.length > 1 };
+    });
+    let tick = 0;
+    const r = await runBotSmoke(client, args, () => new Date(Date.UTC(2026, 9, 1) + tick++ * 1000));
+    expect(r.ok).toBe(true);
+    expect(client.seen[0]).toBe(client.seen[1]);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toBe(bodies[1]);
   });
 
   it("fails when the retry posts a second message instead of replaying", async () => {
@@ -246,10 +271,29 @@ describe("internal-action-smoke CLI", () => {
     expect(r.out).toMatch(/production/);
   });
 
+  it.each(["", "not a url", "ftp://bot.internal.example"])("exit 2 on invalid production exclusion before network: %s", (production) => {
+    const r = run(
+      ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"],
+      { BOT_ENDPOINT_URL: "https://bot-staging.internal.example", BOT_PRODUCTION_URL: production, BOT_SHARED_SECRET: "fixture-only", BOT_KEY_ID: "web-staging" },
+    );
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/BOT_PRODUCTION_URL/);
+    expect(r.out).not.toContain("fixture-only");
+  });
+
+  it("refuses credential-bearing URLs without echoing their credentials", () => {
+    const r = run(
+      ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"],
+      { BOT_ENDPOINT_URL: "https://user:fixture-password@staging.example", BOT_PRODUCTION_URL: "https://bot.internal.example" },
+    );
+    expect(r.code).toBe(2);
+    expect(r.out).not.toContain("fixture-password");
+  });
+
   it("exit 2 when the bot is not configured", () => {
     const r = run(
       ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"],
-      { BOT_ENDPOINT_URL: "https://bot-staging.internal.example" },
+      { BOT_ENDPOINT_URL: "https://bot-staging.internal.example", BOT_PRODUCTION_URL: "https://bot.internal.example" },
     );
     expect(r.code).toBe(2);
   });
