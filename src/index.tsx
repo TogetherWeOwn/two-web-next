@@ -44,6 +44,8 @@ import { upBody } from "./up";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 import { rulesLastUpdated } from "./rules-last-updated";
+import { authStatus, authStatusScript, clearAuthStatus, enableAuthStatus } from "./auth-status";
+import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding, expiredWriteBanner } from "./write-recovery";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
@@ -115,6 +117,10 @@ app.use("*", trustHosts());
 
 // Before throttles, session rotation, body parsing, or any mounted handler.
 app.use("*", sameOrigin);
+app.use("*", authStatusScript);
+app.use("*", expiredWriteBanner);
+app.get("/auth/status", (c) => authStatus(c, () => storeFor(c)));
+app.get("/auth/recover", recoveryLanding);
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
@@ -211,6 +217,7 @@ async function issueSession(
     sameSite: "Lax",
     maxAge: SESSION_TTL_SECONDS,
   });
+  await enableAuthStatus(c, store, await hashToken(token));
 }
 
 async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
@@ -227,6 +234,7 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
   // the old row in the same statement. A replayed cookie finds no row: guest.
+  const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
   const rotated = await store
     .rotate(await hashToken(token), {
@@ -236,6 +244,7 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
     })
     .catch(() => false);
   if (!rotated) return null;
+  await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -464,6 +473,7 @@ app.get("/auth/discord/callback", async (c) => {
   // Consume the return journey on every terminal path — success, denial and
   // failure all clear it (legacy forget on login_next + url.intended).
   const returnTo = await consumeLoginReturn(c);
+  const expiredWrite = await consumeExpiredWrite(c);
   const code = c.req.query("code");
   const state = c.req.query("state");
   // A consent-screen refusal arrives as an `error` param before any code
@@ -514,6 +524,7 @@ app.get("/auth/discord/callback", async (c) => {
     member: join !== "failed",
     moderator,
   });
+  await flashExpiredWrite(c, expiredWrite);
   // A failed auto-join keeps the recovery landing even when a destination
   // was remembered: the session is a non-member one, so a member-only gate
   // (/profile, /members/*) would answer bare 403 and swallow the failure
@@ -553,8 +564,13 @@ registerEventRoutes(
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (token) await store.revoke(await hashToken(token)).catch(() => {});
+  if (token) {
+    try { await store.revoke(await hashToken(token)); }
+    catch { return c.text("Sign-out temporarily unavailable", 503); }
+  }
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
+  clearAuthStatus(c);
+  await consumeExpiredWrite(c);
   return c.redirect("/", 303);
 });
 
