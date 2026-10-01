@@ -399,8 +399,8 @@ export const EventFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}
-          data-event-draft={mode === "edit" && Object.keys(errors).length > 0 ? "" : undefined}>
+        <form method="post" action={action} data-event-editor=""
+          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
             {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required
               aria-invalid={errors.title ? "true" : undefined} aria-describedby={errors.title ? `${id}-error` : undefined} />}
@@ -527,7 +527,7 @@ export const EventFormPage: FC<{
         ) : null}
       </section>
       <script type="module" src="/islands/admin-event-text-limits.js" />
-      {mode === "edit" ? <script src="/islands/admin-event-editor.js" defer /> : null}
+      <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
 };
