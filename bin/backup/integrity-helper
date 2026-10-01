@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Write/verify a versioned receipt for archive bytes, not PostgreSQL recovery."""
+
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+
+def digest_file(archive):
+    # Streaming update is independent of archive size and Python 3.11 file_digest.
+    # https://docs.python.org/3/library/hashlib.html#hashlib.hash.update
+    digest = hashlib.sha256()
+    size = 0
+    with archive.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+            size += len(chunk)
+    if size == 0:
+        raise ValueError("empty archive")
+    return size, digest.hexdigest()
+
+
+def expected_receipt(archive, key):
+    size, digest = digest_file(archive)
+    return {"version": 1, "archiveKey": key, "sizeBytes": size, "sha256": digest}
+
+
+def verify_receipt(archive, key, receipt):
+    # A receipt is tiny; bound input before parsing an untrusted remote object.
+    with receipt.open("rb") as stream:
+        raw = stream.read(4097)
+    if len(raw) > 4096:
+        raise ValueError("oversized receipt")
+    record = json.loads(raw)
+    if (
+        not isinstance(record, dict)
+        or set(record) != {"version", "archiveKey", "sizeBytes", "sha256"}
+        or type(record["version"]) is not int
+        or record["version"] != 1
+        or record["archiveKey"] != key
+        or type(record["sizeBytes"]) is not int
+        or record["sizeBytes"] <= 0
+        or not isinstance(record["sha256"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is None
+    ):
+        raise ValueError("invalid receipt identity or schema")
+    if record != expected_receipt(archive, key):
+        raise ValueError("archive size or SHA-256 mismatch")
+
+
+def main():
+    if len(sys.argv) != 5 or sys.argv[1] not in {"write", "verify"}:
+        print("usage: integrity-helper write|verify ARCHIVE ARCHIVE_KEY RECEIPT", file=sys.stderr)
+        return 2
+    mode, archive, key, receipt = sys.argv[1:]
+    try:
+        if mode == "write":
+            record = expected_receipt(Path(archive), key)
+            Path(receipt).write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+        else:
+            verify_receipt(Path(archive), key, Path(receipt))
+    except (OSError, ValueError, UnicodeError):
+        # Do not echo archive contents, parser errors, or untrusted receipt fields.
+        print("integrity-helper: invalid receipt or archive bytes", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
