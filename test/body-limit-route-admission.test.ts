@@ -8,12 +8,13 @@ import { createMemorySessionStore, hashToken, newSessionToken } from "../src/ses
 import { sha256Hex } from "../src/bot/signer";
 
 // No sockets: model only the existing shield SQL and audit writes.
-const fixture = vi.hoisted(() => ({ hits: 0, buckets: [] as string[], queries: [] as string[], ends: 0, connects: 0 }));
+const fixture = vi.hoisted(() => ({ hits: 0, buckets: [] as string[], queries: [] as string[], ends: 0, connects: 0, failAudit: false }));
 vi.mock("postgres", () => ({ default: () => {
   fixture.connects++;
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join("?");
     fixture.queries.push(query);
+    if (fixture.failAudit && query.includes("agent_event_audits")) throw new Error("private audit failure");
     if (query.includes("SELECT count(*)")) return [{ n: fixture.hits, wait: 31 }];
     if (query.includes("INSERT INTO agent_event_hits")) {
       fixture.hits++;
@@ -50,7 +51,7 @@ async function session(moderator = false) {
   return { sessions, cookie };
 }
 
-beforeEach(() => { fixture.hits = 0; fixture.buckets = []; fixture.queries = []; fixture.ends = 0; fixture.connects = 0; });
+beforeEach(() => { fixture.hits = 0; fixture.buckets = []; fixture.queries = []; fixture.ends = 0; fixture.connects = 0; fixture.failAudit = false; });
 
 describe("profile write admission", () => {
   it.each(["PATCH", "POST"])("%s refuses spent buckets without reading advertised or chunked overflow", async (method) => {
@@ -174,6 +175,22 @@ describe("agent ingress admission", () => {
     expect(fixture.buckets).toEqual([expectedBucket, expectedBucket]);
     expect(fixture.queries.some((q) => /agent_event_grants|agent_event_audits/.test(q))).toBe(false);
     expect(fixture.ends).toBe(2);
+  });
+
+  it("retains the static ingress 500 shape and closes the client on service failure", async () => {
+    fixture.failAudit = true;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const ctx = execution();
+      const response = await app.request("/api/agent-events", { method: "POST", body: "{}" }, ingressEnv, ctx);
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ reason: "internal_error", message: "The agent event ingress failed." });
+      expect(fixture.ends).toBe(1);
+      expect(ctx.waitUntil).toHaveBeenCalledOnce();
+      expect(JSON.stringify(log.mock.calls)).not.toContain("private audit failure");
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("closes an admitted client when the upload source rejects", async () => {

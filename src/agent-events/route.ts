@@ -57,6 +57,11 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
   } catch {
     // A non-JSON body is answered by the service's audited 422.
   }
-  const a = await c.get("agentEventHandler")(body);
-  return c.json(a.body, a.status as 200, a.headers);
+  try {
+    const a = await c.get("agentEventHandler")(body);
+    return c.json(a.body, a.status as 200, a.headers);
+  } catch (err) {
+    console.error("agent-events failed", (err as Error).name);
+    return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
+  }
 }
