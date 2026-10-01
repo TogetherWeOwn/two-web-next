@@ -8,7 +8,7 @@ The homepage and event detail/cancelled pages opt into the base stylesheet. Even
 
 - `public/fonts/display-latin-{500,700}.woff2`: Latin Rajdhani from `@fontsource/rajdhani` 5.3.0 (OFL-1.1). Its unmodified font license is retained in `public/fonts/LICENSE.txt`. Two weights total roughly 31 KB. No remote font origin.
 - `public/logo.svg` and `public/icons/*.png`: generated temporary TWO wordmark, not template art. Regenerate all five consistently with `python3 ci/generate-icons.py`. The mark stays inside the maskable safe area. Existing install icon URLs, sizes and manifest identity are unchanged; theme/background colors match the new mark.
-- `public/theme.css`: adapted, homepage-scoped rules, under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
+- `public/theme.css`: adapted rules scoped to opted-in home/event shells, under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
 
 ## Discord preview policy
 
