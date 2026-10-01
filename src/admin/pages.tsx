@@ -7,7 +7,8 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
 import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
 import { FeaturedContentItem, SkipLink } from "../pages";
-import type { EventRow, FeaturedRow } from "./store";
+import type { EventListRow, EventRow, FeaturedRow } from "./store";
+import { goingCountText } from "../islands/contracts";
 import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 import { featuredListUrl, joinAttemptsUrl, rosterUrl, type FeaturedListQuery, type JoinAttemptsQuery, type RosterQuery, type SortOrder } from "./table-list";
@@ -248,7 +249,25 @@ const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuer
   );
 };
 
-export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
+/**
+ * Going-only seat fill for one admin list row. Maybe/Waitlist/Not going never
+ * occupy a seat (same rule as the fill filter); uncapped events show "N going".
+ * A capped event at or over capacity carries a Full badge, and an
+ * over-capacity row (more Going than seats) carries an Over capacity badge.
+ */
+const EventFillCell: FC<{ row: EventListRow }> = ({ row }) => (
+  <td data-testid={`event-fill-${row.eventKey}`}>
+    {goingCountText(row.goingCount, row.capacity)}
+    {row.capacity !== null && row.goingCount >= row.capacity ? (
+      <span data-testid={`event-fill-badge-${row.eventKey}`}> Full</span>
+    ) : null}
+    {row.capacity !== null && row.goingCount > row.capacity ? (
+      <span data-testid={`event-over-capacity-${row.eventKey}`}> Over capacity</span>
+    ) : null}
+  </td>
+);
+
+export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
@@ -305,14 +324,15 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
           <tr>
             <EventSortHeader label="Title" sort="title" query={query} />
             <EventSortHeader label="Status" sort="status" query={query} />
-            <EventSortHeader label="Starts" sort="starts_at" query={query} />
+            <EventSortHeader label="Starts (UTC)" sort="starts_at" query={query} />
+            <th scope="col">Fill</th>
             <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colspan={4} data-testid="events-empty">
+              <td colspan={5} data-testid="events-empty">
                 No events yet.
               </td>
             </tr>
@@ -323,7 +343,8 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
                   <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
                 </td>
                 <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
-                <td>{r.startsAt.toISOString()}</td>
+                <td><time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time></td>
+                <EventFillCell row={r} />
                 <td>
                   {r.status === "draft" ? (
                     <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
