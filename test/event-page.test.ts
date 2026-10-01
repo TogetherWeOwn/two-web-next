@@ -32,7 +32,10 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
     if (sql.includes('from "rsvps"')) return { rows: [[row.id, 3]] };
-    return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
+    if (sql.includes('"event_key" =')) {
+      return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
+    }
+    return { rows: [] };
   });
   const store = createMemorySessionStore();
   const env = { APP_URL: `${APP_URL}/`, SESSION_SECRET: SECRET, SESSION_STORE: store, ADMIN_DB: db as unknown as Db } as unknown as Env;
