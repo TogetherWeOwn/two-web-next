@@ -89,7 +89,7 @@ async function sha256Etag(body: string): Promise<string> {
 async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
   const etag = await sha256Etag(body);
   const inm = c.req.header("if-none-match");
-  if (inm && inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag)) {
+  if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))) {
     return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
   }
   return new Response(body, { status: 200, headers: { ...headers, etag } });
