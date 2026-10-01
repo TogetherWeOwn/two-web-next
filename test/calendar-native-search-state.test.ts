@@ -80,65 +80,72 @@ afterEach(() => {
 describe("calendar native search state", () => {
   it.each([
     { entry: "?view=calendar&month=2030-2&past=1", view: "calendar", month: "2030-02", past: true },
-    { entry: "?view=list&month=2030-02&past=1", view: "list", month: "2030-02", past: true },
+    { entry: "?view=list&month=2030-02&past=1&q=old", view: "list", month: "2030-02", past: true },
     { entry: "?view=calendar&month=2030-02", view: "calendar", month: "2030-02", past: false },
     { entry: "", view: "list", month: "2030-01", past: false },
     { entry: "?view=bad&month=2030-13&past=true", view: "list", month: "2030-01", past: false },
     { entry: "?view=calendar&month=2030-02&past=01&q=old", view: "list", month: "2030-02", past: false },
-  ])("submits only resolved state from $entry", async ({ entry, view, month, past }) => {
+    { entry: "?view=list&month=2030-02&past=0&q=old", view: "list", month: "2030-02", past: false },
+  ])("preserves only accepted past state from $entry", async ({ entry, view, month, past }) => {
     const html = await page(`/events${entry}`);
     expect(calendarState(html)).toEqual({ view, month, past });
     for (const query of ["game", "", "   "]) {
       const submission = nativeSearch(html, query);
-      expect(attributes(submission.form).method).toBe("get");
+      expect(attributes(submission.form)).toMatchObject({ method: "get", action: "/events" });
       expect(submission.params.getAll("q")).toEqual([query]);
-      expect(submission.params.getAll("view")).toEqual([view]);
-      expect(submission.params.getAll("month")).toEqual([month]);
+      expect([...submission.params.keys()].sort()).toEqual(past ? ["past", "q"] : ["q"]);
       expect(submission.params.getAll("past")).toEqual(past ? ["1"] : []);
       expect(submission.controls.filter((c) => c.name !== "q").every((c) => c.type === "hidden")).toBe(true);
-      expect(calendarState(await page(submission.url))).toEqual({
-        view: query.trim() ? "list" : view, month, past,
-      });
+      // Like the shipped binder, search drops view/month even for blank input.
+      const nativeState = calendarState(await page(submission.url));
+      expect(nativeState).toEqual({ view: "list", month: "2030-01", past });
+      const enhanced = new URLSearchParams();
+      if (query.trim()) enhanced.set("q", query);
+      if (past) enhanced.set("past", "1");
+      expect(calendarState(await page(`/events?${enhanced}`))).toEqual(nativeState);
     }
   });
 
   it("replaces the query without forwarding paging or arbitrary and duplicate parameters", async () => {
-    const html = await page("/events?view=calendar&month=2030-02&past=1&q=old&page=7&redirect=bad&past=0&view=bad");
+    const html = await page("/events?view=calendar&month=2030-02&past=1&q=old&page=7&redirect=bad&past=0&view=bad&q=extra");
     const submission = nativeSearch(html, 'raid & "friends" <game>');
-    expect([...submission.params.keys()].sort()).toEqual(["month", "past", "q", "view"]);
+    expect([...submission.params.keys()].sort()).toEqual(["past", "q"]);
     expect(submission.params.getAll("q")).toEqual(['raid & "friends" <game>']);
     expect(submission.params.getAll("past")).toEqual(["1"]);
     const result = await page(submission.url);
-    expect(calendarState(result)).toEqual({ view: "list", month: "2030-02", past: true });
-    expect(nativeSearch(result, "").params.getAll("q")).toEqual([""]);
+    expect(calendarState(result)).toEqual({ view: "list", month: "2030-01", past: true });
+    const cleared = nativeSearch(result, "");
+    expect(cleared.params.getAll("q")).toEqual([""]);
+    expect(calendarState(await page(cleared.url))).toEqual({ view: "list", month: "2030-01", past: true });
   });
 
   it("does not open the past drawer just because a search reveals past matches", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
     vi.mocked(listUpcoming).mockResolvedValue([]);
     const html = await page("/events?q=game&month=2030-02");
     expect(html).toContain('data-testid="events-past-list"');
     expect(nativeSearch(html, "").params.has("past")).toBe(false);
     expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({
-      view: "list", month: "2030-02", past: false,
-    });
-  });
-
-  it("normalizes invalid state to the current month when there are no upcoming rows", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
-    vi.mocked(listUpcoming).mockResolvedValue([]);
-    vi.mocked(listCalendarPast).mockResolvedValue([]);
-    const html = await page("/events?view=bad&month=bad&past=0");
-    expect(calendarState(html)).toEqual({ view: "list", month: "2026-10", past: false });
-    expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({
       view: "list", month: "2026-10", past: false,
     });
   });
 
-  it("keeps resolved hidden controls in the swapped actions zone, not the stable input", async () => {
+  it("defaults to the current month when searching an empty past-enabled calendar", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
+    vi.mocked(listUpcoming).mockResolvedValue([]);
+    vi.mocked(listCalendarPast).mockResolvedValue([]);
+    const html = await page("/events?view=calendar&month=2030-02&past=1");
+    expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({
+      view: "list", month: "2026-10", past: true,
+    });
+  });
+
+  it("keeps only the past control in the swapped actions zone, not the stable input", async () => {
     const { form } = nativeSearch(await page("/events?view=calendar&month=2030-02&past=1"), "game");
     const actions = form.match(/<span\b[^>]*data-cal-zone="actions"[^>]*>[\s\S]*?<\/span>/)![0];
-    expect([...actions.matchAll(/name="([^"]+)"/g)].map((m) => m[1])).toEqual(["view", "month", "past"]);
+    expect([...actions.matchAll(/name="([^"]+)"/g)].map((m) => m[1])).toEqual(["past"]);
     expect(actions).not.toContain('name="q"');
   });
 });
