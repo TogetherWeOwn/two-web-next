@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
+import { databaseOptions } from "../db/connection";
 import { DEFAULT_CONFIG, type IngressConfig, type Answer, admitAgentEvent } from "./service";
 
 type IngressEnv = { Bindings: Env; Variables: { agentEventHandler: (body: unknown) => Promise<Answer> } };
@@ -32,7 +33,8 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   const url = c.env.AGENT_DB?.connectionString;
   if (!url) return c.json({ reason: "ingress_unavailable", message: "The agent event store is not configured." }, 503);
 
-  const sql = postgres(url, { max: 1, fetch_types: false, prepare: false });
+  // Release idle sockets even if an admitted upload never reaches EOF.
+  const sql = postgres(url, databaseOptions);
   try {
     // Admit before the transport limiter reads. The bound handler cannot charge
     // a second shield hit when the parsed body reaches the service.

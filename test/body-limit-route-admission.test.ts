@@ -8,9 +8,11 @@ import { createMemorySessionStore, hashToken, newSessionToken } from "../src/ses
 import { sha256Hex } from "../src/bot/signer";
 
 // No sockets: model only the existing shield SQL and audit writes.
-const fixture = vi.hoisted(() => ({ hits: 0, buckets: [] as string[], queries: [] as string[], ends: 0, connects: 0, failAudit: false }));
-vi.mock("postgres", () => ({ default: () => {
+const fixture = vi.hoisted(() => ({ hits: 0, buckets: [] as string[], queries: [] as string[], ends: 0, connects: 0, failAudit: false,
+  options: [] as Record<string, unknown>[] }));
+vi.mock("postgres", () => ({ default: (_url: string, options: Record<string, unknown>) => {
   fixture.connects++;
+  fixture.options.push(options);
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join("?");
     fixture.queries.push(query);
@@ -51,7 +53,7 @@ async function session(moderator = false) {
   return { sessions, cookie };
 }
 
-beforeEach(() => { fixture.hits = 0; fixture.buckets = []; fixture.queries = []; fixture.ends = 0; fixture.connects = 0; fixture.failAudit = false; });
+beforeEach(() => { fixture.hits = 0; fixture.buckets = []; fixture.queries = []; fixture.ends = 0; fixture.connects = 0; fixture.failAudit = false; fixture.options = []; });
 
 describe("profile write admission", () => {
   it.each(["PATCH", "POST"])("%s refuses spent buckets without reading advertised or chunked overflow", async (method) => {
@@ -204,6 +206,52 @@ describe("agent ingress admission", () => {
     expect(await response.text()).not.toContain("private upload failure");
     expect(fixture.hits).toBe(1);
     expect(fixture.queries.some((q) => /agent_event_grants|agent_event_audits/.test(q))).toBe(false);
+    expect(fixture.ends).toBe(1);
+    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+  });
+
+  it.each(["complete", "reject"] as const)("bounds the idle client while a below-cap upload withholds EOF, then cleans up on %s", async (finish) => {
+    const ctx = execution();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    let waiting!: () => void;
+    const awaitingEof = new Promise<void>((resolve) => { waiting = resolve; });
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      source = controller;
+      if (pull.mock.calls.length === 1) controller.enqueue(new TextEncoder().encode("{}"));
+      else waiting();
+    });
+    const request = new Request(new URL("/api/agent-events", env.APP_URL), {
+      method: "POST", duplex: "half", headers: { accept: "application/json" },
+      body: new ReadableStream({ pull }, { highWaterMark: 0 }),
+    } as RequestInit);
+    let completed = false;
+    const pending = Promise.resolve(app.request(request, undefined, ingressEnv, ctx)).then((response) => {
+      completed = true;
+      return response;
+    });
+    await awaitingEof;
+    try {
+      expect(completed).toBe(false);
+      expect(fixture.hits).toBe(1);
+      expect(fixture.connects).toBe(1);
+      expect(fixture.ends).toBe(0);
+      expect(ctx.waitUntil).not.toHaveBeenCalled();
+      expect(fixture.queries.some((q) => /agent_event_grants|agent_event_audits/.test(q))).toBe(false);
+      // Driver bounds must already apply: HTTP cleanup cannot run without EOF.
+      expect(fixture.options).toEqual([{
+        max: 1, idle_timeout: 10, connect_timeout: 10, prepare: false, fetch_types: false,
+      }]);
+    } finally {
+      if (finish === "complete") source.close();
+      else source.error(new Error("private withheld upload failure"));
+      await pending;
+    }
+    const response = await pending;
+    expect(response.status).toBe(finish === "complete" ? 422 : 400);
+    expect(await response.text()).not.toContain("private withheld upload failure");
+    expect(fixture.hits).toBe(1);
+    expect(fixture.connects).toBe(1);
+    expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(finish === "complete" ? 1 : 0);
     expect(fixture.ends).toBe(1);
     expect(ctx.waitUntil).toHaveBeenCalledOnce();
   });
