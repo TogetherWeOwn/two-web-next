@@ -41,6 +41,9 @@ import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from ".
 import { upBody } from "./up";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
+import { rulesLastUpdated } from "./rules-last-updated";
+
+export { rulesLastUpdated } from "./rules-last-updated";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -300,29 +303,6 @@ for (const path of ["/about", "/faq"] as const) {
 // Static house rules (ports two-web `Route::view('/rules')`, TOG-5147): no database — renders
 // even when the bot's database is down. The last-updated stamp comes from config, and an empty
 // or unparseable value hides the stamp instead of 500ing (TOG-7323).
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-export function rulesLastUpdated(raw: string | undefined): { iso: string; label: string } | null {
-  const value = raw?.trim() ?? "";
-  if (value === "") return null;
-  const invalid = () => {
-    console.warn("Invalid community.rules_last_updated — hiding /rules stamp");
-    return null;
-  };
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  const year = m?.[1];
-  const mon = m?.[2];
-  const dayStr = m?.[3];
-  if (!year || !mon || !dayStr) return invalid();
-  const month = MONTHS[Number(mon) - 1];
-  const day = Number(dayStr);
-  if (month === undefined || day < 1 || day > 31) return invalid();
-  return { iso: `${year}-${mon}-${dayStr}`, label: `${day} ${month} ${year}` };
-}
-
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
