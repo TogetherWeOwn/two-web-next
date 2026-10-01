@@ -2,13 +2,19 @@
 
 The purchased HTML landing page is the visual foundation for the homepage. Its centered landing composition, condensed uppercase typography, dark surfaces, lime palette (#a3ff12), square buttons, mirrored angular side details and compact account treatment are adapted to Hono SSR in `src/pages.tsx` and `public/theme.css`. The account reference contributes styling only: Discord OAuth, sessions, guild joins and logout remain the existing flows. There is no password/registration form.
 
-Only the homepage opts into the stylesheet. Other routes retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
+The homepage, `/events` and `/events/past` opt into the stylesheet and share the themed header/footer. Event detail, gone pages and other routes retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
 
 ## Assets
 
 - `public/fonts/display-latin-{500,700}.woff2`: Latin Rajdhani from `@fontsource/rajdhani` 5.3.0 (OFL-1.1). Its unmodified font license is retained in `public/fonts/LICENSE.txt`. Two weights total roughly 31 KB. No remote font origin.
 - `public/logo.svg` and `public/icons/*.png`: generated temporary TWO wordmark, not template art. Regenerate all five consistently with `python3 ci/generate-icons.py`. The mark stays inside the maskable safe area. Existing install icon URLs, sizes and manifest identity are unchanged; theme/background colors match the new mark.
-- `public/theme.css`: adapted, homepage-scoped rules, under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
+- `public/theme.css`: adapted, theme-scoped rules, under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
+
+## Community schedule
+
+The list and archive use responsive schedule rows with decorative, timezone-aware date tiles; the meaningful `<time>` text remains available to assistive technology. The month view retains its labelled, focusable horizontal scroll region on narrow screens. Search, month/view navigation, past drawer and archive pagination keep their original island zones, live regions and test IDs. The visible Search button submits the existing GET form without JavaScript; subscribe/ICS, RSS and guest Discord links remain real anchors. No vendor script or additional island bundle is introduced.
+
+`test/page-shells.test.ts` covers themed list/month/search/archive shells and unchanged event-detail opt-out. Its main assertion allows styling classes while still requiring one `id="main"` and negative tabindex. Calendar active-link coverage counts within the view group, separately from the shared primary navigation's current Events link. Existing island state/binder suites retain their behavioral checks.
 
 ## Discord preview policy
 
