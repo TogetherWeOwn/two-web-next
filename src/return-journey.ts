@@ -23,6 +23,7 @@ import type { Context } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import type { Env } from "./env";
 import { safeNext } from "./join/service";
+import { expiredWriteBounce } from "./write-recovery";
 
 export const LOGIN_NEXT_COOKIE = "__Host-two_login_next";
 export const LOGIN_INTENDED_COOKIE = "__Host-two_login_intended";
@@ -65,6 +66,7 @@ export async function rememberLoginNext(c: Ctx, raw: string | undefined): Promis
  * only — a bounced write goes back to the page, never into a re-submit.
  */
 export async function bounceToLogin(c: Ctx): Promise<Response> {
+  if (!["GET", "HEAD"].includes(c.req.method) && !c.req.path.startsWith("/admin")) return expiredWriteBounce(c);
   if (c.req.method === "GET" || c.req.method === "HEAD") {
     const url = new URL(c.req.url);
     await setSignedCookie(c, LOGIN_INTENDED_COOKIE, url.pathname + url.search, c.env.SESSION_SECRET, {

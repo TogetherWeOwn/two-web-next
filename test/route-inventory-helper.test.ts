@@ -43,6 +43,16 @@ describe("route inventory diagnostics", () => {
       .toThrow("Duplicate method/path in app.routes");
   });
 
+  it("reviews auth status and recovery as public, not session-authentication gates", () => {
+    const app = new Hono();
+    app.get("/auth/status", (c) => c.json({ authenticated: false }));
+    app.get("/auth/recover", (c) => c.html("Recovery"));
+    expect(routeInventory(app)).toEqual([
+      { method: "GET", path: "/auth/recover", auth: "public" },
+      { method: "GET", path: "/auth/status", auth: "public" },
+    ]);
+  });
+
   it("collapses stacked handlers but keeps ALL middleware and fallbacks", () => {
     const app = new Hono();
     app.use("*", async (_c, next) => next());

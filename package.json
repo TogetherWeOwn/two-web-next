@@ -16,6 +16,7 @@
     "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
     "test:cutover": "node --test ci/cutover-check-selftest.mjs",
     "a11y": "node ci/a11y.mjs",
+    "test:auth-browser": "node ci/session-recovery-browser.mjs",
     "deps:audit": "node ci/deps-audit.mjs",
     "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
     "db:generate": "drizzle-kit generate",
