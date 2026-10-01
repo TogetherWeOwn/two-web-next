@@ -87,3 +87,29 @@ jobs:
           done
           echo "::error::staging public-route smoke failed after deploy"
           exit 1
+      - name: Smoke test staging event JSON contract
+        # Authenticated JSON show/paging probe through the staging QA seam
+        # (TOG-11769). Needs the staging-environment QA_AUTH_TOKEN secret: it
+        # is never a repository secret/value in this file, only a name. When
+        # the secret is absent the step reports its skip and passes, so the
+        # missing token never fails a deploy; the skipped contract is then
+        # visible in the job log instead of silently asserted.
+        run: |
+          if [ -z "${QA_AUTH_TOKEN:-}" ]; then
+            echo "json-smoke skipped: staging QA_AUTH_TOKEN is not configured"
+            exit 0
+          fi
+          for i in 1 2 3 4 5 6; do
+            if node bin/json-smoke.mjs https://next.togetherweown.com; then
+              echo "staging json-smoke ok (attempt $i)"
+              exit 0
+            fi
+            if [ "$i" -lt 6 ]; then
+              echo "attempt $i failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+          echo "::error::staging event-JSON smoke failed after deploy"
+          exit 1
+        env:
+          QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}

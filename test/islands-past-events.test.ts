@@ -186,6 +186,8 @@ class Node {
   dataset: Record<string, string> = {};
   attributes = new Map<string, string>();
   focused = false;
+  getAttribute(k: string) { return k === "href" ? this.href : k === "content" ? this.content : this.attributes.get(k) ?? null; }
+  contains(other: Node) { return this === other; }
   setAttribute(k: string, v: string) { this.attributes.set(k, v); }
   removeAttribute(k: string) { this.attributes.delete(k); }
   replaceChildren(...children: string[]) { this.childNodes = children; }
@@ -206,8 +208,10 @@ function browser(entry = "/events/past") {
   root.dataset = { page: "1", totalPages: "2", loadError: PAST_EVENTS_COPY.failed };
   let click: (event: Click) => void = () => {};
   let popstate: () => void = () => {};
+  const liveNode = (selector: string) => selector === "h1" ? heading : selector === "[data-archive-feedback]" ? feedback : targets[selectors.indexOf(selector)] ?? null;
   const mount = Object.assign(root, {
-    querySelector: (selector: string) => selector === "h1" ? heading : selector === "[data-archive-feedback]" ? feedback : targets[selectors.indexOf(selector)] ?? null,
+    querySelector: liveNode,
+    querySelectorAll: (selector: string) => liveNode(selector) ? [liveNode(selector)] : [],
     addEventListener: (_type: string, listener: typeof click) => { click = listener; },
     contains: () => true,
   });
@@ -215,11 +219,12 @@ function browser(entry = "/events/past") {
   const reloads: string[] = [];
   const location = { href: new URL(entry, APP_URL).href, origin: APP_URL, assign: (href: string) => reloads.push(href) };
   const requests: { url: string; init: RequestInit; resolve: (r: { ok: boolean; text: () => Promise<string> }) => void; reject: (e: Error) => void }[] = [];
-  const parsedPages = new Map<string, { querySelector: (selector: string) => unknown }>();
+  const parsedPages = new Map<string, { querySelector: (selector: string) => unknown; querySelectorAll: (selector: string) => unknown[] }>();
   runInNewContext(binder, {
     URL, AbortController,
     document: {
       querySelector: (s: string) => s === '[data-island="past-events"]' ? mount : s.startsWith("link") ? canonical : og,
+      querySelectorAll: (s: string) => [s === '[data-island="past-events"]' ? mount : s.startsWith("link") ? canonical : og],
       importNode: (n: string) => n,
     },
     window: {
@@ -244,8 +249,13 @@ function browser(entry = "/events/past") {
     sources[1]!.childNodes = [cards];
     sources[1]!.hidden = cards === "";
     sources[2]!.childNodes = ["page links"];
-    const next = { dataset: { page: String(page), totalPages: "2" }, querySelector: (s: string) => sources[selectors.indexOf(s)] };
-    parsedPages.set(`page-${page}`, { querySelector: (s: string) => s.startsWith("link") ? { href: APP_URL + pastEventsUrl(page) } : next });
+    const next = { dataset: { page: String(page), totalPages: "2" }, querySelectorAll: (s: string) => [sources[selectors.indexOf(s)]] };
+    const nextCanonical = new Node();
+    nextCanonical.href = APP_URL + pastEventsUrl(page);
+    const nextOg = new Node();
+    nextOg.content = nextCanonical.href;
+    const pageNode = (s: string) => s.startsWith("link") ? nextCanonical : s.startsWith("meta") ? nextOg : next;
+    parsedPages.set(`page-${page}`, { querySelector: pageNode, querySelectorAll: (s: string) => [pageNode(s)] });
     requests[i]!.resolve({ ok: true, text: async () => `page-${page}` });
   }
   const settle = () => new Promise((resolve) => setImmediate(resolve));
