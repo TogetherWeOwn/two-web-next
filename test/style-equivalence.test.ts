@@ -2,6 +2,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { URL } from "node:url";
 import { chromium, type Page } from "playwright";
 import { describe, expect, it } from "vitest";
+import { EventFormPage } from "../src/admin/pages";
+import type { EventRow } from "../src/admin/store";
+import { InternalErrorPage, MaintenancePage, RateLimitedPage } from "../src/errors";
 import { Home } from "../src/pages";
 import { ProfilePage } from "../src/profiles/pages";
 import { concretePath, HTML_READS, MEMBER_ID, pageShellFixture } from "./helpers/page-shells";
@@ -30,9 +33,10 @@ function offline(html: string) {
 }
 async function cases() {
   const rows: { name: string; html: string }[] = [];
-  for (const path of [...HTML_READS.map(concretePath), "/missing-page", "/events?view=calendar"]) {
+  const missing = ["/missing-page", "/admin/events/missing-event"];
+  for (const path of [...HTML_READS.map(concretePath), ...missing, "/events?view=calendar"]) {
     const response = await pageShellFixture().request(path);
-    expect(response.status, path).toBe(path === "/missing-page" ? 404 : 200);
+    expect(response.status, path).toBe(missing.includes(path) ? 404 : 200);
     rows.push({ name: path, html: offline(await response.text()) });
   }
   const event = { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAV", title: "Game night",
@@ -49,6 +53,25 @@ async function cases() {
       isOwner: true, appUrl: "https://next.example.test", errors: { bio: "Invalid bio" },
     })!.toString()) });
   }
+  const now = new Date("2030-01-01T20:00:00Z");
+  const row: EventRow = {
+    id: 1, icsSequence: 1n, eventKey: "style-proof-event", title: "Game night", game: null, description: null,
+    startsAt: now, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "UTC", location: "Lobby",
+    capacity: null, status: "draft", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    createdBy: MEMBER_ID, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
+    parentEventId: null, recurrenceIndex: null, createdAt: now, updatedAt: now,
+  };
+  const rejected = EventFormPage({ mode: "edit", row, values: { title: "Rejected draft", capacity: "invalid" },
+    errors: { capacity: "Use a whole number" } })!.toString();
+  expect(rejected).toContain('data-event-draft=""');
+  expect(rejected).toContain('data-testid="form-errors"');
+  expect(rejected).toContain('class="err"');
+  rows.push({ name: "admin-rejected-save", html: offline(rejected) });
+  for (const [name, html] of [
+    ["error-429", RateLimitedPage({})!.toString()],
+    ["error-500", InternalErrorPage({})!.toString()],
+    ["error-503", MaintenancePage({ inviteUrl: "/join" })!.toString()],
+  ]) rows.push({ name: name!, html: offline(html!) });
   return rows;
 }
 

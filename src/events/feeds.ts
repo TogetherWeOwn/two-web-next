@@ -1,6 +1,7 @@
 // W9 calendar feeds: pure builders ported byte-for-byte from two-web's
 // EventIcs / EventRss / EventSubscribe / EventGoogleCalendar. No query, no auth, no HTTP.
 import type { events } from "../db/admin-schema";
+import { stripTrailingSlash } from "../seo";
 
 type EventRow = typeof events.$inferSelect;
 
@@ -48,12 +49,30 @@ function fold(line: string): string {
   return out;
 }
 
-const pageUrl = (e: EventRow, appUrl: string) => `${appUrl}/e/${e.eventKey}`;
+// APP_URL is an unconstrained binding (see seo.ts): a configured trailing
+// slash must never leak a doubled `//` into emitted URLs (TOG-11225).
+const feedBase = (appUrl: string) => stripTrailingSlash(appUrl);
+
+const pageUrl = (e: EventRow, appUrl: string) => `${feedBase(appUrl)}/e/${e.eventKey}`;
+
+export class IcsSequenceRangeError extends RangeError {
+  constructor() {
+    super("Calendar revision is outside the RFC 5545 SEQUENCE range");
+  }
+}
+
+/** SEQUENCE is a nonnegative signed 32-bit INTEGER (§3.3.8, §3.8.7.4). */
+function icsSequence(sequence: bigint): string {
+  // Preserve the stored/imported bigint; never clamp, wrap or reset its ordering.
+  // Exhausted revisions fail the export until an explicit identity migration.
+  if (sequence < 0n || sequence > 2147483647n) throw new IcsSequenceRangeError();
+  return sequence.toString();
+}
 
 function vevent(e: EventRow, appUrl: string): string[] {
   const host = new URL(appUrl).host || "localhost";
   const stamp = icsInstant(e.updatedAt);
-  const seq = Math.floor(e.updatedAt.getTime() / 1000);
+  const seq = icsSequence(e.icsSequence);
   const lines = [
     "BEGIN:VEVENT",
     `UID:${e.eventKey}@${host}`,
@@ -93,6 +112,7 @@ export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
 const xml = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 
 export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
+  const base = feedBase(appUrl);
   const items = rows
     .map((e) => {
       const url = xml(pageUrl(e, appUrl));
@@ -108,14 +128,14 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
     '<?xml version="1.0" encoding="UTF-8"?>\n' +
     '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel>' +
     `<title>${xml(`${SITE_NAME} Events`)}</title>` +
-    `<link>${xml(`${appUrl}/events`)}</link>` +
-    `<atom:link href="${xml(`${appUrl}/events.rss`)}" rel="self" type="application/rss+xml" />` +
+    `<link>${xml(`${base}/events`)}</link>` +
+    `<atom:link href="${xml(`${base}/events.rss`)}" rel="self" type="application/rss+xml" />` +
     `<description>${xml(`Upcoming events from ${SITE_NAME}`)}</description>` +
     `<lastBuildDate>${rssDate(lastBuild)}</lastBuildDate>${items}</channel></rss>`
   );
 }
 
-export const feedUrl = (appUrl: string) => `${appUrl}/events.ics`;
+export const feedUrl = (appUrl: string) => `${feedBase(appUrl)}/events.ics`;
 export const webcalUrl = (appUrl: string) => feedUrl(appUrl).replace(/^https?:\/\//, "webcal://");
 
 /** RFC3986 query encoding, like PHP_QUERY_RFC3986. */

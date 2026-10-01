@@ -27,7 +27,7 @@ function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknown> {
     discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
-    createdAt: startsAt, updatedAt: startsAt,
+    createdAt: startsAt, updatedAt: startsAt, icsSequence: 0n,
   };
   const encoded = columns.map((key) => {
     const value = fixture[key];
