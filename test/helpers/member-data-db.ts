@@ -30,34 +30,37 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
   // same pool (W9 RSVP race tests hold a transaction open while the app pool
   // serves concurrent writes through the same scoped client).
   const options = { max: opts.max ?? 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
-  const admin = postgres(url.href, options);
+  const admin = postgres(url.href, { ...options, connection: { statement_timeout: 2000, lock_timeout: 1000 } });
   const client = postgres(url.href, { ...options, connection: { search_path: schemaName } });
   const db: Db = drizzle(client, { schema: { ...schema, ...adminSchema } });
   let created = false;
-  let disposed = false;
-  const dispose = async () => {
-    if (disposed) return;
-    disposed = true;
+  let disposal: Promise<void> | undefined;
+  const dispose = () => disposal ??= (async () => {
     try {
-      await client.end();
-      if (created) await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`);
-    } finally { await admin.end(); }
-  };
+      await client.end({ timeout: 1 });
+    } finally {
+      try { if (created) await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`); }
+      finally { await admin.end({ timeout: 1 }); }
+    }
+  })();
   try {
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
     // Run canonical migrations, including FKs, inside our schema. No public
     // fallback in search_path and no migration journal or writes in public.
     const migrations = readMigrationFiles({ migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url).href) });
-    for (const migration of migrations) for (const statement of migration.sql) {
-      if (statement.trim()) await client.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
-    }
+    // One commit for the empty fixture, not one durable commit per statement.
+    await client.begin(async (tx) => {
+      for (const migration of migrations) for (const statement of migration.sql) {
+        if (statement.trim()) await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+      }
+    });
   } catch (error) {
     await dispose();
     throw error;
   }
   const reset = async () => {
-    if (disposed) throw new Error("W15 fixture is disposed");
+    if (disposal) throw new Error("W15 fixture is disposed");
     // Deliberately no arbitrary Db argument: only this scoped pool can clean.
     await db.delete(memberDataAccessLogs);
     await db.delete(activityLog);
