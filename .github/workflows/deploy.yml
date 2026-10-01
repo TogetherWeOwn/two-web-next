@@ -1,14 +1,17 @@
 name: deploy
 
-# Staging deploy on merge to main. Production (togetherweown.com) is only
+# Staging deploy after successful full CI on main. Production (togetherweown.com) is only
 # switched at cutover (plan TOG-9671, W16): there is deliberately no prod job here.
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: deploy-staging
@@ -17,6 +20,11 @@ concurrency:
 jobs:
   deploy-staging:
     name: deploy-staging
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
     # Production-style gate: GitHub Environment protection rules (required
@@ -39,6 +47,13 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # workflow_run's github.sha is main's tip, not the successful CI SHA.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - name: Require successful exact-SHA full CI
+        run: node ci/staging-deploy-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Job-private localhost:5432 forward to the Postgres service
         run: |
           apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
