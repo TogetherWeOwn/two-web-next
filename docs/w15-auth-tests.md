@@ -135,6 +135,11 @@ including valid denial and incomplete-code callbacks. Tombstones remain through
 expiry. Both starts sweep expired rows opportunistically; idle expired rows can
 remain until the next start, but cannot authorize anything before or after GC.
 A missing/unavailable admission store never permits an upstream exchange.
+`test/auth-admission.test.ts` separately rejects store acquisition and consumption
+for both flows against Memory and isolated Postgres: no exchange, attempt, new
+session or prior-token revocation. Refused state issuance produces no signed
+journey cookies or OAuth handoff. These are failure contracts, not simulated
+production-outage or availability acceptance.
 
 Fresh successful authentication atomically inserts the new session and revokes
 the supplied signed prior token. Denial/exchange failure does not touch the prior

@@ -183,6 +183,39 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
       expect(await f.attemptCount()).toBe(0);
     });
 
+    it.each(flows)("%s failure to acquire the admission store preserves the prior session without side effects", async (flow) => {
+      const f = fixture(make(), sql);
+      const prior = await priorSession(f.store);
+      const original = await start(f.env, flow);
+      const fetch = mockDiscord();
+      Object.defineProperty(f.env, "SESSION_STORE", {
+        get: () => { throw new Error("fixture store acquisition failed"); },
+      });
+      const result = await app.request(`${callbackPath(flow)}?state=${original.state}&code=fixture-code`,
+        { headers: { cookie: `${original.cookie}; ${prior.cookie}` } }, f.env);
+      expect(result.status).toBe(flow === "join" ? 200 : 302);
+      expect(sessionCookie(result)).toBeUndefined();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(await f.store.get(prior.hash)).toMatchObject({ moderator: true, username: "Prior Member" });
+      expect(f.create).not.toHaveBeenCalled();
+      expect(f.replace).not.toHaveBeenCalled();
+      expect(await f.attemptCount()).toBe(0);
+    });
+
+    it.each(flows)("%s a refused admission record cannot issue signed cookies or an OAuth handoff", async (flow) => {
+      const f = fixture(make(), sql);
+      const fetch = mockDiscord();
+      vi.spyOn(f.store.journeys, "issue").mockResolvedValue(false);
+      const result = await app.request(startPath(flow), {}, f.env);
+      expect(result.status).toBe(302);
+      expect(result.headers.get("location")).toBe(flow === "join" ? "/join" : "/?n=signin_failed");
+      expect(result.headers.getSetCookie()).toHaveLength(0);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(f.create).not.toHaveBeenCalled();
+      expect(f.replace).not.toHaveBeenCalled();
+      expect(await f.attemptCount()).toBe(0);
+    });
+
     it.each(flows)("%s exchange failure preserves the prior session and cannot be retried with original cookies", async (flow) => {
       const f = fixture(make(), sql);
       const prior = await priorSession(f.store);

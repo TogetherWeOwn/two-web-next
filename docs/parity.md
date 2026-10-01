@@ -58,7 +58,9 @@ exchange in flight and replay ORIGINAL signed cookies; only one exchange, join,
 session and terminal attempt is admitted. Separate clients prove durable
 coordination, expiry and replacement rollback on the isolated test container.
 Blank-bot join starts do not advertise OAuth; a bot disabled mid-journey causes
-no exchange or member session. Denial/exchange failure preserves prior authority;
+no exchange or member session. Store acquisition/consumption failure has separate
+request proofs of no upstream call, terminal attempt or session change; refused
+admission issuance cannot hand off to OAuth. Denial/exchange failure preserves prior authority;
 failed ordinary auto-join may only issue a non-member/non-moderator session,
 while failed one-click join issues none. Ten-minute server expiry and tombstone
 cleanup are documented in [W15 coverage](w15-auth-tests.md#admission-state-retention-and-failure-contract).
