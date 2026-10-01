@@ -3,7 +3,15 @@
 import { Column, getTableName, is } from "drizzle-orm";
 import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { PgDialect, PgSession } from "drizzle-orm/pg-core";
-import { captureMemberKeys, memberQueryPermit, refuseMemberRead } from "../member-reads";
+import { captureMemberKeys, memberQueryPermit, memberReadActive, refuseMemberRead } from "../member-reads";
+
+// Exact, fixed projections for the optional bot views. Arbitrary raw SQL does
+// not establish column provenance, even when wrapped in keyedMemberRead().
+const rawOwners = new Map([
+  ["select member_id, joined_at, tenure_days, rank_key, is_current_member from web_v1.members where member_id = $1 limit 1", "member_id"],
+  ["select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc", "member_id"],
+]);
+const normalized = (statement: string) => statement.trim().replace(/\s+/g, " ");
 import type { Db } from "./index";
 
 type SelectedField = { path: string[]; field: unknown };
@@ -37,6 +45,19 @@ function ownerProjection(fields?: SelectedField[]) {
   return [...tables.values()];
 }
 
+/** Resolve observation lazily: outside a read boundary the borrowed DB is unchanged. */
+export function memberReadDb(db: Db): Db {
+  let observed: Db | undefined;
+  return new Proxy(db, {
+    get(target, property) {
+      const queryMethod = ["select", "selectDistinct", "selectDistinctOn", "execute", "transaction", "$with", "with", "query"].includes(String(property));
+      const source = memberReadActive() && queryMethod ? (observed ??= observeMemberReads(target)) : target;
+      const value = Reflect.get(source, property);
+      return typeof value === "function" ? value.bind(source) : value;
+    },
+  });
+}
+
 /** Preserves the original pool/transaction, schema and mapping; no new lookup. */
 export function observeMemberReads(db: Db): Db {
   // Drizzle exposes schema/session metadata on `_`, but protects its dialect in
@@ -55,15 +76,17 @@ export function observeMemberReads(db: Db): Db {
               if ((method === "execute" || method === "all") && typeof original === "function") {
                 return async (...values: unknown[]) => {
                   const capture = readStatement(statement) ? memberQueryPermit() : undefined;
-                  const projection = capture ? ownerProjection(fields) : undefined;
+                  const rawOwner = capture && !fields?.length ? rawOwners.get(normalized(statement)) : undefined;
+                  const projection = capture && !rawOwner ? ownerProjection(fields) : undefined;
                   const rows: unknown = await Reflect.apply(original, query, values);
-                  if (capture && projection) {
+                  if (capture) {
                     if (!Array.isArray(rows)) refuseMemberRead();
-                    const keys = rows.flatMap((row) => projection.flatMap((group) => {
-                      // A missing LEFT JOIN contributes no contents/subject.
-                      const absent = group.fields.every((field) => valueAt(row, field.path) === null);
-                      return absent ? [] : [valueAt(row, group.key!.path)];
-                    }));
+                    const keys = rawOwner ? rows.map((row) => valueAt(row, [rawOwner]))
+                      : rows.flatMap((row) => projection!.flatMap((group) => {
+                        // A missing LEFT JOIN contributes no contents/subject.
+                        const absent = group.fields.every((field) => valueAt(row, field.path) === null);
+                        return absent ? [] : [valueAt(row, group.key!.path)];
+                      }));
                     captureMemberKeys(capture, keys);
                   }
                   return rows;

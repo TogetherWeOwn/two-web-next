@@ -14,10 +14,11 @@
 
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AccessEntry } from "../src/access-log";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import type { Db } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { profiles, users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
@@ -207,7 +208,7 @@ describe("member-access-log (memory doubles)", () => {
     spy.mockRestore();
   });
 
-  it("MEMBER_ACCESS_LOG_ENFORCE=false degrades: served, but still logged loudly", async () => {
+  it("MEMBER_ACCESS_LOG_ENFORCE=false cannot bypass the keyed read boundary", async () => {
     const { app, sessions } = harness({ logDown: true });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await app.request(
@@ -215,7 +216,8 @@ describe("member-access-log (memory doubles)", () => {
       { headers: { cookie: await cookieFor(sessions, BOB) } },
       { ...env, MEMBER_ACCESS_LOG_ENFORCE: "false" },
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain("alice");
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -322,12 +324,12 @@ describe("validateProfile", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
-  const wipe = async () => {
-    await db.delete(memberDataAccessLogs);
-    await db.delete(profiles);
-    await db.delete(users);
-  };
+  let fixture: MemberDataFixture;
+  let db: Db;
+  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
+  afterEach(() => fixture?.reset());
+  afterAll(() => fixture?.dispose());
+  const wipe = () => fixture.reset();
   const setup = async () => {
     await wipe();
     await db.insert(users).values([
@@ -396,7 +398,7 @@ describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-te
     expect((await db.select().from(profiles)).filter((p) => p.userId === BOB.userId)).toHaveLength(1);
   });
 
-  it("log write failure against the real recorder refuses the read (503)", async () => {
+  it("a throwing sink with real profile rows refuses the read (503)", async () => {
     await setup();
     const sessions = createMemorySessionStore();
     const app = profilesApp({

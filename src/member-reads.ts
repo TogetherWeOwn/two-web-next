@@ -48,10 +48,30 @@ export function memberQueryPermit(): Capture | undefined {
   return capture;
 }
 
+export function memberReadActive(): boolean { return captures.getStore() !== undefined; }
+
+/** Non-SQL stores must declare the actual returned owners, including empty reads. */
+export function declareMemberResult(keys: unknown[]): void {
+  const capture = captures.getStore();
+  if (capture) captureMemberKeys(capture, keys);
+}
+
 /** Keys come from retrieved owner columns, never from a route parameter. */
 export function captureMemberKeys(capture: Capture, keys: unknown[]) {
   if (keys.some((key) => typeof key !== "string" || !/^\d{10,25}$/.test(key))) refuseMemberRead();
   for (const key of keys) capture.subjects.add(key as string);
+}
+
+/** HTML rendering finishes inside the boundary, never as a streamed response. */
+export async function bufferedMemberHtml(c: Context, body: string | Promise<string>, status: ContentfulStatusCode = 200): Promise<Response> {
+  const html = await body;
+  // Hono JSX nodes are escaped HTML values with a buffered toString renderer.
+  const escaped = html as unknown as { isEscaped?: boolean; toString?: unknown } | null;
+  if (typeof html !== "string" && !(escaped?.isEscaped === true && typeof escaped.toString === "function")) refuseMemberRead();
+  c.res = await c.html(html, status);
+  const capture = captures.getStore();
+  if (capture) capture.response = c.res;
+  return c.res;
 }
 
 /** Construct only known buffered bytes. Ordinary Response.body is a stream too. */

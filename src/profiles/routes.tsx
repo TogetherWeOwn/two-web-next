@@ -22,7 +22,8 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
-import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
+import { type AccessDecl, type AccessSink } from "../access-log";
+import { bufferedMemberHtml, bufferedMemberText, declareMemberResult, memberReadBoundary } from "../member-reads";
 import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
@@ -118,25 +119,34 @@ export function profilesApp(deps: ProfileDeps = {}) {
   // would gate every route in the worker.
   for (const path of ["/profile", "/members/*"]) {
     app.use(path, gate);
-    app.use(path, memberAccessLog(sinkFor));
+    app.use(path, async (c, next) => {
+      if (c.req.method !== "GET") return next();
+      await memberReadBoundary(c, {
+        viewer: c.get("viewer").id, resource: "profile", action: "view",
+        route: path === "/profile" ? "profile" : "profiles.show",
+      }, async (entry) => {
+        const sink = await sinkFor(c);
+        if (!sink) throw new Error("no access-log sink");
+        return sink(entry);
+      }, next);
+    });
   }
 
-  const render = async (c: Ctx, id: string, routeName: string) => {
-    if (!SNOWFLAKE.test(id)) return c.notFound();
+  const render = async (c: Ctx, id: string) => {
+    if (!SNOWFLAKE.test(id)) return bufferedMemberText(c, "404 Not Found", 404);
     const store = await storeFor(c);
-    if (!store) return c.text("Profiles temporarily unavailable", 503);
+    if (!store) return bufferedMemberText(c, "Profiles temporarily unavailable", 503);
     const member = await store.find(id);
-    if (!member) return c.notFound();
+    // Borrowed non-SQL stores declare retrieved keys, never the requested id.
+    declareMemberResult(member ? [member.id] : []);
+    if (!member) return bufferedMemberText(c, "404 Not Found", 404);
     const viewer = c.get("viewer");
-    // Stats and milestones belong to this same member: the existing declaration
-    // covers all three reads, without duplicating subjects or audit rows.
-    c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
     const stats = await statsFor(c, member.id);
-    return c.html(<ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
+    return bufferedMemberHtml(c, <ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
   };
 
-  app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));
-  app.get("/members/:user", (c) => render(c, c.req.param("user"), "profiles.show"));
+  app.get("/profile", (c) => render(c, c.get("viewer").id));
+  app.get("/members/:user", (c) => render(c, c.req.param("user")));
 
   const patch = async (c: Ctx, forced?: Record<string, unknown>) => {
     const id = c.req.param("user") ?? "";
