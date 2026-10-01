@@ -17,7 +17,7 @@ concurrency:
 jobs:
   capture:
     name: featured-offline-proof
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 8
     # Browser + system libraries are already present; only the matching JS
     # module is installed, inside this CI container. No app/DB service or secrets.
