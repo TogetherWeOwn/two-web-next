@@ -21,7 +21,7 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     else if (path === "/profile" && registrations.has("ALL /profile")) auth = "member";
     else if (path.startsWith("/members/") && registrations.has("ALL /members/*")) {
       auth = method === "PATCH" || method === "POST" ? "member-owner" : "member";
-    } else if (path === "/events.json") auth = "session";
+    } else if (path === "/events.json" || (method === "GET" && path === "/events/:key")) auth = "session";
     else if (path === "/e/:key" || path === "/events/:file{.+\\.ics}") auth = "public-draft-moderator";
     else if (path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE")) auth = "member-decoy";
     else if ((path === "/events" && method === "POST") || (path === "/events/:key" && method === "PATCH") ||

@@ -12,6 +12,7 @@ import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
 import { canonicalUrl } from "../seo";
+import { safeNext } from "../join/service";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
@@ -25,6 +26,7 @@ import {
   mergeCalendarRows,
   parseCalendarMonth,
   parseCalendarView,
+  loginUrl,
   wallMonth,
   calendarZone,
   currentCalendarMonth,
@@ -196,24 +198,43 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} totalPages={totalPages} appUrl={c.env.APP_URL} />);
   });
 
-  app.get("/events.json", async (c) => {
-    // Non-rotating: concurrent writes with one cookie must all authenticate.
+  async function jsonSession(c: Ctx): Promise<Session | Response> {
+    c.header("cache-control", "private, no-store");
+    c.header("vary", "Cookie, Accept");
+    // Non-rotating: JSON polling must not consume the browser's session cookie.
     const session = await readFragmentSession(c);
-    if (!session) return c.json({ error: "unauthenticated" }, 401);
-    const db = await dbFor(c);
-    if (!db) return c.json({ error: "db_unavailable" }, 503);
-    const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
-    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
-    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
-    const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
-    const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
-    const body = JSON.stringify({ data, page, limit });
+    if (session) return session;
+    const accept = (c.req.header("accept") ?? "").toLowerCase();
+    if (accept.includes("text/html") && !accept.includes("application/json")) {
+      const url = new URL(c.req.url);
+      return c.redirect(loginUrl(safeNext(url.pathname + url.search)), 302);
+    }
+    return c.json({ error: "unauthenticated" }, 401);
+  }
+
+  async function jsonResponse(c: Ctx, value: unknown): Promise<Response> {
+    const body = JSON.stringify(value);
     const etag = await etagFor(body);
     c.header("cache-control", "private, no-cache");
     c.header("etag", etag);
     if (c.req.header("if-none-match") === etag) return c.body(null, 304);
     return c.body(body, 200, { "content-type": "application/json; charset=UTF-8" });
+  }
+
+  app.get("/events.json", async (c) => {
+    const session = await jsonSession(c);
+    if (session instanceof Response) return session;
+    const db = await dbFor(c);
+    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    const limitRaw = Number.parseInt(c.req.query("per_page") ?? c.req.query("limit") ?? "", 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, JSON_MAX_LIMIT)) : JSON_DEFAULT_LIMIT;
+    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
+    const { rows, total } = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
+    const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
+    const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
+    return jsonResponse(c, { data, page, limit, meta: {
+      current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)),
+    } });
   });
 
   app.get("/events.rss", async (c) => {
@@ -255,6 +276,24 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
       "cache-control": "max-age=300, private",
     });
+  });
+
+  app.get("/events/:key", async (c) => {
+    const session = await jsonSession(c);
+    if (session instanceof Response) return session;
+    const key = c.req.param("key");
+    if (!KEY_RE.test(key)) return c.json({ error: "not_found" }, 404);
+    const db = await dbFor(c);
+    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    const e = await getPublicEvent(db, key);
+    if (!e) return c.json({ error: "not_found" }, 404);
+    if (e.status === "draft" && !session.moderator) return c.json({ error: "forbidden" }, 403);
+    if (e.status === "cancelled") return c.json({
+      reason: "event_cancelled", message: "This event was cancelled.", event_key: e.eventKey, status: e.status,
+    }, 410);
+    if (e.status === "draft") c.header("x-robots-tag", "noindex, nofollow");
+    const position = await waitlistPosition(db, e.id, session.id);
+    return jsonResponse(c, { data: { ...eventJson(e), waitlist_position: position } });
   });
 
   app.get("/e/:key", memberAccessLog(async (c) => {

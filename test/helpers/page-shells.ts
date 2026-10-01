@@ -24,7 +24,7 @@ export const HTML_READS = [
 export const NON_HTML_READS = [
   "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback",
   "/sitemap_index.xml", "/robots.txt", "/up",
-  "/events.json", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
+  "/events.json", "/events/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 
 export const concretePath = (pattern: string) => pattern

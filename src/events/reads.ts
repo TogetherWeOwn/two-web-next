@@ -177,10 +177,11 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
 export async function listJson(
   db: Db,
   opts: { limit: number; offset: number; includeDrafts: boolean },
-): Promise<PublicEvent[]> {
+): Promise<{ rows: PublicEvent[]; total: number }> {
   const visible = opts.includeDrafts ? sql`true` : inArray(events.status, ["published", "cancelled", "past"]);
-  const rows = await db.select().from(events).where(visible).orderBy(desc(events.startsAt)).limit(opts.limit).offset(opts.offset);
-  return withGoing(db, rows);
+  const [total] = await db.select({ n: count() }).from(events).where(visible);
+  const rows = await db.select().from(events).where(visible).orderBy(asc(events.startsAt), asc(events.id)).limit(opts.limit).offset(opts.offset);
+  return { rows: await withGoing(db, rows), total: Number(total?.n ?? 0) };
 }
 
 export async function sitemapEvents(db: Db): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {

@@ -23,7 +23,7 @@ Test aliases:
 | Every registered admin GET | OAuth 302 | 403, no login loop | 403, no login loop | 200 (missing resource 404), private/no-store |
 | Other public pages | Public event/aggregate data only | Same public representation | Same public representation | Same published-event representation |
 | `/e/:key` attendee list | No names/links/list count | No names/links/list count | Going names + profile links, logged, private/no-store | Same member representation; draft view allowed |
-| `/events.json` | 401 | W8 session gate; no attendee representation | Event data/counts, not attendee names | W8 includes drafts; no attendee representation |
+| `/events.json`, `/events/:key` | JSON 401; browser OAuth 302 with guarded `next` | Session gate; no attendee representation | Event data/counts and own waitlist position, not attendee names; draft show 403 | Includes drafts; draft show noindex; no attendee representation |
 
 `test/event-attendees.test.ts` covers the mounted event page's four roles,
 original RSVP `created_at ASC` ordering (ID tie-break), status/event filtering,
@@ -53,7 +53,7 @@ handlers fail completeness. It is a test-net guard, not an automatic query obser
 | --- | --- |
 | 49: guest profile reads redirect before contents | E: `guest %s: no profile/member data or writes`, HTML and JSON Accept. |
 | 56: no logged-out PATCH writer | E same case proves refusal/no write. **W7 difference:** PATCH is deliberately restored as the owner-only island form writer; guest gets 302, not legacy 405. |
-| 68: member-adjacent JSON, event detail, RSVP writes behind login | E: `guest member-adjacent JSON is refused without returning attendees`; `/events.json` is 401. **W8 difference:** published `/e/:key` is public with aggregate counts only. RSVP write endpoints are not implemented in this checkout; no claim of a W9 port here. |
+| 68: member-adjacent JSON, event detail, RSVP writes behind login | E: `guest %s member-adjacent JSON is refused without returning attendees`; collection and JSON show are 401 for JSON guests and guarded OAuth 302 for browser guests. **W8 difference:** published `/e/:key` is public with aggregate counts only. RSVP write endpoints are not implemented in this checkout; no claim of a W9 port here. |
 | 77: crafted guest Livewire mount denied | E mounted profile denial and P guest route pins. **Architecture:** no Livewire endpoint or server component mount exists; island HTML is served only after the member gate. |
 | 90: public pages/source contain no member data | E: `public pages contain no member data in HTML/source; RSVP counts remain public`; `/`, events/past, join, about, FAQ, rules, privacy, sitemap, event detail. E: `%s: public calendar feeds never expose member data` covers collection ICS, RSS and per-event ICS across all four roles (W9 merged during this revision). |
 | 127: public RSVP count, never attendee name | E same public case pins `1 going` with a real RSVP and absence of all personal tokens. |
