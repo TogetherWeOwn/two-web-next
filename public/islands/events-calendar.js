@@ -75,7 +75,7 @@
     var controller = new AbortController();
     active = controller;
     activeIsSearch = !!opts.search;
-    if (opts.skeleton) setLoading(true);
+    setLoading(!!opts.skeleton);
     try {
       var response = await fetch(url.pathname + url.search, {
         method: "GET",
