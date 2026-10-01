@@ -10,16 +10,18 @@
 // a public join link that grants nothing but membership of a server anyone can ask to join.
 export const FALLBACK_INVITE = "https://discord.gg/4GwEDNRTtx";
 
-const DISCORD_HOSTS = new Set(["discord.gg", "discord.com"]);
-
 function landsInDiscord(url: string): boolean {
+  // URL parsing normalizes these, but the original value becomes the Location header or href.
+  if (/[\u0000-\u001f\u007f\\]/.test(url)) return false;
   let parts: URL;
   try {
     parts = new URL(url);
   } catch {
     return false;
   }
-  return parts.protocol === "https:" && DISCORD_HOSTS.has(parts.hostname.toLowerCase());
+  return parts.protocol === "https:" && !parts.username && !parts.password && !parts.port &&
+    ((parts.hostname === "discord.gg" && /^\/[\w-]+$/.test(parts.pathname)) ||
+      (parts.hostname === "discord.com" && /^\/invite\/[\w-]+$/.test(parts.pathname)));
 }
 
 // The configured invite if usable, the hardcoded one otherwise. Never throws: a member clicking
