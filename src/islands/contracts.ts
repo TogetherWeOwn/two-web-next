@@ -518,25 +518,27 @@ export function spotsLeftText(going: number, capacity: number): string {
 }
 
 /**
- * Server-rendered badge HTML (the W8 slice renders this; the binder only
- * patches the [data-count]/[data-announcement] nodes in place).
+ * Server-rendered badge HTML (the event page renders this; the binder only
+ * patches the [data-count]/[data-spots]/[data-announcement] nodes in place).
  * `role="status"`: updates announce politely, never as an alert. The
  * announcement node is always rendered (empty before any write) so the
  * binder has a stable target; an empty node announces nothing, so page
  * load stays quiet — same observable behavior the legacy test pins.
+ * The spots-left line sits inside the mount so the binder reaches it with
+ * one querySelector and patches only its own island.
  */
 export function renderGoingCount(eventKey: string, s: GoingCountState): string {
   const announcement = goingAnnouncementText(s.announcement);
   const safeKey = eventKey.replace(/"/g, "&quot;");
   const spots =
     s.showSpotsLeft && s.capacity !== null
-      ? `<span data-testid="${SPOTS_LEFT_TESTID}">${spotsLeftText(s.going, s.capacity)}</span>`
+      ? `<span data-testid="${SPOTS_LEFT_TESTID}" data-spots>${spotsLeftText(s.going, s.capacity)}</span>`
       : "";
   return (
     `<span role="status" data-testid="${GOING_COUNT_TESTID}" ` +
     `${MOUNT_ATTR}="${GOING_COUNT_ISLAND}" data-event-key="${safeKey}" data-capacity="${s.capacity ?? ""}">` +
     `<span class="sr-only" data-announcement>${announcement}${announcement ? " " : ""}</span>` +
-    `<span data-count>${goingCountText(s.going, s.capacity)}</span></span>${spots}`
+    `<span data-count>${goingCountText(s.going, s.capacity)}</span>${spots}</span>`
   );
 }
 

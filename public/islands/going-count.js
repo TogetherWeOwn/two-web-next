@@ -16,6 +16,14 @@
   var EVENT = "going-count-updated";
   var URL = "/events.json";
 
+  // A second evaluation of this script must not stack a second document
+  // listener: the guard lives on the shared DOM, not in this closure.
+  var root = document.documentElement;
+  if (root) {
+    if (root.getAttribute("data-going-count-ready") === "1") return;
+    root.setAttribute("data-going-count-ready", "1");
+  }
+
   function announcementText(state) {
     switch (state) {
       case "going":
@@ -35,6 +43,11 @@
       : going + " going";
   }
 
+  function spotsLeftText(going, capacity) {
+    var left = Math.max(0, capacity - going);
+    return left <= 0 ? "Full" : left + " of " + capacity + " spots left";
+  }
+
   function refresh(node) {
     var key = node.getAttribute("data-event-key");
     var capacity = node.getAttribute("data-capacity");
@@ -51,6 +64,10 @@
         if (!row) return;
         var count = node.querySelector("[data-count]");
         if (count) count.textContent = countText(row.going_count, capacity === "" ? null : Number(capacity));
+        var spots = node.querySelector("[data-spots]");
+        if (spots && capacity !== "" && capacity !== null) {
+          spots.textContent = spotsLeftText(row.going_count, Number(capacity));
+        }
         var ann = node.querySelector("[data-announcement]");
         var state = node.getAttribute("data-pending-announcement");
         if (ann && state) {
