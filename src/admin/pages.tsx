@@ -401,10 +401,12 @@ export const EventFormPage: FC<{
         <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}
           data-event-draft={mode === "edit" && Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required
+              aria-invalid={errors.title ? "true" : undefined} aria-describedby={errors.title ? `${id}-error` : undefined} />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} maxlength={100} />}
+            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100}
+              aria-invalid={errors.game ? "true" : undefined} aria-describedby={errors.game ? `${id}-error` : undefined} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
             {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
@@ -427,7 +429,8 @@ export const EventFormPage: FC<{
               aria-invalid={errors.timezone ? "true" : undefined} aria-describedby={errors.timezone ? `${id}-error` : undefined} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} maxlength={255} />}
+            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255}
+              aria-invalid={errors.location ? "true" : undefined} aria-describedby={errors.location ? `${id}-error` : undefined} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
@@ -522,6 +525,7 @@ export const EventFormPage: FC<{
           </section>
         ) : null}
       </section>
+      <script type="module" src="/islands/admin-event-text-limits.js" />
       {mode === "edit" ? <script src="/islands/admin-event-editor.js" defer /> : null}
     </Shell>
   );
