@@ -4,6 +4,7 @@
   "main": "worker.ts",
   "compatibility_date": "2026-09-29",
   "workers_dev": false,
+  "preview_urls": false,
   "observability": { "enabled": true }
   // OPS_ALERT_WEBHOOK_URL is an optional secret on THIS Worker, not the app.
   // No public routes, database bindings, queue bindings or tail consumers.
