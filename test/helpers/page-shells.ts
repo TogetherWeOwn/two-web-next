@@ -43,12 +43,12 @@ export function pageShellFixture(status = "published") {
     parentEventId: null, recurrenceIndex: null, createdAt: now, updatedAt: now,
   };
   const featured: typeof featuredContents.$inferSelect = {
-    id: 1, title: "Fixture featured slot", body: null, url: null, imageUrl: null, imageAlt: null,
+    id: 1, legacyId: null, title: "Fixture featured slot", body: null, url: null, imageUrl: null, imageAlt: null,
     isPublished: false, position: 0, startsAt: null, endsAt: null, createdBy: MEMBER_ID,
     createdAt: now, updatedAt: now,
   };
   const attempt: typeof joinAttempts.$inferSelect = {
-    id: 1, outcome: "added", source: "join", requestId: "page-shell-join-request", discordId: MEMBER_ID,
+    id: 1, legacyId: null, outcome: "added", source: "join", requestId: "page-shell-join-request", discordId: MEMBER_ID,
     createdAt: now,
   };
   const encode = <T extends Record<string, unknown>>(columns: Record<string, unknown>, row: T) =>
@@ -65,11 +65,22 @@ export function pageShellFixture(status = "published") {
     }
     if (sql.includes('from "featured_contents"')) {
       if (sql.includes('"id" =') && !params.includes(1)) return { rows: [] };
+      // listVisibleFeatured selects an explicit 6-column projection without
+      // legacy_id so it stays readable on pre-1012 shapes; SELECT * includes it.
+      if (!sql.includes("legacy_id")) {
+        return { rows: [[featured.id, featured.title, featured.body, featured.url, featured.imageUrl, featured.imageAlt]] };
+      }
       return { rows: [encode(getTableColumns(featuredContents), featured)] };
     }
     if (sql.includes('from "join_attempts"')) {
       if (sql.includes("count(*)")) return { rows: [[attempt.outcome, 1]] };
       if (sql.includes('"join_attempts"."id" =') && params[0] !== attempt.id) return { rows: [] };
+      // List and detail select the same explicit 6 columns (no legacy_id) so
+      // both stay readable on migrateJoin() bootstraps (drizzle/1000 shape).
+      if (!sql.includes("legacy_id")) {
+        const row = [attempt.id, attempt.outcome, attempt.source, attempt.requestId, attempt.discordId, attempt.createdAt.toISOString()];
+        return { rows: [sql.includes('left join "users"') ? [...row, MEMBER_ID] : row] };
+      }
       const row = encode(getTableColumns(joinAttempts), attempt);
       return { rows: [sql.includes('left join "users"') ? [...row, MEMBER_ID] : row] };
     }

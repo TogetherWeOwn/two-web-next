@@ -335,7 +335,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const values = formData(await c.req.parseBody());
     let input;
     try {
-      input = parseFeaturedForm(values, c.env.APP_URL);
+      input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
     } catch (err) {
       if (err instanceof ValidationError) {
         return formError(
@@ -377,7 +377,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const values = formData(await c.req.parseBody());
     let input;
     try {
-      input = parseFeaturedForm(values, c.env.APP_URL);
+      input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
     } catch (err) {
       if (err instanceof ValidationError) {
         return formError(

@@ -72,17 +72,19 @@
   function errorList(errors) {
     var old = root.querySelector('[data-testid="profile-error"]');
     if (old) old.remove();
+    var alert = document.createElement("div");
+    alert.setAttribute("role", "alert");
+    alert.setAttribute("tabindex", "-1");
+    alert.setAttribute("data-testid", "profile-error");
     var ul = document.createElement("ul");
-    ul.setAttribute("role", "alert");
-    ul.setAttribute("tabindex", "-1");
-    ul.setAttribute("data-testid", "profile-error");
     errors.forEach(function (m) {
       var li = document.createElement("li");
       li.textContent = m;
       ul.appendChild(li);
     });
-    form.parentNode.insertBefore(ul, form);
-    ul.focus();
+    alert.appendChild(ul);
+    form.parentNode.insertBefore(alert, form);
+    alert.focus();
   }
 
   form.addEventListener("reset", function () {
