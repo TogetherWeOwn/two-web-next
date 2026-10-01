@@ -116,9 +116,8 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     vi.useFakeTimers();
     let reject!: (e: unknown) => void;
     const gate = new Promise((_res, rej) => { reject = rej; });
-    // Attach the late-failure guard before the deadline wins so a missing
-    // handler would surface as an unhandled rejection and fail this test.
-    gate.catch(() => {});
+    // No local catch: the handler's Promise.race must stay attached so a
+    // late rejection after the deadline is handled, not unhandled.
     const bot = { postAnnouncement: () => gate } as unknown as BotClient;
     const p = handleCallInternalAction({ ...ann }, 1, bot);
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
