@@ -129,6 +129,8 @@ jobs:
           retention-days: 14
       - name: Neon backup selftest (stubbed, no secrets)
         run: bash ci/neon-backup-selftest.sh
+      - name: Neon backup argv selftest (stubbed, no secrets)
+        run: bash ci/neon-backup-argv-selftest.sh
       - name: Migration numbering check
         run: bash ci/check-migration-numbers.sh
       - name: Build (wrangler dry run)
