@@ -40,6 +40,10 @@ function fixture(url, phase) {
   if (hostname === apex && phase === 'before') {
     return { status: 200, headers: { 'content-type': 'text/html' }, body: '<h1>legacy</h1>' };
   }
+  // Pin the login alias independently of the checker table.
+  if (path === '/auth/discord/redirect') {
+    return { status: 302, headers: { location: '/auth/discord', 'cache-control': 'no-store' }, body: '' };
+  }
   const row = URL_CASES.find(row => row.path.replace('{key}', eventKey).replace('{user}', '0') === path);
   assert.ok(row, `unrecognised fixture URL ${url}`);
   // Pin the retired diagnostic contract independently of the checker table.
@@ -120,6 +124,84 @@ for (const phase of ['before', 'after']) {
     });
   });
 }
+
+test('login alias requires the temporary local no-store redirect in both phases', async () => {
+  const path = '/auth/discord/redirect';
+  assert.deepEqual(URL_CASES.filter(row => row.path === path), [
+    { frozen: path, path, status: 302, redirect: '/auth/discord', noStore: true },
+  ]);
+  const regressions = [
+    ...[200, 301, 404].map(status => [`status ${status}`, response => { response.status = status; }, `url:${path}`]),
+    ...['https://foreign.test/auth/discord', '//foreign.test/auth/discord', '/auth/discord?state=untrusted', '/join/discord']
+      .map(location => [`Location ${location}`, response => { response.headers.location = location; }, `location:${path}`]),
+    ['missing Location', response => { delete response.headers.location; }, `location:${path}`],
+    ['missing no-store', response => { delete response.headers['cache-control']; }, `no-store:${path}`],
+    ['cacheable', response => { response.headers['cache-control'] = 'public, max-age=3600'; }, `no-store:${path}`],
+  ];
+  for (const phase of ['before', 'after']) {
+    const measure = change => runChecks(options(phase), {
+      freeze, resolver: stubDns(), request: async url => {
+        const response = fixture(url, phase);
+        if (new URL(url).hostname === options(phase).target && new URL(url).pathname === path) change(response);
+        return { ...response, tlsVerified: true };
+      },
+    });
+    const healthy = await measure(() => {});
+    assert.equal(healthy.ok, true, phase);
+    for (const id of [`url:${path}`, `location:${path}`, `no-store:${path}`]) {
+      assert.equal(healthy.checks.find(check => check.id === id)?.ok, true, `${phase} ${id}`);
+    }
+    for (const [label, change, id] of regressions) {
+      const result = await measure(change);
+      assert.equal(result.ok, false, `${phase} ${label}`);
+      assert.deepEqual(result.checks.filter(check => !check.ok).map(check => check.id), [id], `${phase} ${label}`);
+    }
+  }
+});
+
+test('all no-store gates require a complete directive outside quoted values in both phases', async () => {
+  const cases = [
+    ['no-store', true],
+    ['private, no-store', true],
+    [' \tNo-StOrE\t , max-age=0', true],
+    ['note="commas, and \\"quotes\\"", no-store, private', true],
+    ['note="no-store", no-store', true],
+    ['', false],
+    ['public, max-age=3600', false],
+    ['public, max-age=3600, x-no-store', false],
+    ['public, max-age=3600, note="no-store"', false],
+    ['note="ignored, no-store, ignored"', false],
+    ['note="ignored\\", no-store, ignored"', false],
+    ['"no-store"', false],
+    ['no-store-extra', false],
+    ['no-store=1', false],
+    ['no-store="yes"', false],
+    ['note="unterminated, no-store', false],
+    ['no-store, note="unterminated', false],
+    ['no-store\n', false],
+    ['no-store\r\n', false],
+  ];
+  for (const phase of ['before', 'after']) {
+    for (const [path, id] of [['/auth/discord/redirect', 'no-store:/auth/discord/redirect'],
+      ['/up', 'target-up-no-store'], ['/discord', 'discord-no-store']]) {
+      for (const [header, expected] of cases) {
+        const result = await runChecks(options(phase), {
+          freeze, resolver: stubDns(), request: async url => {
+            const response = fixture(url, phase);
+            if (new URL(url).hostname === options(phase).target && new URL(url).pathname === path) {
+              response.headers['cache-control'] = header;
+            }
+            return { ...response, tlsVerified: true };
+          },
+        });
+        const label = `${phase} ${path} ${JSON.stringify(header)}`;
+        assert.equal(result.ok, expected, label);
+        assert.equal(result.checks.find(check => check.id === id)?.ok, expected, label);
+        assert.deepEqual(result.checks.filter(check => !check.ok).map(check => check.id), expected ? [] : [id], label);
+      }
+    }
+  }
+});
 
 test('retired diagnostics reject soft-404s and redirects in both phases', async () => {
   for (const phase of ['before', 'after']) {
