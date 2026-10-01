@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
@@ -55,7 +56,7 @@ export const events = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     // Read-only from the app: the events_ics_sequence trigger owns every revision.
-    icsSequence: bigint("ics_sequence", { mode: "bigint" }).notNull().default(0n),
+    icsSequence: bigint("ics_sequence", { mode: "bigint" }).notNull().default(sql`0`),
   },
   (t) => [
     // The calendar always asks the same question: published events, soonest first.
@@ -68,6 +69,8 @@ export const featuredContents = pgTable(
   "featured_contents",
   {
     id: serial("id").primaryKey(),
+    // Source PK as a decimal string: import identity, independent of native IDs.
+    legacyId: text("legacy_id").unique(),
     title: text("title").notNull(),
     body: text("body"),
     url: text("url"),
@@ -187,6 +190,8 @@ export const eventSearchLogs = pgTable(
   "event_search_logs",
   {
     id: serial("id").primaryKey(),
+    // Repeated renders are distinct; the source PK is the only import key.
+    legacyId: text("legacy_id").unique(),
     normalizedQuery: text("normalized_query").notNull(),
     resultCount: integer("result_count").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),

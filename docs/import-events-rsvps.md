@@ -47,7 +47,7 @@ Imported content and timestamps replace the same fields on matching rows;
 unchanged rows are not rewritten. Re-runs preserve destination row IDs. No rows
 are deleted, including destination rows absent from the source.
 
-Migration `1012_event-ics-sequence` must be applied before import. The importer
+Migration `1013_event-ics-sequence` must be applied before import. The importer
 checks the source relation for `ics_sequence`: when present, it retains that
 bigint without JavaScript number rounding; older sources backfill from the
 nonnegative, floored UTC `updated_at` epoch (falling back to `created_at`). The

@@ -21,6 +21,7 @@ import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { inviteDestination } from "./invite";
+import { imageHosts } from "./image-policy";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
@@ -74,7 +75,9 @@ const staticSecurityHeaders = secureHeaders({
   strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
-    imgSrc: ["'self'", "https://cdn.discordapp.com"],
+    imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
+    // Only the join page embeds Discord; OAuth/recovery/admin routes cannot frame anything.
+    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com" : "'none'"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     frameAncestors: ["'none'"],
@@ -256,7 +259,8 @@ app.get("/", async (c) => {
   c.header("cache-control", "private, no-store");
   return c.html(
     <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
-      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured} />,
+      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
+      imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
   );
 });
 
@@ -276,7 +280,7 @@ app.get("/discord", (c) => {
 for (const path of ["/about", "/faq"] as const) {
   app.get(path, (c) => {
     c.header("cache-control", "public, max-age=3600");
-    return c.html(path === "/about" ? <About /> : <Faq />);
+    return c.html(path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />);
   });
 }
 
@@ -309,7 +313,7 @@ export function rulesLastUpdated(raw: string | undefined): { iso: string; label:
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules lastUpdated={stamp} />);
+  return c.html(<Rules appUrl={c.env.APP_URL} lastUpdated={stamp} />);
 });
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
@@ -323,7 +327,7 @@ const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
 
 app.get("/privacy", (c) => {
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Privacy version={POLICY_VERSION} html={PRIVACY_HTML} />);
+  return c.html(<Privacy appUrl={c.env.APP_URL} version={POLICY_VERSION} html={PRIVACY_HTML} />);
 });
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;
@@ -392,6 +396,8 @@ app.post("/api/agent-events", agentEventsRoute);
 type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
 
 app.get("/up", async (c) => {
+  // Fixed app identity for the cutover probe, including unknown/degraded reads.
+  c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
   // The queue ledger lives in the same Postgres as the rest of the W13 backend:
   // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
