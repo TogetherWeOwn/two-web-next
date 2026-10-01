@@ -24,15 +24,15 @@
     var e = [];
     if (control(bio) || control(games) || control(tz)) e.push("Remove control characters.");
     if (Array.from(bio).length > 1000) e.push("Keep your bio to 1000 characters or fewer.");
-    var seen = [];
+    var seen = new Set();
     var long = false;
     games.split(/\r\n|\r|\n/).forEach(function (l) {
       var t = l.trim();
       if (Array.from(t).length > 80) long = true;
-      if (t && seen.indexOf(t) < 0) seen.push(t);
+      if (t) seen.add(t);
     });
     if (long) e.push("Keep each game name to 80 characters or fewer.");
-    if (seen.length > 20) e.push("Add no more than 20 games.");
+    if (seen.size > 20) e.push("Add no more than 20 games.");
     if (tz) {
       try {
         new Intl.DateTimeFormat("en", { timeZone: tz });

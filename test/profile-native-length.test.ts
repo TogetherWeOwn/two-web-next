@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
+import { createContext, runInContext } from "node:vm";
 import type { AddressInfo } from "node:net";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -132,6 +133,60 @@ for (const path of paths) {
   });
 }
 
+describe("real island binder: oversized synthetic lists", () => {
+  it.each([
+    { name: "distinct short names", tail: [], errors: ["Add no more than 20 games."] },
+    { name: "invalid tail after too many names", tail: ["🎮".repeat(81), "bad\u0000game"], errors: ["Remove control characters.", "Keep each game name to 80 characters or fewer.", "Add no more than 20 games."] },
+  ])("rejects $name without quadratic membership scans or a request", ({ tail, errors }) => {
+    const lines = [...Array.from({ length: 100_000 }, (_, i) => `${i}🎮`), ...tail];
+    const games = lines.join("\n");
+    const listeners = new Map<string, (event: { preventDefault: () => void }) => void>();
+    type Element = { textContent: string; children: Element[]; setAttribute: ReturnType<typeof vi.fn>; appendChild: (child: Element) => void; focus: ReturnType<typeof vi.fn> };
+    const element = (): Element => ({ textContent: "", children: [], setAttribute: vi.fn(), appendChild(child) { this.children.push(child); }, focus: vi.fn() });
+    const insertBefore = vi.fn();
+    const fetch = vi.fn();
+    const preventDefault = vi.fn();
+    const form = {
+      elements: { bio: { value: "" }, games_text: { value: games }, timezone: { value: "" }, website: { value: "" }, formOpenedAt: { value: String(Date.now() - 5000) } },
+      parentNode: { insertBefore },
+      addEventListener: (event: string, listener: (event: { preventDefault: () => void }) => void) => listeners.set(event, listener),
+    };
+    const root = { getAttribute: () => ID, querySelector: (selector: string) => selector === "form" ? form : null, querySelectorAll: () => [] };
+    const sandbox = createContext({
+      document: { querySelector: () => root, createElement: element }, fetch,
+      submit: () => listeners.get("submit")!({ preventDefault }),
+      membershipBudget: lines.length * 2,
+    });
+    // Count potential linear-array membership work in the binder's own realm.
+    // Stop old quadratic code early; the assertion is deterministic, not a timer.
+    runInContext(`
+      var scanned = 0;
+      ["indexOf", "includes"].forEach(function (method) {
+        var original = Array.prototype[method];
+        Array.prototype[method] = function () {
+          scanned += this.length;
+          if (scanned > membershipBudget) throw new Error("Quadratic membership scan budget exceeded");
+          return original.apply(this, arguments);
+        };
+      });
+    `, sandbox);
+    runInContext(readFileSync("public/islands/member-profile.js", "utf8"), sandbox);
+    let failure: string | undefined;
+    try { runInContext("submit()", sandbox, { timeout: 5000 }); }
+    catch (error) { failure = (error as Error).message; }
+    expect(failure).toBeUndefined();
+    expect(runInContext("scanned", sandbox)).toBeLessThanOrEqual(lines.length * 2);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(insertBefore).toHaveBeenCalledOnce();
+    const alert = insertBefore.mock.calls[0]![0] as Element;
+    expect(alert.setAttribute).toHaveBeenCalledWith("role", "alert");
+    expect(alert.children[0]!.children.map((child) => child.textContent)).toEqual(errors);
+    expect(alert.focus).toHaveBeenCalledOnce();
+    expect(form.elements.games_text.value).toBe(games);
+  });
+});
+
 // Opt in where Chromium is installed; ordinary route regressions need no browser.
 // A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts
 // Ephemeral loopback fixtures serve the real SSR/binder and memory stores.
@@ -213,6 +268,19 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")("native browser submi
     await page.keyboard.insertText(value);
     expect(await page.locator(`[name="${name}"]`).inputValue()).toBe(value);
   }
+
+  it("JS island preserves ordered deduplication after whitespace normalization", async () => {
+    const { page, writes, save } = await openProfile(true);
+    const games = Array.from({ length: 20 }, (_, i) => `${i}遊🎮`);
+    const games_text = ["", ...games, ` ${games[0]} `, games[19]!, " "].join("\n");
+    await enter(page, "games_text", games_text);
+    await page.getByTestId("profile-save").click();
+    await page.getByTestId("profile-saved").waitFor();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ method: "PATCH", status: 200 });
+    expect(JSON.parse(writes[0]!.body).games_text).toBe(games_text);
+    expect(save).toHaveBeenCalledExactlyOnceWith(ID, { bio: null, games, timezone: null });
+  });
 
   for (const javaScriptEnabled of [false, true]) {
     describe(javaScriptEnabled ? "JS island" : "no-JS form", () => {
