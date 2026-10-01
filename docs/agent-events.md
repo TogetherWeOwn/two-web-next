@@ -63,12 +63,17 @@ Source: [legacy service](https://github.com/TogetherWeOwn/two-web/blob/1a9a23555
 
 ## Migration / rollout
 
-`1013_shared-agent-events.sql` copies **every** temporary `agent_events` row into `events`, preserving
-keys, ownership, markers, versions, status and timestamps, then drops the temporary table. Audit/replay
+`1014_shared-agent-events.sql` follows `1013_hot-path-indexes.sql` and copies **every** temporary
+`agent_events` row into `events`, preserving keys, ownership, markers, versions, status and timestamps,
+then drops the temporary table. Audit/replay
 rows and their keys are untouched. Wall strings convert using each row's zone, not the session zone;
 historical fold/gap values follow PostgreSQL's standard-time interpretation (the old table stored no
 instant). Key/marker conflicts abort the transaction rather than silently skipping data. Grant deletion
 sets ownership null and preserves the public row/evidence.
+
+A test/preview database that already applied this PR's unreleased `1013_shared-agent-events` needs
+separate preservation-first reconciliation (or disposable fixture recreation). The renumbered migration
+is not idempotent; do not rerun it over already-added ownership columns or rewrite its ledger blindly.
 
 Deploy with ingress disabled and the old Worker drained; apply migrations transactionally, verify row
 counts and converted times, then deploy this revision before re-enabling. Do not roll back to a Worker

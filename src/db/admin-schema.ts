@@ -1,3 +1,4 @@
+import { isNull } from "drizzle-orm";
 import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { agentEventGrants } from "./schema";
 
@@ -65,6 +66,8 @@ export const events = pgTable(
     // The calendar always asks the same question: published events, soonest first.
     index("events_status_starts_at_idx").on(t.status, t.startsAt),
     index("events_parent_event_id_idx").on(t.parentEventId),
+    index("events_ends_at_index").on(t.endsAt),
+    index("events_starts_at_id_index").on(t.startsAt, t.id),
   ],
 );
 
@@ -183,7 +186,12 @@ export const rsvps = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique("rsvps_event_user_unique").on(t.eventId, t.userId), index("rsvps_user_id_idx").on(t.userId)],
+  (t) => [
+    unique("rsvps_event_user_unique").on(t.eventId, t.userId),
+    index("rsvps_user_id_idx").on(t.userId),
+    index("rsvps_event_id_status_index").on(t.eventId, t.status),
+    index("rsvps_unsynced_event_id_index").on(t.eventId).where(isNull(t.syncedToDiscordAt)),
+  ],
 );
 
 // One rendered /events?q= search: normalized query + visible result count only.

@@ -110,8 +110,15 @@
     {
       "idx": 15,
       "version": "7",
-      "when": 1790827200000,
-      "tag": "1013_shared-agent-events",
+      "when": 1790832986716,
+      "tag": "1013_hot-path-indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790841334816,
+      "tag": "1014_shared-agent-events",
       "breakpoints": true
     }
   ]

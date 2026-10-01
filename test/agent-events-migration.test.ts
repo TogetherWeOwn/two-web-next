@@ -12,12 +12,12 @@ const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url).hr
 const journal = JSON.parse(readFileSync(`${migrationsFolder}/meta/_journal.json`, "utf8")) as {
   entries: { tag: string }[];
 };
-const migrationIndex = journal.entries.findIndex(({ tag }) => tag === "1013_shared-agent-events");
-if (migrationIndex < 1) throw new Error("Canonical migration 1013 is missing from the journal");
+const migrationIndex = journal.entries.findIndex(({ tag }) => tag === "1014_shared-agent-events");
+if (migrationIndex < 1) throw new Error("Canonical migration 1014 is missing from the journal");
 const migrations = readMigrationFiles({ migrationsFolder });
-const migration1013 = migrations[migrationIndex]!;
+const migration1014 = migrations[migrationIndex]!;
 
-// This fixture deliberately stops before 1013; createMemberDataFixture already
+// This fixture deliberately stops before 1014; createMemberDataFixture already
 // applies it. Keep all scratch DDL and cleanup local to this test file.
 async function createMigrationFixture(raw: string) {
   const url = testDatabaseUrl(raw); // Guard before constructing either driver.
@@ -71,7 +71,7 @@ async function createMigrationFixture(raw: string) {
     throw error;
   }
   // Match Drizzle's transactional migration boundary, including the final DROP.
-  const migrate = () => client.begin((sql) => apply(sql, migration1013.sql));
+  const migrate = () => client.begin((sql) => apply(sql, migration1014.sql));
   return { client, schemaName, migrate, dispose };
 }
 
@@ -166,12 +166,32 @@ async function catalog({ client, schemaName }: MigrationFixture) {
   };
 }
 
+it("appends the shared migration after hot-path indexes with a linked, index-preserving snapshot", () => {
+  const entries = JSON.parse(readFileSync(`${migrationsFolder}/meta/_journal.json`, "utf8")).entries as {
+    idx: number; when: number; tag: string;
+  }[];
+  const previous = entries[migrationIndex - 1]!;
+  const shared = entries[migrationIndex]!;
+  expect(previous.tag).toBe("1013_hot-path-indexes");
+  expect(shared.idx).toBe(previous.idx + 1);
+  expect(shared.when).toBeGreaterThan(previous.when);
+  const before = JSON.parse(readFileSync(`${migrationsFolder}/meta/1013_snapshot.json`, "utf8"));
+  const after = JSON.parse(readFileSync(`${migrationsFolder}/meta/1014_snapshot.json`, "utf8"));
+  expect(after.prevId).toBe(before.id);
+  expect(after.id).not.toBe(before.id);
+  expect(before.tables["public.agent_events"]).toBeDefined();
+  expect(after.tables["public.agent_events"]).toBeUndefined();
+  for (const table of ["public.events", "public.rsvps", "public.join_attempts"]) {
+    expect(after.tables[table].indexes).toEqual(before.tables[table].indexes);
+  }
+});
+
 it("refuses a different agent-testdb database before connecting", async () => {
   await expect(createMigrationFixture("postgres://agent_test@agent-testdb:5432/postgres"))
     .rejects.toThrow("refusing before connecting");
 });
 
-describe.skipIf(!process.env.DATABASE_URL)("1013 populated shared-agent-events migration (owned test schema)", () => {
+describe.skipIf(!process.env.DATABASE_URL)("1014 populated shared-agent-events migration (owned test schema)", () => {
   let fixture: MigrationFixture;
   beforeEach(async () => {
     fixture = await createMigrationFixture(process.env.DATABASE_URL!);
