@@ -26,6 +26,7 @@
   // it (abort/ignore is not server rollback), so a newer save cannot overtake an
   // older write that may still commit. Not solved: cross-tab or unknown-outcome races.
   var pending = false;
+  var pendingRequest = 0;
   var generation = 0;
   // Owned client deadline for one save: fetch plus response-body completion
   // (TOG-11625; mirrors PROFILE_SAVE_DEADLINE_MS in src/islands/contracts.ts).
@@ -165,6 +166,9 @@
     var controller = currentAbort;
     clearDeadline();
     inflight = false;
+    // Deadline expiry is the documented unknown-outcome boundary: the request
+    // is abandoned and the member may retry explicitly.
+    pending = false;
     if (controller) {
       try { controller.abort(); } catch (x) {}
     }
@@ -243,6 +247,7 @@
     if (errs.length) return errorList(errs);
     pending = true;
     var request = ++generation;
+    pendingRequest = request;
     // The owned deadline covers the whole write: fetch plus response-body
     // completion. On expiry the request no longer owns feedback — late
     // completions are dropped by the generation guard, and the uncertain
@@ -300,7 +305,7 @@
         notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
       })
       .then(function () {
-        pending = false;
+        if (pendingRequest === request) pending = false;
       });
   });
 })();
