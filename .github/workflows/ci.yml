@@ -109,8 +109,15 @@ jobs:
           A11Y_RESULT: ${{ needs.a11y.result }}
         run: test "$A11Y_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Migration history needs the base commit; fresh (hosted/overflow)
+          # workspaces lack it, unlike reused self-hosted ones.
+          fetch-depth: 0
       - name: Job-private localhost:5432 forward to the Postgres service
         run: |
+          # On hosted/overflow runners the job container's root does not own the
+          # runner-owned checkout, so Git refuses it as dubious ownership.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
