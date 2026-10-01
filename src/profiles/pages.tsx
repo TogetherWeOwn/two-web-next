@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
-import { Layout } from "../pages";
+import { JoinResultBanner, Layout } from "../pages";
+import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import {
   MEMBER_PROFILE_ISLAND,
@@ -58,10 +59,11 @@ export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
   appUrl: string;
+  joinResult?: JoinResult | null;
   stats?: MemberStats | null;
   errors?: Record<string, string>;
   values?: { bio: string; games_text: string; timezone: string };
-}> = ({ member, isOwner, appUrl, stats, errors, values }) => {
+}> = ({ member, isOwner, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const form = values ?? { bio: member.bio ?? "", games_text: member.games.join("\n"), timezone: member.timezone ?? "" };
@@ -79,6 +81,7 @@ export const ProfilePage: FC<{
         </nav>
       </header>
       <main id="main" tabindex={-1}>
+        {joinResult ? <JoinResultBanner result={joinResult} /> : null}
         <section aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
           <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="avatar">
             {img ? <img src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
