@@ -117,16 +117,52 @@ describe("W15 auth/join in Miniflare", () => {
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });
 
-  it("completes the one-click already-member join and honors the signed return cookie", async () => {
+  it("completes the one-click already-member join and renders the banner on the actual landing", async () => {
     joinStatus = 204;
-    const start = await request("/join/discord?source=web-homepage&next=%2Fevents");
+    // Review CHANGES (45bc0ea): assert the callback's ACTUAL redirect
+    // destination (/join is DB-free, so it renders in this fixture), not a
+    // different page. First render shows the already-member banner with the
+    // real reinvite action, then it's gone.
+    const start = await request("/join/discord?source=web-homepage&next=%2Fjoin");
     const url = new URL(start.headers.get("location")!);
     expect(url.searchParams.get("redirect_uri")).toBe(`${STAGING_APP_URL}/join/callback`);
     const result = await request(`/join/callback?code=test-code&state=${url.searchParams.get("state")}`, { headers: { cookie: cookie(start) } });
     expect(result.status).toBe(302);
-    expect(result.headers.get("location")).toBe("/events");
+    expect(result.headers.get("location")).toBe("/join");
     expect(result.headers.getSetCookie().join("\n")).toContain("__Host-two_join_next=; Max-Age=0");
-    expect(await (await request("/", { headers: { cookie: cookie(result) } })).text()).toContain("Worker Member");
+    const view = await request("/join", { headers: { cookie: cookie(result) } });
+    const html = await view.text();
+    expect(html).toContain('data-testid="join-result"');
+    expect(html).toContain('data-testid="reinvite-link"');
+    const again = await request("/join", { headers: { cookie: cookie(view) } });
+    expect(await again.text()).not.toContain('data-testid="join-result"');
+    expect(calls.map((c) => c.path)).toEqual(expectedPaths);
+  });
+
+  it("carries an explicit ?next= through ordinary login and clears the journey cookies", async () => {
+    const start = await request("/auth/discord?next=%2Fe%2Fsunday-squad-01");
+    expect(start.headers.getSetCookie().join("\n")).toContain("__Host-two_login_next=");
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const login = await request(`/auth/discord/callback?code=test-code&state=${state}`, { headers: { cookie: cookie(start) } });
+    expect(login.status).toBe(302);
+    expect(login.headers.get("location")).toBe("/e/sunday-squad-01");
+    const cleared = login.headers.getSetCookie().join("\n");
+    expect(cleared).toContain("__Host-two_login_next=; Max-Age=0");
+    expect(cleared).toContain("__Host-two_login_intended=; Max-Age=0");
+    expect(calls.map((c) => c.path)).toEqual(expectedPaths);
+  });
+
+  it("returns a bounced guest to the page they asked for (legacy url.intended)", async () => {
+    const bounce = await request("/profile");
+    expect(bounce.status).toBe(302);
+    expect(bounce.headers.get("location")).toBe("/auth/discord");
+    expect(bounce.headers.getSetCookie().join("\n")).toContain("__Host-two_login_intended=");
+    const start = await request("/auth/discord", { headers: { cookie: cookie(bounce) } });
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const login = await request(`/auth/discord/callback?code=test-code&state=${state}`, {
+      headers: { cookie: `${cookie(bounce)}; ${cookie(start)}` },
+    });
+    expect(login.headers.get("location")).toBe("/profile");
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });
 
@@ -143,11 +179,16 @@ describe("W15 auth/join in Miniflare", () => {
   });
 
   it("rejects a signed-state mismatch without a Discord exchange", async () => {
-    const start = await request("/auth/discord");
+    const start = await request("/auth/discord?next=%2Fprofile");
     const res = await request("/auth/discord/callback?code=test-code&state=forged", { headers: { cookie: cookie(start) } });
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
-    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+    const cleared = res.headers.getSetCookie().join("\n");
+    expect(cleared).not.toContain("__Host-two_session=");
+    // The failure path still consumes the journey — a stale next never leaks
+    // into a later sign-in.
+    expect(cleared).toContain("__Host-two_login_next=; Max-Age=0");
+    expect(cleared).toContain("__Host-two_login_intended=; Max-Age=0");
     expect(calls).toHaveLength(0);
   });
 

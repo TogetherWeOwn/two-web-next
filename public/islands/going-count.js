@@ -83,7 +83,20 @@
           return r && typeof r === "object" && !Array.isArray(r) && r.event_key === key;
         });
         if (!row || !Number.isSafeInteger(row.going_count) || row.going_count < 0) return;
-        var capacities = nodes.map(function (node) { return capacityFor(row, node); });
+        // The keyed snapshot carries the current cap (`eventJson`); a
+        // moderator capacity edit between SSR and refresh must move both
+        // displays, not just the count. Any malformed snapshot capacity
+        // rejects the row as a whole, like a malformed count. Rows without
+        // the key are an older shape: each badge keeps its strictly
+        // validated SSR cap instead.
+        var fromSnapshot = row.capacity !== undefined;
+        if (fromSnapshot && row.capacity !== null &&
+            (!Number.isSafeInteger(row.capacity) || row.capacity < 1)) return;
+        var snapshotCapacity = fromSnapshot ? row.capacity : null;
+        var capacities = nodes.map(function (node) {
+          if (fromSnapshot) return snapshotCapacity;
+          return capacityFor(row, node);
+        });
         nodes.forEach(function (node, index) {
           var capacity = capacities[index];
           if (capacity === undefined) return;
@@ -91,9 +104,20 @@
           var count = node.querySelector("[data-count]");
           if (count) count.textContent = countText(row.going_count, capacity);
           var spots = node.querySelector("[data-spots]");
-          if (spots) {
-            spots.hidden = capacity === null;
-            if (capacity !== null) spots.textContent = spotsLeftText(row.going_count, capacity);
+          if (capacity === null) {
+            // A lifted cap leaves no seats to count: hide the stale line
+            // and, where the DOM supports it, remove it so a later read
+            // cannot compute against the retired number. A newly introduced
+            // cap without a spots node only moves the count; the line
+            // materializes on the next full render - the binder patches
+            // nodes in place, never invents markup.
+            if (spots) {
+              spots.hidden = true;
+              if (typeof spots.remove === "function") spots.remove();
+            }
+          } else if (spots) {
+            spots.hidden = false;
+            spots.textContent = spotsLeftText(row.going_count, capacity);
           }
           var ann = node.querySelector("[data-announcement]");
           if (ann && state) {

@@ -177,9 +177,13 @@ function browser(html: string, ...additionalHtml: string[]) {
     },
     querySelectorAll: (selector: string) => (selector === '[data-island="going-count"]' ? badges.map((badge) => badge.mount) : []),
   };
+  // The merged binder restores the refreshed broadcast the rsvp-button
+  // island consumes; single-badge refreshes reach it, so the stub covers
+  // that path without asserting it here.
   const evalBinder = () =>
     runInNewContext(binder, {
-      document: documentStub,
+      CustomEvent: class { constructor(public type: string, public options: { detail: unknown }) {} get detail() { return this.options.detail; } },
+      document: { ...documentStub, dispatchEvent() { return true; } },
       fetch: (url: string, init: PendingRequest["init"]) =>
         new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
     });

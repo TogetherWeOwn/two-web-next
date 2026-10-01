@@ -474,7 +474,9 @@ describe("RsvpButton shipped binder", () => {
     expect(b.root.getAttribute("data-full")).toBe("false"); expect(b.get("event-full")).toBeNull();
     const badge = b.page.querySelector('[data-island="going-count"]')!;
     expect(badge.getAttribute("data-capacity")).toBe(capacity === null ? "" : "4");
-    expect(badge.querySelector("[data-spots]")!.hidden).toBe(capacity === null);
+    // A lifted cap removes the stale spots line from the markup (main #231);
+    // a finite snapshot keeps it visible. Null-safe: removed nodes query null.
+    expect(badge.querySelector("[data-spots]")?.hidden ?? null).toBe(capacity === null ? null : false);
     if (capacity !== null) expect(badge.querySelector("[data-spots]")!.textContent).toBe("1 of 4 spots left");
     expect(b.get("waitlist-join")).toBeNull(); b.get("rsvp-going")!.click();
     expect(b.requests[2]!.init.body).toBe('{"status":"going"}'); expect(b.requests).toHaveLength(3);
