@@ -2,9 +2,12 @@
 // JSX idiom — no client JS, no component framework. Moderators get labelled
 // fields and field errors; every form posts back to its own route.
 
+import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
+import { SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
+import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 
 const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
@@ -14,27 +17,16 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title} — TWO admin</title>
       <link rel="stylesheet" href="/styles.css" />
-      <style>{`
-        .admin-table { width: 100%; border-collapse: collapse; }
-        .admin-table th, .admin-table td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
-        .field { margin: 1rem 0; }
-        .field label { display: block; font-weight: 700; margin-bottom: .25rem; }
-        .field input, .field textarea, .field select { width: 100%; max-width: 34rem; font: inherit; padding: .5rem; }
-        .field .hint { color: #6b6257; font-size: .85rem; }
-        .field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
-        .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
-        .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
-        .filters .field { margin: 0; }
-      `}</style>
     </head>
     <body>
+      <SkipLink />
       <header class="bar">
         <a class="brand" href="/admin">TWO admin</a>
-        <nav>
+        <nav aria-label="Administration">
           <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
         </nav>
       </header>
-      <main>{children}</main>
+      <main id="main" tabindex={-1}>{children}</main>
       <footer>Together We Own · moderators only</footer>
     </body>
   </html>
@@ -52,7 +44,7 @@ export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, d
   </Shell>
 );
 
-export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number> }> = ({ actor, funnel }) => (
+export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>; zeroSearches?: ZeroResultSearch[] }> = ({ actor, funnel, zeroSearches }) => (
   <Shell title="Dashboard">
     <section>
       <h1>Moderation</h1>
@@ -91,6 +83,34 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number> 
                   <tr key={outcome}>
                     <td>{outcome}</td>
                     <td data-testid={`funnel-${outcome}`}>{n}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      ) : null}
+      {zeroSearches ? (
+        <section data-testid="top-zero-searches">
+          <h2>Top searches with no results</h2>
+          <p>What guests looked for on /events and found nothing. A repeat miss is a game night nobody posted yet.</p>
+          {zeroSearches.length === 0 ? (
+            <p data-testid="top-zero-searches-empty">No missed searches.</p>
+          ) : (
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Search</th>
+                  <th>Misses</th>
+                  <th>Last searched</th>
+                </tr>
+              </thead>
+              <tbody>
+                {zeroSearches.map((r) => (
+                  <tr key={r.query}>
+                    <td>{r.query}</td>
+                    <td>{r.searches}</td>
+                    <td>{r.lastSearchedAt.toISOString()}</td>
                   </tr>
                 ))}
               </tbody>
@@ -151,7 +171,7 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           ) : (
             rows.map((r) => (
               <tr key={r.id}>
-                <td>{r.outcome}</td>
+                <td><a href={`/admin/join-attempts/${r.id}`} aria-label={`View join attempt ${r.id}: ${r.outcome}`}>{r.outcome}</a></td>
                 <td>{r.source ?? ""}</td>
                 <td>{r.discordId ?? ""}</td>
                 <td>{r.requestId ?? ""}</td>
@@ -165,22 +185,73 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
   </Shell>
 );
 
-export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = ({ rows, q, status }) => (
+export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
+  <Shell title={`Join attempt ${row.id}`}>
+    <section>
+      <p><a href="/admin/join-attempts">Back to join attempts</a></p>
+      <h1>Join attempt {row.id}</h1>
+      <p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
+      <h2>Outcome</h2>
+      <dl>
+        <dt>Outcome</dt><dd>{row.outcome}</dd>
+        <dt>Source</dt><dd>{row.source ?? "—"}</dd>
+        <dt>Attempted at (UTC)</dt><dd><time datetime={row.createdAt.toISOString()}>{row.createdAt.toISOString()}</time></dd>
+      </dl>
+      <h2>Trace</h2>
+      <dl>
+        <dt>Request ID</dt><dd>{row.requestId ?? "—"}</dd>
+        <dt>Discord ID</dt><dd>{row.discordId ?? "—"}</dd>
+      </dl>
+    </section>
+  </Shell>
+);
+
+const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({ label, sort, query }) => {
+  const active = query.sort === sort;
+  const order = active && query.order === "asc" ? "desc" : "asc";
+  return (
+    <th scope="col" aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}>
+      <a href={eventListUrl(query, { sort, order, page: 1 })} aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}>
+        {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+      </a>
+    </th>
+  );
+};
+
+export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
       <form method="get" action="/admin/events" class="filters">
+        <input type="hidden" name="sort" value={query.sort} />
+        <input type="hidden" name="order" value={query.order} />
         <div class="field">
           <label for="q">Search</label>
-          <input id="q" name="q" type="search" value={q} />
+          <input id="q" name="q" type="search" value={query.q} />
         </div>
         <div class="field">
           <label for="status">Status</label>
           <select id="status" name="status">
             {["", "draft", "published", "cancelled", "past"].map((s) => (
-              <option value={s} selected={s === status}>
+              <option value={s} selected={s === query.status}>
                 {s === "" ? "All" : s}
               </option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="series">Series</label>
+          <select id="series" name="series">
+            {[["", "All"], ["parent", "Parent"], ["child", "Child"], ["standalone", "Standalone"]].map(([value, label]) => (
+              <option value={value} selected={value === query.series}>{label}</option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="fill">Fill</label>
+          <select id="fill" name="fill">
+            {[["", "All"], ["full", "Full"], ["has_seats", "Has seats"], ["unlimited", "Unlimited"]].map(([value, label]) => (
+              <option value={value} selected={value === query.fill}>{label}</option>
             ))}
           </select>
         </div>
@@ -194,10 +265,10 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = (
       <table class="admin-table" data-testid="events-table">
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Status</th>
-            <th>Starts</th>
-            <th>Actions</th>
+            <EventSortHeader label="Title" sort="title" query={query} />
+            <EventSortHeader label="Status" sort="status" query={query} />
+            <EventSortHeader label="Starts" sort="starts_at" query={query} />
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -232,6 +303,11 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = (
           )}
         </tbody>
       </table>
+      <nav aria-label="Event pages" class="actions">
+        {query.page > 1 ? <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a> : null}
+        <span>Page {query.page}</span>
+        {hasNext ? <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>Next</a> : null}
+      </nav>
     </section>
   </Shell>
 );
@@ -313,6 +389,29 @@ export const EventFormPage: FC<{
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
           </Field>
+          {mode === "new" ? (
+            <fieldset>
+              <legend>Repeat</legend>
+              <Field name="recurrence_frequency" label="Repeats" errors={errors} hint="Empty = a one-off event. Weeks keep the same wall time in the zone above across clock changes.">
+                {(id) => (
+                  <select id={id} name="recurrence_frequency">
+                    <option value="" selected={val(values, "recurrence_frequency") === ""}>Does not repeat</option>
+                    <option value="weekly" selected={val(values, "recurrence_frequency") === "weekly"}>Weekly</option>
+                  </select>
+                )}
+              </Field>
+              <Field name="recurrence_count" label="Occurrences (including the first, max 52)" errors={errors}>
+                {(id) => <input id={id} name="recurrence_count" type="text" inputmode="numeric" value={val(values, "recurrence_count")} />}
+              </Field>
+              <Field name="recurrence_ends_on" label="Repeat until (YYYY-MM-DD)" errors={errors}>
+                {(id) => <input id={id} name="recurrence_ends_on" type="text" value={val(values, "recurrence_ends_on")} />}
+              </Field>
+            </fieldset>
+          ) : row?.recurrenceFrequency ? (
+            <p class="hint" data-testid="series-info">
+              Part of a {row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.
+            </p>
+          ) : null}
           <div class="actions">
             <button type="submit" class="btn" data-testid="save-event">
               {mode === "new" ? "Create draft" : "Save"}
@@ -443,7 +542,7 @@ export const FeaturedFormPage: FC<{
           <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
             {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
-          <Field name="image_url" label="Image URL" errors={errors}>
+          <Field name="image_url" label="Image URL" errors={errors} hint="Full URL on this site or https://cdn.discordapp.com. Other image hosts are blocked by the site's security policy.">
             {(id) => <input id={id} name="image_url" type="url" value={val(values, "image_url")} />}
           </Field>
           <Field

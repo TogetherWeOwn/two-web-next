@@ -95,8 +95,18 @@ Legacy: `PastEvents.php` + `past-events.blade.php` + `PastEventsArchiveTest.php`
   most-recent-first, no RSVP controls, no viewer join (no per-card query).
 - States: empty archive (join pitch + back link); out-of-range page naming the page
   count (`role="status"`); canonical bare on page 1, `?page=N` otherwise.
-- Drift tests pin: page-turn requests, both empty states, canonicals, per-page count,
-  no RSVP control rendered, no viewer-answer query.
+- Progressive enhancement fetches the archive's SSR HTML, never `/events.json`
+  (that collection is authenticated and has different membership). Real paging anchors
+  still work without JavaScript; modified clicks keep normal browser navigation.
+- The binder patches the stable state/list/pager nodes, updates the canonical and
+  `og:url` with history, and aborts superseded reads. Failures keep current cards and
+  allow retry; back/forward re-reads without adding a history entry.
+- Count and page reads share the same archived-row predicate and captured clock.
+  One grouped going-count aggregate serves the page; no viewer-answer lookup or N+1.
+- Drift tests execute the shipped binder and real Hono/Drizzle reads hermetically:
+  page-turn requests, both empty states, canonicals, per-page count, no RSVP control,
+  no viewer-answer query, stale-response rejection, retry and back/forward. The W8
+  agent-testdb/CI-service test also pins row eligibility and stable newest-first paging.
 
 ## 5. MemberProfile (slice 5, after W7)
 

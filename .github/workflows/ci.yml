@@ -22,15 +22,46 @@ jobs:
     name: check
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+      - name: Seeded admin properties (10s budget, local fixtures)
+        run: timeout 10s npm run test:admin-properties
+      - name: Apply migrations
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # Exercise the exact pre-deploy invocation on the same migrated service.
+      - name: Configuration drift check + selftest
+        run: npm run config:check
+      - name: Check (typecheck + coverage gate)
+        run: npm run typecheck && npm run test:coverage
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Coverage job summary
+        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report
+        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
       - name: Neon backup selftest (stubbed, no secrets)
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
