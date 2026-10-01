@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
@@ -10,16 +9,18 @@ import { build } from "esbuild";
 import { chromium, request as apiRequest } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { assertNoViolations, auditCases, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 
 const output = resolve("artifacts/a11y");
-const scratch = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "two-a11y-"));
+const lifecycle = createAuditLifecycle();
+const stop = lifecycle.stop;
+let scratch;
 const report = { sourceRevision: process.env.GITHUB_SHA || process.env.A11Y_REVISION || "local working tree", tags: WCAG_AA_TAGS, environment: "wrangler dev / local fixtures only", pages: [], failures: [] };
 let server;
 let browser;
 let fixture;
 let readiness;
 let serverLog = "";
-let shuttingDown = false;
 
 async function freePort() {
   const socket = createServer();
@@ -29,46 +30,37 @@ async function freePort() {
   return port;
 }
 
-async function stop() {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  await browser?.close();
-  if (server && server.exitCode === null) {
-    const exited = once(server, "exit");
-    server.kill("SIGTERM");
-    const timer = setTimeout(() => server.kill("SIGKILL"), 5000);
-    await exited;
-    clearTimeout(timer);
-  }
-  await readiness?.dispose();
-  await fixture?.dispose();
-  await rm(scratch, { recursive: true, force: true });
-}
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => { void stop().finally(() => process.exit(1)); });
+  process.once(signal, () => {
+    report.failures.push(`Audit cancelled by ${signal}`);
+    process.exitCode = 1;
+    // Do not exit early: finally waits for this same promise and writes evidence.
+    void stop().catch(() => {});
+  });
 }
 
 try {
   await mkdir(output, { recursive: true });
-  await symlink(resolve("node_modules"), join(scratch, "node_modules"), "dir");
+  scratch = await lifecycle.acquire(() => mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "two-a11y-")), (path) => rm(path, { recursive: true, force: true }));
+  await lifecycle.run(() => symlink(resolve("node_modules"), join(scratch, "node_modules"), "dir"));
   const fixtureBundle = join(scratch, "fixtures.mjs");
-  await build({ entryPoints: ["ci/a11y-fixtures.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: fixtureBundle,
-    define: { "import.meta.url": JSON.stringify(pathToFileURL(resolve("test/helpers/member-data-db.ts")).href) } });
-  const { fixtures } = await import(pathToFileURL(fixtureBundle).href);
+  await lifecycle.run(() => build({ entryPoints: ["ci/a11y-fixtures.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: fixtureBundle,
+    define: { "import.meta.url": JSON.stringify(pathToFileURL(resolve("test/helpers/member-data-db.ts")).href) } }));
+  const { fixtures } = await lifecycle.run(() => import(pathToFileURL(fixtureBundle).href));
   const database = process.env.DATABASE_URL || "postgres://agent_test@agent-testdb:5432/two_web_next";
-  fixture = await fixtures(database);
+  fixture = await lifecycle.acquire(() => fixtures(database), (resource) => resource.dispose());
   // The same fixture entry is bundled in Node only to enumerate Hono's real GET registry.
   const bundled = join(scratch, "routes.mjs");
-  await build({ entryPoints: ["ci/a11y-worker.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: bundled });
-  const { routes, coverage } = await import(pathToFileURL(bundled).href);
+  await lifecycle.run(() => build({ entryPoints: ["ci/a11y-worker.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: bundled }));
+  const { routes, coverage } = await lifecycle.run(() => import(pathToFileURL(bundled).href));
   const scenarios = auditCases(routes, coverage);
   assert(scenarios.length > 0, "Empty accessibility coverage");
   report.coverage = { registered: [...new Set(routes.filter((r) => r.method === "GET").map((r) => r.path))], exclusions: Object.entries(coverage).filter(([, entry]) => entry.skip).map(([route, entry]) => ({ route, reason: entry.reason })) };
 
-  const port = await freePort();
+  const port = await lifecycle.run(freePort);
   const origin = `https://127.0.0.1:${port}`;
   const config = join(scratch, "wrangler.json");
-  await writeFile(config, JSON.stringify({
+  await lifecycle.run(() => writeFile(config, JSON.stringify({
     name: "two-web-next-a11y",
     main: resolve("ci/a11y-worker.ts"),
     compatibility_date: "2026-09-29",
@@ -76,24 +68,26 @@ try {
     assets: { directory: resolve("public") },
     vars: { APP_URL: origin, A11Y_DATABASE_URL: database, A11Y_SCHEMA: fixture.schemaName, A11Y_CI: String(process.env.CI === "true" && process.env.GITHUB_ACTIONS === "true"), SESSION_SECRET: fixture.sessionSecret, DISCORD_CLIENT_ID: "local-fixture", DISCORD_GUILD_ID: "local-fixture", DISCORD_INVITE_URL: "/discord" },
     dev: { local_protocol: "https" },
-  }));
+  })));
   // Do not inherit DB URLs, Cloudflare credentials, or .dev.vars. This worker has no remote bindings.
   const env = Object.fromEntries(["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LD_LIBRARY_PATH", "FONTCONFIG_FILE", "FONTCONFIG_PATH", "NODE_EXTRA_CA_CERTS"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
-  server = spawn(process.execPath, [resolve("node_modules/wrangler/bin/wrangler.js"), "dev", "--local", "--config", config, "--ip", "127.0.0.1", "--port", String(port), "--inspector-port", "0", "--persist-to", join(scratch, "state")], { cwd: scratch, env: { ...env, CI: "true", WRANGLER_SEND_METRICS: "false" }, stdio: ["ignore", "pipe", "pipe"] });
+  server = await lifecycle.acquire(() => spawn(process.execPath, [resolve("node_modules/wrangler/bin/wrangler.js"), "dev", "--local", "--config", config, "--ip", "127.0.0.1", "--port", String(port), "--inspector-port", "0", "--persist-to", join(scratch, "state")], { cwd: scratch, env: { ...env, CI: "true", WRANGLER_SEND_METRICS: "false" }, stdio: ["ignore", "pipe", "pipe"] }), stopChildProcess);
   server.on("error", (error) => { serverLog += `\n${error.message}`; });
   for (const stream of [server.stdout, server.stderr]) stream.on("data", (data) => { serverLog += data.toString(); });
-  readiness = await apiRequest.newContext({ ignoreHTTPSErrors: true });
+  readiness = await lifecycle.acquire(() => apiRequest.newContext({ ignoreHTTPSErrors: true }), (resource) => resource.dispose());
   const deadline = Date.now() + 60000;
   let ready = false;
-  while (Date.now() < deadline && server.exitCode === null) {
+  while (Date.now() < deadline && server.exitCode === null && server.signalCode === null) {
+    lifecycle.assertRunning();
     try { ready = (await readiness.get(`${origin}/up`, { timeout: 1000 })).ok(); } catch {}
     if (ready) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   assert(ready, "Local wrangler failed to become ready (see wrangler.log)");
-  browser = await chromium.launch();
+  browser = await lifecycle.acquire(() => chromium.launch(), (resource) => resource.close());
   for (const viewport of [{ width: 360, height: 780 }, { width: 1280, height: 900 }]) {
     for (const scenario of scenarios) {
+      lifecycle.assertRunning();
       const label = `${scenario.identity} ${scenario.path} ${scenario.state || "default"} ${viewport.width}px`;
       const result = { ...scenario, viewport, label };
       const context = await browser.newContext({ viewport, ignoreHTTPSErrors: true });
@@ -143,6 +137,7 @@ try {
     }
   }
   // Prove that axe + our gate reject a real violation rather than merely completing scans.
+  lifecycle.assertRunning();
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.setContent('<!doctype html><html lang="en"><head><title>Gate sentinel</title></head><body><main><h1>Sentinel</h1><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></main></body></html>');

@@ -27,7 +27,13 @@ export function auditDatabaseUrl(raw, githubActions = false) {
   const local = url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "" && url.pathname === "/two_web_next";
   const ci = githubActions && url.hostname === "localhost" && url.username === "postgres" && url.password === "ci" && url.pathname === "/postgres";
   if (!local && !ci) return refuse();
+  // An omitted URL port must never inherit PGPORT from the runner.
+  url.port = "5432";
   return url;
+}
+
+export function auditDatabaseOptions(url, schemaName) {
+  return { max: 1, port: 5432, password: () => url.password, connect_timeout: 5, connection: { search_path: schemaName }, onnotice: () => {} };
 }
 
 export function redactAuditLog(log) {

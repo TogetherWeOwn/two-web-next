@@ -2,6 +2,8 @@ import type { QueueMessage } from "./jobs/types";
 
 export type Env = AgentEventsEnv & {
   APP_URL: string;
+  // Worker-first static assets: fetched only after the host guard admits the request.
+  ASSETS?: Pick<Fetcher, "fetch">;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
   DISCORD_INVITE_URL: string;

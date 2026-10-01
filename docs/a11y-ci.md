@@ -41,8 +41,16 @@ screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
   enabled. Raw sessions and Drizzle use separate clients to preserve timestamp
   serialization.
 - The runner stops Wrangler, closes its clients and drops only its own schema
-  on completion; run-owned scratch is removed. No shared-table truncate or
-  production/staging database access is involved.
+  on completion; run-owned scratch is removed. SIGINT/SIGTERM seal resource
+  acquisition and join in-flight setup before cleanup. Signal and `finally`
+  callers share one shutdown promise; a signal-exited Wrangler is not awaited
+  a second time. Every disposer is attempted even if another fails, and
+  cancellation exits nonzero only after cleanup and report generation.
+  No shared-table truncate or production/staging database access is involved.
+- Audit DB URLs normalize an omitted port to 5432; all audit client options also
+  pin port/password so runner `PGPORT`/`PGPASSWORD` cannot change the approved
+  destination. Constructor-only regressions exercise conflicting inherited
+  values without connecting.
 
 ## Gate contract
 

@@ -4,7 +4,7 @@ import { URL as NodeURL } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -28,7 +28,8 @@ function eventRow(n: number): typeof events.$inferSelect {
   return {
     id: n, eventKey: `archive-${n}`, title: `Past game ${n}`, game: "Chess", description: null,
     startsAt: date, endsAt: date, timezone: "UTC", location: null, capacity: 10, status: "past",
-    discordEventId: null, createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
+    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
     recurrenceCount: null, recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
     createdAt: date, updatedAt: date,
   };

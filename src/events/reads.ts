@@ -2,15 +2,18 @@
 import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
+import { users } from "../db/schema";
 import { EVENTS_PAST_DRAWER_LIMIT, escapeLikeTerm, PAST_EVENTS_PAGE_SIZE } from "../islands/contracts";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
+
+export type HomeEvent = Pick<PublicEvent, "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount">;
 
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PAST_EVENTS_PAGE_SIZE;
 export const JSON_MAX_LIMIT = 100;
 
-async function withGoing(db: Db, rows: (typeof events.$inferSelect)[]): Promise<PublicEvent[]> {
+async function withGoing(db: Pick<Db, "select">, rows: (typeof events.$inferSelect)[]): Promise<PublicEvent[]> {
   if (rows.length === 0) return [];
   const counts = await db
     .select({ eventId: rsvps.eventId, n: count() })
@@ -56,6 +59,47 @@ export async function listUpcoming(db: Db, now = new Date(), opts: CalendarReadO
     .where(and(calendarVisible(opts), gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
   return withGoing(db, rows);
+}
+
+export const HOME_EVENTS_DEADLINE_MS = 1000;
+// Each of the two reads is cancelled server-side before the response deadline.
+export const HOME_EVENTS_DB_TIMEOUT_MS = 400;
+
+/** Home teaser: published and not ended, capped in SQL; calendar visibility is broader. */
+export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEvent[]> {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select set_config('lock_timeout', ${`${HOME_EVENTS_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${HOME_EVENTS_DB_TIMEOUT_MS}ms`}, true)`,
+    );
+    const rows = await tx
+      .select()
+      .from(events)
+      .where(and(eq(events.status, "published"), gte(events.endsAt, now)))
+      .orderBy(asc(events.startsAt), asc(events.id))
+      .limit(3);
+    // The homepage gets public signposts and an aggregate, never creator or RSVP identities.
+    return (await withGoing(tx, rows)).map(({ eventKey, title, startsAt, timezone, location, goingCount }) =>
+      ({ eventKey, title, startsAt, timezone, location, goingCount }));
+  });
+}
+
+/** Bound connection setup as well as both optional reads; never log driver messages/SQL/identities. */
+export async function loadHomeUpcoming(openDb: () => Promise<Db | null>): Promise<HomeEvent[] | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = Promise.resolve().then(openDb).then((db) => db ? listHomeUpcoming(db) : null);
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("HomeEventsDeadline")), HOME_EVENTS_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([read, deadline]);
+  } catch (err) {
+    console.warn("Home events unavailable; serving the fallback.", {
+      exception: err instanceof Error && err.message === "HomeEventsDeadline" ? "HomeEventsDeadline" : "ReadFailure",
+    });
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Identity wins over display eligibility: hidden, renamed and paginated rows still suppress Discord copies. */
@@ -104,10 +148,29 @@ export async function listPast(db: Db, page: number, now = new Date(), q: string
   };
 }
 
+export async function withGoingCount(db: Db, row: typeof events.$inferSelect): Promise<PublicEvent> {
+  return (await withGoing(db, [row]))[0]!;
+}
+
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
   if (!row) return null;
-  return (await withGoing(db, [row]))[0] ?? null;
+  return withGoingCount(db, row);
+}
+
+export type EventAttendee = { id: string; name: string };
+
+/** Member-only projection, never part of PublicEvent or the feeds/JSON. */
+export async function listGoingAttendees(db: Db, eventId: number): Promise<EventAttendee[]> {
+  // Legacy answer-time order, not the admin roster's most-recent-update order.
+  // Partial select/join/orderBy: https://orm.drizzle.team/docs/select
+  const rows = await db
+    .select({ id: users.id, name: users.username })
+    .from(rsvps)
+    .innerJoin(users, eq(rsvps.userId, users.id))
+    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "going")))
+    .orderBy(asc(rsvps.createdAt), asc(rsvps.id));
+  return rows.filter((row) => Boolean(row.name));
 }
 
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */

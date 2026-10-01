@@ -1,3 +1,7 @@
+// route-inventory: GET /profile
+// route-inventory: GET /members/:user
+// route-inventory: PATCH /members/:user
+// route-inventory: POST /members/:user
 // W7 member journeys: /profile, /members/:user, PATCH /members/:user (TOG-9686).
 //
 // Exposure tests come first by design: the matrix pins what a guest, a signed-in

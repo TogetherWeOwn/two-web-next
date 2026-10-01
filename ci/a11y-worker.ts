@@ -1,7 +1,7 @@
 // Test-only entry: never referenced by the deployment config.
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { auditDatabaseUrl } from "./a11y-policy.mjs";
+import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
 import app from "../src/index";
 import { maintenanceHandler, notFoundHandler, rateLimitExceeded } from "../src/errors";
 import { adminSchema, schema } from "../src/db/index";
@@ -20,7 +20,7 @@ export default {
     globalThis.fetch = async () => { throw new Error("Outbound HTTP is disabled in the local audit worker"); };
     if (!/^w15_[a-f0-9]{32}$/.test(env.A11Y_SCHEMA)) throw new Error("Invalid isolated fixture schema");
     const url = auditDatabaseUrl(env.A11Y_DATABASE_URL, env.A11Y_CI === "true");
-    const options = { max: 1, password: () => url.password, connect_timeout: 5, connection: { search_path: env.A11Y_SCHEMA }, onnotice: () => {} };
+    const options = auditDatabaseOptions(url, env.A11Y_SCHEMA);
     const client = postgres(url.href, options);
     const sessionClient = postgres(url.href, options);
     try {

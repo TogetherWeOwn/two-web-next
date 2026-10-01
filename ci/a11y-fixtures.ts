@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { auditDatabaseUrl } from "./a11y-policy.mjs";
+import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
 import { createMemberDataFixture } from "../test/helpers/member-data-db";
 import { cookieFor, env, MODERATOR, seed, SUBJECT } from "../test/helpers/member-data";
 import { events, featuredContents } from "../src/db/admin-schema";
@@ -12,8 +12,8 @@ export async function fixtures(raw: string) {
   const fixture = await createMemberDataFixture(raw);
   // Drizzle replaces timestamp serializers on its client. Raw session SQL
   // keeps a separate client so Date parameters still serialize normally.
-  const sessionClient = postgres(url.href, { max: 1, password: () => url.password, connect_timeout: 5, connection: { search_path: fixture.schemaName } });
-  const dispose = async () => { await sessionClient.end(); await fixture.dispose(); };
+  const sessionClient = postgres(url.href, auditDatabaseOptions(url, fixture.schemaName));
+  const dispose = async () => { try { await sessionClient.end(); } finally { await fixture.dispose(); } };
   try {
     await seed(fixture.db);
     await fixture.db.insert(events).values([

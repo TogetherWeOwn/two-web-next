@@ -45,6 +45,30 @@ test("refuse staging, production and ambiguous database configuration before con
   ]) assert.throws(() => auditDatabaseUrl(raw), /refusing before connecting/);
 });
 
+test("every audit client pins authorized port/password despite runner PGPORT/PGPASSWORD", () => {
+  const execution = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import assert from "node:assert/strict";
+    import postgres from "postgres";
+    import { auditDatabaseOptions, auditDatabaseUrl } from "./ci/a11y-policy.mjs";
+    for (const [raw, ci] of [
+      ["postgres://agent_test@agent-testdb/two_web_next", false],
+      ["postgres://agent_test@agent-testdb:5432/two_web_next", false],
+      ["postgres://postgres:ci@localhost/postgres", true],
+    ]) {
+      const url = auditDatabaseUrl(raw, ci);
+      assert.equal(url.port, "5432");
+      for (const schema of ["fixture-session", "worker-db", "worker-session"]) {
+        const client = postgres(url.href, auditDatabaseOptions(url, schema));
+        assert.deepEqual(client.options.port, [5432]);
+        assert.equal(client.options.pass(), ci ? "ci" : "");
+        assert.equal(client.options.connection.search_path, schema);
+        await client.end(); // Constructor-only: no database connection.
+      }
+    }
+  `], { env: { ...process.env, PGPORT: "5433", PGPASSWORD: "unauthorized-fixture-value" }, encoding: "utf8" });
+  assert.equal(execution.status, 0, execution.stderr);
+});
+
 test("audit artifacts omit Wrangler's synthetic session and DB configuration values", () => {
   const log = 'env.SESSION_SECRET ("synthetic-value")\nenv.A11Y_DATABASE_URL ("fixture-url")\nenv.APP_URL ("https://127.0.0.1:1234")\nGET /up 200';
   assert.equal(redactAuditLog(log), 'env.SESSION_SECRET: [redacted]\nenv.A11Y_DATABASE_URL: [redacted]\nenv.APP_URL ("https://127.0.0.1:1234")\nGET /up 200');
