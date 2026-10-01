@@ -53,6 +53,38 @@ caller-only write, decoy, lock and 12/minute bucket; successful submissions retu
 POST to that JSON resource still returns 405. The global same-origin guard
 applies to the HTML adapter as to all cookie-authenticated mutations.
 
+## Redirect map
+
+Legacy-only aliases ([TOG-11156](/TOG/issues/TOG-11156)); request proof:
+`test/legacy-redirects.test.ts`. GET and automatic HEAD share this behavior.
+
+| Legacy method + Hono pattern | Status | Location | Query policy |
+|---|---|---|---|
+| `GET /admin/events/create` | 301 | `/admin/events/new` | Drop all |
+| `GET /admin/events/:key/edit` | 301 | `/admin/events/:key` | Drop all |
+| `GET /admin/featured-contents` | 301 | `/admin/featured` | Drop all |
+| `GET /admin/featured-contents/create` | 301 | `/admin/featured/new` | Drop all |
+| `GET /admin/featured-contents/:id/edit` | 301 if mapped, 404 if missing/invalid, 503 if DB unavailable | `/admin/featured/{nativeId}` resolved by `featured_contents.legacy_id = :id` | Drop all |
+| `GET /auth/discord/redirect` | 302 | `/auth/discord` | Preserve only `next` accepted by `safeNext` (`src/join/service.ts`), URL-encoded; otherwise no query |
+
+Admin aliases run behind the same moderator guard as their targets: guests
+302 to `/auth/discord`, signed-in non-moderators receive the same 403. No
+resource/database binding is read before that guard. Four aliases need no
+resource reads; the featured edit alias looks up only the native ID by the
+imported `legacy_id` after authorization. Source IDs stay decimal strings
+(including IDs beyond JavaScript's safe integer range); a missing mapping
+never falls back to a same-number native row. All return `private, no-store`
+after the guard. Dynamic event keys are encoded as one path segment; the
+literal create alias is registered before the event-key route.
+`/admin/join-attempts/:id` already matches the legacy path and needs no redirect.
+
+Login uses a temporary, `no-store` redirect rather than a permanent OAuth
+cache entry. Invalid `next` (including `//evil`), `state`, `code`, and all
+other query keys are discarded. This alias does not start OAuth or issue a
+cookie; `/auth/discord` remains responsible for fresh state. Forwarding a
+safe `next` is not a claim that ordinary login resumes it after the callback:
+that existing gap remains recorded in `docs/w15-auth-tests.md`.
+
 ## Discord redirect-URI discipline (W6)
 
 Discord answers `redirect_uri` values that are not registered on the
@@ -87,6 +119,7 @@ The OAuth aliases mentioned above remain frozen too:
 | Path | Anonymous GET contract |
 |---|---|
 | `/auth/discord` | 302 to Discord authorize, callback on the target host |
+| `/auth/discord/redirect` | 302 to `/auth/discord`, `no-store`, in both cutover phases; no redirect following |
 | `/auth/discord/callback` | 302 to `/?n=signin_failed` without code/state |
 
 Retired paths, carried forward from legacy `ci/live-seo-probe.mjs`, plus the
@@ -105,7 +138,6 @@ to an error page, on the Next candidate in both phases.
 | `/wp-login.php` | 404 |
 | `/livewire/livewire.js` | 404 |
 | `/livewire/update` | 404 (GET only; no mutation) |
-| `/auth/discord/redirect` | 404 (legacy alias deliberately not ported) |
 | `/health` | 404 (removed Next-only diagnostic; `/up` is the health endpoint) |
 | `/healthz` | 404 (removed Next-only diagnostic, not an alias for `/up`) |
 | `/db-ping` | 404 (removed Next-only diagnostic, no database probe) |
@@ -160,7 +192,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/featured/new` | moderator | admin: create form |
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
-| `GET /auth/discord` | public | app: current equivalent of legacy `/auth/discord/redirect` |
+| `GET /auth/discord` | public | app: OAuth start; legacy `/auth/discord/redirect` now temporarily redirects here |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
 | `GET /discord` | public | seo: invite redirect |
 | `GET /e/:key` | public-draft-moderator | events: legacy `/e/{event}` |

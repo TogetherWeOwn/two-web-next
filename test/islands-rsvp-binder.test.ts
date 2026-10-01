@@ -59,7 +59,7 @@ const event: PublicEvent = {
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
   recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
-  createdAt: new Date(), updatedAt: new Date(),
+  createdAt: new Date(), updatedAt: new Date(), icsSequence: 0n,
 };
 function browser(state: "open" | "going" | "waitlisted" | "closed" | "full" = "open", loginUrl = "/join/discord?next=%2Fe%2Fraid%2Fone", integrated = false) {
   const e = { ...event, status: state === "closed" ? "cancelled" : "published", goingCount: state === "full" ? 4 : 1 };

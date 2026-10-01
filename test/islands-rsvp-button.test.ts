@@ -245,7 +245,7 @@ function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<st
     discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
-    createdAt: startsAt, updatedAt: startsAt, ...over,
+    createdAt: startsAt, updatedAt: startsAt, icsSequence: 0n, ...over,
   };
   const queries: { sql: string; params: unknown[] }[] = [];
   const cols = Object.keys(getTableColumns(events)) as (keyof typeof event)[];
