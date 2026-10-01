@@ -406,30 +406,32 @@ export async function getEvent(db: Db, eventKey: string): Promise<EventRow | nul
 // EventsTable: "no delete anywhere on this resource").
 
 export async function createFeatured(db: Db, actor: Actor, input: FeaturedFormInput): Promise<FeaturedRow> {
-  const [row] = await db
-    .insert(featuredContents)
-    .values({
-      title: input.title,
-      body: input.body,
-      url: input.url,
-      imageUrl: input.imageUrl,
-      imageAlt: input.imageAlt,
-      isPublished: input.isPublished,
-      position: input.position,
-      startsAt: input.startsAtUtc,
-      endsAt: input.endsAtUtc,
-      createdBy: actor.id,
-    })
-    .returning();
-  if (!row) throw new Error("featured insert returned no row");
-  await audit(db, {
-    subjectType: "FeaturedContent",
-    subjectId: String(row.id),
-    causerId: actor.id,
-    description: `created featured content ${row.title}`,
-    properties: dirty({} as Record<string, unknown>, row as unknown as Record<string, unknown>),
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(featuredContents)
+      .values({
+        title: input.title,
+        body: input.body,
+        url: input.url,
+        imageUrl: input.imageUrl,
+        imageAlt: input.imageAlt,
+        isPublished: input.isPublished,
+        position: input.position,
+        startsAt: input.startsAtUtc,
+        endsAt: input.endsAtUtc,
+        createdBy: actor.id,
+      })
+      .returning();
+    if (!row) throw new Error("featured insert returned no row");
+    await audit(tx, {
+      subjectType: "FeaturedContent",
+      subjectId: String(row.id),
+      causerId: actor.id,
+      description: `created featured content ${row.title}`,
+      properties: dirty({} as Record<string, unknown>, row as unknown as Record<string, unknown>),
+    });
+    return row;
   });
-  return row;
 }
 
 export async function updateFeatured(
