@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { build } from "esbuild";
+import { request as httpRequest } from "node:http";
 import { convertV4MiniflareOptions, Miniflare, Response as WorkerResponse, type Request as WorkerRequest } from "miniflare";
 import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
 
@@ -12,8 +13,28 @@ describe("W15 auth/join in Miniflare", () => {
   let joinStatus: 201 | 204 = 201;
   const cookie = (res: { headers: { getSetCookie(): string[] } }) =>
     res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-  const request = (path: string, init: Parameters<Miniflare["dispatchFetch"]>[1] = {}) =>
-    mf.dispatchFetch(`${STAGING_APP_URL}${path}`, { ...init, redirect: "manual" });
+  // Send the configured Host on the local HTTP socket. Miniflare's fetch/RPC
+  // bridge restores the URL but substitutes its loopback transport Host.
+  const request = async (path: string, init: RequestInit = {}) => {
+    const input = new Request(`${STAGING_APP_URL}${path}`, init);
+    if (!input.headers.has("host")) input.headers.set("host", new URL(STAGING_APP_URL).host);
+    const body = input.body ? Buffer.from(await input.arrayBuffer()) : undefined;
+    const localUrl = new URL(path, await mf.ready);
+    return new Promise<WorkerResponse>((resolve, reject) => {
+      const req = httpRequest(localUrl.toString(), { method: input.method, headers: Object.fromEntries(input.headers) }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("error", reject);
+        res.on("end", () => {
+          const headers: [string, string][] = [];
+          for (let i = 0; i < res.rawHeaders.length; i += 2) headers.push([res.rawHeaders[i]!, res.rawHeaders[i + 1]!]);
+          resolve(new WorkerResponse(chunks.length ? Buffer.concat(chunks) : null, { status: res.statusCode!, headers }));
+        });
+      });
+      req.on("error", reject);
+      req.end(body);
+    });
+  };
 
   beforeAll(async () => {
     const bundle = await build({
@@ -59,6 +80,18 @@ describe("W15 auth/join in Miniflare", () => {
   const expectedPaths = [
     "/api/v10/oauth2/token", "/api/v10/users/@me", "/api/v10/guilds/326474832151838730/members/42",
   ];
+
+  // Malformed authorities are covered by the raw-app suite: workerd rejects
+  // those before dispatch. These valid but untrusted hosts reach the guard.
+  it.each(["foreign.invalid", "localhost"])("refuses untrusted HTTP Host %s before auth in workerd", async (host) => {
+    const res = await request("/auth/discord", { headers: { host } });
+    expect(res.status).toBe(404);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    expect(res.headers.getSetCookie()).toHaveLength(0);
+    expect(res.headers.get("location")).toBeNull();
+    expect(await res.text()).not.toContain(host);
+    expect(calls).toHaveLength(0);
+  });
 
   it("completes Discord login, rotates on the next view, logs out and rejects cookie replay", async () => {
     const start = await request("/auth/discord");
@@ -111,11 +144,11 @@ describe("W15 auth/join in Miniflare", () => {
   });
 
   it("uses POST-only QA fixtures and byte-identical failure responses in the runtime", async () => {
-    const headers = { [QA_HEADER]: "test-only-qa-token" };
+    const headers = { origin: STAGING_APP_URL, [QA_HEADER]: "test-only-qa-token" };
     const get = await request("/auth/qa/qa-member", { headers });
     expect(get.status).toBe(404);
     expect(get.headers.getSetCookie()).toHaveLength(0);
-    const bad = await request("/auth/qa/qa-member", { method: "POST" });
+    const bad = await request("/auth/qa/qa-member", { method: "POST", headers: { origin: STAGING_APP_URL } });
     const unknown = await request("/auth/qa/unknown", { method: "POST", headers });
     expect(bad.status).toBe(404);
     expect(unknown.status).toBe(404);

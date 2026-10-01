@@ -40,9 +40,9 @@ Use real UTC dates; the expiry day itself is blocking, even if the exception is
 unused. Unknown severity cannot be exempted. Remove expired exceptions rather
 than silently extending them. Fixture examples are synthetic, not accepted risks.
 
-CodeQL scans JavaScript/TypeScript on every PR, pushes to `main`, and weekly
-(Monday 05:23 UTC). Its workflow needs no application secrets or database access;
-`security-events: write` is scoped to its analysis job for uploading findings.
+CodeQL uses the repository's existing default setup for JavaScript/TypeScript,
+Actions and Python. Keep that coverage intact; do not add a competing advanced
+workflow or change repository scanning settings as part of the dependency gate.
 
 ## Releases
 

@@ -1,0 +1,206 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Db } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { activityLog, events } from "../src/db/admin-schema";
+import { createEvent, materializeMissingInstances, materializeRecurringSeries, transitionEvent } from "../src/admin/store";
+import { MAX_OCCURRENCES, occurrences, parseRecurrenceForm } from "../src/admin/recurrence";
+import { ValidationError, utcToWall, wallToUtc } from "../src/admin/validation";
+import { eq, sql } from "drizzle-orm";
+
+// Fixtures mirror legacy tests/Unit/Events/RecurrenceScheduleTest.php (two-web main).
+const starts = wallToUtc("2026-10-04 20:00", "Europe/London");
+const ends = wallToUtc("2026-10-04 21:00", "Europe/London");
+const walls = (m: Map<number, { startsAt: Date }>) => [...m.values()].map((o) => utcToWall(o.startsAt, "Europe/London"));
+
+describe("occurrences (legacy RecurrenceSchedule)", () => {
+  it("names four weekly occurrences, parent first, holding 20:00 London across the clocks change", () => {
+    const o = occurrences(starts, ends, "Europe/London", "weekly", 4);
+    expect([...o.keys()]).toEqual([1, 2, 3, 4]);
+    expect(walls(o)).toEqual(["2026-10-04 20:00", "2026-10-11 20:00", "2026-10-18 20:00", "2026-10-25 20:00"]);
+    // The UTC instant moved an hour on 25 Oct (BST -> GMT); the wall time did not.
+    expect(o.get(3)!.startsAt.toISOString()).toBe("2026-10-18T19:00:00.000Z");
+    expect(o.get(4)!.startsAt.toISOString()).toBe("2026-10-25T20:00:00.000Z");
+  });
+
+  it("keeps the meeting length across the change", () => {
+    for (const { startsAt, endsAt } of occurrences(starts, ends, "Europe/London", "weekly", 4).values()) {
+      expect(endsAt.getTime() - startsAt.getTime()).toBe(3600_000);
+    }
+  });
+
+  it("holds wall time across the spring change too", () => {
+    const s = wallToUtc("2027-03-21 20:00", "Europe/London");
+    const e = wallToUtc("2027-03-21 21:00", "Europe/London");
+    expect(walls(occurrences(s, e, "Europe/London", "weekly", 3))).toEqual(["2027-03-21 20:00", "2027-03-28 20:00", "2027-04-04 20:00"]);
+  });
+
+  it("moves a spring-gap slot forward instead of dropping the week (Carbon parity)", () => {
+    // 01:30 London on 2027-03-21; +1 week is 2027-03-28 01:30, inside the gap -> 02:30 BST.
+    const s = wallToUtc("2027-03-21 01:30", "Europe/London");
+    const e = wallToUtc("2027-03-21 02:30", "Europe/London");
+    const o = occurrences(s, e, "Europe/London", "weekly", 2);
+    expect(o.get(2)!.startsAt.toISOString()).toBe("2027-03-28T01:30:00.000Z");
+  });
+
+  it("uses a zone ahead of UTC without shifting repeat-until by a day", () => {
+    const s = wallToUtc("2026-10-04 08:00", "Pacific/Auckland");
+    const e = wallToUtc("2026-10-04 09:00", "Pacific/Auckland");
+    const o = occurrences(s, e, "Pacific/Auckland", "weekly", 52, new Date(Date.UTC(2026, 9, 11)));
+    expect(o.size).toBe(2);
+  });
+
+  it("applies the tighter of count and repeat-until, and caps at 52", () => {
+    expect(occurrences(starts, ends, "Europe/London", "weekly", 52, new Date(Date.UTC(2026, 9, 11))).size).toBe(2);
+    expect(occurrences(starts, ends, "Europe/London", "weekly", 2, new Date(Date.UTC(2027, 0, 1))).size).toBe(2);
+    expect(occurrences(starts, ends, "Europe/London", "weekly").size).toBe(MAX_OCCURRENCES);
+    expect(MAX_OCCURRENCES).toBe(52);
+  });
+});
+
+describe("parseRecurrenceForm (legacy RecurrenceInput messages)", () => {
+  const fieldsOf = (data: Record<string, unknown>) => {
+    try {
+      parseRecurrenceForm(data);
+    } catch (e) {
+      if (e instanceof ValidationError) return e.fields;
+      throw e;
+    }
+    return null;
+  };
+
+  it("is null for a one-off and a rule for a weekly series", () => {
+    expect(parseRecurrenceForm({})).toBeNull();
+    expect(parseRecurrenceForm({ recurrence_frequency: "" })).toBeNull();
+    expect(parseRecurrenceForm({ recurrence_frequency: "weekly", recurrence_count: "4" })).toMatchObject({ frequency: "weekly", count: 4, endsOn: null });
+  });
+
+  it("refuses with the legacy messages", () => {
+    expect(fieldsOf({ recurrence_frequency: "daily", recurrence_count: "3" })).toEqual({ recurrence_frequency: "Unknown repeat frequency." });
+    expect(fieldsOf({ recurrence_frequency: "weekly" })).toEqual({ recurrence_count: "Give a number of occurrences or a repeat-until date." });
+    expect(fieldsOf({ recurrence_frequency: "weekly", recurrence_count: "0" })).toEqual({ recurrence_count: "Occurrences must be between 1 and 52." });
+    expect(fieldsOf({ recurrence_frequency: "weekly", recurrence_count: "53" })).toEqual({ recurrence_count: "Occurrences must be between 1 and 52." });
+    expect(fieldsOf({ recurrence_frequency: "weekly", recurrence_count: "x" })).toEqual({ recurrence_count: "Occurrences must be between 1 and 52." });
+    expect(fieldsOf({ recurrence_frequency: "weekly", recurrence_ends_on: "soon" })).toEqual({ recurrence_ends_on: "The repeat-until date is not a date." });
+    expect(
+      fieldsOf({ recurrence_frequency: "weekly", recurrence_ends_on: "2026-10-01", starts_at: "2026-10-04 20:00", timezone: "Europe/London" }),
+    ).toEqual({ recurrence_ends_on: "The repeat-until date is before the first meeting." });
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("series materialisation (agent-testdb)", () => {
+  let fixture: MemberDataFixture | undefined;
+  let db: Db;
+  const actor = { id: "recurrence-test", username: "mod" };
+  const input = { title: "Sunday Squad", game: null, description: null, startsAtUtc: starts, endsAtUtc: ends, timezone: "Europe/London", location: null, capacity: null };
+  beforeEach(async () => {
+    // Validates the test host/principal before constructing a driver. All reads,
+    // writes and failure DDL use this owned schema, with no public fallback.
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterEach(async () => {
+    await fixture?.dispose();
+    fixture = undefined;
+  });
+
+  it("creates the parent plus missing occurrences as drafts, and re-running creates nothing", async () => {
+    const { row } = await createEvent(db, actor, input, { frequency: "weekly", count: 4, endsOn: null });
+    const rows = await db.select().from(events).orderBy(events.recurrenceIndex);
+    expect(rows.map((r) => r.recurrenceIndex)).toEqual([1, 2, 3, 4]);
+    expect(rows.every((r) => r.status === "draft")).toBe(true);
+    expect(rows.slice(1).every((r) => r.parentEventId === row.id)).toBe(true);
+    const audits = await db.select().from(activityLog);
+    expect(audits).toHaveLength(4);
+    for (const event of rows) {
+      const audit = audits.find((a) => a.subjectId === event.eventKey);
+      expect(audit).toMatchObject({ subjectType: "Event", causerId: actor.id, description: `created event ${event.title}` });
+      expect(audit!.properties).toMatchObject({
+        eventKey: { before: null, after: event.eventKey },
+        startsAt: { before: null, after: event.startsAt.toISOString() },
+        endsAt: { before: null, after: event.endsAt.toISOString() },
+        recurrenceIndex: { before: null, after: event.recurrenceIndex },
+        status: { before: null, after: "draft" },
+      });
+      expect(audit!.properties).not.toHaveProperty("discordEventId");
+    }
+    expect(await materializeMissingInstances(db, row)).toBe(0);
+    expect(await materializeRecurringSeries(db)).toBe(0);
+    expect(await db.select().from(events)).toHaveLength(4);
+    expect(await db.select().from(activityLog)).toEqual(audits);
+  });
+
+  it("reconcile tops up a missing index and never resurrects a cancelled skipped week", async () => {
+    const { row } = await createEvent(db, actor, input, { frequency: "weekly", count: 4, endsOn: null });
+    const [third] = await db.select().from(events).where(eq(events.recurrenceIndex, 3));
+    await transitionEvent(db, actor, third!.eventKey, "cancelled");
+    await db.delete(events).where(eq(events.recurrenceIndex, 4));
+    const auditsBefore = await db.select().from(activityLog);
+    expect(await materializeRecurringSeries(db)).toBe(1);
+    const rows = await db.select().from(events).orderBy(events.recurrenceIndex);
+    expect(rows.map((r) => [r.recurrenceIndex, r.status])).toEqual([[1, "draft"], [2, "draft"], [3, "cancelled"], [4, "draft"]]);
+    expect(row.recurrenceFrequency).toBe("weekly");
+    const auditsAfter = await db.select().from(activityLog);
+    expect(auditsAfter).toHaveLength(auditsBefore.length + 1);
+    expect(auditsAfter.find((a) => a.subjectId === rows[3]!.eventKey)).toMatchObject({
+      subjectType: "Event",
+      causerId: null,
+      description: "created event Sunday Squad",
+      properties: { recurrenceIndex: { before: null, after: 4 }, parentEventId: { before: null, after: row.id } },
+    });
+    expect(await materializeRecurringSeries(db)).toBe(0);
+    expect(await db.select().from(activityLog)).toEqual(auditsAfter);
+  });
+
+  it("rolls back series creation and reconcile inserts when a child audit fails", async () => {
+    // Reject the last audit after earlier children were inserted to prove that
+    // neither path can commit an occurrence without its creation audit.
+    await db.execute(sql`alter table activity_log add constraint recurrence_test_audit_failure
+      check ((properties->'recurrenceIndex'->>'after')::integer is distinct from 4)`);
+    try {
+      await expect(createEvent(db, actor, input, { frequency: "weekly", count: 4, endsOn: null })).rejects.toThrow();
+      expect(await db.select().from(events)).toHaveLength(0);
+      expect(await db.select().from(activityLog)).toHaveLength(0);
+
+      const { row } = await createEvent(db, actor, input, { frequency: "weekly", count: 1, endsOn: null });
+      await db.update(events).set({ recurrenceCount: 4 }).where(eq(events.id, row.id));
+      const audits = await db.select().from(activityLog);
+      await expect(materializeRecurringSeries(db)).rejects.toThrow();
+      expect(await db.select().from(events)).toHaveLength(1);
+      expect(await db.select().from(activityLog)).toEqual(audits);
+    } finally {
+      await db.execute(sql`alter table activity_log drop constraint recurrence_test_audit_failure`);
+    }
+  });
+
+  it("keeps another schema's events and audits through failure DDL, reset and disposal", async () => {
+    const sentinel = await createMemberDataFixture(process.env.DATABASE_URL!);
+    try {
+      await db.execute(sql`alter table activity_log add constraint recurrence_test_audit_failure
+        check ((properties->'recurrenceIndex'->>'after')::integer is distinct from 4)`);
+      // This would fail if the constraint were installed on the sentinel table.
+      await createEvent(sentinel.db, actor, input, { frequency: "weekly", count: 4, endsOn: null });
+      const sentinelEvents = await sentinel.db.select().from(events).orderBy(events.id);
+      const sentinelAudits = await sentinel.db.select().from(activityLog).orderBy(activityLog.id);
+      expect(sentinelEvents).toHaveLength(4);
+      expect(sentinelAudits).toHaveLength(4);
+
+      await expect(createEvent(db, actor, input, { frequency: "weekly", count: 4, endsOn: null })).rejects.toThrow();
+      await createEvent(db, actor, input);
+      await fixture!.reset();
+      expect(await db.select().from(events)).toHaveLength(0);
+      expect(await db.select().from(activityLog)).toHaveLength(0);
+      await fixture!.dispose();
+      expect(await sentinel.db.select().from(events).orderBy(events.id)).toEqual(sentinelEvents);
+      expect(await sentinel.db.select().from(activityLog).orderBy(activityLog.id)).toEqual(sentinelAudits);
+    } finally {
+      await sentinel.dispose();
+    }
+  });
+
+  it("does not grow a cancelled series", async () => {
+    const { row } = await createEvent(db, actor, input, { frequency: "weekly", count: 3, endsOn: null });
+    await transitionEvent(db, actor, row.eventKey, "cancelled");
+    await db.delete(events).where(eq(events.recurrenceIndex, 3));
+    expect(await materializeRecurringSeries(db)).toBe(0);
+  });
+});
