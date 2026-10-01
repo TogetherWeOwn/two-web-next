@@ -16,9 +16,9 @@ function mockFetch(response: Response | Promise<Response>) {
   return fetchMock;
 }
 
-function stalledBody(cancel = vi.fn()) {
+function stalledBody(cancel = vi.fn(), json = "[") {
   const body = new ReadableStream<Uint8Array>({
-    start(controller) { controller.enqueue(new TextEncoder().encode("[")); },
+    start(controller) { controller.enqueue(new TextEncoder().encode(json)); },
     cancel,
   });
   return { response: new Response(body), cancel };
@@ -69,6 +69,30 @@ describe("Discord transient end-to-end deadline", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(response.body!.locked).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["resolves", "rejects", "never resolves"])("does not parse buffered JSON after timeout when cancellation %s", async (mode) => {
+    const cancel = vi.fn(() => mode === "rejects" ? Promise.reject(new Error("cancel failed"))
+      : mode === "never resolves" ? new Promise<void>(() => {}) : undefined);
+    const json = JSON.stringify([event()]);
+    const { response } = stalledBody(cancel, json);
+    const fetchMock = mockFetch(response);
+    const parse = vi.spyOn(JSON, "parse");
+    const read = startRead();
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS - 1);
+    expect(read.settled()).toBe(false);
+    expect(response.body!.locked).toBe(true);
+    expect(parse).not.toHaveBeenCalledWith(json);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(read.settled()).toBe(true);
+    expect(await read.result).toEqual([]);
+    expect(read.source.lastReadFailed()).toBe(true);
+    expect(fetchMock.mock.calls[0]![1]!.signal!.aborted).toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(response.body!.locked).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(parse).not.toHaveBeenCalledWith(json);
   });
 
   it("spends one budget across delayed headers and a stalled body, not a new body budget", async () => {

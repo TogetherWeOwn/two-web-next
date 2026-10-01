@@ -91,6 +91,8 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         let json = "";
         for (;;) {
           const { done, value } = await reader.read();
+          // Cancellation resolves a pending read as done; discard its buffered JSON.
+          if (controller.signal.aborted) throw new Error("DiscordReadFailure");
           if (done) break;
           json += decoder.decode(value, { stream: true });
         }
