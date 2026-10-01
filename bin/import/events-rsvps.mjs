@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import postgres from "postgres";
 
@@ -111,42 +112,106 @@ class UnsupportedOwnershipError extends Error {
   }
 }
 
+class TargetSeparationError extends Error {
+  constructor() {
+    super("Could not establish isolated import tables; no destination writes.");
+  }
+}
+
+// This is only an early refusal. DNS/proxy aliases and role/search_path defaults
+// are checked on the live transactions below, not inferred from hostnames.
+export function assertSeparateUrls(legacyUrl, targetUrl) {
+  const endpoint = (raw) => {
+    const url = new URL(raw);
+    if (!["postgres:", "postgresql:"].includes(url.protocol)) throw new TargetSeparationError();
+    return JSON.stringify([
+      url.hostname.toLowerCase(), url.port || "5432", decodeURIComponent(url.pathname),
+      decodeURIComponent(url.username), [...url.searchParams].sort(),
+    ]);
+  };
+  try {
+    if (endpoint(legacyUrl) === endpoint(targetUrl)) throw new TargetSeparationError();
+  } catch { throw new TargetSeparationError(); }
+}
+
+async function resolvedTables(sql) {
+  const rows = await sql`
+    select names.name, c.oid::text as relation_id, c.relkind,
+      exists (select 1 from pg_catalog.pg_inherits i
+        where i.inhrelid = c.oid or i.inhparent = c.oid) as inherited
+    from (values ('events'), ('rsvps'), ('users')) as names(name)
+    left join pg_catalog.pg_class c on c.oid = pg_catalog.to_regclass(names.name)
+  `;
+  // Views, foreign tables and inheritance may route writes into another schema.
+  // Only ordinary, non-inherited tables have the identity this importer proves.
+  if (rows.length !== 3 || rows.some((row) => !["events", "rsvps", "users"].includes(row.name)
+    || !/^[1-9][0-9]*$/.test(row.relation_id ?? "") || row.relkind !== "r" || row.inherited !== false)
+    || new Set(rows.map((row) => row.name)).size !== 3) throw new TargetSeparationError();
+  return rows;
+}
+
+export async function assertSeparateTargets(source, destination) {
+  try {
+    if (source === destination) throw new TargetSeparationError();
+    const sourceTables = await resolvedTables(source);
+    const targetTables = await resolvedTables(destination);
+    // Reuse content-funnel's database-local, transaction-scoped lock probe. It
+    // works with read-only roles and transaction pools without privileged IDs.
+    // OIDs alone are not identities across independent, same-named databases.
+    const key = randomBytes(8).readBigInt64BE().toString();
+    const [held] = await source`select pg_catalog.pg_try_advisory_xact_lock(${key}::bigint) as acquired`;
+    if (held?.acquired !== true) throw new TargetSeparationError();
+    const [probe] = await destination`select pg_catalog.pg_try_advisory_xact_lock(${key}::bigint) as acquired`;
+    if (probe?.acquired === true) return;
+    if (probe?.acquired !== false) throw new TargetSeparationError();
+    // Compare resolved tables, not current_schema(): a different leading schema
+    // can still fall back to the source. Shared read-only users are safe; neither
+    // writable target table may overlap any source table in this lock domain.
+    const sourceIds = new Set(sourceTables.map((row) => row.relation_id));
+    if (targetTables.some((row) => row.name !== "users" && sourceIds.has(row.relation_id))) {
+      throw new TargetSeparationError();
+    }
+  } catch { throw new TargetSeparationError(); }
+}
+
 const counts = () => ({ read: 0, inserted: 0, updated: 0, unchanged: 0, orphaned: 0 });
 
 export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) {
+  if (legacy === target) throw new TargetSeparationError();
   // Laravel bookkeeping timestamps have no zone; their documented meaning is UTC.
   return legacy.begin("isolation level repeatable read read only", async (source) => {
-    await source`set local timezone = 'UTC'`;
-    const events = await source`
-      select id::text, event_key, title, game, description,
-        to_char(starts_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as starts_at,
-        to_char(ends_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ends_at,
-        timezone, location, capacity, status, rsvp_open, discord_event_id,
-        to_char(discord_sync_failed_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as discord_sync_failed_at,
-        discord_sync_failure_code, created_by::text, recurrence_frequency,
-        recurrence_count, to_char(recurrence_ends_on, 'YYYY-MM-DD') as recurrence_ends_on,
-        parent_event_id::text, recurrence_index,
-        to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
-        to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as updated_at,
-        agent_grant_id, proof_marker, agent_version
-      from events order by id
-    `;
-    // Grants are deliberately not migrated. Even a deleted grant can leave proof/version attribution.
-    const unsupported = events.filter((event) => event.agent_grant_id !== null
-      || event.proof_marker !== null || event.agent_version !== 0);
-    if (unsupported.length) throw new UnsupportedOwnershipError(unsupported.length);
-    const rsvps = await source`
-      select r.id::text, r.event_id::text, u.discord_id, r.status,
-        to_char(r.synced_to_discord_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as synced_to_discord_at,
-        to_char(r.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
-        to_char(r.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as updated_at
-      from rsvps r left join users u on u.id = r.user_id order by r.id
-    `;
-    const creators = await source`select id::text, discord_id from users where id in (select created_by from events)`;
-    const ordered = parentFirst(events);
-    for (const event of ordered) validateEvent(event);
     return target.begin(`isolation level repeatable read ${dryRun ? "read only" : "read write"}`, async (sql) => {
+      await source`set local timezone = 'UTC'`;
       await sql`set local timezone = 'UTC'`;
+      await assertSeparateTargets(source, sql);
+      const events = await source`
+        select id::text, event_key, title, game, description,
+          to_char(starts_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as starts_at,
+          to_char(ends_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ends_at,
+          timezone, location, capacity, status, rsvp_open, discord_event_id,
+          to_char(discord_sync_failed_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as discord_sync_failed_at,
+          discord_sync_failure_code, created_by::text, recurrence_frequency,
+          recurrence_count, to_char(recurrence_ends_on, 'YYYY-MM-DD') as recurrence_ends_on,
+          parent_event_id::text, recurrence_index,
+          to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
+          to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as updated_at,
+          agent_grant_id, proof_marker, agent_version
+        from events order by id
+      `;
+      // Grants are deliberately not migrated. Even a deleted grant can leave proof/version attribution.
+      const unsupported = events.filter((event) => event.agent_grant_id !== null
+        || event.proof_marker !== null || event.agent_version !== 0);
+      if (unsupported.length) throw new UnsupportedOwnershipError(unsupported.length);
+      const rsvps = await source`
+        select r.id::text, r.event_id::text, u.discord_id, r.status,
+          to_char(r.synced_to_discord_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as synced_to_discord_at,
+          to_char(r.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
+          to_char(r.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as updated_at
+        from rsvps r left join users u on u.id = r.user_id order by r.id
+      `;
+      const creators = await source`select id::text, discord_id from users where id in (select created_by from events)`;
+      const ordered = parentFirst(events);
+      for (const event of ordered) validateEvent(event);
       const report = {
         dryRun, events: counts(), rsvps: counts(),
         unresolved: { creators: 0, rsvpEvents: 0, rsvpUsers: 0 },
@@ -220,6 +285,7 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   try {
     const options = parseArgs(args);
     if (!env.LEGACY_DATABASE_URL || !env.DATABASE_URL) throw new Error("Import URLs are unset.");
+    assertSeparateUrls(env.LEGACY_DATABASE_URL, env.DATABASE_URL);
     legacy = connectDatabase(env.LEGACY_DATABASE_URL);
     target = connectDatabase(env.DATABASE_URL);
     const report = await importEventsRsvps(legacy, target, options);
@@ -227,7 +293,9 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     return reportExitCode(report);
   } catch (error) {
     // Driver errors can carry URLs, SQL parameters, or member data. Never echo them.
-    if (error instanceof UnsupportedOwnershipError) {
+    if (error instanceof TargetSeparationError) {
+      console.error("events-rsvps: could not establish isolated import tables; no destination writes. Verify separate databases/schemas and identity-probe access.");
+    } else if (error instanceof UnsupportedOwnershipError) {
       console.error(`events-rsvps: rejected ${error.count} agent-attributed events; grants/proofs are unsupported. No destination writes.`);
     } else {
       console.error("events-rsvps: import failed; verify flags, env URLs, schema, source validity and database access. Outcome unconfirmed; inspect destination before retry.");
