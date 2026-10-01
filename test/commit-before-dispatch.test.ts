@@ -20,6 +20,7 @@ import { events } from "../src/db/admin-schema";
 import { writeRsvp } from "../src/events/rsvp";
 import { consume } from "../src/jobs/consumer";
 import { trackingQueue } from "../src/jobs/ledger";
+import { pgEventStore } from "../src/jobs/events";
 import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { dispatchSyncEvent, handleSyncEvent, uniqueKey } from "../src/jobs/sync-event";
 import type { BotClient, EventStore } from "../src/jobs/types";
@@ -54,45 +55,7 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
       },
     }) as unknown as BotClient;
 
-  function sqlStore(): EventStore {
-    const sql = raw;
-    type Row = {
-      id: number; event_key: string; title: string; starts_at: Date; ends_at: Date | null;
-      location: string | null; description: string | null; status: string; discord_event_id: string | null;
-    };
-    return {
-      find: async (eventKey) => {
-        const [row] = (await sql`select id, event_key, title, starts_at, ends_at, location,
-          description, status, discord_event_id from events where event_key = ${eventKey}`) as unknown as Row[];
-        if (!row) return null;
-        const unsynced = (await sql`select 1 as one from rsvps
-          where event_id = ${row.id} and synced_to_discord_at is null limit 1`) as unknown as { one: number }[];
-        return {
-          eventKey: row.event_key,
-          payload: {
-            eventKey: row.event_key,
-            name: row.title,
-            startsAt: row.starts_at.toISOString(),
-            endsAt: row.ends_at ? row.ends_at.toISOString() : null,
-            location: row.location ?? "",
-            description: row.description,
-          },
-          mirrored: row.status === "published" && (row.discord_event_id === null || unsynced.length > 0),
-        };
-      },
-      recordMirrored: async (eventKey, discordEventId, mirroredAt) => {
-        const [row] = (await sql`select id from events where event_key = ${eventKey}`) as unknown as { id: number }[];
-        if (!row) return;
-        await sql`update events set discord_event_id = ${discordEventId} where id = ${row.id}`;
-        // The interface stamps only answers written at or before the mirror instant.
-        await sql`update rsvps set synced_to_discord_at = ${mirroredAt}
-          where event_id = ${row.id} and updated_at <= ${mirroredAt}`;
-      },
-      closeFinished: async () => 0,
-      materializeSeries: async () => 0,
-      staleEventKeys: async () => [],
-    };
-  }
+  const sqlStore = (): EventStore => pgEventStore(raw);
 
   function carrier(body: unknown, attempts = 1) {
     const m = { body, attempts, acked: false, retried: undefined as number | "now" | undefined };
@@ -116,6 +79,7 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
         status,
         capacity: 8,
         discordEventId: status === "published" ? "discord-seed-1" : null,
+        syncedRevision: status === "published" ? 1 : 0,
       })
       .returning();
     return { key: row!.eventKey, id: row!.id };
@@ -253,9 +217,9 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
     try {
       // The uncommitted answer is invisible at READ COMMITTED: nothing is
       // stale, so the handler drops the message without calling the bot.
-      expect((await sqlStore().find(key))!.mirrored).toBe(false);
+      expect(await sqlStore().needsSync(key)).toBe(false);
       const outcome = await handleSyncEvent(
-        { eventKey: key, idempotencyKey: "early-key" },
+        { eventKey: key, idempotencyKey: "00000000-0000-4000-8000-0000000000e1" },
         1,
         { bot: bot(), events: sqlStore() },
       );
@@ -266,8 +230,8 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
       await txPromise;
     }
     // After commit the same key is stale and the consumer mirrors it.
-    expect((await sqlStore().find(key))!.mirrored).toBe(true);
-    const m = await consumeOnce({ kind: "sync-event", eventKey: key, idempotencyKey: "late-key" });
+    expect(await sqlStore().needsSync(key)).toBe(true);
+    const m = await consumeOnce({ kind: "sync-event", eventKey: key, idempotencyKey: "00000000-0000-4000-8000-0000000000a1" });
     expect(m.acked).toBe(true);
     expect(botCalls).toHaveLength(1);
     const [answer] = (await raw`select synced_to_discord_at from rsvps where event_id = ${id}`) as unknown as {
