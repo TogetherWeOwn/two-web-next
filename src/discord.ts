@@ -84,7 +84,7 @@ function providerCodeOf(status: number, body: string): string | null {
 function kindOf(status: number, providerCode: string | null): DiscordFailureKind {
   if (status >= 500) return "provider_outage";
   if (status === 429) return "rate_limited";
-  if (status >= 400 && providerCode === "invalid_grant") return "expired_grant";
+  if (status === 400 && providerCode === "invalid_grant") return "expired_grant";
   return "provider_reject";
 }
 

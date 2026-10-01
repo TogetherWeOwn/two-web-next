@@ -183,6 +183,8 @@ describe("exchange failure classification (legacy JoinCallbackFailureTest contra
   });
 
   it.each([
+    ["401 with an invalid_grant body is provider_reject", invalidGrant(401), "provider_reject"],
+    ["403 with an invalid_grant body is provider_reject", invalidGrant(403), "provider_reject"],
     ["503 with an invalid_grant body is an outage — status governs", invalidGrant(503), "provider_outage"],
     [
       "other 400 bodies (invalid_client) are provider_reject",
@@ -202,6 +204,8 @@ describe("exchange failure classification (legacy JoinCallbackFailureTest contra
     const err = (await exchange().catch((e: unknown) => e)) as DiscordError;
     expect(err).toBeInstanceOf(DiscordError);
     expect(err.kind).toBe(kind);
+    expect(err.status).toBe(response.status);
+    if (response.status >= 500 || response.status === 429) expect(err.providerCode).toBeNull();
     expect(err.message).toBe(`discord token_exchange failed with HTTP ${err.status}`);
     leakFree(err.message, err.providerCode);
   });
@@ -272,15 +276,24 @@ describe("join callback: expired recovery versus outage 503", () => {
     leakFree(html, logs, fake.attempts, res.headers.getSetCookie());
   });
 
-  it("outage: a 503 whose body says invalid_grant still renders the discord-down recovery", async () => {
-    const { env: e } = isolatedJoin();
-    const { logs, res, html } = await joinRoundTrip(e, () => invalidGrant(503));
+  it.each([
+    [401, "provider_reject"],
+    [403, "provider_reject"],
+    [429, "rate_limited"],
+    [500, "provider_outage"],
+    [503, "provider_outage"],
+  ] as [number, DiscordError["kind"]][])("HTTP %i with invalid_grant cannot select expired join recovery", async (status, kind) => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res, html } = await joinRoundTrip(e, () => invalidGrant(status));
     expect(res.status).toBe(503);
     expect(html).toContain("Discord is unreachable");
     expect(html).not.toContain("approval expired");
+    expect(calls).toHaveLength(1); // no user lookup or guild mutation after a rejected exchange
     const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
-    expect(exchangeLine[0]!.args[1]).toMatchObject({ kind: "provider_outage", outcome: "error", status: 503 });
-    leakFree(html, logs);
+    expect(exchangeLine).toHaveLength(1);
+    expect(exchangeLine[0]!.args[1]).toEqual({ exception: "DiscordError", kind, outcome: "error", status, source: null });
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId: null, discordId: null }]);
+    leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
   });
 
   it("transport failure with the token inside the raw message: 503, bounded log", async () => {
