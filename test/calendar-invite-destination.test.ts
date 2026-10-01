@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { FALLBACK_INVITE } from "../src/invite";
-import type { DiscordTransient } from "../src/events/discord-transients";
+import type { DiscordEventsSource } from "../src/events/discord-transients";
 import { env } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
+type DiscordTransient = Awaited<ReturnType<DiscordEventsSource["upcoming"]>>[number];
 const APPROVED = "https://discord.gg/approved-invite";
 const TRANSIENT: DiscordTransient = {
   discordId: "900000000000000001", status: "scheduled", title: "Transient night", description: null,
