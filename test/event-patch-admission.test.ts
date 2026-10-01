@@ -189,7 +189,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     const res = await patch({ starts_at: "2027-03-28 01:30", ends_at: "2027-03-28 03:30" });
     expect(res.status).toBe(422);
     expect(await res.json()).toEqual({ error: "invalid", fields: {
-      wall: "That time never occurred in Europe/London — clocks skipped forward over it. Pick a time outside the gap.",
+      starts_at: "That time never occurred in Europe/London — clocks skipped forward over it. Pick a time outside the gap.",
     } });
     await expectUnchanged(before);
   });
