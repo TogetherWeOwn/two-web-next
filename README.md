@@ -157,12 +157,23 @@ Do not use `npm run deploy` as a test or build command.
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ACCOUNT_ID`, followed by a `/up` smoke test against
-https://next.togetherweown.com. The smoke checks HTTP 200 and the expected health
-envelope for liveness, not database readiness: degraded or unknown queue health
-does not fail deployment. There is deliberately no production job:
-production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
+`CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com`.
+The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
+Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
+on every response and staging noindex on returned HTML (the application's header
+contract). `/up` checks HTTP 200 and the expected health envelope for liveness,
+not database readiness: degraded or unknown queue health does not fail deployment.
+Redirects are not followed; each request/body has a 5-second timeout. A failure
+names the route and expected versus actual result and fails the deploy job after
+six attempts. There is deliberately no production job: production
+(togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 Full procedures live in [docs/runbook.md](docs/runbook.md).
+
+`npm run test:smoke` runs the checker against a loopback stub server with local
+fixtures only, no external network or database. It is included in `npm run check`
+and the required PR CI job, so both PR CI and the pre-deploy check exercise the
+selftest. The checker itself is a staging-only post-deploy probe, not a production
+test command.
 
 Deployment context: the top-level Wrangler configuration names Worker
 `two-web-next` and the `next.togetherweown.com` route; it has **no named
