@@ -143,22 +143,58 @@ and [rollback limits](https://developers.cloudflare.com/workers/versions-and-dep
 ## Read `/up` without mistaking liveness for readiness
 
 `GET /health` and `/healthz` return `200 {"ok":true}` without database work.
-`GET /up` also always returns **200**, with `Cache-Control: no-store` and no
-session/auth lookup. Read its JSON, not just HTTP status. Do not probe a live
-DB-backed `/up` as a test; use existing approved incident evidence and local
-fixtures. The contract is [src/up.ts](../src/up.ts), exercised safely by:
+`GET /up` is **readiness**: a read-only DB ping and web migration-ledger read,
+plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
+lookup, and no cookies. No migration is run or repaired by this endpoint.
 
-```bash
-env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
-  npm run test -- test/up.test.ts
-```
+The journal (`drizzle/meta/_journal.json`) is embedded in the Worker at build
+time. Only web tags `1000–1999` are checked against exact `created_at` timestamps
+in `drizzle.__drizzle_migrations`; bot rows and grandfathered `0000/0001` tags do
+not participate. A newer bot row or later web row cannot hide an earlier missing
+web migration. An empty ledger counts all bundled web migrations as pending; a
+missing, unreadable or malformed ledger reports `null`, never a false zero.
+Volatile `clock_timestamp()` in both DB queries avoids Hyperdrive query caching.
 
-| Ledger outcome | Top-level `status` | `queue.status` / measurements |
+DB ping + ledger share a **3-second deadline**, running in parallel with the
+existing 3-second queue deadline. A timed-out request-owned client is terminated
+without waiting for its queries to drain. Exception messages, SQL and credentials
+are never returned/logged by this health path.
+
+| DB/schema outcome | HTTP | `db` | `pending_migrations` | Top-level `status` |
+| --- | --- | --- | --- | --- |
+| DB reachable, every bundled web migration applied | 200 | `ok` | `0` | Queue-derived `healthy` / `degraded` |
+| DB reachable, N web migrations missing | 503 | `ok` | N | `degraded` |
+| DB reachable, ledger read fails/times out | 503 | `ok` | `null` | `degraded` |
+| No usable DB configuration, failed/hung ping | 503 | `error` | `null` | `degraded` |
+
+Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready**:
+
+| Queue ledger outcome | Top-level `status` when DB/schema ready | `queue.status` / measurements |
 | --- | --- | --- |
 | Read succeeds, `pending < 20` | `healthy` | `healthy`, measured values |
 | `pending >= 20` (including `>= 100`) | `degraded` | `degraded`, measured values |
 | Read rejects or takes over 3 seconds | `healthy` | `unknown`, all six measurements `null`, `detail: null` |
-| No usable client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
+| No usable queue client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
+
+The deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`** and the
+existing queue envelope. HTTP 503 (including pending migrations) fails the deploy;
+queue-only `unknown` does not. The workflow's `Apply test migrations` step affects
+only disposable CI Postgres, **not the staging schema**. A failed readiness smoke
+requires a recorded, authorized staging schema/rollback action, not weakening the
+probe or running migrations through `/up`.
+
+Tests use offline fixtures or owned schemas on agent-testdb/CI Postgres. Authorized
+staging E2E is allowed after verifying the staging target/binding; never use
+production DBs or credentials for tests. The contract is [src/up.ts](../src/up.ts):
+
+```bash
+env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
+  npm run test -- test/up.test.ts test/deploy-smoke.test.ts
+DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
+  npm run test -- test/up-db.test.ts
+```
+
+Source: [Drizzle migration log defaults](https://orm.drizzle.team/docs/drizzle-kit-migrate#applied-migrations-log-in-the-database).
 
 `warn_at: 20` and `critical_at: 100` are reported thresholds; the implementation
 has **no separate critical status**. `failed`, `delayed`, `reserved` or `total`
@@ -183,7 +219,7 @@ Normal web stores prefer `DATABASE_URL`, otherwise `DB.connectionString`
 ([src/db/connection.ts](../src/db/connection.ts)); failure does not try the
 other connection. `/up` prefers `DB`; jobs prefer `HYPERDRIVE`, then `DB`, then
 `DATABASE_URL`. `/db-ping` uses only `DB` and actively queries the database:
-**do not use it against staging/production for tests or probes**.
+**never use it against production for tests; staging E2E needs verified staging bindings**.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
@@ -194,7 +230,7 @@ below, not its older `/up` row, define these outcomes.
 | Route(s) | Configured database outage behavior |
 | --- | --- |
 | `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join`, `/health`, `/healthz` (GET) | Stay **200**, DB-free. |
-| `/up` (GET) | Stays **200**, queue becomes `unknown`; not readiness. |
+| `/up` (GET) | **503** `db:error`, `pending_migrations:null`; queue becomes `unknown`. A reachable DB with unreadable/pending web migrations is also 503 (`db:ok`). |
 | `/sitemap_index.xml` (GET) | Stays **200** with static entries; event lookup failure is caught. |
 | `/discord`, `/auth/discord` (GET) | Stay **302** to invite / OAuth start, DB-free. |
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |

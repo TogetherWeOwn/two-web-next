@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { upBody } from "../src/up";
+import { healthSql } from "./helpers/up";
 
 // Execute the deployed workflow's actual shell block, not a copied predicate.
 // curl/sleep are local fakes: no staging requests, DB connections or retry waits.
@@ -59,13 +60,18 @@ describe("deploy smoke /up (offline)", () => {
     const body = await upBody(state === "unconfigured" ? null : async () => {
       if (state === "unknown") throw new Error("fixture outage");
       return depth(state === "degraded" ? 20 : 0);
-    });
+    }, healthSql());
     const result = smoke(JSON.stringify(body));
     expect(result.status, result.output).toBe(0);
     expect(result.attempts).toBe(1);
   });
 
   it.each([
+    ['{"status":"degraded","db":"ok","pending_migrations":1,"queue":{"status":"healthy"}}', "503", "0"],
+    ['{"status":"degraded","db":"ok","pending_migrations":1,"queue":{"status":"healthy"}}', "200", "0"],
+    ['{"status":"degraded","db":"ok","pending_migrations":null,"queue":{"status":"healthy"}}', "503", "0"],
+    ['{"status":"healthy","db":"error","pending_migrations":0,"queue":{"status":"healthy"}}', "200", "0"],
+    ['{"status":"healthy","db":"ok","pending_migrations":"0","queue":{"status":"healthy"}}', "200", "0"],
     ['{"ok":true}', "200", "0"],
     ["null", "200", "0"],
     ['{"status":"healthy","queue":null}', "200", "0"],

@@ -2,9 +2,9 @@
 // `QueueHealth` (routes/funnel.php, empty middleware stack) onto the W13 queue
 // backend. The contract the deploy poll and monitors rely on, verbatim:
 //
-//   - healthy or degraded both answer 200. A backlog is RSVP lag, not an
-//     outage, and `curl -f` must keep passing through one — /up distinguishes
-//     shapes in the body, never the status code.
+//   - queue-only healthy, degraded or unknown answers 200. A backlog is RSVP
+//     lag, not an outage. DB reachability/schema readiness is independent:
+//     a failed DB ping or unavailable/pending migration ledger answers 503.
 //   - `degraded` at or above WARN_AT pending jobs; still `degraded`, never
 //     down, past CRITICAL_AT.
 //   - the queue read can never sink the endpoint. A ledger that will not
@@ -15,7 +15,58 @@
 // `queue_failed_jobs`): Cloudflare Queues carries the messages but exposes no
 // depth API, so the ledger is the `jobs`/`failed_jobs` pair of this port.
 
+import type { Sql } from "postgres";
+import journal from "../drizzle/meta/_journal.json";
 import type { QueueDepth } from "./jobs/postgres";
+
+// JSON is bundled by Wrangler: no filesystem access or migrator in the Worker.
+// Only this repository's web 1000-series entries participate; bot rows and the
+// grandfathered 0000/0001 tags are outside this readiness gate.
+export const WEB_MIGRATIONS = journal.entries.filter((entry) => /^1\d{3}_/.test(entry.tag));
+
+export function pendingWebMigrations(rows: readonly { created_at: unknown }[]): number {
+  const applied = new Set(rows.map(({ created_at }) => {
+    if ((typeof created_at !== "number" && typeof created_at !== "string")
+      || !/^\d+$/.test(String(created_at)) || !Number.isSafeInteger(Number(created_at))) {
+      throw new Error("Invalid migration timestamp");
+    }
+    return Number(created_at);
+  }));
+  return WEB_MIGRATIONS.filter((entry) => !applied.has(entry.when)).length;
+}
+
+export type DatabaseReadiness = { db: "ok" | "error"; pending_migrations: number | null };
+
+export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadiness> {
+  let db: DatabaseReadiness["db"] = "error";
+  if (!sql) return { db, pending_migrations: null };
+  try {
+    const pending_migrations = await withTimeout((async () => {
+      // Volatile clock_timestamp() prevents Hyperdrive query caching from
+      // turning a cached ping/ledger into false readiness after an outage:
+      // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
+      const ping = await sql`SELECT clock_timestamp() AS checked_at`;
+      if (ping.length !== 1) throw new Error("Missing database ping result");
+      db = "ok";
+      // Drizzle 0.45 records journal.when as created_at, not the filename/tag:
+      // https://orm.drizzle.team/docs/drizzle-kit-migrate#applied-migrations-log-in-the-database
+      const rows = await sql<{ created_at: unknown }[]>`
+        SELECT created_at, clock_timestamp() AS checked_at FROM drizzle.__drizzle_migrations
+      `;
+      return pendingWebMigrations(rows);
+    })(), QUEUE_READ_TIMEOUT_MS);
+    return { db, pending_migrations };
+  } catch (err) {
+    console.warn("Health check could not establish database/schema readiness.", {
+      exception: err instanceof Error ? err.name : typeof err,
+    });
+    return { db, pending_migrations: null };
+  }
+}
+
+export function upHttpStatus(body: DatabaseReadiness): 200 | 503 {
+  return body.db === "ok" && body.pending_migrations === 0 ? 200 : 503;
+}
 
 export const QUEUE_WARN_AT = 20;
 export const QUEUE_CRITICAL_AT = 100;
@@ -45,7 +96,14 @@ export type QueuePayload = {
   detail: string | null;
 };
 
-export type UpBody = { status: "healthy" | "degraded"; queue: QueuePayload };
+type QueueHealth = { status: "healthy" | "degraded"; queue: QueuePayload };
+export type UpBody = QueueHealth & DatabaseReadiness;
+
+export async function upBody(measure: (() => Promise<QueueDepth>) | null, sql: Sql | null = null): Promise<UpBody> {
+  // Parallel deadlines keep a hung DB + hung queue inside one 3 s window.
+  const [queue, database] = await Promise.all([queueBody(measure), databaseReadiness(sql)]);
+  return { ...queue, ...database, status: upHttpStatus(database) === 503 ? "degraded" : queue.status };
+}
 
 function unknownQueue(detail: string | null): QueuePayload {
   return {
@@ -67,7 +125,7 @@ function unknownQueue(detail: string | null): QueuePayload {
  * missing backend means uncountable depth, and a throwing measure is a reported
  * `unknown` — never a throw to the route.
  */
-export async function upBody(measure: (() => Promise<QueueDepth>) | null): Promise<UpBody> {
+async function queueBody(measure: (() => Promise<QueueDepth>) | null): Promise<QueueHealth> {
   // Legacy: `queue driver 'x' has no countable depth.` — here: no ledger to read.
   if (!measure) return { status: "healthy", queue: unknownQueue("queue ledger is not configured.") };
 

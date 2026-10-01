@@ -36,7 +36,7 @@ import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttle
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody } from "./up";
+import { upBody, upHttpStatus } from "./up";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 
@@ -381,12 +381,9 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsRoute);
 
-// `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
-// ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
-// stack). No session, cookie or auth on this path, and the queue read can never
-// sink the endpoint: a backlog answers 200 `degraded`, an unreachable or
-// unconfigured ledger 200 `unknown` — `curl -f` must keep passing through the
-// outage it reports on. `no-store` so a monitor never reads a stale 200.
+// `GET /up` — session-free DB/schema readiness plus the existing queue signal.
+// DB/ledger failure or pending web migrations answers 503; queue-only degraded
+// or unknown remains 200. `no-store` so a monitor never reads a stale response.
 // Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
 type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
@@ -399,19 +396,25 @@ app.get("/up", async (c) => {
   let sql: EnvWithDepth["QUEUE_DEPTH_STORE"] | null = injected ?? null;
   try {
     c.header("cache-control", "no-store");
-    // Client construction can throw (malformed URL); that is `unknown`, never a 500.
+    // Malformed configuration is DB-not-ready, never an unhandled 500.
     if (!sql && url) {
       try {
-        sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 });
+        // A blocked queue query must not starve the independent DB/schema read.
+        sql = postgres(url, { max: 2, idle_timeout: 10, connect_timeout: 3, fetch_types: false });
       } catch (err) {
-        console.warn("Health check could not build the queue client.", { exception: err instanceof Error ? err.name : typeof err });
+        console.warn("Health check could not build the database client.", { exception: err instanceof Error ? err.name : typeof err });
       }
     }
     const client = sql;
-    return c.json(await upBody(client ? () => pgQueueDepth(client) : null));
+    const body = await upBody(client ? () => pgQueueDepth(client) : null, client);
+    return c.json(body, upHttpStatus(body));
   } finally {
-    // Per-request client; an injected double owns its own lifecycle.
-    if (sql && !injected) await sql.end({ timeout: 1 }).catch(() => {});
+    // Terminate request-owned work on timeout without extending the response
+    // deadline to drain it. An injected client owns its own lifecycle.
+    if (sql && !injected) {
+      const closed = sql.end({ timeout: 0 }).catch(() => {});
+      try { c.executionCtx.waitUntil(closed); } catch { void closed; }
+    }
   }
 });
 

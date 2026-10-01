@@ -60,14 +60,14 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Smoke test /up
-        # /up is always 200: degraded/unknown queue health must not fail a deploy.
+        # DB/schema readiness is mandatory. Queue-only degraded/unknown is allowed.
         run: |
           for i in 1 2 3 4 5 6; do
             code=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/up.json" -w "%{http_code}" https://next.togetherweown.com/up) || code="000"
             if [ "$code" = "200" ] && node -e '
               try {
                 const body = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-                process.exit(["healthy", "degraded"].includes(body?.status) && ["healthy", "degraded", "unknown"].includes(body?.queue?.status) ? 0 : 1);
+                process.exit(body?.db === "ok" && body?.pending_migrations === 0 && ["healthy", "degraded"].includes(body?.status) && ["healthy", "degraded", "unknown"].includes(body?.queue?.status) ? 0 : 1);
               } catch { process.exit(1); }
             ' "$RUNNER_TEMP/up.json"; then
               echo "smoke ok (attempt $i)"
@@ -76,5 +76,5 @@ jobs:
             echo "attempt $i: HTTP $code, retrying in 10s..."
             sleep 10
           done
-          echo "::error::staging /up did not return 200 with the expected health envelope after deploy"
+          echo "::error::staging /up did not return 200 with db:ok, pending_migrations:0 and the expected queue envelope after deploy"
           exit 1
