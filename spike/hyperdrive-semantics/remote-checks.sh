@@ -149,8 +149,12 @@ def final_result_exists(run_dir, revision):
                 or not (type(result.get("cleanup")) is bool or result.get("cleanup") == "not_verified")
                 or "cleanup" not in result):
             return False
-        allowed = {"ok", "cleanup", "created", "schema", "error", "checks", "passed", "total", "version", "failedStage", "teardownFailures", "path"}
+        allowed = {"ok", "cleanup", "created", "schema", "error", "checks", "passed", "total", "version", "failedStage", "teardownFailures", "path", "refusal"}
         if set(result) - allowed or ("schema" in result and not re.fullmatch(r"w1_staging_[a-f0-9]{32}", str(result["schema"]))):
+            return False
+        if "refusal" in result and (result.get("error") != "remote_staging_preflight_refused"
+                or not isinstance(result["refusal"], list) or len(result["refusal"]) > 12
+                or not all(isinstance(r, str) and re.fullmatch(r"[a-z_]{3,48}", r) for r in result["refusal"])):
             return False
         if "error" in result and not re.fullmatch(r"remote_[a-z_]+|cloudflare_read_denied_http_\d+_code_[\w]+", str(result["error"])):
             return False

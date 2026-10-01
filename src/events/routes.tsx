@@ -10,6 +10,7 @@ import { memberAccessLog } from "../access-log";
 import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
+import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
 import { takeJoinResult } from "../return-journey";
@@ -152,7 +153,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // this month. An unparseable month is a page, never a 500.
     const month =
       parseCalendarMonth(c.req.query("month")) ??
-      (upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
+      parseCalendarMonth(upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
       currentCalendarMonth(now);
 
     const state = { view, month, q, past };
@@ -211,7 +212,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         emptyState={emptyState}
         discordFailed={discordFailed}
         member={session?.member ?? false}
-        inviteUrl={c.env.DISCORD_INVITE_URL}
+        inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
         appUrl={c.env.APP_URL}
         loginReturnTo={loginReturnTo}
         joinResult={joinResult}

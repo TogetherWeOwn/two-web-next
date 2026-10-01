@@ -84,7 +84,7 @@ describe("admin event code-point contract", () => {
     }
     expect(html).toMatch(/name="title"[^>]*required/);
     expect(html.match(/data-event-text-limit=/g)).toHaveLength(3);
-    expect(html.includes('src="/islands/admin-event-editor.js"')).toBe(mode === "edit");
+    expect(html).toContain('src="/islands/admin-event-editor.js"');
   });
 });
 
