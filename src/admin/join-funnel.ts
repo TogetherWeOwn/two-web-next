@@ -7,6 +7,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
+import { nonSensitiveRead } from "../member-reads";
 import { joinFunnelStats } from "./reads";
 
 /** Parity pin: the legacy JoinFunnelStats widget caches its aggregate for 60 s. */
@@ -39,9 +40,9 @@ let publishedFill = 0;
  */
 async function funnelRead(db: Db): Promise<Funnel> {
   return db.transaction(async (tx) => {
-    await tx.execute(
+    await nonSensitiveRead("timeouts", () => tx.execute(
       sql`select set_config('lock_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true)`,
-    );
+    ));
     return joinFunnelStats(tx);
   });
 }

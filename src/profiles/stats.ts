@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
+import { keyedMemberRead } from "../member-reads";
+import { memberReadDb } from "../db/member-reads";
 
 export type Milestone = { type: string; occurredAt: Date; detail: string | null };
 export type MemberStats = {
@@ -66,19 +68,20 @@ const daysOrNull = (value: unknown): number | null => {
 export async function readMemberStats(db: Pick<Db, "execute"> | null, id: string, signal?: AbortSignal): Promise<MemberStats | null> {
   if (!db) return null;
   if (!signal) return memberStatsWithBudget((memberId, budget) => readMemberStats(db, memberId, budget), id);
+  const connection = memberReadDb(db as Db);
   try {
     signal.throwIfAborted();
-    const members = await db.execute(sql`
+    const members = await keyedMemberRead(() => connection.execute(sql`
       select member_id, joined_at, tenure_days, rank_key, is_current_member
       from web_v1.members where member_id = ${id} limit 1
-    `);
+    `));
     signal.throwIfAborted();
     const member = members[0];
     if (!member) return null;
-    const rows = await db.execute(sql`
-      select milestone, occurred_at, detail from web_v1.member_milestones
+    const rows = await keyedMemberRead(() => connection.execute(sql`
+      select member_id, milestone, occurred_at, detail from web_v1.member_milestones
       where member_id = ${id} order by occurred_at desc
-    `);
+    `));
     signal.throwIfAborted();
     return {
       joinedAt: dateOrNull(member.joined_at),

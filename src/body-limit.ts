@@ -75,5 +75,15 @@ export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings:
   return middleware;
 }
 
-export const bodyLimitClass = (handler: unknown): BodyClass | undefined =>
-  typeof handler === "function" ? (handler as unknown as Record<symbol, BodyClass>)[LIMITED] : undefined;
+export function bodyLimitClass(handler: unknown): BodyClass | undefined {
+  const seen = new Set<unknown>();
+  while (typeof handler === "function" && !seen.has(handler)) {
+    seen.add(handler);
+    const kind = (handler as unknown as Record<symbol, BodyClass>)[LIMITED];
+    if (kind) return kind;
+    // Hono mounts apps with a local onError through this composed-handler link.
+    // Follow only that link so the inventory still inspects the actual limiter.
+    handler = Reflect.get(handler, "__COMPOSED_HANDLER");
+  }
+  return undefined;
+}

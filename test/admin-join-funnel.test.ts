@@ -3,6 +3,7 @@
 // route-level check injects a failing ADMIN_DB stub — no live Postgres needed
 // (the real-aggregate path is covered by test/admin-reads.test.ts).
 
+import { drizzle } from "drizzle-orm/postgres-js";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -37,7 +38,7 @@ async function cookieFor(store: ReturnType<typeof createMemorySessionStore>) {
   const token = newSessionToken();
   await store.create({
     tokenHash: await hashToken(token),
-    userId: "mod-funnel",
+    userId: "100000000000000111",
     username: "mod",
     avatar: null,
     member: true,
@@ -134,21 +135,20 @@ describe("dashboardJoinFunnel cache", () => {
 
 function aggregateDb(n: number) {
   const aggregate = vi.fn(async () => [{ outcome: "added", n }]);
-  const db = {
-    transaction: async (work: (tx: unknown) => Promise<unknown>) => work({
-      execute: async () => {},
-      select: (fields: Record<string, unknown>) => ({
-        from: () => ({
-          where: () => ({
-            groupBy: () => "outcome" in fields ? aggregate() : {
-              orderBy: () => ({ limit: async () => [] }),
-            },
-          }),
-        }),
-      }),
-    }),
-  } as unknown as Db;
-  return { db, aggregate };
+  // Real builders, dialect and prepared-execution metadata survive observation;
+  // only returned rows are memory fixtures, not PostgreSQL persistence evidence.
+  const db = drizzle.mock() as unknown as Db;
+  const session = (db as unknown as { session: {
+    prepareQuery: (query: { sql: string }) => unknown;
+    transaction: (work: (tx: Db) => Promise<unknown>) => Promise<unknown>;
+  } }).session;
+  session.prepareQuery = (query) => ({ setToken() { return this; }, execute: async () => {
+    if (query.sql.includes('from "join_attempts"')) return aggregate();
+    if (query.sql.includes('from "event_search_logs"') || query.sql.startsWith("select set_config(")) return [];
+    throw new Error("Dashboard query has no isolated fixture");
+  } });
+  session.transaction = async (work) => work(db);
+  return { db, aggregate, session };
 }
 
 describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
@@ -180,16 +180,16 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
     vi.useFakeTimers();
     let started!: () => void;
     const firstStarted = new Promise<void>((resolve) => { started = resolve; });
-    const healthy = aggregateDb(7).db;
+    const { db, session } = aggregateDb(7);
     let calls = 0;
-    const transaction = vi.fn((work: Parameters<Db["transaction"]>[0]) => {
+    const transaction = vi.fn((work: (tx: Db) => Promise<unknown>) => {
       const widget = ++calls === 1 ? "funnel" : "search";
       started();
       return pending === "both" || pending === widget
         ? new Promise<never>(() => {})
-        : healthy.transaction(work);
+        : work(db);
     });
-    const db = { transaction } as unknown as Db;
+    session.transaction = transaction;
     let response: Response | undefined;
     const request = Promise.resolve(adminApp({ sessionStore: store }).request("/", { headers: { cookie } }, {
       ...env, ADMIN_DB: db,
@@ -213,9 +213,8 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
   it("omits the funnel widget and still answers 200", async () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store);
-    const brokenDb = {
-      transaction: () => Promise.reject(new Error("aggregate unavailable")),
-    } as unknown as Db;
+    const { db: brokenDb, session } = aggregateDb(0);
+    session.transaction = () => Promise.reject(new Error("aggregate unavailable"));
     const res = await adminApp({ sessionStore: store }).request("/", { headers: { cookie } }, {
       ...env,
       ADMIN_DB: brokenDb,
