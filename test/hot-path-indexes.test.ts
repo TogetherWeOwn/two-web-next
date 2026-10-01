@@ -5,6 +5,7 @@ import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events, rsvps } from "../src/db/admin-schema";
 import { joinAttempts } from "../src/db/schema";
+import { JOIN_ATTEMPT_RETENTION_DAYS } from "../src/jobs/constants";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const NOW = "2026-10-01T12:00:00Z";
@@ -188,7 +189,8 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
   });
 
   it("uses the outcome index for Next's retained funnel group-by", async () => {
-    expect(await plan("select outcome, count(*) from join_attempts where created_at >= $1::timestamptz - interval '30 days' group by outcome", [NOW]))
+    const cutoff = new Date(Date.parse(NOW) - JOIN_ATTEMPT_RETENTION_DAYS * 86_400_000).toISOString();
+    expect(await plan("select outcome, count(*) from join_attempts where created_at >= $1 group by outcome", [cutoff]))
       .toContain("join_attempts_outcome_index");
   });
 });
