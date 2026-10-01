@@ -66,6 +66,8 @@ export const featuredContents = pgTable(
   "featured_contents",
   {
     id: serial("id").primaryKey(),
+    // Source PK as a decimal string: import identity, independent of native IDs.
+    legacyId: text("legacy_id").unique(),
     title: text("title").notNull(),
     body: text("body"),
     url: text("url"),
@@ -182,6 +184,8 @@ export const eventSearchLogs = pgTable(
   "event_search_logs",
   {
     id: serial("id").primaryKey(),
+    // Repeated renders are distinct; the source PK is the only import key.
+    legacyId: text("legacy_id").unique(),
     normalizedQuery: text("normalized_query").notNull(),
     resultCount: integer("result_count").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),

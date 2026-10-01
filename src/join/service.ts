@@ -90,6 +90,10 @@ export async function checkJoinThrottle(sql: Sql | null, bucket: string, max: nu
 // Worker that reaches a migrated database is a no-op and one that reaches a
 // fresh staging database self-heals. The drizzle file stays the canonical
 // migration for the `db:migrate` path; this is the funnel-floor backstop.
+// The import-only legacy_id key (drizzle/1011) is deliberately absent here:
+// the admin viewer selects explicit columns so both shapes stay readable, and
+// keeping the bootstrap identical to 1000 means 1011 still applies cleanly on
+// bootstrapped databases.
 const JOIN_MIGRATION = [
   `create table if not exists join_attempts (
     id bigserial primary key,
