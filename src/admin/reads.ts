@@ -1,7 +1,9 @@
 // Admin read surfaces (W12: M6 roster, M8 join viewer + funnel stats).
 // Read-only by construction: nothing here inserts, updates or deletes.
 
-import { and, count, desc, eq, gte, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, or } from "drizzle-orm";
+import { JOIN_ATTEMPT_PAGE_SIZE, parseJoinAttemptsQuery, type RosterQuery } from "./table-list";
+import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
@@ -12,15 +14,23 @@ export const JOIN_RETENTION_DAYS = JOIN_ATTEMPT_RETENTION_DAYS;
 
 export type RosterEntry = { userId: string; username: string | null; status: string; answeredAt: Date };
 
-/** Read-only RSVP roster for one event: who answered what, most recent first. */
-export async function listRoster(db: Db, eventKey: string): Promise<RosterEntry[]> {
+/** Read-only RSVP roster for one event; most recent first unless explicitly sorted. */
+export async function listRoster(
+  db: Db,
+  eventKey: string,
+  query: RosterQuery = { q: "", sort: "answered", order: "desc" },
+): Promise<RosterEntry[]> {
+  const conds = [eq(events.eventKey, eventKey)];
+  if (query.q) conds.push(ilike(users.username, `%${escapeLikeTerm(query.q)}%`));
+  const column = query.sort === "status" ? rsvps.status : rsvps.updatedAt;
+  const order = query.order === "asc" ? asc(column) : desc(column);
   const rows = await db
     .select({ userId: rsvps.userId, username: users.username, status: rsvps.status, answeredAt: rsvps.updatedAt })
     .from(rsvps)
     .innerJoin(events, eq(events.id, rsvps.eventId))
     .leftJoin(users, eq(users.id, rsvps.userId))
-    .where(eq(events.eventKey, eventKey))
-    .orderBy(desc(rsvps.updatedAt), rsvps.userId);
+    .where(and(...conds))
+    .orderBy(order, rsvps.userId);
   return rows;
 }
 
@@ -33,8 +43,6 @@ export type JoinAttemptRow = Pick<
   "id" | "outcome" | "source" | "requestId" | "discordId" | "createdAt"
 >;
 
-const PAGE = 100;
-
 /**
  * Viewer over the write-once trail, newest first, inside the retention
  * window. `q` is an EXACT match on discord_id or request_id (the bot-log
@@ -42,8 +50,9 @@ const PAGE = 100;
  */
 export async function listJoinAttempts(
   db: Db,
-  opts: { outcome?: string; q?: string; now?: Date },
+  opts: { outcome?: string; q?: string; page?: number; now?: Date },
 ): Promise<JoinAttemptRow[]> {
+  const { page } = parseJoinAttemptsQuery({ page: String(opts.page ?? 1) });
   const since = windowStart(opts.now);
   const conds = [gte(joinAttempts.createdAt, since)];
   if (opts.outcome) conds.push(eq(joinAttempts.outcome, opts.outcome));
@@ -60,7 +69,9 @@ export async function listJoinAttempts(
     .from(joinAttempts)
     .where(and(...conds))
     .orderBy(desc(joinAttempts.createdAt), desc(joinAttempts.id))
-    .limit(PAGE);
+    // One lookahead row powers Next; routes render and audit only this page.
+    .limit(JOIN_ATTEMPT_PAGE_SIZE + 1)
+    .offset((page - 1) * JOIN_ATTEMPT_PAGE_SIZE);
 }
 
 /** Direct lookup uses the list's retention window; mapped identities remain audit subjects after leaving. */
@@ -91,8 +102,9 @@ function windowStart(now: Date = new Date()): Date {
   return new Date(now.getTime() - JOIN_RETENTION_DAYS * 86_400_000);
 }
 
-/** JoinFunnelStats: per-outcome counts over the retention window. Outcomes only, no member data. */
-export async function joinFunnelStats(db: Db, now?: Date): Promise<Record<string, number>> {
+/** JoinFunnelStats: per-outcome counts over the retention window. Outcomes only, no member data.
+ * `Pick<Db, "select">` so the dashboard wrapper can run it inside a bounded transaction. */
+export async function joinFunnelStats(db: Pick<Db, "select">, now?: Date): Promise<Record<string, number>> {
   const rows = await db
     .select({ outcome: joinAttempts.outcome, n: count() })
     .from(joinAttempts)
