@@ -34,16 +34,25 @@ export async function createUsersProfilesFixture(raw: string) {
     created = true;
     await next.unsafe(usersMigration);
     await next.unsafe(profilesMigration);
+    await legacy.unsafe(fixture);
   } catch (error) {
     await dispose();
     throw error;
   }
   const reset = async () => {
     if (disposed) throw new Error("Import fixture is disposed");
-    await legacy.unsafe("DROP TABLE IF EXISTS profiles; DROP TABLE IF EXISTS users");
-    await legacy.unsafe(fixture);
-    await next`delete from profiles`;
-    await next`delete from users`;
+    // Keep the fixture DDL stable; reset only rows and serial identities between tests.
+    await legacy.begin(async (sql) => {
+      await sql`delete from profiles`;
+      await sql`delete from users`;
+      await sql`select setval(pg_get_serial_sequence('users', 'id'), 1, false),
+        setval(pg_get_serial_sequence('profiles', 'id'), 1, false)`;
+      await sql.unsafe(fixture.slice(fixture.indexOf("INSERT INTO users ")));
+    });
+    await next.begin(async (sql) => {
+      await sql`delete from profiles`;
+      await sql`delete from users`;
+    });
   };
   const scopedUrl = (schema: string) => {
     const scoped = new URL(url.href);
