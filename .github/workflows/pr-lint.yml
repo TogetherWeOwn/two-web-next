@@ -50,28 +50,16 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Passed via env (not inlined into the script) so titles/bodies
-          # containing quotes can't break shell parsing.
-          EVENT_TITLE: ${{ github.event.pull_request.title }}
-          EVENT_BODY: ${{ github.event.pull_request.body }}
-          EVENT_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Validating release PR #$PR_NUMBER via the API."
-            TITLE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json title --jq .title)
-            BODY=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
-            AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json author --jq .author.login)
-            # The default checkout is the dispatch ref (the release branch
-            # head = the PR head), which is the SHA required checks match on.
-            EVENT=pull_request
-          else
-            TITLE="$EVENT_TITLE"
-            BODY="$EVENT_BODY"
-            AUTHOR="$EVENT_AUTHOR"
-            EVENT='${{ github.event_name }}'
-          fi
+          # Resolve one current API snapshot only after checking its PR/repo/SHA
+          # binding. JSON stays data, never interpolated into shell source.
+          METADATA=$(python3 ci/resolve-pr-metadata.py)
+          TITLE=$(printf '%s' "$METADATA" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')
+          BODY=$(printf '%s' "$METADATA" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
+          AUTHOR=$(printf '%s' "$METADATA" | python3 -c 'import json,sys; print(json.load(sys.stdin)["author"])')
+          EVENT=$(printf '%s' "$METADATA" | python3 -c 'import json,sys; print(json.load(sys.stdin)["event"])')
           {
             echo "title<<PR_EOF"
             echo "$TITLE"
