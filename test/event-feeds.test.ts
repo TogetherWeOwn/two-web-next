@@ -4,7 +4,7 @@
 // W9 calendar feeds: byte-level fixtures pinned to two-web's EventIcs/EventRss/EventGoogleCalendar
 // output, plus route tests (agent-testdb; skipped without DATABASE_URL).
 import { beforeEach, describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";

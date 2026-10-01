@@ -3,7 +3,7 @@
 import { serializeSigned } from "hono/utils/cookie";
 import postgres from "postgres";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { eventSearchLogs, events } from "../src/db/admin-schema";
 import { createDb, type Db } from "../src/db/index";
 import type { Env } from "../src/env";
