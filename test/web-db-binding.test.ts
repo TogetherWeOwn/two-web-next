@@ -120,6 +120,8 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     expect((await request("/admin", { headers: { cookie: moderator } }, env)).status).toBe(200);
   });
 
+  // Sequential requests open and close real SQL clients on shared CI runners.
+  // These throttle assertions need a bounded integration budget, not a latency gate.
   it("enforces profile writes at 30/min through the binding", async () => {
     const cookie = await login();
     // Isolate this budget from other requests and the wall-clock minute boundary.
@@ -133,7 +135,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
       for (let i = 0; i < 30; i++) expect((await write()).status).toBe(303);
       expect((await write()).status).toBe(429);
     } finally { clock.mockRestore(); }
-  });
+  }, 30_000);
 
   it("enforces join starts at 10/min through the binding", async () => {
     await fixture.client`DELETE FROM web_throttle_hits`;
@@ -143,7 +145,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
       expect((await request("/join/discord", {}, bindings)).status).toBe(302);
     }
     expect((await request("/join/discord", {}, bindings)).status).toBe(429);
-  });
+  }, 30_000);
 
   it("keeps explicit configuration ahead of the binding in all login/profile factories", async () => {
     state.urls.length = 0;
