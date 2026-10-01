@@ -630,7 +630,8 @@ export const FeaturedFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action}>
+        <form method="post" action={action} data-event-editor=""
+          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Headline" errors={errors}>
             {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={255} required />}
           </Field>
@@ -683,6 +684,7 @@ export const FeaturedFormPage: FC<{
           </form>
         ) : null}
       </section>
+      <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
 };
