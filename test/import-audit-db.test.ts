@@ -4,6 +4,8 @@ import { URL } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from './helpers/member-data-db';
+import { DEFAULT_CONFIG, handleAgentEvent } from '../src/agent-events/service';
+import { sha256Hex } from '../src/bot/signer';
 // @ts-expect-error Standalone operator CLI has no declaration file.
 import { importAudit } from '../bin/import/audit.mjs';
 
@@ -17,6 +19,7 @@ const names = ['member_data_access_logs', 'activity_log', 'agent_event_grants',
 const sourceSchema = `legacy_audit_${randomUUID().replaceAll('-', '')}`;
 let fixture: MemberDataFixture;
 let legacy: ReturnType<typeof postgres>;
+let ingress: ReturnType<typeof postgres>;
 
 suite('audit import into the migrated Next schema (disposable test DB only)', () => {
   beforeAll(async () => {
@@ -25,6 +28,12 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
       throw new Error('Audit fixtures require agent-testdb database two_web_next');
     }
     fixture = await createMemberDataFixture(raw!);
+    // Ingress uses raw postgres.js JSON serialization, not the fixture's client
+    // whose serializers Drizzle overrides for its own column mapping.
+    ingress = postgres(url.href, {
+      max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {},
+      connection: { search_path: fixture.schemaName },
+    });
     legacy = postgres(url.href, {
       max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {},
     });
@@ -38,6 +47,7 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
       if (legacy) await legacy.unsafe(`DROP SCHEMA IF EXISTS "${sourceSchema}" CASCADE`);
     } finally {
       await legacy?.end();
+      await ingress?.end();
       await fixture?.dispose();
     }
   });
@@ -132,11 +142,107 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
     }
   });
 
-  it('enables only previously enabled legacy grants when explicitly requested', async () => {
-    await run({ dryRun: false, enableGrants: true });
-    const rows = await fixture.client`SELECT disabled_at FROM agent_event_grants ORDER BY id`;
-    expect(rows[0]!.disabled_at).toBeNull();
-    expect(rows[1]!.disabled_at).not.toBeNull();
+  it('reads every mixed-width numeric ID across pages in preview, apply and rerun', async () => {
+    await legacy.unsafe(`INSERT INTO "${sourceSchema}".activity_log (id, description, created_at)
+      SELECT id, 'Synthetic pagination row', timestamp '2026-09-01' FROM generate_series(1, 1000) AS id`);
+    try {
+      const preview = await run();
+      expect(preview.tables.activity_log).toMatchObject({ read: 1002, would_insert: 1002, inserted: 0 });
+      const applied = await run({ dryRun: false });
+      expect(applied.tables.activity_log).toMatchObject({ read: 1002, inserted: 1002, existing: 0 });
+      const rows = await fixture.client`SELECT id FROM activity_log ORDER BY id`;
+      expect(rows.map((r) => r.id)).toEqual([...Array.from({ length: 1000 }, (_, i) => i + 1), 93001, 93002]);
+      const again = await run({ dryRun: false });
+      expect(again.tables.activity_log).toMatchObject({ read: 1002, inserted: 0, updated: 0, existing: 1002 });
+    } finally {
+      await legacy.unsafe(`DELETE FROM "${sourceSchema}".activity_log WHERE id BETWEEN 1 AND 1000`);
+    }
+  }, 30000);
+
+  const unusedId = '44444444-4444-4444-8444-444444444444';
+  const unusedToken = 'synthetic-import-unused-token';
+  const cfg = { ...DEFAULT_CONFIG, enabled: true, callerAgentId: 'synthetic-agent',
+    stagingGuildId: '100000000000000002' };
+  const create = (token: string, key: string) => handleAgentEvent(ingress, cfg, {
+    op: 'create', idempotency_key: key, fields: {
+      title: 'Synthetic post-import event', location: 'Synthetic voice', timezone: 'UTC',
+      starts_at: '2026-10-01 20:00', ends_at: '2026-10-01 22:00',
+    },
+  }, token);
+  const addUnusedGrant = async () => {
+    await legacy.unsafe(`INSERT INTO "${sourceSchema}".agent_event_grants
+      (id, agent_id, company_id, guild_id, verifier_hash, created_at)
+      VALUES ($1, 'synthetic-agent', 'synthetic-company', '100000000000000002', $2, timestamp '2026-09-01')`,
+    [unusedId, await sha256Hex(unusedToken)]);
+  };
+  const removeUnusedGrant = async () => {
+    await legacy.unsafe(`DELETE FROM "${sourceSchema}".events WHERE agent_grant_id = $1`, [unusedId]);
+    await legacy.unsafe(`DELETE FROM "${sourceSchema}".agent_event_audits WHERE grant_id = $1`, [unusedId]);
+    await legacy.unsafe(`DELETE FROM "${sourceSchema}".agent_event_grants WHERE id = $1`, [unusedId]);
+  };
+
+  it('enables only proven unused grants; spent imports cannot create under a fresh key', async () => {
+    const spentToken = 'synthetic-import-spent-token';
+    await addUnusedGrant();
+    await legacy.unsafe(`UPDATE "${sourceSchema}".agent_event_grants SET verifier_hash = $1, expires_at = NULL
+      WHERE id = '22222222-2222-4222-8222-222222222222'`, [await sha256Hex(spentToken)]);
+    try {
+      await run({ dryRun: false, enableGrants: true });
+      const rows = await fixture.client`SELECT disabled_at FROM agent_event_grants ORDER BY id`;
+      expect(rows[0]!.disabled_at).not.toBeNull(); // Already consumed in legacy.
+      expect(rows[1]!.disabled_at).not.toBeNull(); // Disabled in legacy.
+      expect(rows[2]!.disabled_at).toBeNull(); // Proven unused.
+      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      const denied = await create(spentToken, 'fresh-spent-key');
+      expect(denied).toMatchObject({ status: 403, body: { reason: 'grant_disabled' } });
+      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      expect(await fixture.client`SELECT key FROM agent_event_idempotency_keys WHERE key = 'fresh-spent-key'`).toEqual([]);
+      expect((await create(unusedToken, 'fresh-unused-key')).status).toBe(201);
+      expect(await create(unusedToken, 'another-unused-key')).toMatchObject({ status: 409, body: { reason: 'quota_exceeded' } });
+    } finally {
+      await removeUnusedGrant();
+      await legacy.unsafe(`UPDATE "${sourceSchema}".agent_event_grants
+        SET verifier_hash = repeat('a', 64), expires_at = timestamp '2026-10-10'
+        WHERE id = '22222222-2222-4222-8222-222222222222'`);
+    }
+  });
+
+  it.each(['ownership', 'audit', 'expired replay', 'zero allowance'])('keeps a grant disabled with only %s evidence', async (evidence) => {
+    await addUnusedGrant();
+    try {
+      if (evidence === 'ownership') {
+        await legacy.unsafe(`INSERT INTO "${sourceSchema}".events (agent_grant_id) VALUES ($1)`, [unusedId]);
+      } else if (evidence === 'audit') {
+        await legacy.unsafe(`INSERT INTO "${sourceSchema}".agent_event_audits
+          (grant_id, operation, request_id, result, created_at)
+          VALUES ($1, 'create', 'synthetic-historical-request', 'accepted', timestamp '2026-01-01')`, [unusedId]);
+      } else if (evidence === 'expired replay') {
+        await legacy.unsafe(`INSERT INTO "${sourceSchema}".agent_event_idempotency_keys
+          (grant_id, key, payload_digest, status, body, created_at)
+          VALUES ($1, 'synthetic-spent-old-key', repeat('c', 64), 201, '{}', timestamp '2026-01-01')`, [unusedId]);
+      } else {
+        await legacy.unsafe(`UPDATE "${sourceSchema}".agent_event_grants SET max_events = 0 WHERE id = $1`, [unusedId]);
+      }
+      await run({ dryRun: false, enableGrants: true });
+      expect(await create(unusedToken, 'fresh-history-key')).toMatchObject({ status: 403, body: { reason: 'grant_disabled' } });
+      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      expect(await fixture.client`SELECT key FROM agent_event_idempotency_keys WHERE key IN ('fresh-history-key', 'synthetic-spent-old-key')`).toEqual([]);
+    } finally {
+      await removeUnusedGrant();
+    }
+  });
+
+  it('keeps grants with unknown ownership disabled even when activation is requested', async () => {
+    await addUnusedGrant();
+    await legacy.unsafe(`ALTER TABLE "${sourceSchema}".events RENAME COLUMN agent_grant_id TO unknown_ownership`);
+    try {
+      await run({ dryRun: false, enableGrants: true });
+      expect(await create(unusedToken, 'fresh-unknown-key')).toMatchObject({ status: 403, body: { reason: 'grant_disabled' } });
+      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+    } finally {
+      await legacy.unsafe(`ALTER TABLE "${sourceSchema}".events RENAME COLUMN unknown_ownership TO agent_grant_id`);
+      await removeUnusedGrant();
+    }
   });
 
   it('rejects a cleartext verifier and rolls the entire destination back', async () => {
@@ -146,6 +252,23 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
     for (const name of names) {
       const [row] = await fixture.client.unsafe(`SELECT count(*)::int AS n FROM "${name}"`);
       expect(row!.n).toBe(0);
+    }
+  });
+
+  it('excludes null and infinite replay timestamps from the retention window', async () => {
+    await legacy.unsafe(`INSERT INTO "${sourceSchema}".agent_event_idempotency_keys
+      (id, grant_id, key, payload_digest, status, body, created_at) VALUES
+      (94003, '22222222-2222-4222-8222-222222222222', 'synthetic-negative-infinity', repeat('e', 64), 200, '{}', '-infinity'),
+      (94004, '22222222-2222-4222-8222-222222222222', 'synthetic-positive-infinity', repeat('e', 64), 200, '{}', 'infinity'),
+      (94005, '22222222-2222-4222-8222-222222222222', 'synthetic-null-time', repeat('e', 64), 200, '{}', NULL)`);
+    try {
+      const preview = await run();
+      expect(preview.tables.agent_event_idempotency_keys).toMatchObject({ read: 5, would_insert: 1, expired: 4 });
+      const applied = await run({ dryRun: false });
+      expect(applied.tables.agent_event_idempotency_keys).toMatchObject({ read: 5, inserted: 1, expired: 4 });
+      expect(await fixture.client`SELECT key FROM agent_event_idempotency_keys`).toEqual([{ key: 'synthetic-recent' }]);
+    } finally {
+      await legacy.unsafe(`DELETE FROM "${sourceSchema}".agent_event_idempotency_keys WHERE id IN (94003, 94004, 94005)`);
     }
   });
 

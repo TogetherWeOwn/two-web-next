@@ -14,7 +14,15 @@ It is an operator cutover tool, not a scheduled job or a Workers endpoint.
   `--dry-run` and `--apply` together are rejected. Counts contain no row data.
   Errors expose only a static message and, when available, a SQLSTATE.
 - Grants import **disabled** unless `--enable-grants` is explicitly supplied.
-  That flag preserves legacy disabled/expiry state; it never re-enables a grant
+  Even with that flag, only demonstrably untouched grants can remain enabled:
+  the source must expose `events.agent_grant_id` as a UUID, `max_events` must be
+  positive, and the frozen snapshot must have no owned event, ingress audit or
+  replay key for that grant. All history is checked, including replay keys too
+  old to import. A missing ownership contract or any history leaves the grant
+  disabled. This conservative rule avoids restoring spent quota: this tool does
+  not copy ownership into Next `agent_events`. Supply a complete frozen source,
+  not a filtered export, when requesting enabled grants.
+  The flag preserves legacy disabled/expiry state; it never re-enables a grant
   already disabled in legacy or an existing Next grant. Enabling grants requires
   the cutover operator's normal admission/authorization review first.
 - Only the legacy `verifier_hash` is read for grant authentication. It must be a
@@ -71,8 +79,11 @@ and roll back the full destination import; no errors are swallowed.
 
 Only replay keys at or after `now - 90 days` are eligible, matching
 `src/jobs/constants.ts` and the current prune comparison (`created_at < cutoff`).
-The exact boundary is included; null creation times are not inside a retention
-window and are counted as expired. No retention rules are changed for any table.
+The exact boundary is included. PostgreSQL compares timestamps at microsecond
+precision, rather than truncating through JS Dates. Null and non-finite creation
+times (`-infinity`/`infinity`) cannot establish a bounded retention window and are
+counted as expired. See [PostgreSQL `isfinite(timestamp)`](https://www.postgresql.org/docs/17/functions-datetime.html#FUNCTIONS-DATETIME-TABLE).
+No retention rules are changed for any table.
 Older audit evidence is retained; the normal retention job remains responsible
 for its policy. Re-running with `--enable-grants` never changes an already-imported
 grant, so choose the intended admission policy before the first apply.

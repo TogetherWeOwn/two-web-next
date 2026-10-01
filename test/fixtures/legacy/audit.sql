@@ -74,6 +74,15 @@ INSERT INTO legacy.agent_event_grants VALUES
    '100000000000000002', repeat('b', 64), NULL, '2026-09-02 00:00:00', 1,
    '2026-09-01 10:11:12.123456', '2026-09-02 00:00:00');
 
+-- Only the ownership projection is needed for this audit fixture. The pinned
+-- grant migration adds events.agent_grant_id (nullable UUID FK, unique). Other
+-- legacy event content is outside this importer and intentionally not copied.
+CREATE TABLE legacy.events (
+  id bigserial PRIMARY KEY,
+  agent_grant_id uuid UNIQUE REFERENCES legacy.agent_event_grants(id) ON DELETE SET NULL
+);
+INSERT INTO legacy.events (agent_grant_id) VALUES ('22222222-2222-4222-8222-222222222222');
+
 CREATE TABLE legacy.agent_event_idempotency_keys (
   id bigserial PRIMARY KEY,
   grant_id uuid NOT NULL REFERENCES legacy.agent_event_grants(id) ON DELETE CASCADE,

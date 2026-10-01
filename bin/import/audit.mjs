@@ -106,6 +106,12 @@ export async function importAudit({ legacy, target, legacySchema = 'public', tar
   // still advance sequences or invoke triggers).
   await legacy.begin('isolation level repeatable read read only', async (source) => {
     await source`SET LOCAL TIME ZONE 'UTC'`;
+    const ownershipTable = tableName(legacySchema, 'events');
+    const [ownership] = enableGrants ? await source`
+      SELECT EXISTS (SELECT 1 FROM pg_attribute
+        WHERE attrelid = to_regclass(${ownershipTable}) AND attname = 'agent_grant_id'
+          AND atttypid = 'uuid'::regtype AND NOT attisdropped) AS available
+    ` : [{ available: false }];
     await target.begin(dryRun ? 'isolation level repeatable read read only' : '', async (dest) => {
       await dest`SET LOCAL TIME ZONE 'UTC'`;
       if (!dryRun) {
@@ -125,25 +131,43 @@ export async function importAudit({ legacy, target, legacySchema = 'public', tar
           if (col === 'id' || table.json.includes(col) || table.text.includes(col)) return `${id}::text AS ${id}`;
           return id;
         }).join(', ');
+        const isReplay = table.name === 'agent_event_idempotency_keys';
+        // Let Postgres compare the UTC timestamps at full precision. Non-finite
+        // timestamps cannot establish membership in a bounded retention window.
+        const expiry = isReplay
+          ? ', (created_at IS NULL OR NOT isfinite(created_at) OR created_at < $1::timestamp) AS import_expired'
+          : '';
+        // Ownership is not copied into Next agent_events by this importer.
+        // Admit only demonstrably untouched grants; any history (including
+        // expired replay keys) is conservatively spent/unknown, not new quota.
+        const admission = table.name === 'agent_event_grants'
+          ? `, (${enableGrants && ownership.available ? `max_events > 0
+              AND NOT EXISTS (SELECT 1 FROM ${ownershipTable} WHERE agent_grant_id = source.id)
+              AND NOT EXISTS (SELECT 1 FROM ${tableName(legacySchema, 'agent_event_audits')} WHERE grant_id = source.id)
+              AND NOT EXISTS (SELECT 1 FROM ${tableName(legacySchema, 'agent_event_idempotency_keys')} WHERE grant_id = source.id)`
+            : 'false'}) AS import_unused`
+          : '';
         let cursor = null;
         while (true) {
+          const params = isReplay ? [cutoff] : [];
+          if (cursor !== null) params.push(cursor);
           const rows = await source.unsafe(
-            `SELECT ${select} FROM ${from} ${cursor === null ? '' : 'WHERE id > $1'} ORDER BY id LIMIT ${PAGE_SIZE}`,
-            cursor === null ? [] : [cursor],
+            `SELECT ${select}${expiry}${admission} FROM ${from} AS source
+             ${cursor === null ? '' : `WHERE source.id > $${params.length}`}
+             ORDER BY source.id LIMIT ${PAGE_SIZE}`,
+            params,
           );
           if (!rows.length) break;
           for (const row of rows) {
             count.read++;
-            if (table.name === 'agent_event_idempotency_keys' &&
-                (row.created_at === null || new Date(row.created_at).getTime() < new Date(cutoff).getTime())) {
+            if (isReplay && row.import_expired) {
               count.expired++;
               continue;
             }
             if (table.name === 'agent_event_grants') {
               validateGrant(row);
-              if (!enableGrants && row.disabled_at === null) row.disabled_at = at;
+              if (!row.import_unused && row.disabled_at === null) row.disabled_at = at;
             }
-            const isReplay = table.name === 'agent_event_idempotency_keys';
             const existing = await dest.unsafe(
               `SELECT id::text FROM ${to} WHERE id = $1${isReplay ? ' OR (grant_id = $2 AND key = $3)' : ''}`,
               isReplay ? [row.id, row.grant_id, row.key] : [row.id],
