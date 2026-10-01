@@ -59,6 +59,7 @@ export function pageShellFixture(status = "published") {
         ? [[MEMBER_ID, "Fixture member", null, "A local bio.", ["Chess"], "UTC", now.toISOString()]] : [] };
     }
     if (sql.includes('from "events"')) {
+      if (sql.includes('"events"."id" <>')) return { rows: [] }; // No neighboring/related fixture rows.
       if (sql.includes("count(*)")) return { rows: [[1]] };
       if (sql.includes('"event_key" =') && !params.includes(EVENT_KEY)) return { rows: [] };
       return { rows: [encode(getTableColumns(events), event)] };
