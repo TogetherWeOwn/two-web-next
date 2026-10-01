@@ -9,6 +9,7 @@
 // Weeks step in the host's zone, not in UTC: "20:00 London every Sunday" must
 // stay 20:00 London across the clocks-change weekend.
 
+import { parseRecurrenceDate } from "./recurrence-date";
 import { type FieldErrors, isKnownTimezone, utcToWall, ValidationError, wallToUtc } from "./validation";
 
 /** A series that never ends is a runaway reconcile pass: 52 weeklies is a year of Sunday Squads. */
@@ -105,15 +106,6 @@ function str(v: unknown): string | null {
   return t === "" ? null : t;
 }
 
-const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2})?)?$/;
-
-function parseDate(raw: string): Date | null {
-  const m = DATE_RE.exec(raw);
-  if (!m) return null;
-  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-  return d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? d : null;
-}
-
 /**
  * Read the rule out of the create/edit form, or null for a one-off. Unknown
  * frequencies, out-of-range counts, unparsable dates and a repeat-until that
@@ -140,7 +132,7 @@ export function parseRecurrenceForm(data: Record<string, unknown>): RecurrenceIn
   let endsOn: Date | null = null;
   const endsRaw = str(data.recurrence_ends_on);
   if (endsRaw !== null) {
-    endsOn = parseDate(endsRaw);
+    endsOn = parseRecurrenceDate(endsRaw);
     if (!endsOn) fields.recurrence_ends_on = "The repeat-until date is not a date.";
   }
 
@@ -154,7 +146,7 @@ export function parseRecurrenceForm(data: Record<string, unknown>): RecurrenceIn
   const startsRaw = str(data.starts_at);
   const timezone = str(data.timezone) ?? "Europe/London";
   if (endsOn && startsRaw && isKnownTimezone(timezone)) {
-    const startsDate = /^\d{4}-\d{2}-\d{2}/.test(startsRaw) && parseDate(startsRaw.slice(0, 10)) ? startsRaw.slice(0, 10) : null;
+    const startsDate = /^\d{4}-\d{2}-\d{2}/.test(startsRaw) && parseRecurrenceDate(startsRaw.slice(0, 10)) ? startsRaw.slice(0, 10) : null;
     if (startsDate && endsOn.toISOString().slice(0, 10) < startsDate) {
       throw new ValidationError({ recurrence_ends_on: "The repeat-until date is before the first meeting." });
     }
