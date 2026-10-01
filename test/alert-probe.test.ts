@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
+import { ALERT_PROBE_HEADER, AlertProbeError, validProbeId } from "../src/alert-probe-error";
 import { consume } from "../src/jobs/consumer";
 import type { Env } from "../src/env";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
@@ -73,6 +74,17 @@ describe("staging alert probe gates", () => {
     expect(store).not.toHaveBeenCalled();
   });
 
+  it.each(["", "token=private", "11111111-1111-7111-8111-111111111111"])("rejects invalid probe ID %s only after QA authentication", async (probeId) => {
+    const send = vi.fn();
+    const env = { ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue };
+    const res = await request(env, { [ALERT_PROBE_HEADER]: probeId });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_probe_id" });
+    expect(send).not.toHaveBeenCalled();
+    expect((await request(env, { [ALERT_PROBE_HEADER]: probeId, [QA_HEADER]: "wrong" })).status).toBe(404);
+    expect(new AlertProbeError(probeId).probeId).toBeUndefined();
+  });
+
   it("missing queue is an explicit 503, not a successful probe", async () => {
     expect((await request(staging)).status).toBe(503);
   });
@@ -84,12 +96,16 @@ describe("local end-to-end probe chain", () => {
     const queued: unknown[] = [];
     const send = vi.fn(async (body: unknown) => { queued.push(body); });
     const env = { ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue };
-    const response = await request(env);
+    const sentProbeId = "11111111-1111-4111-8111-111111111111";
+    const response = await request(env, { [ALERT_PROBE_HEADER]: sentProbeId });
     expect(response.status).toBe(500);
     expect(response.headers.get("cache-control")).toBe("no-store, private");
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(await response.text()).not.toContain(token);
-    expect(queued).toEqual([{ kind: "alert-probe" }]);
+    expect(queued).toEqual([{ kind: "alert-probe", probeId: expect.any(String) }]);
+    const probeId = (queued[0] as { probeId: string }).probeId;
+    expect(validProbeId(probeId)).toBe(true);
+    expect(probeId).toBe(sentProbeId);
 
     const ack = vi.fn(), retry = vi.fn();
     await consume({ messages: [{ body: queued[0], attempts: 1, ack, retry }] }, { ...noDependencies(), probeEnabled: true });
@@ -97,6 +113,7 @@ describe("local end-to-end probe chain", () => {
     expect(retry).not.toHaveBeenCalled();
     const lines = errors.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('{"level":"critical"'));
     expect(lines).toHaveLength(2);
+    expect(lines.map((line) => JSON.parse(line).probeId)).toEqual([probeId, probeId]);
     expect(JSON.parse(lines[0]!)).toMatchObject({ event: "error.alert", fingerprint: "AlertProbeError@/__probe/alert", route: "/__probe/alert" });
     expect(JSON.parse(lines[1]!)).toMatchObject({ event: "queue.failing", job: "AlertProbe", attempts: 1, exception: "AlertProbeError" });
 
@@ -107,9 +124,17 @@ describe("local end-to-end probe chain", () => {
       { OPS_ALERT_WEBHOOK_URL: "https://discord.com/api/webhooks/123456789/test-token" });
     expect(webhook).toHaveBeenCalledTimes(2);
     expect(receipt.mock.calls.map(([line]) => JSON.parse(line))).toMatchObject([
-      { event: "error.alert", route: "/__probe/alert", delivery: "ops.alert.delivered" },
-      { event: "queue.failing", job: "AlertProbe", delivery: "ops.alert.delivered" },
+      { event: "error.alert", route: "/__probe/alert", probeId, delivery: "ops.alert.delivered" },
+      { event: "queue.failing", job: "AlertProbe", probeId, delivery: "ops.alert.delivered" },
     ]);
+  });
+
+  it("generates a bounded probe ID for a caller without the optional header", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const send = vi.fn(async (_body: { probeId?: string }) => {});
+    expect((await request({ ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue })).status).toBe(500);
+    expect(send).toHaveBeenCalledOnce();
+    expect(validProbeId(send.mock.calls[0]?.[0]?.probeId)).toBe(true);
   });
 
   it("a queued synthetic job is silently acked when the consumer QA gate is off", async () => {

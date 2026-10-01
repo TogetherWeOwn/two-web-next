@@ -1,5 +1,7 @@
 // Tail handler/config contract:
 // https://developers.cloudflare.com/workers/observability/logs/tail-workers/
+import { validProbeId } from "../src/alert-probe-error";
+
 export type TailEnv = { OPS_ALERT_WEBHOOK_URL?: string };
 export const MUTE_MS = 5 * 60 * 1000;
 const MAX_TRACKED = 500;
@@ -70,22 +72,31 @@ export async function parseAlert(message: unknown, timestamp: number): Promise<A
 /** Bounded, per-isolate five-minute mute. Failed deliveries can be attempted again. */
 export class DeliveryMute {
   private readonly sent = new Map<string, number>();
-  private readonly pending = new Set<string>();
+  private readonly pending = new Map<string, number>();
   constructor(private readonly now: () => number = Date.now) {}
-  begin(key: string): boolean {
-    const t = this.now();
+  begin(key: string, sourceTimestamp = this.now()): boolean {
+    const t = sourceTimestamp;
     if (this.pending.has(key) || t - (this.sent.get(key) ?? -Infinity) < MUTE_MS) return false;
     for (const [k, at] of this.sent) if (t - at >= MUTE_MS) this.sent.delete(k);
     if (this.pending.size >= MAX_TRACKED) return false;
-    this.pending.add(key);
+    this.pending.set(key, t);
     return true;
   }
   finish(key: string, delivered: boolean): void {
+    const at = this.pending.get(key);
     this.pending.delete(key);
-    if (!delivered) return;
+    if (!delivered || at === undefined) return;
     if (this.sent.size >= MAX_TRACKED) this.sent.delete(this.sent.keys().next().value!);
-    this.sent.set(key, this.now());
+    // Anchor to the source log, not delivery completion or Tail arrival latency.
+    this.sent.set(key, at);
   }
+}
+
+function receiptProbeId(message: string, alert: AlertSummary): string | undefined {
+  const line = JSON.parse(message) as Record<string, unknown>; // Already validated by parseAlert.
+  const synthetic = (alert.event === "error.alert" && alert.route === "/__probe/alert" &&
+    line.fingerprint === "AlertProbeError@/__probe/alert") || (alert.event === "queue.failing" && alert.job === "AlertProbe");
+  return synthetic && validProbeId(line.probeId) ? line.probeId : undefined;
 }
 
 function webhookUrl(secret: string | undefined): URL | null {
@@ -122,7 +133,7 @@ export function createTailWorker(opts: {
             const alert = await parseAlert(argument, log.timestamp);
             if (!alert) continue;
             const key = `${alert.event}:${alert.fingerprint}`;
-            if (!mute.begin(key)) continue;
+            if (!mute.begin(key, log.timestamp)) continue;
             let delivered = false;
             try {
               // wait=true confirms message persistence; disable all mentions.
@@ -136,8 +147,10 @@ export function createTailWorker(opts: {
               await response.body?.cancel(); // Never read/log the message or credential-bearing error response.
             } catch { /* Transport/timeout: do not log the URL or exception. */ }
             finally { mute.finish(key, delivered); }
-            // The probe waits for receipts, not for the source critical lines.
-            sink(JSON.stringify({ ...alert, delivery: delivered ? "ops.alert.delivered" : "ops.alert.delivery_failed" }));
+            // Probe correlation is receipt-only: never send it to the webhook or split the mute key.
+            const probeId = receiptProbeId(argument, alert);
+            sink(JSON.stringify({ ...alert, ...(probeId ? { probeId } : {}),
+              delivery: delivered ? "ops.alert.delivered" : "ops.alert.delivery_failed" }));
           }
         }
       }

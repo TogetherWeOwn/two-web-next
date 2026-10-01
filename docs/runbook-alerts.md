@@ -49,7 +49,10 @@ printf '%s' 'AlertProbeError@/__probe/alert' | sha256sum
 ```
 
 The Tail Worker adds its own five-minute mute per event/fingerprint, across
-batches and concurrent invocations. Queue failures of the same job class are
+batches and concurrent invocations. Its window uses source console-log timestamps,
+not Tail arrival or webhook completion time: delivery latency cannot extend the
+window past the next source emission. In-flight deliveries remain deduplicated.
+Queue failures of the same job class are
 coalesced (attempt count does not split the fingerprint). Both source and Tail
 mutes are **per isolate, not durable/global**: cold starts, deployment and
 multiple isolates can produce duplicates. State is bounded to 500 sent fingerprints and 500 in-flight deliveries;
@@ -125,9 +128,22 @@ node bin/alert-probe.mjs --receipt-file /path/to/private/alert-receipts.json
 
 The script refuses every non-staging target, posts with the QA token in a
 header (never argv), expects HTTP 500, then waits up to 90 seconds for **both**
-new `ops.alert.delivered` receipts matching the fixed probe fingerprints. A
-source critical line, old receipt, delivery-failed receipt, or only one receipt
-cannot pass. It never calls or reads the webhook secret. Failure/timeout exits
+new `ops.alert.delivered` receipts matching the fixed probe fingerprints and its
+random UUIDv4 `probeId` (sent in `X-TWO-Alert-Probe`). The route accepts this ID
+only after QA authentication; malformed IDs return 400 without enqueueing. A
+caller without that optional header receives a server-generated ID internally.
+The ID follows the synthetic exception/job into internal source logs and Tail
+receipts **only**; it never leaves the account in the Discord payload and does
+not split/bypass the fingerprint mute. A concurrent probe cannot satisfy this
+exercise's receipt pair.
+
+Before sending, the script saves the connected file's prefix and object-start
+boundary. It excludes every pre-existing object, including one partially written
+at the boundary and completed later; it fails closed on prefix replacement or
+truncation. Freshness does not compare the operator clock to Cloudflare's clock.
+A source critical line, old receipt, foreign-probe receipt, delivery-failed
+receipt, or only one receipt cannot pass. It never calls or reads the webhook
+secret. Failure/timeout exits
 nonzero and claims no delivery. Stop the live tail and remove the private raw
 stream after the drill; retain only the script's redacted JSON result plus the
 tested SHA as evidence. A missing operator secret leaves this live drill

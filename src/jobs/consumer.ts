@@ -22,9 +22,9 @@ const JOBS = {
   "role-assign": { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
 } as const;
 
-function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: string) {
+function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: string, probeId?: string) {
   const j = JOBS[kind];
-  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception });
+  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception, probeId });
 }
 
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
@@ -77,7 +77,7 @@ export async function consume(
       if (body.kind === "alert-probe") {
         // Poison only the synthetic job, only when the runtime's QA gate is on.
         // No ledger fixture, bot request, event mutation or uniqueness lock.
-        if (deps.probeEnabled) throw new AlertProbeError();
+        if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
         outcome = { done: true }; // A delayed staging probe cannot page in production.
       } else {
         outcome = body.kind === "sync-event"
@@ -91,7 +91,8 @@ export async function consume(
       console.error("job threw", body.kind, e instanceof Error ? e.message : e);
       // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
       if (m.attempts >= JOBS[body.kind].tries) {
-        alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
+        alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e,
+          e instanceof AlertProbeError ? e.probeId : undefined);
         // Out of tries: a terminal failure, not a phantom pending row — and not
         // a retry either. The job already spent its tries (the transport's
         // max_retries is only a backstop above this cap), so ack it and free

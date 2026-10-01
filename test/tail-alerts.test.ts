@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { ALERT_ROUTES, DeliveryMute, MUTE_MS, createTailWorker, parseAlert } from "../tail/worker";
+import { ALERT_WINDOW_MS, AlertRateLimit, alertRequestError } from "../src/alerts";
 
 const timestamp = Date.parse("2026-10-01T00:00:00Z");
 const requestAlert = {
@@ -90,16 +91,41 @@ describe("Tail delivery", () => {
     expect(sink.mock.calls.map(([line]) => JSON.parse(line).delivery)).toEqual(["ops.alert.delivered", "ops.alert.delivered"]);
   });
 
-  it("mutes each fingerprint for exactly five minutes, independently of event timestamps", async () => {
+  it("mutes each fingerprint for exactly five minutes of source log time, ignoring JSON timestamp fields", async () => {
     const { worker, send, advance } = fixture();
     await worker.tail([trace([requestAlert, requestAlert, queueAlert, queueAlert])], env);
     expect(send).toHaveBeenCalledTimes(2);
-    advance(MUTE_MS - 1);
-    await worker.tail([trace([requestAlert, queueAlert], timestamp + 1e9)], env);
+    advance(MUTE_MS * 2); // Tail processing clock is not the source window.
+    await worker.tail([trace([{ ...requestAlert, timestamp: timestamp + 1e9 }, queueAlert], timestamp + MUTE_MS - 1)], env);
     expect(send).toHaveBeenCalledTimes(2);
-    advance(1);
-    await worker.tail([trace([requestAlert, queueAlert])], env);
+    await worker.tail([trace([requestAlert, queueAlert], timestamp + MUTE_MS)], env);
     expect(send).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([0, 3000])("coordinates expiry with the real source limiter despite %i ms processing and 2s delivery delay", async (processingDelay) => {
+    let sourceTime = timestamp, tailTime = timestamp;
+    const limiter = new AlertRateLimit(ALERT_WINDOW_MS, () => sourceTime);
+    const send = vi.fn(async () => { tailTime += 2000; return new Response(null, { status: 200 }); });
+    const worker = createTailWorker({ fetch: send as unknown as typeof fetch, sink: vi.fn(), mute: new DeliveryMute(() => tailTime) });
+    const emit = async () => {
+      const lines: string[] = [];
+      const emitted = alertRequestError(new TypeError("private"), { method: "POST", route: "/join" }, {
+        limiter, sink: (line) => { lines.push(line); },
+      });
+      tailTime = sourceTime + processingDelay;
+      if (emitted) await worker.tail([trace(lines, sourceTime)], env);
+      return emitted;
+    };
+    expect(await emit()).toBe(true);
+    expect(send).toHaveBeenCalledOnce();
+    sourceTime += ALERT_WINDOW_MS - 1;
+    expect(await emit()).toBe(false);
+    sourceTime++;
+    expect(await emit()).toBe(true);
+    expect(send).toHaveBeenCalledTimes(2);
+    sourceTime += ALERT_WINDOW_MS;
+    expect(await emit()).toBe(true);
+    expect(send).toHaveBeenCalledTimes(3);
   });
 
   it("concurrent invocations share the in-flight mute", async () => {
@@ -114,6 +140,39 @@ describe("Tail delivery", () => {
     await worker.tail([trace([requestAlert])], env);
     expect(send).toHaveBeenCalledTimes(2);
     expect(sink.mock.calls.every(([line]) => JSON.parse(line).delivery === "ops.alert.delivery_failed")).toBe(true);
+  });
+
+  it("keeps probe correlation receipt-only and never splits the fixed mute fingerprint", async () => {
+    const probeId = "11111111-1111-4111-8111-111111111111";
+    const otherId = "22222222-2222-4222-8222-222222222222";
+    const lines = (id: string) => [
+      { ...requestAlert, route: "/__probe/alert", fingerprint: "AlertProbeError@/__probe/alert", probeId: id },
+      { ...queueAlert, job: "AlertProbe", probeId: id },
+    ];
+    const { worker, send, sink } = fixture();
+    await worker.tail([trace(lines(probeId))], env);
+    expect(sink.mock.calls.map(([line]) => JSON.parse(line).probeId)).toEqual([probeId, probeId]);
+    const calls = send.mock.calls as unknown as [string, RequestInit][];
+    expect(calls.every(([, init]) => !String(init.body).includes(probeId) && !String(init.body).includes("probeId"))).toBe(true);
+    await worker.tail([trace(lines(otherId), timestamp + 1000)], env);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sink).toHaveBeenCalledTimes(2);
+    await worker.tail([trace(lines(otherId), timestamp + MUTE_MS)], env);
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(sink.mock.calls.slice(2).map(([line]) => JSON.parse(line).probeId)).toEqual([otherId, otherId]);
+  });
+
+  it("drops invalid or unrelated correlation fields from both receipts and payloads", async () => {
+    const { worker, send, sink } = fixture();
+    await worker.tail([trace([
+      { ...requestAlert, probeId: "11111111-1111-4111-8111-111111111111" },
+      { ...queueAlert, probeId: "11111111-1111-4111-8111-111111111111" },
+      { ...requestAlert, route: "/__probe/alert", fingerprint: "AlertProbeError@/__probe/alert", probeId: "secret=private" },
+      { ...queueAlert, job: "AlertProbe", probeId: "secret=private" },
+    ])], env);
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(sink.mock.calls.every(([line]) => !JSON.parse(line).probeId)).toBe(true);
+    expect(JSON.stringify(sink.mock.calls)).not.toContain("private");
   });
 
   it("swallows transport exceptions without leaking webhook credentials", async () => {

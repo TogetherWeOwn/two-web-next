@@ -12,6 +12,8 @@
 // still logged by the caller (internalErrorHandler) for whoever follows the
 // alert line to the trace.
 
+import { AlertProbeError } from "./alert-probe-error";
+
 export const ALERT_WINDOW_MS = 5 * 60 * 1000;
 const MAX_TRACKED = 500;
 
@@ -82,6 +84,7 @@ export function alertRequestError(
       exception: exceptionClass(err),
       method: req.method,
       route: req.route,
+      ...(err instanceof AlertProbeError && err.probeId ? { probeId: err.probeId } : {}),
     }),
   );
   return true;
@@ -93,6 +96,7 @@ export type FailedJob = {
   job: string;
   attempts: number;
   exception: string;
+  probeId?: string;
 };
 
 /** Failing queue job (ports Queue::failing): connection, queue, job class, attempts, exception. */
