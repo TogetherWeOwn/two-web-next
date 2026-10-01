@@ -56,7 +56,19 @@ Delete the Next-only `/db-ping`, `/health` and `/healthz` routes in every
 configuration. Legacy exposes only `/up`; retaining a token/flag-protected
 ping would add a credential and an unnecessary public connection/fingerprinting
 surface. Removed paths use the ordinary branded 404 (same body and headers as
-unknown paths), without reading any database binding.
+unknown paths), with no diagnostic handler or database version/clock response.
+
+The 404 recovery enhancement ([TOG-10824](/TOG/issues/TOG-10824), contract
+reconciled in [TOG-11066](/TOG/issues/TOG-11066)) supersedes the original
+unconditional no-binding-read clause for ordinary 404 responses only. Like any
+unknown path, a removed diagnostic path may perform the optional, public-only
+lookup of at most three published, not-ended events: 400 ms SQL timeouts and a
+500 ms overall deadline, failing open to an empty suggestion list. Responses
+remain 404, noindex, private/no-store and session-free. No database error or
+connection metadata is exposed. Unsafe requests refused by the global
+same-origin guard still return 403 before reading any database binding. The
+removed-diagnostics tests pin response and DB-access parity across both host
+configurations, including absent, available and failing fixture lookups.
 
 The existing `/up` queue read already exercises the Worker-to-Hyperdrive-to-Postgres
 path: a counted queue proves connectivity; `queue.status: "unknown"` reports an
