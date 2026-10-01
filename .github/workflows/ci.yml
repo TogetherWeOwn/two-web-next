@@ -69,7 +69,9 @@ jobs:
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
     runs-on: [self-hosted, two-selfhosted]
-    timeout-minutes: 10
+    # Container setup and serial SQL coverage exceeded 10m on shared runners.
+    # Keep the job bounded; the seeded property suite retains its hard 10s limit.
+    timeout-minutes: 20
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
