@@ -20,14 +20,14 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
     </head>
     <body>
       <SkipLink />
-      <header class="bar row center">
-        <a class="brand plain" href="/admin">TWO admin</a>
+      <header class="bar rw ct">
+        <a class="brand pl" href="/admin">TWO admin</a>
         <nav aria-label="Administration">
           <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
         </nav>
       </header>
       <main id="main" tabindex={-1}>{children}</main>
-      <footer class="muted">Together We Own · moderators only</footer>
+      <footer class="mt">Together We Own · moderators only</footer>
     </body>
   </html>
 );
@@ -48,21 +48,21 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
   <Shell title="Dashboard">
     <section>
       <h1>Moderation</h1>
-      <p class="lead">
+      <p class="ld">
         Signed in as <strong data-testid="admin-actor">{actor.username}</strong>.
       </p>
-      <ul class="facts">
-        <li class="card">
+      <ul class="ft">
+        <li class="cd">
           <h2>
             <a href="/admin/events">Events</a>
           </h2>
-          <p class="muted">Drafts, publishing, cancellations. Create-as-draft; events are never deleted.</p>
+          <p class="mt">Drafts, publishing, cancellations. Create-as-draft; events are never deleted.</p>
         </li>
-        <li class="card">
+        <li class="cd">
           <h2>
             <a href="/admin/featured">Featured content</a>
           </h2>
-          <p class="muted">Landing-page slots: publish toggle, ordering, show window.</p>
+          <p class="mt">Landing-page slots: publish toggle, ordering, show window.</p>
         </li>
       </ul>
       {funnel ? (
@@ -71,7 +71,7 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
           {Object.keys(funnel).length === 0 ? (
             <p data-testid="join-funnel-empty">No join attempts in the window.</p>
           ) : (
-            <table class="admin-table">
+            <table class="tbl">
               <thead>
                 <tr>
                   <th>Outcome</th>
@@ -97,7 +97,7 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
           {zeroSearches.length === 0 ? (
             <p data-testid="top-zero-searches-empty">No missed searches.</p>
           ) : (
-            <table class="admin-table">
+            <table class="tbl">
               <thead>
                 <tr>
                   <th>Search</th>
@@ -131,15 +131,15 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
   <Shell title="Join attempts">
     <section>
       <h1>Join attempts</h1>
-      <p class="hint">Read-only. Last {JOIN_RETENTION_DAYS} days, newest first. Search is an exact Discord id or request id.</p>
-      <form method="get" action="/admin/join-attempts" class="filters row">
-        <div class="field">
-          <label for="q" class="block bold">Discord id or request id</label>
-          <input class="inherit-font" id="q" name="q" type="search" value={q} />
+      <p class="hn">Read-only. Last {JOIN_RETENTION_DAYS} days, newest first. Search is an exact Discord id or request id.</p>
+      <form method="get" action="/admin/join-attempts" class="flt rw">
+        <div class="fd">
+          <label for="q" class="bk bd">Discord id or request id</label>
+          <input class="ifnt" id="q" name="q" type="search" value={q} />
         </div>
-        <div class="field">
-          <label for="outcome" class="block bold">Outcome</label>
-          <select class="inherit-font" id="outcome" name="outcome">
+        <div class="fd">
+          <label for="outcome" class="bk bd">Outcome</label>
+          <select class="ifnt" id="outcome" name="outcome">
             {["", ...outcomes].map((o) => (
               <option value={o} selected={o === outcome}>
                 {o === "" ? "All" : o}
@@ -147,11 +147,11 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
             ))}
           </select>
         </div>
-        <div class="field">
-          <button type="submit" class="btn center bold caps plain">Filter</button>
+        <div class="fd">
+          <button type="submit" class="bt ct bd cp pl">Filter</button>
         </div>
       </form>
-      <table class="admin-table" data-testid="join-attempts-table">
+      <table class="tbl" data-testid="join-attempts-table">
         <thead>
           <tr>
             <th>Outcome</th>
@@ -190,7 +190,7 @@ const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
   const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
   return (
     <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
-      <button type="submit" class="link inherit-font" data-testid={action}>
+      <button type="submit" class="ln ifnt" data-testid={action}>
         {row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
       </button>
     </form>
@@ -202,7 +202,7 @@ export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
     <section>
       <p><a href="/admin/join-attempts">Back to join attempts</a></p>
       <h1>Join attempt {row.id}</h1>
-      <p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
+      <p class="hn">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
       <h2>Outcome</h2>
       <dl>
         <dt>Outcome</dt><dd>{row.outcome}</dd>
@@ -234,16 +234,16 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
   <Shell title="Events">
     <section>
       <h1>Events</h1>
-      <form method="get" action="/admin/events" class="filters row">
+      <form method="get" action="/admin/events" class="flt rw">
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
-        <div class="field">
-          <label for="q" class="block bold">Search</label>
-          <input class="inherit-font" id="q" name="q" type="search" value={query.q} />
+        <div class="fd">
+          <label for="q" class="bk bd">Search</label>
+          <input class="ifnt" id="q" name="q" type="search" value={query.q} />
         </div>
-        <div class="field">
-          <label for="status" class="block bold">Status</label>
-          <select class="inherit-font" id="status" name="status">
+        <div class="fd">
+          <label for="status" class="bk bd">Status</label>
+          <select class="ifnt" id="status" name="status">
             {["", "draft", "published", "cancelled", "past"].map((s) => (
               <option value={s} selected={s === query.status}>
                 {s === "" ? "All" : s}
@@ -251,38 +251,38 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
             ))}
           </select>
         </div>
-        <div class="field">
-          <label for="rsvp_open" class="block bold">RSVPs</label>
-          <select class="inherit-font" id="rsvp_open" name="rsvp_open">
+        <div class="fd">
+          <label for="rsvp_open" class="bk bd">RSVPs</label>
+          <select class="ifnt" id="rsvp_open" name="rsvp_open">
             <option value="" selected={query.rsvp_open === ""}>All</option>
             <option value="1" selected={query.rsvp_open === "1"}>Open</option>
             <option value="0" selected={query.rsvp_open === "0"}>Paused</option>
           </select>
         </div>
-        <div class="field">
-          <label for="series" class="block bold">Series</label>
-          <select class="inherit-font" id="series" name="series">
+        <div class="fd">
+          <label for="series" class="bk bd">Series</label>
+          <select class="ifnt" id="series" name="series">
             {[["", "All"], ["parent", "Parent"], ["child", "Child"], ["standalone", "Standalone"]].map(([value, label]) => (
               <option value={value} selected={value === query.series}>{label}</option>
             ))}
           </select>
         </div>
-        <div class="field">
-          <label for="fill" class="block bold">Fill</label>
-          <select class="inherit-font" id="fill" name="fill">
+        <div class="fd">
+          <label for="fill" class="bk bd">Fill</label>
+          <select class="ifnt" id="fill" name="fill">
             {[["", "All"], ["full", "Full"], ["has_seats", "Has seats"], ["unlimited", "Unlimited"]].map(([value, label]) => (
               <option value={value} selected={value === query.fill}>{label}</option>
             ))}
           </select>
         </div>
-        <div class="field">
-          <button type="submit" class="btn center bold caps plain">Filter</button>
+        <div class="fd">
+          <button type="submit" class="bt ct bd cp pl">Filter</button>
         </div>
       </form>
       <p>
-        <a class="btn center bold caps plain" href="/admin/events/new" data-testid="new-event">New event</a>
+        <a class="bt ct bd cp pl" href="/admin/events/new" data-testid="new-event">New event</a>
       </p>
-      <table class="admin-table" data-testid="events-table">
+      <table class="tbl" data-testid="events-table">
         <thead>
           <tr>
             <EventSortHeader label="Title" sort="title" query={query} />
@@ -309,12 +309,12 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
                 <td>
                   {r.status === "draft" ? (
                     <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                      <button type="submit" class="link inherit-font">Publish</button>
+                      <button type="submit" class="ln ifnt">Publish</button>
                     </form>
                   ) : null}
                   {r.status === "draft" || r.status === "published" ? (
                     <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                      <button type="submit" class="link inherit-font">Cancel</button>
+                      <button type="submit" class="ln ifnt">Cancel</button>
                     </form>
                   ) : null}
                   <RsvpAction row={r} />
@@ -324,7 +324,7 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
           )}
         </tbody>
       </table>
-      <nav aria-label="Event pages" class="actions row center">
+      <nav aria-label="Event pages" class="act rw ct">
         {query.page > 1 ? <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a> : null}
         <span>Page {query.page}</span>
         {hasNext ? <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>Next</a> : null}
@@ -345,12 +345,12 @@ const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
   const err = errors[name];
   const id = `f-${name.replace(/[^a-z0-9]+/gi, "-")}`;
   return (
-    <div class="field">
-      <label for={id} class="block bold">{label}</label>
+    <div class="fd">
+      <label for={id} class="bk bd">{label}</label>
       {children(id)}
-      {hint ? <p class="hint">{hint}</p> : null}
+      {hint ? <p class="hn">{hint}</p> : null}
       {err ? (
-        <p class="error" role="alert" data-testid={`error-${name}`}>
+        <p class="err" role="alert" data-testid={`error-${name}`}>
           {err}
         </p>
       ) : null}
@@ -376,25 +376,25 @@ export const EventFormPage: FC<{
       <section>
         <h1>{mode === "new" ? "New event" : `Edit ${row!.title}`}</h1>
         {Object.keys(errors).length > 0 ? (
-          <p class="notice" role="alert" data-testid="form-errors">
+          <p class="nt" role="alert" data-testid="form-errors">
             Check the highlighted fields and try again.
           </p>
         ) : null}
         <form method="post" action={action}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
+            {(id) => <input class="ifnt" id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="game" type="text" value={val(values, "game")} maxlength={100} />}
+            {(id) => <input class="ifnt" id={id} name="game" type="text" value={val(values, "game")} maxlength={100} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
-            {(id) => <textarea class="inherit-font" id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
+            {(id) => <textarea class="ifnt" id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
           </Field>
           <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />}
+            {(id) => <input class="ifnt" id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />}
           </Field>
           <Field name="ends_at" label="Ends (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="ends_at" type="text" value={val(values, "ends_at")} required />}
+            {(id) => <input class="ifnt" id={id} name="ends_at" type="text" value={val(values, "ends_at")} required />}
           </Field>
           <Field
             name="timezone"
@@ -402,39 +402,39 @@ export const EventFormPage: FC<{
             errors={errors}
             hint="The IANA zone the wall time above is typed in. Storage is UTC."
           >
-            {(id) => <input class="inherit-font" id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
+            {(id) => <input class="ifnt" id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="location" type="text" value={val(values, "location")} maxlength={255} />}
+            {(id) => <input class="ifnt" id={id} name="location" type="text" value={val(values, "location")} maxlength={255} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
+            {(id) => <input class="ifnt" id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
           </Field>
           {mode === "new" ? (
             <fieldset>
               <legend>Repeat</legend>
               <Field name="recurrence_frequency" label="Repeats" errors={errors} hint="Empty = a one-off event. Weeks keep the same wall time in the zone above across clock changes.">
                 {(id) => (
-                  <select class="inherit-font" id={id} name="recurrence_frequency">
+                  <select class="ifnt" id={id} name="recurrence_frequency">
                     <option value="" selected={val(values, "recurrence_frequency") === ""}>Does not repeat</option>
                     <option value="weekly" selected={val(values, "recurrence_frequency") === "weekly"}>Weekly</option>
                   </select>
                 )}
               </Field>
               <Field name="recurrence_count" label="Occurrences (including the first, max 52)" errors={errors}>
-                {(id) => <input class="inherit-font" id={id} name="recurrence_count" type="text" inputmode="numeric" value={val(values, "recurrence_count")} />}
+                {(id) => <input class="ifnt" id={id} name="recurrence_count" type="text" inputmode="numeric" value={val(values, "recurrence_count")} />}
               </Field>
               <Field name="recurrence_ends_on" label="Repeat until (YYYY-MM-DD)" errors={errors}>
-                {(id) => <input class="inherit-font" id={id} name="recurrence_ends_on" type="text" value={val(values, "recurrence_ends_on")} />}
+                {(id) => <input class="ifnt" id={id} name="recurrence_ends_on" type="text" value={val(values, "recurrence_ends_on")} />}
               </Field>
             </fieldset>
           ) : row?.recurrenceFrequency ? (
-            <p class="hint" data-testid="series-info">
+            <p class="hn" data-testid="series-info">
               Part of a {row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.
             </p>
           ) : null}
-          <div class="actions row center">
-            <button type="submit" class="btn center bold caps plain" data-testid="save-event">
+          <div class="act rw ct">
+            <button type="submit" class="bt ct bd cp pl" data-testid="save-event">
               {mode === "new" ? "Create draft" : "Save"}
             </button>
             <a href="/admin/events">Cancel</a>
@@ -443,15 +443,15 @@ export const EventFormPage: FC<{
         {mode === "edit" && row ? (
           <section aria-label="Status">
             <h2>Status: {row.status}</h2>
-            <div class="actions row center">
+            <div class="act rw ct">
               {row.status === "draft" ? (
                 <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
-                  <button type="submit" class="btn center bold caps plain" data-testid="publish-event">Publish</button>
+                  <button type="submit" class="bt ct bd cp pl" data-testid="publish-event">Publish</button>
                 </form>
               ) : null}
               {row.status === "draft" || row.status === "published" ? (
                 <form method="post" action={`/admin/events/${row.eventKey}/cancel`}>
-                  <button type="submit" class="link inherit-font" data-testid="cancel-event">Cancel event</button>
+                  <button type="submit" class="ln ifnt" data-testid="cancel-event">Cancel event</button>
                 </form>
               ) : null}
               <RsvpAction row={row} />
@@ -461,7 +461,7 @@ export const EventFormPage: FC<{
         {mode === "edit" && roster ? (
           <section aria-label="RSVP roster" data-testid="rsvp-roster">
             <h2>RSVPs ({roster.length})</h2>
-            <table class="admin-table">
+            <table class="tbl">
               <thead>
                 <tr>
                   <th>Member</th>
@@ -499,9 +499,9 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[] }> = ({ rows }) => (
     <section>
       <h1>Featured content</h1>
       <p>
-        <a class="btn center bold caps plain" href="/admin/featured/new" data-testid="new-featured">New featured slot</a>
+        <a class="bt ct bd cp pl" href="/admin/featured/new" data-testid="new-featured">New featured slot</a>
       </p>
-      <table class="admin-table" data-testid="featured-table">
+      <table class="tbl" data-testid="featured-table">
         <thead>
           <tr>
             <th>Title</th>
@@ -550,22 +550,22 @@ export const FeaturedFormPage: FC<{
       <section>
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
         {Object.keys(errors).length > 0 ? (
-          <p class="notice" role="alert" data-testid="form-errors">
+          <p class="nt" role="alert" data-testid="form-errors">
             Check the highlighted fields and try again.
           </p>
         ) : null}
         <form method="post" action={action}>
           <Field name="title" label="Headline" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="title" type="text" value={val(values, "title")} maxlength={255} required />}
+            {(id) => <input class="ifnt" id={id} name="title" type="text" value={val(values, "title")} maxlength={255} required />}
           </Field>
           <Field name="body" label="Body" errors={errors}>
-            {(id) => <textarea class="inherit-font" id={id} name="body" rows={4}>{val(values, "body")}</textarea>}
+            {(id) => <textarea class="ifnt" id={id} name="body" rows={4}>{val(values, "body")}</textarea>}
           </Field>
           <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="url" type="url" value={val(values, "url")} />}
+            {(id) => <input class="ifnt" id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
           <Field name="image_url" label="Image URL" errors={errors} hint="Full URL on this site or https://cdn.discordapp.com. Other image hosts are blocked by the site's security policy.">
-            {(id) => <input class="inherit-font" id={id} name="image_url" type="url" value={val(values, "image_url")} />}
+            {(id) => <input class="ifnt" id={id} name="image_url" type="url" value={val(values, "image_url")} />}
           </Field>
           <Field
             name="image_alt"
@@ -573,25 +573,25 @@ export const FeaturedFormPage: FC<{
             errors={errors}
             hint="Required when an image URL is set — one plain sentence for screen-reader visitors."
           >
-            {(id) => <input class="inherit-font" id={id} name="image_alt" type="text" value={val(values, "image_alt")} maxlength={255} />}
+            {(id) => <input class="ifnt" id={id} name="image_alt" type="text" value={val(values, "image_alt")} maxlength={255} />}
           </Field>
-          <div class="field">
-            <label for="f-is-published" class="block bold">Published</label>
-            <input class="inherit-font" id="f-is-published" name="is_published" type="checkbox" checked={checked} />
+          <div class="fd">
+            <label for="f-is-published" class="bk bd">Published</label>
+            <input class="ifnt" id="f-is-published" name="is_published" type="checkbox" checked={checked} />
           </div>
           <Field name="position" label="Position (lower appears first)" errors={errors}>
             {(id) => (
-              <input class="inherit-font" id={id} name="position" type="text" inputmode="numeric" value={val(values, "position") || "0"} />
+              <input class="ifnt" id={id} name="position" type="text" inputmode="numeric" value={val(values, "position") || "0"} />
             )}
           </Field>
           <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="starts_at" type="text" value={val(values, "starts_at")} />}
+            {(id) => <input class="ifnt" id={id} name="starts_at" type="text" value={val(values, "starts_at")} />}
           </Field>
           <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
-            {(id) => <input class="inherit-font" id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
+            {(id) => <input class="ifnt" id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
           </Field>
-          <div class="actions row center">
-            <button type="submit" class="btn center bold caps plain" data-testid="save-featured">
+          <div class="act rw ct">
+            <button type="submit" class="bt ct bd cp pl" data-testid="save-featured">
               {mode === "new" ? "Create" : "Save"}
             </button>
             <a href="/admin/featured">Cancel</a>
@@ -599,8 +599,8 @@ export const FeaturedFormPage: FC<{
         </form>
         {mode === "edit" ? (
           <form method="post" action={`/admin/featured/${row!.id}/delete`}>
-            <div class="actions row center">
-              <button type="submit" class="link inherit-font" data-testid="delete-featured">
+            <div class="act rw ct">
+              <button type="submit" class="ln ifnt" data-testid="delete-featured">
                 Delete this slot
               </button>
             </div>

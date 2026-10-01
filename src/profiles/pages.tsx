@@ -72,10 +72,10 @@ export const ProfilePage: FC<{
       shareDescription={PROFILE_SHARE_DESCRIPTION}
       robots="noindex, nofollow"
     >
-      <header class="bar row center">
-        <a class="brand plain" href="/">TWO</a>
+      <header class="bar rw ct">
+        <a class="brand pl" href="/">TWO</a>
         <nav aria-label="Primary">
-          <a class="btn center bold caps plain" href="/profile">Your profile</a>
+          <a class="bt ct bd cp pl" href="/profile">Your profile</a>
         </nav>
       </header>
       <main id="main" tabindex={-1}>
@@ -114,8 +114,8 @@ export const ProfilePage: FC<{
                 <label>Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" /></label>
               </div>
               <input type="hidden" name={PROFILE_OPENED_AT_FIELD} value={String(Date.now())} />
-              <button class="btn center bold caps plain" type="submit" data-testid={PROFILE_SAVE_TESTID}>{PROFILE_COPY.save}</button>
-              <button class="btn center bold caps plain" type="reset" data-testid={PROFILE_CANCEL_TESTID}>{PROFILE_COPY.cancel}</button>
+              <button class="bt ct bd cp pl" type="submit" data-testid={PROFILE_SAVE_TESTID}>{PROFILE_COPY.save}</button>
+              <button class="bt ct bd cp pl" type="reset" data-testid={PROFILE_CANCEL_TESTID}>{PROFILE_COPY.cancel}</button>
             </form>
             <script src="/islands/member-profile.js" defer></script>
           </section>

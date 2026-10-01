@@ -19,15 +19,15 @@ const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?
   children,
 }) => (
   <Layout title={`${title} — Together We Own`} robots={NOINDEX}>
-    <header class="bar row center">
-      <a class="brand plain" href="/">TWO</a>
+    <header class="bar rw ct">
+      <a class="brand pl" href="/">TWO</a>
       <nav aria-label="Primary">
-        <a class="btn center bold caps plain" href={headerCta.href}>{headerCta.label}</a>
+        <a class="bt ct bd cp pl" href={headerCta.href}>{headerCta.label}</a>
       </nav>
     </header>
     <main id="main" tabindex={-1}>
       <section aria-labelledby="error-heading">
-        <p class="strap muted caps" aria-hidden="true">{code}</p>
+        <p class="st mt cp" aria-hidden="true">{code}</p>
         <h1 id="error-heading">{title}</h1>
         {children}
       </section>
@@ -39,19 +39,19 @@ const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?
 // 404 recovery stays available even when the optional event lookup fails.
 export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestions = [] }) => (
   <ErrorShell code="404" title="We cannot find that page">
-    <p class="lead">
+    <p class="ld">
       The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
     </p>
     <p>
-      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
     <section aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
       <h2 id="error-events-heading">Happening soon</h2>
       {suggestions.length ? (
-        <ul class="facts">
+        <ul class="ft">
           {suggestions.map((event) => (
-            <li class="card">
+            <li class="cd">
               <a href={`/e/${encodeURIComponent(event.key)}`} data-testid="error-event-suggestion">{event.title}</a>
               <p>
                 <time datetime={event.startsAt.toISOString()}>{event.startsAt.toISOString().slice(0, 16).replace("T", " ")} UTC</time>
@@ -64,11 +64,11 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
         <p data-testid="error-events-empty">Nothing is on the calendar right now — check back soon.</p>
       )}
       <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
-      <form action="/events" method="get" role="search" class="error-events-search">
-        <label for="error-events-search" class="block bold">Search events</label>
-        <div class="row">
-          <input id="error-events-search" class="inherit-font" name="q" type="search" placeholder="Search events…" autocomplete="off" data-testid="error-events-search" />
-          <button type="submit" class="btn center bold caps plain inherit-font" data-testid="error-events-search-submit">Search events</button>
+      <form action="/events" method="get" role="search" class="ees">
+        <label for="error-events-search" class="bk bd">Search events</label>
+        <div class="rw">
+          <input id="error-events-search" class="ifnt" name="q" type="search" placeholder="Search events…" autocomplete="off" data-testid="error-events-search" />
+          <button type="submit" class="bt ct bd cp pl ifnt" data-testid="error-events-search-submit">Search events</button>
         </div>
       </form>
     </section>
@@ -79,12 +79,12 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
 // the logs, never in a member's browser.
 export const InternalErrorPage: FC = () => (
   <ErrorShell code="500" title="Something broke on our side">
-    <p class="lead">
+    <p class="ld">
       It is not you. We have logged the failure and the team will take a look. Try again in a minute — the lobby is
       not going anywhere.
     </p>
     <p>
-      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
   </ErrorShell>
@@ -93,11 +93,11 @@ export const InternalErrorPage: FC = () => (
 // 429 (ports errors/429 + App\Support\ThrottleEnvelope::render).
 export const RateLimitedPage: FC = () => (
   <ErrorShell code="429" title="Slow down a little">
-    <p class="lead">
+    <p class="ld">
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is not going anywhere.
     </p>
     <p>
-      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
   </ErrorShell>
@@ -112,12 +112,12 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
     title="We will be right back"
     headerCta={{ href: inviteUrl, label: "Open Discord" }}
   >
-    <p class="lead">
+    <p class="ld">
       The site is down for a minute of maintenance. The Discord server never closes — come in through the invite and
       we will see you there.
     </p>
     <p>
-      <a class="btn center bold caps plain" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
+      <a class="bt ct bd cp pl" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
       <a href="/" data-testid="error-retry">Try again</a>
     </p>
   </ErrorShell>

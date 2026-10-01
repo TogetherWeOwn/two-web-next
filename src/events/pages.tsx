@@ -103,8 +103,8 @@ const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: 
   children,
 }) => (
   <Layout title={`${title} — Together We Own`} canonical={canonical} shareTitle={shareTitle ?? title} shareDescription={description} robots={robots}>
-    <header class="bar row center">
-      <a class="brand plain" href="/">TWO</a>
+    <header class="bar rw ct">
+      <a class="brand pl" href="/">TWO</a>
       <nav aria-label="Primary">
         <a href="/events">Events</a>
       </nav>
@@ -521,9 +521,9 @@ export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl
     <Shell title={e.title} canonical={canonical} shareTitle={`${e.title} — Together We Own`}
       description={e.description || "An event at Together We Own."}
       robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}>
-      {e.status === "draft" ? <p class="notice" data-testid="event-draft">Draft</p> : null}
-      {e.status === "past" ? <p class="notice" data-testid="event-past">Past event</p> : null}
-      {e.status === "cancelled" ? <p class="notice" data-testid="event-cancelled">Cancelled</p> : null}
+      {e.status === "draft" ? <p class="nt" data-testid="event-draft">Draft</p> : null}
+      {e.status === "past" ? <p class="nt" data-testid="event-past">Past event</p> : null}
+      {e.status === "cancelled" ? <p class="nt" data-testid="event-cancelled">Cancelled</p> : null}
       <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
       <p>
         <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
@@ -536,7 +536,7 @@ export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl
       {!session ? (
         <section data-testid="event-join-pitch" aria-label="Join the community">
           <p>Game nights get posted here first. Join the Discord and you&apos;ll see them before they land on this page.</p>
-          <a class="btn center bold caps plain" data-testid="discord-join" href={`/join?next=${encodeURIComponent(path)}`}>Join the Discord</a>
+          <a class="bt ct bd cp pl" data-testid="discord-join" href={`/join?next=${encodeURIComponent(path)}`}>Join the Discord</a>
         </section>
       ) : null}
       <p>
@@ -563,7 +563,7 @@ export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl
 
 export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonLd }) => (
   <Shell title={e.title} robots="noindex, nofollow">
-    <p class="notice" data-testid="event-cancelled">Cancelled</p>
+    <p class="nt" data-testid="event-cancelled">Cancelled</p>
     <h1>{e.title}</h1>
     <p>This event was cancelled</p>
     <p><a href="/events">See upcoming events</a></p>
