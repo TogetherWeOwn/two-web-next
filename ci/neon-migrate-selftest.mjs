@@ -22,7 +22,7 @@ function testAdminUrl() {
   try { url = new URL(raw); } catch { throw new Error("Invalid test URL; value withheld."); }
   const agent = url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "";
   const ci = process.env.CI === "true" && process.env.GITHUB_ACTIONS === "true"
-    && url.hostname === "localhost" && url.username === "postgres" && url.password === "ci";
+    && url.hostname === "postgres" && url.username === "postgres" && url.password === "ci";
   assert.ok((agent || ci) && ["postgres:", "postgresql:"].includes(url.protocol)
     && url.pathname === "/postgres" && (!url.port || url.port === "5432") && !url.search && !url.hash,
   "Selftest refuses any database other than agent-testdb or CI Postgres before connecting.");
@@ -69,6 +69,7 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true" } }).status, 0);
   assert.equal(spawnSync("bash", ["-c", script], { env: { ...process.env, ...mainEnv,
     GITHUB_REF: "refs/heads/topic" } }).status, 1);
+  assert.match(workflow, /runs-on: \[self-hosted, two-selfhosted\]/);
   assert.match(workflow, /environment: \$\{\{ inputs.target \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /bash ci\/check-migration-numbers.sh/);

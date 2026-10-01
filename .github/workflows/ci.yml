@@ -131,7 +131,7 @@ jobs:
       - name: Migration workflow selftest (isolated Postgres, no Neon/network APIs)
         run: npm run db:migrate:selftest
         env:
-          MIGRATION_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          MIGRATION_TEST_DATABASE_URL: postgres://postgres:ci@postgres:5432/postgres
       - name: Migration numbering check
         run: bash ci/check-migration-numbers.sh
       - name: Build (wrangler dry run)

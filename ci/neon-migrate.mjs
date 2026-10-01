@@ -32,7 +32,7 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
   if (testDatabase) {
     const agent = url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "";
     const ci = env.GITHUB_ACTIONS === "true" && env.CI === "true"
-      && url.hostname === "localhost" && url.username === "postgres" && url.password === "ci";
+      && url.hostname === "postgres" && url.username === "postgres" && url.password === "ci";
     if ((!agent && !ci) || url.search || !/^\/web_migrate_test_[a-f0-9]+$/.test(url.pathname)) {
       refuse("Selftest requires its owned database on agent-testdb or the CI Postgres service.");
     }
