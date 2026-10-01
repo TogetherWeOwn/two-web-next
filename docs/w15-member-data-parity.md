@@ -124,7 +124,7 @@ npm run typecheck
 
 Other pre-existing suites still delete shared tables; serial files do not
 serialize other agents. Broad local tests must use a run-owned migrated test DB.
-Six importer suites additionally pin the local database name to `two_web_next`,
+Seven importer suites additionally pin the local database name to `two_web_next`,
 but create and drop only their own disposable schemas; run those separately
 rather than weakening their guards or pointing destructive suites at that DB.
 The audit suites require their own explicit URL opt-in. Exclude the fixed-name
@@ -144,12 +144,13 @@ DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" \
   --exclude test/import-users-profiles-encoding.test.ts \
   --exclude test/import-audit-db.test.ts \
   --exclude test/import-audit-datestyle-db.test.ts \
+  --exclude test/import-verify.test.ts \
   --exclude test/staging-fixed-agent-testdb.test.ts
 DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
   AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
   npx vitest run test/import-content-funnel.test.ts test/import-events-rsvps-db.test.ts \
   test/import-users-profiles.test.ts test/import-users-profiles-encoding.test.ts \
-  test/import-audit-db.test.ts test/import-audit-datestyle-db.test.ts
+  test/import-audit-db.test.ts test/import-audit-datestyle-db.test.ts test/import-verify.test.ts
 npm run typecheck
 npm run config:check
 node --test ci/a11y-*.test.mjs
