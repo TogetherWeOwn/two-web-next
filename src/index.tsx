@@ -16,19 +16,20 @@ import {
   type Sql,
 } from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
-import { dbPing, hyperdriveQuery } from "./db/ping";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { inviteDestination } from "./invite";
+import { imageHosts } from "./image-policy";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { sitemapEvents } from "./events/reads";
+import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
+import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
@@ -37,6 +38,8 @@ import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
+import { sameOrigin } from "./same-origin";
+import { trustHosts } from "./trust-hosts";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -62,17 +65,19 @@ const CSP_REPORT_ENDPOINT = "/csp-reports";
 // disabled here (strictTransportSecurity: false below): the edge owns it
 // (TOG-8729) — Hono defaults it on, and emitting it from the app would pin
 // local dev machines to HTTPS. The absence is pinned in test/seo-headers.
-// One ALL /* registration (the exposure inventory in
+// One security-header wrapper (the exposure inventory in
 // test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
-// plus the staging X-Robots-Tag composed into a single wrapper. Mounted
-// sub-apps inherit both from this outer dispatch.
+// plus the staging X-Robots-Tag. Mounted sub-apps inherit both from this
+// outer dispatch, including refusals from the same-origin guard.
 const staticSecurityHeaders = secureHeaders({
   // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
   // machines to HTTPS, so the Hono default is explicitly off.
   strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
-    imgSrc: ["'self'", "https://cdn.discordapp.com"],
+    imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
+    // Only the join page embeds Discord; OAuth/recovery/admin routes cannot frame anything.
+    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com" : "'none'"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     frameAncestors: ["'none'"],
@@ -95,6 +100,14 @@ app.use("*", async (c, next) => {
   await staticSecurityHeaders(c, next);
   await robotsTag(c, async () => {});
 });
+
+// TrustHosts re-expression (W16: TOG-10110): refuse foreign Host values
+// before routing. Mounted after secureHeaders (refusals leave hardened) and
+// before every route; absolute URLs never derive from Host (all from APP_URL).
+app.use("*", trustHosts());
+
+// Before throttles, session rotation, body parsing, or any mounted handler.
+app.use("*", sameOrigin);
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
@@ -192,9 +205,11 @@ async function issueSession(
   });
 }
 
-async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, rotateToken = true): Promise<Session | null> {
+async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
+  // Anonymous public pages must not depend on session storage or its startup DDL.
+  const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
   if (!row) return null;
   // Abortable calendar fragments validate expiry/revocation but must not delete
@@ -226,16 +241,26 @@ async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, r
 const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
 
 app.get("/", async (c) => {
-  const store = await storeFor(c);
-  const session = await readSession(c, store);
+  // A DB outage must not break the funnel, including session setup. Fail closed to guest.
+  const session = await readSession(c).catch(() => {
+    // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
+    console.warn("Home session unavailable; serving as guest.", { exception: "SessionReadFailure" });
+    return null;
+  });
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
-  const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
+  const counts = await readCounts(c.env);
+  const [upcomingEvents, featured] = await Promise.all([
+    loadHomeUpcoming(() => dbFor(c)),
+    dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),
+  ]);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,
+    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
+      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
+      imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
   );
 });
 
@@ -360,9 +385,6 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsRoute);
 
-app.get("/health", (c) => c.json({ ok: true }));
-app.get("/healthz", (c) => c.json({ ok: true }));
-
 // `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
 // ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
 // stack). No session, cookie or auth on this path, and the queue read can never
@@ -399,19 +421,6 @@ app.get("/up", async (c) => {
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);
-
-// Shared-Postgres acceptance ping (S1: TOG-9679): proves the Neon staging
-// branch serves this Worker through Hyperdrive. 503s without the binding or
-// on any DB error, with no internals in the body.
-app.get("/db-ping", async (c) => {
-  if (!c.env.DB) return c.json({ ok: false, error: "db_unavailable" }, 503);
-  try {
-    return c.json(await dbPing(hyperdriveQuery(c.env.DB.connectionString)));
-  } catch (err) {
-    console.warn("db-ping failed", { error: String(err) });
-    return c.json({ ok: false, error: "db_unavailable" }, 503);
-  }
-});
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
@@ -482,15 +491,11 @@ app.route("/", profilesApp());
 // W8: public events pages, /events.json and moderator event writes.
 registerEventRoutes(
   app,
-  async (c) => readSession(c, await storeFor(c)),
-  async (c) => readSession(c, await storeFor(c), false),
+  async (c) => readSession(c),
+  async (c) => readSession(c, false),
 );
 
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-  // SameSite=Lax cookies are not sent on cross-site POSTs, so a forged logout form cannot end a session;
-  // the origin check below refuses one anyway.
-  const origin = c.req.header("origin");
-  if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
   const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (token) await store.revoke(await hashToken(token)).catch(() => {});

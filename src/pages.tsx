@@ -1,9 +1,37 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
-import type { Counts } from "./counts";
+import type { Counts, Rank } from "./counts";
+import type { VisibleFeatured } from "./featured";
+import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
+import type { HomeEvent } from "./events/reads";
+import { cardTimeLabel, isValidZone } from "./islands/contracts";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
+
+export const SkipLink: FC = () => <a class="skip-link" href="#main">Skip to content</a>;
+
+export const FeaturedContentItem: FC<{ row: VisibleFeatured; appUrl: string; imageHosts?: string }> = ({ row, appUrl, imageHosts }) => {
+  const src = row.imageUrl ? featuredImageSrc(row.imageUrl, appUrl, imageHosts) : null;
+  return (
+    <article class="card" data-testid="featured-item">
+      <h3>{row.url ? <a href={row.url}>{row.title}</a> : row.title}</h3>
+      {row.body ? <p>{row.body}</p> : null}
+      {src ? (
+        <img
+          class="featured-image"
+          src={src}
+          alt={row.imageAlt?.trim() || row.title}
+          width="640"
+          height="360"
+          loading="lazy"
+          decoding="async"
+          referrerpolicy="no-referrer"
+        />
+      ) : null}
+    </article>
+  );
+};
 
 export const Layout: FC<
   PropsWithChildren<{
@@ -41,7 +69,7 @@ export const Layout: FC<
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
     </head>
-    <body>{children}</body>
+    <body><SkipLink />{children}</body>
   </html>
 );
 
@@ -84,11 +112,11 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
   <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       <section aria-labelledby="join-heading">
         <h1 id="join-heading">Join Together We Own</h1>
         <p class="lead">{JOIN_INTRO}</p>
@@ -135,11 +163,11 @@ export const Recovery: FC<{
   <Layout title={`${title} — Together We Own`}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a class="btn" href="/join">Join with Discord</a>
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       <section aria-labelledby="recovery-heading">
         <h1 id="recovery-heading">{title}</h1>
         <p class="lead">{message}</p>
@@ -153,13 +181,21 @@ export const Recovery: FC<{
   </Layout>
 );
 
+const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map((label) => ({
+  key: label.toLowerCase(), label, memberCount: null,
+}));
+
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
-}> = ({ session, notice, inviteUrl, appUrl, counts }) => (
+  upcomingEvents: HomeEvent[];
+  eventsUnavailable: boolean;
+  featured: VisibleFeatured[];
+  imageHosts?: string;
+}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -167,7 +203,7 @@ export const Home: FC<{
   >
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         {session ? (
           <form method="post" action="/logout">
             <span class="who">{session.username}</span>
@@ -178,7 +214,7 @@ export const Home: FC<{
         )}
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
       <section class="hero">
         <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
@@ -194,7 +230,7 @@ export const Home: FC<{
         {counts.memberCount != null && (
           <p class="counts" data-testid="member-count">
             <strong>{counts.memberCount}</strong> members
-            {counts.onlineCount != null && (
+            {counts.onlineCount != null && counts.onlineCount > 0 && (
               <>
                 {" · "}<strong>{counts.onlineCount}</strong> online
               </>
@@ -202,6 +238,14 @@ export const Home: FC<{
           </p>
         )}
       </section>
+      {featured.length > 0 ? (
+        <section aria-labelledby="featured-heading" data-testid="featured-content">
+          <h2 id="featured-heading">From the community team</h2>
+          <div class="facts">
+            {featured.map((item) => <FeaturedContentItem key={item.id} row={item} appUrl={appUrl} imageHosts={imageHosts} />)}
+          </div>
+        </section>
+      ) : null}
       <section>
         <h2>No application. No interview.</h2>
         <p>Show up a few times. Play. Become a Member. The ladder records trust and time, not grind.</p>
@@ -212,7 +256,46 @@ export const Home: FC<{
       </section>
       <section aria-label="Community ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
-        <p>Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.</p>
+        <p>Ranks stack — a Veteran still holds everything below.</p>
+        <dl class="facts rank-stack" data-testid="rank-stack">
+          {(counts.ranks.length ? counts.ranks : FALLBACK_RANKS).map((rank) => (
+            <div class="card" key={rank.key} data-rank={rank.key}>
+              <dt>{rank.label}</dt>
+              <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+      <section aria-labelledby="home-events-heading">
+        <p class="strap">Next up</p>
+        <h2 id="home-events-heading">Game nights, when they land.</h2>
+        {upcomingEvents.length > 0 ? (
+          <>
+            <ul class="facts home-events" data-testid="home-events-list">
+              {upcomingEvents.map((event) => (
+                <li class="card">
+                  <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
+                    <p><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time></p>
+                    <h3>{event.title}</h3>
+                    {event.location ? <p>{event.location}</p> : null}
+                    <p>{event.goingCount} going</p>
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p><a href="/events">See all events <span aria-hidden="true">→</span></a></p>
+          </>
+        ) : (
+          <div class="card" data-testid="home-events-empty" data-state={eventsUnavailable ? "unavailable" : "empty"}>
+            <h3>{eventsUnavailable ? "Game nights are unavailable right now." : "Nothing scheduled yet."}</h3>
+            <p>{eventsUnavailable
+              ? "We couldn’t load the schedule. The Discord is still open — check there for the next game night."
+              : "Game nights get posted here. Join the Discord and you’ll hear about the next one."}</p>
+          </div>
+        )}
+        {!session ? (
+          <p><a class="btn" href="/join" data-testid="home-events-join">Join the Discord <span aria-hidden="true">→</span></a></p>
+        ) : null}
       </section>
     </main>
     <SiteFooter />
@@ -228,11 +311,11 @@ const Leaf: FC<PropsWithChildren<{ title: string; headingId: string; heading: st
   <Layout title={title}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a class="btn" href={JOIN_HREF}>Join with Discord</a>
       </nav>
     </header>
-    <main>
+    <main id="main" tabindex={-1}>
       <section aria-labelledby={headingId}>
         <h1 id={headingId}>{heading}</h1>
         {children}

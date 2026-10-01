@@ -5,8 +5,10 @@
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
-import { currentlyVisible, FeaturedContentItem, FeaturedStatusBadge } from "../featured";
+import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
+import { FeaturedContentItem, SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
+import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 
 const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
@@ -16,16 +18,16 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title} — TWO admin</title>
       <link rel="stylesheet" href="/styles.css" />
-      <link rel="stylesheet" href="/admin.css" />
     </head>
     <body>
+      <SkipLink />
       <header class="bar">
         <a class="brand" href="/admin">TWO admin</a>
-        <nav>
+        <nav aria-label="Administration">
           <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
         </nav>
       </header>
-      <main>{children}</main>
+      <main id="main" tabindex={-1}>{children}</main>
       <footer>Together We Own · moderators only</footer>
     </body>
   </html>
@@ -170,7 +172,7 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           ) : (
             rows.map((r) => (
               <tr key={r.id}>
-                <td>{r.outcome}</td>
+                <td><a href={`/admin/join-attempts/${r.id}`} aria-label={`View join attempt ${r.id}: ${r.outcome}`}>{r.outcome}</a></td>
                 <td>{r.source ?? ""}</td>
                 <td>{r.discordId ?? ""}</td>
                 <td>{r.requestId ?? ""}</td>
@@ -184,22 +186,93 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
   </Shell>
 );
 
-export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = ({ rows, q, status }) => (
+const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
+  if (row.status !== "published" || row.endsAt <= new Date()) return null;
+  const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
+  return (
+    <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
+      <button type="submit" class="link" data-testid={action}>
+        {row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
+      </button>
+    </form>
+  );
+};
+
+export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
+  <Shell title={`Join attempt ${row.id}`}>
+    <section>
+      <p><a href="/admin/join-attempts">Back to join attempts</a></p>
+      <h1>Join attempt {row.id}</h1>
+      <p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
+      <h2>Outcome</h2>
+      <dl>
+        <dt>Outcome</dt><dd>{row.outcome}</dd>
+        <dt>Source</dt><dd>{row.source ?? "—"}</dd>
+        <dt>Attempted at (UTC)</dt><dd><time datetime={row.createdAt.toISOString()}>{row.createdAt.toISOString()}</time></dd>
+      </dl>
+      <h2>Trace</h2>
+      <dl>
+        <dt>Request ID</dt><dd>{row.requestId ?? "—"}</dd>
+        <dt>Discord ID</dt><dd>{row.discordId ?? "—"}</dd>
+      </dl>
+    </section>
+  </Shell>
+);
+
+const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({ label, sort, query }) => {
+  const active = query.sort === sort;
+  const order = active && query.order === "asc" ? "desc" : "asc";
+  return (
+    <th scope="col" aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}>
+      <a href={eventListUrl(query, { sort, order, page: 1 })} aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}>
+        {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+      </a>
+    </th>
+  );
+};
+
+export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
       <form method="get" action="/admin/events" class="filters">
+        <input type="hidden" name="sort" value={query.sort} />
+        <input type="hidden" name="order" value={query.order} />
         <div class="field">
           <label for="q">Search</label>
-          <input id="q" name="q" type="search" value={q} />
+          <input id="q" name="q" type="search" value={query.q} />
         </div>
         <div class="field">
           <label for="status">Status</label>
           <select id="status" name="status">
             {["", "draft", "published", "cancelled", "past"].map((s) => (
-              <option value={s} selected={s === status}>
+              <option value={s} selected={s === query.status}>
                 {s === "" ? "All" : s}
               </option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="rsvp_open">RSVPs</label>
+          <select id="rsvp_open" name="rsvp_open">
+            <option value="" selected={query.rsvp_open === ""}>All</option>
+            <option value="1" selected={query.rsvp_open === "1"}>Open</option>
+            <option value="0" selected={query.rsvp_open === "0"}>Paused</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="series">Series</label>
+          <select id="series" name="series">
+            {[["", "All"], ["parent", "Parent"], ["child", "Child"], ["standalone", "Standalone"]].map(([value, label]) => (
+              <option value={value} selected={value === query.series}>{label}</option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="fill">Fill</label>
+          <select id="fill" name="fill">
+            {[["", "All"], ["full", "Full"], ["has_seats", "Has seats"], ["unlimited", "Unlimited"]].map(([value, label]) => (
+              <option value={value} selected={value === query.fill}>{label}</option>
             ))}
           </select>
         </div>
@@ -213,10 +286,10 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = (
       <table class="admin-table" data-testid="events-table">
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Status</th>
-            <th>Starts</th>
-            <th>Actions</th>
+            <EventSortHeader label="Title" sort="title" query={query} />
+            <EventSortHeader label="Status" sort="status" query={query} />
+            <EventSortHeader label="Starts" sort="starts_at" query={query} />
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -245,12 +318,18 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string }> = (
                       <button type="submit" class="link">Cancel</button>
                     </form>
                   ) : null}
+                  <RsvpAction row={r} />
                 </td>
               </tr>
             ))
           )}
         </tbody>
       </table>
+      <nav aria-label="Event pages" class="actions">
+        {query.page > 1 ? <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a> : null}
+        <span>Page {query.page}</span>
+        {hasNext ? <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>Next</a> : null}
+      </nav>
     </section>
   </Shell>
 );
@@ -332,6 +411,29 @@ export const EventFormPage: FC<{
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
           </Field>
+          {mode === "new" ? (
+            <fieldset>
+              <legend>Repeat</legend>
+              <Field name="recurrence_frequency" label="Repeats" errors={errors} hint="Empty = a one-off event. Weeks keep the same wall time in the zone above across clock changes.">
+                {(id) => (
+                  <select id={id} name="recurrence_frequency">
+                    <option value="" selected={val(values, "recurrence_frequency") === ""}>Does not repeat</option>
+                    <option value="weekly" selected={val(values, "recurrence_frequency") === "weekly"}>Weekly</option>
+                  </select>
+                )}
+              </Field>
+              <Field name="recurrence_count" label="Occurrences (including the first, max 52)" errors={errors}>
+                {(id) => <input id={id} name="recurrence_count" type="text" inputmode="numeric" value={val(values, "recurrence_count")} />}
+              </Field>
+              <Field name="recurrence_ends_on" label="Repeat until (YYYY-MM-DD)" errors={errors}>
+                {(id) => <input id={id} name="recurrence_ends_on" type="text" value={val(values, "recurrence_ends_on")} />}
+              </Field>
+            </fieldset>
+          ) : row?.recurrenceFrequency ? (
+            <p class="hint" data-testid="series-info">
+              Part of a {row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.
+            </p>
+          ) : null}
           <div class="actions">
             <button type="submit" class="btn" data-testid="save-event">
               {mode === "new" ? "Create draft" : "Save"}
@@ -353,6 +455,7 @@ export const EventFormPage: FC<{
                   <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
                 </form>
               ) : null}
+              <RsvpAction row={row} />
             </div>
           </section>
         ) : null}
@@ -399,7 +502,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; now?: Date }> = ({ rows, no
       <p>
         <a class="btn" href="/admin/featured/new" data-testid="new-featured">New featured slot</a>
       </p>
-      <table class="admin-table" data-testid="featured-table">
+      <table class="admin-table featured-table" data-testid="featured-table">
         <thead>
           <tr>
             <th>Title</th>
@@ -441,7 +544,9 @@ export const FeaturedFormPage: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   now?: Date;
-}> = ({ mode, row, values, errors, now = new Date() }) => {
+  appUrl: string;
+  imageHosts?: string;
+}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked = values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
@@ -454,7 +559,7 @@ export const FeaturedFormPage: FC<{
             <p>Last saved content, checked at <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to refresh this preview.</p>
             <p>Status: <FeaturedStatusBadge row={row} now={now} /></p>
             {currentlyVisible(row, now) ? (
-              <FeaturedContentItem row={row} now={now} />
+              <FeaturedContentItem row={row} appUrl={appUrl} imageHosts={imageHosts} />
             ) : (
               <p data-testid="featured-preview-hidden">This slot is not currently visible on the homepage.</p>
             )}
@@ -475,7 +580,7 @@ export const FeaturedFormPage: FC<{
           <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
             {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
-          <Field name="image_url" label="Image URL" errors={errors}>
+          <Field name="image_url" label="Image URL" errors={errors} hint="HTTPS URL on cdn.discordapp.com or a configured approved public host. Other image hosts are blocked by the site's security policy.">
             {(id) => <input id={id} name="image_url" type="url" value={val(values, "image_url")} />}
           </Field>
           <Field
