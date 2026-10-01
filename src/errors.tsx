@@ -3,7 +3,8 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
 import { notFoundSuggestions, type SuggestedEvent } from "./events/suggestions";
-import { Layout, SiteFooter } from "./pages";
+import { RecoveryShell } from "./pages";
+import { bufferedMemberHtml, bufferedMemberText, memberReadActive } from "./member-reads";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
 // errors/*.blade.php views (TOG-5626/TOG-6788). No session or cookie reads.
@@ -12,41 +13,21 @@ const NOINDEX = "noindex, nofollow";
 
 const JOIN_HREF = "/auth/discord";
 
-const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?: { href: string; label: string } }>> = ({
-  code,
-  title,
-  headerCta = { href: JOIN_HREF, label: "Sign in with Discord" },
-  children,
-}) => (
-  <Layout title={`${title} — Together We Own`} robots={NOINDEX}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="btn" href={headerCta.href}>{headerCta.label}</a>
-      </nav>
-    </header>
-    <main id="main" tabindex={-1}>
-      <section aria-labelledby="error-heading">
-        <p class="strap" aria-hidden="true">{code}</p>
-        <h1 id="error-heading">{title}</h1>
-        {children}
-      </section>
-    </main>
-    <SiteFooter />
-  </Layout>
+const ErrorShell: FC<PropsWithChildren<{
+  code: string;
+  title: string;
+  headerCta?: { href: string; label: string };
+  supportingContent?: PropsWithChildren["children"];
+}>> = ({ code, title, headerCta, supportingContent, children }) => (
+  <RecoveryShell code={code} title={title} headingId="error-heading" robots={NOINDEX} headerCta={headerCta} supportingContent={supportingContent}>
+    {children}
+  </RecoveryShell>
 );
 
 // 404 recovery stays available even when the optional event lookup fails.
 export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestions = [] }) => (
-  <ErrorShell code="404" title="We cannot find that page">
-    <p class="lead">
-      The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
-    </p>
-    <p>
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
-      <a href="/" data-testid="error-home">Back to the homepage</a>
-    </p>
-    <section aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
+  <ErrorShell code="404" title="We cannot find that page" supportingContent={
+    <section class="recovery-events" aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
       <h2 id="error-events-heading">Happening soon</h2>
       {suggestions.length ? (
         <ul class="facts">
@@ -72,6 +53,14 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
         </div>
       </form>
     </section>
+  }>
+    <p class="lead">
+      The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
+    </p>
+    <p class="recovery-actions">
+      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a href="/" data-testid="error-home">Back to the homepage</a>
+    </p>
   </ErrorShell>
 );
 
@@ -83,7 +72,7 @@ export const InternalErrorPage: FC = () => (
       It is not you. We have logged the failure and the team will take a look. Try again in a minute — the lobby is
       not going anywhere.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
@@ -96,7 +85,7 @@ export const RateLimitedPage: FC = () => (
     <p class="lead">
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is not going anywhere.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
@@ -123,7 +112,7 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
       The site is down for a minute of maintenance. The Discord server never closes — come in through the invite and
       we will see you there.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
       <a href="/" data-testid="error-retry">Try again</a>
     </p>
@@ -132,6 +121,12 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
 
 // Host refusals use only this shell, never the optional DB lookup.
 export function notFoundResponse(c: Context, suggestions: SuggestedEvent[] = []): Response | Promise<Response> {
+  if (memberReadActive()) {
+    // Only this known shell classifies a missing route; arbitrary 404 responses
+    // and prior queries still must satisfy the ordinary read boundary.
+    if (c.get("adminActor")) c.set("access", { resource: "not-found", action: "view", route: "admin.not-found" });
+    return bufferedMemberHtml(c, <NotFoundPage suggestions={suggestions} />, 404);
+  }
   c.header("cache-control", "no-store, private");
   c.status(404);
   return c.html(<NotFoundPage suggestions={suggestions} />);
@@ -142,6 +137,13 @@ export async function notFoundHandler(c: Context): Promise<Response> {
 }
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
+  if (memberReadActive()) {
+    // Sanitize before the ordinary logger/alert sees SQL, bindings or causes.
+    console.error("Member request failed; refusing contents.", {
+      exception: err instanceof Error ? err.constructor.name : "unknown",
+    });
+    return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
+  }
   console.error("unhandled error:", err);
   alertRequestError(err, { method: c.req.method, route: c.req.routePath || c.req.path });
   c.header("cache-control", "no-store, private");

@@ -1,4 +1,5 @@
-import { PgDialect } from "drizzle-orm/pg-core";
+import { PgDialect, type PgSession } from "drizzle-orm/pg-core";
+import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
@@ -22,13 +23,18 @@ const fullMember = {
   member_id: MEMBER, joined_at: "2025-01-01T00:00:00Z", tenure_days: "637", rank_key: "community_regular", is_current_member: true,
 };
 const milestones = [
-  { milestone: "first_event", occurred_at: "2026-09-29T19:00:00Z", detail: "Chess <script>alert(1)</script>" },
-  { milestone: "joined", occurred_at: "2025-01-01T00:00:00Z", detail: null },
+  { member_id: MEMBER, milestone: "first_event", occurred_at: "2026-09-29T19:00:00Z", detail: "Chess <script>alert(1)</script>" },
+  { member_id: MEMBER, milestone: "joined", occurred_at: "2025-01-01T00:00:00Z", detail: null },
 ];
 
 function fixture(memberRows: Record<string, unknown>[] = [fullMember], milestoneRows: Record<string, unknown>[] = milestones) {
   const execute = vi.fn().mockResolvedValueOnce(memberRows).mockResolvedValueOnce(milestoneRows);
-  return { db: { execute } as unknown as Db, execute };
+  // Local results still pass through Drizzle compilation/prepareQuery, so the
+  // production observer verifies the exact SQL projection in route tests.
+  const session = { prepareQuery: (query: unknown) => ({ execute: () => execute(query) }) } as unknown as PgSession;
+  const db = new PostgresJsDatabase(new PgDialect(), session, undefined) as Db;
+  db.execute = db.execute.bind(db);
+  return { db, execute };
 }
 
 afterEach(() => {
@@ -43,8 +49,7 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
       joinedAt: new Date(fullMember.joined_at), tenureDays: 637, rankKey: "community_regular", isCurrentMember: true,
       milestones: milestones.map((row) => ({ type: row.milestone, occurredAt: new Date(row.occurred_at), detail: row.detail })),
     });
-    const dialect = new PgDialect();
-    const queries = execute.mock.calls.map(([query]) => dialect.sqlToQuery(query));
+    const queries = execute.mock.calls.map(([query]) => query as { sql: string; params: unknown[] });
     expect(queries[0]!.sql).toContain("from web_v1.members where member_id = $1 limit 1");
     expect(queries[1]!.sql).toContain("where member_id = $1 order by occurred_at desc");
     expect(queries.map((query) => query.params)).toEqual([[MEMBER], [MEMBER]]);
@@ -168,12 +173,24 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     expect(html).toContain("637 days");
     expect(html).toContain("1 Jan 2025");
     expect(html).toContain("Current member");
-    expect(html.indexOf("First Event")).toBeLessThan(html.indexOf(">Joined ·"));
+    expect(html).toContain('<dl class="profile-stats-grid">');
+    expect(html).toContain("<dt>Milestones</dt><dd>2</dd>");
+    expect(html.indexOf("<strong>First Event</strong>")).toBeLessThan(html.indexOf("<strong>Joined</strong>"));
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(log).toHaveLength(1);
     expect(log[0]).toMatchObject({ subjectUserIds: [MEMBER], viewerUserId: VIEWER, route: "profiles.show" });
+  });
+
+  it.each([undefined, "invalid-owner", "123"])("a missing/invalid milestone owner %s cannot hide behind the optional-stats fallback", async (owner) => {
+    const { db } = fixture([fullMember], [{ ...milestones[0], member_id: owner }]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { app, log, cookieFor, bindings } = await harness(db);
+    const res = await app.request(`/members/${MEMBER}`, { headers: { cookie: await cookieFor() } }, bindings);
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain("Profile still here");
+    expect(log).toHaveLength(0);
   });
 
   it.each([
@@ -193,7 +210,7 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     expect(html.match(/data-testid="profile-joined"/g)).toHaveLength(1);
   });
 
-  it.each(["stalled milestones", "throwing source"])("keeps the page and audit available with a %s", async (failure) => {
+  it.each(["stalled milestones", "throwing source"])("refuses unfinished SQL but tolerates an unavailable optional source: %s", async (failure) => {
     const { db, execute } = fixture();
     let signalSeen: AbortSignal | undefined;
     let queryStarted!: () => void;
@@ -215,12 +232,14 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     await started;
     await vi.advanceTimersByTimeAsync(MEMBER_STATS_BUDGET_MS);
     const res = await pending;
-    expect(res.status).toBe(200);
+    const unfinished = failure === "stalled milestones";
+    expect(res.status).toBe(unfinished ? 503 : 200);
     const html = await res.text();
-    expect(html).toContain("Profile still here");
+    if (unfinished) expect(html).not.toContain("Profile still here");
+    else expect(html).toContain("Profile still here");
     expect(html).not.toContain('data-testid="profile-stats"');
-    expect(log).toHaveLength(1);
-    expect(log[0]?.subjectUserIds).toEqual([MEMBER]);
+    expect(log).toHaveLength(unfinished ? 0 : 1);
+    if (!unfinished) expect(log[0]?.subjectUserIds).toEqual([MEMBER]);
     if (signalSeen) expect(signalSeen.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });

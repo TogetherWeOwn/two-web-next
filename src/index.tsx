@@ -38,11 +38,14 @@ import { profilesApp } from "./profiles/routes";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
 import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
+import { consumeLoginReturn, LOGIN_INTENDED_COOKIE, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 import { rulesLastUpdated } from "./rules-last-updated";
+import { authStatus, authStatusScript, clearAuthStatus, enableAuthStatus } from "./auth-status";
+import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding, expiredWriteBanner } from "./write-recovery";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
@@ -114,6 +117,10 @@ app.use("*", trustHosts());
 
 // Before throttles, session rotation, body parsing, or any mounted handler.
 app.use("*", sameOrigin);
+app.use("*", authStatusScript);
+app.use("*", expiredWriteBanner);
+app.get("/auth/status", (c) => authStatus(c, () => storeFor(c)));
+app.get("/auth/recover", recoveryLanding);
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
@@ -210,6 +217,7 @@ async function issueSession(
     sameSite: "Lax",
     maxAge: SESSION_TTL_SECONDS,
   });
+  await enableAuthStatus(c, store, await hashToken(token));
 }
 
 async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
@@ -226,6 +234,7 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
   // the old row in the same statement. A replayed cookie finds no row: guest.
+  const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
   const rotated = await store
     .rotate(await hashToken(token), {
@@ -235,6 +244,7 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
     })
     .catch(() => false);
   if (!rotated) return null;
+  await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -270,13 +280,18 @@ app.get("/", async (c) => {
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
   const counts = await readCounts(c.env);
+  // One-shot join confirmation (legacy join_result flash): first render consumes it.
+  // A failure landing drops a stale success flash instead — the current failure
+  // explanation wins over an older journey's success (TOG-10356 review).
+  const flashed = await takeJoinResult(c);
+  const joinResult = ["join_failed", "signin_failed", "signin_denied", "signin_unavailable"].includes(notice ?? "") ? null : flashed;
   const [upcomingEvents, featured] = await Promise.all([
     loadHomeUpcoming(() => dbFor(c)),
     dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),
   ]);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
+    <Home session={session} notice={notice} joinResult={joinResult} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
       counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
       imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
   );
@@ -330,9 +345,18 @@ app.get("/privacy", (c) => {
 // synchronous bot add. JoinAttempt rows land in Postgres when DATABASE_URL is
 // set; without it the journey degrades to no persistence (never a 500).
 registerJoinRoutes(app, { storeFor, issueSession }, {
-  joinPage: (c, props) => {
-    c.header("cache-control", "public, max-age=3600");
-    return c.html(<Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} />);
+  joinPage: async (c, props) => {
+    // Carrying the join-result flash makes the response viewer-specific:
+    // the static page keeps its shared-cache TTL only when there is nothing
+    // to consume (otherwise a guest could read another member's banner).
+    // Vary stays on every variant: the representation depends on the flash
+    // cookie even when this view has nothing to consume.
+    const joinResult = await takeJoinResult(c);
+    c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=3600");
+    c.header("vary", "Cookie");
+    return c.html(
+      <Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} joinResult={joinResult} />,
+    );
   },
   recovery: (c, props, status = 200) => {
     c.header("cache-control", "no-store, private");
@@ -428,6 +452,9 @@ app.get("/auth/discord/redirect", (c) => {
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
+  // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
+  // OAuth round trip in a signed cookie; a hostile value leaves no trace.
+  await rememberLoginNext(c, c.req.query("next"));
   await setSignedCookie(c, STATE_COOKIE, state, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -443,6 +470,10 @@ app.get("/auth/discord/callback", async (c) => {
   if (limited) return limited;
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
   deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
+  // Consume the return journey on every terminal path — success, denial and
+  // failure all clear it (legacy forget on login_next + url.intended).
+  const returnTo = await consumeLoginReturn(c);
+  const expiredWrite = await consumeExpiredWrite(c);
   const code = c.req.query("code");
   const state = c.req.query("state");
   // A consent-screen refusal arrives as an `error` param before any code
@@ -493,7 +524,26 @@ app.get("/auth/discord/callback", async (c) => {
     member: join !== "failed",
     moderator,
   });
-  return c.redirect(`/?n=${join === "failed" ? "join_failed" : join}`, 302);
+  await flashExpiredWrite(c, expiredWrite);
+  // A failed auto-join keeps the recovery landing even when a destination
+  // was remembered: the session is a non-member one, so a member-only gate
+  // (/profile, /members/*) would answer bare 403 and swallow the failure
+  // explanation plus the invite fallback. The intended destination is
+  // re-recorded for the retry instead of being lost. Successful joins keep
+  // the legacy precedence: explicit next, then intended page, then notice.
+  if (join === "failed") {
+    if (returnTo) {
+      await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+        maxAge: 600,
+      });
+    }
+    return c.redirect("/?n=join_failed", 302);
+  }
+  return c.redirect(returnTo ?? `/?n=${join}`, 302);
 });
 
 // Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard
@@ -514,8 +564,13 @@ registerEventRoutes(
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (token) await store.revoke(await hashToken(token)).catch(() => {});
+  if (token) {
+    try { await store.revoke(await hashToken(token)); }
+    catch { return c.text("Sign-out temporarily unavailable", 503); }
+  }
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
+  clearAuthStatus(c);
+  await consumeExpiredWrite(c);
   return c.redirect("/", 303);
 });
 
