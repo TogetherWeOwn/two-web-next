@@ -194,6 +194,8 @@
       active.abort();
       active = null;
       activeIsSearch = false;
+      // Revoked owners cannot release loading inherited from navigation in finally.
+      setLoading(false);
     }
     debounceTimer = setTimeout(function () {
       debounceTimer = null;

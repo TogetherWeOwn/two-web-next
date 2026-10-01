@@ -212,6 +212,64 @@ describe("EventsCalendar search intent before the next debounce", () => {
     expect(b.skeleton.hidden).toBe(true);
   });
 
+  it.each([false, true])("releases inherited navigation loading when B revokes search A (submitted A=%s)", async (submitted) => {
+    const b = browser();
+    const previous = rendered(b);
+    b.navigate("/events?view=calendar");
+    expect(b.skeleton.hidden).toBe(false);
+    expect(b.content.hidden).toBe(true);
+    expect(b.root.getAttribute("aria-busy")).toBe("true");
+    b.type("A");
+    if (submitted) b.submit();
+    else vi.advanceTimersByTime(300);
+    expect(b.requests).toHaveLength(2);
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    b.type("B");
+    expect(b.requests[1]!.signal.aborted).toBe(true);
+    expect(b.skeleton.hidden).toBe(true);
+    expect(b.content.hidden).toBe(false);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(rendered(b)).toEqual(previous);
+    await b.respond(0);
+    await b.respond(1);
+    vi.advanceTimersByTime(200);
+    b.type("B final");
+    vi.advanceTimersByTime(299);
+    expect(b.requests).toHaveLength(2);
+    expect(b.skeleton.hidden).toBe(true);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(rendered(b)).toEqual(previous);
+    vi.advanceTimersByTime(1);
+    expect(b.requests[2]!.url).toBe("/events?q=B+final");
+    await b.respond(2);
+    expect(b.history).toEqual(["/events?q=B+final"]);
+    expect(b.zones.every((zone) => zone.swaps === 1)).toBe(true);
+  });
+
+  it("obsolete finalizers cannot clear loading owned by navigation after search revocation", async () => {
+    const b = browser();
+    b.navigate("/events?view=calendar");
+    b.type("A");
+    b.submit();
+    b.type("B");
+    expect(b.skeleton.hidden).toBe(true);
+    b.navigate("/events?past=1");
+    await b.respond(0);
+    await fail(b, 1, "network");
+    expect(b.skeleton.hidden).toBe(false);
+    expect(b.content.hidden).toBe(true);
+    expect(b.root.getAttribute("aria-busy")).toBe("true");
+    expect(b.history).toEqual([]);
+    expect(b.feedback.textContent).toBe("last-good feedback");
+    vi.advanceTimersByTime(1000);
+    expect(b.requests).toHaveLength(3);
+    await b.respond(2);
+    expect(b.skeleton.hidden).toBe(true);
+    expect(b.content.hidden).toBe(false);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(b.history).toEqual(["/events?past=1"]);
+  });
+
   it("ignores an obsolete response whose body finishes inside B's debounce window", async () => {
     const b = browser();
     startSearch(b);
