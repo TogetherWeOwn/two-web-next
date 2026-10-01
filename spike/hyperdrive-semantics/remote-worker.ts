@@ -42,8 +42,10 @@ export function refusalReasons(env: Env, now = Date.now()): string[] {
     else {
       if (typeof db.host !== "string" || !db.host) reasons.add("binding_host_missing");
       else if (db.host === "agent-testdb" || db.host.endsWith(".neon.tech")) reasons.add("binding_host_direct_or_local");
-      if (db.database !== REMOTE_TARGET.database) reasons.add("binding_database_mismatch");
-      if (db.user !== REMOTE_TARGET.user) reasons.add("binding_user_mismatch");
+      // A Hyperdrive binding exposes proxy-issued database/user/password, not the origin's.
+      // The origin identity is pinned by the receipt; here we only require them to be present.
+      if (typeof db.database !== "string" || !db.database) reasons.add("binding_database_mismatch");
+      if (typeof db.user !== "string" || !db.user) reasons.add("binding_user_mismatch");
       if (!db.password) reasons.add("binding_password_missing");
       if (!Number.isInteger(db.port) || db.port < 1 || db.port > 65535) reasons.add("binding_port_invalid");
     }
