@@ -18,10 +18,11 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 // Nonempty, exhaustive inventories: a newly registered read needs an exposure
 // case. This cannot quietly become [] == [] when a namespace is renamed.
 const PROFILE_READS = ["/profile", "/members/:user"];
-const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured", "/featured/new", "/featured/:id", "/join-attempts", "/join-attempts/:id"];
+const ADMIN_REDIRECTS = ["/events/create", "/events/:key/edit", "/featured-contents", "/featured-contents/create", "/featured-contents/:id/edit"];
+const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured", "/featured/new", "/featured/:id", "/join-attempts", "/join-attempts/:id", ...ADMIN_REDIRECTS];
 const OTHER_READS = [
   "/", "/discord", "/about", "/faq", "/rules", "/privacy", "/join", "/join/discord", "/join/callback",
-  "/sitemap_index.xml", "/robots.txt", "/up", "/auth/discord", "/auth/discord/callback",
+  "/sitemap_index.xml", "/robots.txt", "/up", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect",
   "/events", "/events/past", "/events.json", "/e/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) => router.routes
@@ -109,7 +110,9 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
     for (const pattern of ADMIN_READS) {
       const path = `/admin${pattern === "/" ? "" : pattern.replace(":key", EVENT_KEY).replace(":id", "999999999")}`;
       const res = await request(path, { headers: role === "guest" ? {} : await headers(actor) });
-      const expected = role === "guest" ? 302 : role !== "moderator" ? 403 : ["/featured/:id", "/join-attempts/:id"].includes(pattern) ? 404 : 200;
+      const expected = role === "guest" ? 302 : role !== "moderator" ? 403
+        : ["/featured/:id", "/featured-contents/:id/edit", "/join-attempts/:id"].includes(pattern) ? 404
+        : ADMIN_REDIRECTS.includes(pattern) ? 301 : 200;
       expect(res.status, path).toBe(expected);
       const body = await res.text();
       if (role !== "moderator") {
