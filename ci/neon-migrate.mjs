@@ -91,7 +91,12 @@ export function migrationClient(config) {
     port: 5432, max: 1, idle_timeout: 0, max_lifetime: 0, connect_timeout: 10,
     password: () => decodeURIComponent(config.url.password),
     ssl: config.testDatabase ? false : { rejectUnauthorized: true },
-    connection: { statement_timeout: 120000, lock_timeout: 10000 },
+    // Canonical migration SQL uses unqualified identifiers intending `public`.
+    // postgres.js merges `connection` into the startup packet (see StartupMessage
+    // in node_modules/postgres/src/connection.js), so pin per-connection GUCs
+    // here: a hostile role/database `search_path` or `DateStyle` must not
+    // misroute DDL or skew the PITR receipt. Never ALTER ROLE/DATABASE defaults.
+    connection: { statement_timeout: 120000, lock_timeout: 10000, search_path: "public", datestyle: "ISO, YMD" },
     onnotice: () => {},
   });
 }
@@ -122,11 +127,21 @@ export async function runMigration(mode, env = process.env, options = {}) {
     // Sources: https://github.com/porsager/postgres#transactions
     // https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS
     const remaining = await client.begin(async (transaction) => {
+      // Defense in depth with the startup pin in migrationClient: even when
+      // the role/database default search_path or DateStyle is hostile, this
+      // transaction applies canonical SQL to `public`. Never ALTER ROLE or
+      // DATABASE defaults as a fix; owned test fixtures may set hostile
+      // defaults to prove the pin.
+      await transaction.unsafe("SET LOCAL search_path = public");
+      await transaction.unsafe("SET LOCAL datestyle = 'ISO, YMD'");
       const [lock] = await transaction`select pg_try_advisory_xact_lock(${lockKey}) as acquired`;
       if (!lock.acquired) refuse("Another web migration holds the database lock; retry only after it finishes.");
       const pending = await plan(transaction);
-      const [clock] = await transaction`select clock_timestamp() as timestamp`;
-      await summary(`Pre-migration Neon PITR timestamp (UTC): ${clock.timestamp.toISOString()}`);
+      // to_char text is immune to the server DateStyle: the driver parses
+      // timestamptz via `new Date(text)` (postgres/src/types.js), which swaps
+      // month/day on SQL/DMY output and shifts the PITR receipt by months.
+      const [clock] = await transaction`select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as timestamp`;
+      await summary(`Pre-migration Neon PITR timestamp (UTC): ${clock.timestamp}`);
       await summary(`Release: ${/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? "") ? env.GITHUB_SHA : "local selftest"}`);
       // Keep Drizzle's journal SQL/hash/timestamp and default ledger format, but
       // include ledger setup and history validation in the same locked transaction.
