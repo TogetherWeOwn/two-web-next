@@ -10,6 +10,8 @@ import { chromium, request as apiRequest } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { assertNoViolations, auditCases, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 import { AUDIT_BROWSER_OPTIONS, createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
+import { buildAuditWorker } from "./a11y-build.mjs";
+import { assertAuditContent } from "./a11y-content.mjs";
 
 const output = resolve("artifacts/a11y");
 const lifecycle = createAuditLifecycle();
@@ -49,9 +51,9 @@ try {
   const { fixtures } = await lifecycle.run(() => import(pathToFileURL(fixtureBundle).href));
   const database = process.env.DATABASE_URL || "postgres://agent_test@agent-testdb:5432/two_web_next";
   fixture = await lifecycle.acquire(() => fixtures(database), (resource) => resource.dispose());
-  // The same fixture entry is bundled in Node only to enumerate Hono's real GET registry.
+  // Route discovery and Wrangler use one bundle with isolated bot read models.
   const bundled = join(scratch, "routes.mjs");
-  await lifecycle.run(() => build({ entryPoints: ["ci/a11y-worker.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: bundled }));
+  await lifecycle.run(() => buildAuditWorker(bundled));
   const { routes, coverage } = await lifecycle.run(() => import(pathToFileURL(bundled).href));
   const scenarios = auditCases(routes, coverage);
   assert(scenarios.length > 0, "Empty accessibility coverage");
@@ -62,7 +64,7 @@ try {
   const config = join(scratch, "wrangler.json");
   await lifecycle.run(() => writeFile(config, JSON.stringify({
     name: "two-web-next-a11y",
-    main: resolve("ci/a11y-worker.ts"),
+    main: bundled,
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: resolve("public") },
@@ -92,7 +94,7 @@ try {
       lifecycle.assertRunning();
       const label = `${scenario.identity} ${scenario.path} ${scenario.state || "default"} ${viewport.width}px`;
       const result = { ...scenario, viewport, label };
-      const context = await browser.newContext({ viewport, ignoreHTTPSErrors: true });
+      const context = await browser.newContext({ viewport, ignoreHTTPSErrors: true, extraHTTPHeaders: { "x-a11y-read-state": scenario.readState || "populated" } });
       // Block every off-origin browser request, including redirects to Discord.
       await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
       const page = await context.newPage();
@@ -120,6 +122,7 @@ try {
         if (scenario.waitFor) await page.getByRole(scenario.waitFor.role).waitFor({ state: "visible" });
         assert(await page.evaluate(() => document.styleSheets.length > 0), "Stylesheet must be loaded for contrast checks");
         assert.deepEqual(resourceErrors, [], "Unexpected script/stylesheet failures");
+        result.contentAssertions = await assertAuditContent(page, scenario);
         const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
         result.violations = results.violations;
         result.incomplete = results.incomplete;
@@ -164,5 +167,5 @@ try {
   }
   await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));
   await writeFile(join(output, "wrangler.log"), redactAuditLog(serverLog));
-  await writeFile(join(output, "summary.md"), `# WCAG 2.2 AA automated audit\n\nSource: ${report.sourceRevision}. Axe: ${report.axeVersion || "NOT VERIFIED"}.\n\nEnvironment: ${report.environment}. No production/staging database or external calls.\n\nTags: ${WCAG_AA_TAGS.join(", ")}. No allowlist or rule exclusions.\n\n| Case | Status | Verdict |\n|---|---|---|\n${report.pages.map((page) => `| ${page.label} | ${page.status} | ${page.verdict} |`).join("\n")}\n\nSentinel: ${report.sentinel || "NOT VERIFIED"}\n\nCleanup: ${report.cleanup || "NOT VERIFIED"}\n\nFailures: ${report.failures.length}\n${report.failures.map((failure) => `- ${failure}`).join("\n")}\n\nIncomplete axe checks are in report.json; automated scanning is not a manual screen-reader certification.\n`);
+  await writeFile(join(output, "summary.md"), `# WCAG 2.2 AA automated audit\n\nSource: ${report.sourceRevision}. Axe: ${report.axeVersion || "NOT VERIFIED"}.\n\nEnvironment: ${report.environment}. No production/staging database or external calls.\n\nTags: ${WCAG_AA_TAGS.join(", ")}. No allowlist or rule exclusions.\n\n| Case | Status | Content assertions | Verdict |\n|---|---|---|---|\n${report.pages.map((page) => `| ${page.label} | ${page.status} | ${page.contentAssertions?.length ?? "NOT VERIFIED"} | ${page.verdict} |`).join("\n")}\n\nSentinel: ${report.sentinel || "NOT VERIFIED"}\n\nCleanup: ${report.cleanup || "NOT VERIFIED"}\n\nFailures: ${report.failures.length}\n${report.failures.map((failure) => `- ${failure}`).join("\n")}\n\nIncomplete axe checks are in report.json; automated scanning is not a manual screen-reader certification.\n`);
 }

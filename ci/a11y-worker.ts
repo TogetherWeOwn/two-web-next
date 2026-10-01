@@ -2,6 +2,7 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
+import { auditFixtureState, auditReadDatabase } from "./a11y-read-models";
 import app from "../src/index";
 import { maintenanceHandler, notFoundHandler, rateLimitExceeded } from "../src/errors";
 import { adminSchema, schema } from "../src/db/index";
@@ -19,6 +20,7 @@ export default {
   async fetch(request: Request, env: Env & { A11Y_DATABASE_URL: string; A11Y_SCHEMA: string; A11Y_CI: string }, ctx: ExecutionContext) {
     globalThis.fetch = async () => { throw new Error("Outbound HTTP is disabled in the local audit worker"); };
     if (!/^w15_[a-f0-9]{32}$/.test(env.A11Y_SCHEMA)) throw new Error("Invalid isolated fixture schema");
+    const readState = auditFixtureState(request.headers.get("x-a11y-read-state"));
     const url = auditDatabaseUrl(env.A11Y_DATABASE_URL, env.A11Y_CI === "true");
     const options = auditDatabaseOptions(url, env.A11Y_SCHEMA);
     const client = postgres(url.href, options);
@@ -26,7 +28,8 @@ export default {
     try {
       const bindings = {
         ...env,
-        ADMIN_DB: drizzle(client, { schema: { ...schema, ...adminSchema } }),
+        A11Y_READ_STATE: readState,
+        ADMIN_DB: auditReadDatabase(drizzle(client, { schema: { ...schema, ...adminSchema } }), readState),
         SESSION_STORE: createPostgresSessionStore(sessionClient as unknown as Sql),
         DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
       };

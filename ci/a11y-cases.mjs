@@ -21,6 +21,7 @@ export const coverage = {
   "/": { cases: [
     { path: "/" },
     { path: "/", identity: "member" },
+    { path: "/", state: "counts-unavailable", readState: "unavailable" },
     ...["joined", "already_member", "join_failed", "signin_failed"].map((notice) => ({ path: `/?n=${notice}` })),
   ] },
   "/join/callback": { cases: [{ path: "/join/callback?error=access_denied" }, { path: "/join/callback" }] },
@@ -33,7 +34,7 @@ export const coverage = {
     { path: "/events", identity: "member" },
     { path: "/events", identity: "moderator" },
   ] },
-  "/profile": { cases: [{ path: "/profile", identity: "member" }, { path: "/profile", identity: "member", state: "validation-error", fill: [{ label: "Timezone", value: "Not/AZone" }], click: { role: "button", name: "Save" }, waitFor: { role: "alert" } }] },
+  "/profile": { cases: [{ path: "/profile", identity: "member" }, { path: "/profile", identity: "member", state: "stats-unavailable", readState: "unavailable" }, { path: "/profile", identity: "member", state: "validation-error", fill: [{ label: "Timezone", value: "Not/AZone" }], click: { role: "button", name: "Save" }, waitFor: { role: "alert" } }] },
   "/members/:user": { cases: [{ path: `/members/${otherMember}`, identity: "member" }, { path: `/members/${member}`, identity: "moderator" }, { path: "/members/999999999999999999", identity: "member", status: 404 }] },
   "/e/:key": { cases: [{ path: `/e/${event}` }, { path: `/e/${cancelled}`, status: 410 }, { path: `/e/${draft}`, identity: "moderator" }, { path: "/e/invalid-key", status: 404 }] },
   "/admin/events/:key": { cases: [{ path: `/admin/events/${event}`, identity: "moderator" }, { path: "/admin/events/missing", identity: "moderator", status: 404 }] },

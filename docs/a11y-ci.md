@@ -24,8 +24,9 @@ screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
 - Public pages, homepage notices, event list/calendar/search/no-results/past
   states, published/draft/cancelled event details, owner profile + validation
   alert, another member's profile, moderator admin pages and missing records are
-  scanned at 360×780 and 1280×900. The matrix has 48 cases / 96 scans,
-  including seeded and missing moderator join-attempt details.
+  scanned at 360×780 and 1280×900. The matrix has 50 cases / 100 scans,
+  including seeded and missing moderator join-attempt details, populated counts
+  and profile stats/milestones, and explicit unavailable-counts/stats cases.
 - Branded 404/429/500/503 handlers are exposed by **test-only** routes in
   `ci/a11y-worker.ts`. Production configuration still points at `src/worker.ts`.
 - Canonical migrations and synthetic users/events/RSVPs/featured/join-attempt
@@ -41,6 +42,21 @@ screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
   `SESSION_STORE`, and `DISCORD_EVENTS` test seams; member-access logging stays
   enabled. Raw sessions and Drizzle use separate clients to preserve timestamp
   serialization.
+- Bot-owned `web_v1` views are **never** read or created. `ci/a11y-build.mjs`
+  narrowly substitutes only the homepage count reader in the temporary bundle;
+  route discovery and Wrangler consume that same bundle. The audit-only
+  `ADMIN_DB.execute` adapter intercepts the two qualified profile stats queries,
+  returning keyed synthetic rows through the **real** stats normalizer. Unknown
+  `web_v1` queries fail closed; other owned-schema DB operations remain real.
+  Production readers/routes/pages and deployment configuration are unchanged.
+- Each browser context selects populated/unavailable read models through a
+  test-only request header. Before axe, content assertions require 84 members,
+  12 online, numeric rank totals and zero-as-`unclaimed`, or their unavailable
+  fallback. Profile assertions require the actual stats section, tenure,
+  membership, dates and milestone list—not the fallback rank/joined elements.
+  Another-member coverage includes one-day/former-member/empty-milestone copy.
+  Query-spy regressions run the production stats reader and prove zero shared
+  DB reads. Missing or hidden populated sections fail even with HTTP 200.
 - The runner stops Wrangler, closes its clients and drops only its own schema
   on completion; run-owned scratch is removed. SIGINT/SIGTERM seal resource
   acquisition and join in-flight setup before cleanup. Signal and `finally`
@@ -64,8 +80,9 @@ alt-less image must produce `image-alt`, and the same gate must reject it; a
 missing detection or permissive gate fails the job. Policy tests in
 `npm run check` also prove static/dynamic route drift and DB refusal behavior.
 
-`artifacts/a11y/report.json` contains each case's status, viewport, violations,
-passes and incomplete checks. `summary.md` is the evidence table; numbered PNGs
+`artifacts/a11y/report.json` contains each case's status, viewport, verified
+content assertions, violations, passes and incomplete checks. `summary.md` is
+an evidence table including content-assertion counts; numbered PNGs
 show the scanned state; `wrangler.log` records local responses with synthetic
 session-secret and database configuration values redacted. Incomplete checks
 are retained for inspection, not mislabeled as violations or manual passes.
@@ -76,8 +93,19 @@ marks incomplete still need human/manual assessment; that is outside this slice.
 
 ## Acceptance / reproduction
 
-- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 96
+- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 100
   document scans pass with zero WCAG A/AA violations and a rejected sentinel.
+- **Given** populated homepage fixtures, **when** either viewport renders,
+  **then** the report records assertions for member/online counts and all five
+  rank totals (including `unclaimed`).
+- **Given** populated owner/moderator profile fixtures, **when** either viewport
+  renders, **then** the screenshot includes synthetic tenure and milestones.
+- **Given** unavailable read-model fixtures, **when** either viewport renders,
+  **then** counts/stats are absent while their normal page fallback passes axe.
+- **Given** another member's fixture, **when** either viewport renders, **then**
+  stats show `1 day`, `Former member` and `No milestones yet.`.
+- **Given** missing populated fixture sections, **when** content is checked,
+  **then** the audit fails before axe can certify the wrong state.
 - **Given** a new static HTML GET, **when** the audit runs, **then** that route is
   scanned without editing a page list.
 - **Given** a new parameterized GET without a fixture, **when** coverage is
