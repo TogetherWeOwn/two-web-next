@@ -300,6 +300,27 @@ describe("join_result flash (legacy AlreadyMemberReinviteTest)", () => {
     return { cb, jar: jarFrom(cb, j) };
   };
 
+  it.each(["/", "/join"])("HEAD %s preserves the flash for exactly one visible GET", async (path) => {
+    const { env } = isolated();
+    const { jar } = await runJoin(env, 204);
+    const pending = jar[JOIN_RESULT_COOKIE];
+    const head = await app.request(path, { method: "HEAD", headers: { cookie: sendJar(jar) } }, env);
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(setCookies(head)).not.toContain(`${JOIN_RESULT_COOKIE}=; Max-Age=0`);
+    expect(jarFrom(head, jar)[JOIN_RESULT_COOKIE]).toBe(pending);
+
+    const first = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    const html = await first.text();
+    expect(html).toContain('data-testid="join-result"');
+    expect(html).toContain('data-testid="reinvite-link"');
+    expect(jarFrom(first, jar)[JOIN_RESULT_COOKIE]).toBeUndefined();
+    const second = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
+    expect(await second.text()).not.toContain('data-testid="join-result"');
+  });
+
   it("added: the homepage renders the confirmation once, then never again", async () => {
     const { env } = isolated();
     const { cb, jar } = await runJoin(env, 201);
@@ -484,6 +505,29 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const html = await res.text();
     expect(html).not.toContain('data-testid="event-join-pitch"');
     expect(html).not.toContain('data-testid="discord-join"');
+  });
+
+  it.each(["/events", `/e/${KEY}`])("HEAD %s preserves the flash for exactly one visible GET", async (path) => {
+    const env = envFor(createMemorySessionStore());
+    const signed = await serializeSigned(JOIN_RESULT_COOKIE, "already_member", SESSION_SECRET, {
+      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+    });
+    const jar: Jar = { [JOIN_RESULT_COOKIE]: signed.split(";")[0]!.slice(JOIN_RESULT_COOKIE.length + 1) };
+    const pending = jar[JOIN_RESULT_COOKIE];
+    const head = await app.request(path, { method: "HEAD", headers: { cookie: sendJar(jar) } }, env);
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(jarFrom(head, jar)[JOIN_RESULT_COOKIE]).toBe(pending);
+
+    const first = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    const html = await first.text();
+    expect(html).toContain('data-testid="join-result"');
+    expect(html).toContain('data-testid="reinvite-link"');
+    expect(jarFrom(first, jar)[JOIN_RESULT_COOKIE]).toBeUndefined();
+    const second = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
+    expect(await second.text()).not.toContain('data-testid="join-result"');
   });
 
   it("the event landing renders the join confirmation once, then never again", async () => {

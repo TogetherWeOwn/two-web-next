@@ -105,13 +105,16 @@ export async function recordJoinResult(c: Ctx, result: JoinResult): Promise<void
   });
 }
 
-/**
- * Read-and-delete the join confirmation: the banner renders exactly once,
- * like the legacy flash data. A forged or unexpected value is dropped.
- */
-export async function takeJoinResult(c: Ctx): Promise<JoinResult | null> {
+/** Read without consuming: HEAD has no visible body, so leaves the flash pending. */
+export async function readJoinResult(c: Ctx): Promise<JoinResult | null> {
+  if (c.req.method !== "GET") return null;
   const value = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_RESULT_COOKIE);
-  if (value !== "added" && value !== "already_member") return null;
-  deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
+  return value === "added" || value === "already_member" ? value : null;
+}
+
+/** Read-and-delete for a visible landing; audited reads defer this until allowed. */
+export async function takeJoinResult(c: Ctx): Promise<JoinResult | null> {
+  const value = await readJoinResult(c);
+  if (value) deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
   return value;
 }

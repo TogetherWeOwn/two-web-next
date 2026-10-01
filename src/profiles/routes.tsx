@@ -27,7 +27,7 @@ import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
-import { bounceToLogin, takeJoinResult } from "../return-journey";
+import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
 import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
@@ -122,6 +122,12 @@ export function profilesApp(deps: ProfileDeps = {}) {
   // would gate every route in the worker.
   for (const path of ["/profile", "/members/*"]) {
     app.use(path, gate);
+    app.use(path, async (c, next) => {
+      await next();
+      // The audit middleware may replace rendered HTML with a fail-closed 503.
+      // Only consume after it allows the visible GET response to leave.
+      if (c.res.status === 200) await takeJoinResult(c);
+    });
     app.use(path, memberAccessLog(sinkFor));
   }
 
@@ -137,7 +143,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
     c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
     // One-shot join confirmation: a member who just completed the join sees the
     // added/already-member banner (and the reinvite action) on their landing.
-    const joinResult = await takeJoinResult(c);
+    const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
     return c.html(<ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} joinResult={joinResult} />);
   };
