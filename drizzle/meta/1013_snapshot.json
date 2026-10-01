@@ -1,6 +1,6 @@
 {
-  "id": "797243a8-4fe2-45fe-a99d-0cc0bbcf5074",
-  "prevId": "11a2342b-78e6-4c85-aeb1-2185e6d39ac0",
+  "id": "11a2342b-78e6-4c85-aeb1-2185e6d39ac0",
+  "prevId": "76a3433a-b981-40fa-912c-6642beba784c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -553,12 +553,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
-        },
-        "owner_token": {
-          "name": "owner_token",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {},
