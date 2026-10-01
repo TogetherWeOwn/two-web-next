@@ -173,7 +173,7 @@ describe("factored stylesheet", () => {
               // The muted declaration must reach the suggestion paragraphs; the
               // theme redefines the muted custom property, so compare against
               // the resolved value rather than the unthemed literal.
-              const [suggestionColor, mutedColor] = await page.evaluate(`(() => {
+              const colors = (await page.evaluate(`(() => {
                 const probe = document.createElement("div");
                 probe.style.color = getComputedStyle(document.body).getPropertyValue("--muted").trim();
                 document.body.appendChild(probe);
@@ -181,8 +181,8 @@ describe("factored stylesheet", () => {
                   getComputedStyle(probe).color];
                 probe.remove();
                 return colors;
-              })()`);
-              expect(suggestionColor, "suggestion paragraphs carry the muted declaration").toBe(mutedColor);
+              })()`)) as string[];
+              expect(colors[0], "suggestion paragraphs carry the muted declaration").toBe(colors[1]);
             }
           }
           if (row.html.includes('data-testid="profile-edit-control"')) {
