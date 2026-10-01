@@ -165,7 +165,20 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
     throw transportFailure("fetch_user");
   }
   if (!res.ok) throw classified("fetch_user", res, await errorBodyOf(res));
-  return (await res.json().catch(() => null)) as DiscordUser;
+  // A successful status does not guarantee a usable identity. Keep parse/read
+  // failures and malformed fields inside the callbacks' bounded recovery path.
+  const body: unknown = await res.json().catch(() => null);
+  const user = body as Partial<DiscordUser> | null;
+  if (
+    user === null || typeof user !== "object" || Array.isArray(user) ||
+    typeof user.id !== "string" || !user.id ||
+    typeof user.username !== "string" || !user.username ||
+    (user.global_name !== null && typeof user.global_name !== "string") ||
+    (user.avatar !== null && typeof user.avatar !== "string")
+  ) {
+    throw new DiscordError("fetch_user", res.status, "provider_reject");
+  }
+  return user as DiscordUser;
 }
 
 export type JoinResult = "joined" | "already_member" | "failed";

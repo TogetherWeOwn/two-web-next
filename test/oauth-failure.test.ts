@@ -21,7 +21,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { createMemorySessionStore } from "../src/sessions";
-import { DiscordError, exchangeCode, failureMeta, isProviderOutage } from "../src/discord";
+import { DiscordError, exchangeCode, failureMeta, fetchUser, isProviderOutage } from "../src/discord";
 import type { EnvWithJoin } from "../src/join/route";
 import type { Sql } from "../src/sessions";
 import type { Env } from "../src/env";
@@ -246,6 +246,79 @@ describe("exchange failure classification (legacy JoinCallbackFailureTest contra
     // Unknown (a bug of ours, not Discord's) keeps the generic banner — legacy
     // login only reserved "unavailable" for ConnectionException.
     expect(isProviderOutage("unknown")).toBe(false);
+  });
+});
+
+// Fresh responses per row: both callbacks must contain malformed successful
+// user lookups, including stream errors whose message/cause carry credentials.
+const malformedUserAnswers: [string, () => Response][] = [
+  ["invalid JSON", () => new Response(`not JSON ${TOK} ${SECRET}`, { status: 200 })],
+  ["body-read failure", () => new Response(new ReadableStream({
+    start(controller) {
+      controller.error(new Error(`read failed ${TOK}`, { cause: new Error(`nested ${SECRET}`) }));
+    },
+  }), { status: 200 })],
+  ["null", () => Response.json(null)],
+  ["array", () => Response.json([])],
+  ["string", () => Response.json(TOK)],
+  ["missing fields", () => Response.json({ diagnostic: SECRET })],
+  ["invalid id", () => Response.json({ id: 42, username: "member", global_name: null, avatar: null })],
+  ["empty id", () => Response.json({ id: "", username: "member", global_name: null, avatar: null })],
+  ["invalid username", () => Response.json({ id: "42", username: { diagnostic: TOK }, global_name: null, avatar: null })],
+  ["invalid display name", () => Response.json({ id: "42", username: "member", global_name: { diagnostic: SECRET }, avatar: null })],
+  ["invalid avatar", () => Response.json({ id: "42", username: "member", global_name: null, avatar: { diagnostic: TOK } })],
+];
+
+const userLookupAnswer = (answer: () => Response) => (url: string) => {
+  if (url.endsWith("/oauth2/token")) return Response.json({ access_token: TOK });
+  if (url.endsWith("/users/@me")) return answer();
+  throw new Error("No guild request is allowed after a malformed user response");
+};
+
+const rejectedUserMeta = { exception: "DiscordError", kind: "provider_reject", status: 200 };
+
+describe("malformed HTTP-200 user responses stay inside callback recovery", () => {
+  it.each(malformedUserAnswers)("fetchUser rejects %s with bounded facts and no cause", async (_name, answer) => {
+    vi.stubGlobal("fetch", vi.fn(async () => answer()));
+    const err = await fetchUser(TOK).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordError);
+    const discordError = err as DiscordError;
+    expect(failureMeta(discordError)).toEqual(rejectedUserMeta);
+    expect(discordError.step).toBe("fetch_user");
+    expect(discordError.message).toBe("discord fetch_user failed with HTTP 200");
+    expect(discordError.providerCode).toBeNull();
+    expect(discordError.cause).toBeUndefined();
+    leakFree(discordError, discordError.message);
+  });
+
+  it.each(malformedUserAnswers)("join contains %s and records exactly one failure", async (_name, answer) => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res, html } = await joinRoundTrip(e, userLookupAnswer(answer));
+    expect(res.status).toBe(503);
+    expect(html).toContain("Discord is unreachable");
+    expect(html).not.toContain("approval expired");
+    expect(calls.map((url) => new URL(url).pathname)).toEqual(["/api/v10/oauth2/token", "/api/v10/users/@me"]);
+    expect(logs).toEqual([{ level: "warn", args: [
+      "discord token exchange failed on the join journey",
+      { ...rejectedUserMeta, source: null, outcome: "error" },
+    ] }]);
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId: null, discordId: null }]);
+    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+    leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
+  });
+
+  it.each(malformedUserAnswers)("login contains %s and redirects without issuing a session", async (_name, answer) => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res } = await loginRoundTrip(e, userLookupAnswer(answer));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?n=signin_failed");
+    expect(calls.map((url) => new URL(url).pathname)).toEqual(["/api/v10/oauth2/token", "/api/v10/users/@me"]);
+    expect(logs).toEqual([{ level: "warn", args: ["discord sign-in failed", rejectedUserMeta] }]);
+    expect(fake.attempts).toEqual([]);
+    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+    const html = await (await app.request("/?n=signin_failed", {}, e)).text();
+    expect(html).toContain("Sign in with Discord");
+    leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
   });
 });
 
