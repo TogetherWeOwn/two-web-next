@@ -94,21 +94,29 @@
       ) {
         throw new Error("Invalid calendar page");
       }
-      // Zones are positionally paired with the fetched source of the same name.
-      var byName = {};
-      sources.forEach(function (s) {
-        byName[s.getAttribute("data-cal-zone")] = s;
+      // Admit every expected name exactly once before touching the live zones.
+      var byName = new Map();
+      sources.forEach(function (source) {
+        var name = source.getAttribute("data-cal-zone");
+        if (byName.has(name)) throw new Error("Invalid calendar page");
+        byName.set(name, source);
       });
-      zones.forEach(function (target) {
-        var source = byName[target.getAttribute("data-cal-zone")];
-        if (!source) return;
-        target.replaceChildren.apply(
-          target,
-          Array.from(source.childNodes).map(function (n) {
-            return document.importNode(n, true);
-          })
-        );
-        target.hidden = source.hidden;
+      var swaps = zones.map(function (target) {
+        var name = target.getAttribute("data-cal-zone");
+        var source = byName.get(name);
+        if (!source) throw new Error("Invalid calendar page");
+        byName.delete(name);
+        return { target: target, source: source };
+      });
+      // Import failures must also leave every last-good zone intact.
+      swaps.forEach(function (swap) {
+        swap.children = Array.from(swap.source.childNodes).map(function (node) {
+          return document.importNode(node, true);
+        });
+      });
+      swaps.forEach(function (swap) {
+        swap.target.replaceChildren.apply(swap.target, swap.children);
+        swap.target.hidden = swap.source.hidden;
       });
       root.dataset.view = next.dataset.view;
       root.dataset.month = next.dataset.month;
