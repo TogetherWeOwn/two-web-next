@@ -172,11 +172,31 @@ staging-only; the separate production workflow below stays disabled until
 authorized cutover (plan TOG-9671, W16).
 Full procedures live in [docs/runbook.md](docs/runbook.md).
 
-`npm run test:smoke` runs the checker against a loopback stub server with local
+`npm run test:smoke` runs both checkers against loopback stub servers with local
 fixtures only, no external network or database. It is included in `npm run check`
 and the required PR CI job, so both PR CI and the pre-deploy check exercise the
-selftest. The checker itself is a staging-only post-deploy probe, not a production
-test command.
+selftests. The checkers themselves are staging-only post-deploy probes, not
+production test commands.
+
+After the public-routes smoke, the deploy runs
+`QA_AUTH_TOKEN=<staging QA token> node bin/json-smoke.mjs https://next.togetherweown.com`,
+which logs into staging through the QA seam (`POST /auth/qa/qa-member` with the
+`X-TWO-QA-Auth` header and an explicit same-origin `Origin`) as the
+non-moderator QA member and asserts the session-gated event JSON contract:
+guest 401 refusals for `/events.json` and `/events/:key`, the collection paging
+envelope (`data/page/limit` plus `meta.current_page/per_page/total/last_page`),
+the JSON show shape for the first collection row (or the exact cancelled 410
+envelope when that row is cancelled), a 410 probe against a cancelled fixture
+when the first page has one, and the malformed-key 422/404 refusals. Until
+PR #109 (`GET /events/:key` show route plus the collection `meta` envelope)
+is deployed, the checker detects the missing show route (guest probe gets the
+app's branded 404) and skips the five contract-dependent checks visibly
+instead of failing the deploy; probes that already hold on main (guest
+collection 401, QA login, malformed `event_key` 422) stay unconditional. The
+step retries six times like the public smoke, refuses any non-staging origin
+(production included), and never logs the token, cookies or response bodies.
+It needs the `staging`-environment `QA_AUTH_TOKEN` secret; without it the step
+reports its skip and passes, so a missing token never fails a deploy.
 
 Deployment context: the top-level Wrangler configuration names Worker
 `two-web-next` and the `next.togetherweown.com` route; it has no named
