@@ -20,12 +20,23 @@ function avatarHash(id, avatar) {
 
 export function createImportClient(url) {
   const parsed = new URL(url);
-  if (!["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname || !parsed.username || parsed.pathname.length < 2) {
+  if (!["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname || !parsed.username || parsed.pathname.length < 2 || parsed.hash) {
     throw new Error("Invalid connection URL");
+  }
+  // Unknown URL parameters become startup settings in Postgres.js, even
+  // overriding connection options. Allow only TLS mode and one literal schema;
+  // options, role, endpoint and session overrides must not cross this boundary.
+  for (const [key, value] of parsed.searchParams) {
+    if (parsed.searchParams.getAll(key).length !== 1
+      || (key !== "sslmode" && key !== "search_path")
+      || (key === "sslmode" && !["disable", "require", "verify-ca", "verify-full", "prefer", "allow"].includes(value))
+      || (key === "search_path" && (value.trim() !== value || !/^[a-z_][a-z0-9_]{0,62}$/.test(value)))) {
+      throw new Error("Invalid connection URL parameters");
+    }
   }
   return postgres(url, {
     max: 1, connect_timeout: 10, debug: false,
-    connection: { timezone: "UTC" }, onnotice: () => {},
+    connection: { timezone: "UTC", client_encoding: "UTF8" }, onnotice: () => {},
     // URL/default port and empty password must never inherit PGPORT/PGPASSWORD.
     port: Number(parsed.port || 5432), password: () => decodeURIComponent(parsed.password),
   });
@@ -35,6 +46,9 @@ export function createImportClient(url) {
 // session, OAuth credential or moderator field is ever read from legacy.
 export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) {
   return legacy.begin("isolation level repeatable read read only", async (source) => {
+    // The driver always decodes UTF8; a LATIN1 session corrupts non-ASCII
+    // names/bio/games on the wire. Re-pin caller-supplied clients before reads.
+    await source`set local client_encoding = 'UTF8'`;
     // Timestamp text must be unambiguous even with caller/server DateStyle overrides.
     await source`set local datestyle = 'ISO, YMD'`;
     const users = await source`
@@ -60,7 +74,10 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
     }
 
     return next.begin(dryRun ? "read only" : "", async (target) => {
+      await target`set local client_encoding = 'UTF8'`;
       await target`set local datestyle = 'ISO, YMD'`;
+      // Bind timestamp parameters as text first: the driver's timestamp
+      // serializer goes through Date and would discard historical microseconds.
       const counts = {
         users: { read: users.length, changed: 0, unchanged: 0, written: 0 },
         profiles: { read: profiles.length, changed: 0, unchanged: 0, written: 0 },
@@ -70,16 +87,16 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
         if (dryRun) {
           const unchanged = await target`
             select 1 from users where id = ${row.discord_id}
-              and (updated_at > ${row.updated_at}::timestamp at time zone 'UTC'
+              and (updated_at > ${row.updated_at}::text::timestamp at time zone 'UTC'
                 or (username, avatar, member, created_at, updated_at) is not distinct from
                   (${row.username}::text, ${row.avatar}::text, ${row.member}::boolean,
-                   ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC'))`;
+                   ${row.created_at}::text::timestamp at time zone 'UTC', ${row.updated_at}::text::timestamp at time zone 'UTC'))`;
           changed = unchanged.length === 0;
         } else {
           const written = await target`
             insert into users (id, username, avatar, member, created_at, updated_at)
             values (${row.discord_id}, ${row.username}, ${row.avatar}, ${row.member},
-              ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')
+              ${row.created_at}::text::timestamp at time zone 'UTC', ${row.updated_at}::text::timestamp at time zone 'UTC')
             on conflict (id) do update set username = excluded.username, avatar = excluded.avatar,
               member = excluded.member, created_at = excluded.created_at, updated_at = excluded.updated_at
             where users.updated_at <= excluded.updated_at
@@ -99,13 +116,13 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
             select 1 from profiles where user_id = ${row.discord_id}
               and (bio, games, timezone, created_at, updated_at) is not distinct from
                 (${row.bio}::text, ${games}::jsonb, ${row.timezone}::text,
-                 ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')`;
+                 ${row.created_at}::text::timestamp at time zone 'UTC', ${row.updated_at}::text::timestamp at time zone 'UTC')`;
           changed = identical.length === 0;
         } else {
           const written = await target`
             insert into profiles (user_id, bio, games, timezone, created_at, updated_at)
             values (${row.discord_id}, ${row.bio}, ${games}, ${row.timezone},
-              ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')
+              ${row.created_at}::text::timestamp at time zone 'UTC', ${row.updated_at}::text::timestamp at time zone 'UTC')
             on conflict (user_id) do update set bio = excluded.bio, games = excluded.games,
               timezone = excluded.timezone, created_at = excluded.created_at, updated_at = excluded.updated_at
             where (profiles.bio, profiles.games, profiles.timezone, profiles.created_at, profiles.updated_at)
