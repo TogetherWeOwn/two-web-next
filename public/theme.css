@@ -130,4 +130,3 @@
 .homepage-theme .error-events-search :focus-visible{outline:3px solid var(--brand);outline-offset:5px}
 @media(prefers-reduced-motion: no-preference){:is(.homepage-theme,.profile-theme) .btn{transition:background-color .15s ease,color .15s ease,transform .15s ease}
 }
-
