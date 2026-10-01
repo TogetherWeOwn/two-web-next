@@ -140,7 +140,7 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   test(`${eventName}: successful same-SHA full CI allows exactly the staging commands`, () => {
     const result = executeStaging(context(eventName), fixture());
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(result.calls, ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy"]);
+    assert.deepEqual(result.calls, ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy --config wrangler.jsonc"]);
     assert.match(result.stdout, new RegExp(`Staging gate passed: ${sha}`));
   });
   test(`${eventName}: checkout mismatch makes no queue/deploy calls`, () => {
@@ -153,7 +153,7 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   });
 }
 
-const mutationCalls = ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy"];
+const mutationCalls = ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy --config wrangler.jsonc"];
 for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   for (const [phase, allowedCalls] of [["afterPreparation", 0], [mutationCalls[0], 1], [mutationCalls[1], 2]]) {
     for (const [name, mutate] of denied.filter(([name]) => ["missing", "wrong SHA", "in_progress", "failure", "cancelled"].includes(name))) {
