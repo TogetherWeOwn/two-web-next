@@ -76,6 +76,11 @@ can add extra occurrences; those aren't automatically deleted by this tool.
 
 ## Fixture contract
 
+- Seed keys are routable at `/e/{key}` and `/events/{key}.ics`, with existing
+  session/moderator/RSVP policies unchanged. They are accepted only when the
+  application binding is the exact staging URL or an HTTP localhost/127.0.0.1
+  origin. Production keeps the ULID-only key contract. Featured links point to
+  the staging `/e/{key}` pages.
 - Exactly **50** `seed-calendar-01`…`seed-calendar-50` event keys: 30 future
   published (four full and one RSVP-paused), six drafts, five cancelled, nine past
   published; six IANA timezones. Dates are anchored at 18:00 UTC on the apply day,

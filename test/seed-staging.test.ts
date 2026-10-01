@@ -222,6 +222,12 @@ describe.skipIf(!url)("staging seed against isolated test Postgres", () => {
     expect((await request("/e/seed-calendar-31", { headers: { cookie: await cookie(true) } })).status).toBe(200);
     expect((await request("/e/seed-calendar-37")).status).toBe(410);
     expect((await request("/events/seed-calendar-01/rsvp", { method: "PUT", headers: { origin: STAGING_APP_URL, "content-type": "application/json" }, body: '{"status":"going"}' })).status).toBe(401);
-    for (const path of ["/e/seed-calendar-01", "/events/seed-calendar-01.ics"]) expect((await request(path, {}, { ...env, APP_URL: "https://togetherweown.com" })).status).toBe(404);
+    const answer = await request("/events/seed-calendar-01/rsvp", { method: "PUT", headers: { cookie: await cookie(false), origin: STAGING_APP_URL, "content-type": "application/json" }, body: '{"status":"going"}' });
+    expect(answer.status).toBe(200);
+    const withdraw = await request("/events/seed-calendar-01/rsvp", { method: "DELETE", headers: { cookie: await cookie(false), origin: STAGING_APP_URL } });
+    expect(withdraw.status).toBe(204);
+    const production = { ...env, APP_URL: "https://togetherweown.com" };
+    for (const path of ["/e/seed-calendar-01", "/events/seed-calendar-01.ics"]) expect((await request(path, {}, production)).status).toBe(404);
+    expect((await request("/events/seed-calendar-01/rsvp", { method: "PUT", headers: { cookie: await cookie(false), origin: production.APP_URL, "content-type": "application/json" }, body: '{"status":"going"}' }, production)).status).toBe(404);
   });
 });

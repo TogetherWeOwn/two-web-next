@@ -40,8 +40,6 @@ type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
 export type SessionReader = (c: Ctx) => Promise<Session | null>;
 
-// Demo keys remain restricted to staging/local application bindings.
-
 export function eventJson(e: PublicEvent) {
   return {
     event_key: e.eventKey,
