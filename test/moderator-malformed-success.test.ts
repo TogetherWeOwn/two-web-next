@@ -47,8 +47,10 @@ function stubResponse(response: Response) {
 
 function expectLookup(fetch: ReturnType<typeof vi.fn>) {
   expect(fetch).toHaveBeenCalledTimes(1);
+  // The bounded-lookup helper (TOG-11463) arms every call with an abort signal.
   expect(fetch).toHaveBeenCalledWith(memberUrl, {
     headers: { authorization: `Bot ${BOT_TOKEN}` },
+    signal: expect.any(AbortSignal),
   });
 }
 
@@ -87,9 +89,15 @@ describe("moderator recompute contains malformed successful Discord responses", 
   });
 
   it("settles false when JSON body reading rejects with token-bearing errors", async () => {
-    const response = Response.json({ roles: [ROLE_ID] });
-    vi.spyOn(response, "json").mockRejectedValue(new Error(`body read ${BOT_TOKEN}`, {
-      cause: new Error(PAYLOAD),
+    // The bounded lookup (TOG-11463) consumes the body stream itself, so the
+    // injection point is a body that errors after a valid prefix — the token-
+    // bearing error must stay contained and read exactly like non-JSON.
+    const payload = new TextEncoder().encode(JSON.stringify({ roles: [ROLE_ID] }));
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(payload);
+        c.error(new Error(`body read ${BOT_TOKEN}`, { cause: new Error(PAYLOAD) }));
+      },
     }));
     const fetch = stubResponse(response);
     await expect(recomputeModerator(opts)).resolves.toBe(false);
