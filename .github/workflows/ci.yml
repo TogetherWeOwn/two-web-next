@@ -107,9 +107,8 @@ jobs:
         run: npm run deps:audit
       - run: npm ci
       - name: Seeded admin properties (10s budget, local fixtures)
-        # Keep npm's CLI/lifecycle startup out of this small wall-clock budget.
-        # Same installed Vitest CLI and arguments as test:admin-properties.
-        run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts
+        # Skip npm's extra process startup; keep the same suite and hard budget.
+        run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
       - name: Apply migrations
         run: npm run db:migrate
         env:
