@@ -105,14 +105,19 @@ requests with QA disabled (including production configuration), wrong/missing
 token, or GET return 404 without sending a job. Untrusted unsafe requests retain
 the ordinary global 403. Authenticated probes use the shared 10/minute QA
 throttle, checked only after the QA gate (so production/bad tokens cannot turn
-into 429s); an exhausted budget returns the ordinary 429 before enqueueing.
+into 429s); an exhausted budget returns the ordinary 429 before reading an upload
+or enqueueing. After authentication/admission, the shared `action` body limit
+counts at most 4,096 bytes; oversized bodies return 413 without enqueueing.
+Disabled or unauthenticated probes never read bodies or consume throttle budget.
 
-An authorized call enqueues `{ kind: "alert-probe" }` on the staging internal
+An authorized call enqueues `{ kind: "alert-probe", probeId }` on the staging internal
 queue, then throws `AlertProbeError` through the real 500 handler. **500 is the
 expected response, not proof of delivery.** An absent queue returns 503.
 The consumer rechecks the QA gate, throws the same fixed synthetic exception,
 emits terminal `queue.failing` for `AlertProbe` on its first attempt and acks it.
-No member/event/bot mutation or ledger fixture is created. A delayed probe
+No member/event/bot mutation or ledger fixture is created. The queue envelope
+accepts only an optional canonical UUIDv4 and forbids a ledger `jobId` on these
+synthetic jobs; legacy probes without an ID remain valid. A delayed probe
 received with QA disabled is silently acked. Repeated probes inside the mute
 window will not produce two new receipts; wait at least five minutes first.
 
