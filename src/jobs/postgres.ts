@@ -68,15 +68,19 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
 export function pgUniqueLock(sql: TxClient | Sql): UniqueLock {
   return {
     async acquire(key, ttlSeconds) {
+      const leaseToken = crypto.randomUUID();
       const rows = await sql`
-        insert into job_unique_locks (key, expires_at) values (${key}, clock_timestamp() + make_interval(secs => ${ttlSeconds}))
-        on conflict (key) do update set expires_at = clock_timestamp() + make_interval(secs => ${ttlSeconds})
+        insert into job_unique_locks (key, expires_at, owner_token)
+        values (${key}, clock_timestamp() + make_interval(secs => ${ttlSeconds}), ${leaseToken}::uuid)
+        on conflict (key) do update set
+          expires_at = clock_timestamp() + make_interval(secs => ${ttlSeconds}),
+          owner_token = excluded.owner_token
           where job_unique_locks.expires_at < clock_timestamp()
-        returning key`;
-      return rows.length > 0;
+        returning owner_token`;
+      return rows[0]?.owner_token ?? null;
     },
-    async release(key) {
-      await sql`delete from job_unique_locks where key = ${key}`;
+    async release(key, leaseToken) {
+      await sql`delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid`;
     },
   };
 }

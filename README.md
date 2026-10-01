@@ -42,9 +42,16 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   have fixture coverage; the general human throttle currently needs an explicit
   `DATABASE_URL` (the Hyperdrive-only path does not enforce it).
 - Worker queue/scheduler scaffolding: retries, locking, queue ledger,
-  `events:reconcile`, retention pruning and always-200 `/up`.
+  `events:reconcile`, retention pruning and readiness `/up` (503 on DB/schema failure).
   Bot/Discord adapters are still reject-all stubs; the separate event write-back
   queue is not bound. These are not a claim of end-to-end live bot parity.
+
+## Moderator guides
+
+- [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
+  event and featured-content workflows, dashboard diagnostics, and safe escalation.
+- [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
+  current notices, recovery pages, and the invite fallback.
 
 ## Develop and test safely
 
@@ -120,12 +127,9 @@ npm run dev -- --config wrangler.local.jsonc --local
 Keep `.dev.vars` on the passwordless test URL above. The checked-in local config
 uses `APP_URL=http://localhost:8787`, local Queue names and no remote bindings;
 set public Discord IDs only for an authorized test application/guild. Do not
-use real guild sign-in as a test fixture. `/robots.txt` is the DB-free local
-startup signal. `/up` is readiness (no auth): it requires a reachable web DB and
-all bundled web migrations applied, otherwise it returns 503. Queue-only
-`degraded` or `unknown` remains HTTP 200 when DB/schema is ready. Use the SQL
-suites for full database verification. This exercises direct Postgres, not
-Hyperdrive pooling. Miniflare requires a nonempty password for a Hyperdrive
+use real guild sign-in as a test fixture. `/up` is the readiness signal (503 on DB
+unreachable or pending web migrations; queue-only trouble stays 200; no auth); use the SQL suites for database
+verification. This exercises direct Postgres, not Hyperdrive pooling. Miniflare requires a nonempty password for a Hyperdrive
 local connection string, so the passwordless authorized URL cannot be used as
 that override. **Do not invent a password or substitute credentials.** Never
 deploy the local config.
@@ -153,20 +157,103 @@ Do not use `npm run deploy` as a test or build command.
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ACCOUNT_ID`, followed by a `/up` smoke test against
-https://next.togetherweown.com. The smoke requires readiness: **HTTP 200 +
-`db:ok` + `pending_migrations:0`** and the existing queue envelope. DB/schema
-failure (HTTP 503) fails deployment; queue-only `degraded` or `unknown` does not.
-The workflow migrates only disposable CI Postgres, not the staging schema.
-There is deliberately no production job:
-production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
+`CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com`.
+The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
+Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
+on every response and staging noindex on returned HTML (the application's header
+contract). `/up` requires HTTP 200 with `db:ok` and `pending_migrations:0` (DB/schema
+readiness); degraded or unknown queue health alone does not fail deployment. Redirects are not followed; each
+request/body has a 5-second timeout. A failure names the route and expected versus
+actual result and fails the deploy job after six attempts. That workflow remains
+staging-only; the separate production workflow below stays disabled until
+authorized cutover (plan TOG-9671, W16).
 Full procedures live in [docs/runbook.md](docs/runbook.md).
 
+`npm run test:smoke` runs the checker against a loopback stub server with local
+fixtures only, no external network or database. It is included in `npm run check`
+and the required PR CI job, so both PR CI and the pre-deploy check exercise the
+selftest. The checker itself is a staging-only post-deploy probe, not a production
+test command.
+
 Deployment context: the top-level Wrangler configuration names Worker
-`two-web-next` and the `next.togetherweown.com` route; it has **no named
-`env.staging` or `env.production` blocks**. The Hyperdrive resource name is not
-a Worker selector or proof of environment isolation. This reference does not
-authorize a live deployment, database probe or production cutover.
+`two-web-next` and the `next.togetherweown.com` route; it has no named
+`env.staging` block. The Hyperdrive resource name is not a Worker selector or
+proof of environment isolation. The separate `env.production` block below is
+a disabled cutover template, not authorization for a live deployment, database
+probe or production cutover.
+
+### Production (manual, disabled until cutover)
+
+`.github/workflows/deploy-production.yml` accepts only `workflow_dispatch` on
+`main`; it never deploys on push, PR or release. Before the deploy job can start,
+`ci/production-deploy-gate.mjs` requires the repository variable
+`PRODUCTION_DEPLOY_ENABLED` to be exactly `true`, verifies the live GitHub
+Environment `production` has nonempty required reviewers with self-review
+prevented, and rejects the placeholder Hyperdrive id. Admin bypass explicitly
+remains enabled by the owner's provisioning exception; neither the workflow nor
+the preflight claims to prevent an authorized administrator from bypassing review.
+Missing protection, failed
+API access, unset/false flag or any other ref fails closed. Both gate jobs inherit
+`contents: read` and `actions: read`; the latter is required to
+[read an Environment in this private repository](https://docs.github.com/en/rest/deployments/environments#get-an-environment--fine-grained-access-tokens).
+The deploy job uses that Environment, checks the gate again after approval, and
+deploys the dispatch SHA with `wrangler deploy --env production`. It does not
+create resources or run migrations/tests on production. Its `/up` smoke requires
+HTTP 200 with `db:ok` and `pending_migrations:0`, accepting degraded/unknown queue
+states like staging.
+The smoke runs only after a separately authorized production deployment; no
+production probe is performed by delivering or testing this template.
+
+`env.production` is a **cutover template**, not a live deployment:
+
+- Worker: `two-web-next-production`; workers.dev and preview URLs disabled.
+- Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
+  apex **placeholder target**. Defining it does not flip DNS; deploying would
+  claim that custom domain, so do not deploy before W16 authorization.
+- Hyperdrive `DB`: all-zero id `00000000000000000000000000000000` is an inert
+  dry-run placeholder, never the staging Hyperdrive. Provision the separately
+  named `two-web-next-production` Hyperdrive and replace the id in a reviewed
+  cutover PR.
+- Queues: `two-web-next-production-sync-event` and
+  `two-web-next-production-internal-action` are reserved, unprovisioned names;
+  provision both separately from staging before cutover. Producers and consumers
+  use these names; crons match staging (every ten minutes, midnight UTC).
+- Vars are explicit because environment bindings/vars do not inherit. Register
+  the production Discord callback; provision secrets for the production Worker
+  separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
+
+Before enabling the flag, the authorized provisioning actor must configure the
+live `production` Environment's required reviewers, prevent self-review and
+main-only deployment policy, install the Environment-scoped secrets
+`PRODUCTION_CLOUDFLARE_API_TOKEN` and `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`, and
+complete resource/secret provisioning and W16 authorization. These names must
+exist only in the `production` Environment, never at repository or organization
+scope. They map to Wrangler's `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`
+variables only in the credential check and deployment steps. Missing/empty values
+are rejected before deployment, so absent production secrets cannot fall back to
+the staging secret names. No secret values are printed.
+
+Keep `PRODUCTION_DEPLOY_ENABLED` unset/false until then, including applicable
+organization and Environment values. The workflow's `vars` expression resolves
+configuration across scopes: repository/Environment absence alone does not
+prove the effective flag is disabled. Verify the organization's value and repo
+visibility before cutover; keep the repository value unset/false while disabled.
+GitHub YAML alone does **not** install review protection.
+A failed protection lookup must be resolved with the existing credential's
+provisioning owner, not by removing the check or substituting credentials.
+
+CI runs these offline checks with no production credentials or database access:
+
+```sh
+node --test ci/production-deploy-gate.test.mjs
+npx wrangler deploy --dry-run --env production --outdir dist-production
+```
+
+The selftest proves disabled flags fail before API access, non-main/non-manual
+requests fail, missing/unprotected Environments fail, and the Hyperdrive sentinel
+blocks live deployment. No production deploy, DNS flip or W16 rehearsal is
+performed by adding this template. Actual production rollout and tested rollback
+remain W16 work (plan TOG-9671).
 
 ## Configuration
 
