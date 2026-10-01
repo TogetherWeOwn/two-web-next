@@ -129,7 +129,7 @@ test("rules accepts rendered Rules but rejects rendered Home with the shared foo
   const home = Home({ session: null, notice: null, inviteUrl: "https://discord.gg/fixture",
     appUrl: "https://example.test", counts: { memberCount: null, onlineCount: null, ranks: [] },
     upcomingEvents: [], eventsUnavailable: false, featured: [] }).toString();
-  const rules = Rules({ lastUpdated: null }).toString();
+  const rules = Rules({ appUrl: "https://example.test", lastUpdated: null }).toString();
   assert.match(home, /<a href="\/rules">House rules<\/a>/);
   assert.match(rules, /id="rules-heading"/);
   for (const [body, expected] of [[home, false], [rules, true]]) {
