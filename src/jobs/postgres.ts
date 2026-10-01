@@ -122,7 +122,11 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
       await sql.begin(async (tx) => {
         await tx`
           insert into queue_failed_jobs (job_id, kind, key, reason)
-          values (${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)})`;
+          values (${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)})
+          on conflict (job_id) do nothing`;
+        // A terminal redelivery keeps the first failure, but must still retire
+        // any live row. Other insert errors abort this transaction before delete.
+        // https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT
         await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
       });
     },
