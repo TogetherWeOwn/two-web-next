@@ -23,8 +23,27 @@ export function evaluateAudit(report, allowlist, today = new Date().toISOString(
     throw new Error('Invalid npm audit v2 report (or registry error)');
   }
   const vulnerabilities = report.vulnerabilities;
-  if (report.metadata.vulnerabilities.total !== Object.keys(vulnerabilities).length) {
-    throw new Error('Audit vulnerability count does not match the report');
+  const counters = report.metadata.vulnerabilities;
+  const counterKeys = [...knownSeverities, 'total'];
+  if (Object.keys(counters).some((key) => !counterKeys.includes(key))
+    || counterKeys.some((key) => !Number.isSafeInteger(counters[key]) || counters[key] < 0)) {
+    throw new Error('Invalid audit vulnerability counters');
+  }
+  if (counters.total !== Object.keys(vulnerabilities).length
+    || [...knownSeverities].reduce((sum, severity) => sum + counters[severity], 0) !== counters.total) {
+    throw new Error('Audit vulnerability counts do not match the total');
+  }
+  // npm counts packages by their reported severity, not by individual "via"
+  // advisories. Validate that accounting before applying our stricter via policy.
+  const counts = Object.fromEntries([...knownSeverities].map((severity) => [severity, 0]));
+  for (const [name, vulnerability] of Object.entries(vulnerabilities)) {
+    if (!knownSeverities.has(vulnerability?.severity)) {
+      throw new Error(`Unknown package severity for ${name}`);
+    }
+    counts[vulnerability.severity]++;
+  }
+  if ([...knownSeverities].some((severity) => counts[severity] !== counters[severity])) {
+    throw new Error('Audit severity counts do not match the package records');
   }
   if (!isObject(allowlist) || allowlist.version !== 1 || !Array.isArray(allowlist.exceptions)) {
     throw new Error('Invalid dependency audit allowlist');
@@ -92,7 +111,9 @@ export function evaluateAudit(report, allowlist, today = new Date().toISOString(
 
 export function runAudit() {
   // No install scripts, node_modules or application/database credentials needed.
-  const audit = spawnSync('npm', ['audit', '--package-lock-only', '--json', '--include=prod', '--include=dev', '--include=optional', '--include=peer'], {
+  // Offline npm can emit a clean report without consulting the registry. CLI
+  // configuration overrides both inherited npm_config_offline and .npmrc files.
+  const audit = spawnSync('npm', ['audit', '--offline=false', '--package-lock-only', '--json', '--include=prod', '--include=dev', '--include=optional', '--include=peer'], {
     cwd: root, encoding: 'utf8', timeout: 120_000, maxBuffer: 16 * 1024 * 1024,
   });
   if (audit.error || ![0, 1].includes(audit.status)) {

@@ -12,12 +12,15 @@
 
 ## Dependency security and static analysis
 
-The required `check` job runs `npm run deps:audit:selftest` (offline fixtures)
-and `npm run deps:audit` before installing dependencies. The audit reads
-`package-lock.json`, includes development/optional/peer dependencies, and blocks
-high, critical or unknown severity. Invalid JSON, registry/process failures and
-invalid/expired exceptions also fail closed. Info/low/moderate findings do not
-block. Dependabot owns dependency upgrades; the gate never runs `npm audit fix`.
+The required `check` job runs `npm run deps:audit:selftest` (local fixtures,
+including a loopback registry) and `npm run deps:audit` before installing
+dependencies. The audit reads `package-lock.json`, includes
+development/optional/peer dependencies, and blocks high, critical or unknown
+severity. It forces online auditing even when npm's environment or `.npmrc`
+enables offline mode. Invalid JSON, malformed/inconsistent severity counters,
+registry/process failures and invalid/expired exceptions also fail closed.
+Info/low/moderate findings do not block. Dependabot owns dependency upgrades;
+the gate never runs `npm audit fix`.
 
 `ci/deps-audit-allowlist.json` starts empty. A reviewed exception has this shape:
 
