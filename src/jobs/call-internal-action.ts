@@ -1,5 +1,6 @@
 import { CALL_INTERNAL_ACTION as C, backoffFor } from "./constants";
 import { botRefusalReason, botRetryExhaustedReason, terminalFailureReason } from "./queue-error";
+import { admitRetryDelay } from "./retry-delay";
 import { BotTerminalError, BotTransportError } from "./types";
 import type { Announcement, BotClient, QueueMessage, RoleAssignment } from "./types";
 import type { Outcome } from "./sync-event";
@@ -45,5 +46,9 @@ export async function handleCallInternalAction(
   if (attempts >= C.tries) {
     return { failed: botRetryExhaustedReason(name, answer.code, attempts) };
   }
-  return { retryInSeconds: answer.retryAfterSeconds ?? backoffFor(C.backoffSeconds, attempts) };
+  // The bot's number is untrusted JSON: admit it into the Cloudflare retry
+  // range, falling back to this attempt's configured backoff (TOG-11629).
+  // The admitted value feeds both the ledger `availableAt` Date and
+  // `Queue.retry({ delaySeconds })` in the consumer, which share it.
+  return { retryInSeconds: admitRetryDelay(answer.retryAfterSeconds, backoffFor(C.backoffSeconds, attempts)) };
 }
