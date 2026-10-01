@@ -18,7 +18,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 
 | Legacy route | Next status | Card |
 |---|---|---|
-| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; live counts + rank reads implemented (pending merge); featured + upcoming remain data slices | W4 ✅ + [TOG-10818](/TOG/issues/TOG-10818) (counts/ranks) + W8 📋 (verify: featured rows, upcoming) |
+| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; live counts + rank reads implemented (pending merge); featured rows use legacy `[start, end)` windows, position/id order and no cap; upcoming pending | W4 ✅ + [TOG-10818](/TOG/issues/TOG-10818) (counts/ranks) + [TOG-10819](/TOG/issues/TOG-10819) (featured) + W8 📋 (verify: upcoming) |
 | `GET /sitemap_index.xml` (home 1.0, join 0.9, events.index 0.8, about/faq/rules/privacy 0.7, published `/e/{key}` 0.6) | ✅ static entries; join + `/e/{key}` rows pending | W4 ✅ + W8 📋 |
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
@@ -179,7 +179,7 @@ go hunting for them.
 |---|---|---|
 | Share meta (canonical + OG/Twitter, no og:image) + RSS autodiscovery | ✅ layout-level; per-event tags pending | W4 ✅ + W8 📋 |
 | `site.webmanifest` + icons (192/512/maskable/apple) + theme-color `#0b0714` | ❌ missing (`public/` has styles + islands only) | **N2** (new: manifest/icons) |
-| Branded 404/429/500/503 pages | ❌ Hono defaults | **N2** (new: error pages) |
+| Branded 404/429/500/503 pages | ✅ branded shells; 404 now has a fail-open, 500 ms lookup (3 upcoming published events) and GET `/events?q=` search, without session reads/writes | **N2** + [TOG-10824](/TOG/issues/TOG-10824) |
 | Draft/noindex + gone-410 + past-never-indexed rules | sitemap side ✅; route side pending | W8 📋 |
 | `content/privacy-policy-v1.md` (live source) | ❌ see N1 | **N1** |
 | `content/faq-preview*.md` (docs-only), `content/welcome/*` (unwired drafts) | copy inlined / never wired | dropped (docs-only / dead) |

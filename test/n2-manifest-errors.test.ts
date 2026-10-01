@@ -94,7 +94,7 @@ describe("branded error handlers on a scratch app", () => {
     return scratchApp;
   }
 
-  it("404: branded copy, join CTA + home link, no dead /events links", async () => {
+  it("404: branded copy, join CTA + home link, event search recovery", async () => {
     const res = await scratch().request("/nope");
     expect(res.status).toBe(404);
     const html = await res.text();
@@ -103,10 +103,9 @@ describe("branded error handlers on a scratch app", () => {
     expect(html).toContain('href="/auth/discord"');
     expect(html).toContain("Back to the homepage");
     expect(html).toContain('name="robots" content="noindex, nofollow"');
-    // No dead links to the events listing (which does not exist here yet).
-    // The /events.rss feed autodiscovery in <head> is intentional, not a page link.
-    expect(html).not.toContain('href="/events"');
-    expect(html).not.toContain('href="/events?');
+    expect(html).toContain('href="/events"');
+    expect(html).toContain('action="/events" method="get"');
+    expect(html).toContain('name="q" type="search"');
   });
 
   it("500: branded copy, logged, never echoes the failure", async () => {
