@@ -96,8 +96,15 @@
     {
       "idx": 13,
       "version": "7",
-      "when": 1790819048514,
-      "tag": "1011_event-sync-revisions",
+      "when": 1790817994959,
+      "tag": "1011_legacy-audit-evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790828895325,
+      "tag": "1012_event-sync-revisions",
       "breakpoints": true
     }
   ]
