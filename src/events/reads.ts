@@ -51,18 +51,22 @@ function calendarVisible(opts: CalendarReadOpts): SQL | undefined {
   return clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : and(...clauses);
 }
 
-/** Upcoming = visible and not yet ended, soonest first (legacy `upcoming()`). */
+/** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). */
 export async function listUpcoming(db: Db, now = new Date(), opts: CalendarReadOpts = {}): Promise<PublicEvent[]> {
   const rows = await db
     .select()
     .from(events)
-    .where(and(calendarVisible(opts), gte(events.endsAt, now)))
+    .where(and(calendarVisible(opts), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
   return withGoing(db, rows);
 }
 
 // Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.
 const finiteEventStart = sql`isfinite(${events.startsAt})`;
+
+// Rendered boundaries decode PostgreSQL infinity to invalid Dates whose
+// `toISOString()`/formatting throws, so upcoming reads refuse either one.
+const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
 
 export const HOME_EVENTS_DEADLINE_MS = 1000;
 // Each of the two reads is cancelled server-side before the response deadline.
@@ -251,12 +255,12 @@ export async function sitemapEvents(db: Db): Promise<{ key: string; status: "pub
   return rows.map((r) => ({ key: r.eventKey, status: "published" as const, updatedAt: r.updatedAt.toISOString() }));
 }
 
-/** Feed scope: upcoming (ends_at >= now), soonest first. `statuses` differs for RSS vs ICS. */
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. `statuses` differs for RSS vs ICS. */
 export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
   return db
     .select()
     .from(events)
-    .where(and(inArray(events.status, statuses), gte(events.endsAt, now)))
+    .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
 }
 
