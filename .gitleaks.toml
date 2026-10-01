@@ -13,6 +13,11 @@ targetRules = ["discord-client-id"]
 regexes = ['''508654771276873729''']
 
 [[allowlists]]
+description = "Synthetic Discord snowflake for the legacy import fixture; sequential digits, not a real client or credential"
+targetRules = ["discord-client-id"]
+regexes = ['''^123456789012345678$''']
+
+[[allowlists]]
 description = "Synthetic event-key fixtures (ULID-shaped, not credentials) in the event search tests"
 targetRules = ["generic-api-key"]
 regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FA[A-D]''']

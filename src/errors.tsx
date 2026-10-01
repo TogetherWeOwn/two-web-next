@@ -123,11 +123,15 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
   </ErrorShell>
 );
 
-export async function notFoundHandler(c: Context): Promise<Response> {
-  const suggestions = await notFoundSuggestions(c.env);
+// Host refusals use only this shell, never the optional DB lookup.
+export function notFoundResponse(c: Context, suggestions: SuggestedEvent[] = []): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   c.status(404);
   return c.html(<NotFoundPage suggestions={suggestions} />);
+}
+
+export async function notFoundHandler(c: Context): Promise<Response> {
+  return notFoundResponse(c, await notFoundSuggestions(c.env));
 }
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
@@ -169,6 +173,16 @@ export function maintenanceHandler(inviteUrl: string): (c: Context) => Response 
 }
 
 export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
-  app.notFound((c) => notFoundHandler(c));
+  app.notFound(async (c) => {
+    // run_worker_first admits every request through TrustHosts before a
+    // static lookup. ASSETS.fetch never re-enters the user Worker.
+    if (c.env?.ASSETS && (c.req.method === "GET" || c.req.method === "HEAD")) {
+      const asset = await c.env.ASSETS.fetch(c.req.raw);
+      // ASSETS responses have immutable headers; outer security middleware
+      // needs a writable copy. Preserve the streaming body and asset metadata.
+      if (asset.status !== 404) return new Response(asset.body, asset);
+    }
+    return notFoundHandler(c);
+  });
   app.onError((err, c) => internalErrorHandler(err, c));
 }

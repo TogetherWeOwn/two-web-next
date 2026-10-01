@@ -1,8 +1,8 @@
 // Mounted guest pages must not depend on session DDL. All persistence is mocked.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
-import { getPublicEvent, listGoingAttendees, type PublicEvent } from "../src/events/reads";
+import app from "./app";
+import { getEventNeighbors, getPublicEvent, listGoingAttendees, listRelatedEvents, type PublicEvent } from "../src/events/reads";
 import { env, EVENT_KEY, SUBJECT } from "./helpers/member-data";
 
 const { connect, ddl } = vi.hoisted(() => ({ connect: vi.fn(), ddl: vi.fn() }));
@@ -10,6 +10,8 @@ vi.mock("postgres", () => ({ default: connect }));
 vi.mock("../src/events/reads", async (importOriginal) => ({
   ...await importOriginal<typeof import("../src/events/reads")>(),
   getPublicEvent: vi.fn(),
+  getEventNeighbors: vi.fn(),
+  listRelatedEvents: vi.fn(),
   listGoingAttendees: vi.fn(),
 }));
 
@@ -34,6 +36,8 @@ beforeEach(() => {
   ddl.mockRejectedValue(new Error("session DDL unavailable"));
   connect.mockReturnValue({ unsafe: ddl });
   vi.mocked(getPublicEvent).mockResolvedValue(event);
+  vi.mocked(getEventNeighbors).mockResolvedValue({ previous: null, next: null });
+  vi.mocked(listRelatedEvents).mockResolvedValue([]);
   vi.mocked(listGoingAttendees).mockResolvedValue([{ id: SUBJECT.userId, name: SUBJECT.username }]);
 });
 afterEach(() => { vi.restoreAllMocks(); });

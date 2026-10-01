@@ -1,5 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
-import type { Counts } from "./counts";
+import type { Counts, Rank } from "./counts";
 import type { VisibleFeatured } from "./featured";
 import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
@@ -182,6 +182,10 @@ export const Recovery: FC<{
   </Layout>
 );
 
+const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map((label) => ({
+  key: label.toLowerCase(), label, memberCount: null,
+}));
+
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
@@ -192,7 +196,8 @@ export const Home: FC<{
   upcomingEvents: HomeEvent[];
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
-}> = ({ session, notice, joinResult, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured }) => (
+  imageHosts?: string;
+}> = ({ session, notice, joinResult, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -237,7 +242,7 @@ export const Home: FC<{
         {counts.memberCount != null && (
           <p class="counts" data-testid="member-count">
             <strong>{counts.memberCount}</strong> members
-            {counts.onlineCount != null && (
+            {counts.onlineCount != null && counts.onlineCount > 0 && (
               <>
                 {" · "}<strong>{counts.onlineCount}</strong> online
               </>
@@ -254,7 +259,7 @@ export const Home: FC<{
                 <h3>{item.url ? <a href={item.url}>{item.title}</a> : item.title}</h3>
                 {item.body ? <p>{item.body}</p> : null}
                 {(() => {
-                  const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl) : null;
+                  const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl, imageHosts) : null;
                   return src ? (
                   <img
                     class="featured-image"
@@ -283,7 +288,15 @@ export const Home: FC<{
       </section>
       <section aria-label="Community ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
-        <p>Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.</p>
+        <p>Ranks stack — a Veteran still holds everything below.</p>
+        <dl class="facts rank-stack" data-testid="rank-stack">
+          {(counts.ranks.length ? counts.ranks : FALLBACK_RANKS).map((rank) => (
+            <div class="card" key={rank.key} data-rank={rank.key}>
+              <dt>{rank.label}</dt>
+              <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
+            </div>
+          ))}
+        </dl>
       </section>
       <section aria-labelledby="home-events-heading">
         <p class="strap">Next up</p>
@@ -321,13 +334,14 @@ export const Home: FC<{
   </Layout>
 );
 
-const Leaf: FC<PropsWithChildren<{ title: string; headingId: string; heading: string }>> = ({
+const Leaf: FC<PropsWithChildren<{ title: string; canonical: string; headingId: string; heading: string }>> = ({
   title,
+  canonical,
   headingId,
   heading,
   children,
 }) => (
-  <Layout title={title}>
+  <Layout title={title} canonical={canonical}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
       <nav aria-label="Primary">
@@ -344,8 +358,8 @@ const Leaf: FC<PropsWithChildren<{ title: string; headingId: string; heading: st
   </Layout>
 );
 
-export const About: FC = () => (
-  <Leaf title="About — Together We Own" headingId="about-heading" heading="About Together We Own">
+export const About: FC<{ appUrl: string }> = ({ appUrl }) => (
+  <Leaf title="About — Together We Own" canonical={canonicalUrl(appUrl, "/about")} headingId="about-heading" heading="About Together We Own">
     <p class="strap">Est. 1998</p>
     <p class="lead">
       An adult gaming community that spent most of its life private. Now the doors are open: turn up, say hello,
@@ -394,8 +408,8 @@ const RULES: Array<[string, string]> = [
 
 // The stamp carries both the machine date and the human label (ports the
 // legacy "1 September 2026" render): crawlers read datetime, members read words.
-export const Rules: FC<{ lastUpdated: { iso: string; label: string } | null }> = ({ lastUpdated }) => (
-  <Leaf title="House rules — Together We Own" headingId="rules-heading" heading="House rules">
+export const Rules: FC<{ appUrl: string; lastUpdated: { iso: string; label: string } | null }> = ({ appUrl, lastUpdated }) => (
+  <Leaf title="House rules — Together We Own" canonical={canonicalUrl(appUrl, "/rules")} headingId="rules-heading" heading="House rules">
     <p class="lead">
       Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in
       Discord before you assume.
@@ -531,8 +545,8 @@ const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, st
   },
 ];
 
-export const Faq: FC = () => (
-  <Leaf title="FAQ — Together We Own" headingId="faq-heading" heading="Frequently asked questions">
+export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
+  <Leaf title="FAQ — Together We Own" canonical={canonicalUrl(appUrl, "/faq")} headingId="faq-heading" heading="Frequently asked questions">
     <p class="strap">New here? Start here</p>
     <p class="lead">
       Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a moderator.
@@ -560,8 +574,8 @@ export const Faq: FC = () => (
 // Versioned privacy policy (N1: TOG-9893). The body is pre-rendered markdown
 // HTML (see src/privacy.ts); the component only stamps the version and wraps
 // it in the funnel leaf chrome. No JavaScript ships on this page.
-export const Privacy: FC<{ version: number; html: string }> = ({ version, html }) => (
-  <Leaf title="Privacy policy — Together We Own" headingId="privacy-heading" heading="Privacy policy">
+export const Privacy: FC<{ appUrl: string; version: number; html: string }> = ({ appUrl, version, html }) => (
+  <Leaf title="Privacy policy — Together We Own" canonical={canonicalUrl(appUrl, "/privacy")} headingId="privacy-heading" heading="Privacy policy">
     <p class="strap" data-testid="privacy-version">Version {version}</p>
     <div data-testid="privacy-policy" dangerouslySetInnerHTML={{ __html: html }} />
     <p>

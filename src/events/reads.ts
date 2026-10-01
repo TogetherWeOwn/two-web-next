@@ -1,5 +1,5 @@
 // Public event reads (W8). Published-only unless the caller is a moderator.
-import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
@@ -148,10 +148,68 @@ export async function listPast(db: Db, page: number, now = new Date(), q: string
   };
 }
 
+export async function withGoingCount(db: Db, row: typeof events.$inferSelect): Promise<PublicEvent> {
+  return (await withGoing(db, [row]))[0]!;
+}
+
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
   if (!row) return null;
-  return (await withGoing(db, [row]))[0] ?? null;
+  return withGoingCount(db, row);
+}
+
+export type EventLink = Pick<PublicEvent, "id" | "eventKey" | "title" | "startsAt" | "timezone" | "location">;
+export interface EventNeighbors {
+  previous: EventLink | null;
+  next: EventLink | null;
+}
+
+const eventLinkColumns = {
+  id: events.id,
+  eventKey: events.eventKey,
+  title: events.title,
+  startsAt: events.startsAt,
+  timezone: events.timezone,
+  location: events.location,
+};
+
+// Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.
+const finiteEventStart = sql`isfinite(${events.startsAt})`;
+
+/** Published links only, even for moderators. Equal starts use id as the legacy tiebreak. */
+export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id">): Promise<EventNeighbors> {
+  // Compare the stored timestamp: a JS Date loses PostgreSQL's microseconds.
+  const anchorStartsAt = db.select({ startsAt: events.startsAt }).from(events).where(eq(events.id, event.id));
+  const [previous, next] = await Promise.all([
+    db.select(eventLinkColumns).from(events)
+      .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, or(
+        lt(events.startsAt, anchorStartsAt),
+        and(eq(events.startsAt, anchorStartsAt), lt(events.id, event.id)),
+      )))
+      .orderBy(desc(events.startsAt), desc(events.id)).limit(1),
+    db.select(eventLinkColumns).from(events)
+      .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, or(
+        gt(events.startsAt, anchorStartsAt),
+        and(eq(events.startsAt, anchorStartsAt), gt(events.id, event.id)),
+      )))
+      .orderBy(asc(events.startsAt), asc(events.id)).limit(1),
+  ]);
+  return { previous: previous[0] ?? null, next: next[0] ?? null };
+}
+
+/** Same game first, then nearest upcoming siblings; one query, no RSVP aggregates. */
+export async function listRelatedEvents(
+  db: Db,
+  event: Pick<PublicEvent, "id" | "game">,
+  now = new Date(),
+): Promise<EventLink[]> {
+  const sameGame = event.game === null ? [] : [sql`case when ${events.game} = ${event.game} then 0 else 1 end`];
+  const rows = await db.select(eventLinkColumns).from(events)
+    .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, gte(events.endsAt, now)))
+    .orderBy(...sameGame, asc(events.startsAt), asc(events.id))
+    .limit(3);
+  // PostgreSQL infinity timestamps decode to invalid Dates, as in 404 suggestions.
+  return rows.filter((event) => Number.isFinite(event.startsAt.getTime()));
 }
 
 export type EventAttendee = { id: string; name: string };

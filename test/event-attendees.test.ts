@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import { listGoingAttendees } from "../src/events/reads";
@@ -64,6 +64,27 @@ describe.skipIf(!process.env.DATABASE_URL)("member-only event attendees (isolate
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.get("vary")).toBe("Cookie");
     expect(await logs()).toMatchObject([{ subjectUserIds: [SUBJECT.userId], subjectCount: 1, route: "events.page" }]);
+  });
+
+  it("composes navigation with member-only attendee logging without leaking names to guests", async () => {
+    const siblingKey = "01J00000000000000000000016";
+    await fixture.db.insert(events).values({
+      eventKey: siblingKey, title: "Next game night", status: "published",
+      startsAt: new Date("2099-11-05T20:00:00Z"), endsAt: new Date("2099-11-05T22:00:00Z"),
+    });
+    for (const actor of [null, MEMBER]) {
+      const res = await request(undefined, { headers: actor ? await headers(actor) : {} });
+      const html = await res.text();
+      expect(res.status).toBe(200);
+      expect(html).toContain(`href="/e/${siblingKey}" rel="next" data-testid="event-next"`);
+      expect(html).toContain(`href="/e/${siblingKey}" data-testid="event-related-link"`);
+      expect(html.includes(SUBJECT.username)).toBe(actor !== null);
+      expect(html.includes('data-testid="event-related-join"')).toBe(actor === null);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+      expect(res.headers.get("vary")).toBe("Cookie");
+      expect(await logs()).toHaveLength(actor ? 1 : 0);
+    }
+    expect(await logs()).toMatchObject([{ subjectUserIds: [SUBJECT.userId], route: "events.page" }]);
   });
 
   it("orders by original answer time, excludes other statuses/events, missing users and empty names", async () => {

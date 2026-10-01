@@ -42,6 +42,7 @@ import {
   listEvents,
   listFeatured,
   NotFoundError,
+  setRsvpOpen,
   transitionEvent,
   updateEvent,
   updateFeatured,
@@ -280,19 +281,22 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
   });
 
-  for (const action of ["publish", "cancel"] as const) {
+  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
     admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
       try {
-        const to = action === "publish" ? "published" : "cancelled";
-        const { row, writeBack } = await transitionEvent(db, c.get("adminActor"), c.req.param("key"), to);
+        const actor = c.get("adminActor");
+        const key = c.req.param("key");
+        const { row, writeBack } = action === "rsvp-pause" || action === "rsvp-reopen"
+          ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
+          : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
         if (writeBack) await dispatchWriteBack(c.env, writeBack);
         return c.redirect(`/admin/events/${row.eventKey}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
         if (err instanceof ValidationError) {
-          return errorPage(c, 422, "That transition is not allowed", err.fields.status);
+          return errorPage(c, 422, "That transition is not allowed", err.fields.status ?? err.fields.rsvp_open);
         }
         throw err;
       }
@@ -323,7 +327,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const values = formData(await c.req.parseBody());
     let input;
     try {
-      input = parseFeaturedForm(values, c.env.APP_URL);
+      input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
     } catch (err) {
       if (err instanceof ValidationError) {
         return formError(
@@ -365,7 +369,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const values = formData(await c.req.parseBody());
     let input;
     try {
-      input = parseFeaturedForm(values, c.env.APP_URL);
+      input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
     } catch (err) {
       if (err instanceof ValidationError) {
         return formError(

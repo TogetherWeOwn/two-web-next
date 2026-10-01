@@ -4,7 +4,7 @@
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
-import { NotFoundError, createEvent, getEvent, recordAccess, transitionEvent, updateEvent } from "../admin/store";
+import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
 import { memberAccessLog } from "../access-log";
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
@@ -34,7 +34,7 @@ import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswe
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -313,17 +313,19 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const session = await readSession(c as unknown as Ctx);
     if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
     if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
-    // One-shot join confirmation (legacy join_result flash): the event page
-    // is a join-CTA landing (`/join?next=/e/<key>`), so it consumes and
-    // renders the banner exactly once like /, /join and /profile.
+    // The event page is also a join-CTA landing; consume its flash once.
     const joinResult = await takeJoinResult(c);
-    const position = session ? await waitlistPosition(db, e.id, session.id) : null;
-    const attendees = session?.member ? await listGoingAttendees(db, e.id) : [];
+    const [neighbors, related, attendees, position] = await Promise.all([
+      getEventNeighbors(db, e),
+      listRelatedEvents(db, e),
+      session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+      session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+    ]);
     if (attendees.length > 0 && session) {
       c.set("viewerId", session.id);
       c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
     }
-    return c.html(<EventPage e={e} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
+    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
@@ -404,21 +406,20 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  for (const action of ["publish", "cancel"] as const) {
+  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
     app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
       const who = await moderator(c);
       if (who instanceof Response) return who;
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       try {
-        const { row, writeBack } = await transitionEvent(
-          db,
-          { id: who.id, username: who.username },
-          c.req.param("key"),
-          action === "publish" ? "published" : "cancelled",
-        );
+        const actor = { id: who.id, username: who.username };
+        const key = c.req.param("key");
+        const { row, writeBack } = action === "rsvp-pause" || action === "rsvp-reopen"
+          ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
+          : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
         if (writeBack) await dispatchWriteBack(c.env, writeBack);
-        return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
+        return c.json({ data: eventJson(await withGoingCount(db, row)) });
       } catch (err) {
         if (err instanceof ValidationError) return invalid(c, err);
         if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
@@ -435,7 +436,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null,
     waitlist_position: a.waitlistPosition,
   } });
-  const closed = (c: Ctx) => c.json({ reason: "event_not_open", message: "This event is not taking RSVPs." }, 403);
+  const closed = (c: Ctx, why: string) => c.json({ reason: "event_not_open", why, message: "This event is not taking RSVPs." }, 403);
 
   async function member(c: Ctx): Promise<Session | Response> {
     // Non-rotating: concurrent writes with one cookie must all authenticate.
@@ -471,7 +472,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!r.ok) {
       if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
       if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
-      return closed(c);
+      return closed(c, r.why);
     }
     await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);

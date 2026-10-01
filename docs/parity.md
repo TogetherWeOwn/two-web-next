@@ -18,14 +18,14 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 
 | Legacy route | Next status | Card |
 |---|---|---|
-| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; featured rows use legacy `[start, end)` windows, position/id order and no cap; next 3 published, not-ended events with going counts, anonymous cards and guest join CTA; missing/down DB keeps 200 with unavailable empty state. Live counts + ranks remain separate slices | W4 ✅ + [TOG-10819](/TOG/issues/TOG-10819) (featured; `test/featured.test.ts`) + [TOG-10820](/TOG/issues/TOG-10820) (upcoming; `test/home-events.test.ts`) |
+| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; live counts + rank reads implemented (pending merge); featured rows use legacy `[start, end)` windows, position/id order and no cap; next 3 published, not-ended events with going counts, anonymous cards and guest join CTA; missing/down DB keeps 200 with unavailable empty state | W4 ✅ + [TOG-10818](/TOG/issues/TOG-10818) (counts/ranks) + [TOG-10819](/TOG/issues/TOG-10819) (featured; `test/featured.test.ts`) + [TOG-10820](/TOG/issues/TOG-10820) (upcoming; `test/home-events.test.ts`) |
 | `GET /sitemap_index.xml` (home 1.0, join 0.9, events.index 0.8, about/faq/rules/privacy 0.7, published `/e/{key}` 0.6) | ✅ static entries; join + `/e/{key}` rows pending | W4 ✅ + W8 📋 |
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`, join-result confirmation + member reinvite) | ✅ + one-shot `join_result` banner on `/`, `/join`, `/profile`, `/e/{key}` with `data-testid="reinvite-link"` → `/discord` | W6 ✅ |
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links implemented in this slice (pending merge); RsvpButton/prev-next/related pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) + [TOG-10823](/TOG/issues/TOG-10823) |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links; prev/next + related implemented (review pending); RsvpButton pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) + [TOG-10823](/TOG/issues/TOG-10823) + [TOG-10821](/TOG/issues/TOG-10821) |
 | `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
 | `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
 | `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
@@ -37,8 +37,17 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | ✅ session-gated, paged, ETag/304, `going_count` | W8 ✅ |
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
-| `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | pending | W8 📋 + W11 🔶 |
+| `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | ✅ `POST /events/:key/rsvp-pause`, `POST /events/:key/rsvp-reopen`, `POST /admin/events/:key/rsvp-pause`, `POST /admin/events/:key/rsvp-reopen`: moderator-only, published/non-ended, row-locked idempotent toggles; each flip uses the Discord sync queue (`test/rsvp-toggle.test.ts`) | [TOG-10817](/TOG/issues/TOG-10817) |
 | `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, full-event waitlisting + FIFO promotion under FOR UPDATE (test/rsvp.test.ts, test/rsvp-waitlist.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
+
+Event-page navigation uses `starts_at, id` order, omitting absent neighbors.
+Related links prefer the same non-null game, then fill to three by `starts_at, id`,
+including ongoing events (`ends_at >= now`) and excluding the current event.
+Links are **published-only for every viewer**, per [TOG-10821](/TOG/issues/TOG-10821):
+this deliberately narrows legacy's moderator-draft and `past`-status eligibility.
+Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
+private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
+per-event RSVP reads.
 
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
@@ -100,7 +109,7 @@ no public version/clock endpoint or redirect alias remains.
 | Legacy surface | Next status | Card |
 |---|---|---|
 | Panel gate: Discord-role → 403 (no login form), dark brand, CSP stack, `RecordMemberDataAccess` on panel | pending (custom React rebuild, no Filament off PHP) | W11 🔶 (M1) |
-| Events resource: table (search/sort/status/series/fill filters, publish/cancel/pause/reopen actions, no delete/bulk) + create-as-draft + edit (UTC↔wall DST carriers) + recurrence fields | Table search/status/series/fill + allowlisted title/starts_at/status sort and 25-row pagination ✅ (TOG-10825); recurrence and pause/reopen remain separate slices | W11 🔶 (M2/M3) |
+| Events resource: table (search/sort/status/series/fill filters, publish/cancel/pause/reopen actions, no delete/bulk) + create-as-draft + edit (UTC↔wall DST carriers) + recurrence fields | Table search/status/series/fill + allowlisted title/starts_at/status sort and 25-row pagination ✅ ([TOG-10825](/TOG/issues/TOG-10825)); pause/reopen row + edit actions and `rsvp_open` ternary filter ✅ ([TOG-10817](/TOG/issues/TOG-10817)); remaining resource parity pending | W11 🔶 (M2/M3) |
 | RsvpsRelationManager (read-only roster, `canViewForRecord` 403) | pending | W12 📋 (M6) |
 | FeaturedContent resource (CRUD + publish window + live preview + safe delete) | pending | W11 🔶 (M4; verify: homepage render path) |
 | JoinAttempt resource (read-only viewer: outcome/source/request/discord-id) | pending | W12 📋 (M8) |
@@ -167,7 +176,7 @@ go hunting for them.
 | Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes) | ✅ `src/throttle.ts` + every-POST-throttled audit (`test/throttle.test.ts`) | **N5** ✅ |
 | VerifyCsrfToken on unsafe web methods | Central same-origin guard for POST/PUT/PATCH/DELETE, two exact machine exemptions, mounted-route audit; no CSRF token scheme ([policy](same-origin.md)) | [TOG-10850](/TOG/issues/TOG-10850) |
 | `member-access-log` (arm/flush, fail-closed 503 when enforced) | ✅ `src/access-log.ts` middleware on member routes; admin guard carries the same contract | W7 ✅ + W12 📋 (retention) |
-| TrustHosts (APP_URL host only) / trustProxies (nginx socket) | Workers: platform TLS; host check pending | W16 📋 |
+| TrustHosts (APP_URL host only) / trustProxies (nginx socket) | Workers: platform TLS; strict APP_URL hostname allowlist (`src/trust-hosts.ts`), no loopback exemption; malformed Host fails closed, IPv6 supported; worker-first ASSETS fallback covers static traffic, workers.dev disabled | [TOG-10110](/TOG/issues/TOG-10110) |
 | Maintenance mode except `/discord` | dropped — Workers deploys are atomic, no maintenance mode; DB-free `/discord` floor preserved | dropped (platform) |
 | CompressStaticAssets (gzips Livewire runtime) | dropped — no Livewire runtime; edge compresses static assets | dropped (platform) |
 
@@ -182,8 +191,8 @@ go hunting for them.
 | SafeRedirect (guarded `next`), SpamTrap (honeypot + 1000 ms floor) | ✅ `safeNext` on login/join/event-CTA returns, incl control-byte rejection / pending | W6 ✅ / W7 📋 + W9 📋 |
 | RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |
 | MemberStatsSource / Profiles support (rank, stats, milestones) | ✅ `src/profiles/stats.ts`: never-throw read of `web_v1.members` + `web_v1.member_milestones`; member-gated profile block, local fixture coverage | W7 ✅ |
-| Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell + upcoming-event teaser; ranks and remaining live data pending | W4 ✅ + W6 🔶 (widget) + [TOG-10820](/TOG/issues/TOG-10820) (upcoming) |
-| Counts (never-throw degraded empty state) | ✅ seam (`readCounts` → UNAVAILABLE) | W4 ✅ + W8 📋 (wire bot views) |
+| Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell + upcoming-event teaser; live counts + rank reads implemented (pending merge) | W4 ✅ + W6 🔶 (widget) + [TOG-10818](/TOG/issues/TOG-10818) (counts/ranks) + [TOG-10820](/TOG/issues/TOG-10820) (upcoming) |
+| Counts (never-throw degraded empty state) | live/rank view reads + 60 s isolate cache implemented (pending merge); stale numerals hidden per card; [contract](web-v1-contract.md) | W4 ✅ + [TOG-10818](/TOG/issues/TOG-10818) |
 
 ### Waitlist service contract ([TOG-10816](/TOG/issues/TOG-10816))
 

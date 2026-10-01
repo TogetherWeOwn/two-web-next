@@ -2,7 +2,7 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -31,7 +31,10 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
     if (sql.includes('from "rsvps"')) return { rows: [[row.id, 3]] };
-    return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
+    if (sql.includes('"event_key" =')) {
+      return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
+    }
+    return { rows: [] };
   });
   const store = createMemorySessionStore();
   const env = { APP_URL: `${APP_URL}/`, SESSION_SECRET: SECRET, SESSION_STORE: store, ADMIN_DB: db as unknown as Db } as unknown as Env;

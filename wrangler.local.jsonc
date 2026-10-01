@@ -8,7 +8,8 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "assets": { "directory": "./public" },
+  // Local assets must pass the same host guard as deployed assets.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   "queues": {
     "producers": [
       { "queue": "two-sync-event-local", "binding": "SYNC_EVENT_QUEUE" },

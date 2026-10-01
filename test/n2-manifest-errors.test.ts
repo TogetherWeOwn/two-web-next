@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import {
   internalErrorHandler,
   maintenanceHandler,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { QA_HEADER, QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, hashToken, type SessionStore } from "../src/sessions";

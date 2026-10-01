@@ -1,6 +1,6 @@
 // route-inventory: GET /up
 import { describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { QUEUE_CRITICAL_AT, QUEUE_READ_TIMEOUT_MS, QUEUE_WARN_AT, upBody } from "../src/up";
 
@@ -78,6 +78,7 @@ describe("GET /up", () => {
   it("answers 200 healthy with the full queue payload shape", async () => {
     const res = await app.request("/up", {}, withStore(sqlReturning(depthRow())));
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(await res.json()).toEqual({
       status: "healthy",
       queue: {
@@ -100,6 +101,7 @@ describe("GET /up", () => {
   it("answers 200 degraded when pending crosses warn", async () => {
     const res = await app.request("/up", {}, withStore(sqlReturning(depthRow({ pending: 25, total: 26 }))));
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     const body = (await res.json()) as any;
     expect(body.status).toBe("degraded");
     expect(body.queue.status).toBe("degraded");
@@ -110,6 +112,7 @@ describe("GET /up", () => {
   it("stays 200 unknown when the ledger read throws (app-DB outage)", async () => {
     const res = await app.request("/up", {}, withStore(sqlReturning(new Error("connection refused"))));
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     const body = (await res.json()) as any;
     expect(body.status).toBe("healthy");
     expect(body.queue).toEqual({
@@ -129,6 +132,7 @@ describe("GET /up", () => {
   it("stays 200 unknown when no database is configured at all", async () => {
     const res = await app.request("/up", {}, env);
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     const body = (await res.json()) as any;
     expect(body.queue.status).toBe("unknown");
     expect(body.queue.detail).toBe("queue ledger is not configured.");
@@ -150,6 +154,7 @@ describe("/up bounded reads", () => {
   it("a malformed DATABASE_URL answers 200 unknown, not 500", async () => {
     const res = await app.request("/up", {}, { ...env, DATABASE_URL: "not a url" } as Env);
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-two-origin")).toBe("two-web-next");
     expect(((await res.json()) as { queue: { status: string } }).queue.status).toBe("unknown");
   });
 });

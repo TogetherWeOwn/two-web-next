@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { adminApp } from "../src/admin/routes";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
@@ -345,6 +345,34 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(promotedHtml).toContain('data-waitlist-position="1"');
     expect(promotedHtml).toContain('href="/members/waiter-1">First waiter</a>');
     expect(promotedHtml).not.toContain("Current holder");
+  });
+
+  it("composes private waitlist positions and promoted attendees with navigation and offset-labelled related events", async () => {
+    const ev = await fullWithLine();
+    await client`insert into users (id, username) values ('holder', 'Current holder'), ('waiter-1', 'First waiter')`;
+    const previous = await seed({ startsAt: new Date("2098-12-31T20:00:00Z"), endsAt: new Date("2098-12-31T22:00:00Z") });
+    const next = await seed({ startsAt: new Date("2099-01-02T01:00:00Z"), endsAt: new Date("2099-01-02T03:00:00Z"), timezone: "America/New_York" });
+    const page = await request(`/e/${ev.eventKey}`, "waiter-2");
+    expect(page.status).toBe(200);
+    expect(page.headers.get("cache-control")).toBe("private, no-store");
+    expect(page.headers.get("vary")).toBe("Cookie");
+    const html = await page.text();
+    expect(html).toContain('data-waitlist-position="2"');
+    expect(html).toContain('href="/members/holder">Current holder</a>');
+    expect(html).toContain(`href="/e/${previous.eventKey}" rel="prev"`);
+    expect(html).toContain(`href="/e/${next.eventKey}" rel="next"`);
+    expect(html).toContain('datetime="2099-01-02T01:00:00.000Z">Thursday, 1 January 2099 at 20:00 GMT-05:00');
+    expect(html).not.toContain('data-testid="event-related-join"');
+    const guest = await (await request(`/e/${ev.eventKey}`, null)).text();
+    expect(guest).toContain('data-waitlist-position=""');
+    expect(guest).toContain(`href="/join?next=%2Fe%2F${ev.eventKey}" data-testid="event-related-join"`);
+    expect(guest).not.toContain("Current holder");
+    await withdraw(ev.eventKey, "holder");
+    const promoted = await (await request(`/e/${ev.eventKey}`, "waiter-2")).text();
+    expect(promoted).toContain('data-waitlist-position="1"');
+    expect(promoted).toContain('href="/members/waiter-1">First waiter</a>');
+    expect(promoted).not.toContain("Current holder");
+    expect(promoted).toContain(`href="/e/${next.eventKey}" rel="next"`);
   });
 
   async function waiterBlockedBy(pid: number): Promise<number> {
