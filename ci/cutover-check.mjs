@@ -38,6 +38,11 @@ export const URL_CASES = [
   { frozen: '/members/{user}', path: '/members/{user}', status: 302, redirect: '/auth/discord' },
   { frozen: '/admin/*', path: '/admin', status: 302, redirect: '/auth/discord' },
   { frozen: '/admin/*', path: '/admin/events', status: 302, redirect: '/auth/discord' },
+  // Legacy Filament bookmarks run behind the moderator guard: guests 302 to
+  // OAuth (moderators 301 to the canonical target after the guard). JSON show
+  // /events/{key} waits on TOG-11155; /events.json 401 above pins the collection.
+  { frozen: '/admin/*', path: '/admin/events/{key}/edit', status: 302, redirect: '/auth/discord' },
+  { frozen: '/admin/*', path: '/admin/featured-contents', status: 302, redirect: '/auth/discord' },
   ...['/health', '/healthz', '/db-ping'].map(path =>
     ({ frozen: path, path, status: 404 })),
   { frozen: '/up', path: '/up', status: 200 },
