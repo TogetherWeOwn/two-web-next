@@ -14,7 +14,7 @@ const identities = (start = 100): Identity[] => ["events", "rsvps", "users"].map
 
 type Allocator = {
   name: string; column_name: string; identity_kind: string; generated_kind: string;
-  default_expression: string | null; unsafe_default_dependency: unknown; owned_sequence: string | null;
+  default_expression: string | null; unsafe_default_dependency: unknown; domain_type: unknown; owned_sequence: string | null;
   default_sequence_ids: string[]; sequence_ids: string[]; schema_sequence_ids: string[];
 };
 const allocators = (rows = identities()): Allocator[] => rows.map((row) => {
@@ -22,7 +22,7 @@ const allocators = (rows = identities()): Allocator[] => rows.map((row) => {
   return {
     name: row.name, column_name: "id", identity_kind: "", generated_kind: "",
     default_expression: `nextval('synthetic.sequence_${id}'::regclass)`,
-    unsafe_default_dependency: false, owned_sequence: id, default_sequence_ids: [id], sequence_ids: [id],
+    unsafe_default_dependency: false, domain_type: false, owned_sequence: id, default_sequence_ids: [id], sequence_ids: [id],
     schema_sequence_ids: rows.map((table) => String(Number(table.relation_id) + 1000)),
   };
 });
@@ -176,6 +176,34 @@ describe("events import static and effective target separation", () => {
         expect(client.queries.some(({ text }) => /from events|from rsvps|from users|lock table|alter table|^insert/.test(text))).toBe(false);
       }
     }
+  });
+
+  it.each(["source", "target"])("refuses %s domain defaults before reads/locks/DDL in both modes", async (side) => {
+    for (const default_expression of [null, "42", "nextval('synthetic.sequence_1200'::regclass)"]) {
+      for (const dryRun of [true, false]) {
+        const sourceRows = allocators(), targetRows = allocators(identities(200));
+        const rows = side === "source" ? sourceRows : targetRows;
+        rows.push({ ...rows[0]!, column_name: "domain_column", domain_type: true, default_expression });
+        const source = stubClient(identities(), true, undefined, sourceRows);
+        const target = stubClient(identities(200), false, undefined, targetRows);
+        await expect(importEventsRsvps(source.sql, target.sql, { dryRun })).rejects.toThrow("no destination writes");
+        expect([...source.queries, ...target.queries].some(({ text }) => /from events|from rsvps|from users|lock table|alter table|^insert/.test(text))).toBe(false);
+      }
+    }
+  });
+
+  it.each([undefined, null, "false", 0])("refuses incomplete or malformed domain metadata (%s)", async (domain_type) => {
+    const sourceRows = allocators();
+    sourceRows[0]!.domain_type = domain_type;
+    await expect(importEventsRsvps(stubClient(identities(), true, undefined, sourceRows).sql, stubClient(identities(200), false).sql))
+      .rejects.toThrow("no destination writes");
+  });
+
+  it("skips domain defaults on supplied destination columns", async () => {
+    const targetRows = allocators(identities(200));
+    targetRows.push({ ...targetRows[0]!, column_name: "description", domain_type: true, default_expression: null });
+    await expect(importEventsRsvps(stubClient().sql, stubClient(identities(200), false, undefined, targetRows).sql, { dryRun: false }))
+      .resolves.toMatchObject({ events: { read: 0 } });
   });
 
   it.each([null, "42", "'42'::bigint"])("permits non-allocating source IDs (%s)", async (default_expression) => {
@@ -569,6 +597,84 @@ describe.skipIf(!url)("events import separation on disposable test schemas", () 
       }
     } finally {
       await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" DROP COLUMN omitted_allocator`);
+    }
+  });
+
+  it.each(["events", "rsvps"].flatMap((table) => [false, true].map((nested) => ({ table, nested }))))(
+    "refuses omitted $table domain defaults before reads/locks/DDL, nested=$nested", async ({ table, nested }) => {
+      const domain = `"${emptySchema}"."omitted_domain"`;
+      const outer = `"${emptySchema}"."outer_domain"`;
+      await target.unsafe(`CREATE DOMAIN ${domain} AS bigint DEFAULT pg_catalog.nextval('"${legacySchema}"."${table}_id_seq"'::regclass)`);
+      if (nested) await target.unsafe(`CREATE DOMAIN ${outer} AS ${domain}`);
+      const queries: string[] = [];
+      const traced = (schema: string) => postgres(safeUrl, {
+        max: 1, port: 5432, password: () => new URL(safeUrl).password, fetch_types: false, onnotice: () => {},
+        connection: { search_path: schema }, debug: (_connection, query) => queries.push(query),
+      });
+      const source = traced(legacySchema), destination = traced(fixture.schemaName);
+      try {
+        await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ADD COLUMN omitted_allocator ${nested ? outer : domain}`);
+        const [metadata] = await target`select t.typtype, ad.oid as column_default
+          from pg_catalog.pg_attribute a join pg_catalog.pg_type t on t.oid = a.atttypid
+          left join pg_catalog.pg_attrdef ad on ad.adrelid = a.attrelid and ad.adnum = a.attnum
+          where a.attrelid = ${`${fixture.schemaName}.${table}`}::regclass and a.attname = 'omitted_allocator'`;
+        expect(metadata).toMatchObject({ typtype: "d", column_default: null });
+        const sourceBefore = await snapshot(legacy), targetBefore = await snapshot(target);
+        for (const dryRun of [true, false]) {
+          queries.length = 0;
+          await expect(importEventsRsvps(source, destination, { dryRun })).rejects.toThrow("no destination writes");
+          expect(queries.some((query) => /\bfrom events\b|\bfrom rsvps\b|\bfrom users\b|\block table\b|\balter table\b|\binsert into\b|\bsetval\s*\(/i.test(query))).toBe(false);
+          expect(await snapshot(legacy)).toEqual(sourceBefore);
+          expect(await snapshot(target)).toEqual(targetBefore);
+        }
+      } finally {
+        await Promise.all([source.end(), destination.end()]);
+        await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" DROP COLUMN IF EXISTS omitted_allocator`);
+        if (nested) await target.unsafe(`DROP DOMAIN ${outer}`);
+        await target.unsafe(`DROP DOMAIN ${domain}`);
+      }
+    },
+  );
+
+  it.each(["events", "rsvps", "users"])("fails closed on a source %s domain's external allocator", async (table) => {
+    const domain = `"${emptySchema}"."source_domain"`;
+    const sequence = `"${emptySchema}"."domain_source_ids"`;
+    await target.unsafe(`CREATE SEQUENCE ${sequence} START 10000`);
+    await target.unsafe(`CREATE DOMAIN ${domain} AS bigint DEFAULT pg_catalog.nextval('${sequence}'::regclass)`);
+    try {
+      // Seed nulls without executing the type default, then expose it without pg_attrdef.
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}"."${table}" ADD COLUMN source_allocator ${domain} DEFAULT NULL`);
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}"."${table}" ALTER COLUMN source_allocator DROP DEFAULT`);
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN id SET DEFAULT pg_catalog.nextval('${sequence}'::regclass)`);
+      const sourceBefore = await snapshot(legacy), targetBefore = await snapshot(target);
+      const sequenceBefore = await target.unsafe(`SELECT last_value, is_called FROM ${sequence}`);
+      for (const dryRun of [true, false]) {
+        await expect(importEventsRsvps(legacy, target, { dryRun })).rejects.toThrow("no destination writes");
+        expect(await snapshot(legacy)).toEqual(sourceBefore);
+        expect(await snapshot(target)).toEqual(targetBefore);
+        expect(await target.unsafe(`SELECT last_value, is_called FROM ${sequence}`)).toEqual(sequenceBefore);
+      }
+    } finally {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN id SET DEFAULT pg_catalog.nextval('"${fixture.schemaName}"."events_id_seq"'::regclass)`);
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}"."${table}" DROP COLUMN IF EXISTS source_allocator`);
+      await target.unsafe(`DROP DOMAIN ${domain}`);
+      await target.unsafe(`DROP SEQUENCE ${sequence}`);
+    }
+  });
+
+  it("does not execute a supplied target column's domain default", async () => {
+    const domain = `"${emptySchema}"."supplied_domain"`;
+    const destination = connectDatabase(alias(fixture.schemaName, "synthetic_supplied_domain"));
+    await target.unsafe(`CREATE DOMAIN ${domain} AS text DEFAULT pg_catalog.nextval('"${legacySchema}"."events_id_seq"'::regclass)::text`);
+    try {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN description TYPE ${domain}`);
+      const sourceBefore = await snapshot(legacy);
+      expect((await importEventsRsvps(legacy, destination, { dryRun: false })).events.inserted).toBe(4);
+      expect(await snapshot(legacy)).toEqual(sourceBefore);
+    } finally {
+      await destination.end();
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN description TYPE text`);
+      await target.unsafe(`DROP DOMAIN ${domain}`);
     }
   });
 

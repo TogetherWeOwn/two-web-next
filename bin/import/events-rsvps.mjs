@@ -156,7 +156,8 @@ async function resolvedAllocators(sql) {
   // JSON arrays remain decoded when the CLI client disables catalog type fetching.
   const rows = await sql`
     select names.name, a.attname as column_name, a.attidentity as identity_kind,
-      a.attgenerated as generated_kind, pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) as default_expression,
+      a.attgenerated as generated_kind, t.typtype = 'd' as domain_type,
+      pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) as default_expression,
       exists (select 1 from pg_catalog.pg_depend d
         where d.classid = 'pg_catalog.pg_attrdef'::regclass and d.objid = ad.oid and (
           (d.refclassid = 'pg_catalog.pg_proc'::regclass
@@ -182,6 +183,7 @@ async function resolvedAllocators(sql) {
     from (values ('events'), ('rsvps'), ('users')) as names(name)
     join pg_catalog.pg_class c on c.oid = pg_catalog.to_regclass(names.name)
     join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+    join pg_catalog.pg_type t on t.oid = a.atttypid
     left join pg_catalog.pg_attrdef ad on ad.adrelid = c.oid and ad.adnum = a.attnum
   `;
   const oid = (value) => typeof value === "string" && /^[1-9][0-9]*$/.test(value);
@@ -192,7 +194,7 @@ async function resolvedAllocators(sql) {
       || typeof row.column_name !== "string" || !row.column_name
       || !["", "a", "d"].includes(row.identity_kind) || row.generated_kind !== ""
       || (row.default_expression !== null && typeof row.default_expression !== "string")
-      || typeof row.unsafe_default_dependency !== "boolean"
+      || typeof row.unsafe_default_dependency !== "boolean" || typeof row.domain_type !== "boolean"
       || (row.owned_sequence !== null && !oid(row.owned_sequence))
       || [row.default_sequence_ids, row.sequence_ids, row.schema_sequence_ids]
         .some((values) => !Array.isArray(values) || values.some((id) => !oid(id))))) throw new TargetSeparationError();
@@ -200,6 +202,10 @@ async function resolvedAllocators(sql) {
 }
 
 function assertProvenDefault(row, requireAllocator = false) {
+  // Domains (including nested domains) may inherit executable pg_type defaults
+  // without a pg_attrdef row. Their defaults/dependencies are outside this proof;
+  // never interpret a domain's missing column default as non-allocating.
+  if (row.domain_type) throw new TargetSeparationError();
   // Pinned builtins have no pg_depend entry; custom functions do, even when
   // pg_get_expr prints unqualified builtin-looking text. Text-to-regclass
   // nextval has no sequence dependency and must never pass as a proven allocator.
