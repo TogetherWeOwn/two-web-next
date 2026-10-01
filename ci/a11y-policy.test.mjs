@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { auditCases, auditDatabaseUrl, assertNoViolations, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 import { coverage as documentCoverage } from "./a11y-cases.mjs";
+import { loadAuditWorkerRoutes } from "./a11y-test-worker.mjs";
 
 const coverage = {
   "/": { cases: [{ path: "/" }] },
@@ -39,6 +40,22 @@ test("removed routes and unexplained exclusions fail", () => {
   assert.throws(() => auditCases(routes.slice(1), coverage), /stale=\//);
   assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { skip: true } }), /exclusion reason/);
   assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { cases: [] } }), /No audit cases/);
+});
+
+test("legacy aliases are non-documents while canonical admin destinations remain audited", async () => {
+  const aliases = [
+    "/auth/discord/redirect", "/admin/events/create", "/admin/events/:key/edit",
+    "/admin/featured-contents", "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
+  ];
+  const destinations = ["/admin/events/new", "/admin/events/:key", "/admin/featured", "/admin/featured/new", "/admin/featured/:id"];
+  const worker = await loadAuditWorkerRoutes();
+  const cases = auditCases(worker.routes, worker.coverage);
+  for (const alias of aliases) {
+    assert.equal(worker.coverage[alias]?.skip, true, alias);
+    assert.match(worker.coverage[alias].reason, /alias redirects/, alias);
+    assert(!cases.some((entry) => entry.route === alias), alias);
+  }
+  for (const destination of destinations) assert(cases.some((entry) => entry.route === destination), destination);
 });
 
 test("refuse staging, production and ambiguous database configuration before connecting", () => {

@@ -1,5 +1,5 @@
 // Admin pages (W11 pt1). Plain server-rendered tables + forms in this repo's
-// JSX idiom — no client JS, no component framework. Moderators get labelled
+// JSX idiom, with a small event-editor navigation guard. Moderators get labelled
 // fields and field errors; every form posts back to its own route.
 
 import type { ZeroResultSearch } from "../events/search-log";
@@ -9,6 +9,18 @@ import { SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
 import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
+import { featuredListUrl, joinAttemptsUrl, rosterUrl, type FeaturedListQuery, type JoinAttemptsQuery, type RosterQuery, type SortOrder } from "./table-list";
+
+const TableSortHeader: FC<{ label: string; active: boolean; order: SortOrder; url: (order: SortOrder) => string }> = ({ label, active, order, url }) => {
+  const next = active && order === "asc" ? "desc" : "asc";
+  return (
+    <th scope="col" aria-sort={active ? (order === "asc" ? "ascending" : "descending") : "none"}>
+      <a href={url(next)} aria-label={`Sort by ${label.toLowerCase()} ${next === "asc" ? "ascending" : "descending"}`}>
+        {label}{active ? (order === "asc" ? " ↑" : " ↓") : ""}
+      </a>
+    </th>
+  );
+};
 
 const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
   <html lang="en">
@@ -122,10 +134,10 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
   </Shell>
 );
 
-export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: string; outcomes: readonly string[] }> = ({
+export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQuery; hasNext: boolean; outcomes: readonly string[] }> = ({
   rows,
-  outcome,
-  q,
+  query,
+  hasNext,
   outcomes,
 }) => (
   <Shell title="Join attempts">
@@ -135,13 +147,13 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
       <form method="get" action="/admin/join-attempts" class="filters">
         <div class="field">
           <label for="q">Discord id or request id</label>
-          <input id="q" name="q" type="search" value={q} />
+          <input id="q" name="q" type="search" value={query.q} />
         </div>
         <div class="field">
           <label for="outcome">Outcome</label>
           <select id="outcome" name="outcome">
             {["", ...outcomes].map((o) => (
-              <option value={o} selected={o === outcome}>
+              <option value={o} selected={o === query.outcome}>
                 {o === "" ? "All" : o}
               </option>
             ))}
@@ -181,6 +193,11 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           )}
         </tbody>
       </table>
+      <nav aria-label="Join attempt pages" class="actions">
+        {query.page > 1 ? <a rel="prev" href={joinAttemptsUrl(query, query.page - 1)}>Previous</a> : null}
+        <span>Page {query.page}</span>
+        {hasNext ? <a rel="next" href={joinAttemptsUrl(query, query.page + 1)}>Next</a> : null}
+      </nav>
     </section>
   </Shell>
 );
@@ -369,7 +386,8 @@ export const EventFormPage: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   roster?: RosterEntry[];
-}> = ({ mode, row, values, errors, roster }) => {
+  rosterQuery?: RosterQuery;
+}> = ({ mode, row, values, errors, roster, rosterQuery = { q: "", sort: "answered", order: "desc" } }) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
@@ -380,7 +398,8 @@ export const EventFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action}>
+        <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}
+          data-event-draft={mode === "edit" && Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
             {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
           </Field>
@@ -459,27 +478,37 @@ export const EventFormPage: FC<{
           </section>
         ) : null}
         {mode === "edit" && roster ? (
-          <section aria-label="RSVP roster" data-testid="rsvp-roster">
+          <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
             <h2>RSVPs ({roster.length})</h2>
+            <p class="hint">Save event changes before searching or sorting the roster.</p>
+            <form method="get" action={`${action}#rsvp-roster`} class="filters">
+              <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
+              <input type="hidden" name="roster_order" value={rosterQuery.order} />
+              <div class="field">
+                <label for="roster-q">Search members</label>
+                <input id="roster-q" name="roster_q" type="search" value={rosterQuery.q} />
+              </div>
+              <div class="field"><button type="submit" class="btn">Search</button></div>
+            </form>
             <table class="admin-table">
               <thead>
                 <tr>
-                  <th>Member</th>
-                  <th>Status</th>
-                  <th>Answered</th>
+                  <th scope="col">Member</th>
+                  <TableSortHeader label="Status" active={rosterQuery.sort === "status"} order={rosterQuery.order} url={(order) => rosterUrl(row!.eventKey, rosterQuery, { sort: "status", order })} />
+                  <TableSortHeader label="Answered" active={rosterQuery.sort === "answered"} order={rosterQuery.order} url={(order) => rosterUrl(row!.eventKey, rosterQuery, { sort: "answered", order })} />
                 </tr>
               </thead>
               <tbody>
                 {roster.length === 0 ? (
                   <tr>
                     <td colspan={3} data-testid="roster-empty">
-                      No RSVPs yet.
+                      {rosterQuery.q ? "No RSVPs match this member search." : "No RSVPs yet."}
                     </td>
                   </tr>
                 ) : (
                   roster.map((r) => (
                     <tr key={r.userId}>
-                      <td>{r.username ?? r.userId}</td>
+                      <td>{r.username?.trim() || "Unknown member"}</td>
                       <td>{r.status}</td>
                       <td>{r.answeredAt.toISOString()}</td>
                     </tr>
@@ -490,31 +519,50 @@ export const EventFormPage: FC<{
           </section>
         ) : null}
       </section>
+      {mode === "edit" ? <script src="/islands/admin-event-editor.js" defer /> : null}
     </Shell>
   );
 };
 
-export const FeaturedPage: FC<{ rows: FeaturedRow[] }> = ({ rows }) => (
+export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }> = ({ rows, query }) => (
   <Shell title="Featured content">
     <section>
       <h1>Featured content</h1>
       <p>
         <a class="btn" href="/admin/featured/new" data-testid="new-featured">New featured slot</a>
       </p>
+      <form method="get" action="/admin/featured" class="filters">
+        <input type="hidden" name="sort" value={query.sort} />
+        <input type="hidden" name="order" value={query.order} />
+        <div class="field">
+          <label for="q">Search titles</label>
+          <input id="q" name="q" type="search" value={query.q} />
+        </div>
+        <div class="field">
+          <label for="published">Published</label>
+          <select id="published" name="published">
+            <option value="" selected={query.published === ""}>All</option>
+            <option value="1" selected={query.published === "1"}>Published</option>
+            <option value="0" selected={query.published === "0"}>Unpublished</option>
+          </select>
+        </div>
+        <div class="field"><button type="submit" class="btn">Filter</button></div>
+      </form>
       <table class="admin-table" data-testid="featured-table">
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Published</th>
-            <th>Position</th>
-            <th>Window (UTC)</th>
+            <th scope="col">Title</th>
+            <th scope="col">Published</th>
+            <TableSortHeader label="Position" active={query.sort === "position"} order={query.order} url={(order) => featuredListUrl(query, { sort: "position", order })} />
+            <th scope="col">Window (UTC)</th>
+            <TableSortHeader label="Last changed" active={query.sort === "updated_at"} order={query.order} url={(order) => featuredListUrl(query, { sort: "updated_at", order })} />
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colspan={4} data-testid="featured-empty">
-                No featured content yet.
+              <td colspan={5} data-testid="featured-empty">
+                {query.q || query.published ? "No featured content matches these filters." : "No featured content yet."}
               </td>
             </tr>
           ) : (
@@ -528,6 +576,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[] }> = ({ rows }) => (
                 <td>
                   {r.startsAt ? r.startsAt.toISOString() : "—"} → {r.endsAt ? r.endsAt.toISOString() : "—"}
                 </td>
+                <td><time datetime={r.updatedAt.toISOString()}>{r.updatedAt.toISOString()}</time></td>
               </tr>
             ))
           )}
