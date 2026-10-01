@@ -31,7 +31,7 @@ const env: EnvWithAdminDb = {
 };
 
 const existing = {
-  id: 1, title: "Featured", body: null, url: null, imageUrl: null, imageAlt: null,
+  id: 1, legacyId: null, title: "Featured", body: null, url: null, imageUrl: null, imageAlt: null,
   isPublished: false, position: 0, startsAt: null, endsAt: null, createdBy: null,
   createdAt: new Date(0), updatedAt: new Date(0),
 };
