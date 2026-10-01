@@ -5,7 +5,7 @@
 // W15 Pest port: assert exposure on the mounted worker, not only isolated routers.
 // Legacy assertion mapping and intentional port differences: docs/w15-member-data-parity.md.
 import { Hono } from "hono";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import rawApp from "../src/index";
 import app from "./app";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
@@ -38,9 +38,10 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     // The three global ALL /* registrations are the composed security/robots
     // headers, strict per-environment trustHosts guard and same-origin guard.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
+    // Profile paths each register the gate, post-audit flash consumption and logger.
     // The event-page access logger is a second GET handler on the same route.
     "GET /e/:key",
-    "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
+    "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*", "ALL /members/*",
   ].sort());
 }
 
@@ -66,13 +67,27 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
   let fixture: MemberDataFixture;
   let db: Db;
   let sessions = createMemorySessionStore();
-  const bindings = () => ({ ...env, ADMIN_DB: db, SESSION_STORE: sessions });
+  let remoteFetch: MockInstance<typeof fetch>;
+  const bindings = () => ({
+    ...env, ADMIN_DB: db, SESSION_STORE: sessions,
+    DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+  });
   const request = (path: string, init: RequestInit = {}) => app.request(path, init, bindings());
   const headers = async (actor: typeof MEMBER) => ({ cookie: await cookieFor(sessions, actor) });
 
   beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
-  beforeEach(async () => { await fixture.reset(); await seed(db); sessions = createMemorySessionStore(); });
-  afterEach(() => fixture?.reset());
+  beforeEach(async () => {
+    remoteFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected external fetch"));
+    await fixture.reset(); await seed(db); sessions = createMemorySessionStore();
+  });
+  afterEach(async () => {
+    try {
+      await fixture?.reset();
+      expect(remoteFetch).not.toHaveBeenCalled();
+    } finally {
+      remoteFetch?.mockRestore();
+    }
+  });
   afterAll(() => fixture?.dispose());
 
   it.each(["text/html", "application/json"])("guest %s: no profile/member data or writes", async (accept) => {

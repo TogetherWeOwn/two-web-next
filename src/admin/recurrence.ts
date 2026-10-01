@@ -9,7 +9,8 @@
 // Weeks step in the host's zone, not in UTC: "20:00 London every Sunday" must
 // stay 20:00 London across the clocks-change weekend.
 
-import { type FieldErrors, isKnownTimezone, utcToWall, ValidationError, wallToUtc } from "./validation";
+import { type FieldErrors, isKnownTimezone, ValidationError } from "./validation";
+import { type PreciseWall, preciseWallToUtc, utcToPreciseWall } from "./recurrence-wall";
 
 /** A series that never ends is a runaway reconcile pass: 52 weeklies is a year of Sunday Squads. */
 export const MAX_OCCURRENCES = 52;
@@ -28,11 +29,14 @@ export type Occurrence = { startsAt: Date; endsAt: Date };
 
 const WALL_PARTS = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
 
-function addDaysToWall(wall: string, days: number): string {
-  const m = WALL_PARTS.exec(wall)!;
+function addDaysToWall(wall: PreciseWall, days: number): PreciseWall {
+  const m = WALL_PARTS.exec(wall.minute)!;
   const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days, Number(m[4]), Number(m[5])));
   const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  return {
+    minute: `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`,
+    subMinuteMs: wall.subMinuteMs,
+  };
 }
 
 /**
@@ -41,22 +45,22 @@ function addDaysToWall(wall: string, days: number): string {
  * length of the gap (02:30 becomes 03:30) instead of failing, because a
  * recurring slot must not vanish for one week a year.
  */
-function resolveWall(wall: string, timezone: string): Date {
+function resolveWall(wall: PreciseWall, timezone: string): Date {
   try {
-    return wallToUtc(wall, timezone);
+    return preciseWallToUtc(wall, timezone);
   } catch (e) {
     if (!(e instanceof ValidationError)) throw e;
   }
   // Gap: read the offset from the day before (pre-transition) and apply it.
-  const probe = wallToUtc(addDaysToWall(wall, -1), timezone);
-  const probeWall = utcToWall(probe, timezone);
+  const probe = preciseWallToUtc(addDaysToWall(wall, -1), timezone);
+  const probeWall = utcToPreciseWall(probe, timezone);
   const offsetMs = asUtcMs(probeWall) - probe.getTime();
   return new Date(asUtcMs(wall) - offsetMs);
 }
 
-function asUtcMs(wall: string): number {
-  const m = WALL_PARTS.exec(wall)!;
-  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+function asUtcMs(wall: PreciseWall): number {
+  const m = WALL_PARTS.exec(wall.minute)!;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) + wall.subMinuteMs;
 }
 
 /**
@@ -75,19 +79,26 @@ export function occurrences(
   max: number = MAX_OCCURRENCES,
 ): Map<number, Occurrence> {
   const limit = Math.min(Math.max(count ?? max, 1), max);
-  const localStart = utcToWall(startsAt, timezone);
-  const localEnd = utcToWall(endsAt, timezone);
+  const localStart = utcToPreciseWall(startsAt, timezone);
+  const localEnd = utcToPreciseWall(endsAt, timezone);
   const endDate = endsOn ? endsOn.toISOString().slice(0, 10) : null;
+  // Seed's real elapsed length. When gap resolution lands the end on or before
+  // the start (a spring-forward can map both walls to the same instant), the
+  // occurrence keeps this duration from its resolved start instead of storing
+  // a zero-length meeting the event parser would reject.
+  const durationMs = endsAt.getTime() - startsAt.getTime();
   const out = new Map<number, Occurrence>();
   for (let index = 1; index <= limit; index++) {
     const step = index - 1;
     const days = frequency === "weekly" ? 7 * step : 0;
     const startWall = addDaysToWall(localStart, days);
-    if (endDate !== null && startWall.slice(0, 10) > endDate) break;
-    out.set(index, {
-      startsAt: index === 1 ? startsAt : resolveWall(startWall, timezone),
-      endsAt: index === 1 ? endsAt : resolveWall(addDaysToWall(localEnd, days), timezone),
-    });
+    if (endDate !== null && startWall.minute.slice(0, 10) > endDate) break;
+    const starts = index === 1 ? startsAt : resolveWall(startWall, timezone);
+    let ends = index === 1 ? endsAt : resolveWall(addDaysToWall(localEnd, days), timezone);
+    if (index > 1 && durationMs > 0 && ends.getTime() <= starts.getTime()) {
+      ends = new Date(starts.getTime() + durationMs);
+    }
+    out.set(index, { startsAt: starts, endsAt: ends });
   }
   return out;
 }

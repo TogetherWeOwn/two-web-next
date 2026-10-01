@@ -209,7 +209,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
       (${first}::uuid, 'sync-event', 'sync-event:e1', 'duplicate outcome'),
       (${second}::uuid, 'sync-event', 'sync-event:e1', 'independent outcome')`;
     const original = (await failures()).filter((row) => row.reason !== "duplicate outcome");
-    const migration = await readFile(fileURLToPath(new URL("../drizzle/1015_queue_failed_job_identity.sql", import.meta.url).href), "utf8");
+    const migration = await readFile(fileURLToPath(new URL("../drizzle/1017_queue_failed_job_identity.sql", import.meta.url).href), "utf8");
     await sql.begin(async (tx) => {
       for (const statement of migration.split("--> statement-breakpoint")) {
         if (statement.trim()) await tx.unsafe(statement);

@@ -24,16 +24,18 @@
 // store (M7) and dispatch the write-back seam where one is due (M3).
 
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
+import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import { JOIN_ATTEMPT_PAGE_SIZE, parseFeaturedListQuery, parseJoinAttemptsQuery, parseRosterQuery } from "./table-list";
 import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./guard";
 import type { SessionStore } from "../sessions";
 import {
   type EventRow,
-  type FeaturedRow,
+  type FeaturedEditRow,
   createEvent,
   createFeatured,
   deleteFeatured,
@@ -156,16 +158,16 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.get("/join-attempts", async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
-    const outcome = c.req.query("outcome") ?? "";
-    const q = (c.req.query("q") ?? "").trim();
-    const rows = await listJoinAttempts(db, { outcome: outcome || undefined, q: q || undefined });
+    const query = parseJoinAttemptsQuery(c.req.query());
+    const fetched = await listJoinAttempts(db, query);
+    const rows = fetched.slice(0, JOIN_ATTEMPT_PAGE_SIZE);
     declareAccess(c, {
       resource: "join_attempts",
       action: "list",
       route: "admin.join-attempts.index",
       subjects: rows.flatMap((r) => (r.discordId ? [r.discordId] : [])),
     });
-    return c.html(<JoinAttemptsPage rows={rows} outcome={outcome} q={q} outcomes={JOIN_OUTCOMES} />);
+    return c.html(<JoinAttemptsPage rows={rows} query={query} hasNext={fetched.length > JOIN_ATTEMPT_PAGE_SIZE} outcomes={JOIN_OUTCOMES} />);
   });
 
   admin.get("/join-attempts/:id", async (c) => {
@@ -208,7 +210,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<EventFormPage mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("form"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -246,7 +248,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const row = await getEvent(db, c.req.param("key"));
     if (!row) return errorPage(c, 404, "Event not found");
-    const roster = await listRoster(db, row.eventKey);
+    const rosterQuery = parseRosterQuery(c.req.query());
+    const roster = await listRoster(db, row.eventKey, rosterQuery);
     // The roster is member data: the viewed members are the access-log subjects.
     declareAccess(c, {
       resource: "events",
@@ -261,11 +264,12 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         values={eventValues(row)}
         errors={{}}
         roster={roster}
+        rosterQuery={rosterQuery}
       />,
     );
   });
 
-  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("form"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const key = c.req.param("key");
@@ -311,7 +315,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   });
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
       try {
@@ -335,22 +339,23 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.get("/featured", async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
-    const rows = await listFeatured(db, {});
+    const query = parseFeaturedListQuery(c.req.query());
+    const rows = await listFeatured(db, { ...query, published: query.published ? query.published === "1" : undefined });
     declareAccess(c, {
       resource: "featured_contents",
       action: "list",
       route: "admin.featured.index",
       subjects: rows.map((r) => String(r.id)),
     });
-    return c.html(<FeaturedPage rows={rows} />);
+    return c.html(<FeaturedPage rows={rows} query={query} />);
   });
 
   admin.get("/featured/new", (c) => {
     declareAccess(c, { resource: "featured_contents", action: "view", route: "admin.featured.create", subjects: [] });
-    return c.html(<FeaturedFormPage mode="new" values={{}} errors={{}} />);
+    return c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -362,7 +367,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return formError(
           c,
           err,
-          (errors, v) => c.html(<FeaturedFormPage mode="new" values={v} errors={errors} />),
+          (errors, v) => c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="new" values={v} errors={errors} />),
           values,
         );
       }
@@ -385,10 +390,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       route: "admin.featured.edit",
       subjects: [String(row.id)],
     });
-    return c.html(<FeaturedFormPage mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
+    return c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
   });
 
-  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
@@ -404,7 +409,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return formError(
           c,
           err,
-          (errors, v) => c.html(<FeaturedFormPage mode="edit" row={existing} values={v} errors={errors} />),
+          (errors, v) => c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="edit" row={existing} values={v} errors={errors} />),
           values,
         );
       }
@@ -419,7 +424,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
   });
 
-  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
@@ -450,9 +455,7 @@ function eventValues(row: EventRow): Record<string, unknown> {
   };
 }
 
-function featuredValues(row: FeaturedRow): Record<string, unknown> {
-  const wall = (d: Date | null) =>
-    d === null ? "" : `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+function featuredValues(row: FeaturedEditRow): Record<string, unknown> {
   return {
     title: row.title,
     body: row.body ?? "",
@@ -461,13 +464,9 @@ function featuredValues(row: FeaturedRow): Record<string, unknown> {
     image_alt: row.imageAlt ?? "",
     is_published: row.isPublished ? "on" : "",
     position: String(row.position),
-    starts_at: wall(row.startsAt),
-    ends_at: wall(row.endsAt),
+    starts_at: row.startsAtText ?? "",
+    ends_at: row.endsAtText ?? "",
   };
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
 }
 
 export { SESSION_GUEST_REDIRECT };

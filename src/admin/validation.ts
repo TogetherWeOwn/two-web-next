@@ -39,6 +39,9 @@ export type FeaturedFormInput = {
   position: number;
   startsAtUtc: Date | null;
   endsAtUtc: Date | null;
+  // Dates serve existing callers; canonical UTC text carries PostgreSQL microseconds.
+  startsAtUtcText?: string | null;
+  endsAtUtcText?: string | null;
 };
 
 /** Field errors keyed by field name, in the form's own terms. */
@@ -52,10 +55,25 @@ export class ValidationError extends Error {
 
 const WALL_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})$/;
 
+// Intl construction dominates repeated wall-time validation. Bound shared
+// formatter reuse so request-supplied zones cannot grow isolate memory forever.
+const FORMATTER_CACHE_LIMIT = 64;
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = JSON.stringify([locale, options]);
+  const cached = formatters.get(key);
+  if (cached) return cached;
+  const value = new Intl.DateTimeFormat(locale, options);
+  if (formatters.size >= FORMATTER_CACHE_LIMIT) formatters.delete(formatters.keys().next().value!);
+  formatters.set(key, value);
+  return value;
+}
+
 /** Whether the string names an IANA zone the runtime knows. */
 export function isKnownTimezone(tz: string): boolean {
   try {
-    new Intl.DateTimeFormat("en", { timeZone: tz });
+    formatter("en", { timeZone: tz });
     return true;
   } catch {
     return false;
@@ -76,7 +94,7 @@ function parseWall(raw: string): WallParts | null {
 }
 
 const dtf = (tz: string) =>
-  new Intl.DateTimeFormat("en-GB", {
+  formatter("en-GB", {
     timeZone: tz,
     year: "numeric",
     month: "2-digit",
@@ -86,9 +104,9 @@ const dtf = (tz: string) =>
     hour12: false,
   });
 
-function wallOfInstant(instantMs: number, tz: string): string {
+function wallOfInstant(instantMs: number, formatter: Intl.DateTimeFormat): string {
   const parts: Record<string, string> = {};
-  for (const p of dtf(tz).formatToParts(new Date(instantMs))) {
+  for (const p of formatter.formatToParts(new Date(instantMs))) {
     if (p.type !== "literal") parts[p.type] = p.value;
   }
   // en-GB can emit hour "24" for midnight; normalise to "00".
@@ -119,14 +137,16 @@ export function wallToUtc(raw: string, timezone: string): Date {
   // Keep only candidates that round-trip, then choose the earliest instant.
   // This also handles half-hour DST without assuming a one-hour change.
   const naiveMs = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi);
+  // Reuse one real formatter for all samples and round-trips in this parse.
+  const formatter = dtf(timezone);
   const candidates = new Set<number>();
   for (const delta of [-36, 0, 36]) {
     const sample = naiveMs + delta * 3600_000;
-    const rendered = parseWall(wallOfInstant(sample, timezone));
+    const rendered = parseWall(wallOfInstant(sample, formatter));
     if (!rendered) continue;
     const renderedAsUtc = Date.UTC(rendered.y, rendered.mo - 1, rendered.d, rendered.h, rendered.mi);
     const candidate = naiveMs - (renderedAsUtc - sample);
-    if (wallOfInstant(candidate, timezone) === wallString(parts)) candidates.add(candidate);
+    if (wallOfInstant(candidate, formatter) === wallString(parts)) candidates.add(candidate);
   }
 
   // Gap check (TOG-6803): a time that never occurred has no candidate.
@@ -140,7 +160,7 @@ export function wallToUtc(raw: string, timezone: string): Date {
 
 /** Render a stored UTC instant as wall text in the row's zone (edit form fill). */
 export function utcToWall(instant: Date, timezone: string): string {
-  return wallOfInstant(instant.getTime(), timezone);
+  return wallOfInstant(instant.getTime(), dtf(timezone));
 }
 
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -199,15 +219,15 @@ export function parseEventForm(
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give the event a title.";
-  else if (title.length > 100) fields.title = "Keep the title to 100 characters.";
+  else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
   const game = str(data.game);
-  if (game && game.length > 100) fields.game = "Keep the game to 100 characters.";
+  if (game && [...game].length > 100) fields.game = "Keep the game to 100 characters.";
   const description = str(data.description);
-  if (description && description.length > 1000) fields.description = "Keep the description to 1000 characters.";
+  if (description && [...description].length > 1000) fields.description = "Keep the description to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
-  if (location && location.length > 255) fields.location = "Keep the location to 255 characters.";
+  if (location && [...location].length > 255) fields.location = "Keep the location to 255 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
   for (const field of ["title", "description", "location"] as const) {
     const raw = data[field];
@@ -236,17 +256,27 @@ export function parseEventForm(
 
   let startsAtUtc: Date | null = null;
   let endsAtUtc: Date | null = null;
-  if (startsRaw && endsRaw && !fields.timezone) {
+  if (!fields.timezone) {
     // Untouched fold/gap-ambiguous wall text keeps the exact instant the
     // form rendered (TOG-6805): the carrier rides in the hidden field, and a
     // match on minute precision means "no keystroke", so the stored instant
     // wins over a re-parse that could land on the other side of the fold.
-    try {
-      startsAtUtc = preservedOrParsed(startsRaw, carriers?.startsAtUtc, timezone);
-      endsAtUtc = preservedOrParsed(endsRaw, carriers?.endsAtUtc, timezone);
-    } catch (e) {
-      if (e instanceof ValidationError) Object.assign(fields, e.fields);
-      else throw e;
+    for (const [raw, carrier, field] of [
+      [startsRaw, carriers?.startsAtUtc, "starts_at"],
+      [endsRaw, carriers?.endsAtUtc, "ends_at"],
+    ] as const) {
+      if (!raw) continue;
+      try {
+        const instant = preservedOrParsed(raw, carrier, timezone);
+        if (field === "starts_at") startsAtUtc = instant;
+        else endsAtUtc = instant;
+      } catch (e) {
+        if (!(e instanceof ValidationError)) throw e;
+        // The shared parser speaks "wall"; the event form needs the input's name.
+        for (const [name, message] of Object.entries(e.fields)) {
+          fields[name === "wall" ? field : name] = message;
+        }
+      }
     }
     if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The end is after the start.";
   }
@@ -307,24 +337,44 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   let position = 0;
   const posRaw = str(data.position);
   if (posRaw !== null) {
-    if (!/^\d+$/.test(posRaw)) fields.position = "Position is 0 or more; lower numbers appear first.";
-    else position = Number(posRaw);
+    position = Number(posRaw);
+    if (!/^\d+$/.test(posRaw) || !Number.isSafeInteger(position) || position > 2147483647) {
+      fields.position = "Position is a whole number from 0 to 2147483647; lower numbers appear first.";
+    }
   }
 
   const startsRaw = str(data.starts_at);
   const endsRaw = str(data.ends_at);
   let startsAtUtc: Date | null = null;
   let endsAtUtc: Date | null = null;
+  let startsAtUtcText: string | null = null;
+  let endsAtUtcText: string | null = null;
   // The show-window is UTC on both sides (legacy labels it "(UTC)").
   for (const [raw, key] of [[startsRaw, "starts_at"], [endsRaw, "ends_at"]] as const) {
     if (raw !== null) {
-      const wall = parseWall(raw);
-      if (!wall) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm, UTC).";
-      else if (key === "starts_at") startsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
-      else endsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
+      if (/\sBC$/i.test(raw)) {
+        fields[key] = "BC dates are not supported. Clear or replace this window bound with an AD date.";
+        continue;
+      }
+      // Featured windows support PostgreSQL precision; event wall times still speak minutes.
+      const match = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/.exec(raw);
+      const wall = match && parseWall(match[1]!);
+      const seconds = Number(match?.[2] ?? 0);
+      const fraction = (match?.[3] ?? "").padEnd(6, "0");
+      if (!wall || wall.y === 0 || seconds > 59) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm[:ss[.ffffff]], UTC; up to 6 fractional digits).";
+      else {
+        // Date.UTC maps years 0–99 to 1900–1999; featured years must stay literal.
+        const instant = new Date(0);
+        instant.setUTCFullYear(wall.y, wall.mo - 1, wall.d);
+        instant.setUTCHours(wall.h, wall.mi, seconds, Number(fraction.slice(0, 3)));
+        const text = `${instant.toISOString().slice(0, 19)}.${fraction}Z`;
+        if (key === "starts_at") { startsAtUtc = instant; startsAtUtcText = text; }
+        else { endsAtUtc = instant; endsAtUtcText = text; }
+      }
     }
   }
-  if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The window ends after it starts.";
+  // Fixed-width UTC strings sort chronologically, even within one Date millisecond.
+  if (startsAtUtcText && endsAtUtcText && endsAtUtcText <= startsAtUtcText) fields.ends_at = "The window ends after it starts.";
 
   if (Object.keys(fields).length > 0) fail(fields);
   return {
@@ -337,6 +387,8 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
     position,
     startsAtUtc,
     endsAtUtc,
+    startsAtUtcText,
+    endsAtUtcText,
   };
 }
 
