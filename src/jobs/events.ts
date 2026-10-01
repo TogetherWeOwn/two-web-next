@@ -118,12 +118,19 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
       // nested transaction on its reserved postgres.js client.
       // pg-proxy avoids postgres-js Drizzle's global timestamp/JSON parser
       // mutation: snapshot/ledger queries on this client still need native types.
-      const db = drizzle(async (query, params) => ({
-        rows: await (sql as postgres.Sql).unsafe(query, params as never[]).values(),
+      const db = drizzle(async (query, params, _method, typings) => ({
+        // Drizzle already JSON-encodes these parameters; native postgres.js
+        // must receive the decoded value to avoid a JSON string audit payload.
+        rows: await (sql as postgres.Sql).unsafe(query, params.map((value, index) =>
+          typings?.[index] === "json" && typeof value === "string" ? JSON.parse(value) : value,
+        ) as never[]).values(),
       }), { schema });
+      // Single-flight excludes other schedulers, not moderator edits. Acquire
+      // the same parent row lock as updateEvent before reading occurrence times;
+      // a waiting READ COMMITTED select returns the newly committed parent.
       const parents = await db.select().from(schema.events).where(and(
         isNotNull(schema.events.recurrenceFrequency), inArray(schema.events.status, ["draft", "published"]),
-      ));
+      )).orderBy(schema.events.id).for("update");
       let created = 0;
       // The writer consumes returned rows only, not postgres-js result metadata.
       const writer = db as unknown as Parameters<typeof materializeMissingInstances>[0];

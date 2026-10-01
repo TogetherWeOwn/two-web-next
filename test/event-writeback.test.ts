@@ -1,4 +1,7 @@
 import postgres from "postgres";
+import { sql as drizzleSql } from "drizzle-orm";
+import { createEvent, updateEvent } from "../src/admin/store";
+import type { EventFormInput } from "../src/admin/validation";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
@@ -9,7 +12,7 @@ import { pgEventStore } from "../src/jobs/events";
 import { reconcileEvents } from "../src/jobs/cron";
 import { trackingQueue } from "../src/jobs/ledger";
 import { BotTransportError } from "../src/jobs/types";
-import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
+import { pgQueueLedger, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
 import { uniqueKey } from "../src/jobs/sync-event";
 import type { BotClient, QueueMessage } from "../src/jobs/types";
 import { enqueueSyncEvent, handleQueue } from "../src/jobs/worker";
@@ -545,6 +548,91 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(await sql`select id from activity_log`).toHaveLength(2);
     expect(await pgEventStore(sql).staleEventKeys()).toEqual([eventKey]);
   });
+
+  for (const order of ["cron then edit", "edit then cron", "cron holds lock", "edit holds lock"] as const) {
+    it(`recurrence backfill serializes with moderator edits: ${order}`, async () => {
+      const db = fixture!.db;
+      const actor = { id: "test-user", username: "test-user" };
+      const input: EventFormInput = { title: "Bounded weekly series", game: null, description: null,
+        startsAtUtc: new Date("2099-01-11T18:00:00Z"), endsAtUtc: new Date("2099-01-11T19:00:00Z"),
+        timezone: "UTC", location: "Voice", capacity: null };
+      const { row: parent } = await createEvent(db, actor, input,
+        { frequency: "weekly", count: 3, endsOn: new Date("2099-01-18T00:00:00Z") });
+      expect(await sql`select recurrence_index from events order by recurrence_index`)
+        .toEqual([{ recurrence_index: 1 }, { recurrence_index: 2 }]);
+      // A normal date edit permits index 3, but only shifts existing children.
+      const earlier = { ...input, startsAtUtc: new Date("2099-01-04T18:00:00Z"), endsAtUtc: new Date("2099-01-04T19:00:00Z") };
+      await updateEvent(db, actor, parent.eventKey, earlier);
+      expect(await sql`select recurrence_index from events order by recurrence_index`)
+        .toEqual([{ recurrence_index: 1 }, { recurrence_index: 2 }]);
+      const later = { ...earlier, startsAtUtc: new Date("2099-01-04T20:00:00Z"), endsAtUtc: new Date("2099-01-04T21:00:00Z") };
+      const flight = pgSingleFlight(sql);
+      let cronPid = 0;
+      let moderatorPid = 0;
+      let holdingPid = 0;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const reconcile = (hold = false) => flight("events:reconcile", async (tx) => {
+        cronPid = (await tx`select pg_backend_pid() as pid`)[0]!.pid;
+        expect(await reconcileEvents({ events: pgEventStore(tx),
+          queue: env.SYNC_EVENT_QUEUE!, lock: pgUniqueLock(sql) })).toEqual({ closed: 0, materialized: 1, resynced: 0 });
+        if (hold) { holdingPid = cronPid; await held; }
+      });
+      const edit = (hold = false) => db.transaction(async (tx) => {
+        moderatorPid = (await tx.execute<{ pid: number }>(drizzleSql`select pg_backend_pid() as pid`))[0]!.pid;
+        // The outer transaction holds updateEvent's real parent/child locks
+        // after its savepoint returns, without changing the store's queries.
+        await updateEvent(tx as unknown as typeof db, actor, parent.eventKey, later);
+        if (hold) { holdingPid = moderatorPid; await held; }
+      });
+      if (order === "cron then edit") { await reconcile(); await edit(); }
+      else if (order === "edit then cron") { await edit(); await reconcile(); }
+      else {
+        const url = testDatabaseUrl(process.env.DATABASE_URL!);
+        const observer = realPostgres(url.href, { max: 1, port: 5432, connect_timeout: 5,
+          password: () => url.password, connection: { search_path: fixture!.schemaName }, onnotice: () => {} });
+        let first: Promise<unknown> | undefined;
+        let second: Promise<unknown> | undefined;
+        try {
+          first = order === "cron holds lock" ? reconcile(true) : edit(true);
+          await vi.waitFor(() => expect(holdingPid).toBeGreaterThan(0));
+          second = order === "cron holds lock" ? edit() : reconcile();
+          // Observe the actual database lock wait, not a sleep or JS scheduling
+          // assumption. Without the parent lock, cron instead waits at the FK
+          // insert after caching old times; releasing the edit yields a stale child.
+          await vi.waitFor(async () => {
+            const waitingPid = order === "cron holds lock" ? moderatorPid : cronPid;
+            expect(waitingPid).toBeGreaterThan(0);
+            const [row] = await observer`select pg_blocking_pids(${waitingPid}) as blockers`;
+            expect(row!.blockers).toContain(holdingPid);
+          }, { interval: 10, timeout: 2000 });
+          release();
+          await Promise.all([first, second]);
+        } finally {
+          release();
+          await Promise.allSettled([first, second]);
+          await observer.end({ timeout: 1 });
+        }
+      }
+      const rows = await sql`select id, event_key, recurrence_index, starts_at, ends_at, status from events order by recurrence_index`;
+      expect(rows.map((row) => ({ index: row.recurrence_index, starts: row.starts_at.toISOString(),
+        ends: row.ends_at.toISOString(), status: row.status }))).toEqual([4, 11, 18].map((day, i) => ({
+          index: i + 1, starts: `2099-01-${String(day).padStart(2, "0")}T20:00:00.000Z`,
+          ends: `2099-01-${String(day).padStart(2, "0")}T21:00:00.000Z`, status: "draft",
+        })));
+      expect(sent).toHaveLength(0);
+      expect(await sql`select causer_id, properties from activity_log
+        where subject_id = ${rows[2]!.event_key} and description like 'created event %'`)
+        .toEqual([{ causer_id: null, properties: expect.objectContaining({ startsAt: expect.any(Object) }) }]);
+      // Native Date serialization/JSON parsing still works after the proxy;
+      // another pass is idempotent and cannot hide a permanently stale child.
+      await flight("events:reconcile", async (tx) => {
+        expect(await reconcileEvents({ events: pgEventStore(tx),
+          queue: env.SYNC_EVENT_QUEUE!, lock: pgUniqueLock(sql) })).toEqual({ closed: 0, materialized: 0, resynced: 0 });
+      });
+      expect(await sql`select id, event_key, recurrence_index, starts_at, ends_at, status from events order by recurrence_index`).toEqual(rows);
+    });
+  }
 
   it("event and RSVP revisions roll back with their mutations", async () => {
     const id = await seed();
