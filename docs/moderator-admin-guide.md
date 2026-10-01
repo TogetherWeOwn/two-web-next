@@ -138,8 +138,10 @@ leave-page warning for unsaved changes (including after a rejected Save).
   status still says `published`; the admin `past` filter need not include every
   ended event.
 - Cancelled/past event fields can still be edited, but saving does not reopen the
-  event. Published/cancelled saves attempt asynchronous Discord write-back;
-  draft/past saves do not. Do not repeatedly save/publish to force a queue repair.
+  event. For the edited event itself, published/cancelled saves attempt asynchronous
+  Discord write-back; draft/past saves do not. Saving a series parent can also
+  shift children and enqueue their write-backs, regardless of the parent's status
+  (see **Weekly series** below). Do not repeatedly save/publish to force a queue repair.
 - There is **no event delete, restore, unpublish, bulk action or cover-image
   upload** in this panel. Repeat rules are available on creation, not as editable
   recurrence fields afterward. Escalate needs outside the visible controls
@@ -166,7 +168,11 @@ still follow the event form's validation rules.
 Each occurrence has its own event page and status. Cancelling an occurrence does
 not cancel the whole series. Moving the parent's start/end times also shifts
 not-yet-started children by the corresponding time differences; started instances
-retain their times. Check affected occurrences after saving. There is no bulk
+retain their times. Shifted published/cancelled children attempt asynchronous
+Discord write-back even when the edited parent is draft or past. For example,
+saving new times on a draft parent can move a published future child and enqueue
+its Discord update. This does not change the children's statuses or confirm
+Discord delivery. Check affected occurrences after saving. There is no bulk
 series cancel or repeat-rule editor.
 
 ### Read the RSVP roster
