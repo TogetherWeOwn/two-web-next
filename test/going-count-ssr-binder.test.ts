@@ -3,12 +3,13 @@ import { runInNewContext } from "node:vm";
 import { URL as NodeURL } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
+import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { createMemorySessionStore } from "../src/sessions";
+import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 
 /**
  * TOG-11227: the event page's going-count badge must mount the shipped
@@ -25,7 +26,7 @@ const SECRET = "test-session-secret-at-least-32-bytes-long";
 const binder = readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8");
 
 // Real Drizzle queries and Hono rendering; all data is local, no DB connection.
-function fixture(over: Partial<typeof events.$inferSelect> = {}) {
+function fixture(over: Partial<typeof events.$inferSelect> = {}, newerEvents = 0) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
     id: 1, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
@@ -37,21 +38,53 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     ...over,
   };
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
-  const db = drizzle(async (sql) => {
+  const encode = (event: typeof row) => columns.map((key) =>
+    event[key] instanceof Date ? (event[key] as Date).toISOString() : event[key]);
+  const newer = Array.from({ length: newerEvents }, (_, i) => ({
+    ...row, id: i + 2, eventKey: String(i + 2).padStart(26, "0"),
+    startsAt: new Date(start.getTime() + (i + 1) * 86400_000),
+  })).reverse();
+  const queries: string[] = [];
+  let going = 3;
+  const db = drizzle(async (sql, params) => {
+    queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
-    if (sql.includes('from "rsvps"')) return { rows: [[row.id, 3]] };
-    if (sql.includes('"event_key" =')) {
-      return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
+    if (sql.includes('from "rsvps"')) return { rows: [[row.id, going]] };
+    if (sql.includes('order by "events"."starts_at" desc limit')) {
+      // Model the collection WHERE before LIMIT, not an already-filtered response.
+      let selected = [...newer, row];
+      if (params.includes("published")) selected = selected.filter((event) => event.status !== "draft");
+      const keyParameter = sql.match(/"event_key" = \$(\d+)/)?.[1];
+      if (keyParameter) selected = selected.filter((event) => event.eventKey === params[Number(keyParameter) - 1]);
+      const limitParameter = sql.match(/limit \$(\d+)/)?.[1];
+      if (limitParameter) selected = selected.slice(0, Number(params[Number(limitParameter) - 1]));
+      return { rows: selected.map(encode) };
     }
+    if (sql.includes('"event_key" =')) return { rows: [encode(row)] };
     return { rows: [] };
   });
+  const store = createMemorySessionStore();
   const env = {
     APP_URL: `${APP_URL}/`,
     SESSION_SECRET: SECRET,
-    SESSION_STORE: createMemorySessionStore(),
+    SESSION_STORE: store,
     ADMIN_DB: db as unknown as Db,
   } as unknown as Env;
-  return { request: () => app.request(PATH, {}, env) };
+  return {
+    queries,
+    setGoing: (value: number) => { going = value; },
+    async cookie(moderator = false) {
+      const token = newSessionToken();
+      await store.create({ tokenHash: await hashToken(token), userId: "member", username: "member", avatar: null,
+        member: true, moderator, expiresAt: new Date(Date.now() + 3600_000) });
+      return (await serializeSigned("__Host-two_session", token, SECRET, {
+        path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+      })).split(";")[0]!;
+    },
+    request(cookie?: string, path = PATH) {
+      return app.request(path, cookie ? { headers: { cookie } } : {}, env);
+    },
+  };
 }
 
 describe("Event page going-count SSR wiring", () => {
@@ -66,6 +99,8 @@ describe("Event page going-count SSR wiring", () => {
     expect(html).toContain('role="status" data-testid="event-going-count"');
     expect(html).toContain("<span data-count>3 of 10 going</span>");
     expect(html).toContain('data-spots>7 of 10 spots left</span>');
+    const badge = html.match(/<span data-count>[\s\S]*?<\/p>/)?.[0];
+    expect(badge?.replace(/<[^>]*>/g, "")).toBe("3 of 10 going · 7 of 10 spots left");
     // Silent on first render: the announcement node exists but is empty.
     expect(html).toContain('data-announcement></span>');
   });
@@ -177,7 +212,7 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     const b = browser(html);
     b.broadcast(KEY, "going");
     expect(b.requests).toHaveLength(1);
-    expect(b.requests[0]!.url).toBe("/events.json");
+    expect(b.requests[0]!.url).toBe(`/events.json?event_key=${KEY}`);
     expect(b.requests[0]!.init.headers).toEqual({ accept: "application/json" });
     b.requests[0]!.resolve(b.okJson([{ event_key: KEY, going_count: 4 }]));
     await b.settle();
@@ -192,6 +227,51 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     expect(b.count.textContent).toBe("10 of 10 going");
     expect(b.spots?.textContent).toBe("Full");
     expect(b.announcement.textContent).toContain("waitlist");
+  });
+
+  it("refreshes an event beyond page one with one GET through the real JSON route", async () => {
+    const source = fixture({}, 25);
+    const cookie = await source.cookie();
+    const firstPage = await source.request(cookie, "/events.json");
+    const firstRows = (await firstPage.json() as { data: { event_key: string }[] }).data;
+    expect(firstRows).toHaveLength(20);
+    expect(firstRows.some((row) => row.event_key === KEY)).toBe(false);
+    const b = browser(await (await source.request()).text());
+    source.setGoing(4);
+    b.broadcast(KEY, "going");
+    expect(b.requests).toHaveLength(1);
+    const response = await source.request(cookie, b.requests[0]!.url);
+    expect(response.status).toBe(200);
+    expect(source.queries.some((sql) => /"event_key" = \$\d+\) order by .* limit/.test(sql))).toBe(true);
+    b.requests[0]!.resolve({ ok: response.ok, json: () => response.json() });
+    await b.settle();
+    expect(b.count.textContent).toBe("4 of 10 going");
+    expect(b.spots?.textContent).toBe("6 of 10 spots left");
+    expect(b.announcement.textContent).toContain("You're going.");
+  });
+
+  it("preserves session, draft visibility and aggregate-only JSON controls for keyed reads", async () => {
+    const source = fixture({ status: "draft" });
+    const url = `/events.json?event_key=${KEY}`;
+    expect((await source.request(undefined, url)).status).toBe(401);
+    const member = await source.cookie();
+    const hidden = await source.request(member, url);
+    expect(hidden.status).toBe(200);
+    expect((await hidden.json() as { data: unknown[] }).data).toEqual([]);
+    const shown = await source.request(await source.cookie(true), url);
+    expect(shown.status).toBe(200);
+    expect(shown.headers.get("cache-control")).toBe("private, no-cache");
+    expect(shown.headers.get("etag")).toBeTruthy();
+    const body = await shown.json() as { data: Record<string, unknown>[] };
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0]).toMatchObject({ event_key: KEY, going_count: 3 });
+    for (const privateField of ["attendees", "user_id", "session", "token"]) {
+      expect(body.data[0]).not.toHaveProperty(privateField);
+    }
+    expect((await source.request(member, "/events.json?event_key=invalid")).status).toBe(422);
+    const missing = await source.request(member, `/events.json?event_key=${"0".repeat(26)}`);
+    expect(missing.status).toBe(200);
+    expect((await missing.json() as { data: unknown[] }).data).toEqual([]);
   });
 
   it("ignores broadcasts for other event keys without a request", async () => {

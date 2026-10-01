@@ -51,7 +51,7 @@
   function refresh(node) {
     var key = node.getAttribute("data-event-key");
     var capacity = node.getAttribute("data-capacity");
-    fetch(URL, { headers: { accept: "application/json" } })
+    fetch(URL + "?event_key=" + encodeURIComponent(key), { headers: { accept: "application/json" } })
       .then(function (res) {
         if (!res.ok) throw new Error("events " + res.status);
         return res.json();

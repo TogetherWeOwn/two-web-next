@@ -532,7 +532,7 @@ export function renderGoingCount(eventKey: string, s: GoingCountState): string {
   const safeKey = eventKey.replace(/"/g, "&quot;");
   const spots =
     s.showSpotsLeft && s.capacity !== null
-      ? `<span data-testid="${SPOTS_LEFT_TESTID}" data-spots>${spotsLeftText(s.going, s.capacity)}</span>`
+      ? ` · <span data-testid="${SPOTS_LEFT_TESTID}" data-spots>${spotsLeftText(s.going, s.capacity)}</span>`
       : "";
   return (
     `<span role="status" data-testid="${GOING_COUNT_TESTID}" ` +
@@ -550,9 +550,9 @@ export interface GoingRefreshRequest {
   eventKey: string;
 }
 
-/** One request per answered event, against the frozen collection URL. */
+/** One request per answered event, filtered before collection pagination. */
 export function goingRefreshRequest(eventKey: string): GoingRefreshRequest {
-  return { method: "GET", url: EVENTS_JSON_URL, eventKey };
+  return { method: "GET", url: `${EVENTS_JSON_URL}?event_key=${encodeURIComponent(eventKey)}`, eventKey };
 }
 
 export interface EventJsonRow {
