@@ -170,8 +170,18 @@ export async function handleAgentEvent(
   credential: string | null,
   clientIp: string | null = null,
 ): Promise<Answer> {
+  const admitted = await admitAgentEvent(sql, cfg, credential, clientIp);
+  return "handle" in admitted ? admitted.handle(body) : admitted;
+}
+
+/** Admission binds the body handler to this hit; HTTP callers run it before buffering. */
+export async function admitAgentEvent(
+  sql: Sql,
+  cfg: IngressConfig,
+  credential: string | null,
+  clientIp: string | null = null,
+): Promise<Answer | { handle: (body: unknown) => Promise<Answer> }> {
   const requestId = ulid();
-  const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
 
   // The outer shield (two-web TOG-8402): every hit per credential per minute,
   // counted before auth, the grant lookup and the audit write — ahead of the
@@ -183,6 +193,11 @@ export async function handleAgentEvent(
   const shieldKey = credential ? await sha256Hex(credential) : `ip:${clientIp ?? "unknown"}`;
   const shielded = await shield(sql, cfg, shieldKey, requestId);
   if (shielded) return shielded;
+  return { handle: (body) => processAgentEvent(sql, cfg, body, credential, requestId) };
+}
+
+async function processAgentEvent(sql: Sql, cfg: IngressConfig, body: unknown, credential: string | null, requestId: string): Promise<Answer> {
+  const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
   let dig: string;
   try {
     dig = await digest(isPlainObject(body) ? body : {});
@@ -236,23 +251,43 @@ export async function handleAgentEvent(
 
   // Replays are answered from the store without spending rate budget.
   const replay = await lookupReplay(sql, grant.id, idem);
-  if (replay) return replayAnswer(sql, grant, op, replay, dig, requestId, idem);
-
-  const limited = await rateLimit(sql, cfg, grant, op as Op);
-  if (limited) {
-    await audit(sql, grant, op, null, idem, dig, requestId, "denied", "rate_limited");
-    return limited;
+  if (!replay) {
+    const limited = await rateLimit(sql, cfg, grant, op as Op);
+    if (limited) {
+      await audit(sql, grant, op, null, idem, dig, requestId, "denied", "rate_limited");
+      return limited;
+    }
   }
 
-  const eventKeyIn = storedEventKey(doc.event_key);
+  let replaying = !!replay;
+  let eventKeyIn = replay ? replay.event_key : storedEventKey(doc.event_key);
   try {
     const lockName = op === "create" || op === "read" ? `agent-event-grant:${grant.id}` : `agent-event:${eventKeyIn ?? `owned:${grant.id}`}`;
     return await sql.begin(async (tx) => {
       await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
+      // Replay identity spans operations and explicit/implicit event addresses.
+      // Acquire its lock before the operation lock and transactional replay check.
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-idempotency:${grant.id}:${idem}`}, 0))`;
+      // Fast receipts can wait on the grant FK too; bound them after the
+      // idempotency lock, without an operation lock, inner budgets or effects.
+      if (replay) return replayAnswer(tx, grant, op, replay, dig, requestId, idem);
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`;
-      // Re-check under the lock: a concurrent identical call may have stored while we waited.
+      // Admission can change while the operation lock waits. Do not replay a success
+      // for a grant that has since expired or been disabled.
+      const refused = await checkGrant(tx, grant, op, idem, dig, requestId, eventKeyIn);
+      if (refused) return refused;
+      // Re-check under the locks: a concurrent call may have stored while we waited.
       const raced = await lookupReplay(tx, grant.id, idem);
-      if (raced) return replayAnswer(tx, grant, op, raced, dig, requestId, idem);
+      if (raced) {
+        // A raced replay waited on the operation lock: revalidate admission before
+        // answering (main #215), then attribute the bounded error receipt to the
+        // stored event key so it never waits on the same held grant FK again.
+        const refused = await checkGrant(tx, grant, op, idem, dig, requestId, eventKeyIn, true);
+        if (refused) return refused;
+        replaying = true;
+        eventKeyIn = raced.event_key;
+        return replayAnswer(tx, grant, op, raced, dig, requestId, idem);
+      }
 
       const out = await execute(tx, grant, op as Op, doc, idem, dig, requestId);
       if (out.stored) {
@@ -264,8 +299,17 @@ export async function handleAgentEvent(
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code === "55P03") {
-      // Contention, not a decision. Audited as an error so a run of these reads as load.
-      await audit(sql, grant, op, eventKeyIn, idem, dig, requestId, "error", "operation_busy");
+      // A replay's grant may be held/deleted: do not wait on the same FK again.
+      // Bound the error receipt too; an unavailable audit table must not turn
+      // a retryable failure into a hung connection or an unaudited success.
+      try {
+        await sql.begin(async (tx) => {
+          await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
+          await audit(tx, replaying ? null : grant, op, eventKeyIn, idem, dig, requestId, "error", "operation_busy");
+        });
+      } catch (auditErr) {
+        if ((auditErr as { code?: string }).code !== "55P03") throw auditErr;
+      }
       return { status: 503, body: { reason: "operation_busy", message: "Another operation on this event is still running. Retry with the same idempotency key.", request_id: requestId } };
     }
     throw err;
@@ -275,6 +319,23 @@ export async function handleAgentEvent(
 async function findGrant(sql: Tx, credential: string): Promise<Grant | null> {
   const [row] = await sql<Grant[]>`SELECT id, agent_id, guild_id, expires_at, disabled_at FROM agent_event_grants WHERE verifier_hash = ${await sha256Hex(credential)}`;
   return row ?? null;
+}
+
+// The final admission lock follows the operation/event locks, never precedes an
+// event-row wait. It holds off provisioning updates until effects commit. Time is
+// sampled after all waits, not with transaction-start now(); epoch milliseconds
+// match initial Date admission without depending on the client's timestamp decoder.
+async function checkGrant(tx: Tx, grant: Grant, op: string, key: string, dig: string, requestId: string, eventKey: string | null, lock = false): Promise<Answer | null> {
+  if (lock) await tx`SELECT id FROM agent_event_grants WHERE id = ${grant.id} FOR SHARE`;
+  const [current] = await tx`SELECT floor(extract(epoch FROM expires_at) * 1000)::double precision AS expires_at_ms,
+                            disabled_at IS NOT NULL AS disabled FROM agent_event_grants WHERE id = ${grant.id}`;
+  const expired = current?.expires_at_ms != null && current.expires_at_ms <= Date.now();
+  if (current && !expired && !current.disabled) return null;
+  const reason = expired ? "grant_expired" : "grant_disabled";
+  await audit(tx, current ? grant : null, op, eventKey, key, dig, requestId, "denied", reason);
+  return { status: 403, body: { reason, message: expired
+    ? "The grant has expired. Expiry rejects ingress and dispatch alike."
+    : "The grant has been disabled by its provisioning owner.", request_id: requestId } };
 }
 
 async function lookupReplay(sql: Tx, grantId: string, key: string): Promise<Row | null> {
@@ -287,6 +348,9 @@ async function replayAnswer(sql: Tx, grant: Grant, op: string, replay: Row, dig:
     await audit(sql, grant, op, replay.event_key, key, dig, requestId, "conflict", "idempotency_conflict");
     return { status: 409, body: { reason: "idempotency_conflict", message: "This idempotency key was already used with a different payload. A key identifies one operation.", request_id: requestId } };
   }
+  // A delivery receipt, not another successful operation: keep stored evidence
+  // untouched and distinguish replays from the original mutation/read.
+  await audit(sql, grant, op, replay.event_key, key, dig, requestId, "replayed", null);
   return { status: replay.status, body: { ...(replay.body as Record<string, unknown>), replayed: true, request_id: requestId } };
 }
 
@@ -370,6 +434,8 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
   };
 
   if (op === "create") {
+    const refused = await checkGrant(tx, grant, op, key, dig, requestId, null, true);
+    if (refused) return refused;
     const [existing] = await tx`SELECT event_key FROM agent_events WHERE agent_grant_id = ${grant.id}`;
     if (existing) return denyOutcome(409, "quota_exceeded", "This grant already owns its one proof event. Updates reuse it.", { event_key: existing.event_key });
     const v = validateFields(doc.fields);
@@ -384,6 +450,8 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
 
   const keyIn = doc.event_key;
   const event = await ownedEvent(tx, grant, keyIn);
+  const refused = await checkGrant(tx, grant, op, key, dig, requestId, typeof event === "string" ? storedEventKey(keyIn) : event.event_key, true);
+  if (refused) return refused;
   if (typeof event === "string") {
     return denyOutcome(event === "foreign_event" ? 403 : 404, event, event === "foreign_event" ? "That event is not owned by this grant." : "This grant owns no such event.", {}, typeof keyIn === "string" ? keyIn : null);
   }

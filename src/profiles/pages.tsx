@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
-import { Layout } from "../pages";
+import { JoinResultBanner, Layout } from "../pages";
+import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import {
   MEMBER_PROFILE_ISLAND,
@@ -27,20 +28,21 @@ const statsLabel = (key: string) => key.replace(/[_-]+/g, " ").replace(/\b\w/g, 
 const statsDate = (date: Date) => date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 
 const MemberStatsBlock: FC<{ stats: MemberStats }> = ({ stats }) => (
-  <section aria-labelledby="member-stats-heading" data-testid="profile-stats">
+  <section class="profile-panel" aria-labelledby="member-stats-heading" data-testid="profile-stats">
     <h2 id="member-stats-heading">Member stats</h2>
-    <dl>
-      {stats.rankKey ? <><dt>Rank</dt><dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd></> : null}
-      {stats.joinedAt ? <><dt>Joined</dt><dd data-testid={PROFILE_JOINED_TESTID}><time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time></dd></> : null}
-      {stats.tenureDays !== null ? <><dt>Tenure</dt><dd>{stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}</dd></> : null}
-      <dt>Membership</dt><dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd>
+    <dl class="profile-stats-grid">
+      {stats.rankKey ? <div><dt>Rank</dt><dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd></div> : null}
+      {stats.joinedAt ? <div><dt>Joined</dt><dd data-testid={PROFILE_JOINED_TESTID}><time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time></dd></div> : null}
+      {stats.tenureDays !== null ? <div><dt>Tenure</dt><dd>{stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}</dd></div> : null}
+      <div><dt>Membership</dt><dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd></div>
+      <div><dt>Milestones</dt><dd>{stats.milestones.length}</dd></div>
     </dl>
     <h3>Milestones</h3>
     {stats.milestones.length > 0 ? (
-      <ol>{stats.milestones.map((milestone) => (
+      <ol class="profile-milestones">{stats.milestones.map((milestone) => (
         <li>
-          {statsLabel(milestone.type)}{milestone.detail ? ` — ${milestone.detail}` : ""}
-          {" · "}<time datetime={milestone.occurredAt.toISOString()}>{statsDate(milestone.occurredAt)}</time>
+          <div><strong>{statsLabel(milestone.type)}</strong>{milestone.detail ? <p>{milestone.detail}</p> : null}</div>
+          <time datetime={milestone.occurredAt.toISOString()}>{statsDate(milestone.occurredAt)}</time>
         </li>
       ))}</ol>
     ) : <p>No milestones yet.</p>}
@@ -58,10 +60,11 @@ export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
   appUrl: string;
+  joinResult?: JoinResult | null;
   stats?: MemberStats | null;
   errors?: Record<string, string>;
   values?: { bio: string; games_text: string; timezone: string };
-}> = ({ member, isOwner, appUrl, stats, errors, values }) => {
+}> = ({ member, isOwner, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const form = values ?? { bio: member.bio ?? "", games_text: member.games.join("\n"), timezone: member.timezone ?? "" };
@@ -71,38 +74,55 @@ export const ProfilePage: FC<{
       canonical={canonicalUrl(appUrl, `/members/${member.id}`)}
       shareDescription={PROFILE_SHARE_DESCRIPTION}
       robots="noindex, nofollow"
+      theme="profile"
     >
-      <header class="bar">
+      <header class="bar profile-header-bar">
         <a class="brand" href="/">TWO</a>
         <nav aria-label="Primary">
           <a class="btn" href="/profile">Your profile</a>
         </nav>
       </header>
       <main id="main" tabindex={-1}>
-        <section aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
-          <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="avatar">
-            {img ? <img src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
-            <span data-avatar-initial="" class="avatar-initial" hidden={!!img}>
-              {[...member.username][0]?.toUpperCase() ?? "?"}
+        {joinResult ? <JoinResultBanner result={joinResult} /> : null}
+        <section class="profile-player" aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
+          <div class="profile-identity">
+            <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="avatar">
+              {img ? <img src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
+              <span data-avatar-initial="" class="avatar-initial" hidden={!!img}>
+                {[...member.username][0]?.toUpperCase() ?? "?"}
+              </span>
             </span>
-          </span>
-          <h1 id="member-heading" tabindex="-1" data-testid={PROFILE_NAME_TESTID}>{member.username}</h1>
-          {!stats?.rankKey && member.rank ? <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p> : null}
-          {!stats?.joinedAt && joined ? <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p> : null}
-          <p data-testid="profile-timezone" hidden={!member.timezone}>{member.timezone ? `Timezone: ${member.timezone}` : ""}</p>
-          <p data-testid="profile-bio">{member.bio || "No bio yet."}</p>
-          <div data-testid="profile-games">
-            {member.games.length > 0 ? (
-              <ul>{member.games.map((g) => <li>{g}</li>)}</ul>
-            ) : (
-              <p>No games listed yet.</p>
-            )}
+            <div>
+              <p class="profile-caption">Member profile</p>
+              <h1 id="member-heading" tabindex="-1" data-testid={PROFILE_NAME_TESTID}>{member.username}</h1>
+              <div class="profile-meta">
+                {!stats?.rankKey && member.rank ? <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p> : null}
+                {!stats?.joinedAt && joined ? <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p> : null}
+                <p data-testid="profile-timezone" hidden={!member.timezone}>{member.timezone ? `Timezone: ${member.timezone}` : ""}</p>
+              </div>
+            </div>
+          </div>
+          <div class="profile-details">
+            <section aria-labelledby="profile-about-heading">
+              <h2 id="profile-about-heading">About</h2>
+              <p class="profile-bio" data-testid="profile-bio">{member.bio || "No bio yet."}</p>
+            </section>
+            <section aria-labelledby="profile-games-heading">
+              <h2 id="profile-games-heading">Games</h2>
+              <div data-testid="profile-games">
+                {member.games.length > 0 ? (
+                  <ul>{member.games.map((g) => <li>{g}</li>)}</ul>
+                ) : (
+                  <p>No games listed yet.</p>
+                )}
+              </div>
+            </section>
           </div>
         </section>
         <script src="/islands/avatar.js" defer></script>
         {stats ? <MemberStatsBlock stats={stats} /> : null}
         {isOwner ? (
-          <section aria-labelledby="edit-heading" data-testid={PROFILE_EDIT_TESTID} {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }} data-member-id={member.id}>
+          <section class="profile-panel profile-editor" aria-labelledby="edit-heading" data-testid={PROFILE_EDIT_TESTID} {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }} data-member-id={member.id}>
             <h2 id="edit-heading" tabindex="-1">Edit your profile</h2>
             <div data-testid="profile-edit-control" hidden>
               <button class="btn" type="button" data-testid="profile-edit-again">Edit your profile</button>
@@ -112,15 +132,18 @@ export const ProfilePage: FC<{
             ) : null}
             <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
               <input type="hidden" name="_method" value="PATCH" />
-              <label>Bio <textarea name="bio" maxlength="1000">{form.bio}</textarea></label>
-              <label>Games (one per line) <textarea name="games_text" maxlength="1700">{form.games_text}</textarea></label>
-              <label>Timezone <input name="timezone" value={form.timezone} placeholder="Europe/London" /></label>
-              <div aria-hidden="true" style="position:absolute;left:-10000px">
+              {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
+              <label class="profile-field">Bio <textarea name="bio" rows={4}>{form.bio}</textarea></label>
+              <label class="profile-field">Games (one per line) <textarea name="games_text" rows={4}>{form.games_text}</textarea></label>
+              <label class="profile-field">Timezone <input name="timezone" value={form.timezone} placeholder="Europe/London" /></label>
+              <div aria-hidden="true" class="sr-only">
                 <label>Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" /></label>
               </div>
               <input type="hidden" name={PROFILE_OPENED_AT_FIELD} value={String(Date.now())} />
-              <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>{PROFILE_COPY.save}</button>
-              <button class="btn" type="reset" data-testid={PROFILE_CANCEL_TESTID}>{PROFILE_COPY.cancel}</button>
+              <div class="actions">
+                <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>{PROFILE_COPY.save}</button>
+                <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>{PROFILE_COPY.cancel}</button>
+              </div>
             </form>
             <script src="/islands/member-profile.js" defer></script>
           </section>
