@@ -25,7 +25,8 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     else if (path === "/e/:key" || path === "/events/:file{.+\\.ics}") auth = "public-draft-moderator";
     else if (path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE")) auth = "member-decoy";
     else if ((path === "/events" && method === "POST") || (path === "/events/:key" && method === "PATCH") ||
-      (method === "POST" && (path === "/events/:key/publish" || path === "/events/:key/cancel"))) auth = "moderator";
+      (method === "POST" && (path === "/events/:key/publish" || path === "/events/:key/cancel" ||
+        path === "/events/:key/rsvp-pause" || path === "/events/:key/rsvp-reopen"))) auth = "moderator";
     else if (path === "/api/agent-events") auth = "machine-bearer";
     else if (path === "/auth/qa/:identity") auth = "staging-token";
     else if (path === "/auth/discord/callback" || path === "/join/callback") auth = "oauth-state";
