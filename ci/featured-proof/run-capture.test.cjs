@@ -34,6 +34,17 @@ async function writeOutput(dir, report = reportFixture()) {
   for (const r of report.results) await fs.writeFile(path.join(dir, r.screenshot), png);
 }
 
+test('both capture jobs use private-repo runners and retain the pinned browser container', async () => {
+  const workflow = await fs.readFile(path.join(__dirname, '../../.github/workflows/featured-offline-proof.yml'), 'utf8');
+  for (const job of ['capture', 'current-source']) {
+    const block = workflow.split(`  ${job}:\n`)[1]?.split(/\n  [a-z-]+:\n/)[0];
+    assert.ok(block, `${job} exists`);
+    assert.match(block, /runs-on: \[self-hosted, two-selfhosted\]/);
+    assert.match(block, /image: mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d/);
+    assert.doesNotMatch(block, /ubuntu-latest/);
+  }
+});
+
 test('unchanged supplied driver and all three fixtures match authorized hashes', async () => {
   await verifyInputs(fixtures);
 });

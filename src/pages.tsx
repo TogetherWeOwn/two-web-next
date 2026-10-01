@@ -11,6 +11,28 @@ const SITE_NAME = "Together We Own";
 
 export const SkipLink: FC = () => <a class="skip-link" href="#main">Skip to content</a>;
 
+export const FeaturedContentItem: FC<{ row: VisibleFeatured; appUrl: string; imageHosts?: string }> = ({ row, appUrl, imageHosts }) => {
+  const src = row.imageUrl ? featuredImageSrc(row.imageUrl, appUrl, imageHosts) : null;
+  return (
+    <article class="card" data-testid="featured-item">
+      <h3>{row.url ? <a href={row.url}>{row.title}</a> : row.title}</h3>
+      {row.body ? <p>{row.body}</p> : null}
+      {src ? (
+        <img
+          class="featured-image"
+          src={src}
+          alt={row.imageAlt?.trim() || row.title}
+          width="640"
+          height="360"
+          loading="lazy"
+          decoding="async"
+          referrerpolicy="no-referrer"
+        />
+      ) : null}
+    </article>
+  );
+};
+
 export const Layout: FC<
   PropsWithChildren<{
     title: string;
@@ -256,27 +278,7 @@ export const Home: FC<{
         <section aria-labelledby="featured-heading" data-testid="featured-content">
           <h2 id="featured-heading">From the community team</h2>
           <div class="facts">
-            {featured.map((item) => (
-              <article class="card" data-testid="featured-item" key={item.id}>
-                <h3>{item.url ? <a href={item.url}>{item.title}</a> : item.title}</h3>
-                {item.body ? <p>{item.body}</p> : null}
-                {(() => {
-                  const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl, imageHosts) : null;
-                  return src ? (
-                  <img
-                    class="featured-image"
-                    src={src}
-                    alt={item.imageAlt?.trim() || item.title}
-                    width="640"
-                    height="360"
-                    loading="lazy"
-                    decoding="async"
-                    referrerpolicy="no-referrer"
-                  />
-                  ) : null;
-                })()}
-              </article>
-            ))}
+            {featured.map((item) => <FeaturedContentItem key={item.id} row={item} appUrl={appUrl} imageHosts={imageHosts} />)}
           </div>
         </section>
       ) : null}
