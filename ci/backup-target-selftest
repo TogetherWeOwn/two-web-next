@@ -151,6 +151,14 @@ else:
             with self.subTest(url_index=urls.index(url)):
                 self.assert_refused(url)
 
+    def test_ipv6_scope_cannot_select_multiple_hosts(self):
+        for host in ["::1%25,alternate.example", "fe80::1%25eth0,alternate.example",
+                     "::1%25,,alternate.example"]:
+            with self.subTest(host=host):
+                self.assert_refused(
+                    "postgres://agent_test:" + PASSWORD + "@[" + host + "]:5433/fixture"
+                )
+
     def test_explicit_target_overrides_all_ambient_pg_settings(self):
         result = self.backup(
             "postgresql://agent_test:" + PASSWORD + "@agent-testdb:5444/fixture"

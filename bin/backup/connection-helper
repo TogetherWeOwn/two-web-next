@@ -27,6 +27,9 @@ def connection_env(url):
     host = parsed.hostname
     if not host or parsed.netloc.count("@") != 1:
         raise ValueError("host or user")
+    # IPv6 scope IDs can contain commas; libpq interprets them as host lists.
+    if "," in host:
+        raise ValueError("host list")
     if ":" in host:
         ipaddress.IPv6Address(host)
     elif not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", host):
