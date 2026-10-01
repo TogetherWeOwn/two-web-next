@@ -115,7 +115,7 @@ export const ProfilePage: FC<{
               <label>Bio <textarea name="bio" maxlength="1000">{form.bio}</textarea></label>
               <label>Games (one per line) <textarea name="games_text" maxlength="1700">{form.games_text}</textarea></label>
               <label>Timezone <input name="timezone" value={form.timezone} placeholder="Europe/London" /></label>
-              <div aria-hidden="true" style="position:absolute;left:-10000px">
+              <div aria-hidden="true" class="sr-only">
                 <label>Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" /></label>
               </div>
               <input type="hidden" name={PROFILE_OPENED_AT_FIELD} value={String(Date.now())} />
