@@ -601,6 +601,96 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect((await pgEventStore(sql).pendingSync(eventKey))!.nextAttemptAt).toBeNull();
   });
 
+  for (const failedWrites of [0, 2]) {
+    it(`fails closed through carrier exhaustion and recovery when both deadline writes fail (${failedWrites})`, async () => {
+      await seed();
+      await enqueueEventSync(env, eventKey, "published");
+      const original = sent[0]!.body;
+      const bot = botDouble();
+      bot.upsertEvent.mockResolvedValueOnce({ ok: false, code: "rate_limited", status: 429, requestId: null,
+        message: "slow down", retryable: true, retryAfterSeconds: 3600 });
+      const start = new Date("2099-01-01T00:00:00Z").getTime();
+      let clock = start;
+      const events = pgEventStore(sql);
+      const dependencies = { ...deps(bot), events, now: () => new Date(clock) };
+      if (failedWrites) {
+        await sql`create sequence retry_after_double_faults`;
+        await sql`create function reject_two_deadlines() returns trigger language plpgsql as $$
+          begin
+            if new.request_attempts = old.request_attempts
+              and new.next_attempt_at > coalesce(old.next_attempt_at, old.mirrored_at) + interval '1 minute'
+              and nextval('retry_after_double_faults') <= 2 then
+              raise exception 'test rejects both Retry-After writes';
+            end if;
+            return new;
+          end;
+        $$`;
+        await sql`create trigger reject_two_deadlines before update on event_sync_attempts
+          for each row execute function reject_two_deadlines()`;
+      }
+      const first = delivery(original);
+      await consume({ messages: [first] }, dependencies);
+      expect(first.ack).not.toHaveBeenCalled();
+      expect(first.retry).toHaveBeenCalledWith({ delaySeconds: 3600 });
+      let pending = (await events.pendingSync(eventKey))!;
+      expect(pending).toMatchObject({ idempotencyKey: original.idempotencyKey, state: "pending", requestAttempts: 1 });
+      expect(pending.nextAttemptAt).toEqual(failedWrites ? null : new Date(start + 3600_000));
+      if (failedWrites) expect(await sql`select last_value from retry_after_double_faults`).toEqual([{ last_value: "2" }]);
+      expect(await sql`select synced_revision, discord_event_id from events`).toEqual([{ synced_revision: "0", discord_event_id: null }]);
+      clock = start + 300_000;
+      const early = delivery(original, 2);
+      await consume({ messages: [early] }, dependencies);
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      expect(early.retry).toHaveBeenCalledWith({ delaySeconds: failedWrites ? 300 : 3300 });
+      await sql`update job_unique_locks set expires_at = now() - interval '1 second'`;
+      await reconcileEvents({ events, queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)),
+        lock: pgUniqueLock(sql), now: () => new Date(clock) });
+      expect(sent).toHaveLength(1);
+      const exhausted = delivery(original, 6);
+      await consume({ messages: [exhausted] }, dependencies);
+      expect(exhausted.ack).toHaveBeenCalledOnce();
+      expect(exhausted.retry).not.toHaveBeenCalled();
+      pending = (await events.pendingSync(eventKey))!;
+      expect(pending.requestAttempts).toBe(1);
+      clock = start + 3600_000;
+      if (failedWrites) {
+        // Even after the old lease and known deadline, loss of the durable result
+        // must not resume I/O. A reviewed settlement can restore that exact result.
+        await reconcileEvents({ events, queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)),
+          lock: pgUniqueLock(sql), now: () => new Date(clock) });
+        expect(sent).toHaveLength(1);
+        expect(await handleSyncEvent(original, 1, dependencies)).toEqual({ retryInSeconds: 300 });
+        expect(bot.upsertEvent).toHaveBeenCalledOnce();
+        await events.deferSync(pending, new Date(start + 3600_000));
+      }
+      await reconcileEvents({ events, queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)),
+        lock: pgUniqueLock(sql), now: () => new Date(clock) });
+      expect(sent).toHaveLength(2);
+      expect(sent[1]!.body.idempotencyKey).toBe(original.idempotencyKey);
+      await consume({ messages: [delivery(sent[1]!.body)] }, dependencies);
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(2);
+      expect(bot.upsertEvent.mock.calls[1]).toEqual(bot.upsertEvent.mock.calls[0]);
+      expect(await sql`select state, request_attempts from event_sync_attempts`)
+        .toEqual([{ state: "succeeded", request_attempts: 2 }]);
+    });
+  }
+
+  it("a claim abandoned before result settlement cannot regain eligibility after a lease", async () => {
+    await seed();
+    const start = new Date("2099-01-01T00:00:00Z");
+    const events = pgEventStore(sql);
+    const key = crypto.randomUUID();
+    const prepared = (await events.prepareSync(eventKey, key, start))!;
+    if ("waiting" in prepared) throw new Error("unexpected pending conflict");
+    const claimed = (await events.claimSync(prepared, start))!;
+    expect(claimed.nextAttemptAt).toBeNull();
+    const bot = botDouble();
+    expect(await handleSyncEvent({ eventKey, idempotencyKey: key }, 1,
+      { bot, events, now: () => new Date(start.getTime() + 3600_000) })).toEqual({ retryInSeconds: 300 });
+    expect(bot.upsertEvent).not.toHaveBeenCalled();
+    expect((await events.pendingSync(eventKey))!.requestAttempts).toBe(1);
+  });
+
   for (const persistenceFault of [false, true]) {
     it(`keeps authoritative Retry-After across early carriers and reconciliation (defer fault=${persistenceFault})`, async () => {
       await seed();
@@ -620,7 +710,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
         await sql`create function reject_first_long_defer() returns trigger language plpgsql as $$
           begin
             if new.request_attempts = old.request_attempts
-              and new.next_attempt_at > old.next_attempt_at + interval '1 minute'
+              and new.next_attempt_at > coalesce(old.next_attempt_at, old.mirrored_at) + interval '1 minute'
               and nextval('retry_after_defer_faults') = 1 then
               raise exception 'test rejects first Retry-After persistence';
             end if;

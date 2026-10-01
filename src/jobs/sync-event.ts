@@ -1,5 +1,5 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
-import { BotTerminalError, BotTransportError } from "./types";
+import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
 import type { BotClient, EventStore, UniqueLock } from "./types";
 
 export type Outcome = { done: true } | { retryInSeconds: number } | { failed: string; definitive?: true };
@@ -46,12 +46,15 @@ export async function handleSyncEvent(
   if (!prepared) return { done: true };
   if ("waiting" in prepared) return waiting();
   if (prepared.state !== "pending") return { done: true };
-  if (prepared.requestAttempts >= SYNC_EVENT.tries || !prepared.nextAttemptAt) {
+  if (prepared.requestAttempts >= SYNC_EVENT.tries) {
     return { failed: "request retry budget exhausted; unresolved identity retained" };
   }
+  // Claims stay closed until their result commits. A lost response/deadline
+  // cannot become eligible again merely because a short lease expired.
+  if (!prepared.nextAttemptAt) return waiting(SYNC_EVENT.uniqueForSeconds);
   const remaining = Math.ceil((prepared.nextAttemptAt.getTime() - now().getTime()) / 1000);
   if (remaining > 0) return waiting(remaining);
-  // A durable claim fences concurrent carriers and leases an in-flight request.
+  // A durable closed claim fences concurrent carriers until its result commits.
   const attempt = await deps.events.claimSync(prepared, now());
   if (!attempt) return waiting();
   // A never-attempted snapshot may have become obsolete since preparation.
@@ -82,7 +85,11 @@ export async function handleSyncEvent(
     if (retryDeadline !== undefined) {
       // A known refusal's persistence failure is not transport ambiguity. Retry
       // the same absolute deadline (including exhausted null), never shorter backoff.
-      await deps.events.deferSync(attempt, retryDeadline);
+      try {
+        await deps.events.deferSync(attempt, retryDeadline);
+      } catch (persistenceError) {
+        throw new SyncRetryPersistenceError(retryDeadline, persistenceError);
+      }
       throw e;
     }
     if (e instanceof BotTerminalError) return { failed: e.message, definitive: true };

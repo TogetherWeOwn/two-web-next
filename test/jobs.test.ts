@@ -134,6 +134,32 @@ describe("SyncEventToDiscord", () => {
     });
   }
 
+  for (const exhausted of [false, true]) {
+    it(`carries the known absolute wait after two failed writes without renewing an exhausted request (${exhausted})`, async () => {
+      const start = 1_000_000;
+      let clock = start;
+      const error = new Error("retry result unavailable");
+      const deferSync = vi.fn<EventStore["deferSync"]>().mockImplementation(async () => {
+        clock += 5000;
+        throw error;
+      });
+      const events = store({ deferSync, claimSync: async (attempt) => ({ ...attempt,
+        requestAttempts: exhausted ? 6 : 1, nextAttemptAt: null }) });
+      const bot = { upsertEvent: vi.fn(async () => fail({ retryAfterSeconds: 42 })) } as unknown as BotClient;
+      const carrier = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "same-key", jobId: "job" });
+      const ledger = memLedger();
+      await consume({ messages: [carrier] }, { bot, events, ledger, lock: memLock(), now: () => new Date(clock) });
+      expect(deferSync.mock.calls.map(([, at]) => at)).toEqual(Array(2).fill(exhausted ? null : new Date(start + 42_000)));
+      expect(deferSync.mock.calls.map(([attempt]) => ({ key: attempt.idempotencyKey, requests: attempt.requestAttempts })))
+        .toEqual(Array(2).fill({ key: "same-key", requests: exhausted ? 6 : 1 }));
+      expect(carrier.retried).toBe(exhausted ? undefined : 32);
+      expect(carrier.acked).toBe(exhausted);
+      expect(ledger.rows.get("job")!.state).toBe(exhausted ? "failed" : "released");
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      expect(events.mirrored).toEqual([]);
+    });
+  }
+
   it("duplicate delivery reuses the key and replays the original answer, mirroring once", async () => {
     const seen = new Map<string, string>();
     let created = 0;

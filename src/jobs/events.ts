@@ -28,15 +28,23 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
 export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): EventStore {
   // Revision dirtiness survives a rejected send and deletion of the last RSVP.
   // The missing-mapping/RSVP predicate remains a migration backstop.
+  // Attempted requests recover independently of first-request eligibility:
+  // closure or later refusal cannot resolve an ambiguous immutable request.
+  // Reconciliation owns the due-time check using its scheduler clock.
   const staleKeys = async (eventKey: string | null) => {
     const rows = await sql`select event_key from events
-      where status in ('published', 'cancelled') and (${eventKey}::text is null or event_key = ${eventKey})
-      and not exists (select 1 from event_sync_attempts rejected
-        where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
-      and (sync_revision > synced_revision or
-        (status = 'published' and (discord_event_id is null or exists (
-          select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
-        ))))`;
+      where (${eventKey}::text is null or event_key = ${eventKey}) and (
+        exists (select 1 from event_sync_attempts pending
+          where pending.event_id = events.id and pending.state = 'pending'
+            and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
+            and pending.next_attempt_at is not null)
+        or (status in ('published', 'cancelled')
+          and not exists (select 1 from event_sync_attempts rejected
+            where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+          and (sync_revision > synced_revision or
+            (status = 'published' and (discord_event_id is null or exists (
+              select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
+            ))))))`;
     return rows.map((row: { event_key: string }) => row.event_key);
   };
   return {
@@ -85,12 +93,20 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
     },
     async claimSync(attempt, now) {
       // Lock the current event with the attempt so close/edit and a first claim
-      // serialize. An unattempted obsolete snapshot has no ambiguous remote
-      // effects: retire it and free the pending slot, leaving the revision dirty.
-      // Once attempted, replay always keeps the immutable payload/key, even past.
+      // serialize. Preparation can also cache a dirty READ COMMITTED snapshot
+      // while its INSERT waits behind another request's settlement. Recheck the
+      // full first-request predicate, not just status/revision, before any I/O.
+      // An ineligible unattempted snapshot retires without consuming a request
+      // or acknowledging the event. Attempted replay keeps its payload/key.
       const [row] = await sql`with candidate as (
-        select a.idempotency_key, a.request_attempts = 0 and
-          (e.status not in ('published', 'cancelled') or e.sync_revision <> a.revision) as obsolete
+        select a.idempotency_key, a.request_attempts = 0 and not (
+          e.status in ('published', 'cancelled') and e.sync_revision = a.revision
+          and not exists (select 1 from event_sync_attempts rejected
+            where rejected.event_id = e.id and rejected.revision = e.sync_revision and rejected.state = 'failed')
+          and (e.sync_revision > e.synced_revision or
+            (e.status = 'published' and (e.discord_event_id is null or exists (
+              select 1 from rsvps where rsvps.event_id = e.id and synced_to_discord_at is null
+            ))))) as obsolete
         from event_sync_attempts a join events e on e.id = a.event_id
         where a.idempotency_key = ${attempt.idempotencyKey}::uuid and a.state = 'pending'
           and a.request_attempts < ${SYNC_EVENT.tries} and a.next_attempt_at <= ${now}
@@ -98,14 +114,13 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
       ) update event_sync_attempts a
         set state = case when candidate.obsolete then 'obsolete' else a.state end,
           request_attempts = a.request_attempts + case when candidate.obsolete then 0 else 1 end,
-          next_attempt_at = case when candidate.obsolete then null
-            else ${new Date(now.getTime() + SYNC_EVENT.uniqueForSeconds * 1000)} end
+          next_attempt_at = null
         from candidate where a.idempotency_key = candidate.idempotency_key
         returning a.*`;
       return row ? attemptFrom(row) : null;
     },
     async deferSync(attempt, nextAttemptAt) {
-      // The claim count fences a late response from an earlier lease holder.
+      // The claim count fences a late result from an earlier claimed request.
       await sql`update event_sync_attempts set next_attempt_at = ${nextAttemptAt}
         where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
           and request_attempts = ${attempt.requestAttempts}`;

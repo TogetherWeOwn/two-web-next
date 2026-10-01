@@ -1,6 +1,7 @@
 import { alertQueueFailing } from "../alerts";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
+import { SyncRetryPersistenceError } from "./types";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
@@ -29,6 +30,7 @@ function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: s
 export async function consume(
   batch: { messages: readonly Msg[] },
   deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger;
+    now?: () => Date;
     needsSync?: EventStore["needsSync"];
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown> },
 ): Promise<void> {
@@ -92,29 +94,39 @@ export async function consume(
           ? await handleSyncEvent(body, m.attempts, deps)
           : await handleCallInternalAction(body, m.attempts, deps.bot);
     } catch (e) {
-      // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
-      // redeliverable throw goes back on the queue with the same message (same
-      // idempotency key); an exhausted throw is terminal, like a failed outcome.
-      console.error("job threw", body.kind, e instanceof Error ? e.message : e);
-      // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
-      if (m.attempts >= JOBS[body.kind].tries) {
-        // An unexpected/exhausted carrier says nothing definitive about the
-        // remote request. Keep any pending snapshot; only retire this ledger.
-        alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
-        // Out of tries: a terminal failure, not a phantom pending row — and not
-        // a retry either. The job already spent its tries (the transport's
-        // max_retries is only a backstop above this cap), so ack it and free
-        // the sync lock instead of requeueing a message the ledger just buried
-        // (which would run again with no live depth accounting and stack up
-        // duplicate failure rows).
-        if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, e instanceof Error ? e.constructor.name : "threw"));
-        if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
-        m.ack();
+      if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
+        // Carry the known wait on this delivery, but only a committed result can
+        // reopen the durable claim. Recovery must not substitute a short lease.
+        console.error("sync retry result persistence failed", e.message);
+        outcome = e.nextAttemptAt === null || m.attempts >= SYNC_EVENT.tries
+          ? { failed: e.message }
+          : { retryInSeconds: Math.max(0, Math.ceil((e.nextAttemptAt.getTime()
+            - (deps.now?.() ?? new Date()).getTime()) / 1000)) };
       } else {
-        if (jobId) await bounded("released", deps.ledger.released(jobId, new Date()));
-        m.retry();
+        // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
+        // redeliverable throw goes back on the queue with the same message (same
+        // idempotency key); an exhausted throw is terminal, like a failed outcome.
+        console.error("job threw", body.kind, e instanceof Error ? e.message : e);
+        // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
+        if (m.attempts >= JOBS[body.kind].tries) {
+          // An unexpected/exhausted carrier says nothing definitive about the
+          // remote request. Keep any pending snapshot; only retire this ledger.
+          alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
+          // Out of tries: a terminal failure, not a phantom pending row — and not
+          // a retry either. The job already spent its tries (the transport's
+          // max_retries is only a backstop above this cap), so ack it and free
+          // the sync lock instead of requeueing a message the ledger just buried
+          // (which would run again with no live depth accounting and stack up
+          // duplicate failure rows).
+          if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, e instanceof Error ? e.constructor.name : "threw"));
+          if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
+          m.ack();
+        } else {
+          if (jobId) await bounded("released", deps.ledger.released(jobId, new Date()));
+          m.retry();
+        }
+        continue;
       }
-      continue;
     }
     if ("retryInSeconds" in outcome) {
       if (jobId)

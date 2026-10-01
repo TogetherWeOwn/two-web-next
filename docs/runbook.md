@@ -322,23 +322,36 @@ attempt snapshots current status/action/payload/revision in `event_sync_attempts
 retries and recovery keep that request's key and payload immutable. Later
 mutations stay dirty until the pending request resolves, then use a new key.
 Drafts/past rows do not start requests. Preparation alone is not a request:
-first claims atomically recheck the current status/revision and retire a stale
-never-attempted snapshot as `obsolete`, without a bot call or marking the event
-synced. The pending slot is then free for a newer eligible revision. Attempted
-requests instead retain their immutable identity even if the event becomes past.
+first claims atomically recheck the current status/revision, synchronization and
+same-revision definitive-refusal eligibility. A stale never-attempted snapshot
+becomes `obsolete`, without a bot call or marking the event synced, even if its
+preparation waited behind another identity's settlement. The pending slot is
+then free for a newer eligible revision. Attempted requests retain their
+immutable identity even if the event becomes past. Reconciliation selects those
+attempted recovery candidates independently of eligibility to start a new
+request, then checks their deadline and remaining budget before sending.
 The bot HTTP adapter remains unwired; this is not proof of live Discord delivery.
 
 Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
 Sync requests independently persist `request_attempts` and `next_attempt_at`:
-claims lease the request for 300 seconds; backoff (`10,60,300,900,3600`) and the
-bot's authoritative Retry-After persist before retry. A failed deadline write
-retries the same selected absolute deadline (or exhausted null), never a shorter
-generic backoff; the local error still propagates. An early/recovered carrier
-cannot contact the bot before eligibility or reset the six-request budget.
-Generic sync throws may call `m.retry()` without a delay, but persisted
-eligibility still prevents an early bot call. Reconciliation skips legitimately
-delayed requests even if the unique lock has expired.
+claims durably set eligibility to null **before** bot I/O. Only a committed
+result can reopen that fence: backoff (`10,60,300,900,3600`) and authoritative
+Retry-After select the next absolute deadline. A failed deadline write retries
+that same Date (or exhausted null), never shorter generic backoff. If both writes
+fail, the consumer carries the known remaining wait on that delivery, but the
+request remains closed across new carriers and reconciliation. The old
+300-second uniqueness TTL is not permission to send again. A concurrent carrier
+waits 300 seconds without bot I/O; carrier exhaustion never clears the fence.
+
+A worker lost after claiming, or unable to commit its result, cannot automatically
+regain request eligibility. Preserve its key/payload/count and reconcile the
+remote result in the bounded reviewed recovery below before committing an
+appropriate deadline or settlement. This intentional fail-closed condition may
+require operator recovery even before six requests; it avoids guessing a wait
+shorter than a response that could not be saved. Ordinary transport retries
+remain automatic when their backoff write commits. Reconciliation skips
+legitimately delayed, null-fenced and exhausted requests even after lock expiry.
 
 A carrier failure is **not** a resolved bot request. Transport loss or a failed
 local completion retains a `pending` snapshot, even after all six automatic
