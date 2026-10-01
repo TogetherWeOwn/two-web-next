@@ -11,10 +11,10 @@
 //   over the explicit zone: refused by shape, the parser only accepts naive
 //   input (TOG-6804).
 // - An autumn-overlap (fold) wall time names two instants. A fresh parse
-//   takes the second (GMT) occurrence — the same instant legacy
-//   EventInput::instant produced; an unchanged edit keeps the exact stored
-//   instant (either side of the fold) via the hidden *_utc carrier
-//   (TOG-6805, see routes).
+//   takes the first occurrence; an unchanged edit keeps the exact stored
+//   instant via the hidden *_utc carrier (TOG-6805, see routes).
+
+import { isFeaturedImageUrl } from "../image-policy";
 
 export type EventStatus = "draft" | "published" | "cancelled" | "past";
 
@@ -93,7 +93,7 @@ function wallOfInstant(instantMs: number, tz: string): string {
   }
   // en-GB can emit hour "24" for midnight; normalise to "00".
   const hour = parts.hour === "24" ? "00" : parts.hour!;
-  return `${parts.year}-${parts.month}-${parts.day} ${hour}:${parts.minute}`;
+  return `${parts.year!.padStart(4, "0")}-${parts.month}-${parts.day} ${hour}:${parts.minute}`;
 }
 
 function pad(n: number): string {
@@ -101,7 +101,7 @@ function pad(n: number): string {
 }
 
 function wallString(p: WallParts): string {
-  return `${p.y}-${pad(p.mo)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}`;
+  return `${String(p.y).padStart(4, "0")}-${pad(p.mo)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}`;
 }
 
 /**
@@ -114,27 +114,28 @@ export function wallToUtc(raw: string, timezone: string): Date {
   if (!parts) throw new ValidationError({ wall: `Not a date and time (want YYYY-MM-DD HH:mm): ${raw}` });
   if (!isKnownTimezone(timezone)) throw new ValidationError({ timezone: `Unknown timezone: ${timezone}` });
 
-  // Iterative offset resolution: guess the wall as UTC, read the zone's
-  // offset at the guess, correct, repeat. Converges in 2-3 passes because
-  // offsets move by whole minutes at most twice a year.
-  let guess = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi);
-  for (let i = 0; i < 4; i++) {
-    const rendered = wallOfInstant(guess, timezone);
-    const rw = parseWall(rendered.replace(" 24:", " 00:"));
-    if (!rw) break;
-    const renderedAsUtc = Date.UTC(rw.y, rw.mo - 1, rw.d, rw.h, rw.mi);
-    const next = guess + (Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi) - renderedAsUtc);
-    if (next === guess) break;
-    guess = next;
+  // Sample offsets on both sides of a nearby transition. Iteration alone
+  // can settle on the SECOND occurrence of a fold (e.g. Europe/London).
+  // Keep only candidates that round-trip, then choose the earliest instant.
+  // This also handles half-hour DST without assuming a one-hour change.
+  const naiveMs = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi);
+  const candidates = new Set<number>();
+  for (const delta of [-36, 0, 36]) {
+    const sample = naiveMs + delta * 3600_000;
+    const rendered = parseWall(wallOfInstant(sample, timezone));
+    if (!rendered) continue;
+    const renderedAsUtc = Date.UTC(rendered.y, rendered.mo - 1, rendered.d, rendered.h, rendered.mi);
+    const candidate = naiveMs - (renderedAsUtc - sample);
+    if (wallOfInstant(candidate, timezone) === wallString(parts)) candidates.add(candidate);
   }
 
-  // Gap check (TOG-6803): a time that never occurred does not round-trip.
-  if (wallOfInstant(guess, timezone) !== wallString(parts)) {
+  // Gap check (TOG-6803): a time that never occurred has no candidate.
+  if (candidates.size === 0) {
     throw new ValidationError({
       wall: `That time never occurred in ${timezone} — clocks skipped forward over it. Pick a time outside the gap.`,
     });
   }
-  return new Date(guess);
+  return new Date(Math.min(...candidates));
 }
 
 /** Render a stored UTC instant as wall text in the row's zone (edit form fill). */
@@ -177,6 +178,19 @@ function fail(fields: FieldErrors): never {
   throw new ValidationError(fields);
 }
 
+// Legacy NoControlCharacters: allow tab/LF/CR and genuine emoji ZWJ
+// sequences, but refuse other Cc and targeted invisible/bidi format chars.
+function containsControlCharacters(value: string): boolean {
+  const stripped = value.replace(/[\t\n\r]/g, "");
+  if (/\p{Cc}/u.test(stripped)) return true;
+  // Match the original text: removing whitespace can manufacture an emoji.
+  const withoutEmojiJoiners = value.replace(
+    /(?:\p{Extended_Pictographic}[\u{FE00}-\u{FE0F}\p{Mn}\p{Me}\p{Sk}\u{E0020}-\u{E007F}]*\u{200D})+\p{Extended_Pictographic}[\u{FE00}-\u{FE0F}\p{Mn}\p{Me}\p{Sk}\u{E0020}-\u{E007F}]*/gu,
+    "",
+  );
+  return /[\u{202A}-\u{202E}\u{2066}-\u{2069}\u{200B}-\u{200D}\u{FEFF}]/u.test(withoutEmojiJoiners);
+}
+
 /** Parse the event create/edit form. `carriers` holds the hidden *_utc edit-page hints (TOG-6805). */
 export function parseEventForm(
   data: Record<string, unknown>,
@@ -194,12 +208,25 @@ export function parseEventForm(
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
   if (location && location.length > 255) fields.location = "Keep the location to 255 characters.";
+  // Check the submitted text, not its trimmed value: trim removes BOM.
+  for (const field of ["title", "description", "location"] as const) {
+    const raw = data[field];
+    if (typeof raw === "string" && containsControlCharacters(raw)) {
+      fields[field] = "Remove control or invisible characters.";
+    }
+  }
 
   let capacity: number | null = null;
-  const capRaw = str(data.capacity);
-  if (capRaw !== null) {
-    if (!/^\d+$/.test(capRaw) || Number(capRaw) < 1) fields.capacity = "Capacity is a headcount of 1 or more, or empty for unlimited.";
-    else capacity = Number(capRaw);
+  // Forms carry strings; JSON and stored PATCH defaults carry numbers. A non-string
+  // value must not silently erase a cap and bypass the occupied-seat guard.
+  const capRaw = typeof data.capacity === "number" ? String(data.capacity) : str(data.capacity);
+  const capError = "Capacity is a headcount from 1 to 2147483647, or empty for unlimited.";
+  if (data.capacity != null && typeof data.capacity !== "string" && typeof data.capacity !== "number") {
+    fields.capacity = capError;
+  } else if (capRaw !== null) {
+    const value = Number(capRaw);
+    if (!/^\d+$/.test(capRaw) || !Number.isInteger(value) || value < 1 || value > 2_147_483_647) fields.capacity = capError;
+    else capacity = value;
   }
 
   const startsRaw = str(data.starts_at);
@@ -242,20 +269,11 @@ function preservedOrParsed(wall: string, carrier: string | undefined, timezone: 
     if (!Number.isNaN(captured.getTime())) {
       // Minute precision: the picker speaks minutes, so seconds would never
       // match and the carrier would be dead. Seconds survive in the carrier.
-      const submittedMinute = utcToWall(wallToUtcSilent(wall, timezone) ?? captured, timezone).slice(0, 16);
-      const capturedMinute = utcToWall(captured, timezone).slice(0, 16);
-      if (submittedMinute === capturedMinute) return captured;
+      const submitted = parseWall(wall);
+      if (submitted && wallString(submitted) === utcToWall(captured, timezone)) return captured;
     }
   }
   return wallToUtc(wall, timezone);
-}
-
-function wallToUtcSilent(wall: string, timezone: string): Date | null {
-  try {
-    return wallToUtc(wall, timezone);
-  } catch {
-    return null;
-  }
 }
 
 function isHttpUrl(raw: string): boolean {
@@ -268,7 +286,7 @@ function isHttpUrl(raw: string): boolean {
 }
 
 /** Parse the featured-content create/edit form (ports FeaturedContentForm rules). */
-export function parseFeaturedForm(data: Record<string, unknown>): FeaturedFormInput {
+export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: string): FeaturedFormInput {
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give it a headline.";
@@ -277,7 +295,9 @@ export function parseFeaturedForm(data: Record<string, unknown>): FeaturedFormIn
   const url = str(data.url);
   if (url && (url.length > 255 || !isHttpUrl(url))) fields.url = "Link is a full http(s) URL, or empty for no link.";
   const imageUrl = str(data.image_url);
-  if (imageUrl && (imageUrl.length > 255 || !isHttpUrl(imageUrl))) fields.image_url = "Image URL is a full http(s) URL to a real photo.";
+  if (imageUrl && (imageUrl.length > 255 || !isFeaturedImageUrl(imageUrl, imageHosts))) {
+    fields.image_url = "Image URL must be HTTPS on an approved public host, without credentials or a custom port (255 characters maximum).";
+  }
   const imageAlt = str(data.image_alt);
   // TOG-8707: an image with no description is silent for screen-reader
   // visitors — the URL and its description arrive together or not at all.

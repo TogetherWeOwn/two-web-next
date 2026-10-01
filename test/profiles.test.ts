@@ -1,3 +1,7 @@
+// route-inventory: GET /profile
+// route-inventory: GET /members/:user
+// route-inventory: PATCH /members/:user
+// route-inventory: POST /members/:user
 // W7 member journeys: /profile, /members/:user, PATCH /members/:user (TOG-9686).
 //
 // Exposure tests come first by design: the matrix pins what a guest, a signed-in
@@ -280,7 +284,9 @@ describe("PATCH /members/:user (memory doubles)", () => {
     for (const fields of bad) {
       const res = await app.request(`/members/${ALICE.userId}`, form(cookie, fields), env);
       expect(res.status).toBe(422);
-      expect(await res.text()).toContain('role="alert"');
+      const html = await res.text();
+      expect(html).toContain('<div role="alert" tabindex="-1" data-testid="profile-error"><ul>');
+      expect(html).not.toContain('<ul role="alert"');
     }
     expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
   });

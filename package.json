@@ -6,10 +6,14 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "check": "npm run typecheck && npm run test",
+    "test:admin-properties": "vitest run test/admin-validation.property.test.ts",
+    "check": "npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover",
+    "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
+    "test:cutover": "node --test ci/cutover-check-selftest.mjs",
+    "a11y": "node ci/a11y.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check"
@@ -20,12 +24,15 @@
     "postgres": "^3.4.9"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@cloudflare/workers-types": "^5.20260929.1",
     "@types/node": "^26.6.3",
     "@vitest/coverage-v8": "^5.0.2",
     "drizzle-kit": "^0.31.11",
     "esbuild": "0.28.1",
+    "fast-check": "4.10.2",
     "miniflare": "5.20260926.1-alpha",
+    "playwright": "^1.63.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
     "wrangler": "^4.143.1"

@@ -58,10 +58,11 @@ describe("wall time → UTC (legacy EventTimezoneTest)", () => {
     expect(wallToUtc("2026-03-29 02:00", "Europe/London").toISOString()).toBe("2026-03-29T01:00:00.000Z");
   });
 
-  it("resolves an autumn fold to the second (GMT) occurrence, matching legacy EventInput::instant", () => {
-    // 2026-10-25 02:00 BST → 01:00 GMT: local 01:00–01:59 happens twice. Legacy pinned
-    // '2026-10-25 01:30' → 2026-10-25 01:30:00 UTC (EventTimezoneTest, autumn overlap row).
-    expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T01:30:00.000Z");
+  it("resolves an autumn fold to the first (BST) occurrence under the current Next policy", () => {
+    // Main's seeded properties (#64) select the earliest round-tripping instant.
+    // Legacy pinned the second (GMT) occurrence; that parity divergence remains
+    // explicit in the acceptance ledger, not waived by this adapted assertion.
+    expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T00:30:00.000Z");
   });
 
   it("rejects impossible calendar dates instead of rolling them over", () => {
@@ -84,14 +85,15 @@ describe("event form floor (legacy EventCapacityFloorTest, form rules)", () => {
   it("accepts the headcount floor, a larger room, and an empty (unlimited) capacity", () => {
     expect(form("1").capacity).toBe(1);
     expect(form("8").capacity).toBe(8);
+    expect(form("2147483647").capacity).toBe(2147483647);
     expect(form("").capacity).toBeNull();
     expect(form(undefined).capacity).toBeNull();
   });
 
-  it("refuses zero, negatives, and non-numeric headcounts", () => {
-    for (const bad of ["0", "-3", "3.5", "eight", "1e2"]) {
+  it("refuses zero, negatives, non-numeric headcounts, and Postgres integer overflow", () => {
+    for (const bad of ["0", "-3", "3.5", "eight", "1e2", "2147483648"]) {
       expect(errors(() => form(bad))).toMatchObject({
-        capacity: "Capacity is a headcount of 1 or more, or empty for unlimited.",
+        capacity: "Capacity is a headcount from 1 to 2147483647, or empty for unlimited.",
       });
     }
   });
@@ -117,8 +119,8 @@ describe("event form floor (legacy EventCapacityFloorTest, form rules)", () => {
     // the fold survives an unchanged resubmit.
     expect(form("2026-10-25T01:30:00.000Z").startsAtUtc.toISOString()).toBe("2026-10-25T01:30:00.000Z"); // GMT side
     expect(form("2026-10-25T00:30:00.000Z").startsAtUtc.toISOString()).toBe("2026-10-25T00:30:00.000Z"); // BST side
-    // Without a carrier (create) the fresh parse lands on the GMT occurrence.
-    expect(form().startsAtUtc.toISOString()).toBe("2026-10-25T01:30:00.000Z");
+    // Without a carrier (create) current Next selects the first, BST occurrence.
+    expect(form().startsAtUtc.toISOString()).toBe("2026-10-25T00:30:00.000Z");
   });
 });
 

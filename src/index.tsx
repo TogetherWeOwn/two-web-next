@@ -21,13 +21,15 @@ import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { inviteDestination } from "./invite";
+import { imageHosts } from "./image-policy";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { sitemapEvents } from "./events/reads";
+import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
+import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
@@ -37,6 +39,7 @@ import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
 import { sameOrigin } from "./same-origin";
+import { trustHosts } from "./trust-hosts";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -72,7 +75,9 @@ const staticSecurityHeaders = secureHeaders({
   strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
-    imgSrc: ["'self'", "https://cdn.discordapp.com"],
+    imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
+    // Only the join page embeds Discord; OAuth/recovery/admin routes cannot frame anything.
+    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com" : "'none'"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     frameAncestors: ["'none'"],
@@ -95,6 +100,11 @@ app.use("*", async (c, next) => {
   await staticSecurityHeaders(c, next);
   await robotsTag(c, async () => {});
 });
+
+// TrustHosts re-expression (W16: TOG-10110): refuse foreign Host values
+// before routing. Mounted after secureHeaders (refusals leave hardened) and
+// before every route; absolute URLs never derive from Host (all from APP_URL).
+app.use("*", trustHosts());
 
 // Before throttles, session rotation, body parsing, or any mounted handler.
 app.use("*", sameOrigin);
@@ -195,9 +205,11 @@ async function issueSession(
   });
 }
 
-async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, rotateToken = true): Promise<Session | null> {
+async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
+  // Anonymous public pages must not depend on session storage or its startup DDL.
+  const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
   if (!row) return null;
   // Abortable calendar fragments validate expiry/revocation but must not delete
@@ -229,16 +241,26 @@ async function readSession(c: Context<{ Bindings: Env }>, store: SessionStore, r
 const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
 
 app.get("/", async (c) => {
-  const store = await storeFor(c);
-  const session = await readSession(c, store);
+  // A DB outage must not break the funnel, including session setup. Fail closed to guest.
+  const session = await readSession(c).catch(() => {
+    // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
+    console.warn("Home session unavailable; serving as guest.", { exception: "SessionReadFailure" });
+    return null;
+  });
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
-  const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
+  const counts = await readCounts(c.env);
+  const [upcomingEvents, featured] = await Promise.all([
+    loadHomeUpcoming(() => dbFor(c)),
+    dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),
+  ]);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,
+    <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
+      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
+      imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
   );
 });
 
@@ -258,7 +280,7 @@ app.get("/discord", (c) => {
 for (const path of ["/about", "/faq"] as const) {
   app.get(path, (c) => {
     c.header("cache-control", "public, max-age=3600");
-    return c.html(path === "/about" ? <About /> : <Faq />);
+    return c.html(path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />);
   });
 }
 
@@ -291,7 +313,7 @@ export function rulesLastUpdated(raw: string | undefined): { iso: string; label:
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules lastUpdated={stamp} />);
+  return c.html(<Rules appUrl={c.env.APP_URL} lastUpdated={stamp} />);
 });
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
@@ -305,7 +327,7 @@ const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
 
 app.get("/privacy", (c) => {
   c.header("cache-control", "public, max-age=3600");
-  return c.html(<Privacy version={POLICY_VERSION} html={PRIVACY_HTML} />);
+  return c.html(<Privacy appUrl={c.env.APP_URL} version={POLICY_VERSION} html={PRIVACY_HTML} />);
 });
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;
@@ -374,6 +396,8 @@ app.post("/api/agent-events", agentEventsRoute);
 type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
 
 app.get("/up", async (c) => {
+  // Fixed app identity for the cutover probe, including unknown/degraded reads.
+  c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
   // The queue ledger lives in the same Postgres as the rest of the W13 backend:
   // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
@@ -469,8 +493,8 @@ app.route("/", profilesApp());
 // W8: public events pages, /events.json and moderator event writes.
 registerEventRoutes(
   app,
-  async (c) => readSession(c, await storeFor(c)),
-  async (c) => readSession(c, await storeFor(c), false),
+  async (c) => readSession(c),
+  async (c) => readSession(c, false),
 );
 
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {

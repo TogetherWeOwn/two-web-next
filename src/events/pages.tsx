@@ -84,11 +84,22 @@ import {
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
 import { googleCalendarUrl } from "./feeds";
-import type { PublicEvent } from "./reads";
+import type { EventAttendee, EventLink, EventNeighbors, PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
   try {
     return new Intl.DateTimeFormat("en-GB", { dateStyle: "full", timeStyle: "short", timeZone: tz }).format(d);
+  } catch {
+    return d.toISOString();
+  }
+};
+
+const fmtWithOffset = (d: Date, tz: string): string => {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric",
+      hour: "2-digit", minute: "2-digit", timeZone: tz, timeZoneName: "longOffset",
+    }).format(d);
   } catch {
     return d.toISOString();
   }
@@ -378,14 +389,14 @@ export const EventsCalendarPage: FC<{
           <div role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
             <a
               href={calendarUrl({ ...state, view: "list" })}
-              aria-pressed={state.view === "list"}
+              aria-current={state.view === "list" ? "page" : undefined}
               data-testid={EVENTS_VIEW_LIST_TESTID}
             >
               List
             </a>{" "}
             <a
               href={calendarUrl({ ...state, view: "calendar" })}
-              aria-pressed={state.view === "calendar"}
+              aria-current={state.view === "calendar" ? "page" : undefined}
               data-testid={EVENTS_VIEW_CALENDAR_TESTID}
             >
               Calendar
@@ -514,7 +525,16 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; session?: Session | null }> = ({ e, appUrl, jsonLd, session }) => {
+export const EventPage: FC<{
+  e: PublicEvent;
+  neighbors: EventNeighbors;
+  related: EventLink[];
+  attendees?: EventAttendee[];
+  appUrl: string;
+  jsonLd: string;
+  session?: Session | null;
+  waitlistPosition?: number | null;
+}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, waitlistPosition }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -524,7 +544,7 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; ses
       {e.status === "draft" ? <p class="notice" data-testid="event-draft">Draft</p> : null}
       {e.status === "past" ? <p class="notice" data-testid="event-past">Past event</p> : null}
       {e.status === "cancelled" ? <p class="notice" data-testid="event-cancelled">Cancelled</p> : null}
-      <h1>{e.title}</h1>
+      <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
       <p>
         <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
       </p>
@@ -547,8 +567,54 @@ export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string; ses
         <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">Copy link</a>
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {attendees.length > 0 ? (
+        <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
+          <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
+          <ul>{attendees.map((attendee) => (
+            <li><a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a></li>
+          ))}</ul>
+        </section>
+      ) : null}
       <script src="/islands/copy-link.js" defer />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+      {neighbors.previous || neighbors.next ? (
+        <nav aria-label="More events" data-testid="event-pagination">
+          {neighbors.previous ? (
+            <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
+              ← Previous event: {neighbors.previous.title}
+            </a>
+          ) : null}{" "}
+          {neighbors.next ? (
+            <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
+              Next event: {neighbors.next.title} →
+            </a>
+          ) : null}
+        </nav>
+      ) : null}
+      {related.length > 0 ? (
+        <section aria-label="Related events" data-testid="event-related">
+          <h2>More events you might like</h2>
+          <ul>
+            {related.map((event) => (
+              <li>
+                <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
+                  {event.title}{" · "}
+                  <time datetime={event.startsAt.toISOString()}>{fmtWithOffset(event.startsAt, event.timezone)}</time>
+                  {event.location ? ` · ${event.location}` : ""}
+                </a>
+              </li>
+            ))}
+          </ul>
+          {!session ? (
+            <>
+              <p>These fill up fast for members. Join the Discord and you&apos;ll hear about the next one before it lands here.</p>
+              <a class="btn" href={`/join?next=${encodeURIComponent(path)}`} data-testid="event-related-join">
+                Join the Discord
+              </a>
+            </>
+          ) : null}
+        </section>
+      ) : null}
     </Shell>
   );
 };

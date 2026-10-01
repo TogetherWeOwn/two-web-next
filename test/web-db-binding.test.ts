@@ -2,7 +2,7 @@
 // The driver wrapper only pins search_path; all SQL goes to test containers.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type postgres from "postgres";
-import app from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
