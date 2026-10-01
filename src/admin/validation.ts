@@ -19,6 +19,9 @@ import { isFeaturedImageUrl } from "../image-policy";
 export type EventStatus = "draft" | "published" | "cancelled" | "past";
 
 export type EventFormInput = {
+  // Deliberately no event key: the route key is minted server-side
+  // (newEventKey) at create and immutable once written. parseEventForm
+  // refuses forged event_key/eventKey input (legacy EventKeyTest).
   title: string;
   game: string | null;
   description: string | null;
@@ -39,6 +42,9 @@ export type FeaturedFormInput = {
   position: number;
   startsAtUtc: Date | null;
   endsAtUtc: Date | null;
+  // Dates serve existing callers; canonical UTC text carries PostgreSQL microseconds.
+  startsAtUtcText?: string | null;
+  endsAtUtcText?: string | null;
 };
 
 /** Field errors keyed by field name, in the form's own terms. */
@@ -214,6 +220,12 @@ export function parseEventForm(
   carriers?: { startsAtUtc?: string; endsAtUtc?: string },
 ): EventFormInput {
   const fields: FieldErrors = {};
+  // The route key is minted server-side and immutable once written (legacy
+  // EventKeyTest): a forged key is refused with 422 rather than applied or
+  // silently ignored. Both spellings are refused; no caller sends a key.
+  if (data.event_key !== undefined || data.eventKey !== undefined) {
+    fields.event_key = "The event key is assigned when the event is created and cannot be changed.";
+  }
   const title = str(data.title);
   if (!title) fields.title = "Give the event a title.";
   else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
@@ -317,7 +329,7 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give it a headline.";
-  else if (title.length > 255) fields.title = "Keep the headline to 255 characters.";
+  else if ([...title].length > 255) fields.title = "Keep the headline to 255 characters.";
   const body = str(data.body);
   const url = str(data.url);
   if (url && (url.length > 255 || !isHttpUrl(url))) fields.url = "Link is a full http(s) URL, or empty for no link.";
@@ -329,29 +341,49 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   // TOG-8707: an image with no description is silent for screen-reader
   // visitors — the URL and its description arrive together or not at all.
   if (imageUrl && !imageAlt) fields.image_alt = "Describe the photo in one plain sentence for screen-reader visitors.";
-  if (imageAlt && imageAlt.length > 255) fields.image_alt = "Keep the alt text to 255 characters.";
+  if (imageAlt && [...imageAlt].length > 255) fields.image_alt = "Keep the alt text to 255 characters.";
 
   let position = 0;
   const posRaw = str(data.position);
   if (posRaw !== null) {
-    if (!/^\d+$/.test(posRaw)) fields.position = "Position is 0 or more; lower numbers appear first.";
-    else position = Number(posRaw);
+    position = Number(posRaw);
+    if (!/^\d+$/.test(posRaw) || !Number.isSafeInteger(position) || position > 2147483647) {
+      fields.position = "Position is a whole number from 0 to 2147483647; lower numbers appear first.";
+    }
   }
 
   const startsRaw = str(data.starts_at);
   const endsRaw = str(data.ends_at);
   let startsAtUtc: Date | null = null;
   let endsAtUtc: Date | null = null;
+  let startsAtUtcText: string | null = null;
+  let endsAtUtcText: string | null = null;
   // The show-window is UTC on both sides (legacy labels it "(UTC)").
   for (const [raw, key] of [[startsRaw, "starts_at"], [endsRaw, "ends_at"]] as const) {
     if (raw !== null) {
-      const wall = parseWall(raw);
-      if (!wall) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm, UTC).";
-      else if (key === "starts_at") startsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
-      else endsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
+      if (/\sBC$/i.test(raw)) {
+        fields[key] = "BC dates are not supported. Clear or replace this window bound with an AD date.";
+        continue;
+      }
+      // Featured windows support PostgreSQL precision; event wall times still speak minutes.
+      const match = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/.exec(raw);
+      const wall = match && parseWall(match[1]!);
+      const seconds = Number(match?.[2] ?? 0);
+      const fraction = (match?.[3] ?? "").padEnd(6, "0");
+      if (!wall || wall.y === 0 || seconds > 59) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm[:ss[.ffffff]], UTC; up to 6 fractional digits).";
+      else {
+        // Date.UTC maps years 0–99 to 1900–1999; featured years must stay literal.
+        const instant = new Date(0);
+        instant.setUTCFullYear(wall.y, wall.mo - 1, wall.d);
+        instant.setUTCHours(wall.h, wall.mi, seconds, Number(fraction.slice(0, 3)));
+        const text = `${instant.toISOString().slice(0, 19)}.${fraction}Z`;
+        if (key === "starts_at") { startsAtUtc = instant; startsAtUtcText = text; }
+        else { endsAtUtc = instant; endsAtUtcText = text; }
+      }
     }
   }
-  if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The window ends after it starts.";
+  // Fixed-width UTC strings sort chronologically, even within one Date millisecond.
+  if (startsAtUtcText && endsAtUtcText && endsAtUtcText <= startsAtUtcText) fields.ends_at = "The window ends after it starts.";
 
   if (Object.keys(fields).length > 0) fail(fields);
   return {
@@ -364,6 +396,8 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
     position,
     startsAtUtc,
     endsAtUtc,
+    startsAtUtcText,
+    endsAtUtcText,
   };
 }
 

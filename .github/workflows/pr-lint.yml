@@ -41,21 +41,22 @@ env:
 jobs:
   pr-lint:
     name: pr-lint
-    runs-on: [self-hosted, two-selfhosted]
+    # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-lint') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 5
+    env:
+      # Metadata lint needs the immutable PR head, not a regenerated merge ref
+      # whose base can differ from the event snapshot. Push/dispatch keep their SHA.
+      PR_LINT_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_LINT_CHECKOUT_SHA }}
 
       - name: Resolve PR title/body
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT: ${{ github.event_name }}
-          # Passed via env (not inlined into the script) so titles/bodies
-          # containing quotes can't break shell parsing.
-          EVENT_TITLE: ${{ github.event.pull_request.title }}
-          EVENT_BODY: ${{ github.event.pull_request.body }}
-          EVENT_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python3 ci/pr-lint-output.py resolve
 
