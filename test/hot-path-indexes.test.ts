@@ -92,7 +92,7 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
   });
 
   it("applies twice over pre-existing legacy indexes without replacing them or losing rows", async () => {
-    const migration = await readFile(fileURLToPath(new URL("../drizzle/1012_hot-path-indexes.sql", import.meta.url).href), "utf8");
+    const migration = await readFile(fileURLToPath(new URL("../drizzle/1013_hot-path-indexes.sql", import.meta.url).href), "utf8");
     await client.begin(async (tx) => {
       // Recreate the independent legacy definitions before applying the new migration.
       // These are only the fixture's indexes, not anything in public or another test schema.

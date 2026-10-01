@@ -26,6 +26,8 @@ export const joinAttempts = pgTable(
   "join_attempts",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
+    // Source PK as a decimal string: no loss of legacy bigint precision.
+    legacyId: text("legacy_id").unique(),
     outcome: varchar("outcome", { length: 16 }).notNull(),
     source: varchar("source", { length: 64 }),
     requestId: text("request_id"),
