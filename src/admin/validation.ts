@@ -307,8 +307,10 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   let position = 0;
   const posRaw = str(data.position);
   if (posRaw !== null) {
-    if (!/^\d+$/.test(posRaw)) fields.position = "Position is 0 or more; lower numbers appear first.";
-    else position = Number(posRaw);
+    position = Number(posRaw);
+    if (!/^\d+$/.test(posRaw) || !Number.isSafeInteger(position) || position > 2147483647) {
+      fields.position = "Position is a whole number from 0 to 2147483647; lower numbers appear first.";
+    }
   }
 
   const startsRaw = str(data.starts_at);
