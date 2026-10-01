@@ -21,11 +21,11 @@ const row = {
   id: 1, eventKey: KEY, title: "Synthetic calendar event", game: null,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-  parentEventId: null, recurrenceIndex: null,
+  parentEventId: null, recurrenceIndex: null, icsSequence: 0n,
   description: "Bring stims.", startsAt: new Date("2026-07-15T18:00:00Z"),
   endsAt: new Date("2026-07-15T20:00:00Z"), timezone: "UTC", location: null,
   capacity: null, status: "published", rsvpOpen: true, createdBy: null,
-  createdAt: new Date("2026-07-01T12:00:00Z"), updatedAt: new Date("2026-07-01T12:00:00Z"), icsSequence: 0n,
+  createdAt: new Date("2026-07-01T12:00:00Z"), updatedAt: new Date("2026-07-01T12:00:00Z"),
 } satisfies typeof events.$inferSelect;
 const env: EnvWithAdminDb = {
   APP_URL: "https://next.example.test",
