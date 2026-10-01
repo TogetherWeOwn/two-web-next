@@ -27,7 +27,7 @@ function lock(root) {
   put(root, "migrations.lock", formatLock(filesystemInventory(root)));
 }
 
-function fixture(t, { bootstrap = false } = {}) {
+function fixture(t, { bootstrap = false, defaultBranch } = {}) {
   const root = mkdtempSync(join(process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "migration-guard-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const [path, sql] of Object.entries(initial)) put(root, path, sql);
@@ -37,7 +37,8 @@ function fixture(t, { bootstrap = false } = {}) {
     mkdirSync(join(root, "ci"));
     renameSync(join(root, "helper-copy.mjs"), join(root, "ci/check-migration-history.mjs"));
   }
-  git(root, "init", "-q");
+  const initConfig = defaultBranch ? ["-c", `init.defaultBranch=${defaultBranch}`] : [];
+  git(root, ...initConfig, "init", "-q", "--initial-branch=fixture");
   git(root, "add", ".");
   git(root, "commit", "-qm", "fixture baseline");
   const base = git(root, "rev-parse", "HEAD");
@@ -249,24 +250,27 @@ test("a corrupt base lock cannot be replaced by a valid candidate lock", (t) => 
   assert.throws(() => checkMigrations(f.root, "HEAD"), /Git baseline lock: lock does not match/);
 });
 
-test("shallow CI fetches event base and dispatch main from a local fixture origin", (t) => {
-  const f = fixture(t);
-  git(f.root, "branch", "main", f.base);
-  put(f.root, "drizzle/1003_new.sql", "SELECT 3;\n");
-  lock(f.root);
-  git(f.root, "add", ".");
-  git(f.root, "commit", "-qm", "candidate");
-  git(f.root, "branch", "candidate");
-  const clone = join(f.root, "shallow-clone");
-  git(f.root, "clone", "--quiet", "--depth=1", "--branch", "candidate", `file://${f.root}`, clone);
-  assert.equal(git(clone, "rev-parse", "--is-shallow-repository"), "true");
-  const eventPath = join(f.root, "event.json");
-  put(f.root, "event.json", JSON.stringify({ pull_request: { base: { sha: f.base } } }));
-  const env = { GITHUB_ACTIONS: "true", GITHUB_EVENT_PATH: eventPath };
-  assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "pull_request" }), f.base);
-  assert.deepEqual(checkMigrations(clone, f.base), { total: 5, historical: 4 });
-  assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "workflow_dispatch" }), f.base);
-});
+for (const defaultBranch of ["main", "master"]) {
+  test(`shallow CI fetches event base and dispatch main (default branch ${defaultBranch})`, (t) => {
+    const f = fixture(t, { defaultBranch });
+    assert.equal(git(f.root, "branch", "--show-current"), "fixture");
+    git(f.root, "branch", "main", f.base);
+    put(f.root, "drizzle/1003_new.sql", "SELECT 3;\n");
+    lock(f.root);
+    git(f.root, "add", ".");
+    git(f.root, "commit", "-qm", "candidate");
+    git(f.root, "branch", "candidate");
+    const clone = join(f.root, "shallow-clone");
+    git(f.root, "clone", "--quiet", "--depth=1", "--branch", "candidate", `file://${f.root}`, clone);
+    assert.equal(git(clone, "rev-parse", "--is-shallow-repository"), "true");
+    const eventPath = join(f.root, "event.json");
+    put(f.root, "event.json", JSON.stringify({ pull_request: { base: { sha: f.base } } }));
+    const env = { GITHUB_ACTIONS: "true", GITHUB_EVENT_PATH: eventPath };
+    assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "pull_request" }), f.base);
+    assert.deepEqual(checkMigrations(clone, f.base), { total: 5, historical: 4 });
+    assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "workflow_dispatch" }), f.base);
+  });
+}
 
 test("CLI guard and regeneration cannot bless a historical edit", (t) => {
   const f = fixture(t);

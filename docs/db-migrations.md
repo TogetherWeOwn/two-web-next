@@ -64,17 +64,53 @@ Rules:
 
 ### Adding a migration and running the offline gate
 
+The guard inventories SQL in `drizzle/`, `db/migrations/` and `migrations/` to
+protect reserved names/bytes across all three roots. **That is not an apply
+manifest:** this repo's `drizzle.config.ts` sets `out: "./drizzle"`, and the pinned
+Drizzle migrator reads SQL named by `drizzle/meta/_journal.json` entries. SQL in
+the other two roots, or unregistered SQL in `drizzle/`, is not applied by the
+current `npm run db:migrate` runner even if the offline guard passes. Nested SQL
+and symlinked files/directories are rejected; `meta/` JSON is not SQL and is not
+hashed by this guard.
+
 1. Fetch current main (`git fetch origin`). Pick an unused number above its
-   highest web number, reconcile any pending migration PRs, and add the SQL
-   directly to `drizzle/`, `db/migrations/` or `migrations/`. Nested SQL and
-   symlinked files/directories are rejected; Drizzle `meta/` JSON is not SQL.
-2. Run `node ci/check-migration-history.mjs --write-lock`. This deterministically
+   highest web number and reconcile any pending migration PRs.
+2. For schema changes, update the configured schemas in `src/db/` and run
+   `npm run db:generate -- --name=tag`. For hand-written SQL, run
+   `npm run db:generate -- --custom --name=tag` and edit **only the new** SQL
+   file. Generation writes the new SQL, snapshot and journal entry to
+   `drizzle/`; copying an SQL file there alone does not register it.
+3. Before committing the new migration, replace its generated ordinal with the
+   chosen web number: for example, rename **new** `drizzle/0017_tag.sql` to
+   `drizzle/1015_tag.sql`, change **only the new** journal entry's `tag` to
+   `1015_tag` (without `.sql`), and rename its **new**
+   `drizzle/meta/0017_snapshot.json` to `drizzle/meta/1015_snapshot.json` to match
+   this repo's snapshot naming. Preserve the generated journal `idx`, `when`,
+   `version` and `breakpoints`, and the snapshot `id`/`prevId` chain. Do not
+   renumber/edit any historical SQL or rewrite existing journal entries or
+   snapshots. The example assumes `1014` is still the highest reserved number;
+   recompute it from fetched main. Commit the new SQL and matching metadata
+   together, reviewing SQL and `--> statement-breakpoint` boundaries.
+4. Run `node ci/check-migration-history.mjs --write-lock`. This deterministically
    regenerates the **candidate** lock from local bytes; it does not authorize a
-   historical change. Review the diff: only the new path/hash should be added.
-3. Run `bash ci/check-migration-numbers.sh`. The existing CI invocation checks
+   historical change. Review the lock diff: only the new path/hash should be
+   added. Run `npm run db:check` to validate Drizzle metadata separately; the
+   history guard does not prove journal completeness or SQL execution.
+5. Run `bash ci/check-migration-numbers.sh`. The existing CI invocation checks
    numbering, current lock completeness, historical names/bytes, and runs the
    hermetic selftests. It requires Node and Git, no database, secrets or SQL
-   execution. Local validation uses fetched `origin/main` as the base.
+   execution. Local validation uses fetched `origin/main` as the base. Applying
+   SQL is a separate gated operation; these authoring commands do not authorize
+   a database connection or deployment.
+
+The pinned versions are Drizzle Kit `0.31.11` and ORM `0.45.3` in
+`package-lock.json`. See the official [generate/custom migration options](https://orm.drizzle.team/docs/drizzle-kit-generate)
+and [migrate behavior](https://orm.drizzle.team/docs/drizzle-kit-migrate). Current
+upstream docs show a newer timestamp-folder layout; this repo still uses the
+pinned flat SQL + `meta/_journal.json` layout, verified against the published
+[Kit package](https://registry.npmjs.org/drizzle-kit/-/drizzle-kit-0.31.11.tgz)
+and [ORM migrator package](https://registry.npmjs.org/drizzle-orm/-/drizzle-orm-0.45.3.tgz).
+Do not convert historical migrations to the newer layout in a numbering PR.
 
 CI obtains its base from GitHub's event: `pull_request.base.sha` for PRs, `before`
 for main pushes, or freshly fetched main for `workflow_dispatch`. A shallow
