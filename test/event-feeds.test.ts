@@ -3,7 +3,8 @@
 // route-inventory: GET /events/:file{.+\.ics}
 // W9 calendar feeds: byte-level fixtures pinned to two-web's EventIcs/EventRss/EventGoogleCalendar
 // output, plus route tests (agent-testdb; skipped without DATABASE_URL).
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { eq } from "drizzle-orm";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
@@ -116,6 +117,34 @@ describe("feed builders (byte fixtures)", () => {
       "https://calendar.google.com/calendar/render?action=TEMPLATE&text=Friday%20night%20Helldivers&dates=20260715T180000Z%2F20260715T200000Z&details=Bring%20stims.&location=Voice%3A%20General",
     );
   });
+
+  it("omits the item description element when the event has none, keeping the channel description", () => {
+    const out = eventsRss([row({ description: null }), row({ eventKey: "01J0000000000000000000EMPT", description: "" })], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    // Exactly one <description> remains: the channel's own.
+    expect(out.match(/<description>/g)).toHaveLength(1);
+    expect(out).toContain("<pubDate>Wed, 15 Jul 2026 18:00:00 +0000</pubDate></item>");
+  });
+
+  it("keeps the permalink guid stable across a rename and renders pubDate in UTC on both DST sides", () => {
+    const summer = eventsRss([row()], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    const renamed = eventsRss([row({ title: "Renamed raid" })], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    const guid = `<guid isPermaLink="true">${APP_URL}/e/${KEY}</guid>`;
+    expect(summer).toContain(guid);
+    expect(renamed).toContain(guid);
+    expect(summer).toContain("<pubDate>Wed, 15 Jul 2026 18:00:00 +0000</pubDate>"); // BST: 19:00 local
+    const winter = eventsRss([row({ startsAt: new Date("2026-01-15T20:00:00Z") })], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    expect(winter).toContain("<pubDate>Thu, 15 Jan 2026 20:00:00 +0000</pubDate>"); // GMT: 20:00 local
+  });
+
+  it("round-trips emoji and multibyte titles byte-for-byte (RSS escaped, ICS raw)", () => {
+    const title = "🎮 Nächster Raid — 東京ゲームナイト";
+    const rss = eventsRss([row({ title })], APP_URL, new Date("2026-07-01T12:00:00Z"));
+    expect(rss).toContain(`<title>${title}</title>`);
+    expect(new TextDecoder().decode(new TextEncoder().encode(rss))).toContain(title);
+    const ics = eventIcs(row({ title }), APP_URL);
+    expect(ics).toContain(`SUMMARY:${title}`);
+    for (const l of ics.split("\r\n")) expect(new TextEncoder().encode(l).length).toBeLessThanOrEqual(75);
+  });
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
@@ -175,5 +204,59 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
     expect((await req("/events/01J0000000000000000000DRF1.ics")).status).toBe(403);
     expect((await req("/events/01J0000000000000000000NONE.ics")).status).toBe(404);
     expect((await req("/events/nope.ics")).status).toBe(404);
+  });
+
+  it.each([
+    ["/events.rss", "<item>"],
+    ["/events.ics", "BEGIN:VEVENT"],
+  ])("%s drops an expired event and rotates its ETag with no write after ends_at", async (path, itemMarker) => {
+    // Legacy FeedExpiryValidatorTest: equality is still upcoming; advancing
+    // the clock one second invalidates the original validator without a write.
+    const key = "01J0000000000000000000EXP1";
+    const title = "Clock-only expiry sentinel";
+    await db.insert(events).values({
+      eventKey: key, title, startsAt: new Date("2026-07-15T18:00:00Z"),
+      endsAt: new Date("2026-07-15T20:00:00Z"), timezone: "UTC", status: "published",
+    });
+    const original = await db.select().from(events).where(eq(events.eventKey, key));
+    expect(original).toHaveLength(1);
+    // Fake only the clock: the driver needs its real socket timers.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-07-15T20:00:00Z"));
+
+      const fresh = await req(path);
+      expect(fresh.status).toBe(200);
+      expect(fresh.headers.get("cache-control")).toBe("max-age=300, public");
+      const freshBody = await fresh.text();
+      expect(freshBody).toContain(itemMarker);
+      expect(freshBody).toContain(title);
+      const etag = fresh.headers.get("etag");
+      expect(etag).toBeTruthy();
+      const unchanged = await req(path, { headers: { "if-none-match": etag! } });
+      expect(unchanged.status).toBe(304);
+      expect(unchanged.headers.get("etag")).toBe(etag);
+      expect(await unchanged.text()).toBe("");
+
+      vi.setSystemTime(new Date("2026-07-15T20:00:01Z"));
+
+      const stale = await req(path, { headers: { "if-none-match": etag! } });
+      expect(stale.status).toBe(200);
+      const staleBody = await stale.text();
+      expect(staleBody).not.toBe(freshBody);
+      expect(staleBody).not.toContain(itemMarker);
+      expect(staleBody).not.toContain(title);
+      const etag2 = stale.headers.get("etag");
+      expect(etag2).toBeTruthy();
+      expect(etag2).not.toBe(etag);
+      const refreshed = await req(path, { headers: { "if-none-match": etag2! } });
+      expect(refreshed.status).toBe(304);
+      expect(refreshed.headers.get("etag")).toBe(etag2);
+      expect(await refreshed.text()).toBe("");
+      expect((await req(`/events/${key}.ics`)).status).toBe(200); // per-event download still serves
+      expect(await db.select().from(events).where(eq(events.eventKey, key))).toEqual(original);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
