@@ -1,0 +1,1 @@
+ALTER TABLE "job_unique_locks" ADD COLUMN "owner_token" uuid;

@@ -1,5 +1,6 @@
 import type { FC } from "hono/jsx";
-import { Layout } from "../pages";
+import { JoinResultBanner, Layout } from "../pages";
+import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import {
   MEMBER_PROFILE_ISLAND,
@@ -58,10 +59,11 @@ export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
   appUrl: string;
+  joinResult?: JoinResult | null;
   stats?: MemberStats | null;
   errors?: Record<string, string>;
   values?: { bio: string; games_text: string; timezone: string };
-}> = ({ member, isOwner, appUrl, stats, errors, values }) => {
+}> = ({ member, isOwner, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const form = values ?? { bio: member.bio ?? "", games_text: member.games.join("\n"), timezone: member.timezone ?? "" };
@@ -79,6 +81,7 @@ export const ProfilePage: FC<{
         </nav>
       </header>
       <main id="main" tabindex={-1}>
+        {joinResult ? <JoinResultBanner result={joinResult} /> : null}
         <section aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
           <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="avatar">
             {img ? <img src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
@@ -89,28 +92,34 @@ export const ProfilePage: FC<{
           <h1 id="member-heading" tabindex="-1" data-testid={PROFILE_NAME_TESTID}>{member.username}</h1>
           {!stats?.rankKey && member.rank ? <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p> : null}
           {!stats?.joinedAt && joined ? <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p> : null}
-          {member.timezone ? <p>Timezone: {member.timezone}</p> : null}
-          {member.bio ? <p>{member.bio}</p> : <p>No bio yet.</p>}
-          {member.games.length > 0 ? (
-            <ul>{member.games.map((g) => <li>{g}</li>)}</ul>
-          ) : (
-            <p>No games listed yet.</p>
-          )}
+          <p data-testid="profile-timezone" hidden={!member.timezone}>{member.timezone ? `Timezone: ${member.timezone}` : ""}</p>
+          <p data-testid="profile-bio">{member.bio || "No bio yet."}</p>
+          <div data-testid="profile-games">
+            {member.games.length > 0 ? (
+              <ul>{member.games.map((g) => <li>{g}</li>)}</ul>
+            ) : (
+              <p>No games listed yet.</p>
+            )}
+          </div>
         </section>
         <script src="/islands/avatar.js" defer></script>
         {stats ? <MemberStatsBlock stats={stats} /> : null}
         {isOwner ? (
           <section aria-labelledby="edit-heading" data-testid={PROFILE_EDIT_TESTID} {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }} data-member-id={member.id}>
             <h2 id="edit-heading" tabindex="-1">Edit your profile</h2>
+            <div data-testid="profile-edit-control" hidden>
+              <button class="btn" type="button" data-testid="profile-edit-again">Edit your profile</button>
+            </div>
             {errors && Object.keys(errors).length > 0 ? (
               <div role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}><ul>{Object.values(errors).map((e) => <li>{e}</li>)}</ul></div>
             ) : null}
             <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
               <input type="hidden" name="_method" value="PATCH" />
-              <label>Bio <textarea name="bio" maxlength="1000">{form.bio}</textarea></label>
-              <label>Games (one per line) <textarea name="games_text" maxlength="1700">{form.games_text}</textarea></label>
+              {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
+              <label>Bio <textarea name="bio">{form.bio}</textarea></label>
+              <label>Games (one per line) <textarea name="games_text">{form.games_text}</textarea></label>
               <label>Timezone <input name="timezone" value={form.timezone} placeholder="Europe/London" /></label>
-              <div aria-hidden="true" style="position:absolute;left:-10000px">
+              <div aria-hidden="true" class="sr-only">
                 <label>Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" /></label>
               </div>
               <input type="hidden" name={PROFILE_OPENED_AT_FIELD} value={String(Date.now())} />
