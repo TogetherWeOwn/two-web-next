@@ -83,6 +83,7 @@ describe("member profile base theme", () => {
     const css = readFileSync(new URL("../public/profile-theme.css", import.meta.url), "utf8");
     expect(css.length).toBeLessThan(8000);
     expect(css).toContain("@media (max-width: 48rem)");
+    expect(css).toContain("@media (max-width: 30rem)");
     expect(css).toContain("grid-template-columns: 1fr");
     expect(css).toContain("[data-testid='profile-games'] li");
     expect(css).toContain("[role='alert']");
