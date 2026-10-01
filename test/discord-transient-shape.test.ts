@@ -66,6 +66,13 @@ describe("Discord transient payload admission", () => {
     expect(source.lastReadFailed()).toBe(false);
   });
 
+  it("treats a non-array payload as a failed read (whole-payload), not a throw", async () => {
+    mockPayload({ message: "nope" });
+    const source = liveDiscordEventsSource(env);
+    expect(await source.upcoming(NOW)).toEqual([]);
+    expect(source.lastReadFailed()).toBe(true);
+  });
+
   it("keeps a healthy sibling when a mixed array contains null and primitives", async () => {
     mockPayload([null, false, "bad row", 42, [], event()]);
     const source = liveDiscordEventsSource(env);
