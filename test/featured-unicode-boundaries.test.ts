@@ -85,6 +85,7 @@ describe("featured Unicode boundaries", () => {
       title: "Game night", body: null, url: "http://example.com", imageUrl: null, imageAlt: null,
       position: 2, isPublished: true,
       startsAtUtc: new Date("2030-01-01T18:00:00Z"), endsAtUtc: new Date("2030-01-01T19:00:00Z"),
+      startsAtUtcText: "2030-01-01T18:00:00.000000Z", endsAtUtcText: "2030-01-01T19:00:00.000000Z",
     });
   });
 
