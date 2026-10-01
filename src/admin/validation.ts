@@ -52,10 +52,25 @@ export class ValidationError extends Error {
 
 const WALL_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})$/;
 
+// Intl construction dominates repeated wall-time validation. Bound shared
+// formatter reuse so request-supplied zones cannot grow isolate memory forever.
+const FORMATTER_CACHE_LIMIT = 64;
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = JSON.stringify([locale, options]);
+  const cached = formatters.get(key);
+  if (cached) return cached;
+  const value = new Intl.DateTimeFormat(locale, options);
+  if (formatters.size >= FORMATTER_CACHE_LIMIT) formatters.delete(formatters.keys().next().value!);
+  formatters.set(key, value);
+  return value;
+}
+
 /** Whether the string names an IANA zone the runtime knows. */
 export function isKnownTimezone(tz: string): boolean {
   try {
-    new Intl.DateTimeFormat("en", { timeZone: tz });
+    formatter("en", { timeZone: tz });
     return true;
   } catch {
     return false;
@@ -76,7 +91,7 @@ function parseWall(raw: string): WallParts | null {
 }
 
 const dtf = (tz: string) =>
-  new Intl.DateTimeFormat("en-GB", {
+  formatter("en-GB", {
     timeZone: tz,
     year: "numeric",
     month: "2-digit",
@@ -201,15 +216,15 @@ export function parseEventForm(
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give the event a title.";
-  else if (title.length > 100) fields.title = "Keep the title to 100 characters.";
+  else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
   const game = str(data.game);
-  if (game && game.length > 100) fields.game = "Keep the game to 100 characters.";
+  if (game && [...game].length > 100) fields.game = "Keep the game to 100 characters.";
   const description = str(data.description);
-  if (description && description.length > 1000) fields.description = "Keep the description to 1000 characters.";
+  if (description && [...description].length > 1000) fields.description = "Keep the description to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
-  if (location && location.length > 255) fields.location = "Keep the location to 255 characters.";
+  if (location && [...location].length > 255) fields.location = "Keep the location to 255 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
   for (const field of ["title", "description", "location"] as const) {
     const raw = data[field];
@@ -238,17 +253,27 @@ export function parseEventForm(
 
   let startsAtUtc: Date | null = null;
   let endsAtUtc: Date | null = null;
-  if (startsRaw && endsRaw && !fields.timezone) {
+  if (!fields.timezone) {
     // Untouched fold/gap-ambiguous wall text keeps the exact instant the
     // form rendered (TOG-6805): the carrier rides in the hidden field, and a
     // match on minute precision means "no keystroke", so the stored instant
     // wins over a re-parse that could land on the other side of the fold.
-    try {
-      startsAtUtc = preservedOrParsed(startsRaw, carriers?.startsAtUtc, timezone);
-      endsAtUtc = preservedOrParsed(endsRaw, carriers?.endsAtUtc, timezone);
-    } catch (e) {
-      if (e instanceof ValidationError) Object.assign(fields, e.fields);
-      else throw e;
+    for (const [raw, carrier, field] of [
+      [startsRaw, carriers?.startsAtUtc, "starts_at"],
+      [endsRaw, carriers?.endsAtUtc, "ends_at"],
+    ] as const) {
+      if (!raw) continue;
+      try {
+        const instant = preservedOrParsed(raw, carrier, timezone);
+        if (field === "starts_at") startsAtUtc = instant;
+        else endsAtUtc = instant;
+      } catch (e) {
+        if (!(e instanceof ValidationError)) throw e;
+        // The shared parser speaks "wall"; the event form needs the input's name.
+        for (const [name, message] of Object.entries(e.fields)) {
+          fields[name === "wall" ? field : name] = message;
+        }
+      }
     }
     if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The end is after the start.";
   }
