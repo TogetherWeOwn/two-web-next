@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Validate DATABASE_URL, then run pg_dump with only its explicit libpq settings."""
+
+import ipaddress
+import os
+import re
+import sys
+from urllib.parse import parse_qsl, unquote, urlsplit
+
+
+def decode(value):
+    value = unquote(value, errors="strict")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("control character")
+    return value
+
+
+def connection_env(url):
+    # urlsplit otherwise silently strips leading whitespace and embedded tabs/newlines.
+    if not url or any(char.isspace() for char in url) or "#" in url:
+        raise ValueError("URL syntax")
+    if re.search(r"%(?![0-9a-fA-F]{2})", url):
+        raise ValueError("percent encoding")
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("postgres", "postgresql"):
+        raise ValueError("scheme")
+    host = parsed.hostname
+    if not host or parsed.netloc.count("@") != 1:
+        raise ValueError("host or user")
+    # IPv6 scope IDs can contain commas; libpq interprets them as host lists.
+    if "," in host:
+        raise ValueError("host list")
+    if ":" in host:
+        ipaddress.IPv6Address(host)
+    elif not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", host):
+        raise ValueError("host")
+    # An omitted port means 5432; an explicitly empty/zero/invalid port refuses.
+    authority = parsed.netloc.rsplit("@", 1)[1]
+    port_text = authority.partition("]")[2] if authority.startswith("[") else authority[len(host):]
+    if port_text and not re.fullmatch(r":[0-9]+", port_text):
+        raise ValueError("port")
+    port = parsed.port if port_text else 5432
+    if not 1 <= port <= 65535:
+        raise ValueError("port")
+    user = decode(parsed.username or "")
+    database = decode(parsed.path[1:]) if parsed.path.startswith("/") else ""
+    if not user or not database or "/" in database or "=" in database:
+        # Never let a dbname-shaped conninfo string select another target.
+        raise ValueError("user or database")
+    settings = {
+        "PGHOST": host,
+        "PGPORT": str(port),
+        "PGUSER": user,
+        "PGPASSWORD": decode(parsed.password or ""),
+        "PGDATABASE": database,
+        # Empty passwords must not fall back to an inherited or default .pgpass.
+        "PGPASSFILE": "/dev/null",
+    }
+    # Neon URLs commonly specify these. Do not accept target/service overrides,
+    # unknown parameters or duplicate keys, and never inherit ambient SSL settings.
+    options = {
+        "sslmode": ("PGSSLMODE", {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}),
+        "channel_binding": ("PGCHANNELBINDING", {"disable", "prefer", "require"}),
+    }
+    seen = set()
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True, errors="strict"):
+        if key not in options or key in seen or value not in options[key][1]:
+            raise ValueError("query option")
+        seen.add(key)
+        settings[options[key][0]] = value
+    return settings
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("neon-backup: connection helper requires an output file", file=sys.stderr)
+        return 2
+    try:
+        settings = connection_env(os.environ.get("DATABASE_URL", ""))
+    except (ValueError, UnicodeError):
+        # Parser exceptions may contain URL/password fragments. Never print them.
+        print("neon-backup: refusing: invalid DATABASE_URL target or options", file=sys.stderr)
+        return 1
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("PG") and key != "DATABASE_URL"}
+    env.update(settings)
+    try:
+        os.execvpe("pg_dump", ["pg_dump", "-w", "-Fc", "-f", sys.argv[1]], env)
+    except OSError:
+        print("neon-backup: could not execute pg_dump", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
