@@ -127,7 +127,8 @@ test("rules accepts rendered Rules but rejects rendered Home with the shared foo
   });
   const { Home, Rules } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
   const home = Home({ session: null, notice: null, inviteUrl: "https://discord.gg/fixture",
-    appUrl: "https://example.test", counts: { memberCount: null, onlineCount: null } }).toString();
+    appUrl: "https://example.test", counts: { memberCount: null, onlineCount: null, ranks: [] },
+    upcomingEvents: [], eventsUnavailable: false, featured: [] }).toString();
   const rules = Rules({ lastUpdated: null }).toString();
   assert.match(home, /<a href="\/rules">House rules<\/a>/);
   assert.match(rules, /id="rules-heading"/);
@@ -142,12 +143,40 @@ test("rules accepts rendered Rules but rejects rendered Home with the shared foo
   }
 });
 
-test("rejects valid JSON with the old /health shape", async (t) => {
-  const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = '{"ok":true}'; });
-  const result = await run(url);
-  assert.equal(result.ok, false);
-  assert.match(result.output, /FAIL \/up: expected JSON \/up status and queue.status/);
+test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"], bundle: true, write: false, format: "esm", platform: "node",
+  });
+  const { upBody } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+  for (const state of ["healthy", "degraded", "unknown", "unconfigured"]) {
+    const body = await upBody(state === "unconfigured" ? null : async () => {
+      if (state === "unknown") throw new Error("fixture outage");
+      const pending = state === "degraded" ? 20 : 0;
+      return { pending, delayed: 0, reserved: 0, total: pending, failed: 0, oldestPendingAgeSeconds: null };
+    });
+    const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = JSON.stringify(body); });
+    const result = await run(url);
+    assert.equal(result.ok, true, `${state}: ${result.output}`);
+  }
 });
+
+for (const body of [
+  '{"ok":true}',
+  "null",
+  '{"status":"healthy","queue":null}',
+  '{"status":"unknown","queue":{"status":"healthy"}}',
+  '{"status":"healthy","queue":{"status":"unknown"}} trailing',
+  "<html>not JSON</html>",
+  '{"status":"healthy"}',
+  '{"status":"healthy","queue":{"status":"unexpected"}}',
+]) {
+  test(`rejects invalid /up envelope (${body})`, async (t) => {
+    const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = body; });
+    const result = await run(url);
+    assert.equal(result.ok, false);
+    assert.match(result.output, /FAIL \/up: expected (JSON \/up status and queue.status|valid JSON object)/);
+  });
+}
 
 test("allows degraded /up and guest admin 403", async (t) => {
   const { url } = await stub(t, (route, result) => {

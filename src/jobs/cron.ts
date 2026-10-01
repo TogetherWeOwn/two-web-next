@@ -19,22 +19,29 @@ import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
  */
 export type SingleFlight = (name: string, fn: (db: TxClient) => Promise<void>) => Promise<boolean>;
 
-/** Ports events:reconcile. Close finished first so the sync pass cannot resurrect an ended event. */
+/**
+ * Ports events:reconcile: close finished, materialise series, re-dispatch stale. Close first so the
+ * sync pass cannot resurrect an ended event; materialise before the sync pass so a new occurrence is
+ * picked up in the same run (new occurrences are drafts, which the stale query never returns).
+ */
 export async function reconcileEvents(deps: {
   events: EventStore;
   queue: { send(b: unknown, o?: { delaySeconds?: number }): Promise<unknown> };
   lock: UniqueLock;
   now?: () => Date;
-}): Promise<{ closed: number; resynced: number }> {
+}): Promise<{ closed: number; materialized: number; resynced: number }> {
   const closed = await deps.events.closeFinished((deps.now ?? (() => new Date()))());
+  const materialized = await deps.events.materializeSeries();
   const stale = await deps.events.staleEventKeys();
   let resynced = 0;
   for (const key of stale) {
     await dispatchSyncEvent(deps.queue, deps.lock, key);
     resynced++; // Laravel counts stale rows, not accepted dispatches
   }
-  if (closed > 0 || resynced > 0) console.info("Event reconcile pass completed.", { closed, resynced });
-  return { closed, resynced };
+  if (closed > 0 || materialized > 0 || resynced > 0) {
+    console.info("Event reconcile pass completed.", { closed, materialized, resynced });
+  }
+  return { closed, materialized, resynced };
 }
 
 export type PruneCounts = {
