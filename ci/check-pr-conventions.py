@@ -52,7 +52,9 @@ def check_pr(title, body, author, require_card_ref):
         failed = True
         print("::error title=PR body::The description is empty. Say what changed, why, "
               "and how it was tested (see the PR template).")
-    if require_card_ref and not re.search(r"\bTOG-\d+\b", body):
+    if require_card_ref and not re.search(
+        r"^[ \t]*Refs:[ \t]+TOG-\d+[ \t]*\r?$", text, flags=re.M
+    ):
         failed = True
         print("::error title=Card reference::Add 'Refs: TOG-1234' to the PR body.")
     return failed
