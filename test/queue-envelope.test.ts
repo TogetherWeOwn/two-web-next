@@ -58,6 +58,13 @@ const malformed: [string, unknown][] = [
   ["null role action", { ...role, action: null }],
   ["missing role user", { ...role, action: { roleKey: "r" } }],
   ["non-string role key", { ...role, action: { userId: "u", roleKey: 42 } }],
+  ["missing role idempotency key", { kind: "role-assign", action: role.action }],
+  ["string role idempotency key", { ...role, idempotencyKey: "k" }],
+  ["array announcement action", { ...announcement, action: [] }],
+  ["array role action", { ...role, action: [] }],
+  ["non-string jobId", { ...sync, jobId: 42 }],
+  ["null jobId", { ...announcement, jobId: null }],
+  ["malformed payload with jobId", { ...sync, eventKey: null, jobId: "private-job-id" }],
 ];
 
 describe("queue envelope batch isolation", () => {
@@ -99,6 +106,31 @@ describe("queue envelope batch isolation", () => {
       expect(console.warn).toHaveBeenCalledExactlyOnceWith("queue malformed message discarded");
       expect(console.error).not.toHaveBeenCalled();
     });
+  });
+
+  it.each([sync, announcement, role])("preserves ledger transitions for a valid carrier", async (body) => {
+    const tracked = { ...body, jobId: "job-1", extraMetadata: { unknown: true } };
+    const m = message(tracked);
+    const deps = dependencies();
+    await consume({ messages: [m] }, deps);
+    expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+    expect(deps.ledger.reserved).toHaveBeenCalledExactlyOnceWith("job-1");
+    expect(deps.ledger.dequeued).toHaveBeenCalledExactlyOnceWith("job-1");
+    expect(deps.ledger.failed).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it("checks field types without adding UUID, snowflake or nonblank policy", async () => {
+    const messages = [
+      message({ kind: "sync-event", eventKey: "", idempotencyKey: "", jobId: undefined }),
+      message({ kind: "announcement", idempotencyKey: "", action: { channelKey: "", body: "" } }),
+      message({ kind: "role-assign", idempotencyKey: null, action: { userId: "opaque", roleKey: "" } }),
+    ];
+    await consume({ messages }, dependencies());
+    for (const m of messages) expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+    expect(handlers.sync).toHaveBeenCalledTimes(1);
+    expect(handlers.internal).toHaveBeenCalledTimes(2);
+    expect(console.warn).not.toHaveBeenCalled();
   });
 
   it.each([["sync", sync], ["announcement", announcement], ["role", role]])(
