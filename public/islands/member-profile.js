@@ -17,7 +17,10 @@
   var id = root.getAttribute("data-member-id");
   var edit = root.querySelector('[data-testid="profile-edit-again"]');
   var editControl = root.querySelector('[data-testid="profile-edit-control"]');
-  var inflight = false;
+  // pending: a PATCH is unsettled at the transport level. Cancel does not clear
+  // it (abort/ignore is not server rollback), so a newer save cannot overtake an
+  // older write that may still commit. Not solved: cross-tab or unknown-outcome races.
+  var pending = false;
   var generation = 0;
 
   function accepted(body) {
@@ -142,9 +145,8 @@
 
   form.addEventListener("reset", function () {
     // Cancel discards the draft, not an already accepted server write. A late
-    // completion must neither change this UI nor unlock a newer request.
+    // completion must not change this UI; the pending guard stays until it settles.
     var cancelled = ++generation;
-    inflight = false;
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
@@ -157,7 +159,7 @@
 
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
-    if (inflight) return;
+    if (pending) return;
     var f = form.elements;
     var body = {
       bio: f.bio.value,
@@ -169,7 +171,7 @@
     clearNotices();
     var errs = clientErrors(body.bio, body.games_text, body.timezone);
     if (errs.length) return errorList(errs);
-    inflight = true;
+    pending = true;
     var request = ++generation;
     fetch("/members/" + encodeURIComponent(id), {
       method: "PATCH",
@@ -201,7 +203,7 @@
         notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
       })
       .then(function () {
-        if (request === generation) inflight = false;
+        pending = false;
       });
   });
 })();
