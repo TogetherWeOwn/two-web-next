@@ -195,7 +195,7 @@ describe("remote runner evidence persistence (offline)", () => {
   it("keeps only enum-shaped refusal reasons", () => {
     const base = { ok: false, cleanup: true, error: "remote_staging_preflight_refused" };
     expect(parseRemoteResult({ ...base, refusal: ["binding_user_mismatch"] }).refusal).toEqual(["binding_user_mismatch"]);
-    for (const bad of ["x", ["host=ep-secret.neon.tech"], [1]])
+    for (const bad of ["x", ["host=ep-secret.neon.tech"], [1], ["private_password"]])
       expect(() => parseRemoteResult({ ...base, refusal: bad })).toThrow("remote_preview_invalid_result");
   });
   it("accepts explicit preflight refusal without a schema or SQL success", async () => {

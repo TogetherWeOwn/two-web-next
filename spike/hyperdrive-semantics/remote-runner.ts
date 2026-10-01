@@ -4,7 +4,7 @@ import { open, writeFile, readFile, mkdir, mkdtemp, rename } from "node:fs/promi
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { REMOTE_TARGET, requireRemoteReceipt, type RemoteReceipt } from "./remote-target";
+import { REFUSAL_REASONS, REMOTE_TARGET, requireRemoteReceipt, type RemoteReceipt } from "./remote-target";
 
 export async function collectRemoteReceipt(token: string, agentId: string, get = providerRead): Promise<RemoteReceipt> {
   if (!token || !agentId) throw new Error("assigned_cloudflare_token_and_agent_required");
@@ -118,8 +118,8 @@ export function parseRemoteResult(value: unknown): RemoteResult {
     if (result.ok || result.cleanup !== true || value.schema !== undefined || value.created !== undefined ||
         checkFields.some((field) => value[field] !== undefined)) return invalid();
     if (value.refusal !== undefined) {
-      if (!Array.isArray(value.refusal) || value.refusal.length > 8 ||
-          !value.refusal.every((r) => typeof r === "string" && /^[a-z_]{3,48}$/.test(r))) return invalid();
+      if (!Array.isArray(value.refusal) || value.refusal.length > REFUSAL_REASONS.length ||
+          !value.refusal.every((r) => typeof r === "string" && (REFUSAL_REASONS as readonly string[]).includes(r))) return invalid();
       result.refusal = value.refusal as string[];
     }
     return result;

@@ -24,26 +24,31 @@ export function createRemoteProbe() {
 
 // Fixed enum of failed predicates. Never values, hosts or credentials.
 export function refusalReasons(env: Env, now = Date.now()): string[] {
-  const reasons: string[] = [];
-  let receipt: RemoteReceipt | undefined;
-  try { receipt = JSON.parse(env.PREFLIGHT ?? ""); } catch { reasons.push("receipt_unparseable"); }
-  if (receipt) {
-    try { requireRemoteReceipt(receipt, now); } catch {
-      const age = now - Date.parse(receipt?.observedAt);
-      reasons.push(!Number.isFinite(age) || age < 0 || age > 300_000 ? "receipt_stale_or_unparseable_time" : "receipt_target_mismatch");
+  const reasons = new Set<string>();
+  try {
+    let receipt: unknown;
+    try { receipt = JSON.parse(env.PREFLIGHT ?? ""); } catch { reasons.add("receipt_unparseable"); }
+    if (!reasons.has("receipt_unparseable")) {
+      if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) reasons.add("receipt_not_object");
+      else {
+        try { requireRemoteReceipt(receipt as RemoteReceipt, now); } catch {
+          const age = now - Date.parse((receipt as RemoteReceipt).observedAt);
+          reasons.add(!Number.isFinite(age) || age < 0 || age > 300_000 ? "receipt_stale_or_unparseable_time" : "receipt_target_mismatch");
+        }
+      }
     }
-  }
-  const db = env.DB;
-  if (!db || typeof db.connect !== "function") reasons.push("binding_missing_or_not_hyperdrive");
-  else {
-    if (!db.host) reasons.push("binding_host_missing");
-    else if (db.host === "agent-testdb" || db.host.endsWith(".neon.tech")) reasons.push("binding_host_direct_or_local");
-    if (db.database !== REMOTE_TARGET.database) reasons.push("binding_database_mismatch");
-    if (db.user !== REMOTE_TARGET.user) reasons.push("binding_user_mismatch");
-    if (!db.password) reasons.push("binding_password_missing");
-    if (!Number.isInteger(db.port) || db.port < 1 || db.port > 65535) reasons.push("binding_port_invalid");
-  }
-  return reasons;
+    const db = env.DB;
+    if (!db || typeof db.connect !== "function") reasons.add("binding_missing_or_not_hyperdrive");
+    else {
+      if (typeof db.host !== "string" || !db.host) reasons.add("binding_host_missing");
+      else if (db.host === "agent-testdb" || db.host.endsWith(".neon.tech")) reasons.add("binding_host_direct_or_local");
+      if (db.database !== REMOTE_TARGET.database) reasons.add("binding_database_mismatch");
+      if (db.user !== REMOTE_TARGET.user) reasons.add("binding_user_mismatch");
+      if (!db.password) reasons.add("binding_password_missing");
+      if (!Number.isInteger(db.port) || db.port < 1 || db.port > 65535) reasons.add("binding_port_invalid");
+    }
+  } catch { reasons.add("preflight_internal_error"); }
+  return [...reasons];
 }
 
 async function execute(env: Env): Promise<Response> {

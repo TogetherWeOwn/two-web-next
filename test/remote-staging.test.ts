@@ -114,4 +114,16 @@ describe("preflight refusal diagnosis", () => {
     expect(refusalReasons(bad)).toEqual(["binding_user_mismatch", "binding_password_missing"]);
     expect(refusalReasons({ ...env, PREFLIGHT: "{" })).toContain("receipt_unparseable");
   });
+  it.each(["null", "false", "0", '""', "[]"])("refuses non-object receipt %s without throwing", async (raw) => {
+    const { refusalReasons } = await import("../spike/hyperdrive-semantics/remote-worker");
+    expect(refusalReasons({ ...environment(), PREFLIGHT: raw })).toContain("receipt_not_object");
+  });
+  it("returns structured refusal for malformed timestamp and non-string host", async () => {
+    const { refusalReasons } = await import("../spike/hyperdrive-semantics/remote-worker");
+    const env = environment();
+    const r = { ...receipt(), observedAt: 5 as unknown as string };
+    expect(refusalReasons({ ...env, PREFLIGHT: JSON.stringify(r) })).toEqual(["receipt_stale_or_unparseable_time"]);
+    const db = { ...env.DB, host: 5 } as unknown as Hyperdrive;
+    expect(refusalReasons({ ...env, DB: db })).toEqual(["binding_host_missing"]);
+  });
 });
