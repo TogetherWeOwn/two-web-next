@@ -66,6 +66,9 @@ export const agentEventGrants = pgTable(
     verifierHash: varchar("verifier_hash", { length: 64 }).notNull().unique(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    // Legacy cutover evidence; ingress still enforces its own one-event quota.
+    maxEvents: integer("max_events").notNull().default(1),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("agent_event_grants_agent_id_idx").on(t.agentId)],
@@ -83,6 +86,7 @@ export const agentEventIdempotencyKeys = pgTable(
     status: smallint("status").notNull(),
     body: jsonb("body").notNull(),
     eventKey: varchar("event_key", { length: 26 }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   // The replay store is unique on (grant, key); rows are never deleted by the request path.
@@ -106,6 +110,8 @@ export const agentEventAudits = pgTable(
     requestId: text("request_id").notNull(),
     result: varchar("result", { length: 16 }).notNull(),
     reasonCode: varchar("reason_code", { length: 64 }),
+    discordEventId: text("discord_event_id"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("agent_event_audits_grant_created_idx").on(t.grantId, t.createdAt), index("agent_event_audits_event_key_idx").on(t.eventKey)],

@@ -248,7 +248,7 @@ app.get("/", async (c) => {
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
-  const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
+  const counts = await readCounts(c.env);
   const [upcomingEvents, featured] = await Promise.all([
     loadHomeUpcoming(() => dbFor(c)),
     dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),

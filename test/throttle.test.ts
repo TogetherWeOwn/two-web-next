@@ -35,6 +35,14 @@ describe("every mutating route is throttled", () => {
     expect(bare).toEqual([]);
   });
 
+  it("registers throttled pause/reopen actions in both route families", () => {
+    for (const prefix of ["/events", "/admin/events"]) {
+      for (const action of ["rsvp-pause", "rsvp-reopen"]) {
+        expect(keys.get(`POST ${prefix}/:key/${action}`)).toBe(true);
+      }
+    }
+  });
+
   it("keeps the exemption list honest (every entry is a real route)", () => {
     for (const k of Object.keys(EXEMPT)) expect(keys.has(k), k).toBe(true);
   });
@@ -88,6 +96,19 @@ describe("throttle middleware", () => {
 });
 
 describe("budgets on the legacy paths", () => {
+  it("pause/reopen share the existing 30/min event-write budget", async () => {
+    const { sql } = fakeStore();
+    const e = { APP_URL: "https://next.example.test", THROTTLE_STORE: async () => sql } as unknown as EnvWithThrottle;
+    const actions = ["publish", "cancel", "rsvp-pause", "rsvp-reopen"];
+    const init = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
+    for (let i = 0; i < 30; i++) {
+      expect((await app.request(`/events/abc/${actions[i % actions.length]}`, init, e)).status).toBe(401);
+    }
+    const res = await app.request("/events/abc/rsvp-reopen", init, e);
+    expect(res.status).toBe(429);
+    expect(await res.json()).toMatchObject({ reason: "rate_limited", retry_after: 30 });
+  });
+
   it("logout: 30 then 429; qa login: 10 then 429", async () => {
     const { sql } = fakeStore();
     const e = {
