@@ -33,13 +33,14 @@ import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswe
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
+import { eventKeyAllowed } from "./keys";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
 export type SessionReader = (c: Ctx) => Promise<Session | null>;
 
-const KEY_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+// Demo keys remain restricted to staging/local application bindings.
 
 export function eventJson(e: PublicEvent) {
   return {
@@ -241,7 +242,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   // Same view policy as /e/:key: drafts are moderator-only; cancelled/past download fine.
   app.get("/events/:file{.+\\.ics}", async (c) => {
     const key = c.req.param("file").slice(0, -4);
-    if (!KEY_RE.test(key)) return c.notFound();
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return c.notFound();
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const e = await getEventRow(db, key);
@@ -262,7 +263,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return db ? (entry) => recordAccess(db, entry) : null;
   }), async (c) => {
     const key = c.req.param("key") ?? "";
-    if (!KEY_RE.test(key)) return c.notFound();
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return c.notFound();
     const db = await dbFor(c);
     if (!db) return c.text("Events temporarily unavailable", 503);
     const e = await getPublicEvent(db, key);
@@ -421,7 +422,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // Accepted, then refused: answering for the caller instead would look like it worked.
     if (input.user_id !== undefined && String(input.user_id) !== who.id) return c.json({ error: "forbidden" }, 403);
     const key = c.req.param("key");
-    if (!KEY_RE.test(key)) return c.json({ error: "not_found" }, 404);
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     // Policy, clock and budget are decided inside writeRsvp, after all blocking waits
@@ -454,7 +455,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // Only the caller's own row is reachable: the delete is keyed on the session user.
     // The budget is charged inside withdrawRsvp, atomically with the delete.
     const key = c.req.param("key");
-    const r = await withdrawRsvp(db, KEY_RE.test(key) ? key : "", who.id);
+    const r = await withdrawRsvp(db, eventKeyAllowed(key, c.env.APP_URL) ? key : "", who.id);
     if (r.limited) return rateLimitExceeded(c, r.retryAfter);
     await dispatchRsvpSync(c.env, key, r.status);
     return c.body(null, 204);

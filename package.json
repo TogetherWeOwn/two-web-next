@@ -12,6 +12,7 @@
     "test:admin-properties": "vitest run test/admin-validation.property.test.ts",
     "check": "npm run typecheck && npm run config:check && npm run test",
     "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
+    "seed:staging": "node bin/seed-staging.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check"
