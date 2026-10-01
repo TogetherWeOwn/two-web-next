@@ -34,7 +34,7 @@ import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./
 import type { SessionStore } from "../sessions";
 import {
   type EventRow,
-  type FeaturedRow,
+  type FeaturedEditRow,
   createEvent,
   createFeatured,
   deleteFeatured,
@@ -454,8 +454,7 @@ function eventValues(row: EventRow): Record<string, unknown> {
   };
 }
 
-function featuredValues(row: FeaturedRow): Record<string, unknown> {
-  const wall = (d: Date | null) => d === null ? "" : d.toISOString().slice(0, -1).replace("T", " ");
+function featuredValues(row: FeaturedEditRow): Record<string, unknown> {
   return {
     title: row.title,
     body: row.body ?? "",
@@ -464,8 +463,8 @@ function featuredValues(row: FeaturedRow): Record<string, unknown> {
     image_alt: row.imageAlt ?? "",
     is_published: row.isPublished ? "on" : "",
     position: String(row.position),
-    starts_at: wall(row.startsAt),
-    ends_at: wall(row.endsAt),
+    starts_at: row.startsAtText ?? "",
+    ends_at: row.endsAtText ?? "",
   };
 }
 

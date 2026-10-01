@@ -636,10 +636,10 @@ export const FeaturedFormPage: FC<{
               <input id={id} name="position" type="text" inputmode="numeric" value={val(values, "position") || "0"} />
             )}
           </Field>
-          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm[:ss[.SSS]], or empty)" errors={errors}>
+          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} />}
           </Field>
-          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm[:ss[.SSS]], or empty)" errors={errors}>
+          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
           </Field>
           <div class="actions">

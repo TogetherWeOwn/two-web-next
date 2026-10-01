@@ -3,7 +3,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { parseFeaturedForm, ValidationError, wallToUtc } from "../src/admin/validation";
-import { featuredContents } from "../src/db/admin-schema";
+import { activityLog, featuredContents } from "../src/db/admin-schema";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Env } from "../src/env";
 import { listVisibleFeatured } from "../src/featured";
@@ -48,7 +48,7 @@ describe("featured UTC window precision (local fixtures)", () => {
 
   it.each([
     "2026-02-30 12:34:56.789", "2026-10-01 24:00:00.000", "2026-10-01 12:60:00.000",
-    "2026-10-01 12:34:60.000", "2026-10-01 12:34:56.7891", "2026-10-01 12:34.789",
+    "2026-10-01 12:34:60.000", "2026-10-01 12:34:56.7891234", "2026-10-01 12:34.789",
     "2026-10-01T12:34:56.789Z", "2026-10-01T12:34:56.789+01:00", "not a date",
   ])("rejects invalid or offset-bearing UTC window text: %s", (raw) => {
     expect(fieldErrors({ starts_at: raw })).toHaveProperty("starts_at");
@@ -68,6 +68,17 @@ describe("featured UTC window precision (local fixtures)", () => {
     for (const end of [start, "2026-10-01 12:34:56.788"]) {
       expect(fieldErrors({ starts_at: start, ends_at: end }).ends_at).toBe("The window ends after it starts.");
     }
+  });
+
+  it.each(["7", "78", "789", "7891", "78912", "789123"])("carries all fractional digits (%s) as canonical UTC text", (fraction) => {
+    const parsed = parseFeaturedForm({ title: "Slot", starts_at: `2026-10-01 12:34:56.${fraction}` });
+    expect(parsed.startsAtUtcText).toBe(`2026-10-01T12:34:56.${fraction.padEnd(6, "0")}Z`);
+  });
+
+  it("compares normalized UTC microseconds rather than truncated Dates or raw text", () => {
+    const fields = { title: "Slot", starts_at: "2026-10-01 12:34:56.7", ends_at: "2026-10-01T12:34:56.700001" };
+    expect(parseFeaturedForm(fields).endsAtUtcText).toBe("2026-10-01T12:34:56.700001Z");
+    expect(fieldErrors({ ...fields, ends_at: "2026-10-01T12:34:56.700000" })).toHaveProperty("ends_at");
   });
 
   it("does not broaden event wall-time parsing to seconds or milliseconds", () => {
@@ -96,7 +107,10 @@ describe.skipIf(!process.env.DATABASE_URL)("featured edit precision (isolated te
   let id: number;
   const fields = { title: "Precise slot", body: "Original body", position: "2", is_published: "on" };
 
-  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); });
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    await fixture.client`SET TIME ZONE 'UTC'`;
+  });
   afterAll(async () => { await fixture?.dispose(); });
   afterEach(() => { vi.useRealTimers(); });
   beforeEach(async () => {
@@ -129,6 +143,117 @@ describe.skipIf(!process.env.DATABASE_URL)("featured edit precision (isolated te
     body: new URLSearchParams({ ...fields, ...values }),
   }, bindings);
   const stored = async () => (await fixture.db.select().from(featuredContents).where(eq(featuredContents.id, id)))[0]!;
+
+  // SQL text assertions are essential: Date equality hides lost microseconds.
+  const preciseStart = "2026-10-01 12:34:56.789123";
+  const preciseEnd = "2026-10-01 13:45:12.345678";
+  const seedWindow = async (start = preciseStart, end = preciseEnd) => {
+    await fixture.client`UPDATE featured_contents SET starts_at = ${start}::timestamptz, ends_at = ${end}::timestamptz WHERE id = ${id}`;
+  };
+  const sqlWindow = async () => {
+    const [row] = await fixture.client`SELECT starts_at::text AS start, ends_at::text AS end FROM featured_contents WHERE id = ${id}`;
+    return row;
+  };
+
+  it.each([
+    ["title", "Microsecond headline"], ["body", "Microsecond body"], ["position", "9"],
+  ])("retains PostgreSQL microseconds on a %s-only edit", async (field, value) => {
+    await seedWindow();
+    const before = await sqlWindow();
+    const assertBoundaries = async () => {
+      for (const [at, visible] of [
+        [startsAt, false], [new Date(startsAt.getTime() + 1), true],
+        [endsAt, true], [new Date(endsAt.getTime() + 1), false],
+      ] as const) {
+        expect((await listVisibleFeatured(fixture.db, at)).some((row) => row.id === id)).toBe(visible);
+      }
+    };
+    await assertBoundaries();
+    expect((await save({ ...windowFields(await read()), [field]: value })).status).toBe(303);
+    expect(await sqlWindow()).toEqual(before);
+    await assertBoundaries();
+    const [audit] = await fixture.db.select().from(activityLog).where(eq(activityLog.subjectId, String(id)));
+    expect(audit!.properties).not.toHaveProperty("startsAt");
+    expect(audit!.properties).not.toHaveProperty("endsAt");
+  });
+
+  it.each([
+    ["starts_at", "2026-10-01 12:35:56.789124"],
+    ["ends_at", "2026-10-01 13:46:12.345679"],
+    ["starts_at", ""], ["ends_at", ""],
+  ])("edits/clears %s while preserving the opposite bound's microseconds", async (field, value) => {
+    await seedWindow();
+    const before = await sqlWindow();
+    expect((await save({ ...windowFields(await read()), [field]: value })).status).toBe(303);
+    const after = await sqlWindow();
+    expect(after![field === "starts_at" ? "end" : "start"]).toBe(before![field === "starts_at" ? "end" : "start"]);
+    expect(after![field === "starts_at" ? "start" : "end"]).toBe(value ? `${value}+00` : null);
+  });
+
+  it("validates ordering within one millisecond without losing PostgreSQL precision", async () => {
+    await seedWindow(preciseStart, "2026-10-01 12:34:56.789124");
+    const before = await sqlWindow();
+    const windows = windowFields(await read());
+    expect((await save({ ...windows, title: "One microsecond window" })).status).toBe(303);
+    expect(await sqlWindow()).toEqual(before);
+    for (const end of [preciseStart, "2026-10-01 12:34:56.789122"]) {
+      expect((await save({ ...windows, ends_at: end })).status).toBe(422);
+      expect(await sqlWindow()).toEqual(before);
+    }
+  });
+
+  it("renders and persists UTC microseconds independently of connection formatting", async () => {
+    await seedWindow();
+    const before = await sqlWindow();
+    await fixture.client`SET TIME ZONE 'America/New_York'`;
+    await fixture.client`SET DateStyle TO 'ISO, DMY'`;
+    try {
+      const windows = windowFields(await read());
+      expect(windows).toEqual({ starts_at: preciseStart, ends_at: preciseEnd });
+      expect((await save({ ...windows, title: "Connection independent" })).status).toBe(303);
+    } finally {
+      await fixture.client`SET TIME ZONE 'UTC'`;
+      await fixture.client`SET DateStyle TO 'ISO, MDY'`;
+    }
+    expect(await sqlWindow()).toEqual(before);
+  });
+
+  it("creates a window at full PostgreSQL precision", async () => {
+    const response = await admin.request("/featured", {
+      method: "POST",
+      headers: { cookie, origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...fields, starts_at: preciseStart, ends_at: preciseEnd }),
+    }, bindings);
+    expect(response.status).toBe(303);
+    id = Number(response.headers.get("location")!.split("/").pop());
+    expect(await sqlWindow()).toEqual({ start: `${preciseStart}+00`, end: `${preciseEnd}+00` });
+    expect(windowFields(await read())).toEqual({ starts_at: preciseStart, ends_at: preciseEnd });
+  });
+
+  it("retains microseconds through a validation error and corrected retry", async () => {
+    await seedWindow();
+    const before = await sqlWindow();
+    const rejected = await save({ ...windowFields(await read()), title: "" });
+    expect(rejected.status).toBe(422);
+    expect((await save({ ...windowFields(await rejected.text()), title: "Corrected microseconds" })).status).toBe(303);
+    expect(await sqlWindow()).toEqual(before);
+  });
+
+  it.each([
+    ["", ""], ["2026-10-01 12:34", "2026-10-01 13:45:12.345678"],
+  ])("keeps nonfinite stored windows recoverable by clearing or replacing them", async (start, end) => {
+    await seedWindow("-infinity", "infinity");
+    const windows = windowFields(await read());
+    expect(windows).toEqual({ starts_at: "-infinity", ends_at: "infinity" });
+    expect((await save({ ...windows, title: "Must fix nonfinite bounds" })).status).toBe(422);
+    expect(await sqlWindow()).toEqual({ start: "-infinity", end: "infinity" });
+    expect((await save({ ...windows, starts_at: start, ends_at: end })).status).toBe(303);
+    expect(await sqlWindow()).toEqual({ start: start ? "2026-10-01 12:34:00+00" : null, end: end ? `${end}+00` : null });
+    const [audit] = await fixture.db.select().from(activityLog).where(eq(activityLog.subjectId, String(id)));
+    expect(audit!.properties).toMatchObject({
+      startsAt: { before: "-infinity" }, endsAt: { before: "infinity" },
+    });
+  });
 
   it.each([
     ["title", "New headline"], ["body", "New body"], ["position", "7"],
