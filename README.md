@@ -46,6 +46,13 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   Bot/Discord adapters are still reject-all stubs; the separate event write-back
   queue is not bound. These are not a claim of end-to-end live bot parity.
 
+## Moderator guides
+
+- [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
+  event and featured-content workflows, dashboard diagnostics, and safe escalation.
+- [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
+  current notices, recovery pages, and the invite fallback.
+
 ## Develop and test safely
 
 Use Node **22+** (CI uses Node 24). Install development dependencies even when
