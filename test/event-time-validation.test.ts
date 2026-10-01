@@ -108,7 +108,7 @@ describe("event form floor (legacy EventCapacityFloorTest, form rules)", () => {
           timezone: "Europe/London",
         }),
       ),
-    ).toMatchObject({ wall: expect.stringContaining("Not a date and time") });
+    ).toEqual({ starts_at: "Not a date and time (want YYYY-MM-DD HH:mm): 2026-07-15T20:00:00+02:00" });
   });
 
   it("keeps the exact stored instant for unchanged fold-ambiguous wall text (TOG-6805 carrier)", () => {
