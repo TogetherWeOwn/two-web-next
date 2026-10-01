@@ -20,6 +20,7 @@ import { type Context, type Next, Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { dbFor, type EnvWithAdminDb } from "../admin/db";
+import { requestBodyLimit } from "../body-limit";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
@@ -102,7 +103,11 @@ export function profilesApp(deps: ProfileDeps = {}) {
       const row = await sessions.get(await hashToken(token));
       if (row) viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
     } catch (err) {
-      console.error("profiles could not resolve the session; refusing.", { error: String(err) });
+      // Bounded like every other session-failure log: class name only — driver
+      // messages can carry DSN fragments (TOG-10355).
+      console.error("profiles could not resolve the session; refusing.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
       return c.text("Profiles temporarily unavailable", 503);
     }
     // A cookie whose row is gone (revoked/expired/rotated) is a guest.
@@ -138,15 +143,18 @@ export function profilesApp(deps: ProfileDeps = {}) {
   app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));
   app.get("/members/:user", (c) => render(c, c.req.param("user"), "profiles.show"));
 
-  const patch = async (c: Ctx, forced?: Record<string, unknown>) => {
-    const id = c.req.param("user") ?? "";
+  const admitWrite = async (c: Ctx, next: Next) => {
     const viewer = c.get("viewer");
     const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(() => ({ limited: false }) as Verdict);
-    if (verdict.limited) {
-      return rateLimitExceeded(c, verdict.retryAfter);
-    }
+    if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
     // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
+    const id = c.req.param("user") ?? "";
     if (!SNOWFLAKE.test(id) || viewer.id !== id) return c.text("Forbidden", 403);
+    await next();
+  };
+
+  const patch = async (c: Ctx, forced?: Record<string, unknown>) => {
+    const id = c.req.param("user") ?? "";
     const store = await storeFor(c);
     if (!store) return c.text("Profiles temporarily unavailable", 503);
     const member = await store.find(id);
@@ -199,9 +207,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
     return c.redirect(`/members/${id}`, 303);
   };
 
-  app.patch("/members/:user", (c) => patch(c));
+  app.patch("/members/:user", admitWrite, requestBodyLimit("form"), (c) => patch(c));
   // Plain HTML forms cannot PATCH: the edit form posts `_method=PATCH`.
-  app.post("/members/:user", async (c) => {
+  app.post("/members/:user", admitWrite, requestBodyLimit("form"), async (c) => {
     const ct = c.req.header("content-type") ?? "";
     if (ct.includes("application/x-www-form-urlencoded") || ct.includes("multipart/form-data")) {
       const body = await c.req.parseBody({ all: true }).catch(() => null);

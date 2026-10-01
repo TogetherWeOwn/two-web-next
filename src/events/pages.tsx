@@ -74,6 +74,7 @@ import {
   monthGrid,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
+  renderGoingCount,
   transientEventKey,
   wallDateIso,
   wallTimeHm,
@@ -356,7 +357,7 @@ export const EventsCalendarPage: FC<{
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
   return (
-    <Shell title="Events" canonical={`${appUrl}/events`} description="Game nights, tournaments and whatever else the community puts on.">
+    <Shell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on.">
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
@@ -496,7 +497,7 @@ export const EventsCalendarPage: FC<{
 };
 
 export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string }> = ({ rows, page, hasMore, totalPages, appUrl }) => (
-  <Shell title="Past events" canonical={`${appUrl}${pastEventsUrl(page)}`} robots="noindex, follow">
+  <Shell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} robots="noindex, follow">
     <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
       <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
       <div data-archive-state>
@@ -550,9 +551,14 @@ export const EventPage: FC<{
       </p>
       {e.location ? <p data-testid="event-venue">{e.location}</p> : null}
       {e.description ? <p>{e.description}</p> : null}
-      <p data-testid="going-count" data-island="going-count" data-event-key={e.eventKey}>
-        {goingCountText(e.goingCount, e.capacity)}
-      </p>
+      <p dangerouslySetInnerHTML={{
+        __html: renderGoingCount(e.eventKey, {
+          going: e.goingCount,
+          capacity: e.capacity,
+          showSpotsLeft: true,
+          announcement: null,
+        }),
+      }} />
       {!session ? (
         <section data-testid="event-join-pitch" aria-label="Join the community">
           <p>Game nights get posted here first. Join the Discord and you&apos;ll see them before they land on this page.</p>
@@ -576,6 +582,7 @@ export const EventPage: FC<{
         </section>
       ) : null}
       <script src="/islands/copy-link.js" defer />
+      <script src="/islands/going-count.js" defer />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
       {neighbors.previous || neighbors.next ? (
         <nav aria-label="More events" data-testid="event-pagination">

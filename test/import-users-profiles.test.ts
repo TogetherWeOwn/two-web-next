@@ -85,6 +85,30 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
   beforeEach(async () => { await fixture.reset(); });
   afterAll(async () => { await fixture?.dispose(); });
 
+  it("resets committed fixture rows and identities without rebuilding source tables", async () => {
+    const tables = await legacy`select 'users'::regclass::oid as users, 'profiles'::regclass::oid as profiles`;
+    const users = await legacy`select * from users order by id`;
+    const profiles = await legacy`select * from profiles order by id`;
+    expect(run(["--apply"], env).status).toBe(0);
+    await legacy`update users set username = 'changed fixture' where id = 11`;
+    await legacy`delete from profiles`;
+    await legacy`insert into users (discord_id, username, created_at) values ('900000000000000099', 'extra fixture', '2026-08-01 10:00:00')`;
+
+    await fixture.reset();
+
+    expect(await legacy`select 'users'::regclass::oid as users, 'profiles'::regclass::oid as profiles`).toEqual(tables);
+    expect(await legacy`select * from users order by id`).toEqual(users);
+    expect(await legacy`select * from profiles order by id`).toEqual(profiles);
+    expect(await next`select * from users`).toHaveLength(0);
+    expect(await next`select * from profiles`).toHaveLength(0);
+    expect((await legacy`insert into users (discord_id, username, created_at) values ('900000000000000099', 'extra fixture', '2026-08-01 10:00:00') returning id`)[0]!.id).toBe("1");
+    expect((await legacy`insert into profiles (user_id, created_at) values (1, '2026-08-04 14:00:00') returning id`)[0]!.id).toBe("3");
+    // The importer uses separate connections, so the reset must already be committed.
+    const applied = run(["--apply"], env);
+    expect(applied.status, applied.stderr).toBe(0);
+    expect(counts(applied.stdout).map((row) => row.read)).toEqual([4, 3]);
+  });
+
   it("defaults to a read-only dry run; apply preserves natural keys and times; re-run writes nothing", async () => {
     const before = await legacy`select * from users order by id`;
     const beforeProfiles = await legacy`select * from profiles order by id`;
