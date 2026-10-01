@@ -54,15 +54,19 @@ Legacy-only aliases ([TOG-11156](/TOG/issues/TOG-11156)); request proof:
 | `GET /admin/events/:key/edit` | 301 | `/admin/events/:key` | Drop all |
 | `GET /admin/featured-contents` | 301 | `/admin/featured` | Drop all |
 | `GET /admin/featured-contents/create` | 301 | `/admin/featured/new` | Drop all |
-| `GET /admin/featured-contents/:id/edit` | 301 | `/admin/featured/:id` | Drop all |
+| `GET /admin/featured-contents/:id/edit` | 301 if mapped, 404 if missing/invalid, 503 if DB unavailable | `/admin/featured/{nativeId}` resolved by `featured_contents.legacy_id = :id` | Drop all |
 | `GET /auth/discord/redirect` | 302 | `/auth/discord` | Preserve only `next` accepted by `safeNext` (`src/join/service.ts`), URL-encoded; otherwise no query |
 
 Admin aliases run behind the same moderator guard as their targets: guests
-302 to `/auth/discord`, signed-in non-moderators receive the same 403. They
-read no resource/database binding and return `private, no-store` after the
-guard. Dynamic keys/IDs are encoded as one path segment; the literal create
-alias is registered before the event-key route. `/admin/join-attempts/:id`
-already matches the legacy path and needs no redirect.
+302 to `/auth/discord`, signed-in non-moderators receive the same 403. No
+resource/database binding is read before that guard. Four aliases need no
+resource reads; the featured edit alias looks up only the native ID by the
+imported `legacy_id` after authorization. Source IDs stay decimal strings
+(including IDs beyond JavaScript's safe integer range); a missing mapping
+never falls back to a same-number native row. All return `private, no-store`
+after the guard. Dynamic event keys are encoded as one path segment; the
+literal create alias is registered before the event-key route.
+`/admin/join-attempts/:id` already matches the legacy path and needs no redirect.
 
 Login uses a temporary, `no-store` redirect rather than a permanent OAuth
 cache entry. Invalid `next` (including `//evil`), `state`, `code`, and all

@@ -96,7 +96,9 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
     for (const pattern of ADMIN_READS) {
       const path = `/admin${pattern === "/" ? "" : pattern.replace(":key", EVENT_KEY).replace(":id", "999999999")}`;
       const res = await request(path, { headers: role === "guest" ? {} : await headers(actor) });
-      const expected = role === "guest" ? 302 : role !== "moderator" ? 403 : ADMIN_REDIRECTS.includes(pattern) ? 301 : ["/featured/:id", "/join-attempts/:id"].includes(pattern) ? 404 : 200;
+      const expected = role === "guest" ? 302 : role !== "moderator" ? 403
+        : ["/featured/:id", "/featured-contents/:id/edit", "/join-attempts/:id"].includes(pattern) ? 404
+        : ADMIN_REDIRECTS.includes(pattern) ? 301 : 200;
       expect(res.status, path).toBe(expected);
       const body = await res.text();
       if (role !== "moderator") {
