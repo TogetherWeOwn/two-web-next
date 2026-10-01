@@ -99,8 +99,8 @@ for (const path of Object.keys(fixtures)) {
 for (const [header, path, expected] of [
   ["content-security-policy", "/events.rss", "nonempty Content-Security-Policy"],
   ["x-content-type-options", "/discord", "X-Content-Type-Options nosniff"],
-  ["x-robots-tag", "/about", "staging X-Robots-Tag noindex"],
-  ["x-robots-tag", "/__smoke_unknown_route__", "staging X-Robots-Tag noindex"],
+  ["x-robots-tag", "/about", "staging X-Robots-Tag noindex/none (unscoped)"],
+  ["x-robots-tag", "/__smoke_unknown_route__", "staging X-Robots-Tag noindex/none (unscoped)"],
 ]) {
   test(`rejects missing ${header} on ${path}`, async (t) => {
     const { url } = await stub(t, (route, result) => { if (route === path) delete result.headers[header]; });
@@ -201,8 +201,47 @@ for (const robotsTag of [null, "index, follow", "noindex, nofollow"]) {
     const result = await run(url);
     assert.equal(result.ok, robotsTag === "noindex, nofollow", result.output);
     if (!result.ok) {
-      assert.ok(result.output.includes(`FAIL /admin: expected staging X-Robots-Tag noindex; actual ${robotsTag ?? "missing"}`), result.output);
+      assert.ok(result.output.includes(`FAIL /admin: expected staging X-Robots-Tag noindex/none (unscoped); actual ${robotsTag ?? "missing"}`), result.output);
       assert.ok(!result.output.includes("PASS /admin"), result.output);
+    }
+  });
+}
+
+for (const [robotsTag, expected] of [
+  ["googlebot: noindex", false],
+  ["googlebot: nofollow, noindex", false],
+  ["googlebot: none", false],
+  ["bingbot: noindex, googlebot: noindex", false],
+  ["x-noindex", false],
+  ["noindexing", false],
+  ["noindex=true", false],
+  ["max-image-preview: none", false],
+  ["max-image-preview: noindex", false],
+  ["none", true],
+  ["NoIndex, NoFollow", true],
+  ["max-image-preview: none, noindex", true],
+  ["noindex, googlebot: nofollow", true],
+]) {
+  test(`HTML requires complete unscoped indexing directive (${robotsTag})`, async (t) => {
+    const { url, requests } = await stub(t, (route, result) => {
+      if (route === "/about" || route === "/admin") {
+        result.headers["x-robots-tag"] = robotsTag;
+        if (route === "/admin") {
+          result.status = 403;
+          result.headers["content-type"] = "text/html; charset=UTF-8";
+          result.body = "<h1>Forbidden</h1>";
+          delete result.headers.location;
+        }
+      }
+    });
+    const result = await run(url);
+    assert.equal(result.ok, expected, result.output);
+    assert.equal(requests.length, 16);
+    if (!expected) {
+      for (const path of ["/about", "/admin"]) {
+        assert.ok(result.output.includes(`FAIL ${path}: expected staging X-Robots-Tag noindex`), result.output);
+        assert.ok(!result.output.includes(`PASS ${path}`), result.output);
+      }
     }
   });
 }
@@ -241,6 +280,37 @@ for (const path of ["/discord", "/profile", "/admin"]) {
       assert.ok(!result.output.includes("never-log-this"));
     });
   }
+}
+
+for (const [location, expected] of [
+  ["https://discord.gg/fixture", true],
+  ["https://discord.com/invite/fixture-code", true],
+  ["https://DISCORD.COM/invite/fixture?event=123", true],
+  ["https://discord.com/", false],
+  ["https://discord.com/channels/123/456", false],
+  ["https://discord.com/invite/", false],
+  ["https://discord.com/invite/fixture/extra", false],
+  ["https://discord.gg/", false],
+  ["https://discord.gg/fixture/extra", false],
+  ["https://discord.gg/%2Ffixture", false],
+  ["https://never-log-this@discord.gg/fixture", false],
+  ["https://user:never-log-this@discord.com/invite/fixture", false],
+  ["https://discord.gg.example.invalid/fixture", false],
+  ["http://discord.gg/fixture", false],
+]) {
+  test(`Discord redirect requires a credential-free invite (${location.replace(/[^/]*@/, "redacted@")})`, async (t) => {
+    const { url, requests } = await stub(t, (route, result) => {
+      if (route === "/discord") result.headers.location = location;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, expected, result.output);
+    assert.equal(requests.length, 16);
+    assert.ok(!result.output.includes("never-log-this"));
+    if (!expected) {
+      assert.match(result.output, /FAIL \/discord: expected Location to HTTPS Discord invite; actual unexpected Location/);
+      assert.ok(!result.output.includes("PASS /discord"), result.output);
+    }
+  });
 }
 
 test("CLI exits nonzero and names expected versus actual on failure", async (t) => {

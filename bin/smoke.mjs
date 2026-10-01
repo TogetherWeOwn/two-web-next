@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
+import { headerIndexingRules } from "../ci/robots-directives.mjs";
 
 const html = [
   ["/", /The lobby is open/],
@@ -53,7 +54,7 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
       const contentType = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
       // Staging noindex follows returned HTML, including guest denials (src/headers.ts).
       if (contentType === "text/html") {
-        check(/\bnoindex\b/i.test(headers.get("x-robots-tag") ?? ""), "staging X-Robots-Tag noindex", headers.get("x-robots-tag") ?? "missing");
+        check(headerIndexingRules(headers.get("x-robots-tag")).some(rule => rule.crawler === "*"), "staging X-Robots-Tag noindex/none (unscoped)", headers.get("x-robots-tag") ?? "missing");
       }
       if (route.type) {
         check(contentType === route.type, `Content-Type ${route.type}`, contentType ?? "missing");
@@ -75,7 +76,9 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
         let target;
         try { if (location) target = new URL(location, base); } catch { /* Invalid Location fails below. */ }
         const valid = route.redirect === "discord"
-          ? target?.protocol === "https:" && ["discord.gg", "discord.com"].includes(target.hostname)
+          ? target?.protocol === "https:" && !target.username && !target.password &&
+            ((target.hostname === "discord.gg" && /^\/[\w-]+$/.test(target.pathname)) ||
+             (target.hostname === "discord.com" && /^\/invite\/[\w-]+$/.test(target.pathname)))
           : target?.origin === base.origin && target.pathname === "/auth/discord";
         // Do not print OAuth/query values or response bodies into deploy logs.
         check(Boolean(valid), `Location to ${route.redirect === "discord" ? "HTTPS Discord invite" : "same-origin /auth/discord"}`, location ? "unexpected Location" : "missing Location");
