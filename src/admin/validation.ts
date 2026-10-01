@@ -14,7 +14,7 @@
 //   takes the first occurrence; an unchanged edit keeps the exact stored
 //   instant via the hidden *_utc carrier (TOG-6805, see routes).
 
-import { featuredImageAllowed } from "../featured-image";
+import { isFeaturedImageUrl } from "../image-policy";
 
 export type EventStatus = "draft" | "published" | "cancelled" | "past";
 
@@ -86,9 +86,9 @@ const dtf = (tz: string) =>
     hour12: false,
   });
 
-function wallOfInstant(instantMs: number, tz: string): string {
+function wallOfInstant(instantMs: number, formatter: Intl.DateTimeFormat): string {
   const parts: Record<string, string> = {};
-  for (const p of dtf(tz).formatToParts(new Date(instantMs))) {
+  for (const p of formatter.formatToParts(new Date(instantMs))) {
     if (p.type !== "literal") parts[p.type] = p.value;
   }
   // en-GB can emit hour "24" for midnight; normalise to "00".
@@ -119,14 +119,16 @@ export function wallToUtc(raw: string, timezone: string): Date {
   // Keep only candidates that round-trip, then choose the earliest instant.
   // This also handles half-hour DST without assuming a one-hour change.
   const naiveMs = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi);
+  // Reuse one real formatter for all samples and round-trips in this parse.
+  const formatter = dtf(timezone);
   const candidates = new Set<number>();
   for (const delta of [-36, 0, 36]) {
     const sample = naiveMs + delta * 3600_000;
-    const rendered = parseWall(wallOfInstant(sample, timezone));
+    const rendered = parseWall(wallOfInstant(sample, formatter));
     if (!rendered) continue;
     const renderedAsUtc = Date.UTC(rendered.y, rendered.mo - 1, rendered.d, rendered.h, rendered.mi);
     const candidate = naiveMs - (renderedAsUtc - sample);
-    if (wallOfInstant(candidate, timezone) === wallString(parts)) candidates.add(candidate);
+    if (wallOfInstant(candidate, formatter) === wallString(parts)) candidates.add(candidate);
   }
 
   // Gap check (TOG-6803): a time that never occurred has no candidate.
@@ -140,7 +142,7 @@ export function wallToUtc(raw: string, timezone: string): Date {
 
 /** Render a stored UTC instant as wall text in the row's zone (edit form fill). */
 export function utcToWall(instant: Date, timezone: string): string {
-  return wallOfInstant(instant.getTime(), timezone);
+  return wallOfInstant(instant.getTime(), dtf(timezone));
 }
 
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -286,7 +288,7 @@ function isHttpUrl(raw: string): boolean {
 }
 
 /** Parse the featured-content create/edit form (ports FeaturedContentForm rules). */
-export function parseFeaturedForm(data: Record<string, unknown>, appUrl: string): FeaturedFormInput {
+export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: string): FeaturedFormInput {
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give it a headline.";
@@ -295,8 +297,8 @@ export function parseFeaturedForm(data: Record<string, unknown>, appUrl: string)
   const url = str(data.url);
   if (url && (url.length > 255 || !isHttpUrl(url))) fields.url = "Link is a full http(s) URL, or empty for no link.";
   const imageUrl = str(data.image_url);
-  if (imageUrl && (imageUrl.length > 255 || !isHttpUrl(imageUrl) || !featuredImageAllowed(imageUrl, appUrl))) {
-    fields.image_url = "Use a full image URL on this site or https://cdn.discordapp.com; other hosts are blocked by the site's security policy.";
+  if (imageUrl && (imageUrl.length > 255 || !isFeaturedImageUrl(imageUrl, imageHosts))) {
+    fields.image_url = "Image URL must be HTTPS on an approved public host, without credentials or a custom port (255 characters maximum).";
   }
   const imageAlt = str(data.image_alt);
   // TOG-8707: an image with no description is silent for screen-reader

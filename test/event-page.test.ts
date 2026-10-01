@@ -17,7 +17,7 @@ const SECRET = "test-session-secret-at-least-32-bytes-long";
 function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
-    id: 1, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
+    id: 1, icsSequence: 1n, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
     startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC",
     location: "The lobby & voice channel", capacity: 10, status: "published", rsvpOpen: true,
     discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
@@ -31,7 +31,10 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
     if (sql.includes('from "rsvps"')) return { rows: [[row.id, 3]] };
-    return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
+    if (sql.includes('"event_key" =')) {
+      return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
+    }
+    return { rows: [] };
   });
   const store = createMemorySessionStore();
   const env = { APP_URL: `${APP_URL}/`, SESSION_SECRET: SECRET, SESSION_STORE: store, ADMIN_DB: db as unknown as Db } as unknown as Env;

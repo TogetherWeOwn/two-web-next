@@ -2,7 +2,7 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
-import { getPublicEvent, listGoingAttendees, type PublicEvent } from "../src/events/reads";
+import { getEventNeighbors, getPublicEvent, listGoingAttendees, listRelatedEvents, type PublicEvent } from "../src/events/reads";
 import { env, EVENT_KEY, SUBJECT } from "./helpers/member-data";
 
 const { connect, ddl } = vi.hoisted(() => ({ connect: vi.fn(), ddl: vi.fn() }));
@@ -10,11 +10,13 @@ vi.mock("postgres", () => ({ default: connect }));
 vi.mock("../src/events/reads", async (importOriginal) => ({
   ...await importOriginal<typeof import("../src/events/reads")>(),
   getPublicEvent: vi.fn(),
+  getEventNeighbors: vi.fn(),
+  listRelatedEvents: vi.fn(),
   listGoingAttendees: vi.fn(),
 }));
 
 const event: PublicEvent = {
-  id: 1, eventKey: EVENT_KEY, title: "Friday night games", description: null, game: null,
+  id: 1, icsSequence: 1n, eventKey: EVENT_KEY, title: "Friday night games", description: null, game: null,
   startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
   timezone: "UTC", location: null, capacity: null, status: "published", discordEventId: null,
   discordSyncFailedAt: null, discordSyncFailureCode: null,
@@ -34,6 +36,8 @@ beforeEach(() => {
   ddl.mockRejectedValue(new Error("session DDL unavailable"));
   connect.mockReturnValue({ unsafe: ddl });
   vi.mocked(getPublicEvent).mockResolvedValue(event);
+  vi.mocked(getEventNeighbors).mockResolvedValue({ previous: null, next: null });
+  vi.mocked(listRelatedEvents).mockResolvedValue([]);
   vi.mocked(listGoingAttendees).mockResolvedValue([{ id: SUBJECT.userId, name: SUBJECT.username }]);
 });
 afterEach(() => { vi.restoreAllMocks(); });

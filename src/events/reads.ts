@@ -1,5 +1,5 @@
 // Public event reads (W8). Published-only unless the caller is a moderator.
-import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
@@ -130,21 +130,29 @@ export async function listCalendarPast(
   return withGoing(db, rows);
 }
 
+/** Invalid HTML archive pages/offsets retain the page-one fallback. */
+export function normalizePastPage(page: number): number {
+  return Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger((page - 1) * PAGE_SIZE) ? page : 1;
+}
+
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
 export async function listPast(db: Db, page: number, now = new Date(), q: string | null = null): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number }> {
+  page = normalizePastPage(page);
   const archived = and(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))), searchCondition(q));
   const [total] = await db.select({ n: count() }).from(events).where(archived);
+  const totalPages = Math.ceil(Number(total?.n ?? 0) / PAGE_SIZE);
+  if (page > totalPages) return { rows: [], hasMore: false, totalPages };
   const rows = await db
     .select()
     .from(events)
     .where(archived)
     .orderBy(desc(events.startsAt), desc(events.id))
     .limit(PAGE_SIZE + 1)
-    .offset((Math.max(1, page) - 1) * PAGE_SIZE);
+    .offset((page - 1) * PAGE_SIZE);
   return {
     rows: await withGoing(db, rows.slice(0, PAGE_SIZE)),
     hasMore: rows.length > PAGE_SIZE,
-    totalPages: Math.ceil(Number(total?.n ?? 0) / PAGE_SIZE),
+    totalPages,
   };
 }
 
@@ -156,6 +164,60 @@ export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent |
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
   if (!row) return null;
   return withGoingCount(db, row);
+}
+
+export type EventLink = Pick<PublicEvent, "id" | "eventKey" | "title" | "startsAt" | "timezone" | "location">;
+export interface EventNeighbors {
+  previous: EventLink | null;
+  next: EventLink | null;
+}
+
+const eventLinkColumns = {
+  id: events.id,
+  eventKey: events.eventKey,
+  title: events.title,
+  startsAt: events.startsAt,
+  timezone: events.timezone,
+  location: events.location,
+};
+
+// Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.
+const finiteEventStart = sql`isfinite(${events.startsAt})`;
+
+/** Published links only, even for moderators. Equal starts use id as the legacy tiebreak. */
+export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id">): Promise<EventNeighbors> {
+  // Compare the stored timestamp: a JS Date loses PostgreSQL's microseconds.
+  const anchorStartsAt = db.select({ startsAt: events.startsAt }).from(events).where(eq(events.id, event.id));
+  const [previous, next] = await Promise.all([
+    db.select(eventLinkColumns).from(events)
+      .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, or(
+        lt(events.startsAt, anchorStartsAt),
+        and(eq(events.startsAt, anchorStartsAt), lt(events.id, event.id)),
+      )))
+      .orderBy(desc(events.startsAt), desc(events.id)).limit(1),
+    db.select(eventLinkColumns).from(events)
+      .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, or(
+        gt(events.startsAt, anchorStartsAt),
+        and(eq(events.startsAt, anchorStartsAt), gt(events.id, event.id)),
+      )))
+      .orderBy(asc(events.startsAt), asc(events.id)).limit(1),
+  ]);
+  return { previous: previous[0] ?? null, next: next[0] ?? null };
+}
+
+/** Same game first, then nearest upcoming siblings; one query, no RSVP aggregates. */
+export async function listRelatedEvents(
+  db: Db,
+  event: Pick<PublicEvent, "id" | "game">,
+  now = new Date(),
+): Promise<EventLink[]> {
+  const sameGame = event.game === null ? [] : [sql`case when ${events.game} = ${event.game} then 0 else 1 end`];
+  const rows = await db.select(eventLinkColumns).from(events)
+    .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, gte(events.endsAt, now)))
+    .orderBy(...sameGame, asc(events.startsAt), asc(events.id))
+    .limit(3);
+  // PostgreSQL infinity timestamps decode to invalid Dates, as in 404 suggestions.
+  return rows.filter((event) => Number.isFinite(event.startsAt.getTime()));
 }
 
 export type EventAttendee = { id: string; name: string };
