@@ -11,7 +11,7 @@ async function main() {
   if (!/^[a-f0-9]{40}$/.test(manifest.sourceHead) || manifest.sourceHead !== process.env.PROOF_CHECKOUT_HEAD) {
     throw new Error('Fixture source head mismatch');
   }
-  if (manifest.fixtures.map(f => f.name).join(',') !== 'edit.html,list.html,scheduled.html') throw new Error('Unexpected fixtures');
+  if (manifest.fixtures.map(f => f.name).join(',') !== 'edit.html,long-content.html,list.html,scheduled.html') throw new Error('Unexpected fixtures');
   const html = {};
   for (const fixture of manifest.fixtures) {
     const bytes = await fs.readFile(path.join(input, fixture.name));
@@ -23,7 +23,7 @@ async function main() {
   const report = {
     ...manifest, capturedAt: new Date().toISOString(), runUrl: process.env.PROOF_RUN_URL,
     containerImage: process.env.PROOF_CONTAINER_IMAGE, javascriptEnabled: false, offline: true,
-    visualInspection: 'REQUIRED: independent QA must inspect all six captures', results: [], errors: [],
+    visualInspection: 'REQUIRED: independent QA must inspect all eight captures', results: [], errors: [],
   };
   let browser;
   try {
@@ -41,7 +41,7 @@ async function main() {
         try {
           const page = await context.newPage();
           await page.setContent(html[fixture.name], { waitUntil: 'load' });
-          if (fixture.name === 'edit.html') {
+          if (fixture.name === 'edit.html' || fixture.name === 'long-content.html') {
             check('saved live card', await page.locator('[data-testid="featured-item"]').isVisible());
             check('live label', await page.locator('[data-status="live"]').isVisible());
             check('saved-content disclosure', (await page.locator('[data-testid="featured-preview"]').innerText()).includes('Save changes to refresh this preview'));
@@ -60,6 +60,20 @@ async function main() {
             check('scheduled label', await page.locator('[data-status="scheduled"]').isVisible());
             check('hidden notice', await page.locator('[data-testid="featured-preview-hidden"]').isVisible());
             check('no scheduled public card', await page.locator('[data-testid="featured-item"]').count() === 0);
+          }
+          if (fixture.name === 'long-content.html') {
+            const card = page.locator('[data-testid="featured-item"]');
+            check('long headline preserved', (await card.locator('h3').textContent()) === 'a'.repeat(255));
+            check('long body preserved', (await card.locator('p').textContent()) === `https://example.test/${'a'.repeat(400)}`);
+            for (const selector of ['h3', 'p']) {
+              check(`long ${selector} wraps inside card`, await card.locator(selector).evaluate(el => {
+                const card = el.closest('[data-testid="featured-item"]').getBoundingClientRect();
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                const lines = [...range.getClientRects()];
+                return lines.length > 1 && lines.every(line => line.left >= card.left && line.right <= card.right + 0.5);
+              }));
+            }
           }
           const layout = await page.evaluate(() => ({
             viewportWidth: innerWidth, documentWidth: document.documentElement.scrollWidth,
@@ -87,7 +101,7 @@ async function main() {
     await fs.writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');
     await fs.copyFile(path.join(input, 'manifest.json'), path.join(output, 'manifest.json'));
   }
-  const passed = report.errors.length === 0 && report.results.length === 6 && report.results.every(r => r.checks.every(c => c.pass));
+  const passed = report.errors.length === 0 && report.results.length === 8 && report.results.every(r => r.checks.every(c => c.pass));
   console.log(JSON.stringify({ automatedChecksPassed: passed, screenshots: report.results.length, sourceHead: report.sourceHead }));
   if (!passed) process.exitCode = 1;
 }

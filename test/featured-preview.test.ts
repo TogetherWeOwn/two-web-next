@@ -87,6 +87,17 @@ describe("featured SSR preview", () => {
     expect(publicItem).toContain("Bring a friend.\nEveryone is welcome.");
   });
 
+  it("preserves long saved content in the scoped wrapping preview without changing the homepage article", () => {
+    const saved = { ...row, title: "a".repeat(255), body: `https://example.test/${"a".repeat(400)}` };
+    const html = edit(saved);
+    expect(html).toContain('class="featured-form"');
+    expect(html).toContain('class="featured-preview"');
+    expect(articles(html)).toEqual(articles(home(saved)));
+    expect(articles(html)?.[0]).toContain(saved.title);
+    expect(articles(html)?.[0]).toContain(`<p>${saved.body}</p>`);
+    expect(html).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
+  });
+
   it.each(states.filter(([status]) => status !== "live"))("hides %s items", (_status, window) => {
     const saved = { ...row, ...window };
     expect(edit(saved)).toContain('data-testid="featured-preview-hidden"');

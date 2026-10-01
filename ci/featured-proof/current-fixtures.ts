@@ -19,6 +19,7 @@ async function main() {
     createdAt: now, updatedAt: now,
   };
   const scheduled = { ...row, id: 2, title: "Next games", startsAt: new Date("2026-10-01T20:00:00Z"), endsAt: null };
+  const longContent = { ...row, title: "a".repeat(255), body: `https://example.test/${"a".repeat(400)}` };
   const rows = [
     row, scheduled,
     { ...row, id: 3, title: "Past games", endsAt: now },
@@ -32,6 +33,7 @@ async function main() {
   const stylesheet = `data:text/css;base64,${css.toString("base64")}`;
   const fixtures = [
     ["edit.html", jsx(FeaturedFormPage, { mode: "edit", row, values, errors: {}, now, appUrl: "https://next.example.test" })],
+    ["long-content.html", jsx(FeaturedFormPage, { mode: "edit", row: longContent, values: { ...values, title: longContent.title, body: longContent.body }, errors: {}, now, appUrl: "https://next.example.test" })],
     ["list.html", jsx(FeaturedPage, { rows, now })],
     ["scheduled.html", jsx(FeaturedFormPage, { mode: "edit", row: scheduled, values: { ...values, title: scheduled.title, starts_at: "2026-10-01 20:00", ends_at: "" }, errors: {}, now, appUrl: "https://next.example.test" })],
   ] as const;

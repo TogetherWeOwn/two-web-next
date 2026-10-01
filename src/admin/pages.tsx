@@ -551,10 +551,10 @@ export const FeaturedFormPage: FC<{
   const checked = values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
-      <section>
+      <section class="featured-form">
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
         {mode === "edit" && row ? (
-          <section aria-labelledby="featured-preview-heading" data-testid="featured-preview">
+          <section class="featured-preview" aria-labelledby="featured-preview-heading" data-testid="featured-preview">
             <h2 id="featured-preview-heading">Homepage preview</h2>
             <p>Last saved content, checked at <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to refresh this preview.</p>
             <p>Status: <FeaturedStatusBadge row={row} now={now} /></p>
