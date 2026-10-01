@@ -48,33 +48,40 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await a;
   });
 
-  it("flight body queries run on the reserved tx (no max:1 deadlock)", async () => {
-    // The outer pool has one connection held by the flight; prune queries
-    // must use its reserved client. Dispatch uses a separate autocommit pool.
-    const single = await createJobsFixture(process.env.DATABASE_URL!, { max: 1 });
-    const { migrate } = await import("../src/sessions");
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
+  describe("reserved transaction", () => {
+    let single: JobsFixture | undefined;
+    beforeAll(async () => {
+      // Keep schema/session migration outside the test's deadlock budget.
+      single = await createJobsFixture(process.env.DATABASE_URL!, { max: 1 });
+      const { migrate } = await import("../src/sessions");
       await migrate(single.client as unknown as Parameters<typeof migrate>[0]);
-      const ran = await Promise.race([
-        pgSingleFlight(single.client)(own("prune"), async (db) => {
-          const stores = pgPruneStores(db);
-          const lock = pgUniqueLock(db);
-          for (const table of [stores.accessLog, stores.joinAttempts, stores.idempotencyKeys, stores.searchLog]) {
-            expect(await table.pruneOlderThan(new Date(0))).toBe(0);
-          }
-          expect(await stores.sessions.sweepExpired(new Date())).toBe(0);
-          expect(await lock.acquire(own("prune-tx"), 60)).toBe(true);
-        }),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error("deadlock: body stalled on max:1 pool")), 3000);
-        }),
-      ]);
-      expect(ran).toBe(true);
-    } finally {
-      clearTimeout(timeout);
-      await single.dispose();
-    }
+    });
+    afterAll(async () => { await single?.dispose(); });
+
+    it("flight body queries run on the reserved tx (no max:1 deadlock)", async () => {
+      // The outer pool has one connection held by the flight; prune queries
+      // must use its reserved client. Dispatch uses a separate autocommit pool.
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const ran = await Promise.race([
+          pgSingleFlight(single!.client)(own("prune"), async (db) => {
+            const stores = pgPruneStores(db);
+            const lock = pgUniqueLock(db);
+            for (const table of [stores.accessLog, stores.joinAttempts, stores.idempotencyKeys, stores.searchLog]) {
+              expect(await table.pruneOlderThan(new Date(0))).toBe(0);
+            }
+            expect(await stores.sessions.sweepExpired(new Date())).toBe(0);
+            expect(await lock.acquire(own("prune-tx"), 60)).toBe(true);
+          }),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error("deadlock: body stalled on max:1 pool")), 3000);
+          }),
+        ]);
+        expect(ran).toBe(true);
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
   });
 
   it("unique lock: one winner, expiry frees it, release frees it", async () => {
