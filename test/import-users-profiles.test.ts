@@ -102,12 +102,13 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
     const users = await next`select *, xmin::text as version from users order by id`;
     const profiles = await next`select *, xmin::text as version from profiles order by user_id`;
     expect(users.map((row) => row.id)).toEqual(before.map((row) => row.discord_id));
-    expect(users[0]).toMatchObject({ username: "synthetic-member", member: true, avatar: "abc123" });
+    expect(users[0]).toMatchObject({ username: "Synthetic Display", member: true, avatar: "abc123" });
     expect(profileAvatarSrcset(users[0]!.id, users[0]!.avatar)).toEqual({
       src: "https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=128",
       srcset: "https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=64 1x, https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=128 2x, https://cdn.discordapp.com/avatars/900000000000000011/abc123.png?size=256 3x",
     });
     expect(users[1]).toMatchObject({ username: "synthetic-member", member: false, avatar: null });
+    expect(users[2]).toMatchObject({ username: "synthetic-no-profile", member: true, avatar: null });
     expect(users[0]!.created_at.toISOString()).toBe("2026-08-01T10:00:00.000Z");
     expect(users[2]!.updated_at.toISOString()).toBe("2026-08-03T12:00:00.000Z");
     expect(profiles[0]).toMatchObject({ user_id: users[0]!.id, bio: "Synthetic bio with unicode: café 🎮", games: ["Synthetic Game", "Another Game"], timezone: "Europe/London" });
@@ -221,7 +222,7 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
   it("updates conflicts and only dirty rows, including nulls and membership changes", async () => {
     expect(run(["--apply"], env).status).toBe(0);
     const unchanged = await next`select xmin::text as version from users where id = '900000000000000022'`;
-    await legacy`update users set username = 'synthetic-updated', avatar = null, discord_joined_at = null,
+    await legacy`update users set username = 'synthetic-updated', display_name = null, avatar = null, discord_joined_at = null,
       is_moderator = false, updated_at = '2026-09-30 17:00:00' where id = 11`;
     await legacy`update profiles set bio = null, games = '["Changed Game"]', timezone = null,
       updated_at = '2026-09-30 17:00:00' where user_id = 11`;
@@ -234,6 +235,39 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
     expect((await next`select * from users where id = '900000000000000011'`)[0]).toMatchObject({ username: "synthetic-updated", avatar: null, member: false });
     expect((await next`select * from profiles where user_id = '900000000000000011'`)[0]).toMatchObject({ bio: null, games: ["Changed Game"], timezone: null });
     expect(await next`select xmin::text as version from users where id = '900000000000000022'`).toEqual(unchanged);
+  });
+
+  it.each([null, "", "Changed Display 🎮", "   "])("updates an equal-timestamp display name %s with the same preview/apply counts", async (displayName) => {
+    expect(run(["--apply"], env).status).toBe(0);
+    await legacy`update users set display_name = ${displayName} where id = 11`;
+    const expectedName = displayName === null || displayName === "" ? "synthetic-member" : displayName;
+    const before = await next`select *, xmin::text as version from users order by id`;
+    const preview = run([], env);
+    expect(preview.status, preview.stderr).toBe(0);
+    expect(counts(preview.stdout).map((row) => [row.changed, row.written])).toEqual([[1, 0], [0, 0]]);
+    expect(await next`select *, xmin::text as version from users order by id`).toEqual(before);
+    const applied = run(["--apply"], env);
+    expect(applied.status, applied.stderr).toBe(0);
+    expect(counts(applied.stdout).map((row) => [row.changed, row.written])).toEqual([[1, 1], [0, 0]]);
+    expect((await next`select username from users where id = '900000000000000011'`)[0]!.username).toBe(expectedName);
+    const after = await next`select *, xmin::text as version from users order by id`;
+    const repeat = run(["--apply"], env);
+    expect(repeat.status, repeat.stderr).toBe(0);
+    expect(counts(repeat.stdout).map((row) => row.written)).toEqual([0, 0]);
+    expect(await next`select *, xmin::text as version from users order by id`).toEqual(after);
+  });
+
+  it("does not overwrite newer Next users, including their row versions, on preview or repeated apply", async () => {
+    expect(run(["--apply"], env).status).toBe(0);
+    await next`update users set username = 'Current Discord Name', avatar = 'newhash', member = false,
+      updated_at = '2026-10-01T00:00:00Z' where id = '900000000000000011'`;
+    const before = await next`select *, xmin::text as version from users order by id`;
+    for (const args of [[], ["--apply"], ["--apply"]]) {
+      const result = run(args, env);
+      expect(result.status, result.stderr).toBe(0);
+      expect(counts(result.stdout).map((row) => [row.changed, row.unchanged, row.written])).toEqual([[0, 3, 0], [0, 2, 0]]);
+      expect(await next`select *, xmin::text as version from users order by id`).toEqual(before);
+    }
   });
 
   it("fails before writing on invalid games or missing creation timestamps", async () => {
