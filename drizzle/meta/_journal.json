@@ -99,6 +99,13 @@
       "when": 1790817994959,
       "tag": "1011_legacy-audit-evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790829060000,
+      "tag": "1012_hot-path-indexes",
+      "breakpoints": true
     }
   ]
 }

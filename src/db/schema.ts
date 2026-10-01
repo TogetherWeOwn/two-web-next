@@ -32,7 +32,10 @@ export const joinAttempts = pgTable(
     discordId: text("discord_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("join_attempts_created_at_idx").on(t.createdAt)],
+  (t) => [
+    index("join_attempts_created_at_idx").on(t.createdAt),
+    index("join_attempts_outcome_index").on(t.outcome),
+  ],
 );
 
 export type JoinAttempt = typeof joinAttempts.$inferSelect;
