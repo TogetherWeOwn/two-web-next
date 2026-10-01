@@ -40,10 +40,10 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     // headers, strict per-environment trustHosts guard, same-origin guard,
     // auth-status controller injection and expired-write banner consumption.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
-    // Profile paths each register the gate, post-audit flash consumption and logger.
-    // The event-page access logger is a second GET handler on the same route.
-    "GET /e/:key",
-    "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*", "ALL /members/*",
+    // Five global ALL /*: headers, trustHosts, same-origin, auth-status injection and expired-write banner.
+    // The event read boundary encloses its existing GET handler directly;
+    // profile flash consumption stays inside the existing boundary middleware.
+    "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
   ].sort());
 }
 

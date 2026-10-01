@@ -186,9 +186,9 @@ reduce it. There is no roster pagination. Save event edits before these controls
 reload the page. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation.
 Reads of other members are access-logged; empty rosters and self-only reads create
-no access row. Audit-write failures block the response under the default
-fail-closed policy, not every deployment configuration. Stop and escalate any
-reported audit failure; a rendered page is not proof that logging succeeded.
+no access row. Audit-write failures always refuse protected contents, including
+when the legacy `MEMBER_ACCESS_LOG_ENFORCE` setting is false. Stop and escalate any
+reported audit failure; do not try disabling enforcement or another access path.
 
 ## Featured content settings and homepage delivery
 
@@ -247,16 +247,15 @@ a username/substring search. Empty cells mean unavailable values, not verified
 anonymity. Source is attribution, not authenticated identity. Select an outcome
 link to open `/admin/join-attempts/:id`: it shows **Outcome**, **Source**,
 **Attempted at (UTC)** and **Trace** (**Request ID**, **Discord ID**) as recorded.
-Missing identifiers appear as a dash. Detail links only resolve attempts within
+Missing request IDs appear as a dash. Detail links only resolve attempts within
 the same 90-day window. **Back to join attempts** returns to the unfiltered first
-page. There is no edit, delete or retry control. The list declares only the
-rendered page's recorded Discord IDs for access logging; a detail declares a
-subject only when its Discord ID maps to a stored user, regardless of that user's
-current membership flag.
-Missing/unmapped IDs on a detail, empty lists and self-only reads create no access
-row. Audit-write failures block the response under the default fail-closed policy,
-not every deployment configuration. Stop and escalate any reported audit failure;
-a rendered detail is not proof that an access row was written.
+page. There is no edit, delete or retry control. List and detail reads attribute
+the returned rows' recorded Discord IDs directly, excluding the viewer; they do
+not require a current users row or membership flag. Missing, invalid or partial
+member keys refuse the contents instead of silently dropping subjects. Empty
+lists and self-only reads create no access row. Audit-write failures always
+refuse protected contents, even with the legacy enforcement setting disabled.
+Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the
 [join troubleshooting guide](troubleshooting-join.md#moderator-diagnostics-and-escalation).
