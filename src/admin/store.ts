@@ -6,19 +6,17 @@
 // - spatie LogsActivity dirty-only audit on both resources (M7).
 // - AccessRecorder one-row-per-request access log (M5).
 //
-// Concurrency: every state change runs in one transaction behind a
-// row-equivalent serialisation. Drizzle/postgres-js has no FOR UPDATE builder
-// in 0.45, so the transition re-reads inside the transaction and aborts on a
-// concurrent change (optimistic guard on updated_at); W1/W13 own the
-// Hyperdrive FOR UPDATE semantics proof. The queue dispatch + reconcile
-// backstop arrive with W8/W13; `writeBackDue` marks what they must carry.
+// Capacity edits share the RSVP service's event-row FOR UPDATE lock: validation,
+// the edit and FIFO promotions commit together. Routes dispatch the write-back
+// only after commit; mirror stamps on promoted answers are reset in that write.
 
 import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { activityLog, events, featuredContents, memberDataAccessLogs } from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
-import { isMirrored, newEventKey, nextStatus } from "./validation";
+import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
+import { CAPACITY_BELOW_GOING, goingCount, promoteWaitlist } from "../events/waitlist";
 
 export type Actor = { id: string; username: string };
 
@@ -197,10 +195,13 @@ export async function updateEvent(
   input: EventFormInput,
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   return db.transaction(async (tx) => {
-    // FOR UPDATE serialises concurrent parent edits so the child shift below
-    // always sees the committed old times (no double-shift).
+    // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
+    // child shift below always sees the committed old times (no double-shift).
     const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
+    if (input.capacity !== null && input.capacity < await goingCount(tx, locked.id)) {
+      throw new ValidationError({ capacity: CAPACITY_BELOW_GOING });
+    }
     const [row] = await tx
       .update(events)
       .set({
@@ -217,6 +218,7 @@ export async function updateEvent(
       .where(eq(events.eventKey, eventKey))
       .returning();
     if (!row) throw new Error("event update returned no row");
+    await promoteWaitlist(tx, row);
     const changes = dirty(locked as Record<string, unknown>, row as unknown as Record<string, unknown>);
     if (Object.keys(changes).length > 0) {
       await tx.insert(activityLog).values({
