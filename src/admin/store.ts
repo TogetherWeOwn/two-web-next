@@ -440,30 +440,32 @@ export async function getEvent(db: Db, eventKey: string): Promise<EventRow | nul
 // EventsTable: "no delete anywhere on this resource").
 
 export async function createFeatured(db: Db, actor: Actor, input: FeaturedFormInput): Promise<FeaturedRow> {
-  const [row] = await db
-    .insert(featuredContents)
-    .values({
-      title: input.title,
-      body: input.body,
-      url: input.url,
-      imageUrl: input.imageUrl,
-      imageAlt: input.imageAlt,
-      isPublished: input.isPublished,
-      position: input.position,
-      startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
-      endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
-      createdBy: actor.id,
-    })
-    .returning(featuredEditSelection);
-  if (!row) throw new Error("featured insert returned no row");
-  await audit(db, {
-    subjectType: "FeaturedContent",
-    subjectId: String(row.id),
-    causerId: actor.id,
-    description: `created featured content ${row.title}`,
-    properties: dirty({} as Record<string, unknown>, featuredAuditValues(row)),
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(featuredContents)
+      .values({
+        title: input.title,
+        body: input.body,
+        url: input.url,
+        imageUrl: input.imageUrl,
+        imageAlt: input.imageAlt,
+        isPublished: input.isPublished,
+        position: input.position,
+        startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
+        endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
+        createdBy: actor.id,
+      })
+      .returning(featuredEditSelection);
+    if (!row) throw new Error("featured insert returned no row");
+    await audit(tx, {
+      subjectType: "FeaturedContent",
+      subjectId: String(row.id),
+      causerId: actor.id,
+      description: `created featured content ${row.title}`,
+      properties: dirty({} as Record<string, unknown>, featuredAuditValues(row)),
+    });
+    return row;
   });
-  return row;
 }
 
 export async function updateFeatured(
