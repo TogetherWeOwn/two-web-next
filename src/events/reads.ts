@@ -238,11 +238,13 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */
 export async function listJson(
   db: Db,
-  opts: { limit: number; offset: number; includeDrafts: boolean },
+  opts: { limit: number; offset: number; includeDrafts: boolean; eventKey?: string },
 ): Promise<{ rows: PublicEvent[]; total: number }> {
   const visible = opts.includeDrafts ? sql`true` : inArray(events.status, ["published", "cancelled", "past"]);
-  const [total] = await db.select({ n: count() }).from(events).where(visible);
-  const rows = await db.select().from(events).where(visible).orderBy(asc(events.startsAt), asc(events.id)).limit(opts.limit).offset(opts.offset);
+  const match = opts.eventKey === undefined ? undefined : eq(events.eventKey, opts.eventKey);
+  const predicate = and(visible, match);
+  const [total] = await db.select({ n: count() }).from(events).where(predicate);
+  const rows = await db.select().from(events).where(predicate).orderBy(asc(events.startsAt), asc(events.id)).limit(opts.limit).offset(opts.offset);
   return { rows: await withGoing(db, rows), total: Number(total?.n ?? 0) };
 }
 

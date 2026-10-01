@@ -411,6 +411,41 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect((await req("/e/not-a-ulid")).status).toBe(404);
   });
 
+  it("filters keyed JSON reads before pagination without changing draft visibility", async () => {
+    const key = String(26).padStart(26, "0");
+    const draftKey = String(99).padStart(26, "0");
+    await db.insert(events).values(Array.from({ length: 26 }, (_, i) => ({
+      eventKey: String(i + 1).padStart(26, "0"), title: `Game ${i + 1}`, status: "published",
+      startsAt: new Date(Date.UTC(2099, 0, i + 1)), endsAt: new Date(Date.UTC(2099, 0, i + 1, 1)),
+    })));
+    await db.insert(events).values({ eventKey: draftKey, title: "Draft game", status: "draft",
+      startsAt: new Date("2099-02-01T00:00:00Z"), endsAt: new Date("2099-02-01T01:00:00Z") });
+    const first = await req("/events.json", await as(MEMBER));
+    const firstRows = (await first.json() as { data: { event_key: string }[] }).data;
+    expect(firstRows).toHaveLength(20);
+    expect(firstRows.some((row) => row.event_key === key)).toBe(false);
+    const selected = await req(`/events.json?event_key=${key}`, await as(MEMBER));
+    expect(selected.status).toBe(200);
+    const selectedBody = await selected.json() as Collection;
+    expect(selectedBody.data).toHaveLength(1);
+    expect(selectedBody.data[0]).toMatchObject({ event_key: key, going_count: 0 });
+    expect(selectedBody.meta).toEqual({ current_page: 1, per_page: 20, total: 1, last_page: 1 });
+    const hidden = await collection(`?event_key=${draftKey}`);
+    expect(hidden.data).toEqual([]);
+    expect(hidden.meta.total).toBe(0);
+    const shown = await collection(`?event_key=${draftKey}`, MOD);
+    expect(shown.data[0]?.event_key).toBe(draftKey);
+    expect(shown.meta.total).toBe(1);
+    const second = await collection(`?event_key=${key}&per_page=1&page=2`);
+    expect(second.data).toEqual([]);
+    expect(second.meta).toEqual({ current_page: 2, per_page: 1, total: 1, last_page: 1 });
+    const missing = await collection(`?event_key=${String(98).padStart(26, "0")}`);
+    expect(missing.data).toEqual([]);
+    expect(missing.meta.total).toBe(0);
+    expect((await req("/events.json?event_key=not-a-key", await as(MEMBER))).status).toBe(422);
+    expect((await req(`/events.json?event_key=${key}`)).status).toBe(401);
+  });
+
   it("past archive pages twenty newest-first eligible rows with a stable tie-break and correct page count", async () => {
     await db.insert(events).values(Array.from({ length: 25 }, (_, i) => ({
       eventKey: `archive-${i + 1}`, title: `Past game ${i + 1}`, status: i < 23 ? "past" : "published",
