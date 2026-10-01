@@ -152,9 +152,15 @@ export async function exchangeCode(
     throw transportFailure("token_exchange");
   }
   if (!res.ok) throw classified("token_exchange", res, await errorBodyOf(res));
-  const body = (await res.json().catch(() => null)) as { access_token?: string } | null;
-  if (!body?.access_token) throw new DiscordError("token_exchange", res.status, "provider_reject");
-  return body.access_token;
+  const body: unknown = await res.json().catch(() => null);
+  const token = body as { access_token?: unknown } | null;
+  if (
+    token === null || typeof token !== "object" || Array.isArray(token) ||
+    typeof token.access_token !== "string" || !token.access_token
+  ) {
+    throw new DiscordError("token_exchange", res.status, "provider_reject");
+  }
+  return token.access_token;
 }
 
 export async function fetchUser(accessToken: string): Promise<DiscordUser> {
