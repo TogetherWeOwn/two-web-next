@@ -188,14 +188,21 @@ def main():
         # separate gh title/body/author requests could mix different revisions.
         pull_request = json.loads(command(["gh", "api", f"repos/{repository}/pulls/{number}"]))
         try:
-            workflow_sha = os.environ["GITHUB_SHA"]
-            require(re.fullmatch(r"[0-9a-f]{40}", workflow_sha) and checked_sha == workflow_sha,
+            # The metadata-only job pins PR checkout to the immutable event head.
+            # Binding below still checks that pin against the event and live API head;
+            # push/dispatch and older merge-ref callers retain GITHUB_SHA binding.
+            checkout_sha = os.environ.get("PR_LINT_CHECKOUT_SHA", os.environ["GITHUB_SHA"])
+            if "PR_LINT_CHECKOUT_SHA" in os.environ:
+                expected = (event.get("pull_request", {}).get("head", {}).get("sha")
+                            if event_name == "pull_request" else os.environ["GITHUB_SHA"])
+                require(checkout_sha == expected, "Checkout pin differs from the event revision")
+            require(re.fullmatch(r"[0-9a-f]{40}", checkout_sha) and checked_sha == checkout_sha,
                     "Checkout does not match the workflow SHA")
             merge_commit = None
-            if event_name == "pull_request" and workflow_sha != pull_request.get("head", {}).get("sha"):
+            if event_name == "pull_request" and checkout_sha != pull_request.get("head", {}).get("sha"):
                 merge_commit = json.loads(command([
-                    "gh", "api", f"repos/{repository}/git/commits/{workflow_sha}"]))
-            metadata = resolve_metadata(event_name, repository, workflow_sha, checked_sha, parents,
+                    "gh", "api", f"repos/{repository}/git/commits/{checkout_sha}"]))
+            metadata = resolve_metadata(event_name, repository, checkout_sha, checked_sha, parents,
                                         event, pull_request, dispatch_number, merge_commit)
         except (ValueError, KeyError, TypeError, AttributeError, subprocess.CalledProcessError):
             try:
