@@ -15,7 +15,7 @@ const fixtures = {
   "/rules": [200, "text/html", '<h1 id="rules-heading">House rules</h1>'],
   "/privacy": [200, "text/html", "<h1>Privacy policy</h1>"],
   "/events": [200, "text/html", '<h1 id="events-heading">Events</h1>'],
-  "/events/past": [200, "text/html", "<h1>Past events</h1>"],
+  "/events/past": [200, "text/html", '<h1 id="past-events-heading">Past events</h1>'],
   "/events.rss": [200, "application/rss+xml", '<rss version="2.0"><channel></channel></rss>'],
   "/events.ics": [200, "text/calendar", "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n"],
   "/sitemap_index.xml": [200, "application/xml", '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>'],
@@ -139,6 +139,32 @@ test("rules accepts rendered Rules but rejects rendered Home with the shared foo
     if (!expected) {
       assert.match(result.output, /FAIL \/rules: expected body matching .*rules-heading.*; actual body did not match/);
       assert.ok(!result.output.includes("PASS /rules"), result.output);
+    }
+  }
+});
+
+test("past events accepts rendered Archive but rejects rendered Upcoming with archive navigation", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/events/pages.tsx"], bundle: true, write: false, format: "esm", platform: "node",
+  });
+  const { EventsCalendarPage, PastEventsPage } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+  const upcoming = EventsCalendarPage({
+    state: { view: "list", month: "2026-10", q: "", past: false }, upcoming: [], past: [],
+    zone: "UTC", now: new Date("2026-10-01T00:00:00Z"), emptyState: "never", discordFailed: false,
+    member: false, inviteUrl: "https://discord.gg/fixture", appUrl: "https://example.test",
+  }).toString();
+  const archive = PastEventsPage({ rows: [], page: 1, hasMore: false, totalPages: 0, appUrl: "https://example.test" }).toString();
+  assert.match(upcoming, /Past events/);
+  assert.doesNotMatch(upcoming, /id="past-events-heading"/);
+  assert.match(archive, /id="past-events-heading"/);
+  for (const [body, expected] of [[upcoming, false], [archive, true]]) {
+    const { url, requests } = await stub(t, (route, result) => { if (route === "/events/past") result.body = body; });
+    const result = await run(url);
+    assert.equal(result.ok, expected, result.output);
+    assert.equal(requests.length, 16);
+    if (!expected) {
+      assert.match(result.output, /FAIL \/events\/past: expected body matching .*past-events-heading.*; actual body did not match/);
+      assert.ok(!result.output.includes("PASS /events/past"), result.output);
     }
   }
 });
@@ -286,6 +312,12 @@ for (const [location, expected] of [
   ["https://discord.gg/fixture", true],
   ["https://discord.com/invite/fixture-code", true],
   ["https://DISCORD.COM/invite/fixture?event=123", true],
+  ["https://discord.gg:443/fixture", true],
+  ["https://discord.com:443/invite/fixture", true],
+  ["https://discord.gg:8443/fixture", false],
+  ["https://discord.com:8443/invite/fixture", false],
+  ["https://discord.gg:80/fixture", false],
+  ["https://discord.com:80/invite/fixture", false],
   ["https://discord.com/", false],
   ["https://discord.com/channels/123/456", false],
   ["https://discord.com/invite/", false],

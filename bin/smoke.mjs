@@ -9,7 +9,7 @@ const html = [
   ["/rules", /id="rules-heading"/],
   ["/privacy", /Privacy policy/],
   ["/events", /id="events-heading"/],
-  ["/events/past", /Past events/],
+  ["/events/past", /id="past-events-heading"/],
 ];
 const routes = [
   { path: "/up", statuses: [200], type: "application/json", json: true },
@@ -76,7 +76,7 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
         let target;
         try { if (location) target = new URL(location, base); } catch { /* Invalid Location fails below. */ }
         const valid = route.redirect === "discord"
-          ? target?.protocol === "https:" && !target.username && !target.password &&
+          ? target?.protocol === "https:" && !target.port && !target.username && !target.password &&
             ((target.hostname === "discord.gg" && /^\/[\w-]+$/.test(target.pathname)) ||
              (target.hostname === "discord.com" && /^\/invite\/[\w-]+$/.test(target.pathname)))
           : target?.origin === base.origin && target.pathname === "/auth/discord";
