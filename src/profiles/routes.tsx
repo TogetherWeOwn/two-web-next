@@ -103,7 +103,11 @@ export function profilesApp(deps: ProfileDeps = {}) {
       const row = await sessions.get(await hashToken(token));
       if (row) viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
     } catch (err) {
-      console.error("profiles could not resolve the session; refusing.", { error: String(err) });
+      // Bounded like every other session-failure log: class name only — driver
+      // messages can carry DSN fragments (TOG-10355).
+      console.error("profiles could not resolve the session; refusing.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
       return c.text("Profiles temporarily unavailable", 503);
     }
     // A cookie whose row is gone (revoked/expired/rotated) is a guest.
