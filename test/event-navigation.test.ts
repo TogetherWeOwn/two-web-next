@@ -30,7 +30,7 @@ function pageFixture(e = row(2), previous: EventLink | null = row(1), next: Even
   const columns = Object.keys(getTableColumns(events)) as (keyof EventRow)[];
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
-    if (sql.includes('from "rsvps"')) return { rows: [] };
+    if (sql.includes('from "rsvps"') || sql.includes("from rsvps")) return { rows: [] };
     if (sql.includes('"event_key" =')) {
       return { rows: columns.length ? [columns.map((k) => e[k] instanceof Date ? (e[k] as Date).toISOString() : e[k])] : [] };
     }
@@ -147,7 +147,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(html).toContain('href="#main"');
     expect(html).toContain('<main id="main" tabindex="-1">');
     expect(html).toContain('<nav aria-label="Primary">');
-    expect(html.match(/<h1>/g)).toHaveLength(1);
+    expect(html.match(/<h1\b/g)).toHaveLength(1);
     expect(html).toContain('data-testid="event-venue">Voice');
     expect(html).toContain(`rel="canonical" href="https://next.example.test/e/${key(2)}"`);
     expect(html).toContain(`data-copy-link="https://next.example.test/e/${key(2)}"`);
@@ -161,7 +161,8 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     }
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("vary")).toBe("Cookie");
-    expect(f.queries).toHaveLength(6); // Member-only attendees plus the three navigation reads.
+    expect(f.queries).toHaveLength(7); // Viewer position, member-only attendees and three navigation reads.
+    expect(f.queries.filter((q) => q.sql.includes("row_number() over"))).toHaveLength(1);
     expect(f.queries.filter((q) => q.sql.includes('inner join "users"'))).toHaveLength(1);
   });
 
@@ -192,7 +193,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     const mod = await draft.request({ headers: { cookie: await cookie(draft.env, true) } });
     expect(mod.status).toBe(200);
     expect(mod.headers.get("cache-control")).toBe("private, no-store");
-    expect(draft.queries.slice(4)).toHaveLength(4); // Three navigation reads plus member-only attendees.
+    expect(draft.queries.slice(4)).toHaveLength(5); // Navigation, member-only attendees and viewer position.
     const cancelled = pageFixture(row(2, { status: "cancelled" }));
     const gone = await cancelled.request();
     expect(gone.status).toBe(410);

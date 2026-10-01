@@ -30,6 +30,7 @@ import {
   currentCalendarMonth,
 } from "../islands/contracts";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
+import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
@@ -205,7 +206,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
     const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
-    const body = JSON.stringify({ data: rows.map(eventJson), page, limit });
+    const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
+    const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
+    const body = JSON.stringify({ data, page, limit });
     const etag = await etagFor(body);
     c.header("cache-control", "private, no-cache");
     c.header("etag", etag);
@@ -268,7 +271,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       c.header("x-robots-tag", "noindex, nofollow");
       return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
     }
-    // The guest join pitch depends on the viewer; never share-cache this HTML.
+    // The guest join pitch and waitlist position depend on the viewer; never share-cache this HTML.
     c.header("cache-control", "private, no-store");
     c.header("vary", "Cookie");
     // The injected reader uses only bindings/cookies; this route additionally
@@ -276,16 +279,17 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const session = await readSession(c as unknown as Ctx);
     if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
     if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
-    const [neighbors, related, attendees] = await Promise.all([
+    const [neighbors, related, attendees, position] = await Promise.all([
       getEventNeighbors(db, e),
       listRelatedEvents(db, e),
       session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+      session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
     ]);
     if (attendees.length > 0 && session) {
       c.set("viewerId", session.id);
       c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
     }
-    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} />);
+    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
@@ -357,7 +361,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       const { row, writeBack, childWriteBacks } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
       if (writeBack) await dispatchWriteBack(c.env, writeBack);
       for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
-      return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
+      const updated = await getPublicEvent(db, row.eventKey);
+      return c.json({ data: eventJson(updated!) });
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);
       if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
@@ -391,7 +396,11 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   // ---- RSVP (member writes, W9) ---------------------------------------------------
   // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
   // DELETE 204 always (quiet), any other verb 405. One shared 12/min budget per member.
-  const rsvpBody = (a: RsvpAnswer) => ({ data: { status: a.status, synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null } });
+  const rsvpBody = (a: RsvpAnswer) => ({ data: {
+    status: a.status,
+    synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null,
+    waitlist_position: a.waitlistPosition,
+  } });
   const closed = (c: Ctx) => c.json({ reason: "event_not_open", message: "This event is not taking RSVPs." }, 403);
 
   async function member(c: Ctx): Promise<Session | Response> {
@@ -409,7 +418,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // without touching limiter, auth or DB, and logs nothing. Present non-string
     // values count as filled (fail-closed); absent/empty inputs are genuine.
     if (rsvpTrapTripped(input)) {
-      return c.json(rsvpBody({ status: isRsvpStatus(input.status) ? input.status : "going", syncedToDiscordAt: null }), 201);
+      return c.json(rsvpBody({ status: isRsvpStatus(input.status) ? input.status : "going", syncedToDiscordAt: null, waitlistPosition: null }), 201);
     }
     const who = await member(c);
     if (who instanceof Response) return who;
@@ -428,8 +437,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!r.ok) {
       if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
       if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
-      if (r.reason === "closed") return closed(c);
-      return c.json({ reason: "event_at_capacity", message: "This event is full.", event_key: key, capacity: r.capacity }, 409);
+      return closed(c);
     }
     await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);

@@ -71,6 +71,8 @@ export function pageShellFixture(status = "published") {
       const row = encode(getTableColumns(joinAttempts), attempt);
       return { rows: [sql.includes('left join "users"') ? [...row, MEMBER_ID] : row] };
     }
+    if (sql.includes("row_number() over (partition by event_id order by created_at, id)")
+      && sql.includes("from rsvps")) return { rows: [] };
     if (sql.includes('from "rsvps"') || sql.includes('from "event_search_log"')
       || sql.startsWith('insert into "member_data_access_logs"') || sql.startsWith("SET LOCAL")) return { rows: [] };
     throw new Error(`Unexpected page-shell fixture query: ${sql}`);
