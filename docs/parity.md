@@ -57,6 +57,12 @@ pre-login/pre-join token on fresh authentication. Request tests hold the first
 exchange in flight and replay ORIGINAL signed cookies; only one exchange, join,
 session and terminal attempt is admitted. Separate clients prove durable
 coordination, expiry and replacement rollback on the isolated test container.
+Journey expiry/consumption eligibility depends on the locked CTE output, not a
+base-relation qualifier that can run before locking. Auth/join natural-expiry
+regressions observe an actual wait on an unchanged tuple with collected table
+statistics; these failed on the pre-correction SQL in PostgreSQL 17.11. The
+holder-updated expiry case remains separate. This database-level proof does not
+establish attacker-reachable HTTP exploitation or lift independent review gates.
 Blank-bot join starts do not advertise OAuth; a bot disabled mid-journey causes
 no exchange or member session. Store acquisition/consumption failure has separate
 request proofs of no upstream call, terminal attempt or session change; refused

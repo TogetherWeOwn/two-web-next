@@ -36,16 +36,17 @@ export function createPostgresOAuthJourneyStore(sql: Sql): OAuthJourneyStore {
       return rows.length === 1;
     },
     async consume(stateHash, flow) {
-      // Lock first, then use the live database clock: now() is frozen at
-      // statement start and could admit a journey that expired during a wait.
+      // Evaluate eligibility from the locked output, not a separate base scan
+      // that the planner can qualify before waiting. now() is frozen at statement
+      // start, so expiry also requires the live clock after acquiring the lock.
       // Keep the tombstone until expiry; never delete on consume.
       const rows = await sql<{ state_hash: string }[]>`with locked as materialized (
-          select state_hash from web_oauth_journeys
+          select state_hash, consumed_at, expires_at from web_oauth_journeys
           where state_hash = ${stateHash} and flow = ${flow} for update
         )
         update web_oauth_journeys j set consumed_at = clock_timestamp()
         from locked where j.state_hash = locked.state_hash
-          and j.consumed_at is null and j.expires_at > clock_timestamp()
+          and locked.consumed_at is null and locked.expires_at > clock_timestamp()
         returning j.state_hash`;
       return rows.length === 1;
     },

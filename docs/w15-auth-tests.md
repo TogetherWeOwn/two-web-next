@@ -127,9 +127,17 @@ runtime session-store DDL. Only SHA-256 state hashes, `auth`/`join` flow,
 server expiry and consumption time persist; no code, access token or raw state.
 A journey expires ten minutes after server issuance regardless of browser cookie
 retention. A row lock followed by a conditional UPDATE admits one callback across
-isolates; expiry is checked against `clock_timestamp()` after the lock, not the
-stale statement-start `now()`. The isolated Postgres test observes a real lock
-wait and expires the record before releasing it.
+isolates; consumption and expiry eligibility use the materialized locking CTE's
+output, with `clock_timestamp()` rather than stale statement-start `now()`. A live
+clock on a separately scanned base relation is insufficient: the planner can
+qualify that relation before waiting for the CTE's lock. The isolated Postgres
+suite retains the holder-updated expiry case and separately observes auth/join
+consumers blocked by the actual holder while a pre-set deadline passes without
+any tuple update. Collected table statistics exercise the alternative join
+ordering; tuple identity/eligibility fields remain unchanged, consumption is
+refused and no tombstone is marked. These new cases failed on the old query in
+PostgreSQL 17.11 before the locked-output correction. This is a database-level
+reproduction, not evidence of an attacker-reachable HTTP exploit.
 Consumption precedes exchange, terminal-attempt writes and session issuance,
 including valid denial and incomplete-code callbacks. Tombstones remain through
 expiry. Both starts sweep expired rows opportunistically; idle expired rows can
