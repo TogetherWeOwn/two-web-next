@@ -23,7 +23,7 @@ function fixture(status: "draft" | "published" = "draft") {
     capacity: 10, status, rsvpOpen: true, discordEventId: null,
     discordSyncFailedAt: null, discordSyncFailureCode: null, createdBy: null,
     recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-    parentEventId: null, recurrenceIndex: null,
+    parentEventId: null, recurrenceIndex: null, icsSequence: 0n,
     createdAt: new Date("2026-10-01T00:00:00Z"), updatedAt: new Date("2026-10-01T00:00:00Z"),
   };
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
