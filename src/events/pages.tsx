@@ -441,6 +441,7 @@ export const EventsCalendarPage: FC<{
             data-testid={EVENTS_SEARCH_TESTID}
           />
           <span data-cal-zone="actions">
+            {state.past ? <input type="hidden" name="past" value="1" /> : null}
             {searching ? (
               <a href={calendarUrl({ ...state, q: "" })} data-testid={EVENTS_SEARCH_CLEAR_TESTID}>
                 {EVENTS_EMPTY_COPY.searchClear}
