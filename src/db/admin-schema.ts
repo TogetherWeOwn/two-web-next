@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -8,9 +8,9 @@ import { boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text
 // Column-for-column notes where the port differs deliberately:
 // - events.status is text (legacy cast to the EventStatus enum in PHP; the
 //   transition guard lives in src/admin/validation.ts nextStatus()).
-// - activity_log is the spatie shape minus the event/batch columns the legacy
-//   app added but the admin rebuild never reads; subject/causer are stored as
-//   type+id string pairs (nullableMorphs) rather than separate tables.
+// - activity_log retains the spatie event/batch/causer columns for cutover
+//   evidence even though the admin rebuild does not read them; subject/causer
+//   are type+id string pairs (nullableMorphs) rather than separate tables.
 // - created_by / viewer_user_id are plain text (Discord snowflakes), NOT
 //   foreign keys to users: main's login flow never maintains the users
 //   roster, so an FK would reject every admin write with 23503. The W-auth
@@ -36,6 +36,8 @@ export const events = pgTable(
     capacity: integer("capacity"),
     status: text("status").notNull().default("draft"),
     discordEventId: text("discord_event_id").unique(),
+    discordSyncFailedAt: timestamp("discord_sync_failed_at", { withTimezone: true }),
+    discordSyncFailureCode: text("discord_sync_failure_code"),
     createdBy: text("created_by"),
     // Pause flag (TOG-8725): a published event stays visible while taking no
     // new answers. Default true so every row written by a caller that does
@@ -135,14 +137,17 @@ export const activityLog = pgTable(
   "activity_log",
   {
     id: serial("id").primaryKey(),
-    logName: text("log_name").notNull().default("default"),
+    logName: text("log_name").default("default"),
     description: text("description").notNull(),
     subjectType: text("subject_type"),
     subjectId: text("subject_id"),
+    causerType: text("causer_type"),
     causerId: text("causer_id"),
+    event: text("event"),
+    batchUuid: uuid("batch_uuid"),
     properties: jsonb("properties").$type<Record<string, { before: unknown; after: unknown }>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [index("activity_log_log_name_idx").on(t.logName)],
 );
@@ -159,12 +164,32 @@ export const rsvps = pgTable(
       .notNull()
       .references(() => events.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
+    // Source tie-break survives orphan recovery; native answers leave it null.
+    // FIFO: created_at, coalesce(legacy_id, id), id. Do not JSON-serialize this bigint.
+    legacyId: bigint("legacy_id", { mode: "bigint" }),
     // going | maybe | not_going | waitlisted (src/islands/contracts.ts RSVP_STATUSES).
     status: text("status").notNull(),
+    // Null until the Discord mirror has caught up with this answer. Every write resets it
+    // (W9); the mirror job stamps it (RsvpResource contract: null = "saved, syncing").
+    syncedToDiscordAt: timestamp("synced_to_discord_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique("rsvps_event_user_unique").on(t.eventId, t.userId), index("rsvps_user_id_idx").on(t.userId)],
+);
+
+// One rendered /events?q= search: normalized query + visible result count only.
+// No user id, session or IP by design (legacy EventSearchLog, TOG-8400); pruned
+// at 90 d by the W13 cron.
+export const eventSearchLogs = pgTable(
+  "event_search_logs",
+  {
+    id: serial("id").primaryKey(),
+    normalizedQuery: text("normalized_query").notNull(),
+    resultCount: integer("result_count").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("event_search_logs_zero_idx").on(t.resultCount, t.normalizedQuery), index("event_search_logs_occurred_at_idx").on(t.occurredAt)],
 );
 
 export type Event = typeof events.$inferSelect;

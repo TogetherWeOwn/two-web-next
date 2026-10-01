@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
+// route-inventory: POST /api/agent-events
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { DEFAULT_CONFIG, type IngressConfig, digest, handleAgentEvent, validateFields } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 import users from "../drizzle/0000_init-users.sql?raw";
@@ -32,12 +33,12 @@ describe("validateFields / digest (pure)", () => {
 
 describe("worker route without a store", () => {
   it("answers 404 ingress_disabled by default and never touches a database", async () => {
-    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, {} as never);
+    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, { APP_URL: "https://next.example.test" } as never);
     expect(res.status).toBe(404);
     expect((await res.json()) as { reason: string }).toMatchObject({ reason: "ingress_disabled" });
   });
   it("answers 503 when enabled but no store is bound", async () => {
-    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, { AGENT_EVENTS_ENABLED: "true" } as never);
+    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, { APP_URL: "https://next.example.test", AGENT_EVENTS_ENABLED: "true" } as never);
     expect(res.status).toBe(503);
   });
 });
@@ -149,6 +150,43 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
     expect((await call({ op: "update", idempotency_key: key(), version: 2, fields: FIELDS })).body.reason).toBe("event_not_open");
 
     expect((await call({ op: "read", idempotency_key: key(), event_key: "01NOSUCHEVENT000000000000" })).body.reason).toBe("event_not_found");
+  });
+
+  it("returns the latest receipts in chronological order, bounded at fifty", async () => {
+    // Ports AgentEventReceiptWindowTest (boundary pair: exactly 50, latest 50
+    // of 55). The read snapshots its own audit row after, so the window must
+    // cut the oldest, not the newest.
+    const t = "tok-window-" + schemaName;
+    await grant(t, CALLER, STAGING);
+    const withTok = (body: unknown) => handleAgentEvent(sql, cfg, body, t);
+    const k = key();
+    const created = await withTok({ op: "create", idempotency_key: k, fields: FIELDS });
+    expect(created.status).toBe(201);
+    const ek = created.body.event_key as string;
+    const base = Date.now();
+    for (let i = 0; i < 55; i++) {
+      const id = `01WINDOW${String(i).padStart(4, "0")}000000000000`;
+      const at = new Date(base + i * 1000).toISOString();
+      await sql`INSERT INTO agent_event_audits (grant_id, event_key, operation, request_id, result, created_at)
+                VALUES ((SELECT id FROM agent_event_grants WHERE verifier_hash = ${await sha256Hex(t)}), ${ek}, 'update', ${id}, 'ok', ${at})`;
+    }
+    // Newer foreign rows must not occupy the bounded window. Each matches
+    // only one of the two scope filters, so neither filter can be dropped.
+    const foreign = "tok-window-foreign-" + schemaName;
+    await grant(foreign, CALLER, STAGING);
+    await sql`INSERT INTO agent_event_audits (grant_id, event_key, operation, request_id, result, reason_code)
+              VALUES ((SELECT id FROM agent_event_grants WHERE verifier_hash = ${await sha256Hex(foreign)}), ${ek}, 'cancel', 'foreign-grant-row', 'denied', 'foreign_event')`;
+    await sql`INSERT INTO agent_event_audits (grant_id, event_key, operation, request_id, result, reason_code)
+              VALUES ((SELECT id FROM agent_event_grants WHERE verifier_hash = ${await sha256Hex(t)}), '01FOREIGNEVENT000000000000', 'cancel', 'foreign-event-row', 'denied', 'foreign_event')`;
+    const read = await withTok({ op: "read", idempotency_key: key(), event_key: ek });
+    expect(read.status).toBe(200);
+    const receipts = read.body.receipts as { request_id: string; at: string }[];
+    expect(receipts).toHaveLength(50);
+    // Latest 50 of 56 (55 seeded + the create): the create and the five
+    // oldest seeded rows fell off, order is chronological.
+    expect(receipts[0]!.request_id).toBe("01WINDOW0005000000000000");
+    expect(receipts[49]!.request_id).toBe("01WINDOW0054000000000000");
+    expect([...receipts].map((r) => r.at)).toEqual([...receipts].map((r) => r.at).sort());
   });
 
   it("concurrent duplicate deliveries execute once and every caller gets the one answer", async () => {

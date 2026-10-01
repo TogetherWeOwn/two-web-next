@@ -18,17 +18,21 @@
 import { getSignedCookie } from "hono/cookie";
 import { type Context, type Next, Hono } from "hono";
 import postgres from "postgres";
-import { dbFor } from "../admin/db";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
+import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
+import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
 import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { createDbProfileStore, type ProfileStore } from "./store";
 import { validateProfile } from "./validation";
+import { MEMBER_STATS_BUDGET_MS, memberStatsWithBudget, readMemberStats, readOwnedMemberStats, type MemberStatsSource } from "./stats";
 
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
 const SESSION_COOKIE = "__Host-two_session";
@@ -39,8 +43,9 @@ type Verdict = Awaited<ReturnType<typeof checkJoinThrottle>>;
 export type ProfileDeps = {
   sessionStore?: SessionStore;
   store?: ProfileStore;
+  stats?: MemberStatsSource;
   accessLog?: AccessSink;
-  /** bucket → verdict. Default: web_throttle_hits via DATABASE_URL; no DB allows. */
+  /** bucket → verdict. Default: web_throttle_hits via the web DB; no DB allows. */
   throttle?: (bucket: string) => Promise<Verdict>;
 };
 
@@ -58,6 +63,17 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const db = await dbFor(c);
     return db ? createDbProfileStore(db) : null;
   };
+  const statsFor = (c: Ctx, id: string) => memberStatsWithBudget(deps.stats ?? (async (memberId, signal) => {
+    // Injected fixtures/clients are borrowed, never shut down by this request.
+    const injected = (c.env as EnvWithAdminDb).ADMIN_DB;
+    if (injected) return readMemberStats(injected, memberId, signal);
+    const url = databaseUrl(c.env);
+    if (!url) return null;
+    signal.throwIfAborted();
+    // Also bound server-side execution if the connection disappears mid-query.
+    const client = postgres(url, { ...databaseOptions, connection: { statement_timeout: MEMBER_STATS_BUDGET_MS } });
+    return readOwnedMemberStats(drizzle(client), memberId, signal);
+  }), id);
   const sinkFor = async (c: { env: Env }): Promise<AccessSink | null> => {
     if (deps.accessLog) return deps.accessLog;
     const db = await dbFor(c);
@@ -65,9 +81,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
   };
   const throttle = async (c: { env: Env }, bucket: string): Promise<Verdict> => {
     if (deps.throttle) return deps.throttle(bucket);
-    const url = c.env.DATABASE_URL;
+    const url = databaseUrl(c.env);
     if (!url) return { limited: false };
-    const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+    const sql = postgres(url, databaseOptions) as unknown as Sql;
     if (!migratedThrottle.has(url)) {
       await migrateJoin(sql);
       migratedThrottle.add(url);
@@ -77,11 +93,6 @@ export function profilesApp(deps: ProfileDeps = {}) {
 
   // Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed).
   const gate = async (c: Ctx, next: Next) => {
-    // The origin check for forged same-shape writes (SameSite=Lax already stops the cookie).
-    if (c.req.method !== "GET" && c.req.method !== "HEAD") {
-      const origin = c.req.header("origin");
-      if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-    }
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     if (!token) return c.redirect("/auth/discord", 302);
     let viewer: Viewer | null = null;
@@ -117,8 +128,11 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const member = await store.find(id);
     if (!member) return c.notFound();
     const viewer = c.get("viewer");
+    // Stats and milestones belong to this same member: the existing declaration
+    // covers all three reads, without duplicating subjects or audit rows.
     c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
-    return c.html(<ProfilePage member={member} isOwner={viewer.id === member.id} />);
+    const stats = await statsFor(c, member.id);
+    return c.html(<ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
   };
 
   app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));
@@ -129,11 +143,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const viewer = c.get("viewer");
     const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(() => ({ limited: false }) as Verdict);
     if (verdict.limited) {
-      return c.json(
-        { reason: "rate_limited", message: "Too many profile updates. Try again shortly.", retry_after: verdict.retryAfter },
-        429,
-        { "Retry-After": String(verdict.retryAfter) },
-      );
+      return rateLimitExceeded(c, verdict.retryAfter);
     }
     // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
     if (!SNOWFLAKE.test(id) || viewer.id !== id) return c.text("Forbidden", 403);
@@ -161,7 +171,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
       return c.html(
         <ProfilePage
           member={member}
+          stats={await statsFor(c, member.id)}
           isOwner
+          appUrl={c.env.APP_URL}
           errors={result.errors}
           values={{
             bio: typeof input.bio === "string" ? input.bio : "",
