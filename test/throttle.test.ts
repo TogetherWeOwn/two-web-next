@@ -16,6 +16,7 @@ const EXEMPT: Record<string, string> = {
   "POST /api/agent-events": "agent ingress; its own HMAC-signed limiter, same 429 envelope (W14)",
   "PUT /events/:key/rsvp": "shared 12/min transactional RSVP budget (W9)",
   "DELETE /events/:key/rsvp": "shared 12/min transactional RSVP budget (W9)",
+  "POST /e/:key/rsvp": "HTML adapter invokes the same PUT/DELETE handlers and transactional 12/min RSVP bucket (W10)",
   "PATCH /members/:user": "in-handler 30/min profile-write bucket (W7)",
   "POST /members/:user": "in-handler 30/min profile-write bucket (W7)",
 };
