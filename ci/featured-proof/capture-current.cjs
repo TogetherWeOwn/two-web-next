@@ -27,6 +27,8 @@ async function main() {
   };
   let browser;
   try {
+    report.playwrightVersion = require('playwright/package.json').version;
+    if (report.playwrightVersion !== '1.58.2') throw new Error('Capture requires the container-matched Playwright 1.58.2 module');
     browser = await chromium.launch({ headless: true });
     report.browserVersion = browser.version();
     for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {

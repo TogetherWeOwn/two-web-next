@@ -110,7 +110,9 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2
           export NODE_PATH="$RUNNER_TEMP/featured-runtime/node_modules"
-          node ci/featured-proof/capture-current.cjs "$RUNNER_TEMP/featured-current-fixtures" "$RUNNER_TEMP/featured-current-output"
+          # Resolve only the pinned runtime module, not the app's newer Playwright.
+          cp ci/featured-proof/capture-current.cjs "$RUNNER_TEMP/featured-current-capture.cjs"
+          node "$RUNNER_TEMP/featured-current-capture.cjs" "$RUNNER_TEMP/featured-current-fixtures" "$RUNNER_TEMP/featured-current-output"
       - name: Retain screenshots, manifest and report for independent QA
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
