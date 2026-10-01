@@ -22,6 +22,7 @@ import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { inviteDestination } from "./invite";
+import { imageHosts } from "./image-policy";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
@@ -75,11 +76,12 @@ const staticSecurityHeaders = secureHeaders({
   strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
-    imgSrc: ["'self'", "https://cdn.discordapp.com"],
+    imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
+    // Only homepage/join reads embed the widget; other routes cannot frame anything.
+    frameSrc: [(c) => ["/", "/join"].includes(c.req.path) && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com/widget" : "'none'"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     fontSrc: ["'self'"],
-    frameSrc: ["https://discord.com/widget"],
     frameAncestors: ["'none'"],
     formAction: ["'self'"],
     reportUri: CSP_REPORT_ENDPOINT,
@@ -260,7 +262,7 @@ app.get("/", async (c) => {
   return c.html(
     <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
       counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
-      widgetUrl={discordWidgetUrl(c.env.DISCORD_GUILD_ID)} />,
+      widgetUrl={discordWidgetUrl(c.env.DISCORD_GUILD_ID)} imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
   );
 });
 

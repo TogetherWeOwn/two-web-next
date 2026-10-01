@@ -4,6 +4,7 @@ import app from "./app";
 import { featuredContents } from "../src/db/admin-schema";
 import { FEATURED_READ_DEADLINE_MS, listVisibleFeatured } from "../src/featured";
 import * as eventReads from "../src/events/reads";
+import * as featuredReads from "../src/featured";
 import { featuredImageAllowed, featuredImageSrc } from "../src/featured-image";
 import { adminApp } from "../src/admin/routes";
 import { serializeSigned } from "hono/utils/cookie";
@@ -70,6 +71,27 @@ describe("featured homepage fallback (local fixtures)", () => {
       rejectRead(new Error("late database failure"));
       await vi.advanceTimersByTimeAsync(0);
     } finally { vi.useRealTimers(); }
+  });
+
+  it("uses the configured allowlist for remote image rendering and CSP on the homepage", async () => {
+    const imageUrl = "https://images.unsplash.com/photo.jpg";
+    expect(featuredImageAllowed(imageUrl, env.APP_URL, "images.unsplash.com")).toBe(true);
+    expect(featuredImageSrc(imageUrl, env.APP_URL, "images.unsplash.com")).toBe(imageUrl);
+    expect(featuredImageSrc(imageUrl, env.APP_URL)).toBeNull();
+    for (const host of ["images.corp", "images.mail", "localhost.localdomain", "images.alt"]) {
+      expect(featuredImageSrc(`https://${host}/photo.jpg`, env.APP_URL, host)).toBeNull();
+    }
+    vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]);
+    vi.spyOn(featuredReads, "listVisibleFeatured").mockResolvedValue([{
+      id: 1, title: "Configured photo", body: null, url: null, imageUrl, imageAlt: "Squad photo",
+    }]);
+    const bindings = { ...env, ADMIN_DB: drizzle.mock(), FEATURED_IMAGE_HOSTS: "images.unsplash.com" } as Env;
+    const res = await app.request("/", {}, bindings);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain(`src="${imageUrl}" alt="Squad photo"`);
+    expect(res.headers.get("content-security-policy")).toContain("img-src 'self' https://cdn.discordapp.com https://images.unsplash.com");
+    const unconfigured = await app.request("/", {}, { ...bindings, FEATURED_IMAGE_HOSTS: "" });
+    expect(await unconfigured.text()).not.toContain(imageUrl);
   });
 
   it.each([
@@ -220,7 +242,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     for (const imageUrl of ["https://images.example.test/photo.jpg", "http://cdn.discordapp.com/photo.jpg"]) {
       const rejected = await publish("/featured", "Rejected photo", imageUrl);
       expect(rejected.status).toBe(422);
-      expect(await rejected.text()).toContain("other hosts are blocked");
+      expect(await rejected.text()).toContain("HTTPS on an approved public host");
     }
     expect(await listVisibleFeatured(fixture.db)).toEqual([]);
     const accepted = await publish("/featured", "Published photo", "https://cdn.discordapp.com/attachments/photo.jpg");
@@ -230,11 +252,14 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     expect(await (await home()).text()).toContain('src="https://cdn.discordapp.com/attachments/photo.jpg" alt="Squad photo"');
     const rejectedEdit = await publish(`/featured/${row!.id}`, "Bad edit", "https://images.example.test/photo.jpg");
     expect(rejectedEdit.status).toBe(422);
-    const edited = await publish(`/featured/${row!.id}`, "Local photo", `${env.APP_URL}/local.jpg`);
+    const rejectedLocal = await publish(`/featured/${row!.id}`, "Local photo", `${env.APP_URL}/local.jpg`);
+    expect(rejectedLocal.status).toBe(422); // New URLs need an approved public host, even on this site.
+    const edited = await publish(`/featured/${row!.id}`, "Edited photo", "https://cdn.discordapp.com/attachments/edited.jpg");
     expect(edited.status).toBe(303);
-    await fixture.db.insert(featuredContents).values({
-      title: "Old imported photo", imageUrl: "https://images.example.test/old.jpg", isPublished: true,
-    });
+    await fixture.db.insert(featuredContents).values([
+      { title: "Old imported photo", imageUrl: "https://images.example.test/old.jpg", isPublished: true },
+      { title: "Legacy local photo", imageUrl: `${env.APP_URL}/local.jpg`, isPublished: true },
+    ]);
     const res = await home();
     const html = await res.text();
     expect(html).toContain('src="/local.jpg"');
