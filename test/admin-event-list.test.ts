@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { EVENT_PAGE_SIZE, eventListUrl, parseEventListQuery } from "../src/admin/event-list";
@@ -18,7 +18,7 @@ const env: Env = {
   DISCORD_BOT_TOKEN: "bot-token",
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
 };
-const viewer = "event-list-test-mod";
+const viewer = "100000000000000111";
 
 async function cookieFor(store: SessionStore, moderator: boolean) {
   const token = newSessionToken();
@@ -179,7 +179,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (isolated agent-tes
     }
   });
 
-  it.each(["1", "0"])("paginates RSVP state %s with every filter preserved and logs only displayed rows", async (rsvp_open) => {
+  it.each(["1", "0"])("paginates RSVP state %s with every filter preserved and no event-id member subjects", async (rsvp_open) => {
     await fixture.db.insert(events).values(Array.from({ length: EVENT_PAGE_SIZE + 2 }, (_, i) => ({
       eventKey: `list-test-page-${i}`, title: `Page fixture & nights ${String(i).padStart(2, "0")}`,
       status: "published", capacity: 4, rsvpOpen: rsvp_open === "1",
@@ -208,10 +208,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (isolated agent-tes
     const sortLink = second.match(/href="([^"]+)" aria-label="Sort by title descending"/)![1]!.replaceAll("&amp;", "&");
     expect(new URL(sortLink, env.APP_URL).searchParams.has("page")).toBe(false);
     expect(new URL(sortLink, env.APP_URL).searchParams.get("rsvp_open")).toBe(rsvp_open);
-    const [log] = await fixture.db.select().from(memberDataAccessLogs)
-      .where(and(eq(memberDataAccessLogs.viewerDiscordId, viewer), eq(memberDataAccessLogs.subjectCount, EVENT_PAGE_SIZE)));
-    expect(log!.subjectUserIds.sort()).toEqual(rowKeys(first).sort());
-    expect(log!.subjectUserIds).not.toContain("list-test-page-25");
+    expect(await fixture.db.select().from(memberDataAccessLogs)
+      .where(eq(memberDataAccessLogs.viewerDiscordId, viewer))).toHaveLength(0);
   });
 
   it("breaks equal sort values by id so pages do not repeat rows", async () => {

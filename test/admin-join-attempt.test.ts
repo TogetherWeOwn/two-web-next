@@ -106,7 +106,7 @@ describe.skipIf(!process.env.DATABASE_URL)("join attempt detail (isolated agent-
   });
 
   it("looks up the primary key even when the attempt is beyond the list's 100-row cap", async () => {
-    const row = await attempt({ outcome: "added", createdAt: new Date(Date.now() - 60_000) });
+    const row = await attempt({ outcome: "added", discordId: SUBJECT.userId, createdAt: new Date(Date.now() - 60_000) });
     await fixture.db.insert(joinAttempts).values(Array.from({ length: 101 }, () => ({ outcome: "error" })));
     expect((await read(row.id)).status).toBe(200);
   });
@@ -135,19 +135,36 @@ describe.skipIf(!process.env.DATABASE_URL)("join attempt detail (isolated agent-
     }]);
   });
 
-  it.each([null, "unmapped-discord-id", MODERATOR.userId])("does not invent a member subject or log a self read for %s", async (discordId) => {
+  it.each([null, "unmapped-discord-id"])("refuses an unattributable retained attempt for %s", async (discordId) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const row = await attempt({ outcome: "degraded", discordId, requestId: "private-unattributable-trace" });
+    const res = await read(row.id);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const html = await res.text();
+    expect(html).not.toContain("degraded");
+    expect(html).not.toContain(row.requestId!);
+    if (discordId) expect(html).not.toContain(discordId);
+    expect(await logs()).toHaveLength(0);
+  });
+
+  it.each(["100000000000000999", MODERATOR.userId])("attributes actual retained key %s without a users lookup or a self row", async (discordId) => {
     const row = await attempt({ outcome: "degraded", discordId });
     const res = await read(row.id);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("degraded");
-    expect(html).toContain("—");
-    if (discordId) expect(html).toContain(discordId);
-    expect(await logs()).toHaveLength(0);
+    expect(html).toContain(discordId);
+    const entries = await logs();
+    if (discordId === MODERATOR.userId) expect(entries).toHaveLength(0);
+    else {
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ subjectUserIds: [discordId], subjectCount: 1 });
+    }
   });
 
   it("escapes trace identifiers and sources rather than rendering markup", async () => {
-    const row = await attempt({ outcome: "error", source: "<script>alert(1)</script>", requestId: '<img src=x onerror="alert(1)">' });
+    const row = await attempt({ outcome: "error", discordId: SUBJECT.userId, source: "<script>alert(1)</script>", requestId: '<img src=x onerror="alert(1)">' });
     const html = await (await read(row.id)).text();
     expect(html).toContain("&lt;script&gt;");
     expect(html).toContain("&lt;img");
