@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { jsx } from "hono/jsx/jsx-runtime";
 import { FeaturedFormPage, FeaturedPage } from "../../src/admin/pages";
 import type { FeaturedRow } from "../../src/admin/store";
+import { parseFeaturedListQuery } from "../../src/admin/table-list";
 
 async function main() {
   const output = resolve(process.argv[2]!);
@@ -34,7 +35,7 @@ async function main() {
   const fixtures = [
     ["edit.html", jsx(FeaturedFormPage, { mode: "edit", row, values, errors: {}, now, appUrl: "https://next.example.test" })],
     ["long-content.html", jsx(FeaturedFormPage, { mode: "edit", row: longContent, values: { ...values, title: longContent.title, body: longContent.body }, errors: {}, now, appUrl: "https://next.example.test" })],
-    ["list.html", jsx(FeaturedPage, { rows, now })],
+    ["list.html", jsx(FeaturedPage, { rows, query: parseFeaturedListQuery({}), now })],
     ["scheduled.html", jsx(FeaturedFormPage, { mode: "edit", row: scheduled, values: { ...values, title: scheduled.title, starts_at: "2026-10-01 20:00", ends_at: "" }, errors: {}, now, appUrl: "https://next.example.test" })],
   ] as const;
   await mkdir(output); // Refuse to overwrite another evidence bundle.

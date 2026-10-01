@@ -2,6 +2,7 @@ import { jsx } from "hono/jsx/jsx-runtime";
 import { describe, expect, it } from "vitest";
 import { FeaturedFormPage, FeaturedPage } from "../src/admin/pages";
 import type { FeaturedRow } from "../src/admin/store";
+import { parseFeaturedListQuery } from "../src/admin/table-list";
 import { currentlyVisible, featuredStatus, type FeaturedWindow } from "../src/featured-status";
 import { FeaturedContentItem, Home } from "../src/pages";
 
@@ -9,6 +10,7 @@ const now = new Date("2026-09-30T20:00:00Z");
 const before = new Date(now.getTime() - 1);
 const after = new Date(now.getTime() + 1);
 const appUrl = "https://next.example.test";
+const query = parseFeaturedListQuery({});
 const row: FeaturedRow = {
   id: 1, legacyId: null, title: "Friday games", body: "Bring a friend.\nEveryone is welcome.",
   url: "https://example.test/games", imageUrl: "https://cdn.discordapp.com/photo.jpg", imageAlt: "Friends playing together",
@@ -37,7 +39,7 @@ describe("featured publish-window status", () => {
     const saved = { ...row, ...window };
     expect(featuredStatus(saved, now)).toBe(status);
     expect(currentlyVisible(saved, now)).toBe(status === "live");
-    const table = String(jsx(FeaturedPage, { rows: [saved], now }));
+    const table = String(jsx(FeaturedPage, { rows: [saved], query, now }));
     expect(table).toContain(`data-status="${status}">${status}</span>`);
     expect(edit(saved)).toContain(`data-status="${status}">${status}</span>`);
     expect(edit(saved).includes('data-testid="featured-item"')).toBe(status === "live");
@@ -70,8 +72,24 @@ describe("featured publish-window status", () => {
     expect(currentlyVisible(window, now)).toBe(false);
   });
 
+  it("preserves filters, accessible sorting and last-changed times alongside status badges", () => {
+    const filtered = parseFeaturedListQuery({ published: "1", q: "Friday", sort: "updated_at", order: "desc" });
+    const html = String(jsx(FeaturedPage, { rows: [row], query: filtered, now }));
+    expect(html).toContain('name="q" type="search" value="Friday"');
+    expect(html).toContain('value="1" selected');
+    expect(html).toContain('aria-sort="descending"');
+    expect(html).toContain('aria-label="Sort by last changed ascending"');
+    expect(html).toContain("sort=updated_at&amp;order=asc&amp;published=1&amp;q=Friday");
+    expect(html).toContain('<th scope="col">Status</th>');
+    expect(html).toContain('data-status="live">live</span>');
+    expect(html).toContain(`<time datetime="${row.updatedAt.toISOString()}">`);
+    const empty = String(jsx(FeaturedPage, { rows: [], query: filtered, now }));
+    expect(empty).toContain('colspan="5" data-testid="featured-empty"');
+    expect(empty).toContain("No featured content matches these filters.");
+  });
+
   it("captures one clock for every row in the table and adds the bounded-width table class", () => {
-    const html = String(jsx(FeaturedPage, { rows: [row, { ...row, id: 2 }], now }));
+    const html = String(jsx(FeaturedPage, { rows: [row, { ...row, id: 2 }], query, now }));
     expect(html.match(/data-status="live"/g)).toHaveLength(2);
     expect(html).toContain('class="admin-table featured-table"');
   });
@@ -146,7 +164,7 @@ describe("featured SSR preview", () => {
   });
 
   it("has no inline script, stylesheet, style attribute or event handlers", () => {
-    for (const html of [edit(row), String(jsx(FeaturedPage, { rows: [row], now })), item(row)]) {
+    for (const html of [edit(row), String(jsx(FeaturedPage, { rows: [row], query, now })), item(row)]) {
       expect(html).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
     }
     expect(edit(row)).toContain('<link rel="stylesheet" href="/styles.css"/>');
