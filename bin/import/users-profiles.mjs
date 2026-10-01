@@ -38,7 +38,8 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
     // Timestamp text must be unambiguous even with caller/server DateStyle overrides.
     await source`set local datestyle = 'ISO, YMD'`;
     const users = await source`
-      select discord_id, username, avatar, (discord_joined_at is not null) as member,
+      select discord_id, coalesce(nullif(display_name, ''), username) as username,
+        avatar, (discord_joined_at is not null) as member,
         created_at::text as created_at, coalesce(updated_at, created_at)::text as updated_at
       from users order by id`;
     const profiles = await source`
@@ -67,12 +68,13 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
       for (const row of users) {
         let changed;
         if (dryRun) {
-          const identical = await target`
+          const unchanged = await target`
             select 1 from users where id = ${row.discord_id}
-              and (username, avatar, member, created_at, updated_at) is not distinct from
-                (${row.username}::text, ${row.avatar}::text, ${row.member}::boolean,
-                 ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')`;
-          changed = identical.length === 0;
+              and (updated_at > ${row.updated_at}::timestamp at time zone 'UTC'
+                or (username, avatar, member, created_at, updated_at) is not distinct from
+                  (${row.username}::text, ${row.avatar}::text, ${row.member}::boolean,
+                   ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC'))`;
+          changed = unchanged.length === 0;
         } else {
           const written = await target`
             insert into users (id, username, avatar, member, created_at, updated_at)
@@ -80,8 +82,9 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
               ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')
             on conflict (id) do update set username = excluded.username, avatar = excluded.avatar,
               member = excluded.member, created_at = excluded.created_at, updated_at = excluded.updated_at
-            where (users.username, users.avatar, users.member, users.created_at, users.updated_at)
-              is distinct from (excluded.username, excluded.avatar, excluded.member, excluded.created_at, excluded.updated_at)
+            where users.updated_at <= excluded.updated_at
+              and (users.username, users.avatar, users.member, users.created_at, users.updated_at)
+                is distinct from (excluded.username, excluded.avatar, excluded.member, excluded.created_at, excluded.updated_at)
             returning id`;
           changed = written.length !== 0;
         }
