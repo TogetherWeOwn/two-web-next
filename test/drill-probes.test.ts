@@ -23,6 +23,7 @@ import { BotTerminalError } from "../src/jobs/types";
 import type {
   BotClient,
   EventStore,
+  SyncAttempt,
   QueueLedger,
   UniqueLock,
 } from "../src/jobs/types";
@@ -128,13 +129,19 @@ function memLock() {
 }
 
 function memStore(): EventStore {
+  const attempt = (eventKey: string, idempotencyKey: string): SyncAttempt => ({
+    idempotencyKey, eventKey, revision: 1, action: "event.upsert",
+    payload: { eventKey, name: "n", startsAt: "s", endsAt: null, location: "l", description: null },
+    mirroredAt: new Date(0), state: "pending", requestAttempts: 0, nextAttemptAt: new Date(0),
+  });
   return {
-    find: async (eventKey: string) => ({
-      eventKey,
-      payload: { eventKey, name: "n", startsAt: "s", endsAt: null, location: "l", description: null },
-      mirrored: true,
-    }),
-    recordMirrored: async () => {},
+    prepareSync: async (eventKey, key) => attempt(eventKey, key),
+    claimSync: async (a) => a,
+    completeSync: async () => {},
+    deferSync: async () => {},
+    failSync: async () => {},
+    needsSync: async () => false,
+    pendingSync: async () => null,
     closeFinished: async () => 0,
     materializeSeries: async () => 0,
     staleEventKeys: async () => [],
@@ -242,7 +249,7 @@ describe("queue:poison-probe drill", () => {
     const mirrored: string[] = [];
     const events: EventStore = {
       ...memStore(),
-      recordMirrored: async (_k, id) => void mirrored.push(id),
+      completeSync: async (_a, id) => void mirrored.push(id),
     };
     let calls = 0;
     const bot = {
