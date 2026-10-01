@@ -163,7 +163,9 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     await expect(handleCallInternalAction({ ...ann }, 1, down)).resolves.toEqual({ retryInSeconds: 5 });
 
     const broken = { postAnnouncement: async () => { throw new BotTerminalError("bad secret"); } } as unknown as BotClient;
-    await expect(handleCallInternalAction({ ...ann }, 1, broken)).resolves.toEqual({ failed: "bad secret" });
+    // Class-only (TOG-11627): the terminal message can carry tokens or personal
+    // data, so the handler emits only the exception class.
+    await expect(handleCallInternalAction({ ...ann }, 1, broken)).resolves.toEqual({ failed: "BotTerminalError" });
 
     vi.useFakeTimers();
     await expect(handleCallInternalAction({ ...ann }, 1, ok)).resolves.toEqual({ done: true });
