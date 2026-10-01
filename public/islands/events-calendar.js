@@ -29,6 +29,7 @@
   var DEBOUNCE_MS = 300;
   var active = null;
   var debounceTimer = null;
+  var inputRevision = 0;
   // Back changes the address before its fetch commits. Replacing that request
   // must not lose the obligation to reconcile the address with the rendered page.
   var renderedAddress = pageAddress(new URL(window.location.href));
@@ -63,15 +64,34 @@
     if (!on) root.removeAttribute("aria-busy");
   }
 
+  // URLs change across month steps; the control's test ID or label is stable.
+  function replacementControl(control) {
+    if (root.contains(control) && !control.closest("[hidden]")) return control;
+    var attr = control.hasAttribute("data-testid") ? "data-testid" : "aria-label";
+    var identity = control.getAttribute(attr);
+    if (!identity) return null;
+    return Array.from(root.querySelectorAll("a")).find(function (link) {
+      return link.getAttribute(attr) === identity && calendarHref(link.href) && !link.closest("[hidden]");
+    }) || null;
+  }
+
+  // opts.control: the focused keyboard-activated anchor to restore if replaced.
   // opts.focus: a selector to focus after the swap (grid day jumps land on the card).
   // opts.skeleton: member-started actions show it; a settled search does not.
   // opts.syncInput: explicit navigation rewrites the box unless newer typing began.
   async function load(url, push, opts) {
     opts = opts || {};
     var inputAtStart = input.value;
+    var inputRevisionAtStart = inputRevision;
+    var focusAtStart = document.activeElement;
     if (active) active.abort();
     var controller = new AbortController();
     active = controller;
+    var focusMoved = false;
+    var trackFocus = focusAtStart && (opts.focus || opts.control) ? function (event) {
+      if (event.target !== focusAtStart) focusMoved = true;
+    } : null;
+    if (trackFocus) document.addEventListener("focusin", trackFocus, { signal: controller.signal });
     if (opts.skeleton) setLoading(true);
     try {
       var response = await fetch(url.pathname + url.search, {
@@ -94,6 +114,12 @@
       ) {
         throw new Error("Invalid calendar page");
       }
+      // Check ownership before replacement detaches the focused control. Newer
+      // typing (even back to the same value) or moved focus cancels restoration.
+      // Hiding content can itself blur its control to body after a paint.
+      var hiddenOrigin = focusAtStart && root.contains(focusAtStart) && focusAtStart.closest('[data-cal-zone="content"]');
+      var skeletonBlur = opts.skeleton && hiddenOrigin && document.activeElement === document.body;
+      var ownsFocus = !focusMoved && inputRevision === inputRevisionAtStart && (document.activeElement === focusAtStart || skeletonBlur);
       // Zones are positionally paired with the fetched source of the same name.
       var byName = {};
       sources.forEach(function (s) {
@@ -128,8 +154,11 @@
       if (push) window.history.pushState(null, "", url.pathname + url.search + url.hash);
       renderedAddress = pageAddress(url);
       feedback.textContent = "";
-      if (opts.focus) {
-        var target = root.querySelector(opts.focus);
+      // A card or month control cannot take focus while content is hidden.
+      setLoading(false);
+      if (ownsFocus && (opts.focus || opts.control)) {
+        var target = opts.focus && root.querySelector(opts.focus);
+        if (!target && opts.control) target = replacementControl(opts.control) || root.querySelector("#events-heading");
         if (target) target.focus();
       }
     } catch (error) {
@@ -141,6 +170,7 @@
         window.location.assign(window.location.href);
       }
     } finally {
+      if (trackFocus) document.removeEventListener("focusin", trackFocus);
       if (active === controller) {
         setLoading(false);
         active = null;
@@ -165,6 +195,7 @@
     var link = event.target.closest("a");
     if (!link || !root.contains(link) || link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
     cancelDebounce();
+    var control = event.detail === 0 && document.activeElement === link ? link : null;
 
     // Grid day jump: re-render as the list, then move focus onto the card.
     if (link.hasAttribute("data-cal-jump")) {
@@ -172,17 +203,18 @@
       var url = calendarHref(link.href);
       if (!url) return;
       event.preventDefault();
-      load(url, true, { skeleton: true, syncInput: true, focus: hash || null });
+      load(url, true, { skeleton: true, syncInput: true, focus: hash || null, control: control });
       return;
     }
 
     var target = calendarHref(link.href);
     if (!target) return;
     event.preventDefault();
-    load(target, true, { skeleton: true, syncInput: true });
+    load(target, true, { skeleton: true, syncInput: true, control: control });
   });
 
   input.addEventListener("input", function () {
+    inputRevision += 1;
     cancelDebounce();
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
