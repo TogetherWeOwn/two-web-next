@@ -53,7 +53,7 @@ jobs:
     needs: scope
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: [self-hosted, two-selfhosted]
-    timeout-minutes: 15
+    timeout-minutes: 25
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
     # its own network namespace; localhost:5432 is forwarded to the service.
