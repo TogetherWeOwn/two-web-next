@@ -58,7 +58,7 @@ export async function listUpcoming(db: Db, now = new Date(), opts: CalendarReadO
     .from(events)
     .where(and(calendarVisible(opts), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
-  return withGoing(db, rows);
+  return withGoing(db, rows.filter(isRenderableEventWindow));
 }
 
 export const HOME_EVENTS_DEADLINE_MS = 1000;
@@ -78,7 +78,9 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
       .orderBy(asc(events.startsAt), asc(events.id))
       .limit(3);
     // The homepage gets public signposts and an aggregate, never creator or RSVP identities.
-    return (await withGoing(tx, rows)).map(({ eventKey, title, startsAt, timezone, location, goingCount }) =>
+    // The teaser renders `startsAt` unguarded, so unrenderable windows are
+    // refused here too (this read never had #232's `isfinite()` guard).
+    return (await withGoing(tx, rows.filter(isRenderableEventWindow))).map(({ eventKey, title, startsAt, timezone, location, goingCount }) =>
       ({ eventKey, title, startsAt, timezone, location, goingCount }));
   });
 }
@@ -127,7 +129,10 @@ export async function listCalendarPast(
     .where(and(calendarVisible(opts), lt(events.endsAt, now)))
     .orderBy(desc(events.startsAt), desc(events.id))
     .limit(EVENTS_PAST_DRAWER_LIMIT);
-  return withGoing(db, rows);
+  // Ended rows are normally renderable by construction (ends_at < now), but
+  // imports can violate the end-after-start invariant with an unrenderable
+  // starts_at, and the drawer/`EmptyGap` render it unguarded.
+  return withGoing(db, rows.filter(isRenderableEventWindow));
 }
 
 /** Invalid HTML archive pages/offsets retain the page-one fallback. */
@@ -149,8 +154,11 @@ export async function listPast(db: Db, page: number, now = new Date(), q: string
     .orderBy(desc(events.startsAt), desc(events.id))
     .limit(PAGE_SIZE + 1)
     .offset((page - 1) * PAGE_SIZE);
+  // Same refusal as the other served reads: the archive `Card` renders
+  // `startsAt` unguarded, and imports can carry an unrenderable starts_at on
+  // an otherwise-ended (hence archived) row.
   return {
-    rows: await withGoing(db, rows.slice(0, PAGE_SIZE)),
+    rows: await withGoing(db, rows.slice(0, PAGE_SIZE).filter(isRenderableEventWindow)),
     hasMore: rows.length > PAGE_SIZE,
     totalPages,
   };
@@ -162,7 +170,9 @@ export async function withGoingCount(db: Db, row: typeof events.$inferSelect): P
 
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
-  if (!row) return null;
+  // A stored window no Date can represent cannot render (same RangeError as
+  // the upcoming path), so the page 404s with suggestions instead of 500ing.
+  if (!row || !isRenderableEventWindow(row)) return null;
   return withGoingCount(db, row);
 }
 
@@ -187,6 +197,18 @@ const finiteEventStart = sql`isfinite(${events.startsAt})`;
 // Rendered boundaries decode PostgreSQL infinity to invalid Dates whose
 // `toISOString()`/formatting throws, so upcoming reads refuse either one.
 const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
+
+/**
+ * PostgreSQL accepts finite timestamps far outside the JS Date range (up to
+ * year 294276); the driver decodes those to invalid Dates whose
+ * `getTime()` is NaN and whose `toISOString()`/formatting throws RangeError
+ * (TOG-11700). `isfinite()` cannot see them, so served reads refuse them in
+ * JS the same way 404 suggestions and related links already do. The write
+ * path caps years at four digits, so only imports can carry such rows.
+ */
+export function isRenderableEventWindow(row: Pick<typeof events.$inferSelect, "startsAt" | "endsAt">): boolean {
+  return Number.isFinite(row.startsAt.getTime()) && Number.isFinite(row.endsAt.getTime());
+}
 
 /** Published links only, even for moderators. Equal starts use id as the legacy tiebreak. */
 export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id">): Promise<EventNeighbors> {
@@ -247,7 +269,9 @@ export async function listJson(
   const visible = opts.includeDrafts ? sql`true` : inArray(events.status, ["published", "cancelled", "past"]);
   const match = opts.eventKey === undefined ? undefined : eq(events.eventKey, opts.eventKey);
   const rows = await db.select().from(events).where(and(visible, match)).orderBy(desc(events.startsAt)).limit(opts.limit).offset(opts.offset);
-  return withGoing(db, rows);
+  // `eventJson` serializes both boundaries unguarded (`toISOString()`), so a
+  // poison row would 500 the whole member collection instead of dropping out.
+  return withGoing(db, rows.filter(isRenderableEventWindow));
 }
 
 export async function sitemapEvents(db: Db): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
@@ -257,14 +281,20 @@ export async function sitemapEvents(db: Db): Promise<{ key: string; status: "pub
 
 /** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. `statuses` differs for RSS vs ICS. */
 export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
-  return db
+  const rows = await db
     .select()
     .from(events)
     .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
+  // Feed builders stringify date parts without throwing, so without this the
+  // export would serve corrupt `NaN` instants instead of failing loudly.
+  return rows.filter(isRenderableEventWindow);
 }
 
 export async function getEventRow(db: Db, key: string) {
   const [row] = await db.select().from(events).where(eq(events.eventKey, key));
-  return row ?? null;
+  // Same refusal as the collection/single reads: a per-event export of an
+  // unrenderable window would serve corrupt `NaN` instants, so it 404s.
+  if (!row || !isRenderableEventWindow(row)) return null;
+  return row;
 }
