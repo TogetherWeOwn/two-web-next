@@ -29,8 +29,12 @@ against `agent-testdb` — never prod or staging databases.
 
 ## Migration numbering (reserved)
 
-One sequence, two owners. The ledger table is `schema_migrations`
-(name column holds the `NNNN` prefix).
+One reserved filename sequence, two owners. The web runner uses Drizzle's
+actual default ledger, `drizzle.__drizzle_migrations` (`hash`, `created_at`),
+not a `schema_migrations` name ledger. The tracked `drizzle/meta/_journal.json`
+provides tags and timestamps. Bot migrations are outside this runner's scope;
+never insert bot records into the web Drizzle ledger or infer web history from
+another owner's ledger.
 
 | Range | Owner | Lives in | Status |
 |---|---|---|---|
@@ -53,6 +57,17 @@ Rules:
 - The frozen contracts move with the data: `web_v1` read-only views and
   the HMAC `POST /internal/actions` signer (byte-for-byte; existing hex
   vectors pin it).
+
+## Apply web migrations
+
+The separately dispatched [db-migrate workflow](../.github/workflows/db-migrate.yml)
+is the sanctioned live web apply path, not `npm run db:migrate` from an agent
+workspace. Follow the [operator procedure and recovery gates](runbook.md#neon-web-schema-migrations-separate-operator-action).
+It loads the selected GitHub Environment secret, rejects disabled production,
+plans from the SQL journal/Drizzle ledger, records a pre-apply PITR timestamp,
+applies transactionally and verifies zero pending migrations. Live execution
+requires separate authorization; the default Worker deploy stays migration-free.
+`npm run db:migrate:selftest` exercises only disposable local/CI databases.
 
 ## Backups
 
