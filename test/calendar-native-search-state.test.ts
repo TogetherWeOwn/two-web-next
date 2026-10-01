@@ -29,7 +29,7 @@ const env = {
 
 function eventRow(id: number, startsAt: Date): PublicEvent {
   return {
-    id, icsSequence: 1n, eventKey: `event-${id}`, title: "Game night", game: null, description: null,
+    id, icsSequence: 1n, syncRevision: 1, syncedRevision: 0, eventKey: `event-${id}`, title: "Game night", game: null, description: null,
     startsAt, endsAt: new Date(startsAt.getTime() + 7200_000), timezone: "UTC",
     location: null, capacity: null, status: "published", discordEventId: null,
     discordSyncFailedAt: null, discordSyncFailureCode: null, createdBy: null, rsvpOpen: true,
