@@ -22,14 +22,14 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /sitemap_index.xml` (home 1.0, join 0.9, events.index 0.8, about/faq/rules/privacy 0.7, published `/e/{key}` 0.6) | ✅ static entries; join + `/e/{key}` rows pending | W4 ✅ + W8 📋 |
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
-| `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`) | `/auth/discord*` live; `/join` path alias pending | W6 🔶 |
+| `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`) | `/auth/discord*` live; `/join` path alias pending; expired-grant vs outage classification (200 "Join approval expired" vs 503 "Discord is unreachable"; status governs, untrusted bodies never parsed) + bounded OAuth log redaction ✅ [TOG-10355](/TOG/issues/TOG-10355) | W6 🔶 |
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
 | `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links; prev/next + related implemented (review pending); RsvpButton pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) + [TOG-10823](/TOG/issues/TOG-10823) + [TOG-10821](/TOG/issues/TOG-10821) |
 | `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
 | `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
 | `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
-| `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | ✅ same-app flow (`identify`+`guilds.join`, auto-join, role recompute) | W5 ✅ |
+| `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | Same-app flow (`identify`+`guilds.join`, auto-join, role recompute); legacy start alias implemented: 302 to `/auth/discord`, only validated `next` forwarded, other queries dropped (`test/legacy-redirects.test.ts`); ordinary-login callback return-to remains a separate gap; classified failure banners (denied `signin_denied` / outage `signin_unavailable` / generic `signin_failed`) with bounded logs implemented ([TOG-10355](/TOG/issues/TOG-10355), pending merge) | W5 ✅ + [TOG-11156](/TOG/issues/TOG-11156) (alias, pending merge) |
 | `GET /auth/qa/{identity}` (staging-only, header token) | ✅ as `POST /auth/qa/:identity` — **deliberate divergence**: GET login is CSRF-able; POST + byte-identical 404s | W5 ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; throttle pending | W5 ✅ + N5 (new card, throttle) |
 | `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block reads bot-owned `web_v1` views, hides on no row/missing views/DB failure, covered by the same profile access-log subject | W7 ✅ |
@@ -110,10 +110,12 @@ no public version/clock endpoint or redirect alias remains.
 |---|---|---|
 | Panel gate: Discord-role → 403 (no login form), dark brand, CSP stack, `RecordMemberDataAccess` on panel | pending (custom React rebuild, no Filament off PHP) | W11 🔶 (M1) |
 | Events resource: table (search/sort/status/series/fill filters, publish/cancel/pause/reopen actions, no delete/bulk) + create-as-draft + edit (UTC↔wall DST carriers) + recurrence fields | Table search/status/series/fill + allowlisted title/starts_at/status sort and 25-row pagination ✅ ([TOG-10825](/TOG/issues/TOG-10825)); pause/reopen row + edit actions and `rsvp_open` ternary filter ✅ ([TOG-10817](/TOG/issues/TOG-10817)); remaining resource parity pending | W11 🔶 (M2/M3) |
+| `GET /admin/events/create`, `GET /admin/events/:key/edit` (Filament bookmarks) | Implemented 301 map to `/admin/events/new`, `/admin/events/:key`; same moderator guard, no resource reads, all queries dropped (`test/legacy-redirects.test.ts`) | [TOG-11156](/TOG/issues/TOG-11156) (pending merge) |
+| `GET /admin/featured-contents`, `GET /admin/featured-contents/create`, `GET /admin/featured-contents/:id/edit` (Filament bookmarks) | Implemented 301 map to `/admin/featured`, `/admin/featured/new`, `/admin/featured/{nativeId}`; edit resolves imported `legacy_id` after the guard (404 if missing/invalid, 503 if unavailable), never falls back to a same-number native row; all queries dropped (`test/legacy-redirects.test.ts`) | [TOG-11156](/TOG/issues/TOG-11156) (pending merge) |
 | RsvpsRelationManager (read-only roster, `canViewForRecord` 403) | pending | W12 📋 (M6) |
 | FeaturedContent resource (CRUD + publish window + live preview + safe delete) | pending | W11 🔶 (M4; verify: homepage render path) |
 | JoinAttempt resource (read-only viewer: outcome/source/request/discord-id) | pending | W12 📋 (M8) |
-| JoinFunnelStats widget (per-outcome counts, 60 s cache, no member data) | pending | W12 📋 (M8 funnel-stats) |
+| JoinFunnelStats widget (per-outcome counts, 60 s cache, no member data) | ✅ [TOG-11226](/TOG/issues/TOG-11226) (60 s per-connection cache; injected ADMIN_DB takes precedence; both optional analytics reads run in parallel with a 500 ms budget after DB resolution, excluding authorization/access logging) | W12 📋 (M8 funnel-stats) |
 | TopZeroResultSearches widget (normalized queries only) | ✅ TOG-10105 (dashboard section, moderator gate) | W12 📋 (verify scope at build) |
 | Moderator admin guide + member-data docs | ops docs follow the rebuild | W11 🔶 / W12 📋 |
 

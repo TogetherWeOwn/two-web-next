@@ -6,7 +6,7 @@ import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
 import { memberAccessLog } from "../access-log";
-import { ValidationError, parseEventForm } from "../admin/validation";
+import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
@@ -32,8 +32,8 @@ import {
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
-import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
+import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, normalizePastPage, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -84,14 +84,23 @@ async function sha256Etag(body: string): Promise<string> {
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }
 
-/** Strong validator over the bytes; 304 on a matching If-None-Match. Sessionless: sets no cookie. */
+/** Strong validator over the bytes; preserve queued headers, but never read or issue a session here. */
 async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
   const etag = await sha256Etag(body);
   const inm = c.req.header("if-none-match");
-  if (inm && inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag)) {
-    return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
+  if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))) {
+    return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }
-  return new Response(body, { status: 200, headers: { ...headers, etag } });
+  return c.body(body, 200, { ...headers, etag });
+}
+
+async function calendarFeedResponse(c: Ctx, build: () => string, headers: Record<string, string>): Promise<Response> {
+  try {
+    return feedResponse(c, build(), headers);
+  } catch (error) {
+    if (!(error instanceof IcsSequenceRangeError)) throw error;
+    return c.text("Calendar revision unavailable", 503, { "cache-control": "no-store" });
+  }
 }
 
 export function registerEventRoutes(app: App, readSession: SessionReader, readFragmentSession: SessionReader): void {
@@ -190,7 +199,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   app.get("/events/past", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
+    const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
     const { rows, hasMore, totalPages } = await listPast(db, page);
     c.header("cache-control", "public, max-age=300");
     return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} totalPages={totalPages} appUrl={c.env.APP_URL} />);
@@ -205,7 +214,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
+    const eventKey = c.req.query("event_key");
+    if (eventKey !== undefined && !KEY_RE.test(eventKey)) return c.json({ error: "invalid_event_key" }, 422);
+    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator, eventKey });
     const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
     const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
     const body = JSON.stringify({ data, page, limit });
@@ -231,7 +242,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published", "cancelled"]);
-    return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL), {
+    return calendarFeedResponse(c, () => eventsIcsCollection(rows, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": 'inline; filename="events.ics"',
       "cache-control": "max-age=300, public",
@@ -250,7 +261,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       const session = await readSession(c);
       if (!session?.moderator) return c.text("Forbidden", 403);
     }
-    return feedResponse(c, eventIcs(e, c.env.APP_URL), {
+    return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
       "cache-control": "max-age=300, private",
@@ -314,6 +325,17 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   }
 
+  async function eventBody(c: Ctx): Promise<Record<string, unknown>> {
+    // Event edits must not turn malformed/non-object JSON into an empty PATCH.
+    // Keep the RSVP trap's permissive body parsing independent of this admission.
+    if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json")) return body(c);
+    const input: unknown = await c.req.json().catch(() => null);
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new ValidationError({ body: "Send a JSON object." });
+    }
+    return input as Record<string, unknown>;
+  }
+
   const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
 
   app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
@@ -322,7 +344,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     try {
-      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await body(c)));
+      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await eventBody(c)));
       return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);
@@ -338,22 +360,24 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const key = c.req.param("key");
     const existing = await getEvent(db, key);
     if (!existing) return c.json({ error: "not_found" }, 404);
-    // PATCH: unspecified fields keep their stored value.
-    const patch = await body(c);
-    const merged = {
-      title: existing.title,
-      game: existing.game,
-      description: existing.description,
-      timezone: existing.timezone,
-      location: existing.location,
-      capacity: existing.capacity,
-      ...patch,
-    } as Record<string, unknown>;
-    const tz = String(merged.timezone);
-    const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
-    merged.starts_at ??= wall(existing.startsAt);
-    merged.ends_at ??= wall(existing.endsAt);
     try {
+      // PATCH: unspecified fields keep their stored value.
+      const patch = await eventBody(c);
+      const merged = {
+        title: existing.title,
+        game: existing.game,
+        description: existing.description,
+        timezone: existing.timezone,
+        location: existing.location,
+        capacity: existing.capacity,
+        ...patch,
+      } as Record<string, unknown>;
+      // Match parseEventForm's zone default before deriving omitted wall times.
+      const tz = typeof merged.timezone === "string" ? merged.timezone.trim() || "Europe/London" : "Europe/London";
+      if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
+      const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
+      merged.starts_at ??= wall(existing.startsAt);
+      merged.ends_at ??= wall(existing.endsAt);
       const input = parseEventForm(merged, {
         startsAtUtc: existing.startsAt.toISOString(),
         endsAtUtc: existing.endsAt.toISOString(),
