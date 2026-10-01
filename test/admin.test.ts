@@ -296,7 +296,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       title: "Scheduled game night",
       body: "Bring your board",
       url: "https://example.test/details",
-      image_url: `${APP_URL}/board.jpg`,
+      image_url: "https://cdn.discordapp.com/attachments/board.jpg",
       image_alt: "A chess board ready for play",
       is_published: "on",
       position: "2",

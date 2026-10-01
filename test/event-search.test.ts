@@ -173,8 +173,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
 
     const rows = await db.select().from(eventSearchLogs).orderBy(eventSearchLogs.id);
     expect(rows.map((r) => [r.normalizedQuery, r.resultCount])).toEqual([["helldiv", 1], ["chess", 1]]);
-    // Row shape carries no member identifier at all.
-    expect(Object.keys(rows[0]!).sort()).toEqual(["id", "normalizedQuery", "occurredAt", "resultCount"]);
+    // Row shape carries no member identifier; legacyId is only a source row PK.
+    expect(Object.keys(rows[0]!).sort()).toEqual(["id", "legacyId", "normalizedQuery", "occurredAt", "resultCount"]);
+    expect(rows.every((row) => row.legacyId === null)).toBe(true);
   });
 
   it("matches an exact title with doubled spaces, logs the collapsed form once; NUL does not 500", async () => {
