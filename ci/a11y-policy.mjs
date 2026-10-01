@@ -1,3 +1,5 @@
+import { Hono } from "hono";
+
 // Keep route discovery separate from browser execution so coverage drift is unit-testable.
 export const WCAG_AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
 
@@ -8,6 +10,8 @@ export function auditCases(routes, coverage) {
   if (unknown.length || stale.length) {
     throw new Error(`GET route coverage drift: missing=${unknown.join(", ")}; stale=${stale.join(", ")}`);
   }
+  const matcher = new Hono();
+  for (const route of routes) matcher.router.add(route.method, route.path, route);
   return registered.flatMap((route) => {
     const entry = coverage[route] ?? { cases: [{ path: route, identity: route.startsWith("/admin") ? "moderator" : "guest" }] };
     if (entry.skip) {
@@ -15,8 +19,33 @@ export function auditCases(routes, coverage) {
       return [];
     }
     if (!entry.cases?.length) throw new Error(`No audit cases for ${route}`);
-    return entry.cases.map((scenario) => ({ route, identity: "guest", status: 200, ...scenario }));
+    return entry.cases.map((scenario) => {
+      const path = concreteAuditPath(scenario.path, route, matcher);
+      const matches = matcher.router.match("GET", path)[0];
+      const firstGet = matches.find(([matched]) => matched.method === "GET")?.[0];
+      if (firstGet?.path !== route) {
+        throw new Error(`Invalid audit path for ${route}: ${scenario.path} does not match the registered GET`);
+      }
+      return { identity: "guest", status: 200, ...scenario, route };
+    });
   });
+}
+
+function concreteAuditPath(raw, route, matcher) {
+  const refuse = () => { throw new Error(`Invalid audit path for ${route}: ${String(raw)}`); };
+  if (typeof raw !== "string" || !raw.startsWith("/") || /[\\#\s\u0000-\u001f\u007f]/.test(raw)) return refuse();
+  const origin = "https://a11y.invalid";
+  let url;
+  let decoded;
+  try {
+    url = new URL(raw, origin);
+    decoded = decodeURIComponent(url.pathname);
+  } catch { return refuse(); }
+  // Refuse URL normalization, encoded separators, placeholders and second decoding.
+  if (url.origin !== origin || url.pathname !== raw.split("?")[0] || url.pathname.includes("//")
+    || /%2f/i.test(url.pathname) || /[:*{}%\\?#\s\u0000-\u001f\u007f]/.test(decoded)
+    || decoded.split("/").some((segment) => segment === "." || segment === "..")) return refuse();
+  return matcher.getPath(new Request(url));
 }
 
 export function auditDatabaseUrl(raw, githubActions = false) {
