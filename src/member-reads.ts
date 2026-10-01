@@ -70,7 +70,7 @@ export async function memberReadBoundary(
   write: AccessSink,
   next: Next,
 ): Promise<void> {
-  const capture: Capture = { subjects: new Set(), failed: false, pending: 0 };
+  const capture: Capture = { subjects: new Set(), failed: !/^\d{10,25}$/.test(declaration.viewer), pending: 0 };
   await captures.run(capture, async () => {
     try { await next(); } catch { capture.failed = true; }
     // Classification is tied to this exact response. A later stream (declared

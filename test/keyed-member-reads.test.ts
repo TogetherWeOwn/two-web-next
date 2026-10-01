@@ -81,10 +81,9 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
   });
 
   it.each([null, "not-a-member-key", "123"])("invalid/partial key %s refuses contents before audit", async (key) => {
-    // Test-service-only raw rows reproduce incomplete legacy projections without
-    // relaxing the production table's primary key constraint.
+    // Nullable join-attempt owners reproduce incomplete legacy projections
+    // without weakening the users table's primary key constraint.
     const connection = db();
-    await fixture.db.execute(sql`alter table join_attempts alter column discord_id drop not null`);
     const { joinAttempts } = await import("../src/db/schema");
     await fixture.db.insert(joinAttempts).values([
       { requestId: "keyed-valid", discordId: SUBJECT.userId, outcome: "joined" },
@@ -139,6 +138,36 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
       throw rollback;
     }).catch((err: unknown) => { if (err !== rollback) throw err; });
     expect(await logs()).toHaveLength(0);
+  });
+
+  it("sequential and concurrent reads share a DB, never receipts or viewer identities", async () => {
+    const connection = db();
+    const app = new Hono<{ Bindings: Env }>();
+    app.use("/:viewer/:subject", (c, next) => memberReadBoundary(c, { ...declaration, viewer: c.req.param("viewer")! }, (entry) => recordAccess(fixture.db, entry), next));
+    app.get("/:viewer/:subject", async (c) => {
+      const rows = await keyedMemberRead(() => connection.select({ id: users.id, name: users.username }).from(users).where(eq(users.id, c.req.param("subject")!)));
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      return bufferedMemberText(c, rows.map((row) => row.name).join(" "));
+    });
+    const request = (viewer: string, subject: string) => app.request(`/${viewer}/${subject}`, {}, env);
+    const parallel = await Promise.all([request(MEMBER.userId, SUBJECT.userId), request(MODERATOR.userId, MEMBER.userId)]);
+    expect(parallel.map((res) => res.status)).toEqual([200, 200]);
+    for (const subject of [MEMBER.userId, "999999999999999999", SUBJECT.userId]) {
+      expect((await request(MEMBER.userId, subject)).status).toBe(200);
+    }
+    expect((await logs()).map((row) => [row.viewerDiscordId, row.subjectUserIds]).sort()).toEqual([
+      [MEMBER.userId, [SUBJECT.userId]], [MODERATOR.userId, [MEMBER.userId]], [MEMBER.userId, [SUBJECT.userId]],
+    ].sort());
+  });
+
+  it("prepared statements consume a fresh permit on each execution", async () => {
+    const prepared = db().select({ id: users.id, name: users.username }).from(users).prepare("keyed_member_prepared");
+    const app = router(async (c) => {
+      await keyedMemberRead(() => prepared.execute());
+      try { await prepared.execute(); } catch {}
+      return bufferedMemberText(c, PERSONAL_STRINGS[1]!);
+    });
+    await deny(await app.request("/existing", {}, env));
   });
 
   it("transaction descendants cannot bypass classification", async () => {
