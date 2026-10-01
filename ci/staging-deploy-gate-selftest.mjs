@@ -280,7 +280,7 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(workflow, /runs-on: \[self-hosted, two-selfhosted\]/);
   assert.match(workflow, /container:\n      image: node:24-bookworm/);
   assert.match(workflow, /environment:\n      name: staging\n      url: https:\/\/next.togetherweown.com/);
-  assert.match(workflow, /name: Smoke test \/up/);
+  assert.match(workflow, /name: Smoke test staging/);
   assert.equal(gateCommand, "node ci/staging-deploy-gate.mjs");
   const gateOffset = workflow.indexOf("- name: Require successful exact-SHA full CI");
   assert.ok(gateOffset < workflow.indexOf("- name: Ensure queues exist"));
