@@ -16,7 +16,7 @@ const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const key = (id: number) => String(id).padStart(26, "0");
 type EventRow = typeof events.$inferSelect;
 const row = (id: number, over: Partial<EventRow> = {}): EventRow => ({
-  id, eventKey: key(id), title: `Game night ${id}`, game: "Chess", description: null,
+  id, icsSequence: 1894305600n, eventKey: key(id), title: `Game night ${id}`, game: "Chess", description: null,
   startsAt: NOW, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "Europe/London",
   location: "Voice", capacity: null, status: "published", discordEventId: null,
   discordSyncFailedAt: null, discordSyncFailureCode: null,

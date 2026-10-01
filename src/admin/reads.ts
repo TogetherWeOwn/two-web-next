@@ -91,8 +91,9 @@ function windowStart(now: Date = new Date()): Date {
   return new Date(now.getTime() - JOIN_RETENTION_DAYS * 86_400_000);
 }
 
-/** JoinFunnelStats: per-outcome counts over the retention window. Outcomes only, no member data. */
-export async function joinFunnelStats(db: Db, now?: Date): Promise<Record<string, number>> {
+/** JoinFunnelStats: per-outcome counts over the retention window. Outcomes only, no member data.
+ * `Pick<Db, "select">` so the dashboard wrapper can run it inside a bounded transaction. */
+export async function joinFunnelStats(db: Pick<Db, "select">, now?: Date): Promise<Record<string, number>> {
   const rows = await db
     .select({ outcome: joinAttempts.outcome, n: count() })
     .from(joinAttempts)

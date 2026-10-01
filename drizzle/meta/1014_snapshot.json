@@ -1,6 +1,6 @@
 {
-  "id": "0e64f5bc-4d34-4020-90c6-f6c7cfce0e63",
-  "prevId": "2c244e22-9b9c-4ec1-8772-fa849a6aa970",
+  "id": "2c244e22-9b9c-4ec1-8772-fa849a6aa970",
+  "prevId": "11a2342b-78e6-4c85-aeb1-2185e6d39ac0",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -755,15 +755,7 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "queue_failed_jobs_job_id_unique": {
-          "name": "queue_failed_jobs_job_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "job_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

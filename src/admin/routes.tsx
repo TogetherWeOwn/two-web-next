@@ -27,7 +27,7 @@ import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
-import { dbFor } from "./db";
+import { dbFor, type EnvWithAdminDb } from "./db";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./guard";
 import type { SessionStore } from "../sessions";
@@ -39,6 +39,7 @@ import {
   deleteFeatured,
   getEvent,
   getFeatured,
+  getFeaturedIdByLegacyId,
   listEvents,
   listFeatured,
   NotFoundError,
@@ -49,7 +50,9 @@ import {
 } from "./store";
 import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
-import { getJoinAttempt, joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
+import { databaseUrl } from "../db/connection";
+import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
+import { getJoinAttempt, listJoinAttempts, listRoster } from "./reads";
 import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
@@ -112,15 +115,41 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
   admin.use("/*", adminGuard(overrides));
 
+  // Legacy Filament bookmarks: guard first, no query forwarding.
+  // Only the featured edit alias needs a resource read to resolve the imported ID.
+  // Keep the literal create alias ahead of /events/:key.
+  admin.get("/events/create", (c) => c.redirect("/admin/events/new", 301));
+  admin.get("/events/:key/edit", (c) => c.redirect(`/admin/events/${encodeURIComponent(c.req.param("key"))}`, 301));
+  admin.get("/featured-contents", (c) => c.redirect("/admin/featured", 301));
+  admin.get("/featured-contents/create", (c) => c.redirect("/admin/featured/new", 301));
+  admin.get("/featured-contents/:id/edit", async (c) => {
+    const legacyId = c.req.param("id");
+    if (!/^[1-9]\d*$/.test(legacyId)) return errorPage(c, 404, "Featured content not found");
+    try {
+      const db = await dbOr503(c);
+      if (!db) return c.text("Admin temporarily unavailable", 503);
+      const id = await getFeaturedIdByLegacyId(db, legacyId);
+      if (id === null) return errorPage(c, 404, "Featured content not found");
+      return c.redirect(`/admin/featured/${id}`, 301);
+    } catch {
+      return c.text("Admin temporarily unavailable", 503);
+    }
+  });
+
   admin.get("/", async (c) => {
     declareAccess(c, { resource: "dashboard", action: "view", route: "admin.dashboard", subjects: [] });
     // Funnel counts are outcomes only (no member data): no access-log subjects.
     // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
     const db = await dbFor(c);
-    const funnel = db ? await joinFunnelStats(db) : undefined;
-    // Normalized queries + counts only; a failing or blocked read resolves
-    // undefined itself, so the widget is omitted — the dashboard never waits.
-    const zeroSearches = db ? await topZeroResultSearches(db) : undefined;
+    // Match dbFor's precedence: an injected ADMIN_DB overrides either URL.
+    const identity = (c.env as EnvWithAdminDb).ADMIN_DB || databaseUrl(c.env) || db;
+    // Start both optional analytics reads together with the same 500 ms budget,
+    // rather than stacking their deadlines. Failed/blocked widgets are omitted;
+    // authorization and the guard's critical access-log write stay fail-closed.
+    const [funnel, zeroSearches] = db ? await Promise.all([
+      dashboardJoinFunnel(db, identity),
+      topZeroResultSearches(db, 10, FUNNEL_READ_DEADLINE_MS),
+    ]) : [undefined, undefined];
     return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />);
   });
 
