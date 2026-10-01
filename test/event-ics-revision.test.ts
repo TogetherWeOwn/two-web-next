@@ -141,6 +141,40 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
     expect((await read()).icsSequence).toBe(1782900001n);
   });
 
+  it.each(["/events.ics", `/events/${KEY}.ics`])("exhaustion preserves storage but suspends calendar export: %s", async (path) => {
+    await insert();
+    // Simulate restored legacy counters only inside this disposable, owned schema.
+    const restore = async (revision: bigint) => {
+      await fixture.client.begin(async (sql) => {
+        await sql`alter table events disable trigger events_ics_sequence`;
+        await sql`update events set ics_sequence = ${revision.toString()} where event_key = ${KEY}`;
+        await sql`alter table events enable trigger events_ics_sequence`;
+      });
+    };
+    await restore(2147483647n);
+    const valid = await request(path);
+    expect(valid.status).toBe(200);
+    expect(sequence(await valid.text())).toBe(2147483647n);
+    const etag = valid.headers.get("etag")!;
+    await fixture.client`update events set title = 'Exhausted revision' where event_key = ${KEY}`;
+    expect((await read()).icsSequence).toBe(2147483648n);
+    for (const revision of [2147483648n, 9007199254740993n, -1n]) {
+      await restore(revision);
+      const response = await request(path, { headers: { "if-none-match": etag } });
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("content-type")).toContain("text/plain");
+      expect(response.headers.get("etag")).toBeNull();
+      expect(response.headers.get("content-disposition")).toBeNull();
+      expect(await response.text()).toBe("Calendar revision unavailable");
+      expect((await read()).icsSequence).toBe(revision);
+    }
+    await fixture.client`update events set status = 'draft' where event_key = ${KEY}`;
+    await restore(9007199254740993n);
+    expect((await request(`/events/${KEY}.ics`)).status).toBe(403);
+    expect((await request("/events.ics")).status).toBe(200);
+  });
+
   it("native creates still audit content without serializing the database bigint", async () => {
     const created = await createEvent(fixture.db, actor, input);
     expect(created.row.icsSequence).toBeGreaterThan(0n);

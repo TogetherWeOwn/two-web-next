@@ -56,6 +56,24 @@ existing destination revision. Changed content advances beyond the destination
 revision even when source timestamps/counters are stale. Identical re-runs do
 not advance the counter.
 
+### Calendar wire range and exhaustion
+
+Storage/import retain exact bigint revisions, but RFC 5545 §§3.3.8 and 3.8.7.4
+limit the `SEQUENCE` wire value to **0–2147483647**. Both ICS exports reject an
+out-of-range revision and return **503**, with no ETag or cacheable calendar.
+The collection fails as a whole rather than silently omitting an event. There
+is no clamping, modulo, reset, or automatic UID change: any of those could make
+subscribers retain stale content or create duplicate events.
+
+At 2147483647 the last valid revision remains exportable; the next real edit
+continues the database counter and suspends ICS export. Native event edits and
+legacy import remain available and do not lose the stored revision. An imported
+oversized counter has the same export policy. Recovery requires an explicitly
+approved calendar-identity migration (new UID and subscriber transition), not
+lowering the counter on the existing UID. No such migration or cutover is
+authorized by this document. Epoch-based compatibility also reaches this limit
+in January 2038; plan the identity transition before that boundary.
+
 Ordinary application inserts/updates cannot choose a revision: the database
 trigger `events_ics_sequence` owns it. Restoring legacy counters is a separate
 cutover operation requiring the **destination table-owner principal**, not a new

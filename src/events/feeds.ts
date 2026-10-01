@@ -50,10 +50,24 @@ function fold(line: string): string {
 
 const pageUrl = (e: EventRow, appUrl: string) => `${appUrl}/e/${e.eventKey}`;
 
+export class IcsSequenceRangeError extends RangeError {
+  constructor() {
+    super("Calendar revision is outside the RFC 5545 SEQUENCE range");
+  }
+}
+
+/** SEQUENCE is a nonnegative signed 32-bit INTEGER (§3.3.8, §3.8.7.4). */
+function icsSequence(sequence: bigint): string {
+  // Preserve the stored/imported bigint; never clamp, wrap or reset its ordering.
+  // Exhausted revisions fail the export until an explicit identity migration.
+  if (sequence < 0n || sequence > 2147483647n) throw new IcsSequenceRangeError();
+  return sequence.toString();
+}
+
 function vevent(e: EventRow, appUrl: string): string[] {
   const host = new URL(appUrl).host || "localhost";
   const stamp = icsInstant(e.updatedAt);
-  const seq = e.icsSequence;
+  const seq = icsSequence(e.icsSequence);
   const lines = [
     "BEGIN:VEVENT",
     `UID:${e.eventKey}@${host}`,
