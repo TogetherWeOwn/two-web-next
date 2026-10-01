@@ -56,7 +56,7 @@ Schema identifiers are validated and quoted, never interpolated as SQL text.
 ## Mapping, counts and retention
 
 Apply the canonical Drizzle migrations before import. Migration
-`1009_legacy-audit-evidence.sql` adds the previously omitted legacy audit fields:
+`1011_legacy-audit-evidence.sql` adds the previously omitted legacy audit fields:
 activity `causer_type`, `event`, `batch_uuid`; grant `max_events` and `updated_at`;
 replay `updated_at`; audit `discord_event_id` and `updated_at`. It also permits
 legacy null activity `log_name`/`updated_at`. No historical values are fabricated.

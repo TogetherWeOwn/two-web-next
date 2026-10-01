@@ -82,8 +82,22 @@
     {
       "idx": 11,
       "version": "7",
-      "when": 1790798917581,
-      "tag": "1009_legacy-audit-evidence",
+      "when": 1790798302320,
+      "tag": "1009_event-sync-failure",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790801235552,
+      "tag": "1010_rsvp-legacy-order",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790817994959,
+      "tag": "1011_legacy-audit-evidence",
       "breakpoints": true
     }
   ]

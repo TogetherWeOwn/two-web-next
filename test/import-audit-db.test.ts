@@ -65,6 +65,19 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
     targetSchema: fixture.schemaName, now, ...opts,
   });
 
+  it('preserves the event-sync and RSVP schema additions preceding the audit migration', async () => {
+    const columns = await fixture.client`SELECT table_name, column_name, data_type, is_nullable
+      FROM information_schema.columns WHERE table_schema = ${fixture.schemaName}
+      AND ((table_name = 'events' AND column_name IN ('discord_sync_failed_at', 'discord_sync_failure_code'))
+        OR (table_name = 'rsvps' AND column_name = 'legacy_id'))
+      ORDER BY table_name, column_name`;
+    expect([...columns]).toEqual([
+      { table_name: 'events', column_name: 'discord_sync_failed_at', data_type: 'timestamp with time zone', is_nullable: 'YES' },
+      { table_name: 'events', column_name: 'discord_sync_failure_code', data_type: 'text', is_nullable: 'YES' },
+      { table_name: 'rsvps', column_name: 'legacy_id', data_type: 'bigint', is_nullable: 'YES' },
+    ]);
+  });
+
   it('previews counts without writes or sequence advancement', async () => {
     const before = await fixture.client`SELECT last_value, is_called FROM activity_log_id_seq`;
     const result = await run();

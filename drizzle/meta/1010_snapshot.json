@@ -1,6 +1,6 @@
 {
-  "id": "ea4675b9-d270-443c-90da-f9132bb96faf",
-  "prevId": "0d53122b-dc5b-4142-812c-3093404d70e6",
+  "id": "9f0dc1d3-0a7e-4148-aaa9-409252ab5e5e",
+  "prevId": "ea4675b9-d270-443c-90da-f9132bb96faf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1482,6 +1482,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "legacy_id": {
+          "name": "legacy_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         },
         "status": {
           "name": "status",

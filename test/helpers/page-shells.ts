@@ -35,7 +35,8 @@ export function pageShellFixture(status = "published") {
   const event: typeof events.$inferSelect = {
     id: 1, eventKey: EVENT_KEY, title: "Fixture game night", game: "Chess", description: "Play together.",
     startsAt: now, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "UTC", location: "Lobby",
-    capacity: null, status, discordEventId: null, createdBy: MEMBER_ID, rsvpOpen: true,
+    capacity: null, status, discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    createdBy: MEMBER_ID, rsvpOpen: true,
     recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
     parentEventId: null, recurrenceIndex: null, createdAt: now, updatedAt: now,
   };
@@ -70,6 +71,8 @@ export function pageShellFixture(status = "published") {
       const row = encode(getTableColumns(joinAttempts), attempt);
       return { rows: [sql.includes('left join "users"') ? [...row, MEMBER_ID] : row] };
     }
+    if (sql.includes("row_number() over (partition by event_id order by created_at, coalesce(legacy_id, id), id)")
+      && sql.includes("from rsvps")) return { rows: [] };
     if (sql.includes('from "rsvps"') || sql.includes('from "event_search_log"')
       || sql.startsWith('insert into "member_data_access_logs"') || sql.startsWith("SET LOCAL")) return { rows: [] };
     throw new Error(`Unexpected page-shell fixture query: ${sql}`);

@@ -1,6 +1,6 @@
 {
-  "id": "ea4675b9-d270-443c-90da-f9132bb96faf",
-  "prevId": "0d53122b-dc5b-4142-812c-3093404d70e6",
+  "id": "d4923104-c545-4d95-9ace-5b54320dc898",
+  "prevId": "9f0dc1d3-0a7e-4148-aaa9-409252ab5e5e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -59,6 +59,18 @@
         "reason_code": {
           "name": "reason_code",
           "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discord_event_id": {
+          "name": "discord_event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -172,6 +184,19 @@
         },
         "disabled_at": {
           "name": "disabled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "max_events": {
+          "name": "max_events",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -313,6 +338,12 @@
         "event_key": {
           "name": "event_key",
           "type": "varchar(26)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -870,7 +901,7 @@
           "name": "log_name",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "default": "'default'"
         },
         "description": {
@@ -891,9 +922,27 @@
           "primaryKey": false,
           "notNull": false
         },
+        "causer_type": {
+          "name": "causer_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "causer_id": {
           "name": "causer_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event": {
+          "name": "event",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "batch_uuid": {
+          "name": "batch_uuid",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
@@ -914,7 +963,7 @@
           "name": "updated_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "default": "now()"
         }
       },
@@ -1482,6 +1531,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "legacy_id": {
+          "name": "legacy_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         },
         "status": {
           "name": "status",

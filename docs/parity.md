@@ -18,7 +18,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 
 | Legacy route | Next status | Card |
 |---|---|---|
-| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; featured rows use legacy `[start, end)` windows, position/id order and no cap; upcoming pending | W4 ✅ + [TOG-10819](/TOG/issues/TOG-10819) (featured; `test/featured.test.ts`) + W8 📋 (upcoming) |
+| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; featured rows use legacy `[start, end)` windows, position/id order and no cap; next 3 published, not-ended events with going counts, anonymous cards and guest join CTA; missing/down DB keeps 200 with unavailable empty state. Live counts + ranks remain separate slices | W4 ✅ + [TOG-10819](/TOG/issues/TOG-10819) (featured; `test/featured.test.ts`) + [TOG-10820](/TOG/issues/TOG-10820) (upcoming; `test/home-events.test.ts`) |
 | `GET /sitemap_index.xml` (home 1.0, join 0.9, events.index 0.8, about/faq/rules/privacy 0.7, published `/e/{key}` 0.6) | ✅ static entries; join + `/e/{key}` rows pending | W4 ✅ + W8 📋 |
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
@@ -38,7 +38,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes (throttle = N5) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | pending | W8 📋 + W11 🔶 |
-| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, FOR UPDATE capacity races (test/rsvp.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
+| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, full-event waitlisting + FIFO promotion under FOR UPDATE (test/rsvp.test.ts, test/rsvp-waitlist.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
 
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
@@ -56,7 +56,19 @@ Delete the Next-only `/db-ping`, `/health` and `/healthz` routes in every
 configuration. Legacy exposes only `/up`; retaining a token/flag-protected
 ping would add a credential and an unnecessary public connection/fingerprinting
 surface. Removed paths use the ordinary branded 404 (same body and headers as
-unknown paths), without reading any database binding.
+unknown paths), with no diagnostic handler or database version/clock response.
+
+The 404 recovery enhancement ([TOG-10824](/TOG/issues/TOG-10824), contract
+reconciled in [TOG-11066](/TOG/issues/TOG-11066)) supersedes the original
+unconditional no-binding-read clause for ordinary 404 responses only. Like any
+unknown path, a removed diagnostic path may perform the optional, public-only
+lookup of at most three published, not-ended events: 400 ms SQL timeouts and a
+500 ms overall deadline, failing open to an empty suggestion list. Responses
+remain 404, noindex, private/no-store and session-free. No database error or
+connection metadata is exposed. Unsafe requests refused by the global
+same-origin guard still return 403 before reading any database binding. The
+removed-diagnostics tests pin response and DB-access parity across both host
+configurations, including absent, available and failing fixture lookups.
 
 The existing `/up` queue read already exercises the Worker-to-Hyperdrive-to-Postgres
 path: a counted queue proves connectivity; `queue.status: "unknown"` reports an
@@ -88,7 +100,7 @@ no public version/clock endpoint or redirect alias remains.
 | Legacy surface | Next status | Card |
 |---|---|---|
 | Panel gate: Discord-role → 403 (no login form), dark brand, CSP stack, `RecordMemberDataAccess` on panel | pending (custom React rebuild, no Filament off PHP) | W11 🔶 (M1) |
-| Events resource: table (search/sort/status/series/fill filters, publish/cancel/pause/reopen actions, no delete/bulk) + create-as-draft + edit (UTC↔wall DST carriers) + recurrence fields | pending | W11 🔶 (M2/M3) |
+| Events resource: table (search/sort/status/series/fill filters, publish/cancel/pause/reopen actions, no delete/bulk) + create-as-draft + edit (UTC↔wall DST carriers) + recurrence fields | Table search/status/series/fill + allowlisted title/starts_at/status sort and 25-row pagination ✅ (TOG-10825); recurrence and pause/reopen remain separate slices | W11 🔶 (M2/M3) |
 | RsvpsRelationManager (read-only roster, `canViewForRecord` 403) | pending | W12 📋 (M6) |
 | FeaturedContent resource (CRUD + publish window + live preview + safe delete) | pending | W11 🔶 (M4; verify: homepage render path) |
 | JoinAttempt resource (read-only viewer: outcome/source/request/discord-id) | pending | W12 📋 (M8) |
@@ -163,15 +175,25 @@ go hunting for them.
 
 | Legacy | Next status | Card |
 |---|---|---|
-| EventService (capacity/waitlist under lock, series create/materialize, sync-after-commit) | pending | W8 📋 + W11 🔶 + W13 ⛔ |
+| EventService (capacity/waitlist under lock, series create/materialize, sync-after-commit) | ✅ capacity floor + FIFO waitlists/promotions under the event `FOR UPDATE` lock; series pending | [TOG-10816](/TOG/issues/TOG-10816) + W11 🔶 + W13 ⛔ |
 | InternalActionClient + signer (sole bot speaker; `addMember` sync-only, never queued) | ✅ signer byte-parity; client pending | W14 ✅ + W13 ⛔ |
 | EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | ✅ | W8 ✅ (JSON-LD) + W9 ✅ (feeds) |
 | RsvpRateLimit / AgentEventRateLimit | ✅ / ✅ | W9 ✅ / W14 ✅ |
 | SafeRedirect (guarded `next`), SpamTrap (honeypot + 1000 ms floor) | pending | W6 🔶 / W7 📋 + W9 📋 |
 | RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |
 | MemberStatsSource / Profiles support (rank, stats, milestones) | ✅ `src/profiles/stats.ts`: never-throw read of `web_v1.members` + `web_v1.member_milestones`; member-gated profile block, local fixture coverage | W7 ✅ |
-| Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell; live data pending | W4 ✅ + W6 🔶 (widget) + W8 📋 (upcoming) |
+| Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell + upcoming-event teaser; ranks and remaining live data pending | W4 ✅ + W6 🔶 (widget) + [TOG-10820](/TOG/issues/TOG-10820) (upcoming) |
 | Counts (never-throw degraded empty state) | ✅ seam (`readCounts` → UNAVAILABLE) | W4 ✅ + W8 📋 (wire bot views) |
+
+### Waitlist service contract ([TOG-10816](/TOG/issues/TOG-10816))
+
+- Full-event `going` writes return 201/200 with `status: waitlisted` and one-based `waitlist_position`; they take no seat and spend the same shared per-member 12/min budget. **Requested divergence:** the frozen legacy service refuses full-event `going` with 409 and accepts an explicit `waitlisted` answer; Next automatically joins the line.
+- FIFO uses `(created_at, id)` in Postgres, including exact sub-millisecond timestamps. Fresh keys use the database's post-lock `clock_timestamp()`, never the Worker's millisecond clock or transaction-start time. Existing waiters retain priority on re-answer; an older non-waitlisted answer joining the line gets fresh FIFO keys.
+- Every accepted RSVP write settles the line under the event-row lock, so a new Going request cannot bypass an existing head and a stale-view explicit Waitlisted answer can immediately take a vacant seat. Withdrawal, a Going downgrade, and admin/JSON event edits also settle available seats within that transaction. Capacity increases promote N heads; removing the cap promotes all. Paused, cancelled, draft and ended events do not promote. Promoted rows reset their Discord mirror stamps; the caller queues one event write-back after commit.
+- Member budget/expiry decisions follow all own-row, promotion-row and prune waits. Limited writes do not change answers or promote anyone; accepted writes spend one fresh hit regardless of automatic promotion.
+- Capacity below the current Going count is an admin form field error / JSON 422. JSON numeric capacities and title-only PATCH defaults retain the finite cap; malformed capacities cannot erase it.
+- The shared position helper supplies RSVP JSON, viewer-specific `/events.json` rows and `/e/{key}`'s `data-waitlist-position` carrier alongside member-only Going attendees. All event pages are private/no-store with `Vary: Cookie` because the guest join pitch depends on the viewer; guests receive no position or attendee identities. Parent time/capacity edits preserve recurrence child write-backs while promoting FIFO. RsvpButton UI states remain the W10 slice 2 deliverable.
+- Proof: `test/rsvp-waitlist.test.ts` ports service/HTTP WaitlistTest cases and forces a concurrent withdraw + Going race on an owned disposable Postgres schema, proving the existing head keeps the freed seat and capacity is never exceeded. Tests use only agent-testdb or CI Postgres, never staging/production.
 
 ## 12. SEO, shell, content, sessions
 
@@ -179,7 +201,7 @@ go hunting for them.
 |---|---|---|
 | Share meta (canonical + OG/Twitter, no og:image) + RSS autodiscovery | ✅ layout-level; per-event tags pending | W4 ✅ + W8 📋 |
 | `site.webmanifest` + icons (192/512/maskable/apple) + theme-color `#0b0714` | ❌ missing (`public/` has styles + islands only) | **N2** (new: manifest/icons) |
-| Branded 404/429/500/503 pages | ❌ Hono defaults | **N2** (new: error pages) |
+| Branded 404/429/500/503 pages | ✅ branded shells; 404 now has a fail-open, 500 ms lookup (3 upcoming published events) and GET `/events?q=` search, without session reads/writes | **N2** + [TOG-10824](/TOG/issues/TOG-10824) |
 | Draft/noindex + gone-410 + past-never-indexed rules | sitemap side ✅; route side pending | W8 📋 |
 | `content/privacy-policy-v1.md` (live source) | ❌ see N1 | **N1** |
 | `content/faq-preview*.md` (docs-only), `content/welcome/*` (unwired drafts) | copy inlined / never wired | dropped (docs-only / dead) |
