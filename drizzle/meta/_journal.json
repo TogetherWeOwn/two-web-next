@@ -99,6 +99,13 @@
       "when": 1790817994959,
       "tag": "1011_legacy-audit-evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790856000000,
+      "tag": "1012_event-ics-sequence",
+      "breakpoints": true
     }
   ]
 }

@@ -53,7 +53,7 @@ const pageUrl = (e: EventRow, appUrl: string) => `${appUrl}/e/${e.eventKey}`;
 function vevent(e: EventRow, appUrl: string): string[] {
   const host = new URL(appUrl).host || "localhost";
   const stamp = icsInstant(e.updatedAt);
-  const seq = Math.floor(e.updatedAt.getTime() / 1000);
+  const seq = e.icsSequence;
   const lines = [
     "BEGIN:VEVENT",
     `UID:${e.eventKey}@${host}`,

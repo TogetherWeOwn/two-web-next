@@ -15,6 +15,7 @@ const KEY = "01J0000000000000000000ABCD";
 const row = (o: Partial<typeof events.$inferSelect> = {}) =>
   ({
     id: 1,
+    icsSequence: 1782907200n,
     eventKey: KEY,
     title: "Friday night Helldivers",
     game: null,
@@ -61,6 +62,14 @@ describe("feed builders (byte fixtures)", () => {
         "",
       ].join("\r\n"),
     );
+  });
+
+  it("emits the persisted bigint exactly in both exports, independent of updatedAt", () => {
+    const event = row({ icsSequence: 9007199254740993n });
+    for (const body of [eventIcs(event, APP_URL), eventsIcsCollection([event], APP_URL)]) {
+      expect(body).toContain("SEQUENCE:9007199254740993\r\n");
+      expect(body).toContain("DTSTAMP:20260701T120000Z\r\n");
+    }
   });
 
   it("escapes, folds at 75 octets on a character boundary, and maps CANCELLED", () => {

@@ -54,6 +54,8 @@ export const events = pgTable(
     recurrenceIndex: integer("recurrence_index"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    // Read-only from the app: the events_ics_sequence trigger owns every revision.
+    icsSequence: bigint("ics_sequence", { mode: "bigint" }).notNull().default(0n),
   },
   (t) => [
     // The calendar always asks the same question: published events, soonest first.
@@ -193,7 +195,7 @@ export const eventSearchLogs = pgTable(
 );
 
 export type Event = typeof events.$inferSelect;
-export type NewEvent = typeof events.$inferInsert;
+export type NewEvent = Omit<typeof events.$inferInsert, "icsSequence">;
 export type FeaturedContent = typeof featuredContents.$inferSelect;
 export type NewFeaturedContent = typeof featuredContents.$inferInsert;
 export type MemberDataAccessLog = typeof memberDataAccessLogs.$inferSelect;

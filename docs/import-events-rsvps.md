@@ -47,6 +47,27 @@ Imported content and timestamps replace the same fields on matching rows;
 unchanged rows are not rewritten. Re-runs preserve destination row IDs. No rows
 are deleted, including destination rows absent from the source.
 
+Migration `1012_event-ics-sequence` must be applied before import. The importer
+checks the source relation for `ics_sequence`: when present, it retains that
+bigint without JavaScript number rounding; older sources backfill from the
+nonnegative, floored UTC `updated_at` epoch (falling back to `created_at`). The
+imported revision is never below the source revision, timestamp backfill, or an
+existing destination revision. Changed content advances beyond the destination
+revision even when source timestamps/counters are stale. Identical re-runs do
+not advance the counter.
+
+Ordinary application inserts/updates cannot choose a revision: the database
+trigger `events_ics_sequence` owns it. Restoring legacy counters is a separate
+cutover operation requiring the **destination table-owner principal**, not a new
+grant to the Worker. Apply locks `events` in ACCESS EXCLUSIVE mode, temporarily
+disables only that named trigger in the destination transaction, and re-enables
+it before commit. The lock prevents concurrent writes during restoration; a
+failed import rolls back both data and trigger state. Other triggers, constraints
+and replication settings are untouched. Dry-run neither locks nor disables the
+trigger and cannot prove table-owner permissions. A permission failure is a
+blocker: stop and report it; do not substitute credentials or grant ownership to
+the application. This document does not authorize a real cutover apply.
+
 Event start/end instants retain their UTC meaning alongside the IANA timezone;
 Laravel's timestamp-without-time-zone bookkeeping is explicitly interpreted as
 UTC. Comparisons and writes preserve all six PostgreSQL fractional digits, without

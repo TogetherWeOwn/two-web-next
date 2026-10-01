@@ -14,7 +14,7 @@ vi.mock("../src/events/reads", async (importOriginal) => ({
 }));
 
 const event: PublicEvent = {
-  id: 1, eventKey: EVENT_KEY, title: "Friday night games", description: null, game: null,
+  id: 1, icsSequence: 1n, eventKey: EVENT_KEY, title: "Friday night games", description: null, game: null,
   startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
   timezone: "UTC", location: null, capacity: null, status: "published", discordEventId: null,
   discordSyncFailedAt: null, discordSyncFailureCode: null,

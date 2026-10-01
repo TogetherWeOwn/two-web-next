@@ -27,7 +27,7 @@ export type FeaturedRow = typeof featuredContents.$inferSelect;
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
 
-const AUDIT_EXCLUDE = new Set(["discordEventId"]);
+const AUDIT_EXCLUDE = new Set(["discordEventId", "icsSequence"]);
 
 function dirty<T extends Record<string, unknown>>(before: T, after: Partial<T>): Record<string, { before: unknown; after: unknown }> {
   const out: Record<string, { before: unknown; after: unknown }> = {};
