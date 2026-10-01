@@ -1,4 +1,5 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
+import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
 import { BotTerminalError, BotTransportError } from "./types";
 import type { BotClient, EventStore, UniqueLock } from "./types";
 
@@ -59,12 +60,14 @@ export async function handleSyncEvent(
     answer = await deps.bot.upsertEvent(event.payload, msg.idempotencyKey);
   } catch (e) {
     if (e instanceof BotTransportError) return retry(backoffFor(SYNC_EVENT.backoffSeconds, attempts));
-    if (e instanceof BotTerminalError) return { failed: e.message };
+    // Class-only: the terminal message can carry tokens or personal data.
+    if (e instanceof BotTerminalError) return { failed: terminalFailureReason() };
     throw e;
   }
   if (!answer.ok) {
     if (!answer.retryable) {
-      return { failed: `The bot refused event.upsert for ${msg.eventKey} with \`${answer.code}\`: ${answer.message}` };
+      // Class-only: keep the job and sanitized code, never the provider message.
+      return { failed: botRefusalReason(`event.upsert for ${sanitizeQueueScope(msg.eventKey)}`, answer.code) };
     }
     // The bot's number beats ours: on a 429 it knows where the ceiling is.
     return retry(answer.retryAfterSeconds ?? backoffFor(SYNC_EVENT.backoffSeconds, attempts));

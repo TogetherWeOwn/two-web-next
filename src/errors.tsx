@@ -4,6 +4,7 @@ import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
 import { notFoundSuggestions, type SuggestedEvent } from "./events/suggestions";
 import { RecoveryShell } from "./pages";
+import { bufferedMemberHtml, bufferedMemberText, memberReadActive } from "./member-reads";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
 // errors/*.blade.php views (TOG-5626/TOG-6788). No session or cookie reads.
@@ -120,6 +121,12 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
 
 // Host refusals use only this shell, never the optional DB lookup.
 export function notFoundResponse(c: Context, suggestions: SuggestedEvent[] = []): Response | Promise<Response> {
+  if (memberReadActive()) {
+    // Only this known shell classifies a missing route; arbitrary 404 responses
+    // and prior queries still must satisfy the ordinary read boundary.
+    if (c.get("adminActor")) c.set("access", { resource: "not-found", action: "view", route: "admin.not-found" });
+    return bufferedMemberHtml(c, <NotFoundPage suggestions={suggestions} />, 404);
+  }
   c.header("cache-control", "no-store, private");
   c.status(404);
   return c.html(<NotFoundPage suggestions={suggestions} />);
@@ -130,6 +137,13 @@ export async function notFoundHandler(c: Context): Promise<Response> {
 }
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
+  if (memberReadActive()) {
+    // Sanitize before the ordinary logger/alert sees SQL, bindings or causes.
+    console.error("Member request failed; refusing contents.", {
+      exception: err instanceof Error ? err.constructor.name : "unknown",
+    });
+    return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
+  }
   console.error("unhandled error:", err);
   alertRequestError(err, { method: c.req.method, route: c.req.routePath || c.req.path });
   c.header("cache-control", "no-store, private");

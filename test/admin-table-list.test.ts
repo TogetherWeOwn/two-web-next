@@ -98,10 +98,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
     const expected = rows.filter((r) => r.title.includes("night") && (!published || r.isPublished === (published === "1")));
     const html = await request(`/featured?published=${published}&q=NIGHT`);
     expect(featuredIds(html).sort()).toEqual(expected.map((r) => r.id).sort());
-    const [log] = await logs();
-    expect(log!.route).toBe("admin.featured.index");
-    expect(log!.subjectUserIds).toEqual(expected.map((r) => String(r.id)).sort());
-    expect(log!.subjectCount).toBe(expected.length);
+    expect(await logs()).toEqual([]); // Featured IDs are resources, not member keys.
     expect(html).toContain(`value="${published}" selected`);
     expect(html).toContain('name="q" type="search" value="NIGHT"');
   });
@@ -125,13 +122,13 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
       const expected = q === injection ? rows[4]! : rows[3]!;
       const html = await request(`/featured?q=${encodeURIComponent(q)}`);
       expect(featuredIds(html)).toEqual([expected.id]);
-      expect((await logs()).at(-1)!.subjectUserIds).toEqual([String(expected.id)]);
+      expect(await logs()).toEqual([]);
     }
     expect(await fixture.db.select().from(featuredContents)).toHaveLength(5);
     expect(await fixture.db.select().from(users)).toEqual([]);
     const empty = await request("/featured?q=absent");
     expect(empty).toContain('colspan="5" data-testid="featured-empty"');
-    expect(await logs()).toHaveLength(2); // Empty result sets create no access row.
+    expect(await logs()).toEqual([]); // All featured projections are classified non-sensitive.
   });
 
   it("featured last-changed column and accessible sort links preserve filters and sort direction", async () => {
@@ -150,26 +147,26 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
       eventKey, title: eventKey, startsAt: new Date("2099-10-01T20:00Z"), endsAt: new Date("2099-10-01T22:00Z"),
     }))).returning();
     await fixture.db.insert(users).values([
-      { id: "a", username: "Alice" }, { id: "b", username: "Alice 100%_\\" },
-      { id: "c", username: injection }, { id: "d", username: "Drew" },
+      { id: "100000000000001001", username: "Alice" }, { id: "100000000000001002", username: "Alice 100%_\\" },
+      { id: "100000000000001003", username: injection }, { id: "100000000000001004", username: "Drew" },
     ]);
     await fixture.db.insert(rsvps).values([
-      { eventId: event!.id, userId: "a", status: "going", updatedAt: new Date("2026-10-01T01:00Z") },
-      { eventId: event!.id, userId: "b", status: "maybe", updatedAt: new Date("2026-10-02T01:00Z") },
-      { eventId: event!.id, userId: "c", status: "going", updatedAt: new Date("2026-10-02T01:00Z") },
-      { eventId: event!.id, userId: "unknown-id", status: "not_going", updatedAt: new Date("2026-10-03T01:00Z") },
-      { eventId: other!.id, userId: "d", status: "going" },
+      { eventId: event!.id, userId: "100000000000001001", status: "going", updatedAt: new Date("2026-10-01T01:00Z") },
+      { eventId: event!.id, userId: "100000000000001002", status: "maybe", updatedAt: new Date("2026-10-02T01:00Z") },
+      { eventId: event!.id, userId: "100000000000001003", status: "going", updatedAt: new Date("2026-10-02T01:00Z") },
+      { eventId: event!.id, userId: "100000000000001005", status: "not_going", updatedAt: new Date("2026-10-03T01:00Z") },
+      { eventId: other!.id, userId: "100000000000001004", status: "going" },
     ]);
     return listRoster(fixture.db, "roster");
   }
 
   it("roster member search is server-side, literal, event-scoped and access-logs only rendered members", async () => {
     await seedRoster();
-    for (const [q, ids] of [["alice", ["a", "b"]], ["%_\\", ["b"]], [injection, ["c"]], ["Drew", []]] as const) {
+    for (const [q, ids] of [["alice", ["100000000000001001", "100000000000001002"]], ["%_\\", ["100000000000001002"]], [injection, ["100000000000001003"]], ["Drew", []]] as const) {
       const html = await request(`/events/roster?roster_q=${encodeURIComponent(q)}`);
       expect(html).toContain(`RSVPs (${ids.length})`);
       if (ids.length) expect((await logs()).at(-1)!.subjectUserIds).toEqual(ids);
-      expect(html).not.toContain("unknown-id");
+      expect(html).not.toContain("100000000000001005");
       expect(html).not.toContain("Unknown member");
       if (q !== "alice" && q !== "%_\\") expect(html).not.toContain("Alice");
     }
@@ -200,7 +197,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
     await seedRoster();
     const fallback = await request(`/events/roster?roster_sort=${encodeURIComponent(injection)}&roster_order=invalid`);
     expect(fallback.indexOf("Unknown member")).toBeLessThan(fallback.indexOf("Alice"));
-    expect(fallback).not.toContain("unknown-id");
+    expect(fallback).not.toContain("100000000000001005");
     expect(fallback).toContain('aria-label="Sort by answered ascending"');
     const html = await request("/events/roster?roster_q=alice&roster_sort=status&roster_order=asc");
     expect(html).toContain('aria-sort="ascending"');
@@ -257,10 +254,10 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
       eventKey: "missing-names", title: "Missing names", startsAt: new Date("2099-10-01T20:00Z"), endsAt: new Date("2099-10-01T22:00Z"),
     }).returning();
     await fixture.db.insert(users).values([
-      { id: "empty-member-id", username: "" }, { id: "blank-member-id", username: " \t\n " },
-      { id: "named-member-id", username: " Alice " },
+      { id: "100000000000002002", username: "" }, { id: "100000000000002003", username: " \t\n " },
+      { id: "100000000000002004", username: " Alice " },
     ]);
-    const ids = ["absent-member-id", "empty-member-id", "blank-member-id", "named-member-id"];
+    const ids = ["100000000000002001", "100000000000002002", "100000000000002003", "100000000000002004"];
     await fixture.db.insert(rsvps).values(ids.map((userId) => ({ eventId: event!.id, userId, status: "going" as const })));
     const html = await request("/events/missing-names");
     expect(html.match(/<td>Unknown member<\/td>/g)).toHaveLength(3);
@@ -283,10 +280,10 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
     expect(await request("/events/roster")).toContain("No RSVPs yet.");
   });
 
-  it("join pages retain filters, reach older attempts, omit lookahead subjects, and keep stable id ordering", async () => {
+  it("join pages retain filters, reach older attempts, audit every retrieved owner, and keep stable id ordering", async () => {
     const now = new Date();
     const rows = await fixture.db.insert(joinAttempts).values(Array.from({ length: JOIN_ATTEMPT_PAGE_SIZE + 2 }, (_, i) => ({
-      outcome: "denied", requestId: "request & trace", discordId: `member-${i}`, createdAt: now,
+      outcome: "denied", requestId: "request & trace", discordId: String(100000000000003000n + BigInt(i)), createdAt: now,
     }))).returning();
     await fixture.db.insert(joinAttempts).values([
       { outcome: "added", requestId: "request & trace", discordId: "wrong-outcome" },
@@ -305,21 +302,40 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
     const prev = new URL(link(second, "prev")!, env.APP_URL);
     expect(Object.fromEntries(prev.searchParams)).toEqual({ outcome: "denied", q: "request & trace", page: "1" });
     const access = await logs();
-    expect(access[0]!.subjectUserIds).toEqual(ordered.slice(0, JOIN_ATTEMPT_PAGE_SIZE).map((r) => r.discordId!).sort());
+    expect(access).toHaveLength(2); // One real row per request, not per member.
+    expect(access[0]!.subjectUserIds).toEqual(ordered.slice(0, JOIN_ATTEMPT_PAGE_SIZE + 1).map((r) => r.discordId!).sort());
     expect(access[1]!.subjectUserIds).toEqual(ordered.slice(JOIN_ATTEMPT_PAGE_SIZE).map((r) => r.discordId!).sort());
-    expect(access[0]!.subjectCount).toBe(JOIN_ATTEMPT_PAGE_SIZE);
-    expect(access[0]!.subjectUserIds).not.toContain(ordered[JOIN_ATTEMPT_PAGE_SIZE]!.discordId);
+    expect(access[0]!.subjectCount).toBe(JOIN_ATTEMPT_PAGE_SIZE + 1);
+    expect(access[0]!.subjectUserIds).toContain(ordered[JOIN_ATTEMPT_PAGE_SIZE]!.discordId);
+    expect(first).not.toContain(ordered[JOIN_ATTEMPT_PAGE_SIZE]!.discordId); // Retrieved but not rendered.
     expect(access.every((r) => r.route === "admin.join-attempts.index")).toBe(true);
     expect(await fixture.db.select().from(joinAttempts)).toHaveLength(JOIN_ATTEMPT_PAGE_SIZE + 5);
   });
 
+  it.each([null, "invalid-owner", "123"])("refuses the whole page when its unrendered lookahead owner is %s", async (owner) => {
+    const createdAt = new Date();
+    await fixture.db.insert(joinAttempts).values(Array.from({ length: JOIN_ATTEMPT_PAGE_SIZE + 1 }, (_, i) => ({
+      outcome: "added", requestId: "private-page-sentinel", createdAt,
+      discordId: i === 0 ? owner : String(100000000000005000n + BigInt(i)),
+    })));
+    const response = await adminApp({ sessionStore: store, db: fixture.db }).request("/join-attempts", {
+      headers: { cookie },
+    }, { ...env, ADMIN_DB: fixture.db });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const body = await response.text();
+    expect(body).not.toContain("private-page-sentinel");
+    expect(body).not.toContain("100000000000005");
+    expect(await logs()).toEqual([]);
+  });
+
   it("join exact Discord/request search, empty pages and invalid page state remain usable", async () => {
     await fixture.db.insert(joinAttempts).values([
-      { outcome: "added", discordId: "123", requestId: "one" },
-      { outcome: "added", discordId: "1234", requestId: "two" },
+      { outcome: "added", discordId: "100000000000004001", requestId: "one" },
+      { outcome: "added", discordId: "1000000000000040010", requestId: "two" },
       { outcome: "denied", requestId: injection },
     ]);
-    const exact = await request("/join-attempts?q=123&page=invalid");
+    const exact = await request("/join-attempts?q=100000000000004001&page=invalid");
     expect(attemptIds(exact)).toHaveLength(1);
     expect(exact).toContain("Page 1");
     expect(await listJoinAttempts(fixture.db, { q: injection })).toHaveLength(1);

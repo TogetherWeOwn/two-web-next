@@ -23,7 +23,7 @@ const baseEnv = {
   DISCORD_INVITE_URL: "https://discord.gg/invite", DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
 } as Env;
-const actor = { id: "toggle-mod", username: "mod" };
+const actor = { id: "100000000000000111", username: "mod" };
 
 async function cookie(moderator = true) {
   const token = newSessionToken();
