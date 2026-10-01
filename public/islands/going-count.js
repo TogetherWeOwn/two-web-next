@@ -18,6 +18,14 @@
   var URL = "/events.json";
   var latest = new Map();
 
+  // A second evaluation of this script must not stack a second document
+  // listener: the guard lives on the shared DOM, not in this closure.
+  var root = document.documentElement;
+  if (root) {
+    if (root.getAttribute("data-going-count-ready") === "1") return;
+    root.setAttribute("data-going-count-ready", "1");
+  }
+
   function announcementText(state) {
     switch (state) {
       case "going":
@@ -52,12 +60,17 @@
     if (capacity === null || (Number.isSafeInteger(capacity) && capacity > 0)) return capacity;
   }
 
+  function spotsLeftText(going, capacity) {
+    var left = Math.max(0, capacity - going);
+    return left <= 0 ? "Full" : left + " of " + capacity + " spots left";
+  }
+
   function refresh(nodes, key, state) {
     // A new broadcast owns both the read and its announcement, even if it
     // fails. An older completion must never replace the last good state.
     var request = {};
     latest.set(key, request);
-    fetch(URL, { headers: { accept: "application/json" } })
+    fetch(URL + "?event_key=" + encodeURIComponent(key), { headers: { accept: "application/json" } })
       .then(function (res) {
         if (!res.ok) throw new Error("events " + res.status);
         return res.json();
@@ -74,8 +87,14 @@
         nodes.forEach(function (node, index) {
           var capacity = capacities[index];
           if (capacity === undefined) return;
+          node.setAttribute("data-capacity", capacity === null ? "" : String(capacity));
           var count = node.querySelector("[data-count]");
           if (count) count.textContent = countText(row.going_count, capacity);
+          var spots = node.querySelector("[data-spots]");
+          if (spots) {
+            spots.hidden = capacity === null;
+            if (capacity !== null) spots.textContent = spotsLeftText(row.going_count, capacity);
+          }
           var ann = node.querySelector("[data-announcement]");
           if (ann && state) {
             var t = announcementText(state);

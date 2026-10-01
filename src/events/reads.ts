@@ -251,10 +251,11 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */
 export async function listJson(
   db: Db,
-  opts: { limit: number; offset: number; includeDrafts: boolean },
+  opts: { limit: number; offset: number; includeDrafts: boolean; eventKey?: string },
 ): Promise<PublicEvent[]> {
   const visible = opts.includeDrafts ? sql`true` : inArray(events.status, ["published", "cancelled", "past"]);
-  const rows = await db.select().from(events).where(visible).orderBy(desc(events.startsAt)).limit(opts.limit).offset(opts.offset);
+  const match = opts.eventKey === undefined ? undefined : eq(events.eventKey, opts.eventKey);
+  const rows = await db.select().from(events).where(and(visible, match)).orderBy(desc(events.startsAt)).limit(opts.limit).offset(opts.offset);
   return withGoing(db, rows);
 }
 

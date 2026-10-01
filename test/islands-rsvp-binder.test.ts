@@ -14,6 +14,7 @@ class Node {
   parentNode: Node | null = null;
   attributes = new Map<string, string>();
   disabled = false;
+  hidden = false;
   focused = false;
   href = "";
   private text = "";
@@ -273,11 +274,11 @@ describe("RsvpButton shipped binder", () => {
 
   it("integrates EventPage SSR and both binders: one aggregate GET, count and announcement update", async () => {
     const b = browser("open", undefined, true);
-    expect(b.html).toContain('src="/islands/going-count.js"');
+    expect(b.html.match(/src="\/islands\/going-count\.js"/g)).toHaveLength(1);
     expect(b.html).toContain('data-testid="event-attendees-refresh"');
     expect(b.requests).toHaveLength(0);
     b.get("rsvp-going")!.click(); b.finish(0, 201); await b.settle();
-    expect(b.requests).toHaveLength(2); expect(b.requests[1]!.url).toBe("/events.json");
+    expect(b.requests).toHaveLength(2); expect(b.requests[1]!.url).toBe("/events.json?event_key=raid%2Fone");
     b.finish(1, 200, [{ event_key: "raid/one", going_count: 2 }]); await b.settle();
     const badge = b.page.querySelector('[data-island="going-count"]')!;
     expect(badge.querySelector("[data-count]")?.textContent).toBe("2 of 4 going");
@@ -319,9 +320,9 @@ describe("RsvpButton shipped binder", () => {
 
   it("keeps the newest aggregate when withdrawal GET B finishes before join GET A", async () => {
     const b = browser("open", undefined, true); b.get("rsvp-going")!.click(); b.finish(0, 201); await b.settle();
-    expect(b.requests[1]!.url).toBe("/events.json");
+    expect(b.requests[1]!.url).toBe("/events.json?event_key=raid%2Fone");
     b.get("rsvp-withdraw")!.click(); b.finish(2, 204); await b.settle();
-    expect(b.requests[3]!.url).toBe("/events.json");
+    expect(b.requests[3]!.url).toBe("/events.json?event_key=raid%2Fone");
     b.finish(3, 200, [{ event_key: "raid/one", going_count: 1, capacity: 4 }]); await b.settle();
     b.finish(1, 200, [{ event_key: "raid/one", going_count: 2, capacity: 4 }]); await b.settle();
     const badge = b.page.querySelector('[data-island="going-count"]')!;
@@ -336,7 +337,7 @@ describe("RsvpButton shipped binder", () => {
   it("does not invent a vacancy when withdrawing promotes a FIFO waiter into the full event", async () => {
     const b = browser("going-full", undefined, true); b.get("rsvp-withdraw")!.click(); b.finish(0, 204); await b.settle();
     expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("rsvp-going")).toBeNull();
-    expect(b.get("waitlist-join")).not.toBeNull(); expect(b.requests[1]!.url).toBe("/events.json");
+    expect(b.get("waitlist-join")).not.toBeNull(); expect(b.requests[1]!.url).toBe("/events.json?event_key=raid%2Fone");
     b.finish(1, 200, [{ event_key: "raid/one", going_count: 4, capacity: 4 }]); await b.settle();
     expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
     expect(b.get("rsvp-going")).toBeNull(); expect(b.get("waitlist-claim")).toBeNull();
@@ -350,6 +351,10 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-going")).toBeNull();
     b.finish(1, 200, [{ event_key: "raid/one", going_count: 3, capacity }]); await b.settle();
     expect(b.root.getAttribute("data-full")).toBe("false"); expect(b.get("event-full")).toBeNull();
+    const badge = b.page.querySelector('[data-island="going-count"]')!;
+    expect(badge.getAttribute("data-capacity")).toBe(capacity === null ? "" : "4");
+    expect(badge.querySelector("[data-spots]")!.hidden).toBe(capacity === null);
+    if (capacity !== null) expect(badge.querySelector("[data-spots]")!.textContent).toBe("1 of 4 spots left");
     expect(b.get("waitlist-join")).toBeNull(); b.get("rsvp-going")!.click();
     expect(b.requests[2]!.init.body).toBe('{"status":"going"}'); expect(b.requests).toHaveLength(3);
   });

@@ -17,6 +17,7 @@ class DOMCustomEvent {
 class TextTarget {
   private value: string;
   writes: string[] = [];
+  hidden = false;
 
   constructor(initial: string) {
     this.value = initial;
@@ -32,11 +33,13 @@ class TextTarget {
 class Badge {
   private attributes: Map<string, string>;
   count: TextTarget;
+  spots: TextTarget | null;
   announcement = new TextTarget("");
 
-  constructor(key: string, capacity: string = "4") {
+  constructor(key: string, capacity: string = "4", showSpots = false) {
     this.attributes = new Map([["data-island", "going-count"], ["data-event-key", key], ["data-capacity", capacity]]);
     this.count = new TextTarget(capacity ? `2 of ${capacity} going` : "2 going");
+    this.spots = showSpots ? new TextTarget(`${Number(capacity) - 2} of ${capacity} spots left`) : null;
   }
 
   getAttribute(name: string) { return this.attributes.get(name) ?? null; }
@@ -44,6 +47,7 @@ class Badge {
   removeAttribute(name: string) { this.attributes.delete(name); }
   querySelector(selector: string) {
     if (selector === "[data-count]") return this.count;
+    if (selector === "[data-spots]") return this.spots;
     if (selector === "[data-announcement]") return this.announcement;
     return null;
   }
@@ -267,6 +271,37 @@ describe("GoingCount distributed binder refresh ownership", () => {
 });
 
 describe("GoingCount accepted aggregate snapshots", () => {
+  it("keeps count, spots and capacity on the latest snapshot, including unbounded transitions", async () => {
+    const badge = new Badge("a", "4", true);
+    const b = browser(badge);
+    b.broadcast({ eventKey: "a", viewerState: "going" });
+    b.broadcast({ eventKey: "a", viewerState: "none" });
+    await b.respond(1, [{ event_key: "a", going_count: 4, capacity: 4 }]);
+    expect(badge.spots!.textContent).toBe("Full");
+    await b.respond(0, [{ event_key: "a", going_count: 2, capacity: 9 }]);
+    expect(badge.count.textContent).toBe("4 of 4 going");
+    expect(badge.spots!.textContent).toBe("Full");
+    expect(badge.getAttribute("data-capacity")).toBe("4");
+    expect(badge.announcement.textContent).toBe("RSVP removed. ");
+    b.broadcast({ eventKey: "a" });
+    await b.respond(2, [{ event_key: "a", going_count: 3, capacity: null }]);
+    expect(badge.count.textContent).toBe("3 going");
+    expect(badge.getAttribute("data-capacity")).toBe("");
+    expect(badge.spots!.hidden).toBe(true);
+    b.broadcast({ eventKey: "a" });
+    await b.respond(3, [{ event_key: "a", going_count: 2, capacity: 6 }]);
+    expect(badge.count.textContent).toBe("2 of 6 going");
+    expect(badge.getAttribute("data-capacity")).toBe("6");
+    expect(badge.spots!.hidden).toBe(false);
+    expect(badge.spots!.textContent).toBe("4 of 6 spots left");
+    expect(b.refreshes).toEqual([
+      { eventKey: "a", goingCount: 4, capacity: 4 },
+      { eventKey: "a", goingCount: 3, capacity: null },
+      { eventKey: "a", goingCount: 2, capacity: 6 },
+    ]);
+    expect(b.requests).toHaveLength(4);
+  });
+
   it.each([7, null])("uses current capacity %s across same-key badges and publishes once", async (capacity) => {
     const badges = [new Badge("a"), new Badge("a", "8"), new Badge("a", "")];
     const other = new Badge("b");
@@ -286,7 +321,7 @@ describe("GoingCount accepted aggregate snapshots", () => {
     b.broadcast({});
     await settle();
     expect(b.requests).toHaveLength(1);
-    expect(b.requests[0]!.url).toBe("/events.json");
+    expect(b.requests[0]!.url).toBe("/events.json?event_key=a");
     expect(binder).not.toMatch(/setInterval|setTimeout/);
   });
 

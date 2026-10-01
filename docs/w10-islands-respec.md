@@ -36,8 +36,8 @@ Legacy: `GoingCount.php` + `going-count.blade.php` + `GoingCountTest.php` (TOG-7
   "You're on the waitlist." / "RSVP removed."); silent on first render so page load
   stays quiet; never `role="alert"`.
 - Refresh: `going-count-updated` DOM CustomEvent `{eventKey, viewerState}` → exactly
-  one `GET /events.json` per answered event; non-matching island keys fire nothing;
-  missing row keeps last known-good. A newer write owns its refresh even when an
+  one `GET /events.json?event_key=…` per answered event (key filtered before
+  pagination); non-matching island keys fire nothing; missing row keeps last known-good. A newer write owns its refresh even when an
   older fetch/body finishes later. The accepted aggregate emits
   `going-count-refreshed {eventKey, goingCount, capacity}` for capacity reconciliation,
   without another request. Executable: `test/islands-going-count*.test.ts`.

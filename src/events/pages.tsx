@@ -74,6 +74,7 @@ import {
   monthGrid,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
+  renderGoingCount,
   transientEventKey,
   wallDateIso,
   wallTimeHm,
@@ -552,14 +553,14 @@ export const EventPage: FC<{
       </p>
       {e.location ? <p data-testid="event-venue">{e.location}</p> : null}
       {e.description ? <p>{e.description}</p> : null}
-      <p data-testid="going-count">
-        <span role="status" data-testid="event-going-count" data-island="going-count"
-          data-event-key={e.eventKey} data-capacity={e.capacity ?? ""}>
-          <span class="sr-only" data-announcement></span>
-          <span data-count>{goingCountText(e.goingCount, e.capacity)}</span>
-        </span>
-      </p>
-      <script src="/islands/going-count.js" defer />
+      <p dangerouslySetInnerHTML={{
+        __html: renderGoingCount(e.eventKey, {
+          going: e.goingCount,
+          capacity: e.capacity,
+          showSpotsLeft: true,
+          announcement: null,
+        }),
+      }} />
       {!session ? (
         <section data-testid="event-join-pitch" aria-label="Join the community">
           <p>Game nights get posted here first. Join the Discord and you&apos;ll see them before they land on this page.</p>
@@ -584,6 +585,7 @@ export const EventPage: FC<{
         </section>
       ) : null}
       <script src="/islands/copy-link.js" defer />
+      <script src="/islands/going-count.js" defer />
       <RsvpButton e={e} member={member} answer={answer} waitlistPosition={waitlistPosition} returnTo={returnTo ?? path} />
       <script src="/islands/rsvp-button.js" defer />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
