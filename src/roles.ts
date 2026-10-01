@@ -10,6 +10,8 @@
 // flag (moderator = false) but never blocks sign-in: the privilege is denied by
 // default while the front door stays open.
 
+import { discordFetch } from "./discord-http";
+
 const API = "https://discord.com/api/v10";
 
 export type GuildMemberRoles = { roles: string[]; joinedAt: string | null };
@@ -19,7 +21,7 @@ export async function fetchMemberRoles(
   userId: string,
   botToken: string,
 ): Promise<GuildMemberRoles | null> {
-  const res = await fetch(`${API}/guilds/${guildId}/members/${userId}`, {
+  const res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
     headers: { authorization: `Bot ${botToken}` },
   });
   if (res.status === 404) return null;
