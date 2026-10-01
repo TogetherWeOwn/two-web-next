@@ -28,6 +28,7 @@
 
   var DEBOUNCE_MS = 300;
   var active = null;
+  var activeIsSearch = false;
   var debounceTimer = null;
   // Back changes the address before its fetch commits. Replacing that request
   // must not lose the obligation to reconcile the address with the rendered page.
@@ -66,12 +67,14 @@
   // opts.focus: a selector to focus after the swap (grid day jumps land on the card).
   // opts.skeleton: member-started actions show it; a settled search does not.
   // opts.syncInput: explicit navigation rewrites the box unless newer typing began.
+  // opts.search: newer input invalidates this request before its debounce fires.
   async function load(url, push, opts) {
     opts = opts || {};
     var inputAtStart = input.value;
     if (active) active.abort();
     var controller = new AbortController();
     active = controller;
+    activeIsSearch = !!opts.search;
     if (opts.skeleton) setLoading(true);
     try {
       var response = await fetch(url.pathname + url.search, {
@@ -144,6 +147,7 @@
       if (active === controller) {
         setLoading(false);
         active = null;
+        activeIsSearch = false;
       }
     }
   }
@@ -184,16 +188,23 @@
 
   input.addEventListener("input", function () {
     cancelDebounce();
+    // Typing supersedes a search immediately, not just when the next fetch starts.
+    // Explicit navigation may still commit while newer text remains in the box.
+    if (active && activeIsSearch) {
+      active.abort();
+      active = null;
+      activeIsSearch = false;
+    }
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
-      load(searchUrl(input.value), true, {});
+      load(searchUrl(input.value), true, { search: true });
     }, DEBOUNCE_MS);
   });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     cancelDebounce();
-    load(searchUrl(input.value), true, {});
+    load(searchUrl(input.value), true, { search: true });
   });
 
   window.addEventListener("popstate", function () {
