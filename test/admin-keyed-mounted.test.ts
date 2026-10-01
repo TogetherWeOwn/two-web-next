@@ -1,4 +1,6 @@
 import { eq, sql } from "drizzle-orm";
+import { serializeSigned } from "hono/utils/cookie";
+import { JOIN_RESULT_COOKIE } from "../src/return-journey";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import * as reads from "../src/admin/reads";
@@ -204,6 +206,48 @@ describe.skipIf(!process.env.DATABASE_URL)("mounted keyed admin reads (isolated 
       throw rollback;
     }).catch((error: unknown) => { if (error !== rollback) throw error; });
     expect(await logs()).toHaveLength(0);
+  });
+
+  it.each([
+    [`/e/${EVENT_KEY}`, "added"], [`/e/${EVENT_KEY}`, "already_member"],
+    [`/members/${SUBJECT.userId}`, "added"], [`/members/${SUBJECT.userId}`, "already_member"],
+  ])("%s preserves %s after a REAL failed audit INSERT until one visible response", async (path, result) => {
+    const flash = (await serializeSigned(JOIN_RESULT_COOKIE, result, env.SESSION_SECRET, {
+      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+    })).split(";")[0]!;
+    const jar = new Map([cookie, flash].map((pair) => [pair.slice(0, pair.indexOf("=")), pair]));
+    const get = (db: Db = fixture.db) => app.request(path, { headers: { cookie: [...jar.values()].join("; ") } }, {
+      ...env, ADMIN_DB: db, SESSION_STORE: sessions,
+    });
+    const apply = (response: Response) => {
+      for (const value of response.headers.getSetCookie()) {
+        const pair = value.split(";")[0]!;
+        const name = pair.slice(0, pair.indexOf("="));
+        if (/max-age=0/i.test(value)) jar.delete(name);
+        else jar.set(name, pair);
+      }
+    };
+    const rollback = new Error("rollback join-result failed INSERT");
+    await fixture.db.transaction(async (tx) => {
+      await tx.execute(sql`alter table member_data_access_logs drop column subject_count`);
+      const refused = await get(tx as unknown as Db);
+      await denial(refused, false);
+      apply(refused);
+      expect(jar.get(JOIN_RESULT_COOKIE)).toBe(flash);
+      throw rollback;
+    }).catch((error: unknown) => { if (error !== rollback) throw error; });
+    expect(await logs()).toHaveLength(0);
+    const allowed = await get();
+    expect(allowed.status).toBe(200);
+    expect(allowed.headers.get("cache-control")).toBe("private, no-store");
+    expect(await allowed.text()).toContain('data-testid="join-result"');
+    expect(await logs()).toMatchObject([{ viewerDiscordId: MODERATOR.userId, subjectUserIds: [SUBJECT.userId], subjectCount: 1 }]);
+    apply(allowed);
+    expect(jar.has(JOIN_RESULT_COOKIE)).toBe(false);
+    const second = await get();
+    expect(second.status).toBe(200);
+    expect(await second.text()).not.toContain('data-testid="join-result"');
+    expect(await logs()).toHaveLength(2);
   });
 
   it.each([`/admin/events/${EVENT_KEY}`, `/members/${SUBJECT.userId}`])("HEAD captures actual subjects on %s, even with an empty response body", async (path) => {

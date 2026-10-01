@@ -13,6 +13,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
 import { NotFoundPage, rateLimitExceeded } from "../errors";
+import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
@@ -178,10 +179,29 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       }
     }
 
+    // One-shot join confirmation (legacy join_result flash): /events is a
+    // join-CTA landing (`/join?next=/events`), so it consumes and renders the
+    // banner exactly once like /, /join, /profile and /e/:key (TOG-10356
+    // review). Island fragment swaps must not consume it: the banner renders
+    // outside the swapped zones, so a fragment would eat the flash without
+    // ever displaying it — the pending value survives for the next full load.
+    const island = c.req.header("x-two-island") === "events-calendar";
+    const joinResult = island ? null : await takeJoinResult(c);
     // Search analytics must run per request, not only on shared-cache misses.
-    c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
+    c.header("cache-control", session || searching || joinResult ? "private, no-store" : "public, max-age=60");
     if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
+    // Guest sign-in links carry this page as ?next= so the OAuth round trip
+    // lands back here (TOG-10356). Rooted pathname + search only — the
+    // journey guard re-validates before any redirect, so a hostile query can
+    // at worst fall back to the default landing, never off-app.
+    let loginReturnTo: string | null = null;
+    try {
+      const u = new URL(c.req.url);
+      loginReturnTo = u.pathname + u.search;
+    } catch {
+      loginReturnTo = "/events";
+    }
     return c.html(
       <EventsCalendarPage
         state={state}
@@ -194,6 +214,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         member={session?.member ?? false}
         inviteUrl={c.env.DISCORD_INVITE_URL}
         appUrl={c.env.APP_URL}
+        loginReturnTo={loginReturnTo}
+        joinResult={joinResult}
       />,
     );
   });
@@ -299,16 +321,19 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         viewer = session?.id ?? null;
         if (e.status === "draft" && !session?.moderator) return bufferedMemberText(c, "Forbidden", 403);
         if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
+        const joinResult = await readJoinResult(c);
         const [neighbors, related, attendees, position] = await Promise.all([
           getEventNeighbors(db, e),
           listRelatedEvents(db, e),
           session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
           session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
         ]);
-        return bufferedMemberHtml(c, <EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
+        return bufferedMemberHtml(c, <EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
       };
       await render();
     });
+    // Consume only after the keyed boundary allows a visible response.
+    if (c.res.status === 200) await takeJoinResult(c);
     return c.res;
   });
 

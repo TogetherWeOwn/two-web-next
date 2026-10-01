@@ -38,7 +38,8 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     // The three global ALL /* registrations are the composed security/robots
     // headers, strict per-environment trustHosts guard and same-origin guard.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
-    // The event read boundary now encloses its existing GET handler directly.
+    // The event read boundary encloses its existing GET handler directly;
+    // profile flash consumption stays inside the existing boundary middleware.
     "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
   ].sort());
 }

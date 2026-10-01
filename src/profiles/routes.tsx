@@ -29,6 +29,7 @@ import { NotFoundPage, rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
+import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
 import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
@@ -101,7 +102,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
   const gate = async (c: Ctx, next: Next) => {
     c.header("cache-control", "private, no-store");
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    if (!token) return c.redirect("/auth/discord", 302);
+    // Guest: record where they were headed (legacy url.intended), then into
+    // the site OAuth flow — the callback returns them here after sign-in.
+    if (!token) return bounceToLogin(c);
     let viewer: Viewer | null = null;
     try {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
@@ -116,8 +119,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
       });
       return c.text("Profiles temporarily unavailable", 503);
     }
-    // A cookie whose row is gone (revoked/expired/rotated) is a guest.
-    if (!viewer) return c.redirect("/auth/discord", 302);
+    // A cookie whose row is gone (revoked/expired/rotated) is a guest — same
+    // intended-page bounce so the round trip lands them back here.
+    if (!viewer) return bounceToLogin(c);
     if (!viewer.member) return c.text("Forbidden", 403);
     c.set("viewerId", viewer.id);
     c.set("viewer", viewer);
@@ -139,6 +143,8 @@ export function profilesApp(deps: ProfileDeps = {}) {
         if (!sink) throw new Error("no access-log sink");
         return sink(entry);
       }, next);
+      // Refused contents must leave the one-shot confirmation pending.
+      if (c.res.status === 200) await takeJoinResult(c);
     });
   }
 
@@ -151,8 +157,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
     declareMemberResult(member ? [member.id] : []);
     if (!member) return bufferedMemberHtml(c, <NotFoundPage />, 404);
     const viewer = c.get("viewer");
+    const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
-    return bufferedMemberHtml(c, <ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
+    return bufferedMemberHtml(c, <ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} joinResult={joinResult} />);
   };
 
   app.get("/profile", (c) => render(c, c.get("viewer").id));
