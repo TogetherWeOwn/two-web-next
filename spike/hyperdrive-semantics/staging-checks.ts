@@ -6,7 +6,8 @@ type Check = { name: string; pass: boolean; detail: string };
 const query = (client: Pick<Sql, "unsafe">, statement: string, parameters: (number | string)[] = []) =>
   client.unsafe(statement, parameters, { prepare: true });
 
-export async function runFixedStagingChecks(open: () => Sql) {
+export async function runFixedStagingChecks(open: () => Sql,
+  report?: (state: { schema: string; created: boolean; cleanup: boolean }) => void) {
   const schema = "w1_staging_" + crypto.randomUUID().replaceAll("-", "");
   const checks: Check[] = [];
   const clients: Sql[] = [];
@@ -23,6 +24,7 @@ export async function runFixedStagingChecks(open: () => Sql) {
       // Never drop a pre-existing schema. Cleanup owns only this invocation's UUID.
       await query(admin, `CREATE SCHEMA ${schema}`);
       created = true;
+      report?.({ schema, created, cleanup: false });
       await query(admin, `CREATE TABLE ${schema}.spike_events (
         id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         event_key text NOT NULL UNIQUE, status text NOT NULL, capacity integer NULL,
@@ -49,21 +51,23 @@ export async function runFixedStagingChecks(open: () => Sql) {
       const b = connect();
       // postgres.js 3.4.9 can leave a fresh reserve() pending with fetch_types:false.
       // Warm both bounded connections before reserving transaction-local clients.
-      await a`SELECT 1`;
-      await b`SELECT 1`;
+      // VOLATILE reads bypass enabled Hyperdrive caching without changing the resource.
+      // Source: https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
+      await a`SELECT random()`;
+      await b`SELECT random()`;
       const ra = await a.reserve();
       try {
         const rb = await b.reserve();
         try {
           await ra`BEGIN`;
-          const [event] = await query(ra, `SELECT id FROM ${schema}.spike_events
+          const [event] = await query(ra, `SELECT id, random() FROM ${schema}.spike_events
             WHERE event_key = 'evt-cap1' FOR UPDATE`);
           if (!event) throw new Error("missing_event");
           await rb`BEGIN`;
           await rb`SET LOCAL lock_timeout = '250ms'`;
           let blocked = false;
           try {
-            await query(rb, `SELECT id FROM ${schema}.spike_events WHERE event_key = 'evt-cap1' FOR UPDATE`);
+            await query(rb, `SELECT id, random() FROM ${schema}.spike_events WHERE event_key = 'evt-cap1' FOR UPDATE`);
           } catch (err) {
             if ((err as { code?: string }).code !== "55P03") throw err;
             blocked = true;
@@ -74,9 +78,9 @@ export async function runFixedStagingChecks(open: () => Sql) {
           await ra`COMMIT`;
           // Retry under the same event lock and execute the capacity decision.
           await rb`BEGIN`;
-          const [capacity] = await query(rb, `SELECT capacity FROM ${schema}.spike_events
+          const [capacity] = await query(rb, `SELECT capacity, random() FROM ${schema}.spike_events
             WHERE id = $1 FOR UPDATE`, [event.id]);
-          const [count] = await query(rb, `SELECT count(*)::int AS n FROM ${schema}.spike_rsvps
+          const [count] = await query(rb, `SELECT count(*)::int AS n, random() FROM ${schema}.spike_rsvps
             WHERE event_id = $1 AND status = 'going'`, [event.id]);
           if (!capacity || !count) throw new Error("missing_capacity_count");
           const refused = count.n >= capacity.capacity;
@@ -88,7 +92,7 @@ export async function runFixedStagingChecks(open: () => Sql) {
 
           // (b) Transaction-scoped single-flight. No session-lock pooler claim.
           await ra`BEGIN`;
-          const [key] = await ra`SELECT pg_backend_pid() AS id`;
+          const [key] = await ra`SELECT pg_backend_pid() AS id, random()`;
           if (!key) throw new Error("missing_lock_key");
           await ra`SELECT pg_advisory_xact_lock(${key.id})`;
           await rb`BEGIN`;
@@ -116,16 +120,22 @@ export async function runFixedStagingChecks(open: () => Sql) {
         (viewer_discord_id, resource, action, subject_user_ids, subject_count, route, occurred_at)
         VALUES ('snowflake-7', 'member', 'list', '[424242, 1001]', 2, 'members.index', now())`);
       await query(admin, `ANALYZE ${schema}.spike_access_logs`);
-      const plan = await query(admin, `EXPLAIN (COSTS OFF) SELECT id FROM ${schema}.spike_access_logs
+      const plan = await query(admin, `EXPLAIN (COSTS OFF) SELECT id, random() FROM ${schema}.spike_access_logs
         WHERE subject_user_ids @> '[424242]'::jsonb`);
-      const [count] = await query(admin, `SELECT count(*)::int AS n FROM ${schema}.spike_access_logs
+      const [count] = await query(admin, `SELECT count(*)::int AS n, random() FROM ${schema}.spike_access_logs
         WHERE subject_user_ids @> '[424242]'::jsonb`);
       if (!count) throw new Error("missing_containment_count");
       const usesGin = plan.some((row) => String(row["QUERY PLAN"]).includes("spike_access_logs_subject_user_ids_gin"));
       checks.push({ name: "(c) jsonb+GIN", pass: usesGin && count.n === 1,
         detail: `uses_gin=${usesGin} rows=2001 hits=${count.n}` });
     } finally {
-      if (created) { await query(admin, `DROP SCHEMA ${schema} CASCADE`); cleaned = true; }
+      if (created) {
+        await query(admin, `DROP SCHEMA ${schema} CASCADE`);
+        const [remaining] = await admin`SELECT count(*)::int AS n, random() FROM pg_namespace WHERE nspname = ${schema}`;
+        if (remaining?.n !== 0) throw new Error("schema_cleanup_not_verified");
+        cleaned = true;
+        report?.({ schema, created, cleanup: true });
+      }
     }
   } finally {
     // Attempt every close even when one connection refuses to terminate.

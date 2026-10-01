@@ -104,11 +104,12 @@ function fixture(failAt?: string, closeFailure = false, gin = true, lockCode = "
       statements.push(statement);
       if (failAt && statement.includes(failAt)) throw new Error("fixture_failure");
       if (statement.includes("version()")) return [{ version: "fixture-version" }];
-      if (statement.includes("SELECT id FROM") && statement.includes("FOR UPDATE")) {
+      if (statement.includes("SELECT id,") && statement.includes("FOR UPDATE")) {
         if (++eventReads === 2) throw Object.assign(new Error("contention"), { code: lockCode });
         return [{ id: 1 }];
       }
       if (statement.includes("SELECT capacity")) return [{ capacity: 1 }];
+      if (statement.includes("pg_namespace")) return [{ n: 0 }];
       if (statement.includes("count(*)")) return [{ n: 1 }];
       if (statement.includes("pg_backend_pid")) return [{ id: 123 }];
       if (statement.includes("pg_try_advisory_xact_lock")) return [{ ok: ++advisoryReads === 2 }];

@@ -1,5 +1,16 @@
 # W1 separate staging E2E harness — preparation, not activation
 
+## October 1 continuation
+
+The CTO/CEO gate [TOG-10479](/TOG/issues/TOG-10479) is resolved: live staging
+acceptance is allowed. The cancelled coordination chain is not a new access gate.
+See [remote-staging.md](remote-staging.md) for the separate runnable, ephemeral
+`wrangler dev --remote` path and its actual evidence boundary. The preparation-only
+library and stronger Neon-provider-receipt validator described below remain intact;
+they are NOT the entrypoint used by that preview runner. No Neon provider read is
+claimed by the new Cloudflare-only collector. The three live results are still
+NOT VERIFIED until that reviewed runner executes and records them.
+
 ## Boundary and status
 
 The 2026-09-30 clarification permits gated staging E2E. Unit/integration controls
