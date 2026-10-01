@@ -2,10 +2,12 @@
 
 ## Allowed execution path
 
-The current test policy permits **agent-testdb / agent-testredis or CI service
-containers only**. Never point this probe at production or staging, including
-the Neon staging branch. The original Hyperdrive→Neon acceptance is therefore
-not executable under the current policy; local results do not satisfy it.
+Unit/integration controls use **agent-testdb / agent-testredis or CI service
+containers only**. This particular probe stays local-only: never point it at
+production or staging, including Neon. The 2026-09-30 policy clarification permits
+separately gated staging E2E; it does not make this direct/local probe Hyperdrive
+evidence. See [the separate staging harness](staging-probe.md). Live acceptance
+still requires its existing access, review and CTO gates; it is not run here.
 
 The checked-in `wrangler.probe.jsonc` binds the pinned agent-testdb target as a
 plain `vars` string (`TEST_DB_CONNECTION_STRING`). A Hyperdrive binding is
@@ -50,11 +52,12 @@ evidence. Do not label it Hyperdrive→Neon evidence or invent a Neon branch nam
 ## Remaining acceptance gap
 
 [TOG-9680](/TOG/issues/TOG-9680) originally requires pass/fail per (a)–(c) through
-Hyperdrive to an exact Neon branch. That remains unverified. The CTO must decide
-how to reconcile this requirement with the test-container-only policy through
-the authorized governance path; this runbook grants no exception. Likewise,
-creating/deleting Cloudflare resources or obtaining credentials is not part of
-the local test command.
+Hyperdrive to an exact Neon branch. That remains unverified. The prerequisite
+[TOG-10983](/TOG/issues/TOG-10983) prepares a separate staging-only harness and
+executor-specific mapping; [TOG-10479](/TOG/issues/TOG-10479) retains the CTO gate
+and [TOG-10478](/TOG/issues/TOG-10478) owns eventual live acceptance. This runbook
+does not release those gates. Creating/deleting Cloudflare resources or obtaining
+credentials is not part of either preparation or the local command.
 
 Before any future authorized integration leg, retain the exact branch identity,
 Wrangler version, all three results, and schema cleanup evidence. A single GIN
