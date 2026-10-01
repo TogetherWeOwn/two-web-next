@@ -115,6 +115,27 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(f.queries).toHaveLength(5); // Event + going aggregate + 3 navigation reads.
   });
 
+  it.each([
+    ["2030-01-10T20:00:00Z", "2030-01-11T01:00:00Z", "GMT", "GMT-05:00"],
+    ["2030-07-10T19:00:00Z", "2030-07-11T00:00:00Z", "GMT+01:00", "GMT-04:00"],
+  ])("distinguishes equal host-local related times across zones at %s", async (londonStart, newYorkStart, londonOffset, newYorkOffset) => {
+    const london = row(3, { startsAt: new Date(londonStart!), timezone: "Europe/London" });
+    const newYork = row(4, { startsAt: new Date(newYorkStart!), timezone: "America/New_York" });
+    const html = await (await pageFixture(row(2), null, null, [london, newYork]).request()).text();
+    const related = html.split('data-testid="event-related"')[1]!;
+    const times = [...related.matchAll(/<time datetime="([^"]+)">([^<]+)<\/time>/g)];
+    expect(times.map((m) => m[1])).toEqual([london.startsAt.toISOString(), newYork.startsAt.toISOString()]);
+    expect(times[0]![2]).toContain(`20:00 ${londonOffset}`);
+    expect(times[1]![2]).toContain(`20:00 ${newYorkOffset}`);
+    expect(times[0]![2]).not.toBe(times[1]![2]);
+  });
+
+  it("falls back to an explicit UTC instant for an invalid related-event zone", async () => {
+    const sibling = row(3, { timezone: "Invalid/Zone" });
+    const html = await (await pageFixture(row(2), null, null, [sibling]).request()).text();
+    expect(html).toContain(`<time datetime="${NOW.toISOString()}">${NOW.toISOString()}</time>`);
+  });
+
   it.each(["published", "draft", "past"] as const)("preserves %s page states, sharing and landmarks alongside navigation", async (status) => {
     const f = pageFixture(row(2, { status }));
     f.env.APP_URL += "/";

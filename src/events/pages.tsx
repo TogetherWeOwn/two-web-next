@@ -94,6 +94,17 @@ const fmt = (d: Date, tz: string): string => {
   }
 };
 
+const fmtWithOffset = (d: Date, tz: string): string => {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric",
+      hour: "2-digit", minute: "2-digit", timeZone: tz, timeZoneName: "longOffset",
+    }).format(d);
+  } catch {
+    return d.toISOString();
+  }
+};
+
 const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: string; description?: string | null; shareTitle?: string }>> = ({
   title,
   canonical,
@@ -587,7 +598,7 @@ export const EventPage: FC<{
               <li>
                 <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
                   {event.title}{" · "}
-                  <time datetime={event.startsAt.toISOString()}>{fmt(event.startsAt, event.timezone)}</time>
+                  <time datetime={event.startsAt.toISOString()}>{fmtWithOffset(event.startsAt, event.timezone)}</time>
                   {event.location ? ` · ${event.location}` : ""}
                 </a>
               </li>
