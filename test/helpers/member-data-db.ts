@@ -7,6 +7,7 @@ import postgres from "postgres";
 import { activityLog, events, memberDataAccessLogs, rsvps } from "../../src/db/admin-schema";
 import { adminSchema, schema, type Db } from "../../src/db/index";
 import { joinAttempts, profiles, users } from "../../src/db/schema";
+import { startDbPhase } from "./diagnostic-timing";
 
 export function testDatabaseUrl(raw: string, runner = process.env): URL {
   const refuse = () => { throw new Error("W15 requires agent-testdb or the GitHub CI Postgres service; refusing before connecting"); };
@@ -38,34 +39,51 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
   const dispose = async () => {
     if (disposed) return;
     disposed = true;
+    const finish = startDbPhase("member-data", "dispose");
+    let ok = false;
     try {
-      await client.end();
-      if (created) await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`);
-    } finally { await admin.end(); }
+      try {
+        await client.end();
+        if (created) await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`);
+      } finally { await admin.end(); }
+      ok = true;
+    } finally { finish(ok); }
   };
+  let finish = startDbPhase("member-data", "create");
   try {
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
+    finish();
     // Run canonical migrations, including FKs, inside our schema. No public
     // fallback in search_path and no migration journal or writes in public.
+    finish = startDbPhase("member-data", "migration-read");
     const migrations = readMigrationFiles({ migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url).href) });
+    finish();
+    finish = startDbPhase("member-data", "migrate");
     for (const migration of migrations) for (const statement of migration.sql) {
       if (statement.trim()) await client.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
     }
+    finish();
   } catch (error) {
+    finish(false);
     await dispose();
     throw error;
   }
   const reset = async () => {
     if (disposed) throw new Error("W15 fixture is disposed");
-    // Deliberately no arbitrary Db argument: only this scoped pool can clean.
-    await db.delete(memberDataAccessLogs);
-    await db.delete(activityLog);
-    await db.delete(rsvps);
-    await db.delete(profiles);
-    await db.delete(joinAttempts);
-    await db.delete(events);
-    await db.delete(users);
+    const finish = startDbPhase("member-data", "reset");
+    let ok = false;
+    try {
+      // Deliberately no arbitrary Db argument: only this scoped pool can clean.
+      await db.delete(memberDataAccessLogs);
+      await db.delete(activityLog);
+      await db.delete(rsvps);
+      await db.delete(profiles);
+      await db.delete(joinAttempts);
+      await db.delete(events);
+      await db.delete(users);
+      ok = true;
+    } finally { finish(ok); }
   };
   // client is the same schema-scoped pool behind db (search_path pinned to the
   // owned schema): raw SQL and lock holders through it resolve unqualified

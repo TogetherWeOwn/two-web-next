@@ -5,6 +5,9 @@ export default defineConfig({
     include: ["test/**/*.test.ts", "test/**/*.test.mjs"],
     // Live suites truncate shared tables in one database, so files run serially.
     fileParallelism: false,
+    reporters: process.env.TEST_TIMINGS === "1"
+      ? ["default", "./ci/test-timing-reporter.mjs"]
+      : ["default"],
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],

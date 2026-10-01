@@ -100,27 +100,31 @@ jobs:
           node-version: 24
           cache: npm
       - name: Dependency audit selftest (local fixtures)
-        run: npm run deps:audit:selftest
+        run: node ci/time-command.mjs deps-audit-selftest -- npm run deps:audit:selftest
       - name: Dependency audit (lockfile, including dev dependencies)
-        run: npm run deps:audit
-      - run: npm ci
+        run: node ci/time-command.mjs deps-audit -- npm run deps:audit
+      - run: node ci/time-command.mjs npm-ci -- npm ci
       - name: Seeded admin properties (10s budget, local fixtures)
         # Skip npm's extra process startup; keep the same suite and hard budget.
-        run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
+        run: node ci/time-command.mjs admin-properties -- timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
       - name: Apply migrations
-        run: npm run db:migrate
+        run: node ci/time-command.mjs migrations -- npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Exercise the exact pre-deploy invocation on the same migrated service.
       - name: Configuration drift check + selftest
-        run: npm run config:check
+        run: node ci/time-command.mjs config-check -- npm run config:check
       - name: Check (typecheck + coverage gate)
-        run: npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
+        run: |
+          node ci/time-command.mjs typecheck -- npm run typecheck &&
+          node ci/time-command.mjs coverage -- npm run test:coverage &&
+          node ci/time-command.mjs a11y-node -- sh -c 'node --test ci/a11y-*.test.mjs'
         env:
+          TEST_TIMINGS: "1"
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
-        run: npm run test:cutover
+        run: node ci/time-command.mjs cutover -- npm run test:cutover
       - name: Coverage job summary
         if: always() && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
@@ -133,8 +137,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Neon backup selftest (stubbed, no secrets)
-        run: bash ci/neon-backup-selftest.sh
+        run: node ci/time-command.mjs backup-selftest -- bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
-        run: bash ci/check-migration-numbers.sh
+        run: node ci/time-command.mjs migration-numbering -- bash ci/check-migration-numbers.sh
       - name: Build (wrangler dry run)
-        run: npx wrangler deploy --dry-run --outdir dist
+        run: node ci/time-command.mjs dry-run-build -- npx wrangler deploy --dry-run --outdir dist

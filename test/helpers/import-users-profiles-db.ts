@@ -4,6 +4,7 @@ import fixture from "../fixtures/legacy/users-profiles.sql?raw";
 import usersMigration from "../../drizzle/0000_init-users.sql?raw";
 import profilesMigration from "../../drizzle/1003_profiles.sql?raw";
 import { testDatabaseUrl } from "./member-data-db";
+import { startDbPhase } from "./diagnostic-timing";
 
 export async function createUsersProfilesFixture(raw: string) {
   const url = testDatabaseUrl(raw); // Refuse query overrides before constructing a driver or running DDL.
@@ -22,37 +23,54 @@ export async function createUsersProfilesFixture(raw: string) {
   const dispose = async () => {
     if (disposed) return;
     disposed = true;
+    const finish = startDbPhase("users-profiles", "dispose");
+    let ok = false;
     try {
-      await Promise.all([legacy.end(), next.end()]);
-      if (created) await admin.unsafe(`DROP SCHEMA "${legacySchema}" CASCADE; DROP SCHEMA "${nextSchema}" CASCADE`);
-    } finally { await admin.end(); }
+      try {
+        await Promise.all([legacy.end(), next.end()]);
+        if (created) await admin.unsafe(`DROP SCHEMA "${legacySchema}" CASCADE; DROP SCHEMA "${nextSchema}" CASCADE`);
+      } finally { await admin.end(); }
+      ok = true;
+    } finally { finish(ok); }
   };
+  let finish = startDbPhase("users-profiles", "create");
   try {
     await admin.begin(async (sql) => {
       await sql.unsafe(`CREATE SCHEMA "${legacySchema}"; CREATE SCHEMA "${nextSchema}"`);
     });
     created = true;
+    finish();
+    finish = startDbPhase("users-profiles", "migrate");
     await next.unsafe(usersMigration);
     await next.unsafe(profilesMigration);
+    finish();
+    finish = startDbPhase("users-profiles", "seed");
     await legacy.unsafe(fixture);
+    finish();
   } catch (error) {
+    finish(false);
     await dispose();
     throw error;
   }
   const reset = async () => {
     if (disposed) throw new Error("Import fixture is disposed");
-    // Keep the fixture DDL stable; reset only rows and serial identities between tests.
-    await legacy.begin(async (sql) => {
-      await sql`delete from profiles`;
-      await sql`delete from users`;
-      await sql`select setval(pg_get_serial_sequence('users', 'id'), 1, false),
-        setval(pg_get_serial_sequence('profiles', 'id'), 1, false)`;
-      await sql.unsafe(fixture.slice(fixture.indexOf("INSERT INTO users ")));
-    });
-    await next.begin(async (sql) => {
-      await sql`delete from profiles`;
-      await sql`delete from users`;
-    });
+    const finish = startDbPhase("users-profiles", "reset");
+    let ok = false;
+    try {
+      // Keep the fixture DDL stable; reset only rows and serial identities between tests.
+      await legacy.begin(async (sql) => {
+        await sql`delete from profiles`;
+        await sql`delete from users`;
+        await sql`select setval(pg_get_serial_sequence('users', 'id'), 1, false),
+          setval(pg_get_serial_sequence('profiles', 'id'), 1, false)`;
+        await sql.unsafe(fixture.slice(fixture.indexOf("INSERT INTO users ")));
+      });
+      await next.begin(async (sql) => {
+        await sql`delete from profiles`;
+        await sql`delete from users`;
+      });
+      ok = true;
+    } finally { finish(ok); }
   };
   const scopedUrl = (schema: string) => {
     const scoped = new URL(url.href);
