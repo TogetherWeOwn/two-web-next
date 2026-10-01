@@ -65,8 +65,9 @@
     void copy();
   });
   link.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented || event.repeat || event.key !== " ") return;
+    if (event.defaultPrevented || event.key !== " ") return;
     event.preventDefault();
+    if (event.repeat) return;
     void copy();
   });
 })();

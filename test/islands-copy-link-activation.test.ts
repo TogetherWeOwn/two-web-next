@@ -81,7 +81,8 @@ describe("Copy-link activation admission", () => {
       const before = feedback(b);
       for (let i = 0; i < 3; i++) {
         const repeated = await b.activate("keydown", { repeat: true });
-        expect(repeated.preventDefault).not.toHaveBeenCalled();
+        expect(repeated.preventDefault).toHaveBeenCalledOnce();
+        expect(repeated.event.defaultPrevented).toBe(true);
         expect(feedback(b)).toEqual(before);
       }
       await b.activate("keydown");
@@ -115,7 +116,9 @@ describe("Copy-link activation admission", () => {
     const before = feedback(b);
     await b.activate("click", {}, true);
     await b.activate("keydown", {}, true);
-    await b.activate("keydown", { repeat: true });
+    const repeated = await b.activate("keydown", { repeat: true });
+    expect(repeated.preventDefault).toHaveBeenCalledOnce();
+    expect(repeated.event.defaultPrevented).toBe(true);
     expect(feedback(b)).toEqual(before);
   });
 
