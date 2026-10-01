@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { open, writeFile, readFile, mkdir, mkdtemp } from "node:fs/promises";
+import { open, writeFile, readFile, mkdir, mkdtemp, rename } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -94,6 +94,83 @@ export function buildPreviewLaunch(wrangler: string, dir: string, config: string
   };
 }
 
+type RemoteResult = Partial<import("./staging-checks").StagingResult> & {
+  ok: boolean; cleanup: boolean | "not_verified"; error?: string; path?: string;
+};
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const schemaPattern = /^w1_staging_[a-f0-9]{32}$/;
+const stages = ["connect", "create_schema", "setup", "a", "b", "c", "cleanup", "close"];
+
+// The proxy may return valid JSON that is not a Worker result. Copy only the
+// supported contract, never raw upstream fields/errors into sanitized evidence.
+export function parseRemoteResult(value: unknown): RemoteResult {
+  const invalid = () => { throw new Error("remote_preview_invalid_result"); };
+  if (!isRecord(value) || typeof value.ok !== "boolean" ||
+      ![true, false, "not_verified"].includes(value.cleanup as boolean | string)) return invalid();
+  const result: RemoteResult = { ok: value.ok, cleanup: value.cleanup as RemoteResult["cleanup"] };
+  if (value.error !== undefined) {
+    if (typeof value.error !== "string" || !["remote_staging_preflight_refused", "remote_staging_probe_failed"].includes(value.error)) return invalid();
+    result.error = value.error as string;
+  }
+  if (result.error === "remote_staging_preflight_refused") {
+    if (result.ok || result.cleanup !== true || value.schema !== undefined || value.created !== undefined) return invalid();
+    return result;
+  }
+  if (![true, false, "not_verified"].includes(value.created as boolean | string)) return invalid();
+  result.created = value.created as RemoteResult["created"];
+  if (value.schema !== undefined) {
+    if (typeof value.schema !== "string" || !schemaPattern.test(value.schema)) return invalid();
+    result.schema = value.schema;
+  } else if (result.created !== false) return invalid();
+  if (value.checks === undefined) {
+    // An unexpected pre-check exception has only the last schema state.
+    if (result.ok || result.error !== "remote_staging_probe_failed") return invalid();
+    return result;
+  }
+  const names = ["(a) FOR UPDATE", "(b) advisory xact lock", "(c) jsonb+GIN"];
+  const details = [
+    /^blocked_55P03=(true|false) second_seat_refused=(true|false) going=\d+$/,
+    /^concurrent_refused=(true|false) reacquired=(true|false)$/,
+    /^uses_gin=(true|false) rows=2001 hits=\d+$/,
+  ];
+  if (!Array.isArray(value.checks) || value.checks.length !== 3 || value.total !== 3 ||
+      !Array.isArray(value.teardownFailures) || value.teardownFailures.some((stage) => !["cleanup", "close"].includes(stage)) ||
+      (value.failedStage !== undefined && (typeof value.failedStage !== "string" || !stages.includes(value.failedStage)))) return invalid();
+  result.checks = value.checks.map((check: unknown, index) => {
+    if (!isRecord(check) || check.name !== names[index] || typeof check.pass !== "boolean" ||
+        typeof check.status !== "string" || !["passed", "failed", "not_attempted"].includes(check.status) || check.pass !== (check.status === "passed") ||
+        typeof check.detail !== "string" || !(details[index]!.test(check.detail) ||
+          (check.status === "failed" && check.detail === "stage_exception") ||
+          (check.status === "not_attempted" && check.detail === "not_attempted"))) return invalid();
+    return { name: names[index]!, pass: check.pass, status: check.status as "passed" | "failed" | "not_attempted", detail: check.detail };
+  });
+  const passed = result.checks.filter((check) => check.pass).length;
+  if (value.passed !== passed) return invalid();
+  result.passed = passed; result.total = 3;
+  result.teardownFailures = value.teardownFailures as NonNullable<RemoteResult["teardownFailures"]>;
+  if (value.failedStage !== undefined) result.failedStage = value.failedStage as RemoteResult["failedStage"];
+  if (value.version !== undefined) {
+    if (typeof value.version !== "string" || !/^PostgreSQL \d+(?:\.\d+)*(?: [^\r\n]{1,300})?$/.test(value.version)) return invalid();
+    result.version = value.version;
+  }
+  if (result.ok) {
+    if (passed !== 3 || result.created !== true || result.cleanup !== true || result.failedStage || result.error ||
+        result.teardownFailures.length || value.path !== "wrangler-remote-hyperdrive-neon-staging") return invalid();
+    result.path = "wrangler-remote-hyperdrive-neon-staging";
+  }
+  return result;
+}
+
+export function attemptedSchema(logText: string): string | undefined {
+  for (const match of [...logText.matchAll(/W1_SCHEMA (\{[^\n]+\})/g)].reverse()) {
+    try {
+      const state: unknown = JSON.parse(match[1]!);
+      if (isRecord(state) && typeof state.schema === "string" && schemaPattern.test(state.schema)) return state.schema;
+    } catch { /* A truncated marker is not evidence; retain the preceding valid one. */ }
+  }
+}
+
 export async function main() {
   // Only remote-checks.sh supplies a run-owned snapshot/manifest. Refuse direct
   // execution from a mutable working tree, before reading provider metadata.
@@ -124,7 +201,7 @@ export async function main() {
   const interrupt = () => abort.abort();
   process.once("SIGINT", interrupt); process.once("SIGTERM", interrupt);
   const timer = setTimeout(interrupt, 480_000);
-  let result: any = { ok: false, error: "remote_preview_failed", cleanup: "not_verified" };
+  let result: RemoteResult = { ok: false, error: "remote_preview_failed", cleanup: "not_verified" };
   try {
     const url = `http://127.0.0.1:${port}`;
     const headers = { "X-W1-Run-Key": runKey };
@@ -142,7 +219,7 @@ export async function main() {
     if (current.hyperdriveId !== receipt.hyperdriveId || JSON.stringify(current.origin) !== JSON.stringify(receipt.origin)) throw new Error("remote_binding_changed");
     requireRemoteReceipt(receipt);
     const response = await fetch(url + "/run", { method: "POST", headers, signal: abort.signal });
-    result = await response.json();
+    result = parseRemoteResult(await response.json());
     if (!response.ok) result.ok = false;
   } catch (err) {
     // Only known local/provider code strings, never arbitrary driver/network errors.
@@ -159,19 +236,14 @@ export async function main() {
     // after this runner exits, including when SIGKILL prevents this finally block.
     await log.close();
     if (result.cleanup === "not_verified") {
-      const logText = await readFile(logPath, "utf8");
-      const states = [...logText.matchAll(/W1_SCHEMA (\{[^\n]+\})/g)];
-      const last = states.at(-1)?.[1];
-      if (last) {
-        try {
-          const state = JSON.parse(last);
-          if (/^w1_staging_[a-f0-9]{32}$/.test(state.schema)) result.schema = state.schema;
-        } catch { /* No cleanup claim from truncated logs. */ }
-      }
+      result.schema = attemptedSchema(await readFile(logPath, "utf8")) ?? result.schema;
     }
   }
   const evidence = { revision, wranglerVersion, runtime: "ephemeral-remote-preview-not-deployed-worker", receipt, result };
-  await writeFile(path.join(dir, "result.json"), JSON.stringify(evidence, null, 2), { mode: 0o600 });
+  // Atomic publication lets the surviving supervisor distinguish a complete
+  // result from a runner killed midway through a write.
+  await writeFile(path.join(dir, "result.pending.json"), JSON.stringify(evidence, null, 2), { mode: 0o600 });
+  await rename(path.join(dir, "result.pending.json"), path.join(dir, "result.json"));
   console.log(JSON.stringify(evidence, null, 2));
   return result.ok === true && result.cleanup === true ? 0 : 1;
 }

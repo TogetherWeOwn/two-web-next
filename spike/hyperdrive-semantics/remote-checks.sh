@@ -135,6 +135,68 @@ def snapshot_source(repo, run_dir):
     return source, revision
 
 
+def final_result_exists(run_dir, revision):
+    # Node atomically publishes only a validated/allowlisted response. Still
+    # reject absent, truncated, wrong-revision or unsupported final envelopes.
+    try:
+        evidence = json.loads((run_dir / "result.json").read_text())
+        if not isinstance(evidence, dict) or set(evidence) != {"revision", "wranglerVersion", "runtime", "receipt", "result"}:
+            return False
+        result = evidence["result"]
+        if (evidence["revision"] != revision or evidence["runtime"] != "ephemeral-remote-preview-not-deployed-worker"
+                or not isinstance(evidence["receipt"], dict) or not isinstance(result, dict)
+                or type(result.get("ok")) is not bool
+                or not (type(result.get("cleanup")) is bool or result.get("cleanup") == "not_verified")
+                or "cleanup" not in result):
+            return False
+        allowed = {"ok", "cleanup", "created", "schema", "error", "checks", "passed", "total", "version", "failedStage", "teardownFailures", "path"}
+        if set(result) - allowed or ("schema" in result and not re.fullmatch(r"w1_staging_[a-f0-9]{32}", str(result["schema"]))):
+            return False
+        if "error" in result and not re.fullmatch(r"remote_[a-z_]+|cloudflare_read_denied_http_\d+_code_[\w]+", str(result["error"])):
+            return False
+        if result["ok"]:
+            return (result.get("cleanup") is True and result.get("created") is True
+                    and result.get("passed") == 3 and result.get("total") == 3
+                    and isinstance(result.get("checks"), list) and len(result["checks"]) == 3
+                    and all(isinstance(check, dict) and check.get("pass") is True for check in result["checks"]))
+        return "error" in result or "failedStage" in result or isinstance(result.get("checks"), list)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def persist_runner_failure(run_dir, source, revision, status):
+    if final_result_exists(run_dir, revision):
+        return False  # Preserve already complete check/cleanup evidence verbatim.
+    result = {"ok": False, "error": "remote_runner_failed", "cleanup": "not_verified"}
+    try:
+        text = (run_dir / "private-wrangler.log").read_text(errors="replace")
+        for marker in reversed(re.findall(r"W1_SCHEMA (\{[^\n]+\})", text)):
+            try:
+                state = json.loads(marker)
+                schema = state.get("schema") if isinstance(state, dict) else None
+                if isinstance(schema, str) and re.fullmatch(r"w1_staging_[a-f0-9]{32}", schema):
+                    result["schema"] = schema
+                    break
+            except ValueError:
+                pass
+    except OSError:
+        pass
+    evidence = {"revision": revision, "runtime": "ephemeral-remote-preview-not-deployed-worker",
+                "runnerExitStatus": status, "result": result}
+    try:
+        version = json.loads((source / "node_modules/wrangler/package.json").read_text())["version"]
+        if isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version):
+            evidence["wranglerVersion"] = version
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    pending = run_dir / "supervisor-result.pending.json"
+    pending.write_text(json.dumps(evidence, indent=2))
+    pending.chmod(0o600)
+    os.replace(pending, run_dir / "result.json")
+    print(json.dumps(evidence, indent=2))
+    return True
+
+
 def main(repo, scratch):
     os.umask(0o077)
     enable_subreaper()  # Refuse unsupported teardown before any provider access.
@@ -156,8 +218,15 @@ def main(repo, scratch):
     env = {**build_env, "CLOUDFLARE_API_TOKEN": os.environ.get("CLOUDFLARE_API_TOKEN", ""),
            "PAPERCLIP_AGENT_ID": os.environ.get("PAPERCLIP_AGENT_ID", ""),
            "W1_REMOTE_RUN_DIR": str(run_dir), "W1_SOURCE_REVISION": revision}
-    return run_bounded(["node", str(runner), "--run"], source, env,
-                       max(0, deadline - time.monotonic()))
+    status = 1
+    try:
+        status = run_bounded(["node", str(runner), "--run"], source, env,
+                             max(0, deadline - time.monotonic()))
+    finally:
+        # After reaping, the surviving owner preserves exact-schema uncertainty
+        # even when Node's finally/result write never ran. Process death is not DROP.
+        missing = persist_runner_failure(run_dir, source, revision, status)
+    return status or (1 if missing else 0)
 
 
 if __name__ == "__main__":

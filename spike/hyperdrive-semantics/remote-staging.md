@@ -115,7 +115,16 @@ errors/tokens. Driver failures expose only a fixed code plus owned-schema and
 cleanup state. Wrangler inherits the runner's supervisor-owned process group
 (no detached preview session). After any invocation outcome, abrupt Node exit,
 or forced timeout, the independent supervisor terminates that group (TERM,
-bounded wait, KILL) and reaps orphaned descendants. Killing local processes is
+bounded wait, KILL) and reaps orphaned descendants. Worker JSON is validated before
+replacing the canonical unknown-cleanup failure; null, non-object, malformed and
+incomplete responses cannot erase attempted-schema recovery. Only supported
+check/error fields are copied into evidence, never arbitrary upstream fields.
+The runner atomically publishes `result.json`. After reaping, the supervisor
+preserves an existing valid final result; otherwise it atomically writes a
+sanitized failure with revision, exit status, Wrangler version when available,
+cleanup `not_verified` and the last valid exact schema marker. Even a runner
+that exits zero without a valid final result makes the command fail.
+Killing local processes is
 **not database cleanup proof**. SIGKILL of the supervisor itself, host death, or
 an incomplete result also cannot prove cleanup. Preserve the exact attempted
 schema if available, mark cleanup NOT VERIFIED, and stop before further runs.
@@ -137,7 +146,8 @@ All three live criteria remain NOT VERIFIED until an actual result exists.
 
 ```sh
 ./node_modules/.bin/vitest run test/remote-staging.test.ts \
-  test/remote-runner-isolation.test.ts test/staging-hyperdrive.test.ts \
+  test/remote-runner-isolation.test.ts test/remote-runner-evidence.test.ts \
+  test/staging-hyperdrive.test.ts \
   test/staging-failure-evidence.test.ts test/postgres-staging-options.test.ts \
   test/hyperdrive-probe.test.ts test/worker-runner.test.ts
 W1_AGENT_TESTDB=1 ./node_modules/.bin/vitest run test/staging-fixed-agent-testdb.test.ts

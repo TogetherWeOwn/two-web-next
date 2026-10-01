@@ -1,7 +1,7 @@
 // Optional direct-agent-testdb control. Never Hyperdrive or Neon evidence.
 import { expect, it, vi } from "vitest";
 import postgres from "postgres";
-import { runFixedStagingChecks } from "../spike/hyperdrive-semantics/staging-checks";
+import { runFixedStagingChecks, StagingCheckFailure } from "../spike/hyperdrive-semantics/staging-checks";
 
 // Pin ALL options; no connection URL/environment override is accepted.
 const open = () => postgres({
@@ -30,7 +30,7 @@ it.skipIf(!enabled)("fixed prepared checks clean their agent-testdb schema", asy
 
 it.skipIf(!enabled)("setup failure drops only the owned agent-testdb schema", async () => {
   let ownedSchema = "";
-  await expect(runFixedStagingChecks(() => {
+  const failure = await runFixedStagingChecks(() => {
     const sql = open();
     const unsafe = sql.unsafe.bind(sql);
     vi.spyOn(sql, "unsafe").mockImplementation((...args) => {
@@ -40,7 +40,14 @@ it.skipIf(!enabled)("setup failure drops only the owned agent-testdb schema", as
       return unsafe(...args);
     });
     return sql;
-  })).rejects.toThrow("forced_offline_setup_failure");
+  }).catch((error: unknown) => error);
+  // Independently verify deletion even if the sanitized failure contract regresses.
   expect(ownedSchema).toMatch(/^w1_staging_[a-f0-9]{32}$/);
   await expectDropped(ownedSchema);
+  expect(failure).toBeInstanceOf(StagingCheckFailure);
+  expect(failure).toMatchObject({ message: "staging_probe_failed", result: {
+    ok: false, schema: ownedSchema, created: true, cleanup: true,
+    failedStage: "setup", passed: 0, total: 3, teardownFailures: [],
+  } });
+  expect(JSON.stringify(failure)).not.toContain("forced_offline_setup_failure");
 }, 30_000);

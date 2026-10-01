@@ -243,6 +243,62 @@ except RuntimeError as error:
   });
 });
 
+describe("supervisor failure evidence (benign local processes only)", () => {
+  it.each(["SIGKILL", "deadline", "invalid artifact", "valid artifact", "zero exit"])("persists sanitized evidence after %s", (kind) => {
+    const dir = fixture(); const script = supervisor(dir);
+    const result = python(script, `
+revision = "c" * 40
+schema = "w1_staging_" + "d" * 32
+captured = {}
+g = n["main"].__globals__
+original_bounded = g["run_bounded"]
+def snapshot(repo, run_dir):
+    captured["run_dir"] = run_dir
+    source = run_dir / "fixture-source"
+    (source / "node_modules/wrangler").mkdir(parents=True)
+    (source / "node_modules/wrangler/package.json").write_text(json.dumps({"version": "4.143.1"}))
+    return source, revision
+expected = {"revision": revision, "wranglerVersion": "4.143.1",
+            "runtime": "ephemeral-remote-preview-not-deployed-worker",
+            "receipt": {}, "result": {"ok": False, "error": "remote_staging_preflight_refused", "cleanup": True}}
+def bounded(command, cwd, env, timeout_s, grace_s=10, output=None):
+    if command[0].endswith("/esbuild"):
+        runner = pathlib.Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--outfile=")))
+        runner.write_text(r'''import { writeFileSync } from "node:fs";
+import path from "node:path";
+const dir = process.env.W1_REMOTE_RUN_DIR;
+writeFileSync(path.join(dir, "private-wrangler.log"), "private synthetic-token-not-evidence\\nW1_SCHEMA " + JSON.stringify({schema: "%s", created: true, cleanup: "not_verified"}) + "\\nW1_SCHEMA {\\"schema\\":\\"invalid-synthetic-token-not-evidence\\"}\\n");
+if ("%s" === "invalid artifact") writeFileSync(path.join(dir, "result.json"), "null");
+if ("%s" === "valid artifact") writeFileSync(path.join(dir, "result.json"), %s);
+if ("%s" === "deadline") { process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); }
+else if ("%s" !== "zero exit") process.kill(process.pid, "SIGKILL");
+''' % (schema, sys.argv[3], sys.argv[3], json.dumps(json.dumps(expected)), sys.argv[3], sys.argv[3]))
+        return 0
+    return original_bounded(command, cwd, env, timeout_s=0.5, grace_s=0.1, output=output)
+g["snapshot_source"] = snapshot
+g["run_bounded"] = bounded
+import contextlib, io
+with contextlib.redirect_stdout(io.StringIO()):
+    status = n["main"](pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[2]))
+run_dir = captured["run_dir"]
+evidence = json.loads((run_dir / "result.json").read_text())
+try:
+    os.waitpid(-1, os.WNOHANG)
+    reaped = False
+except ChildProcessError:
+    reaped = True
+print(json.dumps({"status": status, "evidence": evidence, "expected": expected,
+                  "reaped": reaped, "mode": (run_dir / "result.json").stat().st_mode & 0o777}))`, [dir, kind]);
+    expect(result.status).toBe(kind === "deadline" ? 124 : kind === "zero exit" ? 1 : 137);
+    expect(result.reaped).toBe(true);
+    expect(result.mode).toBe(0o600);
+    if (kind === "valid artifact") expect(result.evidence).toEqual(result.expected);
+    else expect(result.evidence).toMatchObject({ revision: "c".repeat(40), wranglerVersion: "4.143.1",
+      runnerExitStatus: kind === "zero exit" ? 0 : result.status, result: { ok: false, cleanup: "not_verified", schema: "w1_staging_" + "d".repeat(32) } });
+    expect(JSON.stringify(result.evidence)).not.toContain("synthetic-token-not-evidence");
+  });
+});
+
 describe("independent timeout process ownership (benign local processes only)", () => {
   it.each(["supervisor deadline", "GNU timeout SIGKILL of runner"])("kills and actually reaps all descendants after %s", (kind) => {
     const dir = fixture(); const script = supervisor(dir);
