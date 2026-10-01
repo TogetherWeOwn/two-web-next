@@ -87,8 +87,9 @@ function fixture() {
   root.setAttribute("data-member-id", "100000000000000001");
   const heading = node(root, "h2");
   heading.setAttribute("id", "edit-heading");
-  const edit = node(root, "button", "profile-edit-again", "Edit your profile");
-  edit.hidden = true;
+  const editControl = node(root, "div", "profile-edit-control");
+  editControl.hidden = true;
+  const edit = node(editControl, "button", "profile-edit-again", "Edit your profile");
   const form = Object.assign(node(root, "form", "profile-form"), {
     elements: Object.fromEntries(Object.entries({ bio: "Original bio", games_text: "Chess", timezone: "UTC", website: "", formOpenedAt: "1800000000000", _method: "PATCH" }).map(([key, value]) => {
       const field = node(root.querySelector("form")!, key === "bio" || key === "games_text" ? "textarea" : "input");
@@ -109,7 +110,7 @@ function fixture() {
     timers.splice(0).forEach((callback) => callback());
   };
   const notice = (id: string) => root.querySelector(`[data-testid="${id}"]`);
-  return { document, root, name, heading, bio, games, timezone, form, edit, fetch, requests, enter, cancel, notice };
+  return { document, root, name, heading, bio, games, timezone, form, edit, editControl, fetch, requests, enter, cancel, notice };
 }
 
 describe("shipped member-profile edit lifecycle", () => {
@@ -120,14 +121,14 @@ describe("shipped member-profile edit lifecycle", () => {
     f.requests[0]!.resolve(success());
     await flush();
     expect(f.form.hidden).toBe(true);
-    expect(f.edit.hidden).toBe(false);
+    expect(f.editControl.hidden).toBe(false);
     expect(f.bio.textContent).toBe("First bio");
     expect(f.games.querySelectorAll("li").map((li) => li.textContent)).toEqual(["Go", "Chess"]);
     expect(f.timezone.textContent).toBe("Timezone: Europe/London");
     expect(f.document.activeElement).toBe(f.notice("profile-saved"));
     f.edit.dispatch("click");
     expect(f.form.hidden).toBe(false);
-    expect(f.edit.hidden).toBe(true);
+    expect(f.editControl.hidden).toBe(true);
     expect(f.notice("profile-saved")).toBeNull();
     expect(f.document.activeElement).toBe(f.heading);
     f.enter({ bio: "Second bio", games_text: "  Go  \nGo\n\nChess ", timezone: "" });
@@ -160,7 +161,7 @@ describe("shipped member-profile edit lifecycle", () => {
     await flush();
     expect(f.form.hidden).toBe(false);
     expect(f.bio.textContent).toBe("Original bio");
-    expect(f.edit.hidden).toBe(true);
+    expect(f.editControl.hidden).toBe(true);
     for (const id of ["profile-saved", "profile-error", "profile-save-failed"]) expect(f.notice(id)).toBeNull();
     expect(f.document.activeElement).toBe(f.name);
     expect(f.fetch).toHaveBeenCalledOnce();
@@ -240,7 +241,7 @@ describe("shipped member-profile edit lifecycle", () => {
     f.requests[0]!.resolve(success());
     await flush();
     expect(f.form.hidden).toBe(false);
-    expect(f.edit.hidden).toBe(true);
+    expect(f.editControl.hidden).toBe(true);
     expect(f.form.elements.bio!.value).toBe("Newer unsaved draft");
     expect(f.bio.textContent).toBe("Accepted bio");
     f.cancel();
@@ -305,7 +306,9 @@ describe("shipped member-profile edit lifecycle", () => {
     const html = jsx(ProfilePage, { member: { id: "100000000000000001", username: "Fixture", avatar: null, bio: "Original bio", games: ["Chess"], timezone: "UTC" }, isOwner: true, appUrl: "https://next.example.test" }).toString();
     expect(html).toMatch(/<form method="post" action="\/members\/100000000000000001" data-testid="profile-form">/);
     expect(html).toContain('name="_method" value="PATCH"');
-    expect(html).toMatch(/<button[^>]*type="button"[^>]*data-testid="profile-edit-again"[^>]*hidden/);
+    // Hide the unstyled wrapper: .btn's display:inline-flex overrides the
+    // browser's hidden rule if hidden is put on the styled button itself.
+    expect(html).toMatch(/<div data-testid="profile-edit-control" hidden=""><button class="btn" type="button" data-testid="profile-edit-again">/);
     expect(html).toContain('data-testid="profile-bio"');
     expect(html).toContain('data-testid="profile-games"');
     expect(html).toContain('data-testid="profile-timezone"');

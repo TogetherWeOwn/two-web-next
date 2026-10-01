@@ -16,6 +16,7 @@
   if (!form) return;
   var id = root.getAttribute("data-member-id");
   var edit = root.querySelector('[data-testid="profile-edit-again"]');
+  var editControl = root.querySelector('[data-testid="profile-edit-control"]');
   var inflight = false;
   var generation = 0;
 
@@ -56,8 +57,8 @@
       list.appendChild(content);
     }
     // If a newer draft was typed while saving, keep it reachable too.
-    form.hidden = unchanged && !!edit;
-    if (edit) edit.hidden = !form.hidden;
+    form.hidden = unchanged && !!edit && !!editControl;
+    if (editControl) editControl.hidden = !form.hidden;
   }
 
   function control(v) {
@@ -134,7 +135,7 @@
   if (edit) edit.addEventListener("click", function () {
     clearNotices();
     form.hidden = false;
-    edit.hidden = true;
+    if (editControl) editControl.hidden = true;
     var heading = root.querySelector('[id="edit-heading"]');
     if (heading) heading.focus();
   });
@@ -145,7 +146,7 @@
     var cancelled = ++generation;
     inflight = false;
     form.hidden = false;
-    if (edit) edit.hidden = true;
+    if (editControl) editControl.hidden = true;
     clearNotices();
     setTimeout(function () {
       if (cancelled !== generation) return;

@@ -104,7 +104,9 @@ export const ProfilePage: FC<{
         {isOwner ? (
           <section aria-labelledby="edit-heading" data-testid={PROFILE_EDIT_TESTID} {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }} data-member-id={member.id}>
             <h2 id="edit-heading" tabindex="-1">Edit your profile</h2>
-            <button class="btn" type="button" data-testid="profile-edit-again" hidden>Edit your profile</button>
+            <div data-testid="profile-edit-control" hidden>
+              <button class="btn" type="button" data-testid="profile-edit-again">Edit your profile</button>
+            </div>
             {errors && Object.keys(errors).length > 0 ? (
               <div role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}><ul>{Object.values(errors).map((e) => <li>{e}</li>)}</ul></div>
             ) : null}
