@@ -18,19 +18,20 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
+    theme?: "home";
   }>
-> = ({ title, canonical, shareTitle, shareDescription, robots, children }) => (
+> = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <meta name="theme-color" content="#0b0714" />
+      <meta name="theme-color" content="#151720" />
       <link rel="manifest" href="/site.webmanifest" />
       <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
       <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
       {robots ? <meta name="robots" content={robots} /> : null}
       <title>{title}</title>
-      <meta name="description" content="Together We Own: a close-knit adult gaming community, founded 1998." />
+      <meta name="description" content={shareDescription || "Together We Own: a close-knit adult gaming community, founded 1998."} />
       {canonical ? (
         <>
           <link rel="canonical" href={canonical} />
@@ -46,8 +47,14 @@ export const Layout: FC<
       ) : null}
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
+      {theme === "home" ? (
+        <>
+          <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+          <link rel="stylesheet" href="/theme.css" />
+        </>
+      ) : null}
     </head>
-    <body><SkipLink />{children}</body>
+    <body class={theme === "home" ? "homepage-theme" : undefined}><SkipLink />{children}</body>
   </html>
 );
 
@@ -192,27 +199,39 @@ export const Home: FC<{
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
     shareDescription="We spent most of our life private. Now you can just turn up."
+    theme="home"
   >
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav aria-label="Primary">
+    <header class="bar site-header">
+      <nav class="main-nav" aria-label="Primary">
+        <a href="/" aria-current="page">Home</a>
+        <a href="/events">Events</a>
+      </nav>
+      <a class="brand" href="/" aria-label="Together We Own homepage">
+        <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+      </a>
+      <nav class="header-account" aria-label="Account">
         {session ? (
           <form method="post" action="/logout">
+            <span class="account-caption">Signed in</span>
             <span class="who">{session.username}</span>
             <button type="submit" class="link">Sign out</button>
           </form>
         ) : (
-          <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+          <div>
+            <span class="account-caption">Welcome, guest</span>
+            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+          </div>
         )}
       </nav>
     </header>
     <main id="main" tabindex={-1}>
       {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
-      <section class="hero">
+      <section class="hero" aria-labelledby="home-heading">
+        <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
         <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
-        <h1>The lobby is open.</h1>
+        <h1 id="home-heading">The lobby is open.</h1>
         <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-        <p>Small enough that people notice when you come back.</p>
         {session?.member ? (
           <a class="btn" href={inviteUrl}>Open Discord</a>
         ) : (
@@ -258,15 +277,22 @@ export const Home: FC<{
           </div>
         </section>
       ) : null}
-      <section>
-        <h2>No application. No interview.</h2>
-        <p>Show up a few times. Play. Become a Member. The ladder records trust and time, not grind.</p>
-      </section>
-      <section>
-        <h2>Not a crowd. A place that knows your name.</h2>
-        <p>The community is voice-first. Game nights get posted in the Discord first.</p>
-      </section>
-      <section aria-label="Community ladder">
+      <div class="community-grid">
+        <section class="community-intro" aria-labelledby="community-heading">
+          <h2 id="community-heading">No application. No interview.</h2>
+          <p>Show up a few times. Play. Become a Member. The ladder records trust and time, not grind.</p>
+          <p>Small enough that people notice when you come back.</p>
+          <h3>Not a crowd. A place that knows your name.</h3>
+          <p>The community is voice-first. Game nights get posted in the Discord first.</p>
+        </section>
+        <section class="discord-preview" aria-labelledby="discord-heading">
+          <h2 id="discord-heading">In the Discord</h2>
+          <p>Visit the join page for the server preview and ways to join.</p>
+          <p><a href="/join#join-heading" data-testid="home-widget-link">View the Discord lobby</a></p>
+          <p><a href="/discord" data-testid="home-discord-invite">Open Discord</a></p>
+        </section>
+      </div>
+      <section aria-label="Community ladder" class="community-ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
         <p>Ranks stack — a Veteran still holds everything below.</p>
         <dl class="facts rank-stack" data-testid="rank-stack">
