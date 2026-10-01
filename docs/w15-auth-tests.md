@@ -54,8 +54,8 @@ ported file is covered. Destinations are relative to this repository.
 | Legacy test file | Disposition and Next proof / explicit omissions |
 |---|---|
 | `Feature/Auth/DiscordLoginTest.php` (90-506) | **Adapted:** `test/app.test.ts`, `test/auth-acceptance.test.ts`, `test/roster.test.ts`, `test/admin.test.ts`, `test/profiles.test.ts`: scopes/state, identity/display-name/roster, moderator grant/fail-closed roles, auth failure, logout and gates. **Dropped:** Socialite, remember-me cookie, Laravel flash/translation mechanics. **Gap:** exact ordinary-login recovery copy and arbitrary exception-message log redaction are not proven by redirect tests. |
-| `Feature/Auth/OAuthReplayAndThrottleTest.php` (88-246) | **Partial port:** missing/mismatched state rejected before exchange in `test/app.test.ts`, `test/auth-acceptance.test.ts`, `test/join.test.ts`; Worker mismatch proof in `test/auth-worker.test.ts`. **Gap:** browser deletion cookies are not server-side single-use state enforcement; replaying the original signed state cookie is not claimed safe. Login/QA/logout throttles defer to [TOG-9897](/TOG/issues/TOG-9897) (N5). |
-| `Feature/Auth/SessionFixationTest.php` (125,140,157) | **Adapted:** random opaque tokens, authenticated-view rotation, old-cookie rejection and logout replay in `test/app.test.ts`, `test/auth-acceptance.test.ts`, `test/e2e-db.test.ts`, `test/auth-worker.test.ts`. **Dropped:** issuing a new Laravel guest session ID after logout. **Gap:** revoking an already-issued pre-login/pre-join session on a fresh login is not established by token uniqueness. |
+| `Feature/Auth/OAuthReplayAndThrottleTest.php` (88-246) | **Partial port:** missing/mismatched state rejected before exchange in `test/app.test.ts`, `test/auth-acceptance.test.ts`, `test/join.test.ts`; Worker mismatch proof in `test/auth-worker.test.ts`. **Implemented, review pending ([TOG-10354](/TOG/issues/TOG-10354)):** `test/auth-admission.test.ts` competes callbacks with the ORIGINAL signed cookies while the first exchange is blocked; only one exchange/join/session/attempt occurs. `test/oauth-journeys.test.ts` proves independent Postgres-client admission and expiry. Browser cookie deletion alone remains insufficient. Login/QA/logout throttles defer to [TOG-9897](/TOG/issues/TOG-9897) (N5). |
+| `Feature/Auth/SessionFixationTest.php` (125,140,157) | **Adapted:** random opaque tokens, authenticated-view rotation, old-cookie rejection and logout replay in `test/app.test.ts`, `test/auth-acceptance.test.ts`, `test/e2e-db.test.ts`, `test/auth-worker.test.ts`. **Dropped:** issuing a new Laravel guest session ID after logout. **Implemented, review pending ([TOG-10354](/TOG/issues/TOG-10354)):** `test/auth-admission.test.ts` proves fresh auth/join invalidates the supplied active token, including already-member re-entry; denial/exchange failure preserve it without minting or elevating. `test/oauth-journeys.test.ts` proves replacement-insert failure rolls back prior-token revocation in real Postgres. |
 | `Feature/SessionCookieFlagsTest.php` (17,51,61) | **Ported:** emitted `__Host-`, Secure, HttpOnly, Lax, Path=/, absent Domain in `test/auth-acceptance.test.ts`; TTL and runtime login also covered. **Dropped:** `.env.example` PHP cookie settings and nginx TLS-proxy harness; Workers receives HTTPS directly. |
 | `Feature/Auth/ReturnToPageTest.php` (107-231) | **Ported/adapted:** ordinary-login next/intended precedence (107-165), hostile values, one-shot consumption and denial/failure clearing in `test/login-return.test.ts` and `test/auth-worker.test.ts`; join safe return and landing-link propagation in `test/join.test.ts`. Event/calendar CTA integration (223,231) is covered by the guest/member `data-testid="signin"` (carrying the page as `?next=`) and `event-join-pitch`/`discord-join` cases in `test/login-return.test.ts`, plus stale-restart clearing, NUL rejection and failed-join recovery pins. **Dropped:** Laravel session-key mechanics (`login_next`, `url.intended`) become `__Host-two_login_*` signed cookies; the precedence contract is what is pinned. |
 | `Unit/SafeRedirectTest.php` (14,21,42) | **Ported:** `safeNext` tests in `test/join.test.ts`: rooted paths/query strings accepted; absolute/protocol-relative/backslash/scheme/whitespace/non-string inputs rejected. The port exposed raw whitespace acceptance; the minimal guard now rejects it before URL normalization. Control bytes (notably NUL, which would 500 in the callback `Location` header) are rejected too — pinned via the hostile-next table in `test/login-return.test.ts`. |
@@ -68,7 +68,7 @@ ported file is covered. Destinations are relative to this repository.
 | `Feature/Auth/CheckDiscordModeratorsTest.php` (65-168) | **Dropped from W15 request tests / deferred:** deploy-time Artisan role-audit command belongs to W16 pre-flip verification (`docs/parity.md:98`); runtime role recompute is covered separately. |
 | `Feature/Join/OneClickJoinTest.php` (58-180) | **Adapted:** `test/join.test.ts`, `test/auth-worker.test.ts`: exact scopes, synchronous add, sign-in, source/outcome, safe next, invite recovery; no queued token. Moderator is recomputed, not blindly preserved. The legacy profile confirmation/re-invite UI is the `data-testid="join-result"` banner (added/already-member copy plus `data-testid="reinvite-link"`) pinned in `test/login-return.test.ts`. |
 | `Feature/Join/JoinAttemptFunnelTest.php` (69-266) | **Ported/adapted:** `test/join.test.ts`: added/already-member/denied/error/degraded rows, attribution, safe columns and live test-container persistence. Direct Discord PUT has no bot request ID, so null is asserted. Funnel stats/admin gate are covered by `test/admin-reads.test.ts` (W12), not duplicated. |
-| `Feature/Join/JoinDenialMatrixTest.php` (71-191) | **Partial port:** `test/join.test.ts`: refused bot=no member session; denial/generic errors=no exchange; exchange outage; already-member and safe return. **Gap:** duplicate-callback idempotence with the original signed cookies, blank-bot no-call guarantee and signed-in re-entry semantics are not proven by these cases. |
+| `Feature/Join/JoinDenialMatrixTest.php` (71-191) | **Partial port:** `test/join.test.ts`: refused bot=no member session; denial/generic errors=no exchange; exchange outage; already-member and safe return. **Implemented, review pending ([TOG-10354](/TOG/issues/TOG-10354)):** `test/auth-admission.test.ts` adds original-cookie duplicate admission, blank-bot no-OAuth/no-exchange/no-member-session behavior, already-member re-entry, and bot-refusal no-elevation contracts against memory and isolated Postgres. Invalid/unissued/replayed state does not append a terminal attempt; an admitted denial/failure appends at most one. |
 | `Feature/Join/JoinCallbackFailureTest.php` (39,77,127) | **Partial adaptation:** `test/join.test.ts`: invalid state recovery, exchange outage503, safe static invite and cleared cookies. This class-based PHPUnit test is included in the inventory even though it lacks Pest `it()` declarations. **Gap:** expired invalid_grant immediate-retry classification versus infrastructure503 is not yet matched. |
 | `Feature/Join/AccessTokenIsNeverLoggedTest.php` (13) | **Partial port:** persisted-token hygiene in `test/join.test.ts`; token is confined to intercepted outbound Discord requests in `test/auth-worker.test.ts`. **Gap:** arbitrary nested exception-message redaction across all log channels is stronger and is not proven by table-hygiene tests. |
 | `Feature/Join/AlreadyMemberReinviteTest.php` (24,37,45) | **Adapted:** the already-member join flashes `join_result` and the next render of `/`, `/join`, `/profile`, the `/events` calendar, or the `/e/{key}` join landing shows `data-testid="join-result"` with `data-testid="reinvite-link"` → `/discord` (which resolves to the live invite) — pinned in `test/login-return.test.ts` and `test/auth-worker.test.ts`. One-shot: the second render carries no banner, and island fragment swaps never consume the pending flash. |
@@ -124,6 +124,29 @@ this slice is not a load test. Browser focus/accessibility and staging deploymen
 are **not verified** by Miniflare HTML/API tests. No staging/production database
 is used, including for verification.
 
+## Admission state retention and failure contract
+
+[TOG-10354](/TOG/issues/TOG-10354) adds `web_oauth_journeys` alongside the
+runtime session-store DDL. Only SHA-256 state hashes, `auth`/`join` flow,
+server expiry and consumption time persist; no code, access token or raw state.
+A journey expires ten minutes after server issuance regardless of browser cookie
+retention. An atomic conditional UPDATE admits one callback across isolates.
+Consumption precedes exchange, terminal-attempt writes and session issuance,
+including valid denial and incomplete-code callbacks. Tombstones remain through
+expiry. Both starts sweep expired rows opportunistically; idle expired rows can
+remain until the next start, but cannot authorize anything before or after GC.
+A missing/unavailable admission store never permits an upstream exchange.
+
+Fresh successful authentication atomically inserts the new session and revokes
+the supplied signed prior token. Denial/exchange failure does not touch the prior
+session. Failed one-click join issues no session; failed ordinary auto-join retains
+the recorded Next divergence of an identified non-member session, always with
+`member=false, moderator=false`, replacing the prior token. The 30-day rotating
+TTL and POST-only QA contract are unchanged. Tests are request/Worker and isolated
+Postgres evidence; browser proof, exact-head CI and independent auth/security
+review remain required before this implementation is called delivered. Other
+mapping gaps and production/cutover holds remain unchanged.
+
 ## Reproduce
 
 Install development tools even if the agent environment defaults to omitting dev
@@ -135,7 +158,7 @@ npm run typecheck
 # Only agent-testdb locally, or the workflow's own Postgres service container:
 export DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next_w15_tog10114
 npm run db:migrate
-npm test -- test/app.test.ts test/auth-acceptance.test.ts test/auth-worker.test.ts test/sessions.test.ts test/e2e-db.test.ts test/join.test.ts
+npm test -- test/app.test.ts test/auth-acceptance.test.ts test/auth-admission.test.ts test/oauth-journeys.test.ts test/auth-worker.test.ts test/sessions.test.ts test/e2e-db.test.ts test/join.test.ts
 ```
 
 Use an isolated test-container database; never use a deployment URL.

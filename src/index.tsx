@@ -188,15 +188,17 @@ async function issueSession(
     console.warn("roster upsert failed", { user: row.userId, error: String(err) });
   }
   const token = newSessionToken();
-  await store.create({
+  const replacement = {
     tokenHash: await hashToken(token),
-    userId: row.userId,
-    username: row.username,
-    avatar: row.avatar,
-    member: row.member,
-    moderator: row.moderator,
+    ...row,
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
-  });
+  };
+  const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+  if (typeof prior === "string" && prior.startsWith("two_")) {
+    await store.replace(await hashToken(prior), replacement);
+  } else {
+    await store.create(replacement);
+  }
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -441,6 +443,10 @@ registerErrorHandlers(app);
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
+  const store = await storeFor(c).catch(() => null);
+  if (!store) return c.redirect("/?n=signin_failed", 302);
+  await store.journeys.sweepExpired();
+  if (!await store.journeys.issue(await hashToken(state), "auth")) return c.redirect("/?n=signin_failed", 302);
   // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
   // OAuth round trip in a signed cookie; a hostile value leaves no trace.
   await rememberLoginNext(c, c.req.query("next"));
@@ -464,7 +470,10 @@ app.get("/auth/discord/callback", async (c) => {
   const returnTo = await consumeLoginReturn(c);
   const code = c.req.query("code");
   const state = c.req.query("state");
-  if (!code || !state || !expected || state !== expected) return c.redirect("/?n=signin_failed", 302);
+  if (!state || typeof expected !== "string" || state !== expected) return c.redirect("/?n=signin_failed", 302);
+  const store = await storeFor(c).catch(() => null);
+  const admitted = store && await store.journeys.consume(await hashToken(state), "auth").catch(() => false);
+  if (!admitted || !code || c.req.query("error")) return c.redirect("/?n=signin_failed", 302);
 
   let accessToken: string;
   let user;
@@ -478,21 +487,20 @@ app.get("/auth/discord/callback", async (c) => {
 
   // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and
   // never stored.
-  const join = await addGuildMember(c.env.DISCORD_GUILD_ID, user.id, accessToken, c.env.DISCORD_BOT_TOKEN).catch(
-    () => "failed" as const,
-  );
+  const join = c.env.DISCORD_BOT_TOKEN.trim() === "" ? "failed" : await addGuildMember(
+    c.env.DISCORD_GUILD_ID, user.id, accessToken, c.env.DISCORD_BOT_TOKEN,
+  ).catch(() => "failed" as const);
   if (join === "failed") console.warn("guild auto-join failed", { user: user.id });
 
   // Moderator recompute: roles re-read with the bot token against snowflake IDs
   // (never names). A failed lookup fails closed on the flag, never on sign-in.
-  const moderator = await recomputeModerator({
+  const moderator = join === "failed" ? false : await recomputeModerator({
     guildId: c.env.DISCORD_GUILD_ID,
     userId: user.id,
     botToken: c.env.DISCORD_BOT_TOKEN,
     moderatorRoleIds: parseModeratorRoleIds(c.env.DISCORD_MODERATOR_ROLE_IDS),
   });
 
-  const store = await storeFor(c);
   await issueSession(c, store, {
     userId: user.id,
     username: user.global_name ?? user.username,

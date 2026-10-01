@@ -21,7 +21,7 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import { inviteDestination } from "../invite";
 import { recordJoinResult } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
-import type { SessionStore, Sql } from "../sessions";
+import { hashToken, type SessionStore, type Sql } from "../sessions";
 import {
   JOIN_THROTTLE_BUCKET,
   JOIN_THROTTLE_PER_MINUTE,
@@ -132,11 +132,17 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
   });
 
   app.get("/join/discord", async (c) => {
+    // An unconfigured bot cannot accept a handoff. Do not send the browser to
+    // Discord or mint a journey that could later produce a member session.
+    if (c.env.DISCORD_BOT_TOKEN.trim() === "") return c.redirect("/join", 302);
     const limited = await throttled(c);
     if (limited) return limited;
     const source = sanitizeSource(c.req.query("source"));
     const next = safeNext(c.req.query("next"));
     const state = crypto.randomUUID();
+    const store = await hooks.storeFor(c);
+    await store.journeys.sweepExpired();
+    if (!await store.journeys.issue(await hashToken(state), "join")) return c.redirect("/join", 302);
     if (source) {
       await setSignedCookie(c, JOIN_SOURCE_COOKIE, source, c.env.SESSION_SECRET, {
         path: "/", secure: true, httpOnly: true, sameSite: "Lax", maxAge: JOURNEY_TTL_SECONDS,
@@ -180,13 +186,15 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     clearJourney();
     const code = c.req.query("code");
     const state = c.req.query("state");
+    const store = state && expected && state === expected ? await hooks.storeFor(c).catch(() => null) : null;
+    const admitted = store && await store.journeys.consume(await hashToken(state!), "join").catch(() => false);
 
     // They pressed Cancel on the consent screen, or Discord answered the
     // approval with an error: nothing to exchange. Legacy renders the recovery
     // page (not a redirect) and never echoes Discord's error_description.
     if (c.req.query("error")) {
       const denied = c.req.query("error") === "access_denied";
-      await recordAttempt(sql, { outcome: "denied", source, requestId: null, discordId: null });
+      if (admitted) await recordAttempt(sql, { outcome: "denied", source, requestId: null, discordId: null });
       return recover(
         denied ? "Join cancelled" : "Join didn't complete",
         denied
@@ -195,9 +203,13 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
       );
     }
 
-    if (!code || !state || !expected || state !== expected) {
-      await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
+    if (!admitted || !store || !code) {
+      if (admitted) await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
       return recover("Join link expired", "That join link expired. Approvals last ten minutes — try again below.");
+    }
+    if (c.env.DISCORD_BOT_TOKEN.trim() === "") {
+      await recordAttempt(sql, { outcome: "degraded", source, requestId: null, discordId: null });
+      return recover("Automatic join is unavailable", "Use the invite link below to join the server directly.");
     }
 
     // The exchange is the one place the live token exists. It is exchanged,
@@ -243,7 +255,6 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
       botToken: c.env.DISCORD_BOT_TOKEN,
       moderatorRoleIds: parseModeratorRoleIds(c.env.DISCORD_MODERATOR_ROLE_IDS),
     });
-    const store = await hooks.storeFor(c);
     await hooks.issueSession(c, store, {
       userId: user.id,
       username: user.global_name ?? user.username,

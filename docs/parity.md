@@ -49,6 +49,23 @@ Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
 private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
 per-event RSVP reads.
 
+### Auth admission follow-up (implemented; review pending)
+
+[TOG-10354](/TOG/issues/TOG-10354) adds shared Postgres single-use admission for
+ordinary auth and one-click join, plus atomic invalidation of the supplied active
+pre-login/pre-join token on fresh authentication. Request tests hold the first
+exchange in flight and replay ORIGINAL signed cookies; only one exchange, join,
+session and terminal attempt is admitted. Separate clients prove durable
+coordination, expiry and replacement rollback on the isolated test container.
+Blank-bot join starts do not advertise OAuth; a bot disabled mid-journey causes
+no exchange or member session. Denial/exchange failure preserves prior authority;
+failed ordinary auto-join may only issue a non-member/non-moderator session,
+while failed one-click join issues none. Ten-minute server expiry and tombstone
+cleanup are documented in [W15 coverage](w15-auth-tests.md#admission-state-retention-and-failure-contract).
+Exact-head independent review/CI and local browser proof remain delivery gates.
+This narrows three W15 gaps; it does not claim full parity, cutover readiness,
+production testing, or change the recorded rotating TTL/POST-QA divergences.
+
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
 | Legacy route | Next status | Card |

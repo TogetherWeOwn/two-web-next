@@ -8,7 +8,7 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { events } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
@@ -514,6 +514,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const store = createMemorySessionStore();
     const cookie = await sessionCookie(store, { userId: "42", member: true });
     const failing: SessionStore = {
+      journeys: {
+        issue: async () => { throw new Error("store down"); },
+        consume: async () => { throw new Error("store down"); },
+        sweepExpired: async () => { throw new Error("store down"); },
+      },
+      replace: async () => { throw new Error("store down"); },
       create: async () => { throw new Error("store down"); },
       get: async () => { throw new Error("store down"); },
       rotate: async () => { throw new Error("store down"); },
