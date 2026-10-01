@@ -178,6 +178,50 @@ describe("queue carrier lease ownership", () => {
       .rejects.toThrow("fixture send failure");
   });
 
+  it("a hung failed-send cleanup rejects with the original error at the deadline", async () => {
+    const { lock, rows } = memoryLock();
+    vi.mocked(lock.release).mockImplementation(() => new Promise<void>(() => {}));
+    const sendError = new Error("fixture send failure");
+    const send = vi.fn(async (_body: unknown) => { throw sendError; });
+    let settled = false;
+    const result = producer(lock, send).dispatch().catch((error: unknown) => { settled = true; return error; });
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await result).toBe(sendError);
+    const a = send.mock.calls[0]![0] as SyncMessage;
+    expect(lock.release).toHaveBeenCalledExactlyOnceWith(key, a.leaseToken);
+    expect(rows.get(key)?.token).toBe(a.leaseToken);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a compensating release finishing after its deadline still cannot delete B", async () => {
+    const { lock, rows } = memoryLock();
+    const release = vi.mocked(lock.release).getMockImplementation()!;
+    let unblock!: () => void;
+    const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+    const finished = vi.fn();
+    vi.mocked(lock.release).mockImplementation(async (k, token) => {
+      await blocked;
+      await release(k, token);
+      finished();
+    });
+    const sendError = new Error("fixture send failure");
+    const result = producer(lock, vi.fn(async () => { throw sendError; })).dispatch().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await result).toBe(sendError);
+    await vi.advanceTimersByTimeAsync(SYNC_EVENT.uniqueForSeconds * 1000);
+    const b = await lock.acquire(key, 300);
+    expect(b).toEqual(expect.any(String));
+    unblock();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finished).toHaveBeenCalledOnce();
+    expect(rows.get(key)?.token).toBe(b);
+    expect(await lock.acquire(key, 300)).toBeNull();
+  });
+
   it("legacy tokenless messages ack without releasing even if other identities match B's token", async () => {
     const { lock, rows } = memoryLock();
     const token = await lock.acquire(key, 300);

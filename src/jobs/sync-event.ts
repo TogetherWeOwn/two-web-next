@@ -6,6 +6,8 @@ export type Outcome = { done: true } | { retryInSeconds: number } | { failed: st
 
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
+const LOCK_TIMEOUT_MS = 2000;
+
 /** Producer: idempotency key minted once, here (the constructor in Laravel), and carried on every retry. */
 export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },
@@ -23,7 +25,14 @@ export async function dispatchSyncEvent(
     );
   } catch (err) {
     // Failed send: compensate only this acquisition, never a newer holder.
-    await lock.release(key, leaseToken).catch(() => {});
+    // Like terminal cleanup, a wedged DELETE must not hold dispatch hostage.
+    // TTL recovers a stuck lease; a late DELETE remains fenced by this token.
+    let t: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<void>((resolve) => { t = setTimeout(resolve, LOCK_TIMEOUT_MS); });
+    await Promise.race([
+      Promise.resolve().then(() => lock.release(key, leaseToken)).catch(() => {}),
+      timeout,
+    ]).finally(() => clearTimeout(t));
     throw err;
   }
   return true;

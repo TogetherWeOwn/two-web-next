@@ -49,6 +49,15 @@ const malformed: [string, unknown][] = [
   ["non-string sync event key", { ...sync, eventKey: 42 }],
   ["missing sync idempotency key", { kind: "sync-event", eventKey: "e" }],
   ["null sync idempotency key", { ...sync, idempotencyKey: null }],
+  ...[
+    ["null", null], ["number", 42], ["boolean", false], ["object", {}], ["array", []],
+    ["blank", ""], ["non-UUID", "private-invalid-lease-token"],
+    ["truncated UUID", leaseToken.slice(1)], ["unhyphenated UUID", leaseToken.replaceAll("-", "")],
+    ["non-hex UUID", leaseToken.replace("4", "g")],
+    ["whitespace UUID", ` ${leaseToken}`], ["newline UUID", `${leaseToken}\n`],
+  ].map(([label, token]): [string, unknown] => [
+    `${label} lease token`, { ...sync, leaseToken: token, jobId: "private-job-id" },
+  ]),
   ["missing announcement action", { kind: "announcement", idempotencyKey: "k" }],
   ["null announcement action", { ...announcement, action: null }],
   ["primitive announcement action", { ...announcement, action: "private-action" }],
@@ -90,8 +99,7 @@ describe("queue envelope batch isolation", () => {
       expect(invalid.retry).not.toHaveBeenCalled();
       expect(handlers.internal).not.toHaveBeenCalled();
       expect(handlers.sync).toHaveBeenCalledExactlyOnceWith(sync, 1, deps);
-      expect(deps.ledger.reserved).not.toHaveBeenCalled();
-      expect(deps.ledger.failed).not.toHaveBeenCalled();
+      for (const operation of Object.values(deps.ledger)) expect(operation).not.toHaveBeenCalled();
       expect(deps.lock.acquire).not.toHaveBeenCalled();
       if (disposition === "ack") {
         expect(healthy.ack).toHaveBeenCalledExactlyOnceWith();
@@ -121,7 +129,24 @@ describe("queue envelope batch isolation", () => {
     expect(console.warn).not.toHaveBeenCalled();
   });
 
-  it("checks field types without adding UUID, snowflake or nonblank policy", async () => {
+  it.each([undefined, "ABCDEF12-3456-7890-ABCD-EF1234567890"])(
+    "accepts a legacy absent token or a canonical UUID without constraining opaque keys", async (token) => {
+      const body = { kind: "sync-event", eventKey: "", idempotencyKey: "opaque", jobId: "legacy-job", leaseToken: token };
+      const m = message(body);
+      const deps = dependencies();
+      await consume({ messages: [m] }, deps);
+      expect(handlers.sync).toHaveBeenCalledExactlyOnceWith(body, 1, deps);
+      expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+      expect(m.retry).not.toHaveBeenCalled();
+      expect(deps.ledger.reserved).toHaveBeenCalledExactlyOnceWith("legacy-job");
+      expect(deps.ledger.dequeued).toHaveBeenCalledExactlyOnceWith("legacy-job");
+      if (token === undefined) expect(deps.lock.release).not.toHaveBeenCalled();
+      else expect(deps.lock.release).toHaveBeenCalledExactlyOnceWith(uniqueKey(""), token);
+      expect(console.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("checks legacy field types without adding UUID, snowflake or nonblank policy", async () => {
     const messages = [
       message({ kind: "sync-event", eventKey: "", idempotencyKey: "", jobId: undefined }),
       message({ kind: "announcement", idempotencyKey: "", action: { channelKey: "", body: "" } }),

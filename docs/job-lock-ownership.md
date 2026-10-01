@@ -7,9 +7,11 @@ that identity as `leaseToken`; it is separate from the bot's idempotency key
 and the depth ledger's `jobId`. Transport redelivery keeps all three identities.
 
 Terminal cleanup and failed-send compensation compare both event lock key and
-token in one Postgres `DELETE`. An old carrier cannot delete a replacement
-lease, even if its cleanup query finishes after the carrier's two-second
-cleanup timeout. A rejected acquire returns null and dispatches/releases nothing.
+token in one Postgres `DELETE`. Both cleanup paths are bounded best-effort at
+two seconds; failed-send cleanup preserves the original send error even when
+release rejects or hangs. An old carrier cannot delete a replacement lease,
+even if its cleanup query finishes after the deadline. A rejected acquire
+returns null and dispatches/releases nothing.
 The current holder can release without waiting for TTL; expiry-based takeover
 still uses `clock_timestamp()` rather than transaction-start time.
 
@@ -25,6 +27,10 @@ still uses `clock_timestamp()` rather than transaction-start time.
   new consumer skips their lock cleanup; it never guesses ownership from
   `eventKey`, `jobId` or `idempotencyKey`. Their original lease expires normally,
   and they cannot delete a newer token-bearing lease.
+- Present `leaseToken` values must be canonical UUID strings. Malformed tokens
+  are discarded before handlers, ledger transitions or lock operations, with
+  only a fixed warning that contains no payload or token. Tokenless carriers
+  remain valid; opaque event, job and idempotency keys are not constrained.
 - The additive schema is compatible with old inserts, but old Worker code's
   **key-only DELETE is not fenced**. Follow the deployment's existing gate to
   ensure prior consumer invocations have settled before relying on the new
@@ -39,7 +45,8 @@ still uses `clock_timestamp()` rather than transaction-start time.
 
 ```sh
 DATABASE_URL=postgres://agent_test@agent-testdb:5432/postgres \
-  npm test -- test/jobs-lock-ownership.test.ts test/jobs-postgres.test.ts \
+  npm test -- test/jobs-lock-ownership.test.ts test/queue-envelope.test.ts \
+  test/jobs-postgres.test.ts \
   test/jobs-scheduled.test.ts test/jobs.test.ts test/alerts.test.ts \
   test/review-p1-verify.test.ts
 npm run typecheck
