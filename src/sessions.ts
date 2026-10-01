@@ -159,6 +159,7 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async rotate(oldHash, replacement) {
       if (!live(oldHash)) return false;
+      if (oldHash === replacement.tokenHash) return true;
       rows.delete(oldHash);
       rows.set(replacement.tokenHash, { ...replacement, expiresAt: replacement.expiresAt.getTime() });
       return true;

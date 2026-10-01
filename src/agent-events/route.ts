@@ -1,7 +1,10 @@
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
-import { DEFAULT_CONFIG, type IngressConfig, handleAgentEvent } from "./service";
+import { databaseOptions } from "../db/connection";
+import { DEFAULT_CONFIG, type IngressConfig, type Answer, admitAgentEvent } from "./service";
+
+type IngressEnv = { Bindings: Env; Variables: { agentEventHandler: (body: unknown) => Promise<Answer> } };
 
 export function ingressConfig(env: Env): IngressConfig {
   const routePerMinute = Number(env.AGENT_EVENTS_ROUTE_PER_MINUTE);
@@ -21,7 +24,7 @@ function bearer(header: string | undefined): string | null {
 }
 
 // No session, no cookie, no user: a machine caller never answers to browser middleware.
-export async function agentEventsRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
+export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, next) => {
   c.header("cache-control", "no-store");
   const cfg = ingressConfig(c.env);
   if (!cfg.enabled) {
@@ -30,23 +33,37 @@ export async function agentEventsRoute(c: Context<{ Bindings: Env }>): Promise<R
   const url = c.env.AGENT_DB?.connectionString;
   if (!url) return c.json({ reason: "ingress_unavailable", message: "The agent event store is not configured." }, 503);
 
+  // Release idle sockets even if an admitted upload never reaches EOF.
+  const sql = postgres(url, databaseOptions);
+  try {
+    // Admit before the transport limiter reads. The bound handler cannot charge
+    // a second shield hit when the parsed body reaches the service.
+    const ip = c.req.header("cf-connecting-ip") ?? null;
+    const admitted = await admitAgentEvent(sql, cfg, bearer(c.req.header("authorization")), ip);
+    if (!("handle" in admitted)) return c.json(admitted.body, admitted.status as 200, admitted.headers);
+    c.set("agentEventHandler", admitted.handle);
+    await next();
+  } catch (err) {
+    console.error("agent-events failed", (err as Error).name);
+    return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
+  } finally {
+    // Also close on 413, source failures, and shield refusals.
+    c.executionCtx.waitUntil(sql.end({ timeout: 2 }));
+  }
+};
+
+export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response> {
   let body: unknown = null;
   try {
     body = await c.req.json();
   } catch {
     // A non-JSON body is answered by the service's audited 422.
   }
-  const sql = postgres(url, { max: 1, fetch_types: false, prepare: false });
   try {
-    // Anonymous shield bucket: Cloudflare's client address header. A machine
-    // caller always presents a credential, so this only keys floods without one.
-    const ip = c.req.header("cf-connecting-ip") ?? null;
-    const a = await handleAgentEvent(sql, cfg, body, bearer(c.req.header("authorization")), ip);
+    const a = await c.get("agentEventHandler")(body);
     return c.json(a.body, a.status as 200, a.headers);
   } catch (err) {
     console.error("agent-events failed", (err as Error).name);
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
-  } finally {
-    c.executionCtx.waitUntil(sql.end({ timeout: 2 }));
   }
 }
