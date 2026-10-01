@@ -11,9 +11,16 @@ const mergeSha = "c".repeat(40);
 // An offline baseline workflow fixture lets the same assertions reproduce the
 // old-source failure without modifying the checkout or dispatching live jobs.
 const workflow = readFileSync(process.env.PR_LINT_WORKFLOW_FIXTURE ?? ".github/workflows/pr-lint.yml", "utf8");
-const resolverShell = workflow.split("        run: |\n")[1]!
-  .split("\n      - name: Check title, body and commits")[0]!
-  .split("\n").map((line) => line.slice(10)).join("\n");
+function workflowStep(name: string) {
+  const text = workflow.split(`      - name: ${name}\n`)[1]!.split("      - name: ")[0]!;
+  const run = text.match(/        run: \|\n((?:          .*\n)+)/)?.[1]
+    ?? text.match(/        run: (.+)/)?.[1];
+  if (!run) throw new Error(`Missing workflow step: ${name}`);
+  return run.replace(/^          /gm, "");
+}
+const resolverShell = workflowStep("Resolve PR title/body");
+const checkerShell = workflowStep("Check title, body and commits");
+const fileTransport = workflow.includes("PR_METADATA_PATH:");
 
 function releasePr() {
   return {
@@ -105,6 +112,7 @@ else:
       GITHUB_REPOSITORY: repository,
       GITHUB_SHA: fixture.workflowSha,
       GITHUB_OUTPUT: join(dir, "output"),
+      RUNNER_TEMP: dir,
       PR_NUMBER: fixture.dispatchNumber,
       EVENT_TITLE: fixture.event.pull_request?.title ?? "",
       EVENT_BODY: fixture.event.pull_request?.body ?? "",
@@ -113,8 +121,8 @@ else:
       COMMITS: JSON.stringify([{ id: headSha, message: "fix(ci): bind lint metadata" }]),
     };
     const shell = resolverShell.replaceAll("${{ github.event_name }}", fixture.eventName)
-      + "\nexport EVENT TITLE BODY AUTHOR\npython3 ci/check-pr-conventions.py\n";
-    const result = spawnSync("bash", ["-c", shell], { env, encoding: "utf8", timeout: 5000 });
+      + (fileTransport ? "" : "\nexport EVENT TITLE BODY AUTHOR\npython3 ci/check-pr-conventions.py\n");
+    const resolved = spawnSync("bash", ["-e", "-c", shell], { env, encoding: "utf8", timeout: 5000 });
     const optionalFile = (name: string) => {
       try { return readFileSync(join(dir, name), "utf8"); }
       catch (error) {
@@ -122,7 +130,21 @@ else:
         throw error;
       }
     };
-    return { ...result, output: optionalFile("output"), calls: optionalFile("gh-calls.jsonl") };
+    const outputCommands = optionalFile("output");
+    if (resolved.status !== 0 || !fileTransport) {
+      return { ...resolved, output: outputCommands, calls: optionalFile("gh-calls.jsonl") };
+    }
+    // Execute the real check step with the file path published by the resolver.
+    // Binding failures must never publish even this one output command.
+    expect(outputCommands.trim().split("\n")).toHaveLength(1);
+    expect(outputCommands).toMatch(/^metadata=/);
+    const metadataPath = outputCommands.trim().slice("metadata=".length);
+    expect(metadataPath.startsWith(join(dir, "pr-lint-"))).toBe(true);
+    const metadata = readFileSync(metadataPath, "utf8");
+    const checked = spawnSync("bash", ["-e", "-c", checkerShell], {
+      env: { ...env, PR_METADATA_PATH: metadataPath }, encoding: "utf8", timeout: 5000,
+    });
+    return { ...checked, output: metadata, calls: optionalFile("gh-calls.jsonl") };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -143,13 +165,25 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     const result = runWorkflow(fixture);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("PR conventions OK");
-    expect(result.output).toContain(fixture.live.title);
-    expect(result.output).toContain(fixture.live.body);
-    expect(result.output).toContain(`author=${fixture.live.user.login}`);
-    expect(result.output).toContain("event=pull_request");
+    expect(JSON.parse(result.output)).toEqual({
+      title: fixture.live.title, body: fixture.live.body,
+      author: fixture.live.user.login, event: "pull_request",
+    });
     expect(result.calls.trim().split("\n").map((line) => JSON.parse(line))).toEqual([
       ["api", "repos/TogetherWeOwn/two-web-next/pulls/28"],
     ]);
+  });
+
+  it.each(["workflow_dispatch", "pull_request"])("preserves bound metadata through file transport (%s)", (eventName) => {
+    const fixture = eventName === "workflow_dispatch" ? dispatch() : pullRequest(true);
+    fixture.live.body += "\r\nPR_EOF\r\nbody=not-an-output\nauthor=renovate[bot]\n$(not-a-command)\nUnicode: café 日本語 🧪\r\n\n\n";
+    const result = runWorkflow(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.output)).toEqual({
+      title: fixture.live.title, body: fixture.live.body,
+      author: fixture.live.user.login, event: "pull_request",
+    });
+    expect(result.stdout).toContain("PR conventions OK");
   });
 
   it.each([
@@ -230,7 +264,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     const result = runWorkflow(fixture);
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls).toBe("");
-    expect(result.output).toContain("event=push");
+    expect(JSON.parse(result.output).event).toBe("push");
     expect(result.stdout).toContain("PR conventions OK");
   });
 });
