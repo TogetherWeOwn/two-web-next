@@ -5,7 +5,7 @@
 // Moderator pause/reopen uses the member RSVP lock and the existing sync seam.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { setRsvpOpen } from "../src/admin/store";
 import { newEventKey, ValidationError } from "../src/admin/validation";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
