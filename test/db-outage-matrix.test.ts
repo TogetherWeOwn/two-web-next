@@ -5,6 +5,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import postgres, { type Sql } from "postgres";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
+import testApp from "./app";
 import type { Env } from "../src/env";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR } from "./helpers/member-data";
@@ -47,8 +48,7 @@ const adminForm = "title=Outage+fixture&timezone=UTC&starts_at=2030-01-01T12%3A0
 const MATRIX: Case[] = [
   ...["/", "/about", "/faq", "/rules", "/privacy", "/join"].map((route) => ({ method: "GET", route, status: 200 })),
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
-  ...["/sitemap_index.xml", "/robots.txt", "/health", "/healthz", "/up"].map((route) => ({ method: "GET", route, status: 200 })),
-  { method: "GET", route: "/db-ping", status: 503, format: "json" },
+  ...["/sitemap_index.xml", "/robots.txt", "/up"].map((route) => ({ method: "GET", route, status: 200 })),
   { method: "GET", route: "/auth/discord", status: 302, location: "https://discord.com/oauth2/authorize" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
@@ -64,7 +64,7 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/events.json", status: 503, actor: "member", format: "json" },
   { method: "POST", route: "/events", status: 503, actor: "moderator", format: "json", body: eventForm },
   { method: "PATCH", route: "/events/:key", status: 503, actor: "moderator", format: "json", body: "{}" },
-  ...["publish", "cancel"].map((action) => ({
+  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => ({
     method: "POST", route: `/events/:key/${action}`, status: 503, actor: "moderator" as const, format: "json" as const, body: "{}",
   })),
   { method: "PUT", route: "/events/:key/rsvp", status: 503, actor: "member", format: "json", body: '{"status":"going"}' },
@@ -76,10 +76,10 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
   // Empty create forms expose no member subjects and need no data read.
   ...["/admin/events/new", "/admin/featured/new"].map((route) => ({ method: "GET", route, status: 200, actor: "moderator" as const, format: "html" as const })),
-  ...["/admin/join-attempts", "/admin/events", "/admin/events/:key", "/admin/featured", "/admin/featured/:id"].map((route) => ({
+  ...["/admin/join-attempts", "/admin/join-attempts/:id", "/admin/events", "/admin/events/:key", "/admin/featured", "/admin/featured/:id"].map((route) => ({
     method: "GET", route, status: 503, actor: "moderator" as const, format: "html" as const,
   })),
-  ...["/admin/events", "/admin/events/:key", "/admin/events/:key/publish", "/admin/events/:key/cancel", "/admin/featured", "/admin/featured/:id", "/admin/featured/:id/delete"].map((route) => ({
+  ...["/admin/events", "/admin/events/:key", "/admin/events/:key/publish", "/admin/events/:key/cancel", "/admin/events/:key/rsvp-pause", "/admin/events/:key/rsvp-reopen", "/admin/featured", "/admin/featured/:id", "/admin/featured/:id/delete"].map((route) => ({
     method: "POST", route, status: 503, actor: "moderator" as const, format: "html" as const,
     body: route.includes("featured") ? "title=Fixture&position=0" : adminForm, contentType: "application/x-www-form-urlencoded",
   })),
@@ -87,7 +87,7 @@ const MATRIX: Case[] = [
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
 // endpoint. Pin known middleware multiplicity instead of filtering wildcards.
-const MIDDLEWARE = ["ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*"];
+const MIDDLEWARE = ["ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*"];
 function assertInventory(router: { routes: { method: string; path: string }[] }): void {
   const endpoints = router.routes.filter((r) => r.method !== "ALL").map((r) => `${r.method} ${r.path}`);
   const expected = MATRIX.filter((r) => r.method !== "ALL").map((r) => `${r.method} ${r.route}`);
@@ -124,7 +124,7 @@ async function request(row: Case, sessionDown = false): Promise<Response> {
     if (!sessionDown) Object.assign(bindings, { SESSION_STORE: store });
   }
   if (row.body !== undefined) headers.set("content-type", row.contentType ?? "application/json");
-  return app.request(concretePath(row), { method: row.method === "ALL" ? "POST" : row.method, headers, body: row.body }, bindings);
+  return testApp.request(concretePath(row), { method: row.method === "ALL" ? "POST" : row.method, headers, body: row.body }, bindings);
 }
 
 async function assertResponse(res: Response, row: Case): Promise<void> {
@@ -187,7 +187,7 @@ describe("configured Postgres outage: production session store", () => {
 it("enabled agent ingress fails closed when its separate binding is down", async () => {
   const pending: Promise<unknown>[] = [];
   const bindings = { ...outageEnv(), AGENT_EVENTS_ENABLED: "true" };
-  const res = await app.request("/api/agent-events", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, bindings, {
+  const res = await testApp.request("/api/agent-events", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, bindings, {
     waitUntil: (promise: Promise<unknown>) => { pending.push(promise); }, passThroughOnException: () => {}, props: {},
   });
   await assertResponse(res, { method: "POST", route: "/api/agent-events", status: 503, format: "json" });
@@ -200,7 +200,7 @@ it("valid login callback fails closed at session persistence, not OAuth validati
   vi.mocked(fetch).mockResolvedValueOnce(Response.json({ access_token: "local-fixture-token" }))
     .mockResolvedValueOnce(Response.json({ id: MEMBER.userId, username: MEMBER.username, avatar: null }))
     .mockResolvedValueOnce(new Response(null, { status: 201 }));
-  const res = await app.request(`/auth/discord/callback?code=local-code&state=${state}`, { headers: { cookie } }, outageEnv());
+  const res = await testApp.request(`/auth/discord/callback?code=local-code&state=${state}`, { headers: { cookie } }, outageEnv());
   expect(fetch).toHaveBeenCalledTimes(3);
   await assertResponse(res, { method: "GET", route: "/auth/discord/callback", status: 503, format: "html" });
 });

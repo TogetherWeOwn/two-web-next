@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isDatabaseUnavailable } from "../src/db/errors";
 import { internalErrorHandler } from "../src/errors";
-import app from "../src/index";
+import app from "./app";
 import { createMemorySessionStore } from "../src/sessions";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";

@@ -4,7 +4,11 @@ The executable route inventory lives in `test/db-outage-matrix.test.ts`. Every
 registered Hono endpoint needs an explicit entry; middleware registrations are
 not endpoints. The matrix uses a refused loopback Postgres address, never a
 production or staging database. Redirect responses are inspected without
-following them, so no Discord/OAuth request is made.
+following them, so no Discord/OAuth request is made. Requests use the configured
+trusted origin; the inventory still inspects the real router and pins every
+middleware registration, including TrustHosts and same-origin guards. The
+retired `/health`, `/healthz` and `/db-ping` diagnostics are not registered;
+join-attempt detail and both admin/API RSVP pause/reopen routes are covered.
 
 ## Legacy comparison
 
