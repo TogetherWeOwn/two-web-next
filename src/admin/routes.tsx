@@ -24,6 +24,7 @@
 // store (M7) and dispatch the write-back seam where one is due (M3).
 
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
+import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
@@ -34,7 +35,7 @@ import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./
 import type { SessionStore } from "../sessions";
 import {
   type EventRow,
-  type FeaturedRow,
+  type FeaturedEditRow,
   createEvent,
   createFeatured,
   deleteFeatured,
@@ -212,7 +213,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<EventFormPage mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("form"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -271,7 +272,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     );
   });
 
-  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("form"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const key = c.req.param("key");
@@ -317,7 +318,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   });
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
       try {
@@ -357,7 +358,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<FeaturedFormPage mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -395,7 +396,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return c.html(<FeaturedFormPage mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
   });
 
-  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
@@ -426,7 +427,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
   });
 
-  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
@@ -457,9 +458,7 @@ function eventValues(row: EventRow): Record<string, unknown> {
   };
 }
 
-function featuredValues(row: FeaturedRow): Record<string, unknown> {
-  const wall = (d: Date | null) =>
-    d === null ? "" : `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+function featuredValues(row: FeaturedEditRow): Record<string, unknown> {
   return {
     title: row.title,
     body: row.body ?? "",
@@ -468,13 +467,9 @@ function featuredValues(row: FeaturedRow): Record<string, unknown> {
     image_alt: row.imageAlt ?? "",
     is_published: row.isPublished ? "on" : "",
     position: String(row.position),
-    starts_at: wall(row.startsAt),
-    ends_at: wall(row.endsAt),
+    starts_at: row.startsAtText ?? "",
+    ends_at: row.endsAtText ?? "",
   };
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
 }
 
 export { SESSION_GUEST_REDIRECT };

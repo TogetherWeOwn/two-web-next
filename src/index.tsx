@@ -3,7 +3,8 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
-import { agentEventsRoute } from "./agent-events/route";
+import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
+import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import { cspReportsRoute } from "./csp-reports";
 import {
@@ -36,7 +37,7 @@ import { registerJoinRoutes } from "./join/route";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
-import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
+import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
@@ -384,7 +385,7 @@ app.get("/robots.txt", (c) => {
 // `/discord`. Flood control lives in the handler instead.
 app.post("/csp-reports", cspReportsRoute);
 
-app.post("/api/agent-events", agentEventsRoute);
+app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
 // `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
 // ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
@@ -517,7 +518,7 @@ registerEventRoutes(
   async (c) => readSession(c, false),
 );
 
-app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   // The route-scoped same-origin guard runs before throttling or session storage.
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (token) {
@@ -536,11 +537,13 @@ app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => 
 
 // Staging-only QA seam. 404 everywhere that is not the staging host with
 // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post("/auth/qa/:identity", throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), async (c) => {
+app.post("/auth/qa/:identity", async (c, next) => {
   if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
+  await next();
+}, throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
-  const fixture = QA_IDENTITIES[c.req.param("identity") ?? ""];
+  const fixture = qaIdentity(c.req.param("identity") ?? "");
   if (!ok || !fixture) return c.notFound();
   const store = await storeFor(c);
   await issueSession(c, store, {

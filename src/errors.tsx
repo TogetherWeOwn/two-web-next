@@ -106,6 +106,13 @@ export const RateLimitedPage: FC = () => (
   </ErrorShell>
 );
 
+export const PayloadTooLargePage: FC = () => (
+  <ErrorShell code="413" title="That request is too large">
+    <p class="lead">Reduce the size of your request and try again.</p>
+    <p><a href="/">Back to the homepage</a></p>
+  </ErrorShell>
+);
+
 // 503 (ports errors/503). The CTA — and the header nav — point at the Discord
 // invite URL directly, never /auth/discord: during maintenance /auth may itself
 // be down, so nothing on this page sends the member there.
@@ -219,6 +226,17 @@ export function databaseUnavailable(c: Context, jsonOnly = false): Response | Pr
     return c.json({ error: "db_unavailable", message: "The service is temporarily unavailable. Try again shortly." });
   }
   return c.html(<MaintenancePage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
+}
+
+// Like the shared 429 response: one static envelope for API/JSON callers,
+// a branded page for browsers, and no request body, field names or stack traces.
+export function payloadTooLarge(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  c.status(413);
+  if (c.req.path.startsWith("/api/") || (c.req.header("accept") ?? "").includes("application/json")) {
+    return c.json({ reason: "payload_too_large", message: "Reduce the size of your request and try again." });
+  }
+  return c.html(<PayloadTooLargePage />);
 }
 
 export function maintenanceHandler(inviteUrl: string): (c: Context) => Response | Promise<Response> {

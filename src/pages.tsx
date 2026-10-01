@@ -30,7 +30,7 @@ export const Layout: FC<
       <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
       {robots ? <meta name="robots" content={robots} /> : null}
       <title>{title}</title>
-      <meta name="description" content="Together We Own: a close-knit adult gaming community, founded 1998." />
+      <meta name="description" content={shareDescription || "Together We Own: a close-knit adult gaming community, founded 1998."} />
       {canonical ? (
         <>
           <link rel="canonical" href={canonical} />
