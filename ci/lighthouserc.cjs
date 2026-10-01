@@ -6,8 +6,8 @@ module.exports = {
   ci: {
     collect: {
       url: paths.map((path) => `http://127.0.0.1:8787${path}`),
-      startServerCommand: 'npm run dev:lighthouse',
-      startServerReadyPattern: 'Ready on http://127.0.0.1:8787',
+      startServerCommand: 'node ci/lighthouse-admission.cjs',
+      startServerReadyPattern: 'Lighthouse fixture content admitted',
       startServerReadyTimeout: 60000,
       numberOfRuns: 3,
       settings: {

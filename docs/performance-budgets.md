@@ -33,19 +33,32 @@ Do not run another service on that port. The dedicated Wrangler config has no
 Hyperdrive, database, queue, cron, remote service or deployment route. The fixture
 worker discards runtime bindings, injects a read-only Drizzle proxy and in-memory
 sessions, and serves the production Hono pages with the production public assets.
-It refuses OAuth, writes and routes outside the audit set. Tests prove that all
-five paths return HTML 200, not redirects/errors, with no outbound fetches even
-if a database URL or Discord token is accidentally injected. The event fixture
-samples its clock inside each request, not at module evaluation (workerd's
-global-scope clock is the Unix epoch). `test/performance-worker.test.ts` bundles
-the real wrapper into Miniflare and verifies both event pages render dates seven
-days in the future without outbound access.
+It refuses OAuth, writes, authenticated requests and routes outside the audit set.
+The proxy admits only complete anonymous-read SQL statements with the expected
+parameters. Homepage read callbacks use fresh local read-only proxies, with only
+the production transaction-local 400ms/400ms or 250ms/250ms timeout settings;
+unknown SQL, session-level settings and nested/configured transactions fail closed.
+There is no SQL transport or mutable database state.
+
+`ci/lighthouse-admission.cjs` starts the same local Wrangler command and withholds
+LHCI's readiness marker until all five routes pass HTML/content admission. HTTP
+200 alone is insufficient: homepage teasers and featured content, the event card
+and detail must contain the fixture title, venue, aggregate and future dates.
+Redirects and empty/outage fallbacks are rejected. Probes have a five-second
+abort bound; a 55-second fail-closed watchdog precedes LHCI's unchanged 60-second
+startup wait. Shutdown terminates the wrapper's owned Wrangler process group.
+
+Tests exercise the real wrapper in Miniflare/workerd and prove populated homepage,
+calendar and detail content without outbound fetches, even if runtime database or
+Discord bindings are accidentally injected. The fixture samples its clock inside
+each request, not at module evaluation (workerd's global-scope clock is the Unix
+epoch), and admission requires dates seven days after the request.
 
 Measured as a guest:
 
 | Path | Data |
 |---|---|
-| `/` | Existing unavailable-counts fallback |
+| `/` | Published upcoming teaser with three RSVPs and featured community news; existing unavailable-counts fallback only |
 | `/events` | One published upcoming game night with three RSVPs; no past rows |
 | `/e/01ARZ3NDEKTSV4RRFFQ69G5FAV` | The same fixture, real detail renderer |
 | `/join` | Existing widget-free fallback (nonnumeric fixture guild ID) |
