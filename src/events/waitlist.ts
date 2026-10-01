@@ -19,7 +19,7 @@ export async function waitlistPositions(db: Pick<Db, "execute">, eventIds: numbe
   if (eventIds.length === 0) return new Map();
   const rows = await db.execute(sql`
     select event_id, position from (
-      select event_id, user_id, row_number() over (partition by event_id order by created_at, id)::int as position
+      select event_id, user_id, row_number() over (partition by event_id order by created_at, coalesce(legacy_id, id), id)::int as position
       from rsvps where event_id in (${sql.join(eventIds.map((id) => sql`${id}`), sql`, `)}) and status = 'waitlisted'
     ) line where user_id = ${userId}`) as unknown as { event_id: number; position: number }[];
   return new Map(rows.map((row) => [row.event_id, row.position]));
@@ -35,7 +35,7 @@ export async function waitlistPosition(db: Pick<Db, "execute">, eventId: number,
 export async function lockWaitlist(tx: Tx, eventId: number): Promise<void> {
   await tx.select({ id: rsvps.id }).from(rsvps)
     .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "waitlisted")))
-    .orderBy(asc(rsvps.createdAt), asc(rsvps.id)).for("update");
+    .orderBy(asc(rsvps.createdAt), sql`coalesce(${rsvps.legacyId}, ${rsvps.id})`, asc(rsvps.id)).for("update");
 }
 
 /** Settle FIFO heads inside the caller's transaction and event-row lock, never after commit.
@@ -47,7 +47,7 @@ export async function promoteWaitlist(tx: Tx, ev: Event, clock: () => Date = () 
   if (free !== null && free <= 0) return;
   const query = tx.select({ id: rsvps.id }).from(rsvps)
     .where(and(eq(rsvps.eventId, ev.id), eq(rsvps.status, "waitlisted")))
-    .orderBy(asc(rsvps.createdAt), asc(rsvps.id)).for("update").$dynamic();
+    .orderBy(asc(rsvps.createdAt), sql`coalesce(${rsvps.legacyId}, ${rsvps.id})`, asc(rsvps.id)).for("update").$dynamic();
   const heads = await (free === null ? query : query.limit(free));
   const now = clock();
   // A mirror-stamp writer can hold a head row until after the event ends.
