@@ -10,6 +10,7 @@ import { memberAccessLog } from "../access-log";
 import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
+import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
 import { canonicalUrl } from "../seo";
@@ -191,7 +192,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         emptyState={emptyState}
         discordFailed={discordFailed}
         member={session?.member ?? false}
-        inviteUrl={c.env.DISCORD_INVITE_URL}
+        inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
         appUrl={c.env.APP_URL}
       />,
     );
