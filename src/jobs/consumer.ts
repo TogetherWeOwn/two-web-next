@@ -146,7 +146,7 @@ export async function consume(
           }, LEDGER_TIMEOUT_MS);
         });
         const successor = (async () => {
-          if (await (deps.needsSync ?? deps.events.needsSync)(body.eventKey)) {
+          if (await (deps.needsSync?.(body.eventKey) ?? deps.events.needsSync(body.eventKey))) {
             controller.signal.throwIfAborted();
             await deps.dispatchPending!(body.eventKey, controller.signal);
           }

@@ -24,7 +24,7 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
   } };
 }
 
-/** Current-row snapshot at the first bot attempt; durable and immutable thereafter. */
+/** Durable request snapshot; first claims recheck eligibility, attempted retries are immutable. */
 export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): EventStore {
   // Revision dirtiness survives a rejected send and deletion of the last RSVP.
   // The missing-mapping/RSVP predicate remains a migration backstop.

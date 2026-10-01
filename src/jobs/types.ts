@@ -45,7 +45,7 @@ export type SyncAttempt = {
   /** `failed` is definitive refusal; `obsolete` was retired before any request. */
   state: "pending" | "succeeded" | "failed" | "obsolete";
   requestAttempts: number;
-  /** Null after the automatic request budget is exhausted; identity stays pending. */
+  /** Null for a retired snapshot or exhausted automatic budget (identity stays pending). */
   nextAttemptAt: Date | null;
 } & ({ action: "event.upsert"; payload: EventUpsert } | { action: "event.cancel"; payload: { eventKey: string } });
 

@@ -20,13 +20,13 @@ import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
  */
 export type SingleFlight = (name: string, fn: (db: TxClient) => Promise<void>) => Promise<boolean>;
 
+type ReconcilePreparation = { closed: number; materialized: number; stale: string[] };
+
 /**
  * Ports events:reconcile: close finished, materialise series, re-dispatch stale. Close first so the
  * sync pass cannot resurrect an ended event; materialise before the sync pass so a new occurrence is
  * picked up in the same run (new occurrences are drafts, which the stale query never returns).
  */
-type ReconcilePreparation = { closed: number; materialized: number; stale: string[] };
-
 export async function reconcileEvents(deps: {
   events: EventStore;
   queue: { send(b: unknown, o?: { delaySeconds?: number }): Promise<unknown> };
