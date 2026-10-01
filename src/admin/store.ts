@@ -501,6 +501,12 @@ export async function listFeatured(db: Db, opts: { published?: boolean }): Promi
   return db.select().from(featuredContents).orderBy(asc(featuredContents.position));
 }
 
+/** Imported source IDs are independent of native IDs; never fall back to a native match. */
+export async function getFeaturedIdByLegacyId(db: Db, legacyId: string): Promise<number | null> {
+  const [row] = await db.select({ id: featuredContents.id }).from(featuredContents).where(eq(featuredContents.legacyId, legacyId));
+  return row?.id ?? null;
+}
+
 export async function getFeatured(db: Db, id: number): Promise<FeaturedRow | null> {
   const [row] = await db.select().from(featuredContents).where(eq(featuredContents.id, id));
   return row ?? null;
