@@ -6,6 +6,22 @@ import type { Env } from "../src/env";
 import { FALLBACK_INVITE, inviteDestination } from "../src/invite";
 import type { EnvWithJoin } from "../src/join/route";
 
+const campaignInvites = [
+  "https://discord.gg/Ab12?utm_campaign=join%20now&utm_source=日本#日本%20campaign",
+  "https://discord.com/invite/Ab12?utm_campaign=join%20now&utm_source=日本#日本%20campaign",
+];
+
+const malformedInvites = [
+  "https:/discord.gg/Ab12",
+  "https:discord.gg/Ab12",
+  "https:///discord.gg/Ab12",
+  "https:////discord.gg/Ab12",
+  "https:/discord.com/invite/Ab12",
+  "https:discord.com/invite/Ab12",
+  "https:///discord.com/invite/Ab12",
+  "https:////discord.com/invite/Ab12",
+];
+
 const validInvites = [
   "https://discord.gg/4GwEDNRTtx",
   "https://discord.gg/Ab_12-cD",
@@ -16,9 +32,12 @@ const validInvites = [
   "https://discord.com:443/invite/Ab12",
   "https://discord.gg/Ab12?utm_source=web&utm_campaign=join%20now#campaign",
   "https://discord.com/invite/Ab12?utm_source=web&utm_campaign=join%20now#campaign",
+  "HTTPS://discord.gg/Ab12",
+  ...campaignInvites,
 ];
 
 const invalidInvites = [
+  ...malformedInvites,
   "",
   "not a URL",
   "https://",
@@ -40,6 +59,8 @@ const invalidInvites = [
   "https://synthetic-user:synthetic-password@discord.gg/Ab12",
   "https://synthetic-user@discord.com/invite/Ab12",
   "https://:synthetic-password@discord.com/invite/Ab12",
+  "https://@discord.gg/Ab12",
+  "https://:@discord.com/invite/Ab12",
   "https://discord.gg:8443/Ab12",
   "https://discord.com:80/invite/Ab12",
   "https://discord.gg.evil.test/Ab12",
@@ -72,8 +93,8 @@ afterEach(() => {
 });
 
 describe("inviteDestination", () => {
-  it.each(validInvites)("preserves an approved invite unchanged: %s", (configured) => {
-    expect(inviteDestination(configured)).toBe(configured);
+  it.each(validInvites)("serializes an approved invite without changing its meaning: %s", (configured) => {
+    expect(inviteDestination(configured)).toBe(new URL(configured).href);
     expect(console.error).not.toHaveBeenCalled();
   });
 
@@ -91,9 +112,11 @@ describe("inviteDestination", () => {
 });
 
 describe("GET /discord invite floor", () => {
-  it.each([
-    [validInvites[7], validInvites[7]],
-    [validInvites[8], validInvites[8]],
+  it.each<[string, string]>([
+    ...malformedInvites.map((configured): [string, string] => [configured, FALLBACK_INVITE]),
+    ...campaignInvites.map((configured): [string, string] => [configured, new URL(configured).href]),
+    [validInvites[7]!, validInvites[7]!],
+    [validInvites[8]!, validInvites[8]!],
     ["https://discord.com/login", FALLBACK_INVITE],
     ["https://discord.com/oauth2/authorize", FALLBACK_INVITE],
     ["https://synthetic-user:synthetic-password@discord.gg/Ab12", FALLBACK_INVITE],
@@ -111,6 +134,13 @@ describe("GET /discord invite floor", () => {
     const res = await app.request("/discord", { headers: { cookie: "__Host-two_session=synthetic" } }, e);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(destination);
+    const resolved = new URL(res.headers.get("location")!, env.APP_URL);
+    expect(resolved.href).toBe(new URL(destination).href);
+    if (campaignInvites.includes(configured)) {
+      expect(resolved.searchParams.get("utm_campaign")).toBe("join now");
+      expect(resolved.searchParams.get("utm_source")).toBe("日本");
+      expect(decodeURIComponent(resolved.hash.slice(1))).toBe("日本 campaign");
+    }
     expect(res.headers.get("cache-control")).toBe("no-store, private");
     expect(res.headers.getSetCookie()).toEqual([]);
     expect(dependency).not.toHaveBeenCalled();
@@ -118,7 +148,9 @@ describe("GET /discord invite floor", () => {
 });
 
 describe("join recovery invite", () => {
-  it.each([
+  it.each<[string, string]>([
+    ...malformedInvites.map((configured): [string, string] => [configured, FALLBACK_INVITE]),
+    ...campaignInvites.map((configured): [string, string] => [configured, new URL(configured).href]),
     ["https://discord.com/invite/Ab_12-cD?utm_source=web#campaign", "https://discord.com/invite/Ab_12-cD?utm_source=web#campaign"],
     ["https://discord.com/login", FALLBACK_INVITE],
     ["https://discord.com/oauth2/authorize", FALLBACK_INVITE],
@@ -135,7 +167,7 @@ describe("join recovery invite", () => {
     const res = await app.request("/join/callback?error=access_denied", {}, e);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain(`href="${destination}"`);
+    expect(html).toContain(`href="${destination.replaceAll("&", "&amp;")}"`);
     if (configured !== destination) expect(html).not.toContain(configured);
     expect(network).not.toHaveBeenCalled();
   });
