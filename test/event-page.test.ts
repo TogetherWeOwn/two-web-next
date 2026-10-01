@@ -30,7 +30,9 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const db = drizzle(async (sql) => {
     queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
-    if (sql.includes('from "rsvps"')) return { rows: [[row.id, 3]] };
+    // The going-count aggregate reads two positional columns; the viewer
+    // answer read selects its own row and is empty in this fixture.
+    if (sql.includes('from "rsvps"')) return sql.includes("count(*)") ? { rows: [[row.id, 3]] } : { rows: [] };
     if (sql.includes('"event_key" =')) {
       return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
     }
@@ -42,7 +44,7 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     row, queries, env,
     async cookie(moderator = false, expired = false) {
       const token = newSessionToken();
-      await store.create({ tokenHash: await hashToken(token), userId: "member", username: "member", avatar: null,
+      await store.create({ tokenHash: await hashToken(token), userId: "100000000000000001", username: "member", avatar: null,
         member: true, moderator, expiresAt: new Date(Date.now() + (expired ? -1000 : 3600_000)) });
       return (await serializeSigned("__Host-two_session", token, SECRET, {
         path: "/", secure: true, httpOnly: true, sameSite: "Lax",
