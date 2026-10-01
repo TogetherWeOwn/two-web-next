@@ -31,8 +31,10 @@ export class BotTransportError extends Error {}
 export class BotTerminalError extends Error {}
 /** Known retry result could not be committed; the durable claim remains closed. */
 export class SyncRetryPersistenceError extends Error {
-  constructor(readonly nextAttemptAt: Date | null, cause: unknown) {
+  readonly nextAttemptAt: Date | null;
+  constructor(nextAttemptAt: Date | null, cause: unknown) {
     super("sync retry result could not be persisted; request remains fenced", { cause });
+    this.nextAttemptAt = nextAttemptAt;
   }
 }
 

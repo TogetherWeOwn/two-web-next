@@ -36,7 +36,7 @@ function expectFullWeeks(days: CalendarDay[]) {
 function calendarFixture(startsAt: Date, zone?: string) {
   const pastStart = new Date("2025-01-15T12:00:00Z");
   const past: typeof events.$inferSelect = {
-    id: 1, icsSequence: 1n, eventKey: "zone-fixture", title: "Past zone fixture", game: null, description: null,
+    id: 1, icsSequence: 1n, syncRevision: 1, syncedRevision: 0, eventKey: "zone-fixture", title: "Past zone fixture", game: null, description: null,
     startsAt: pastStart, endsAt: new Date("2025-01-15T13:00:00Z"), timezone: zone ?? "UTC",
     location: null, capacity: null, status: "published", discordEventId: null,
     discordSyncFailedAt: null, discordSyncFailureCode: null, createdBy: null, rsvpOpen: true,

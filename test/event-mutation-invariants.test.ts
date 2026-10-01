@@ -2,6 +2,7 @@
 // A per-run schema inside the test container owns all rows and lock holders.
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
+import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
@@ -9,9 +10,14 @@ import { getEvent, updateEvent } from "../src/admin/store";
 import { type EventFormInput, newEventKey, parseEventForm, ValidationError } from "../src/admin/validation";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
 
 const NOW = new Date("2026-09-30T12:00:00Z");
 const APP_URL = "https://next.example.test";
@@ -39,7 +45,9 @@ describe("JSON capacity parsing", () => {
 describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   const store = createMemorySessionStore(() => Date.now());
+  type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
   const sent: SyncMessage[] = [];
+  let realPostgres: typeof postgres;
   const env = {
     APP_URL,
     DISCORD_CLIENT_ID: "client-id",
@@ -50,22 +58,38 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     SESSION_SECRET,
     get ADMIN_DB() { return fixture.db; },
     SESSION_STORE: store,
-    EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
+    get DB() { return { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href }; },
+    SYNC_EVENT_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
   } as unknown as Env;
 
   beforeAll(async () => {
+    realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres")).default;
+    vi.mocked(postgres).mockImplementation(realPostgres);
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 5 });
+    // Producer clients must stay inside the owned schema and test-URL guard.
+    vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}> = {}) => {
+      const safe = testDatabaseUrl(raw);
+      return realPostgres(safe.href, {
+        ...opts, password: () => safe.password,
+        connection: { ...opts.connection, search_path: fixture.schemaName },
+      });
+    }) as typeof postgres);
   });
   beforeEach(async () => {
     await fixture.reset();
     await fixture.client`delete from web_throttle_hits`;
+    await fixture.client`delete from queue_jobs`;
+    await fixture.client`delete from job_unique_locks`;
     sent.length = 0;
     // Keep socket/lock-observer timers real while pinning the decision clock.
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
   });
   afterEach(() => vi.useRealTimers());
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    if (realPostgres) vi.mocked(postgres).mockImplementation(realPostgres);
+    await fixture?.dispose();
+  });
 
   async function cookieFor(userId = ACTOR.id, moderator = true): Promise<string> {
     const token = newSessionToken();
@@ -139,7 +163,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("published");
     expect(await fixture.db.select().from(activityLog)).toHaveLength(1);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ eventKey: row.eventKey, action: "event.upsert" });
+    expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: row.eventKey });
   });
 
   it("still allows POST cancel of an ended draft", async () => {
@@ -147,7 +171,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     expect((await json("POST", `/events/${row.eventKey}/cancel`)).status).toBe(200);
     expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("cancelled");
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ eventKey: row.eventKey, action: "event.cancel" });
+    expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: row.eventKey });
   });
 
   it("admin POST publish renders the expiry reason; admin cancel of that draft remains legal", async () => {
@@ -199,7 +223,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
           : answer,
       ));
       expect(await fixture.db.select().from(activityLog)).toHaveLength(1);
-      expect(sent.at(-1)).toMatchObject({ eventKey: row.eventKey, action: "event.upsert" });
+      expect(sent.at(-1)).toMatchObject({ kind: "sync-event", eventKey: row.eventKey });
     }
   });
 
@@ -309,7 +333,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     const result = await pending;
     expect(result).toBeInstanceOf(ValidationError);
     expect(result).toMatchObject({ fields: { capacity: "Capacity cannot be lower than the number of members already going. Occupied seats: 6." } });
-    expect(await getEvent(fixture.db, row.eventKey)).toEqual(row);
+    // The concurrent RSVP legitimately dirties the sync revision and ICS sequence; the refused edit changed nothing else.
+    const { syncRevision: _r, syncedRevision: _s, icsSequence: _i, ...unchanged } = row;
+    expect(await getEvent(fixture.db, row.eventKey)).toMatchObject(unchanged);
     expect(await fixture.db.select().from(rsvps).where(eq(rsvps.eventId, row.id))).toHaveLength(9);
     expect(await fixture.db.select().from(activityLog)).toEqual([]);
     expect(sent).toEqual([]);
