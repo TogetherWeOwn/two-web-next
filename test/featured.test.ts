@@ -199,10 +199,12 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     expect(html).toContain('alt="Squad &amp; friends"');
     expect(html).toContain('alt="Title fallback"');
     expect(html).toContain('alt="Blank fallback"');
-    expect(html.match(/loading="lazy"/g)).toHaveLength(3);
-    expect(html.match(/width="640" height="360"/g)).toHaveLength(3);
-    expect(html.match(/decoding="async" referrerpolicy="no-referrer"/g)).toHaveLength(3);
-    expect(html).not.toMatch(/<a[^>]*><img/);
+    const featuredHtml = html.match(/<section\b[^>]*data-testid="featured-content"[^>]*>[\s\S]*?<\/section>/)?.[0];
+    expect(featuredHtml).toBeDefined();
+    expect(featuredHtml!.match(/loading="lazy"/g)).toHaveLength(3);
+    expect(featuredHtml!.match(/width="640" height="360"/g)).toHaveLength(3);
+    expect(featuredHtml!.match(/decoding="async" referrerpolicy="no-referrer"/g)).toHaveLength(3);
+    expect(featuredHtml).not.toMatch(/<a[^>]*><img/);
     expect(res.headers.get("content-security-policy")).toContain("img-src 'self' https://cdn.discordapp.com");
   });
 

@@ -26,3 +26,10 @@ regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FA[A-D]''']
 description = "Two synthetic ULID event keys in binding-only DB regression fixtures, not credentials"
 targetRules = ["generic-api-key"]
 regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FAV''', '''01ARZ3NDEKTSV4RRFFQ69G5FAW''']
+
+[[allowlists]]
+description = "Synthetic sequential guild id in offline homepage widget fixtures, not an OAuth credential"
+targetRules = ["discord-client-id"]
+condition = "AND"
+paths = ['''^test/home-theme\.test\.ts$''']
+regexes = ['''123456789012345678''']

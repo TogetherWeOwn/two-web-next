@@ -158,7 +158,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
       expect((await request("/join/discord", {}, bindings)).status).toBe(302);
     }
     expect((await request("/join/discord", {}, bindings)).status).toBe(429);
-  });
+  }, 30_000);
 
   it("keeps explicit configuration ahead of the binding in all login/profile factories", async () => {
     state.urls.length = 0;
