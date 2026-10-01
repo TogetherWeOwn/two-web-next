@@ -5,7 +5,8 @@
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
-import { SkipLink } from "../pages";
+import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
+import { FeaturedContentItem, SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
 import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
@@ -367,7 +368,7 @@ const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
       {children(id)}
       {hint ? <p class="hint">{hint}</p> : null}
       {err ? (
-        <p class="error" role="alert" data-testid={`error-${name}`}>
+        <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>
           {err}
         </p>
       ) : null}
@@ -401,19 +402,23 @@ export const EventFormPage: FC<{
         <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}
           data-event-draft={mode === "edit" && Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required
+              aria-invalid={errors.title ? "true" : undefined} aria-describedby={errors.title ? `${id}-error` : undefined} />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} maxlength={100} />}
+            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100}
+              aria-invalid={errors.game ? "true" : undefined} aria-describedby={errors.game ? `${id}-error` : undefined} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
             {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
           </Field>
           <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />}
+            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required
+              aria-invalid={errors.starts_at ? "true" : undefined} aria-describedby={errors.starts_at ? `${id}-error` : undefined} />}
           </Field>
           <Field name="ends_at" label="Ends (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required />}
+            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required
+              aria-invalid={errors.ends_at ? "true" : undefined} aria-describedby={errors.ends_at ? `${id}-error` : undefined} />}
           </Field>
           <Field
             name="timezone"
@@ -421,10 +426,12 @@ export const EventFormPage: FC<{
             errors={errors}
             hint="The IANA zone the wall time above is typed in. Storage is UTC."
           >
-            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
+            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"}
+              aria-invalid={errors.timezone ? "true" : undefined} aria-describedby={errors.timezone ? `${id}-error` : undefined} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} maxlength={255} />}
+            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255}
+              aria-invalid={errors.location ? "true" : undefined} aria-describedby={errors.location ? `${id}-error` : undefined} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
@@ -519,12 +526,13 @@ export const EventFormPage: FC<{
           </section>
         ) : null}
       </section>
+      <script type="module" src="/islands/admin-event-text-limits.js" />
       {mode === "edit" ? <script src="/islands/admin-event-editor.js" defer /> : null}
     </Shell>
   );
 };
 
-export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }> = ({ rows, query }) => (
+export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; now?: Date }> = ({ rows, query, now = new Date() }) => (
   <Shell title="Featured content">
     <section>
       <h1>Featured content</h1>
@@ -548,11 +556,13 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }>
         </div>
         <div class="field"><button type="submit" class="btn">Filter</button></div>
       </form>
-      <table class="admin-table" data-testid="featured-table">
+      <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="featured-table-scroll" role="region" aria-label="Featured content list" aria-describedby="featured-scroll-hint" tabindex={0} data-testid="featured-table-scroll">
+      <table class="admin-table featured-table" data-testid="featured-table">
         <thead>
           <tr>
             <th scope="col">Title</th>
-            <th scope="col">Published</th>
+            <th scope="col">Status</th>
             <TableSortHeader label="Position" active={query.sort === "position"} order={query.order} url={(order) => featuredListUrl(query, { sort: "position", order })} />
             <th scope="col">Window (UTC)</th>
             <TableSortHeader label="Last changed" active={query.sort === "updated_at"} order={query.order} url={(order) => featuredListUrl(query, { sort: "updated_at", order })} />
@@ -571,10 +581,11 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }>
                 <td>
                   <a href={`/admin/featured/${r.id}`}>{r.title}</a>
                 </td>
-                <td data-testid={`featured-published-${r.id}`}>{r.isPublished ? "yes" : "no"}</td>
+                <td data-testid={`featured-status-${r.id}`}><FeaturedStatusBadge row={r} now={now} /></td>
                 <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
                 <td>
-                  {r.startsAt ? r.startsAt.toISOString() : "—"} → {r.endsAt ? r.endsAt.toISOString() : "—"}
+                  <span class="featured-window-bound">{r.startsAt ? <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time> : "—"}</span>
+                  <span class="featured-window-bound">→ {r.endsAt ? <time datetime={r.endsAt.toISOString()}>{r.endsAt.toISOString()}</time> : "—"}</span>
                 </td>
                 <td><time datetime={r.updatedAt.toISOString()}>{r.updatedAt.toISOString()}</time></td>
               </tr>
@@ -582,6 +593,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }>
           )}
         </tbody>
       </table>
+      </div>
     </section>
   </Shell>
 );
@@ -591,13 +603,28 @@ export const FeaturedFormPage: FC<{
   row?: FeaturedRow;
   values: Record<string, unknown>;
   errors: Record<string, string>;
-}> = ({ mode, row, values, errors }) => {
+  now?: Date;
+  appUrl: string;
+  imageHosts?: string;
+}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked = values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
-      <section>
+      <section class="featured-form">
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
+        {mode === "edit" && row ? (
+          <section class="featured-preview" aria-labelledby="featured-preview-heading" data-testid="featured-preview">
+            <h2 id="featured-preview-heading">Homepage preview</h2>
+            <p>Last saved content, checked at <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to refresh this preview.</p>
+            <p>Status: <FeaturedStatusBadge row={row} now={now} /></p>
+            {currentlyVisible(row, now) ? (
+              <FeaturedContentItem row={row} appUrl={appUrl} imageHosts={imageHosts} />
+            ) : (
+              <p data-testid="featured-preview-hidden">This slot is not currently visible on the homepage.</p>
+            )}
+          </section>
+        ) : null}
         {Object.keys(errors).length > 0 ? (
           <p class="notice" role="alert" data-testid="form-errors">
             Check the highlighted fields and try again.
@@ -613,7 +640,7 @@ export const FeaturedFormPage: FC<{
           <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
             {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
-          <Field name="image_url" label="Image URL" errors={errors} hint="Full URL on this site or https://cdn.discordapp.com. Other image hosts are blocked by the site's security policy.">
+          <Field name="image_url" label="Image URL" errors={errors} hint="HTTPS URL on cdn.discordapp.com or a configured approved public host. Other image hosts are blocked by the site's security policy.">
             {(id) => <input id={id} name="image_url" type="url" value={val(values, "image_url")} />}
           </Field>
           <Field
@@ -633,10 +660,10 @@ export const FeaturedFormPage: FC<{
               <input id={id} name="position" type="text" inputmode="numeric" value={val(values, "position") || "0"} />
             )}
           </Field>
-          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
+          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} />}
           </Field>
-          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
+          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
           </Field>
           <div class="actions">
