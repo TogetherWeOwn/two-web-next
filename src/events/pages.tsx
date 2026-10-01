@@ -396,7 +396,7 @@ export const EventsCalendarPage: FC<{
           <p class="strap">Community schedule</p>
           <h1 id="events-heading" tabindex={-1}>Events</h1>
           <p>Game nights, tournaments and whatever else the community puts on.</p>
-          {!member ? <a class="btn" href="/join">Join the Discord</a> : null}
+          {!member ? <a class="btn" href={loginReturnTo ? `/join?next=${encodeURIComponent(loginReturnTo)}` : "/join"}>Join the Discord</a> : null}
         </div>
         {/* One-shot join confirmation (legacy join_result): /events is the
             join landing when the CTA carried next=/events. Renders outside the
@@ -531,7 +531,7 @@ export const EventsCalendarPage: FC<{
 };
 
 export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string }> = ({ rows, page, hasMore, totalPages, appUrl }) => (
-  <ScheduleShell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} description="Look back at the community’s game nights and tournaments." robots="noindex, follow">
+  <ScheduleShell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} description="Look back at the community’s game nights and tournaments." robots="noindex, follow" loginReturnTo={pastEventsUrl(page)}>
     <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
       <div class="schedule-heading">
         <p class="strap">The archive</p>

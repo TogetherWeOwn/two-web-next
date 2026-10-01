@@ -66,6 +66,31 @@ it.each(["/events", "/events?view=calendar&month=2030-01", "/events?q=no-such-ev
   expect(html.match(/<script\b[^>]*>/g)).toEqual([`<script src="/islands/${script}.js" defer="">`]);
 });
 
+it.each([
+  "/events",
+  "/events?q=game%20night",
+  "/events?view=calendar&month=2030-01",
+  "/events?view=calendar&month=2030-01&q=no-such-event&past=1",
+])("%s: the guest schedule-heading Join CTA preserves the calendar destination", async (path) => {
+  const { env } = pageShellFixture();
+  const response = await app.request(`${env.APP_URL}${path}`, {}, env);
+  expect(response.status).toBe(200);
+  const heading = (await response.text()).match(/<div class="schedule-heading">(.*?)<\/div>/)![1]!;
+  expect(heading).toContain(`href="/join?next=${encodeURIComponent(path)}">Join the Discord</a>`);
+});
+
+it.each([
+  ["/events/past", "/events/past"],
+  ["/events/past?page=1", "/events/past"],
+  ["/events/past?page=3", "/events/past?page=3"],
+] as const)("%s: the archive header Sign in CTA preserves the normalized archive destination", async (path, next) => {
+  const { env } = pageShellFixture();
+  const response = await app.request(`${env.APP_URL}${path}`, {}, env);
+  expect(response.status).toBe(200);
+  const header = (await response.text()).match(/<header\b[^>]*>(.*?)<\/header>/)![1]!;
+  expect(header).toContain(`href="/auth/discord?next=${encodeURIComponent(next)}" data-testid="signin"`);
+});
+
 it("keeps event detail outside the schedule-only theme", async () => {
   const html = await (await pageShellFixture().request(`/e/${EVENT_KEY}`)).text();
   expect(html).not.toContain('href="/theme.css"');
