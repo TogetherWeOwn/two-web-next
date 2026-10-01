@@ -8,10 +8,12 @@ const MAX_TRACKED = 500;
 // request path, query string, exception, job payload or trace event.request.
 export const ALERT_ROUTES = new Set([
   "/", "/about", "/admin", "/admin/events", "/admin/events/:key", "/admin/events/new",
-  "/admin/events/:key/cancel", "/admin/events/:key/publish", "/admin/events/:key/rsvp-pause",
-  "/admin/events/:key/rsvp-reopen", "/admin/featured", "/admin/featured/:id", "/admin/featured/new",
-  "/admin/featured/:id/delete", "/admin/join-attempts", "/admin/join-attempts/:id",
-  "/api/agent-events", "/auth/discord", "/auth/discord/callback", "/auth/qa/:identity",
+  "/admin/events/:key/cancel", "/admin/events/:key/edit", "/admin/events/create",
+  "/admin/events/:key/publish", "/admin/events/:key/rsvp-pause", "/admin/events/:key/rsvp-reopen",
+  "/admin/featured", "/admin/featured/:id", "/admin/featured/new", "/admin/featured/:id/delete",
+  "/admin/featured-contents", "/admin/featured-contents/:id/edit", "/admin/featured-contents/create",
+  "/admin/join-attempts", "/admin/join-attempts/:id",
+  "/api/agent-events", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect", "/auth/qa/:identity",
   "/__probe/alert", "/csp-reports", "/discord", "/e/:key", "/events", "/events.ics",
   "/events.json", "/events.rss", "/events/:file{.+\\.ics}", "/events/past", "/events/:key",
   "/events/:key/cancel", "/events/:key/publish", "/events/:key/rsvp", "/events/:key/rsvp-pause",
