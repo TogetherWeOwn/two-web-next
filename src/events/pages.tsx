@@ -334,7 +334,9 @@ export const EventsCalendarPage: FC<{
   appUrl: string;
   /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
   loginReturnTo?: string | null;
-}> = ({ state, upcoming, past, zone, now, emptyState, discordFailed, member, inviteUrl, appUrl, loginReturnTo = null }) => {
+  /** One-shot join confirmation when this page is the join landing (TOG-10356). */
+  joinResult?: JoinResult | null;
+}> = ({ state, upcoming, past, zone, now, emptyState, discordFailed, member, inviteUrl, appUrl, loginReturnTo = null, joinResult = null }) => {
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
@@ -364,6 +366,10 @@ export const EventsCalendarPage: FC<{
         <h1 id="events-heading" tabindex={-1}>
           Events
         </h1>
+        {/* One-shot join confirmation (legacy join_result): /events is the
+            join landing when the CTA carried next=/events. Renders outside the
+            island zones so fragment swaps never swallow it. */}
+        {joinResult ? <JoinResultBanner result={joinResult} /> : null}
 
         {/* Live regions OUTSIDE the swapped zones (legacy TOG-5416): they must
             announce without being re-created. */}

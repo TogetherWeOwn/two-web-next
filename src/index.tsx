@@ -28,6 +28,7 @@ import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
+import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { profilesApp } from "./profiles/routes";
@@ -232,17 +233,22 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
 const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
 
 app.get("/", async (c) => {
-  const session = await readSession(c);
+  // Optional homepage data must not take down the funnel during a DB outage.
+  const session = await readSession(c).catch(() => null);
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
   const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
   // One-shot join confirmation (legacy join_result flash): first render consumes it.
-  const joinResult = await takeJoinResult(c);
+  // A failure landing drops a stale success flash instead — the current failure
+  // explanation wins over an older journey's success (TOG-10356 review).
+  const flashed = await takeJoinResult(c);
+  const joinResult = notice === "join_failed" || notice === "signin_failed" ? null : flashed;
+  const featured = await dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} joinResult={joinResult} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} />,
+    <Home session={session} notice={notice} joinResult={joinResult} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} featured={featured} />,
   );
 });
 

@@ -79,23 +79,24 @@ describe("W15 auth/join in Miniflare", () => {
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });
 
-  it("completes the one-click already-member join and honors the signed return cookie", async () => {
+  it("completes the one-click already-member join and renders the banner on the actual landing", async () => {
     joinStatus = 204;
-    const start = await request("/join/discord?source=web-homepage&next=%2Fevents");
+    // Review CHANGES (45bc0ea): assert the callback's ACTUAL redirect
+    // destination (/join is DB-free, so it renders in this fixture), not a
+    // different page. First render shows the already-member banner with the
+    // real reinvite action, then it's gone.
+    const start = await request("/join/discord?source=web-homepage&next=%2Fjoin");
     const url = new URL(start.headers.get("location")!);
     expect(url.searchParams.get("redirect_uri")).toBe(`${STAGING_APP_URL}/join/callback`);
     const result = await request(`/join/callback?code=test-code&state=${url.searchParams.get("state")}`, { headers: { cookie: cookie(start) } });
     expect(result.status).toBe(302);
-    expect(result.headers.get("location")).toBe("/events");
+    expect(result.headers.get("location")).toBe("/join");
     expect(result.headers.getSetCookie().join("\n")).toContain("__Host-two_join_next=; Max-Age=0");
-    // The one-shot confirmation (legacy join_result): first render shows the
-    // already-member banner with the real reinvite action, then it's gone.
-    const view = await request("/", { headers: { cookie: cookie(result) } });
+    const view = await request("/join", { headers: { cookie: cookie(result) } });
     const html = await view.text();
-    expect(html).toContain("Worker Member");
     expect(html).toContain('data-testid="join-result"');
     expect(html).toContain('data-testid="reinvite-link"');
-    const again = await request("/", { headers: { cookie: cookie(view) } });
+    const again = await request("/join", { headers: { cookie: cookie(view) } });
     expect(await again.text()).not.toContain('data-testid="join-result"');
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });

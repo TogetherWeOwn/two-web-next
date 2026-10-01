@@ -167,8 +167,16 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       }
     }
 
+    // One-shot join confirmation (legacy join_result flash): /events is a
+    // join-CTA landing (`/join?next=/events`), so it consumes and renders the
+    // banner exactly once like /, /join, /profile and /e/:key (TOG-10356
+    // review). Island fragment swaps must not consume it: the banner renders
+    // outside the swapped zones, so a fragment would eat the flash without
+    // ever displaying it — the pending value survives for the next full load.
+    const island = c.req.header("x-two-island") === "events-calendar";
+    const joinResult = island ? null : await takeJoinResult(c);
     // Search analytics must run per request, not only on shared-cache misses.
-    c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
+    c.header("cache-control", session || searching || joinResult ? "private, no-store" : "public, max-age=60");
     if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
     // Guest sign-in links carry this page as ?next= so the OAuth round trip
@@ -195,6 +203,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         inviteUrl={c.env.DISCORD_INVITE_URL}
         appUrl={c.env.APP_URL}
         loginReturnTo={loginReturnTo}
+        joinResult={joinResult}
       />,
     );
   });
@@ -277,17 +286,16 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return c.text("Events temporarily unavailable", 503);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
-    // The page personalizes on the session (member/guest join pitch) and on
-    // the one-shot join confirmation, so it is never share-cached (main W16)
-    // and always varies on the cookie (TOG-10356 finding 5). A signed-in exit
-    // always rotates the session cookie, so even the 403/410 must carry
-    // private,no-store (TOG-10356 review: cancelled 410s carried a rotated
-    // auth cookie with no Cache-Control). Headers go before the draft gate:
-    // a signed-in non-moderator still rotated above, so the 403 must not be
-    // cacheable either.
+    // The live page personalizes on the session (member/guest join pitch)
+    // and on the one-shot join confirmation, so it is never share-cached
+    // (main W16) and always varies on the cookie (TOG-10356 finding 5). The
+    // cancelled page is viewer-independent: it renders before any session
+    // read, so a store outage or a rotated cookie can never turn the static
+    // cancellation into a 500 (TOG-10356 review). Its no-store posture stays
+    // even without a session exit: nothing viewer-specific here may be
+    // cached. The draft gate below still reads the session first — a
+    // signed-in rotation there makes its 403 viewer-specific too.
     if (e.status === "cancelled") {
-      const session = await readSession(c as unknown as Ctx);
-      void session;
       c.header("x-robots-tag", "noindex, nofollow");
       c.header("cache-control", "private, no-store");
       c.header("vary", "Cookie");

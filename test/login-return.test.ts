@@ -328,6 +328,29 @@ describe("join_result flash (legacy AlreadyMemberReinviteTest)", () => {
     const res = await app.request("/", { headers: { cookie: forged } }, env);
     expect(await res.text()).not.toContain('data-testid="join-result"');
   });
+
+  it.each(["signin_failed", "join_failed"] as const)(
+    "a failure landing (?n=%s) drops a stale success flash and shows the recovery notice",
+    async (notice) => {
+      // Review CHANGES (45bc0ea): Home preferred the flashed success over the
+      // current failure notice, hiding the explanation/invite fallback behind
+      // an older journey's success. The current notice wins; the stale flash
+      // is consumed, never left pending.
+      const { env } = isolated();
+      const { jar } = await runJoin(env, 204);
+      expect(jar[JOIN_RESULT_COOKIE]).toBeTruthy();
+      const res = await app.request(`/?n=${notice}`, { headers: { cookie: sendJar(jar) } }, env);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('data-testid="notice"');
+      expect(html).not.toContain('data-testid="join-result"');
+      const after = jarFrom(res, jar);
+      expect(after[JOIN_RESULT_COOKIE]).toBeUndefined();
+      // And the plain notice still renders with no flash anywhere near it.
+      const plain = await app.request(`/?n=${notice}`, {}, env);
+      expect(await plain.text()).toContain('data-testid="notice"');
+    },
+  );
 });
 
 describe("/join next forwarding (legacy ReturnToPageTest)", () => {
@@ -469,17 +492,87 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(await second.text()).not.toContain('data-testid="join-result"');
   });
 
-  it("a cancelled event with a rotated session cookie is never cacheable", async () => {
-    // Finding 2: readSession rotates before the cancelled branch, so the 410
-    // must carry private,no-store even though the body is viewer-independent.
+  it("a cancelled event never touches the session and is never cacheable", async () => {
+    // Review CHANGES (45bc0ea): the cancelled branch renders before any
+    // session read, so a store outage can never turn the static 410 into a
+    // 500 — and no rotation cookie is minted for a body that ignores it.
     await db.update(events).set({ status: "cancelled" }).where(eq(events.eventKey, KEY));
     const store = createMemorySessionStore();
     const cookie = await sessionCookie(store, { userId: "42", member: true });
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(store));
     expect(res.status).toBe(410);
-    expect(res.headers.getSetCookie().some((c) => c.startsWith("__Host-two_session="))).toBe(true);
+    expect(res.headers.getSetCookie().some((c) => c.startsWith("__Host-two_session="))).toBe(false);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.get("vary")?.toLowerCase()).toContain("cookie");
+  });
+
+  it("a cancelled event still renders 410 when the session store is down", async () => {
+    // Review CHANGES (45bc0ea): with a signed session cookie but a failing
+    // store, the viewer-independent cancellation must still answer 410 —
+    // the handler performs zero session reads on this path.
+    await db.update(events).set({ status: "cancelled" }).where(eq(events.eventKey, KEY));
+    const store = createMemorySessionStore();
+    const cookie = await sessionCookie(store, { userId: "42", member: true });
+    const failing: SessionStore = {
+      create: async () => { throw new Error("store down"); },
+      get: async () => { throw new Error("store down"); },
+      rotate: async () => { throw new Error("store down"); },
+      revoke: async () => { throw new Error("store down"); },
+      sweepExpired: async () => { throw new Error("store down"); },
+    };
+    const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(failing));
+    expect(res.status).toBe(410);
+    expect(await res.text()).toContain('data-testid="event-cancelled"');
+  });
+
+  it("the /events landing renders the join confirmation once, then never again", async () => {
+    // Review CHANGES (45bc0ea): /events is the join landing when the CTA
+    // carried next=/events, so it consumes and renders the flash like /,
+    // /join, /profile and /e/:key — with private,no-store for that view.
+    const store = createMemorySessionStore();
+    const env = envFor(store);
+    mockDiscord({ joinStatus: 204 });
+    const start = await app.request("/join/discord?next=%2Fevents", {}, env);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const cb = await app.request(`/join/callback?code=abc&state=${state}`, { headers: { cookie: sendJar(jarFrom(start)) } }, env);
+    expect(cb.headers.get("location")).toBe("/events");
+    const jar = jarFrom(cb, jarFrom(start));
+    expect(jar[JOIN_RESULT_COOKIE]).toBeTruthy();
+
+    const first = await app.request("/events", { headers: { cookie: sendJar(jar) } }, env);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    const html = await first.text();
+    expect(html).toContain('data-testid="join-result"');
+    expect(html).toContain('data-testid="reinvite-link"');
+    const after = jarFrom(first, jar);
+    expect(after[JOIN_RESULT_COOKIE]).toBeUndefined();
+
+    const second = await app.request("/events", { headers: { cookie: sendJar(after) } }, env);
+    expect(await second.text()).not.toContain('data-testid="join-result"');
+  });
+
+  it("an island fragment swap never consumes the pending join confirmation", async () => {
+    // The banner renders outside the swapped zones: a fragment request must
+    // leave the flash for the next full page load, not eat it silently.
+    const store = createMemorySessionStore();
+    const env = envFor(store);
+    mockDiscord({ joinStatus: 204 });
+    const start = await app.request("/join/discord?next=%2Fevents", {}, env);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const cb = await app.request(`/join/callback?code=abc&state=${state}`, { headers: { cookie: sendJar(jarFrom(start)) } }, env);
+    const jar = jarFrom(cb, jarFrom(start));
+
+    const fragment = await app.request("/events", {
+      headers: { cookie: sendJar(jar), "x-two-island": "events-calendar" },
+    }, env);
+    expect(fragment.status).toBe(200);
+    expect(await fragment.text()).not.toContain('data-testid="join-result"');
+    const kept = jarFrom(fragment, jar);
+    expect(kept[JOIN_RESULT_COOKIE]).toBeTruthy();
+
+    const full = await app.request("/events", { headers: { cookie: sendJar(kept) } }, env);
+    expect(await full.text()).toContain('data-testid="join-result"');
   });
 
   it("/events cards carry the login CTA with the page as next for guests only", async () => {

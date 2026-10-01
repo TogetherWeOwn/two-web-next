@@ -18,7 +18,7 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 
 | Legacy route | Next status | Card |
 |---|---|---|
-| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; live counts + featured + upcoming land with data slices | W4 ✅ + W8 📋 (verify: featured rows, upcoming) |
+| `GET /` (HomeController: counts + ranks + featured + 3 upcoming) | ✅ degraded shell; featured rows use legacy `[start, end)` windows, position/id order and no cap; upcoming pending | W4 ✅ + [TOG-10819](/TOG/issues/TOG-10819) (featured; `test/featured.test.ts`) + W8 📋 (upcoming) |
 | `GET /sitemap_index.xml` (home 1.0, join 0.9, events.index 0.8, about/faq/rules/privacy 0.7, published `/e/{key}` 0.6) | ✅ static entries; join + `/e/{key}` rows pending | W4 ✅ + W8 📋 |
 | `GET /robots.txt` (dynamic, per-env host) | ✅ | W4 ✅ |
 | `Route::view /rules` (DB-free leaf + last-updated stamp) | ✅ | W4 ✅ |
@@ -56,7 +56,19 @@ Delete the Next-only `/db-ping`, `/health` and `/healthz` routes in every
 configuration. Legacy exposes only `/up`; retaining a token/flag-protected
 ping would add a credential and an unnecessary public connection/fingerprinting
 surface. Removed paths use the ordinary branded 404 (same body and headers as
-unknown paths), without reading any database binding.
+unknown paths), with no diagnostic handler or database version/clock response.
+
+The 404 recovery enhancement ([TOG-10824](/TOG/issues/TOG-10824), contract
+reconciled in [TOG-11066](/TOG/issues/TOG-11066)) supersedes the original
+unconditional no-binding-read clause for ordinary 404 responses only. Like any
+unknown path, a removed diagnostic path may perform the optional, public-only
+lookup of at most three published, not-ended events: 400 ms SQL timeouts and a
+500 ms overall deadline, failing open to an empty suggestion list. Responses
+remain 404, noindex, private/no-store and session-free. No database error or
+connection metadata is exposed. Unsafe requests refused by the global
+same-origin guard still return 403 before reading any database binding. The
+removed-diagnostics tests pin response and DB-access parity across both host
+configurations, including absent, available and failing fixture lookups.
 
 The existing `/up` queue read already exercises the Worker-to-Hyperdrive-to-Postgres
 path: a counted queue proves connectivity; `queue.status: "unknown"` reports an
@@ -179,7 +191,7 @@ go hunting for them.
 |---|---|---|
 | Share meta (canonical + OG/Twitter, no og:image) + RSS autodiscovery | ✅ layout-level; per-event tags pending | W4 ✅ + W8 📋 |
 | `site.webmanifest` + icons (192/512/maskable/apple) + theme-color `#0b0714` | ❌ missing (`public/` has styles + islands only) | **N2** (new: manifest/icons) |
-| Branded 404/429/500/503 pages | ❌ Hono defaults | **N2** (new: error pages) |
+| Branded 404/429/500/503 pages | ✅ branded shells; 404 now has a fail-open, 500 ms lookup (3 upcoming published events) and GET `/events?q=` search, without session reads/writes | **N2** + [TOG-10824](/TOG/issues/TOG-10824) |
 | Draft/noindex + gone-410 + past-never-indexed rules | sitemap side ✅; route side pending | W8 📋 |
 | `content/privacy-policy-v1.md` (live source) | ❌ see N1 | **N1** |
 | `content/faq-preview*.md` (docs-only), `content/welcome/*` (unwired drafts) | copy inlined / never wired | dropped (docs-only / dead) |
