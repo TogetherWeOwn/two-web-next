@@ -1,6 +1,7 @@
 import { alertQueueFailing } from "../alerts";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
+import { isQueueMessage } from "./envelope";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
@@ -31,7 +32,14 @@ export async function consume(
   deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger },
 ): Promise<void> {
   for (const m of batch.messages) {
-    const body = m.body as QueueMessage;
+    const body = m.body;
+    if (!isQueueMessage(body)) {
+      // Bad carriers cannot recover on retry. Do not trust their ledger/lock
+      // identifiers or log their payload; discard only this message.
+      console.warn("queue malformed message discarded");
+      m.ack();
+      continue;
+    }
     const jobId = typeof body.jobId === "string" ? body.jobId : null;
     const key = body.kind === "sync-event" ? uniqueKey(body.eventKey) : null;
     // Ledger transitions are best-effort: a stale ledger row is a visible backlog
@@ -55,6 +63,9 @@ export async function consume(
     // of the batch still runs. A stuck lock row self-heals via its TTL
     // (pgUniqueLock expires rows); the message must not be held hostage.
     const releaseLock = (key: string) => {
+      // In-flight legacy messages have no ownership proof. Never infer it from
+      // the event/job/idempotency key; let their original row expire instead.
+      if (body.kind !== "sync-event" || !body.leaseToken) return Promise.resolve();
       let t: ReturnType<typeof setTimeout>;
       const timeout = new Promise<void>((r) => {
         t = setTimeout(() => {
@@ -63,7 +74,7 @@ export async function consume(
         }, LOCK_TIMEOUT_MS);
       });
       return Promise.race([
-        deps.lock.release(key).catch((e: unknown) =>
+        deps.lock.release(key, body.leaseToken).catch((e: unknown) =>
           console.warn("queue lock release failed", key, e instanceof Error ? e.message : e)),
         timeout,
       ]).finally(() => clearTimeout(t));

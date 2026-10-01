@@ -67,7 +67,10 @@ describe("W15 Discord login and callback boundaries", () => {
     expect(url.searchParams.get("scope")).toBe("identify guilds.join");
     expect(url.searchParams.get("client_id")).toBe(env.DISCORD_CLIENT_ID);
     expect(url.searchParams.get("state")).not.toBe(new URL(second.headers.get("location")!).searchParams.get("state"));
-    const stateCookie = first.headers.getSetCookie()[0]!;
+    // A bare /auth/discord emits the state cookie plus the stale-clear
+    // deletion for the explicit next (TOG-10356 finding 6): find by name,
+    // never by position.
+    const stateCookie = first.headers.getSetCookie().find((c) => c.startsWith("__Host-two_oauth_state="))!;
     for (const flag of ["__Host-two_oauth_state=", "Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=600"]) {
       expect(stateCookie).toContain(flag);
     }
@@ -81,7 +84,12 @@ describe("W15 Discord login and callback boundaries", () => {
       const start = await app.request("/auth/discord", {}, e);
       const result = await app.request(`/auth/discord/callback${query}`, { headers: { cookie: cookies(start) } }, e);
       expect(result.status).toBe(302);
-      expect(result.headers.get("location")).toBe("/?n=signin_failed");
+      // A consent refusal (error=access_denied) gets its own user-visible
+      // meaning — "you cancelled" — distinct from the generic failure banner
+      // (TOG-10355, legacy DiscordLoginTest denial row). None of these rows
+      // may reach Discord.
+      const notice = query.includes("error=access_denied") ? "signin_denied" : "signin_failed";
+      expect(result.headers.get("location")).toBe(`/?n=${notice}`);
       expect(fetch).not.toHaveBeenCalled();
       expect(result.headers.getSetCookie().join("\n")).toContain("__Host-two_oauth_state=; Max-Age=0");
       expect(result.headers.getSetCookie().join("\n")).not.toContain(`${SESSION_COOKIE}=`);
@@ -93,7 +101,11 @@ describe("W15 Discord login and callback boundaries", () => {
     mockDiscord(step);
     const res = await signIn(e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/?n=signin_failed");
+    // Classification, not a blanket banner (TOG-10355): a 401 on the token
+    // endpoint is OUR credentials being rejected (generic failure copy); a
+    // 503 from the user endpoint is a Discord outage ("on Discord, not you").
+    const notice = step === "exchange" ? "signin_failed" : "signin_unavailable";
+    expect(res.headers.get("location")).toBe(`/?n=${notice}`);
     expect(await res.text()).not.toContain("untrusted-upstream-body");
     expect(res.headers.getSetCookie().join("\n")).not.toContain(`${SESSION_COOKIE}=`);
   });
