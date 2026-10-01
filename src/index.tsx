@@ -33,6 +33,7 @@ import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
+import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
 import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
@@ -425,6 +426,13 @@ app.get("/up", async (c) => {
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);
+
+// Legacy login links: retain only the existing guarded-next value, never OAuth input.
+app.get("/auth/discord/redirect", (c) => {
+  const next = safeNext(c.req.query("next"));
+  c.header("cache-control", "no-store");
+  return c.redirect(next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord", 302);
+});
 
 app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
