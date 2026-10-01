@@ -90,7 +90,9 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       repository: process.env.GITHUB_REPOSITORY,
       ref: process.env.GITHUB_REF,
       sha: process.env.GITHUB_SHA,
-      checkoutSha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      // The job container may not own the host checkout; trust only this path,
+      // only for this command (https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory).
+      checkoutSha: execFileSync("git", ["-c", `safe.directory=${resolve(".")}`, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     }, { token: process.env.GITHUB_TOKEN });
     console.log(`Staging gate passed: ${evidence.sha}, full CI run ${evidence.runId}, attempt ${evidence.runAttempt}`);
   } catch (error) {

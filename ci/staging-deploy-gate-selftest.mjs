@@ -46,13 +46,19 @@ const gateCommand = step("Require successful exact-SHA full CI");
 const queueCommand = step("Ensure queues exist");
 const deployCommand = step("Deploy to Cloudflare Workers");
 
-function executeStaging(ctx, evidence) {
+function executeStaging(ctx, evidence, changes = {}) {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-"));
   try {
     writeFileSync(join(dir, "event.json"), JSON.stringify(ctx.event));
     writeFileSync(join(dir, "evidence.json"), JSON.stringify(evidence));
-    writeFileSync(join(dir, "git"), '#!/bin/sh\n[ "$*" = "rev-parse HEAD" ] || exit 1\nprintf "%s\\n" "$TEST_CHECKOUT_SHA"\n', { mode: 0o755 });
-    writeFileSync(join(dir, "npx"), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_CALLS"\n', { mode: 0o755 });
+    writeFileSync(join(dir, "changes.json"), JSON.stringify(changes));
+    writeFileSync(join(dir, "transition.mjs"), `
+      import { readFileSync, writeFileSync } from "node:fs";
+      const changes = JSON.parse(readFileSync(process.env.TEST_CHANGES, "utf8"));
+      if (changes[process.argv[2]]) writeFileSync(process.env.TEST_EVIDENCE, JSON.stringify(changes[process.argv[2]]));
+    `);
+    writeFileSync(join(dir, "git"), '#!/bin/sh\n[ "$*" = "rev-parse HEAD" ] || [ "$*" = "-c safe.directory=$PWD rev-parse HEAD" ] || exit 1\nprintf "%s\\n" "$TEST_CHECKOUT_SHA"\n', { mode: 0o755 });
+    writeFileSync(join(dir, "npx"), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_CALLS"\nnode "$TEST_TRANSITION" "$*"\n', { mode: 0o755 });
     writeFileSync(join(dir, "fetch.mjs"), `
       import { readFileSync } from "node:fs";
       const evidence = JSON.parse(readFileSync(process.env.TEST_EVIDENCE, "utf8"));
@@ -75,7 +81,7 @@ function executeStaging(ctx, evidence) {
         }};
       };
     `);
-    const result = spawnSync("bash", ["-c", `set -e\n${gateCommand}\n${queueCommand}\n${deployCommand}`], {
+    const result = spawnSync("bash", ["-c", `set -e\n${gateCommand}\nnode "$TEST_TRANSITION" afterPreparation\n${queueCommand}\n${deployCommand}`], {
       cwd: root, encoding: "utf8", timeout: 15_000,
       env: {
         PATH: `${dir}:${process.env.PATH}`, NODE_OPTIONS: `--import=${join(dir, "fetch.mjs")}`,
@@ -83,6 +89,7 @@ function executeStaging(ctx, evidence) {
         GITHUB_REPOSITORY: ctx.repository, GITHUB_REF: ctx.ref, GITHUB_SHA: ctx.sha,
         GITHUB_TOKEN: "offline-stub", TEST_CHECKOUT_SHA: ctx.checkoutSha,
         TEST_EVIDENCE: join(dir, "evidence.json"), TEST_CALLS: join(dir, "calls"),
+        TEST_TRANSITION: join(dir, "transition.mjs"), TEST_CHANGES: join(dir, "changes.json"),
       },
     });
     let calls = [];
@@ -145,6 +152,89 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
     assert.match(result.stderr, /Checkout does not match deployment SHA/);
   });
 }
+
+const mutationCalls = ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy"];
+for (const eventName of ["workflow_run", "workflow_dispatch"]) {
+  for (const [phase, allowedCalls] of [["afterPreparation", 0], [mutationCalls[0], 1], [mutationCalls[1], 2]]) {
+    for (const [name, mutate] of denied.filter(([name]) => ["missing", "wrong SHA", "in_progress", "failure", "cancelled"].includes(name))) {
+      test(`${eventName}: ${name} after ${phase} stops the next mutation`, () => {
+        const changed = fixture();
+        mutate(changed);
+        if (changed.runs.workflow_runs.length) {
+          changed.runs.workflow_runs[0].run_attempt = 2;
+          changed.current = structuredClone(changed.runs.workflow_runs[0]);
+        }
+        const result = executeStaging(context(eventName), fixture(), { [phase]: changed });
+        assert.equal(result.status, 1, result.stderr);
+        assert.deepEqual(result.calls, mutationCalls.slice(0, allowedCalls));
+        assert.match(result.stderr, /Staging gate refused:/);
+      });
+    }
+  }
+}
+
+test("real Git accepts only the current checkout despite a container owner mismatch", () => {
+  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-owner-"));
+  try {
+    const env = { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    function git(args) {
+      const result = spawnSync("git", args, { cwd: dir, env, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    }
+    git(["init", "--quiet"]);
+    git(["-c", "user.name=Offline Test", "-c", "user.email=offline@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"]);
+    const checkoutSha = git(["rev-parse", "HEAD"]);
+    env.GIT_TEST_ASSUME_DIFFERENT_OWNER = "1";
+    const bare = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, env, encoding: "utf8" });
+    assert.equal(bare.status, 128, bare.stderr);
+    assert.match(bare.stderr, /dubious ownership/);
+    const ctx = context("workflow_dispatch");
+    ctx.sha = checkoutSha;
+    const evidence = fixture();
+    evidence.runs.workflow_runs[0].head_sha = checkoutSha;
+    evidence.current.head_sha = checkoutSha;
+    for (const job of evidence.jobs.jobs) job.head_sha = checkoutSha;
+    writeFileSync(join(dir, "event.json"), JSON.stringify(ctx.event));
+    writeFileSync(join(dir, "fetch.mjs"), `
+      const evidence = ${JSON.stringify(evidence)};
+      globalThis.fetch = async (url) => ({ ok: true, json: async () => {
+        const path = new URL(url).pathname;
+        if (path.endsWith("/workflows/ci.yml/runs")) return evidence.runs;
+        if (path.endsWith("/runs/42/jobs")) return evidence.jobs;
+        if (path.endsWith("/runs/42")) return evidence.current;
+        throw new Error("Unexpected API path");
+      }});
+    `);
+    const result = spawnSync(process.execPath, [join(root, "ci/staging-deploy-gate.mjs")], {
+      cwd: dir, encoding: "utf8", timeout: 15_000,
+      env: { ...env, NODE_OPTIONS: `--import=${join(dir, "fetch.mjs")}`,
+        GITHUB_EVENT_NAME: ctx.eventName, GITHUB_EVENT_PATH: join(dir, "event.json"),
+        GITHUB_REPOSITORY: repository, GITHUB_REF: ctx.ref, GITHUB_SHA: checkoutSha, GITHUB_TOKEN: "offline-stub" },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`Staging gate passed: ${checkoutSha}`));
+    // Trust is command-scoped: the next bare Git call still refuses this repo.
+    assert.equal(spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, env }).status, 128);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("rejected completion events never enter staging job concurrency", () => {
+  assert.doesNotMatch(workflow, /^concurrency:/m);
+  assert.match(workflow, /    concurrency:\n      group: deploy-staging\n      cancel-in-progress: false/);
+  const expression = workflow.match(/    if: >-\n((?:      .*\n)+)/)[1];
+  const accepts = new Function("github", `return ${expression}`);
+  const github = { event_name: "workflow_run", repository, event: context("workflow_run").event };
+  assert.equal(accepts(github), true);
+  for (const conclusion of ["failure", "cancelled", "skipped", null]) {
+    github.event.workflow_run.conclusion = conclusion;
+    assert.equal(accepts(github), false);
+  }
+  assert.equal(accepts({ event_name: "workflow_dispatch", ref: "refs/heads/main" }), true);
+  assert.equal(accepts({ event_name: "workflow_dispatch", ref: "refs/heads/topic" }), false);
+});
 
 test("trigger identity is pinned, main-only and never taken from PR or fork evidence", () => {
   assert.equal(deploymentTarget(context("workflow_run")), sha);
