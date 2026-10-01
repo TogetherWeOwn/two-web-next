@@ -67,10 +67,7 @@ describe("W15 Discord login and callback boundaries", () => {
     expect(url.searchParams.get("scope")).toBe("identify guilds.join");
     expect(url.searchParams.get("client_id")).toBe(env.DISCORD_CLIENT_ID);
     expect(url.searchParams.get("state")).not.toBe(new URL(second.headers.get("location")!).searchParams.get("state"));
-    // A bare /auth/discord emits the state cookie plus the stale-clear
-    // deletion for the explicit next (TOG-10356 finding 6): find by name,
-    // never by position.
-    const stateCookie = first.headers.getSetCookie().find((c) => c.startsWith("__Host-two_oauth_state="))!;
+    const stateCookie = first.headers.getSetCookie()[0]!;
     for (const flag of ["__Host-two_oauth_state=", "Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=600"]) {
       expect(stateCookie).toContain(flag);
     }
