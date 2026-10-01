@@ -51,12 +51,12 @@ function calendarVisible(opts: CalendarReadOpts): SQL | undefined {
   return clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : and(...clauses);
 }
 
-/** Upcoming = visible and not yet ended, soonest first (legacy `upcoming()`). */
+/** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). */
 export async function listUpcoming(db: Db, now = new Date(), opts: CalendarReadOpts = {}): Promise<PublicEvent[]> {
   const rows = await db
     .select()
     .from(events)
-    .where(and(calendarVisible(opts), gte(events.endsAt, now)))
+    .where(and(calendarVisible(opts), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
   return withGoing(db, rows);
 }
@@ -130,21 +130,29 @@ export async function listCalendarPast(
   return withGoing(db, rows);
 }
 
+/** Invalid HTML archive pages/offsets retain the page-one fallback. */
+export function normalizePastPage(page: number): number {
+  return Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger((page - 1) * PAGE_SIZE) ? page : 1;
+}
+
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
 export async function listPast(db: Db, page: number, now = new Date(), q: string | null = null): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number }> {
+  page = normalizePastPage(page);
   const archived = and(or(eq(events.status, "past"), and(eq(events.status, "published"), lt(events.endsAt, now))), searchCondition(q));
   const [total] = await db.select({ n: count() }).from(events).where(archived);
+  const totalPages = Math.ceil(Number(total?.n ?? 0) / PAGE_SIZE);
+  if (page > totalPages) return { rows: [], hasMore: false, totalPages };
   const rows = await db
     .select()
     .from(events)
     .where(archived)
     .orderBy(desc(events.startsAt), desc(events.id))
     .limit(PAGE_SIZE + 1)
-    .offset((Math.max(1, page) - 1) * PAGE_SIZE);
+    .offset((page - 1) * PAGE_SIZE);
   return {
     rows: await withGoing(db, rows.slice(0, PAGE_SIZE)),
     hasMore: rows.length > PAGE_SIZE,
-    totalPages: Math.ceil(Number(total?.n ?? 0) / PAGE_SIZE),
+    totalPages,
   };
 }
 
@@ -175,6 +183,10 @@ const eventLinkColumns = {
 
 // Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.
 const finiteEventStart = sql`isfinite(${events.startsAt})`;
+
+// Rendered boundaries decode PostgreSQL infinity to invalid Dates whose
+// `toISOString()`/formatting throws, so upcoming reads refuse either one.
+const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${events.endsAt})`);
 
 /** Published links only, even for moderators. Equal starts use id as the legacy tiebreak. */
 export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id">): Promise<EventNeighbors> {
@@ -230,10 +242,11 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */
 export async function listJson(
   db: Db,
-  opts: { limit: number; offset: number; includeDrafts: boolean },
+  opts: { limit: number; offset: number; includeDrafts: boolean; eventKey?: string },
 ): Promise<PublicEvent[]> {
   const visible = opts.includeDrafts ? sql`true` : inArray(events.status, ["published", "cancelled", "past"]);
-  const rows = await db.select().from(events).where(visible).orderBy(desc(events.startsAt)).limit(opts.limit).offset(opts.offset);
+  const match = opts.eventKey === undefined ? undefined : eq(events.eventKey, opts.eventKey);
+  const rows = await db.select().from(events).where(and(visible, match)).orderBy(desc(events.startsAt)).limit(opts.limit).offset(opts.offset);
   return withGoing(db, rows);
 }
 
@@ -242,12 +255,12 @@ export async function sitemapEvents(db: Db): Promise<{ key: string; status: "pub
   return rows.map((r) => ({ key: r.eventKey, status: "published" as const, updatedAt: r.updatedAt.toISOString() }));
 }
 
-/** Feed scope: upcoming (ends_at >= now), soonest first. `statuses` differs for RSS vs ICS. */
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. `statuses` differs for RSS vs ICS. */
 export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
   return db
     .select()
     .from(events)
-    .where(and(inArray(events.status, statuses), gte(events.endsAt, now)))
+    .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt));
 }
 

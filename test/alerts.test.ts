@@ -90,7 +90,7 @@ describe("app wiring", () => {
 });
 
 describe("queue.failing", () => {
-  const lock: UniqueLock = { acquire: async () => true, release: async () => {} };
+  const lock: UniqueLock = { acquire: async () => "test-lease", release: async () => {} };
   const events = {} as EventStore;
   const ledger = { released: async () => {}, dequeued: async () => {}, failed: async () => {} } as unknown as QueueLedger;
   const msg = (body: unknown, attempts: number) => ({ body, attempts, ack() {}, retry() {} });
@@ -129,7 +129,7 @@ describe("queue.failing", () => {
     const boom = () => { throw new TypeError("x"); };
     const store = { find: boom } as unknown as EventStore;
     await consume(
-      { messages: [msg({ kind: "sync-event", eventKey: "e1" }, SYNC_EVENT.tries)] },
+      { messages: [msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, SYNC_EVENT.tries)] },
       { bot: {} as BotClient, events: store, lock, ledger },
     );
     expect(failingLines(spy)).toMatchObject([{ queue: "two-sync-event", job: "SyncEventToDiscord" }]);
