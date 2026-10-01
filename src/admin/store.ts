@@ -95,6 +95,9 @@ export async function createEvent(
   // never mirrored, so the write-back is a no-op by construction. A series is
   // one transaction (no half-series): the parent (index 1) and every
   // occurrence its rule names, all drafts.
+  // The key is minted here, never taken from input: EventFormInput carries
+  // no key field and parseEventForm refuses forged event_key/eventKey
+  // (legacy EventKeyTest immutability).
   const row = await db.transaction(async (tx) => {
     const [parent] = await tx
       .insert(events)
@@ -232,6 +235,8 @@ export async function updateEvent(
         throw new ValidationError({ capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.` });
       }
     }
+    // Closed field list: the key is addressed by, never written through,
+    // this update (EventFormInput carries no key; forged keys never parse).
     const [row] = await tx
       .update(events)
       .set({
