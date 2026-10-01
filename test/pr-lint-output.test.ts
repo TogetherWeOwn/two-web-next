@@ -185,7 +185,8 @@ describe("unchanged convention policy and workflow gates", () => {
     expect(readFileSync(helper, "utf8")).toContain('with_name("resolve-pr-metadata.py")');
     expect(resolve.text).toContain("          PR_NUMBER: ${{ inputs.pr_number }}\n");
     expect(workflow).toContain("    name: pr-lint\n");
-    expect(workflow).toContain("    runs-on: [self-hosted, two-selfhosted]\n");
+    // Self-hosted stays the default; CI_OVERFLOW_* repo vars may select an overflow runner.
+    expect(workflow).toContain(`|| '["self-hosted","two-selfhosted"]') }}\n`);
     expect(workflow.match(/^permissions:\n((?:  .*\n)+)/m)?.[1]).toBe("  contents: read\n  pull-requests: read\n");
   });
 });
