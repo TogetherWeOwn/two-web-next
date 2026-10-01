@@ -7,28 +7,18 @@ import os
 from pathlib import Path
 import runpy
 import subprocess
+import sys
 import tempfile
 
 
 def resolve():
-    event = os.environ["EVENT"]
-    if event == "workflow_dispatch":
-        number = os.environ["PR_NUMBER"]
-        print(f"Validating release PR #{number} via the API.")
-        # Decode the API response directly: shell command substitution strips trailing LFs.
-        response = subprocess.run(
-            ["gh", "pr", "view", number, "--repo", os.environ["GITHUB_REPOSITORY"],
-             "--json", "title,body,author"],
-            check=True, capture_output=True, text=True,
-        )
-        pr = json.loads(response.stdout)
-        title, body, author = pr["title"], pr["body"], pr["author"]["login"]
-        event = "pull_request"
-    else:
-        title = os.environ.get("EVENT_TITLE", "")
-        body = os.environ.get("EVENT_BODY", "")
-        author = os.environ.get("EVENT_AUTHOR", "")
-    metadata = {"event": event, "title": title, "body": body, "author": author}
+    # Bind identity/revision before publishing any output, then keep the decoded
+    # JSON intact through the job-owned file (including trailing LFs and CRs).
+    response = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("resolve-pr-metadata.py"))],
+        check=True, stdout=subprocess.PIPE, text=True,
+    )
+    metadata = json.loads(response.stdout)
     # Keep arbitrary values out of output commands and avoid a large encoded env value.
     # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#multiline-strings
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.environ["RUNNER_TEMP"],
