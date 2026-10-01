@@ -1,7 +1,9 @@
 // Admin read surfaces (W12: M6 roster, M8 join viewer + funnel stats).
 // Read-only by construction: nothing here inserts, updates or deletes.
 
-import { and, count, desc, eq, gte, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, or } from "drizzle-orm";
+import { JOIN_ATTEMPT_PAGE_SIZE, parseJoinAttemptsQuery, type RosterQuery } from "./table-list";
+import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
@@ -13,15 +15,23 @@ export const JOIN_RETENTION_DAYS = JOIN_ATTEMPT_RETENTION_DAYS;
 
 export type RosterEntry = { userId: string; username: string | null; status: string; answeredAt: Date };
 
-/** Read-only RSVP roster for one event: who answered what, most recent first. */
-export async function listRoster(db: Db, eventKey: string): Promise<RosterEntry[]> {
+/** Read-only RSVP roster for one event; most recent first unless explicitly sorted. */
+export async function listRoster(
+  db: Db,
+  eventKey: string,
+  query: RosterQuery = { q: "", sort: "answered", order: "desc" },
+): Promise<RosterEntry[]> {
+  const conds = [eq(events.eventKey, eventKey)];
+  if (query.q) conds.push(ilike(users.username, `%${escapeLikeTerm(query.q)}%`));
+  const column = query.sort === "status" ? rsvps.status : rsvps.updatedAt;
+  const order = query.order === "asc" ? asc(column) : desc(column);
   return keyedMemberRead(() => db
     .select({ userId: rsvps.userId, memberId: users.id, username: users.username, status: rsvps.status, answeredAt: rsvps.updatedAt })
     .from(rsvps)
     .innerJoin(events, eq(events.id, rsvps.eventId))
     .leftJoin(users, eq(users.id, rsvps.userId))
-    .where(eq(events.eventKey, eventKey))
-    .orderBy(desc(rsvps.updatedAt), rsvps.userId));
+    .where(and(...conds))
+    .orderBy(order, rsvps.userId));
 }
 
 // Explicit projection works on both migrateJoin() bootstrap and imported
@@ -39,7 +49,6 @@ const attemptColumns = {
   discordId: joinAttempts.discordId,
   createdAt: joinAttempts.createdAt,
 };
-const PAGE = 100;
 
 /**
  * Viewer over the write-once trail, newest first, inside the retention
@@ -48,8 +57,9 @@ const PAGE = 100;
  */
 export async function listJoinAttempts(
   db: Db,
-  opts: { outcome?: string; q?: string; now?: Date },
+  opts: { outcome?: string; q?: string; page?: number; now?: Date },
 ): Promise<JoinAttemptRow[]> {
+  const { page } = parseJoinAttemptsQuery({ page: String(opts.page ?? 1) });
   const since = windowStart(opts.now);
   const conds = [gte(joinAttempts.createdAt, since)];
   if (opts.outcome) conds.push(eq(joinAttempts.outcome, opts.outcome));
@@ -58,7 +68,9 @@ export async function listJoinAttempts(
     .from(joinAttempts)
     .where(and(...conds))
     .orderBy(desc(joinAttempts.createdAt), desc(joinAttempts.id))
-    .limit(PAGE));
+    // The lookahead powers Next and is still a sensitive read: capture its owner.
+    .limit(JOIN_ATTEMPT_PAGE_SIZE + 1)
+    .offset((page - 1) * JOIN_ATTEMPT_PAGE_SIZE));
 }
 
 /** Direct lookup uses the list's retention window and the retrieved owner key. */

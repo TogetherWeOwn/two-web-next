@@ -130,10 +130,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
     const html = await res.text();
     expect(html).toContain("RSVPs (2)");
     expect(html).toContain("alice");
-    expect(html).toContain("10000000000000901"); // no users row: falls back to the id
+    expect(html).toContain("Unknown member"); // no users row: do not expose an opaque id
+    expect(html).not.toContain("10000000000000901");
     expect(html).toContain("2026-10-03T10:00:00.000Z");
     // Newest answer first.
-    expect(html.indexOf("10000000000000901")).toBeLessThan(html.indexOf("alice"));
+    expect(html.indexOf("Unknown member")).toBeLessThan(html.indexOf("alice"));
 
     const logs = await db.select().from(memberDataAccessLogs);
     expect(logs).toHaveLength(1);

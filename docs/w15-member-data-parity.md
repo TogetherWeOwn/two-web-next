@@ -83,7 +83,7 @@ handlers fail completeness. It remains an inventory guard. Runtime query observa
 | 123: ordinary-site profile reads logged | A real profile rows + E mounted worker reads. |
 | 136: real failed INSERT refuses admin contents | A admin missing-column/table cases. **Bug fixed here:** returning a new middleware response after `await next()` was ignored by Hono; assign `c.res` to replace the finalized roster. |
 | 158: failure log excludes viewer/bindings/SQL | A real INSERT failure diagnostics scan excludes personal tokens, viewer/subject IDs, query token, statement and missing-column name. **Diagnostic difference:** class-only `DrizzleQueryError`, not Laravel exception class + SQLSTATE. |
-| 194: every admin route has recorder, selected set nonempty | E enumerates all 9 registered admin GETs and checks every role; A proves real rows/failures on roster/join routes. **Difference:** no Filament gate aliases; adminGuard is the single wildcard middleware. |
+| 194: every admin route has recorder, selected set nonempty | E enumerates all 14 registered admin GETs (including the five legacy aliases) and checks every role; A proves real rows/failures on roster/join routes. **Difference:** no Filament gate aliases; adminGuard is the single wildcard middleware. |
 | 242: undeclared lazy streamed response refused | `test/keyed-member-reads.test.ts`, mounted admin/event tests and `test/keyed-member-worker.test.ts` refuse undeclared stream replacements without producer pulls or sensitive bytes. Ordinary Response bodies are not tested with `instanceof ReadableStream`. |
 | 266: declared stream recorded before release | **Intentional stricter difference:** declared member streams are also refused. Only the controlled buffered HTML/text APIs classify a response; replacing that exact response invalidates classification. No supported member streaming is added. |
 | 291: arm/flush leaves no state for later request | A `arming a later request inherits nothing...`, sequential armed/self/404 requests and simultaneous requests on one app instance. AsyncLocalStorage capture/one-query permits and exact-response classification replace container-global recorder state; real-row and workerd suites separately exercise isolation. |
@@ -179,6 +179,17 @@ Classifications are not blanket SQL exemptions. Anonymous event reads permit onl
 results; invalid/missing viewer keys cannot release member contents. Captured
 subjects are deduplicated, sorted, self-excluded and written once, before releasing
 the exact classified buffer, using stable route names and private/no-store.
+
+Roster search/sort retains both RSVP and joined-user owner projections. Featured
+filter/sort and legacy-ID resolution remain classified non-sensitive reads;
+featured/event resource IDs never become member subjects. Authorized legacy admin
+redirects use empty classified text buffers and fixed metadata, not a response
+classification bypass. Join pagination renders 100 rows but retrieves a 101st
+sensitive lookahead: its actual owner is also audited. Unlike main's former
+route-declared subjects, slicing the HTML rows cannot erase a retrieved owner.
+`test/admin-table-list.test.ts` proves actual one-row PostgreSQL attribution across
+both pages and refuses the whole response for missing, malformed or short
+lookahead keys. Workerd's existing single-row fixture does not prove pagination.
 
 - **Real PostgreSQL:** keyed/mounted suites execute actual SELECTs and INSERTs,
   prove real audit failures with isolated rollback-only DDL/check constraints,
