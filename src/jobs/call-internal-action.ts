@@ -1,4 +1,5 @@
 import { CALL_INTERNAL_ACTION as C, backoffFor } from "./constants";
+import { botRefusalReason, botRetryExhaustedReason, terminalFailureReason } from "./queue-error";
 import { BotTerminalError, BotTransportError } from "./types";
 import type { Announcement, BotClient, QueueMessage, RoleAssignment } from "./types";
 import type { Outcome } from "./sync-event";
@@ -33,14 +34,16 @@ export async function handleCallInternalAction(
         ? { failed: `gave up after ${attempts} attempts` }
         : { retryInSeconds: backoffFor(C.backoffSeconds, attempts) };
     }
-    if (e instanceof BotTerminalError) return { failed: e.message };
+    // Class-only: the terminal message can carry tokens or personal data.
+    if (e instanceof BotTerminalError) return { failed: terminalFailureReason() };
     throw e;
   }
   if (answer.ok) return { done: true };
   const name = msg.kind === "announcement" ? "announcement.post" : "role.assign";
-  if (!answer.retryable) return { failed: `The bot refused ${name} with \`${answer.code}\`: ${answer.message}` };
+  // Class-only: keep the stable failure code, never the provider message.
+  if (!answer.retryable) return { failed: botRefusalReason(name, answer.code) };
   if (attempts >= C.tries) {
-    return { failed: `The bot refused ${name} with a retryable \`${answer.code}\` on all ${attempts} attempts.` };
+    return { failed: botRetryExhaustedReason(name, answer.code, attempts) };
   }
   return { retryInSeconds: answer.retryAfterSeconds ?? backoffFor(C.backoffSeconds, attempts) };
 }
