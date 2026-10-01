@@ -13,7 +13,7 @@ function assertShell(html: string) {
   expect(html.match(/<a\b[^>]*href="#main"[^>]*>/g)).toHaveLength(1);
   // First child of body is stronger than first anchor: no button/input/positive
   // tabindex can silently get ahead of the bypass link.
-  expect(html).toMatch(/<body>\s*<a class="skip-link" href="#main">Skip to content<\/a>/);
+  expect(html).toMatch(/<body(?: class="homepage-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/);
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   expect(html).toContain('rel="stylesheet" href="/styles.css"');
 }
