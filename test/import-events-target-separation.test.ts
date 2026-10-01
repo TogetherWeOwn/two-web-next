@@ -12,11 +12,28 @@ const identities = (start = 100): Identity[] => ["events", "rsvps", "users"].map
   name, relation_id: String(start + index), relkind: "r", inherited: false,
 }));
 
-function stubClient(rows = identities(), acquired: unknown = true, failure?: "identity" | "probe") {
+type Allocator = {
+  name: string; identity_kind: string; id_default: string | null; owned_id_sequence: string | null;
+  id_sequence_ids: string[]; sequence_ids: string[]; schema_sequence_ids: string[];
+};
+const allocators = (rows = identities()): Allocator[] => rows.map((row) => {
+  const id = String(Number(row.relation_id) + 1000);
+  return {
+    name: row.name, identity_kind: "", id_default: `nextval('synthetic.sequence_${id}'::regclass)`,
+    owned_id_sequence: id, id_sequence_ids: [id], sequence_ids: [id],
+    schema_sequence_ids: rows.map((table) => String(Number(table.relation_id) + 1000)),
+  };
+});
+
+function stubClient(rows = identities(), acquired: unknown = true, failure?: "identity" | "probe" | "allocator", allocatorRows = allocators(rows)) {
   const queries: { text: string; values: unknown[] }[] = [];
   const sql = Object.assign(async (parts: TemplateStringsArray, ...values: unknown[]) => {
     const text = parts.join("?").replace(/\s+/g, " ").trim();
     queries.push({ text, values });
+    if (text.includes("pg_get_serial_sequence")) {
+      if (failure === "allocator") throw new Error("synthetic allocator denied password=do-not-print row-content");
+      return allocatorRows;
+    }
     if (text.includes("pg_catalog.pg_class")) {
       if (failure === "identity") throw new Error("synthetic postgres://user:do-not-print@alias/db row-content");
       return rows;
@@ -97,6 +114,51 @@ describe("events import static and effective target separation", () => {
       .resolves.toMatchObject({ dryRun: false, events: { read: 0 }, rsvps: { read: 0 } });
   });
 
+  it.each(["events", "rsvps"])("refuses distinct writable %s tables with a shared source allocator", async (table) => {
+    const targetRows = identities(200);
+    const allocatorRows = allocators(targetRows);
+    const row = allocatorRows.find((allocator) => allocator.name === table)!;
+    row.id_sequence_ids = ["1100"];
+    row.sequence_ids.push("1100");
+    const source = stubClient();
+    const target = stubClient(targetRows, false, undefined, allocatorRows);
+    await expect(importEventsRsvps(source.sql, target.sql, { dryRun: false })).rejects.toThrow("no destination writes");
+    expect([...source.queries, ...target.queries].some(({ text }) => /from events|from rsvps|from users/.test(text))).toBe(false);
+  });
+
+  it.each(["dynamic", "missing", "malformed"])("fails closed on an unprovable %s target allocator", async (kind) => {
+    const targetRows = identities(200);
+    const allocatorRows = allocators(targetRows);
+    if (kind === "dynamic") allocatorRows[0]!.id_default = "synthetic_allocator()";
+    if (kind === "missing") allocatorRows[0]!.id_sequence_ids = [];
+    if (kind === "malformed") allocatorRows[0]!.sequence_ids = ["not-an-oid"];
+    await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false, undefined, allocatorRows).sql, { dryRun: false }))
+      .rejects.toThrow("no destination writes");
+  });
+
+  it.each(["schema_sequence_ids", "sequence_ids", "owned_id_sequence"] as const)("protects source allocators found through %s", async (field) => {
+    const sourceRows = allocators();
+    if (field === "owned_id_sequence") sourceRows[0]![field] = "1200";
+    else sourceRows[0]![field].push("1200");
+    await expect(importEventsRsvps(stubClient(identities(), true, undefined, sourceRows).sql, stubClient(identities(200), false).sql))
+      .rejects.toThrow("no destination writes");
+  });
+
+  it.each(["source", "target"])("fails closed on incomplete %s allocator metadata", async (side) => {
+    const sourceRows = allocators();
+    const targetRows = allocators(identities(200));
+    (side === "source" ? sourceRows : targetRows).pop();
+    await expect(importEventsRsvps(stubClient(identities(), true, undefined, sourceRows).sql,
+      stubClient(identities(200), false, undefined, targetRows).sql, { dryRun: false })).rejects.toThrow("no destination writes");
+  });
+
+  it.each(["a", "d"])("allows disjoint catalog-owned identity allocators (%s)", async (identity_kind) => {
+    const targetRows = identities(200);
+    const allocatorRows = allocators(targetRows).map((row) => ({ ...row, identity_kind, id_default: null, id_sequence_ids: [] }));
+    await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false, undefined, allocatorRows).sql, { dryRun: false }))
+      .resolves.toMatchObject({ events: { read: 0 } });
+  });
+
   it("allows independent database lock domains with equal local OIDs and names", async () => {
     await expect(importEventsRsvps(stubClient().sql, stubClient().sql, { dryRun: false }))
       .resolves.toMatchObject({ dryRun: false, events: { read: 0 } });
@@ -108,7 +170,7 @@ describe("events import static and effective target separation", () => {
     expect(client.sql.begin).not.toHaveBeenCalled();
   });
 
-  it.each(["identity", "probe"] as const)("fails closed on denied %s queries without exposing driver errors", async (failure) => {
+  it.each(["identity", "probe", "allocator"] as const)("fails closed on denied %s queries without exposing driver errors", async (failure) => {
     for (const side of ["source", "target"]) {
       const source = stubClient(identities(), true, side === "source" ? failure : undefined);
       const target = stubClient(identities(200), false, side === "target" ? failure : undefined);
@@ -238,6 +300,72 @@ describe.skipIf(!url)("events import separation on disposable test schemas", () 
     } finally {
       await destination.end();
       await target`drop table ${target(emptySchema)}.events`;
+    }
+  });
+
+  it.each(["events", "rsvps"])("refuses distinct target tables that allocate IDs from source %s sequence", async (table) => {
+    // These identifiers are generated fixture schema names and a fixed table list.
+    await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ALTER COLUMN id
+      SET DEFAULT nextval('"${legacySchema}"."${table}_id_seq"'::regclass)`);
+    const sourceBefore = await snapshot(legacy);
+    const targetBefore = await snapshot(target);
+    try {
+      for (const dryRun of [true, false]) {
+        await expect(importEventsRsvps(legacy, target, { dryRun })).rejects.toThrow("no destination writes");
+        expect(await snapshot(legacy)).toEqual(sourceBefore);
+        expect(await snapshot(target)).toEqual(targetBefore);
+      }
+    } finally {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ALTER COLUMN id
+        SET DEFAULT nextval('"${fixture.schemaName}"."${table}_id_seq"'::regclass)`);
+    }
+  });
+
+  it.each(["schema-only", "external-reference"])("protects a %s source sequence without relying on table ownership", async (kind) => {
+    const sequenceSchema = kind === "schema-only" ? legacySchema : emptySchema;
+    const sequence = `"${sequenceSchema}"."synthetic_allocator"`;
+    await target.unsafe(`CREATE SEQUENCE ${sequence}`);
+    const sequenceState = () => target.unsafe(`SELECT last_value, is_called FROM ${sequence}`);
+    try {
+      if (kind === "external-reference") {
+        await legacy.unsafe(`ALTER TABLE "${legacySchema}".events ALTER COLUMN id SET DEFAULT nextval('${sequence}'::regclass)`);
+      }
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN id SET DEFAULT nextval('${sequence}'::regclass)`);
+      const sourceBefore = await snapshot(legacy);
+      const targetBefore = await snapshot(target);
+      const sequenceBefore = await sequenceState();
+      for (const dryRun of [true, false]) {
+        await expect(importEventsRsvps(legacy, target, { dryRun })).rejects.toThrow("no destination writes");
+        expect(await snapshot(legacy)).toEqual(sourceBefore);
+        expect(await snapshot(target)).toEqual(targetBefore);
+        expect(await sequenceState()).toEqual(sequenceBefore);
+      }
+    } finally {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN id
+        SET DEFAULT nextval('"${fixture.schemaName}"."events_id_seq"'::regclass)`);
+      if (kind === "external-reference") {
+        await legacy.unsafe(`ALTER TABLE "${legacySchema}".events ALTER COLUMN id SET DEFAULT nextval('"${legacySchema}"."events_id_seq"'::regclass)`);
+      }
+      await target.unsafe(`DROP SEQUENCE ${sequence}`);
+    }
+  });
+
+  it("allows isolated catalog-owned identity columns with source state unchanged", async () => {
+    const sourceBefore = await snapshot(legacy);
+    try {
+      for (const table of ["events", "rsvps"]) {
+        await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ALTER COLUMN id DROP DEFAULT,
+          ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY`);
+      }
+      const report = await importEventsRsvps(legacy, target, { dryRun: false });
+      expect(report.events.inserted).toBe(4);
+      expect(report.rsvps.inserted).toBe(3);
+      expect(await snapshot(legacy)).toEqual(sourceBefore);
+    } finally {
+      for (const table of ["events", "rsvps"]) {
+        await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ALTER COLUMN id DROP IDENTITY IF EXISTS,
+          ALTER COLUMN id SET DEFAULT nextval('"${fixture.schemaName}"."${table}_id_seq"'::regclass)`);
+      }
     }
   });
 
