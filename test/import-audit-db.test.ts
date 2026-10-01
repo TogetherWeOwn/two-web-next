@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
-import { URL } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from './helpers/member-data-db';
@@ -28,14 +30,15 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
       throw new Error('Audit fixtures require agent-testdb database two_web_next');
     }
     fixture = await createMemberDataFixture(raw!);
-    // Ingress uses raw postgres.js JSON serialization, not the fixture's client
-    // whose serializers Drizzle overrides for its own column mapping.
+    // Import and ingress must use raw postgres.js serializers like the CLI.
+    // Drizzle overrides the fixture client's JSON and timestamp serializers.
     ingress = postgres(url.href, {
       max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {},
-      connection: { search_path: fixture.schemaName },
+      connection: { search_path: fixture.schemaName, timezone: 'Asia/Tokyo' },
     });
     legacy = postgres(url.href, {
       max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {},
+      connection: { timezone: 'Pacific/Honolulu' },
     });
     const ddl = await readFile(new URL('./fixtures/legacy/audit.sql', import.meta.url), 'utf8');
     await legacy.unsafe(ddl.replaceAll('CREATE SCHEMA legacy;', `CREATE SCHEMA "${sourceSchema}";`)
@@ -61,9 +64,75 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
   });
 
   const run = (opts: Record<string, unknown> = {}) => importAudit({
-    legacy, target: fixture.client, legacySchema: sourceSchema,
+    legacy, target: ingress, legacySchema: sourceSchema,
     targetSchema: fixture.schemaName, now, ...opts,
   });
+
+  const expectPreservedEvidence = async () => {
+    const [access] = await ingress`SELECT subject_user_ids, jsonb_typeof(subject_user_ids) AS type
+      FROM member_data_access_logs WHERE id = 92001`;
+    expect.soft(access).toEqual({ subject_user_ids: [91001], type: 'array' });
+    const activities = await ingress`SELECT properties, jsonb_typeof(properties) AS type
+      FROM activity_log ORDER BY id`;
+    expect.soft([...activities]).toEqual([
+      { properties: { attributes: { synthetic: true } }, type: 'object' },
+      { properties: null, type: null },
+    ]);
+    const [replay] = await ingress`SELECT body, jsonb_typeof(body) AS type
+      FROM agent_event_idempotency_keys WHERE id = 94001`;
+    expect.soft(replay).toEqual({ body: { event_key: '01K5SYNTHETIC0000000000001' }, type: 'object' });
+    const timestamps = {
+      member_data_access_logs: ['occurred_at'],
+      activity_log: ['created_at', 'updated_at'],
+      agent_event_grants: ['expires_at', 'disabled_at', 'created_at', 'updated_at'],
+      agent_event_audits: ['created_at', 'updated_at'],
+      agent_event_idempotency_keys: ['created_at', 'updated_at'],
+    };
+    // Compare in Postgres at full precision, not through either client's Date parser.
+    for (const [table, columns] of Object.entries(timestamps)) {
+      for (const column of columns) {
+        const mismatches = await ingress.unsafe(`SELECT s.id::text FROM "${sourceSchema}"."${table}" s
+          JOIN "${fixture.schemaName}"."${table}" t ON t.id = s.id
+          WHERE t."${column}" IS DISTINCT FROM (s."${column}" AT TIME ZONE 'UTC')
+          ${table === 'agent_event_grants' && column === 'disabled_at' ? 'AND s.disabled_at IS NOT NULL' : ''}`);
+        expect.soft([...mismatches], `${table}.${column}`).toEqual([]);
+      }
+    }
+  };
+
+  it('runs the actual CLI with raw clients, preserving JSON and every UTC timestamp on apply and rerun', async () => {
+    const url = testDatabaseUrl(raw!);
+    // Keep this real-clock CLI test within retention as the pinned fixture ages.
+    await legacy.unsafe(`UPDATE "${sourceSchema}".agent_event_idempotency_keys
+      SET created_at = date_trunc('day', now() AT TIME ZONE 'UTC') - interval '1 day' + interval '0.123456 seconds'
+      WHERE id = 94001`);
+    const cli = async (args: string[]) => {
+      const { stdout, stderr } = await promisify(execFile)(process.execPath,
+        [fileURLToPath(new URL('../bin/import/audit.mjs', import.meta.url)), ...args], {
+          timeout: 20000,
+          env: { LEGACY_DATABASE_URL: url.href, DATABASE_URL: url.href,
+            LEGACY_DATABASE_SCHEMA: sourceSchema, DATABASE_SCHEMA: fixture.schemaName, TZ: 'Pacific/Honolulu' },
+        });
+      expect(stderr).toBe('');
+      return JSON.parse(stdout);
+    };
+    try {
+      const preview = await cli([]);
+      expect(preview.mode).toBe('dry-run');
+      for (const name of names) expect(preview.tables[name]).toMatchObject({ inserted: 0, updated: 0 });
+      const applied = await cli(['--apply']);
+      for (const name of names) expect(applied.tables[name]).toMatchObject({
+        inserted: name === 'agent_event_idempotency_keys' ? 1 : 2, updated: 0,
+      });
+      await expectPreservedEvidence();
+      const again = await cli(['--apply']);
+      for (const name of names) expect(again.tables[name]).toMatchObject({ inserted: 0, updated: 0 });
+      await expectPreservedEvidence();
+    } finally {
+      await legacy.unsafe(`UPDATE "${sourceSchema}".agent_event_idempotency_keys
+        SET created_at = timestamp '2026-09-29 00:00:00.123456' WHERE id = 94001`);
+    }
+  }, 30000);
 
   it('preserves the event-sync and RSVP schema additions preceding the audit migration', async () => {
     const columns = await fixture.client`SELECT table_name, column_name, data_type, is_nullable

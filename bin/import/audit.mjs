@@ -181,7 +181,15 @@ export async function importAudit({ legacy, target, legacySchema = 'public', tar
               continue;
             }
             const columns = table.columns.map(identifier).join(', ');
-            const values = table.columns.map((col, i) => `$${i + 1}${table.json.includes(col) ? '::jsonb' : ''}`).join(', ');
+            // Bind projected evidence as text before server-side conversion:
+            // raw postgres.js JSON/Date serializers otherwise re-encode JSON
+            // strings and truncate timestamp microseconds at the write boundary.
+            const values = table.columns.map((col, i) => {
+              const param = `$${i + 1}`;
+              if (table.json.includes(col)) return `${param}::text::jsonb`;
+              if (table.timestamps.includes(col)) return `${param}::text::timestamptz`;
+              return param;
+            }).join(', ');
             // Only known identifiers enter SQL text; all row values are parameters.
             const inserted = await dest.unsafe(
               `INSERT INTO ${to} (${columns}) VALUES (${values}) ON CONFLICT (id) DO NOTHING RETURNING id`,

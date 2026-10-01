@@ -68,11 +68,11 @@ CREATE TABLE legacy.agent_event_grants (
 CREATE INDEX ON legacy.agent_event_grants (agent_id);
 INSERT INTO legacy.agent_event_grants VALUES
   ('22222222-2222-4222-8222-222222222222', 'synthetic-agent', 'synthetic-company',
-   '100000000000000002', repeat('a', 64), '2026-10-10 00:00:00', NULL, 1,
+   '100000000000000002', repeat('a', 64), '2026-10-10 00:00:00.345678', NULL, 1,
    '2026-09-01 10:11:12.123456', '2026-09-01 10:11:12.234567'),
   ('33333333-3333-4333-8333-333333333333', 'synthetic-disabled-agent', 'synthetic-company',
-   '100000000000000002', repeat('b', 64), NULL, '2026-09-02 00:00:00', 1,
-   '2026-09-01 10:11:12.123456', '2026-09-02 00:00:00');
+   '100000000000000002', repeat('b', 64), NULL, '2026-09-02 00:00:00.456789', 1,
+   '2026-09-01 10:11:12.123456', '2026-09-02 00:00:00.234567');
 
 -- Only the ownership projection is needed for this audit fixture. The pinned
 -- grant migration adds events.agent_grant_id (nullable UUID FK, unique). Other

@@ -65,8 +65,11 @@ existing one-event quota, and this migration does not widen grant authority.
 
 Legacy Laravel timestamps are UTC wall times (`config/app.php` at the pinned
 legacy revision). The tool interprets them as UTC and transfers text to Postgres,
-not JS Dates, preserving microseconds. Numeric primary keys are read as text to
-avoid JS rounding. Null legacy `created_at` or a log ID outside Next's current
+not JS Dates, preserving microseconds. Destination parameters bind as text before
+Postgres converts them with `::text::timestamptz` or `::text::jsonb`: this avoids the
+raw driver's Date truncation and JSON double encoding at the write boundary.
+JSON arrays/objects remain arrays/objects; SQL null remains null. Numeric primary
+keys are read as text to avoid JS rounding. Null legacy `created_at` or a log ID outside Next's current
 integer range fails the destination constraint and rolls back; resolve such an
 incompatible source with the migration owner rather than substituting today's
 timestamp or changing an ID.
@@ -112,6 +115,11 @@ unique `legacy_audit_*` schema from the fixture's `legacy` DDL, so parallel agen
 runs cannot truncate another card's tables. Cleanup drops only those schemas.
 Without the explicit test URL, DB tests skip and credential-free CLI tests run.
 CI supplies the disposable service URL explicitly and runs the fixture suite.
+The importer uses raw postgres.js source/destination clients, not the Drizzle
+fixture client's overridden serializers. A subprocess regression runs the actual
+CLI in preview/apply/rerun modes, checks JSON types and complete values, and compares
+every imported timestamp column in Postgres at full precision, including nulls.
+It sets a non-UTC process timezone; direct-client tests also use non-UTC sessions.
 
 ## Append-only triggers
 
