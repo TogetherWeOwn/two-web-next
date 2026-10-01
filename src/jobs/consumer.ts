@@ -55,6 +55,9 @@ export async function consume(
     // of the batch still runs. A stuck lock row self-heals via its TTL
     // (pgUniqueLock expires rows); the message must not be held hostage.
     const releaseLock = (key: string) => {
+      // In-flight legacy messages have no ownership proof. Never infer it from
+      // the event/job/idempotency key; let their original row expire instead.
+      if (body.kind !== "sync-event" || !body.leaseToken) return Promise.resolve();
       let t: ReturnType<typeof setTimeout>;
       const timeout = new Promise<void>((r) => {
         t = setTimeout(() => {
@@ -63,7 +66,7 @@ export async function consume(
         }, LOCK_TIMEOUT_MS);
       });
       return Promise.race([
-        deps.lock.release(key).catch((e: unknown) =>
+        deps.lock.release(key, body.leaseToken).catch((e: unknown) =>
           console.warn("queue lock release failed", key, e instanceof Error ? e.message : e)),
         timeout,
       ]).finally(() => clearTimeout(t));

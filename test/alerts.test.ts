@@ -90,7 +90,7 @@ describe("app wiring", () => {
 });
 
 describe("queue.failing", () => {
-  const lock: UniqueLock = { acquire: async () => true, release: async () => {} };
+  const lock: UniqueLock = { acquire: async () => "test-lease", release: async () => {} };
   const events = {} as EventStore;
   const ledger = { released: async () => {}, dequeued: async () => {}, failed: async () => {} } as unknown as QueueLedger;
   const msg = (body: unknown, attempts: number) => ({ body, attempts, ack() {}, retry() {} });

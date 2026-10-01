@@ -17,8 +17,8 @@ function memLock(): UniqueLock & { held: Set<string> } {
   const held = new Set<string>();
   return {
     held,
-    acquire: async (k) => (held.has(k) ? false : (held.add(k), true)),
-    release: async (k) => void held.delete(k),
+    acquire: async (k) => (held.has(k) ? null : (held.add(k), k)),
+    release: async (k, token) => { if (token === k) held.delete(k); },
   };
 }
 function memLedger(): QueueLedger & { rows: Map<string, { state: string; availableAt?: Date; reason?: string }> } {
@@ -87,7 +87,7 @@ describe("SyncEventToDiscord", () => {
       expect(m.retried).toBe(delay);
       expect(m.acked).toBe(false);
     }
-    const last = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, 6);
+    const last = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", leaseToken: uniqueKey("e1") }, 6);
     lock.held.add(uniqueKey("e1"));
     await consume({ messages: [last] }, { bot, events: store(), lock, ledger: memLedger() });
     expect(last.acked).toBe(true);
@@ -264,7 +264,7 @@ describe("queue ledger (N3)", () => {
     const lock = memLock();
     lock.held.add(uniqueKey("e1"));
     const ledger = memLedger();
-    const last = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" }, SYNC_EVENT.tries);
+    const last = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", leaseToken: uniqueKey("e1"), jobId: "j1" }, SYNC_EVENT.tries);
     await consume({ messages: [last] }, { bot, events: store(), lock, ledger });
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
@@ -279,13 +279,13 @@ describe("queue ledger (N3)", () => {
     // batch lost). Cleanup is best-effort — the lock row self-heals via TTL.
     const bot = { upsertEvent: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
     const lock: UniqueLock = {
-      acquire: async () => true,
+      acquire: async () => "test-lease",
       release: async (key) => {
         if (key === uniqueKey("e1")) throw new Error("lock DELETE failed");
       },
     };
     const ledger = memLedger();
-    const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" }, SYNC_EVENT.tries);
+    const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", leaseToken: "test-lease", jobId: "j1" }, SYNC_EVENT.tries);
     const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" }, 1);
     await consume({ messages: [first, second] }, { bot, events: store(), lock, ledger });
     expect(first.acked).toBe(true);
@@ -304,12 +304,12 @@ describe("queue ledger (N3)", () => {
       let unblock!: () => void;
       const hung = new Promise<void>((r) => { unblock = r; });
       const lock: UniqueLock = {
-        acquire: async () => true,
+        acquire: async () => "test-lease",
         release: async (key) => {
           if (key === uniqueKey("e1")) await hung;
         },
       };
-      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" }, SYNC_EVENT.tries);
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", leaseToken: "test-lease", jobId: "j1" }, SYNC_EVENT.tries);
       const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" }, 1);
       const p = consume({ messages: [first, second] }, { bot, events: store(), lock, ledger: memLedger() });
       await vi.advanceTimersByTimeAsync(5000);

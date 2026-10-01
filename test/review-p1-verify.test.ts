@@ -11,8 +11,8 @@ import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs
 function memLock(held = new Set<string>()): UniqueLock & { held: Set<string> } {
   return {
     held,
-    acquire: async (k) => (held.has(k) ? false : (held.add(k), true)),
-    release: async (k) => void held.delete(k),
+    acquire: async (k) => (held.has(k) ? null : (held.add(k), k)),
+    release: async (k, token) => { if (token === k) held.delete(k); },
   };
 }
 function store(): EventStore {
@@ -72,7 +72,7 @@ describe("P1-3: exhausted throws ack, nonterminal throws retry", () => {
       dequeued: async () => { calls.push("dequeued"); },
       failed: async () => { calls.push("failed"); },
     };
-    const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j" }, 6);
+    const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", leaseToken: "sync-event:e1", jobId: "j" }, 6);
     await consume({ messages: [m] }, { bot, events: store(), lock, ledger });
     expect(calls).toEqual(["reserved", "failed"]);
     expect(m.acked).toBe(true);
@@ -167,7 +167,7 @@ describe("P1-1b: the producer-side ledger no longer shares a pool with the consu
         failed: async () => {},
       };
       const lock: UniqueLock = {
-        acquire: async () => true,
+        acquire: async () => "test-lease",
         // Own client: the row lock is held by `blocker`, not by this
         // session — but `blocker` holds FOR UPDATE on the same row, so this
         // UPDATE also waits. The point stands: the bounded ledger (2s)
@@ -177,7 +177,7 @@ describe("P1-1b: the producer-side ledger no longer shares a pool with the consu
       const bot = {
         upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d" }),
       } as unknown as BotClient;
-      const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: crypto.randomUUID() });
+      const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", leaseToken: "test-lease", jobId: crypto.randomUUID() });
       const done = consume({ messages: [m] }, { bot, events: store(), lock, ledger });
       const winner = await Promise.race([done.then(() => "done"), new Promise((r) => setTimeout(() => r("timeout"), 8000))]);
       // Bounded ledger (2s) and bounded lock cleanup (2s) both expire while

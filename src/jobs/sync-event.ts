@@ -13,11 +13,19 @@ export async function dispatchSyncEvent(
   eventKey: string,
 ): Promise<boolean> {
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
-  if (!(await lock.acquire(uniqueKey(eventKey), SYNC_EVENT.uniqueForSeconds))) return false;
-  await queue.send(
-    { kind: "sync-event", eventKey, idempotencyKey: crypto.randomUUID() },
-    { delaySeconds: SYNC_EVENT.debounceSeconds },
-  );
+  const key = uniqueKey(eventKey);
+  const leaseToken = await lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+  if (!leaseToken) return false;
+  try {
+    await queue.send(
+      { kind: "sync-event", eventKey, idempotencyKey: crypto.randomUUID(), leaseToken },
+      { delaySeconds: SYNC_EVENT.debounceSeconds },
+    );
+  } catch (err) {
+    // Failed send: compensate only this acquisition, never a newer holder.
+    await lock.release(key, leaseToken).catch(() => {});
+    throw err;
+  }
   return true;
 }
 

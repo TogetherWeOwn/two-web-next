@@ -178,6 +178,8 @@ export type ProfileRow = typeof profiles.$inferSelect;
 export const jobUniqueLocks = pgTable("job_unique_locks", {
   key: text("key").primaryKey(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  // Null only for pre-fencing leases; expiry replaces them with a new owner.
+  ownerToken: uuid("owner_token"),
 });
 
 // N3 (TOG-9895): the countable queue ledger behind GET /up. Cloudflare Queues holds the
