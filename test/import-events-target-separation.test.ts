@@ -13,14 +13,16 @@ const identities = (start = 100): Identity[] => ["events", "rsvps", "users"].map
 }));
 
 type Allocator = {
-  name: string; identity_kind: string; id_default: string | null; custom_id_function: unknown; owned_id_sequence: string | null;
-  id_sequence_ids: string[]; sequence_ids: string[]; schema_sequence_ids: string[];
+  name: string; column_name: string; identity_kind: string; generated_kind: string;
+  default_expression: string | null; unsafe_default_dependency: unknown; owned_sequence: string | null;
+  default_sequence_ids: string[]; sequence_ids: string[]; schema_sequence_ids: string[];
 };
 const allocators = (rows = identities()): Allocator[] => rows.map((row) => {
   const id = String(Number(row.relation_id) + 1000);
   return {
-    name: row.name, identity_kind: "", id_default: `nextval('synthetic.sequence_${id}'::regclass)`,
-    custom_id_function: false, owned_id_sequence: id, id_sequence_ids: [id], sequence_ids: [id],
+    name: row.name, column_name: "id", identity_kind: "", generated_kind: "",
+    default_expression: `nextval('synthetic.sequence_${id}'::regclass)`,
+    unsafe_default_dependency: false, owned_sequence: id, default_sequence_ids: [id], sequence_ids: [id],
     schema_sequence_ids: rows.map((table) => String(Number(table.relation_id) + 1000)),
   };
 });
@@ -74,6 +76,13 @@ describe("events import static and effective target separation", () => {
     [`${syntheticUrl}?search_path=legacy`, `${syntheticUrl}?search_path=target`],
   ])("defers potentially distinct identities to the live probe", (source, target) => {
     expect(() => assertSeparateUrls(source, target)).not.toThrow();
+  });
+
+  it("normalizes duplicate parameters with the driver's last-value-wins precedence", () => {
+    const source = `${syntheticUrl}?search_path=target&search_path=legacy`;
+    const target = `${syntheticUrl}?search_path=legacy&search_path=target`;
+    expect(() => assertSeparateUrls(source, target)).not.toThrow();
+    expect(() => assertSeparateUrls(source, `${syntheticUrl}?search_path=legacy`)).toThrow("no destination writes");
   });
 
   it.each([true, false])("CLI statically refuses aliases with dryRun=%s without leaking inputs", async (dryRun) => {
@@ -136,26 +145,73 @@ describe("events import static and effective target separation", () => {
       .resolves.toMatchObject({ events: { read: 0 } });
   });
 
-  it.each(["sequence_ids", "owned_id_sequence"] as const)("still protects shared users allocators from %s", async (field) => {
+  it.each(["sequence_ids", "owned_sequence"] as const)("still protects shared users allocators from %s", async (field) => {
     const sourceRows = allocators();
-    if (field === "owned_id_sequence") sourceRows[2]![field] = "1200";
+    if (field === "owned_sequence") sourceRows[2]![field] = "1200";
     else sourceRows[2]![field].push("1200");
     await expect(assertSeparateTargets(stubClient(identities(), true, undefined, sourceRows).sql, stubClient(identities(200), false).sql))
       .rejects.toThrow("no destination writes");
   });
 
-  it.each([true, null, "false"])("refuses custom or unconfirmed ID function identity (%s)", async (custom_id_function) => {
+  it.each([true, null, "false"])("refuses custom or unconfirmed ID function identity (%s)", async (unsafe_default_dependency) => {
     const targetRows = identities(200);
     const allocatorRows = allocators(targetRows);
-    allocatorRows[0]!.custom_id_function = custom_id_function;
+    allocatorRows[0]!.unsafe_default_dependency = unsafe_default_dependency;
     await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false, undefined, allocatorRows).sql, { dryRun: false }))
       .rejects.toThrow("no destination writes");
+  });
+
+  it.each(["source-id", "source-extra", "target-extra"])("refuses unproven %s defaults before source reads and destination locks/DDL", async (kind) => {
+    for (const dryRun of [true, false]) {
+      const sourceRows = allocators();
+      const targetRows = allocators(identities(200));
+      const row = { ...(kind === "target-extra" ? targetRows : sourceRows)[0]!,
+        default_expression: "nextval('synthetic.external_ids'::text)", default_sequence_ids: [], owned_sequence: null, sequence_ids: [] };
+      if (kind === "source-id") sourceRows[0] = row;
+      else (kind === "target-extra" ? targetRows : sourceRows).push({ ...row, column_name: "omitted_allocator" });
+      const source = stubClient(identities(), true, undefined, sourceRows);
+      const target = stubClient(identities(200), false, undefined, targetRows);
+      await expect(importEventsRsvps(source.sql, target.sql, { dryRun })).rejects.toThrow("no destination writes");
+      for (const client of [source, target]) {
+        expect(client.queries.some(({ text }) => /from events|from rsvps|from users|lock table|alter table|^insert/.test(text))).toBe(false);
+      }
+    }
+  });
+
+  it.each([null, "42", "'42'::bigint"])("permits non-allocating source IDs (%s)", async (default_expression) => {
+    const sourceRows = allocators().map((row) => ({ ...row, default_expression, default_sequence_ids: [] }));
+    await expect(importEventsRsvps(stubClient(identities(), true, undefined, sourceRows).sql, stubClient(identities(200), false).sql))
+      .resolves.toMatchObject({ events: { read: 0 } });
+  });
+
+  it.each([null, "0", "'draft'::text", "false", "now()", "CURRENT_TIMESTAMP", "CURRENT_DATE"])("permits proven omitted non-allocating defaults (%s)", async (default_expression) => {
+    const targetRows = allocators(identities(200));
+    targetRows.push({ ...targetRows[0]!, column_name: "omitted_default", default_expression,
+      default_sequence_ids: [], sequence_ids: [], owned_sequence: null });
+    await expect(importEventsRsvps(stubClient().sql, stubClient(identities(200), false, undefined, targetRows).sql, { dryRun: false }))
+      .resolves.toMatchObject({ events: { read: 0 } });
+  });
+
+  it("still refuses omitted builtin-looking defaults with custom dependencies", async () => {
+    const targetRows = allocators(identities(200));
+    targetRows.push({ ...targetRows[0]!, column_name: "omitted_default", default_expression: "now()",
+      unsafe_default_dependency: true, default_sequence_ids: [], sequence_ids: [], owned_sequence: null });
+    await expect(importEventsRsvps(stubClient().sql, stubClient(identities(200), false, undefined, targetRows).sql))
+      .rejects.toThrow("no destination writes");
+  });
+
+  it("does not execute supplied-column defaults", async () => {
+    const targetRows = allocators(identities(200));
+    targetRows.push({ ...targetRows[0]!, column_name: "title", default_expression: "nextval('synthetic.source_ids'::text)",
+      default_sequence_ids: [], sequence_ids: [], owned_sequence: null });
+    await expect(importEventsRsvps(stubClient().sql, stubClient(identities(200), false, undefined, targetRows).sql, { dryRun: false }))
+      .resolves.toMatchObject({ events: { read: 0 } });
   });
 
   it("allows an explicitly qualified builtin nextval allocator", async () => {
     const targetRows = identities(200);
     const allocatorRows = allocators(targetRows);
-    allocatorRows[0]!.id_default = "pg_catalog.nextval('synthetic.sequence_1200'::regclass)";
+    allocatorRows[0]!.default_expression = "pg_catalog.nextval('synthetic.sequence_1200'::regclass)";
     await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false, undefined, allocatorRows).sql))
       .resolves.toMatchObject({ events: { read: 0 } });
   });
@@ -164,7 +220,7 @@ describe("events import static and effective target separation", () => {
     const targetRows = identities(200);
     const allocatorRows = allocators(targetRows);
     const row = allocatorRows.find((allocator) => allocator.name === table)!;
-    row.id_sequence_ids = ["1100"];
+    row.default_sequence_ids = ["1100"];
     row.sequence_ids.push("1100");
     const source = stubClient();
     const target = stubClient(targetRows, false, undefined, allocatorRows);
@@ -175,16 +231,16 @@ describe("events import static and effective target separation", () => {
   it.each(["dynamic", "missing", "malformed"])("fails closed on an unprovable %s target allocator", async (kind) => {
     const targetRows = identities(200);
     const allocatorRows = allocators(targetRows);
-    if (kind === "dynamic") allocatorRows[0]!.id_default = "synthetic_allocator()";
-    if (kind === "missing") allocatorRows[0]!.id_sequence_ids = [];
+    if (kind === "dynamic") allocatorRows[0]!.default_expression = "synthetic_allocator()";
+    if (kind === "missing") allocatorRows[0]!.default_sequence_ids = [];
     if (kind === "malformed") allocatorRows[0]!.sequence_ids = ["not-an-oid"];
     await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false, undefined, allocatorRows).sql, { dryRun: false }))
       .rejects.toThrow("no destination writes");
   });
 
-  it.each(["schema_sequence_ids", "sequence_ids", "owned_id_sequence"] as const)("protects source allocators found through %s", async (field) => {
+  it.each(["schema_sequence_ids", "sequence_ids", "owned_sequence"] as const)("protects source allocators found through %s", async (field) => {
     const sourceRows = allocators();
-    if (field === "owned_id_sequence") sourceRows[0]![field] = "1200";
+    if (field === "owned_sequence") sourceRows[0]![field] = "1200";
     else sourceRows[0]![field].push("1200");
     await expect(importEventsRsvps(stubClient(identities(), true, undefined, sourceRows).sql, stubClient(identities(200), false).sql))
       .rejects.toThrow("no destination writes");
@@ -200,7 +256,7 @@ describe("events import static and effective target separation", () => {
 
   it.each(["a", "d"])("allows disjoint catalog-owned identity allocators (%s)", async (identity_kind) => {
     const targetRows = identities(200);
-    const allocatorRows = allocators(targetRows).map((row) => ({ ...row, identity_kind, id_default: null, id_sequence_ids: [] }));
+    const allocatorRows = allocators(targetRows).map((row) => ({ ...row, identity_kind, default_expression: null, default_sequence_ids: [] }));
     await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false, undefined, allocatorRows).sql, { dryRun: false }))
       .resolves.toMatchObject({ events: { read: 0 } });
   });
@@ -464,6 +520,137 @@ describe.skipIf(!url)("events import separation on disposable test schemas", () 
       }
       await target.unsafe(`DROP SEQUENCE ${sequence}`);
     }
+  });
+
+  it.each(["events", "rsvps", "users"])("fails closed on a late-bound external source %s allocator", async (table) => {
+    const sequence = `"${emptySchema}"."late_bound_source_ids"`;
+    await target.unsafe(`CREATE SEQUENCE ${sequence} START 10000`);
+    const sequenceState = () => target.unsafe(`SELECT last_value, is_called FROM ${sequence}`);
+    try {
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}"."${table}" ALTER COLUMN id
+        SET DEFAULT pg_catalog.nextval('${sequence}'::text)`);
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN id
+        SET DEFAULT pg_catalog.nextval('${sequence}'::regclass)`);
+      const [dependencies] = await legacy`select count(*)::integer as count
+        from pg_catalog.pg_attrdef ad join pg_catalog.pg_depend d on d.objid = ad.oid
+          and d.classid = 'pg_catalog.pg_attrdef'::regclass
+          and d.refclassid = 'pg_catalog.pg_class'::regclass
+        join pg_catalog.pg_class s on s.oid = d.refobjid and s.relkind = 'S'
+        where ad.adrelid = ${`${legacySchema}.${table}`}::regclass`;
+      expect(dependencies!.count).toBe(0);
+      const sourceBefore = await snapshot(legacy);
+      const targetBefore = await snapshot(target);
+      const sequenceBefore = await sequenceState();
+      for (const dryRun of [true, false]) {
+        await expect(importEventsRsvps(legacy, target, { dryRun })).rejects.toThrow("no destination writes");
+        expect(await snapshot(legacy)).toEqual(sourceBefore);
+        expect(await snapshot(target)).toEqual(targetBefore);
+        expect(await sequenceState()).toEqual(sequenceBefore);
+      }
+    } finally {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN id
+        SET DEFAULT pg_catalog.nextval('"${fixture.schemaName}"."events_id_seq"'::regclass)`);
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}"."${table}" ALTER COLUMN id
+        SET DEFAULT pg_catalog.nextval('"${legacySchema}"."${table}_id_seq"'::regclass)`);
+      await target.unsafe(`DROP SEQUENCE ${sequence}`);
+    }
+  });
+
+  it.each(["events", "rsvps"])("refuses an omitted %s column with a late-bound source sequence default", async (table) => {
+    await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" ADD COLUMN omitted_allocator bigint
+      DEFAULT pg_catalog.nextval('"${legacySchema}"."events_id_seq"'::text)`);
+    try {
+      const sourceBefore = await snapshot(legacy);
+      const targetBefore = await snapshot(target);
+      for (const dryRun of [true, false]) {
+        await expect(importEventsRsvps(legacy, target, { dryRun })).rejects.toThrow("no destination writes");
+        expect(await snapshot(legacy)).toEqual(sourceBefore);
+        expect(await snapshot(target)).toEqual(targetBefore);
+      }
+    } finally {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}" DROP COLUMN omitted_allocator`);
+    }
+  });
+
+  it("protects a late-bound external source non-ID default", async () => {
+    const sequence = `"${emptySchema}"."source_default_ids"`;
+    await target.unsafe(`CREATE SEQUENCE ${sequence} START 10000`);
+    const sequenceState = () => target.unsafe(`SELECT last_value, is_called FROM ${sequence}`);
+    try {
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}".events ADD COLUMN source_allocator bigint`);
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}".events ALTER COLUMN source_allocator
+        SET DEFAULT pg_catalog.nextval('${sequence}'::text)`);
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN id
+        SET DEFAULT pg_catalog.nextval('${sequence}'::regclass)`);
+      const sourceBefore = await snapshot(legacy);
+      const targetBefore = await snapshot(target);
+      const sequenceBefore = await sequenceState();
+      for (const dryRun of [true, false]) {
+        await expect(importEventsRsvps(legacy, target, { dryRun })).rejects.toThrow("no destination writes");
+        expect(await snapshot(legacy)).toEqual(sourceBefore);
+        expect(await snapshot(target)).toEqual(targetBefore);
+        expect(await sequenceState()).toEqual(sequenceBefore);
+      }
+    } finally {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN id
+        SET DEFAULT pg_catalog.nextval('"${fixture.schemaName}"."events_id_seq"'::regclass)`);
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}".events DROP COLUMN source_allocator`);
+      await target.unsafe(`DROP SEQUENCE ${sequence}`);
+    }
+  });
+
+  it.each(["events", "rsvps"])("permits proven disjoint omitted %s defaults, not supplied-column defaults", async (table) => {
+    const sequence = `"${emptySchema}"."isolated_omitted_ids"`;
+    await target.unsafe(`CREATE SEQUENCE ${sequence} START 10000`);
+    try {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}"
+        ADD COLUMN omitted_allocator bigint DEFAULT pg_catalog.nextval('${sequence}'::regclass),
+        ADD COLUMN omitted_constant text DEFAULT 'synthetic', ADD COLUMN omitted_time timestamptz DEFAULT now()`);
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN title
+        SET DEFAULT pg_catalog.nextval('"${legacySchema}"."events_id_seq"'::text)::text`);
+      const sourceBefore = await snapshot(legacy);
+      expect((await importEventsRsvps(legacy, target, { dryRun: false })).events.inserted).toBe(4);
+      expect(await snapshot(legacy)).toEqual(sourceBefore);
+      const values = await target.unsafe(`SELECT omitted_allocator, omitted_constant, omitted_time FROM "${fixture.schemaName}"."${table}"`);
+      expect(values).toHaveLength(table === "events" ? 4 : 3);
+      expect(new Set(values.map((row) => row.omitted_allocator)).size).toBe(values.length);
+      for (const row of values) {
+        expect(row.omitted_constant).toBe("synthetic");
+        expect(row.omitted_time).not.toBeNull();
+      }
+    } finally {
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}".events ALTER COLUMN title DROP DEFAULT`);
+      await target.unsafe(`ALTER TABLE "${fixture.schemaName}"."${table}"
+        DROP COLUMN omitted_allocator, DROP COLUMN omitted_constant, DROP COLUMN omitted_time`);
+      await target.unsafe(`DROP SEQUENCE ${sequence}`);
+    }
+  });
+
+  it.each(["none", "constant"])("preserves non-allocating source IDs (%s)", async (kind) => {
+    for (const table of ["events", "rsvps", "users"]) {
+      await legacy.unsafe(`ALTER TABLE "${legacySchema}"."${table}" ALTER COLUMN id ${kind === "none" ? "DROP DEFAULT" : "SET DEFAULT 42"}`);
+    }
+    const sourceBefore = await snapshot(legacy);
+    expect((await importEventsRsvps(legacy, target, { dryRun: false })).events.inserted).toBe(4);
+    expect(await snapshot(legacy)).toEqual(sourceBefore);
+  });
+
+  it("allows opposite-order duplicate search paths with CLI clients", async () => {
+    const sourceUrl = alias(fixture.schemaName, "synthetic_duplicates");
+    const source = new URL(sourceUrl);
+    source.searchParams.append("search_path", legacySchema);
+    const destination = new URL(alias(legacySchema, "synthetic_duplicates"));
+    destination.searchParams.append("search_path", fixture.schemaName);
+    const sourceClient = connectDatabase(source.href);
+    const destinationClient = connectDatabase(destination.href);
+    try {
+      expect((await sourceClient`select current_schema() as schema`)[0]!.schema).toBe(legacySchema);
+      expect((await destinationClient`select current_schema() as schema`)[0]!.schema).toBe(fixture.schemaName);
+      expect(() => assertSeparateUrls(source.href, destination.href)).not.toThrow();
+      const sourceBefore = await snapshot(sourceClient);
+      expect((await importEventsRsvps(sourceClient, destinationClient, { dryRun: false })).events.inserted).toBe(4);
+      expect(await snapshot(sourceClient)).toEqual(sourceBefore);
+    } finally { await Promise.all([sourceClient.end(), destinationClient.end()]); }
   });
 
   it("allows isolated catalog-owned identity columns with source state unchanged", async () => {

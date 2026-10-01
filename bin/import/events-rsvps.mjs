@@ -126,7 +126,7 @@ export function assertSeparateUrls(legacyUrl, targetUrl) {
     if (!["postgres:", "postgresql:"].includes(url.protocol)) throw new TargetSeparationError();
     return JSON.stringify([
       url.hostname.toLowerCase(), url.port || "5432", decodeURIComponent(url.pathname),
-      decodeURIComponent(url.username), [...url.searchParams].sort(),
+      decodeURIComponent(url.username), [...new Map(url.searchParams)].sort(),
     ]);
   };
   try {
@@ -151,70 +151,91 @@ async function resolvedTables(sql) {
 }
 
 async function resolvedAllocators(sql) {
+  // Enumerate every live column: source allocators can hide outside id, and
+  // omitted destination columns execute their defaults even on ON CONFLICT.
   // JSON arrays remain decoded when the CLI client disables catalog type fetching.
   const rows = await sql`
-    select names.name, a.attidentity as identity_kind,
-      pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) as id_default,
+    select names.name, a.attname as column_name, a.attidentity as identity_kind,
+      a.attgenerated as generated_kind, pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) as default_expression,
       exists (select 1 from pg_catalog.pg_depend d
-        where d.classid = 'pg_catalog.pg_attrdef'::regclass and d.objid = ad.oid
-          and d.refclassid = 'pg_catalog.pg_proc'::regclass
-          and d.refobjid <> 'pg_catalog.nextval(pg_catalog.regclass)'::regprocedure) as custom_id_function,
-      pg_catalog.pg_get_serial_sequence(c.oid::regclass::text, 'id')::regclass::oid::text as owned_id_sequence,
+        where d.classid = 'pg_catalog.pg_attrdef'::regclass and d.objid = ad.oid and (
+          (d.refclassid = 'pg_catalog.pg_proc'::regclass
+            and d.refobjid not in ('pg_catalog.nextval(pg_catalog.regclass)'::regprocedure,
+              'pg_catalog.now()'::regprocedure))
+          or d.refclassid = 'pg_catalog.pg_operator'::regclass
+          or (d.refclassid = 'pg_catalog.pg_type'::regclass and exists (
+            select 1 from pg_catalog.pg_type t where t.oid = d.refobjid
+              and t.typnamespace <> 'pg_catalog'::regnamespace))
+        )) as unsafe_default_dependency,
+      pg_catalog.pg_get_serial_sequence(c.oid::regclass::text, a.attname)::regclass::oid::text as owned_sequence,
       pg_catalog.array_to_json(array(select d.refobjid::text from pg_catalog.pg_depend d
         join pg_catalog.pg_class s on s.oid = d.refobjid and s.relkind = 'S'
         where d.classid = 'pg_catalog.pg_attrdef'::regclass and d.objid = ad.oid
-          and d.refclassid = 'pg_catalog.pg_class'::regclass)) as id_sequence_ids,
-      pg_catalog.array_to_json(array(select distinct s.oid::text from pg_catalog.pg_class s
-        where s.relkind = 'S' and (
-          exists (select 1 from pg_catalog.pg_depend d
-            join pg_catalog.pg_attrdef defaults on defaults.oid = d.objid
-            where d.classid = 'pg_catalog.pg_attrdef'::regclass
-              and d.refclassid = 'pg_catalog.pg_class'::regclass
-              and d.refobjid = s.oid and defaults.adrelid = c.oid)
-          or exists (select 1 from pg_catalog.pg_depend d
-            where d.classid = 'pg_catalog.pg_class'::regclass and d.objid = s.oid
-              and d.refclassid = 'pg_catalog.pg_class'::regclass
-              and d.refobjid = c.oid and d.deptype in ('a', 'i'))
-        ))) as sequence_ids,
+          and d.refclassid = 'pg_catalog.pg_class'::regclass)) as default_sequence_ids,
+      pg_catalog.array_to_json(array(select s.oid::text from pg_catalog.pg_class s
+        where s.relkind = 'S' and exists (select 1 from pg_catalog.pg_depend d
+          where d.classid = 'pg_catalog.pg_class'::regclass and d.objid = s.oid
+            and d.refclassid = 'pg_catalog.pg_class'::regclass and d.refobjid = c.oid
+            and d.refobjsubid = a.attnum and d.deptype in ('a', 'i')))) as sequence_ids,
       pg_catalog.array_to_json(array(select s.oid::text from pg_catalog.pg_class s
         where s.relkind = 'S' and s.relnamespace = c.relnamespace)) as schema_sequence_ids
     from (values ('events'), ('rsvps'), ('users')) as names(name)
     join pg_catalog.pg_class c on c.oid = pg_catalog.to_regclass(names.name)
-    join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attname = 'id' and not a.attisdropped
+    join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
     left join pg_catalog.pg_attrdef ad on ad.adrelid = c.oid and ad.adnum = a.attnum
   `;
   const oid = (value) => typeof value === "string" && /^[1-9][0-9]*$/.test(value);
-  if (rows.length !== 3 || new Set(rows.map((row) => row.name)).size !== 3
+  const ids = rows.filter((row) => row.column_name === "id");
+  if (ids.length !== 3 || new Set(ids.map((row) => row.name)).size !== 3
+    || new Set(rows.map((row) => JSON.stringify([row.name, row.column_name]))).size !== rows.length
     || rows.some((row) => !["events", "rsvps", "users"].includes(row.name)
-      || !["", "a", "d"].includes(row.identity_kind)
-      || (row.id_default !== null && typeof row.id_default !== "string")
-      || typeof row.custom_id_function !== "boolean"
-      || (row.owned_id_sequence !== null && !oid(row.owned_id_sequence))
-      || [row.id_sequence_ids, row.sequence_ids, row.schema_sequence_ids]
-        .some((ids) => !Array.isArray(ids) || ids.some((id) => !oid(id))))) throw new TargetSeparationError();
+      || typeof row.column_name !== "string" || !row.column_name
+      || !["", "a", "d"].includes(row.identity_kind) || row.generated_kind !== ""
+      || (row.default_expression !== null && typeof row.default_expression !== "string")
+      || typeof row.unsafe_default_dependency !== "boolean"
+      || (row.owned_sequence !== null && !oid(row.owned_sequence))
+      || [row.default_sequence_ids, row.sequence_ids, row.schema_sequence_ids]
+        .some((values) => !Array.isArray(values) || values.some((id) => !oid(id))))) throw new TargetSeparationError();
   return rows;
+}
+
+function assertProvenDefault(row, requireAllocator = false) {
+  // Pinned builtins have no pg_depend entry; custom functions do, even when
+  // pg_get_expr prints unqualified builtin-looking text. Text-to-regclass
+  // nextval has no sequence dependency and must never pass as a proven allocator.
+  const direct = row.identity_kind === "" && row.default_sequence_ids.length === 1
+    && /^(?:pg_catalog\.)?nextval\('(?:[^']|'')+'::regclass\)$/.test(row.default_expression ?? "");
+  const identity = row.identity_kind !== "" && row.default_expression === null && row.owned_sequence !== null;
+  // Permit simple catalog literals and builtin transaction time, including shared
+  // users' timestamp defaults. Do not evaluate expressions to prove them.
+  const constant = row.identity_kind === "" && row.default_sequence_ids.length === 0
+    && (row.default_expression === null || /^(?:NULL|true|false|[+-]?[0-9]+(?:\.[0-9]+)?|'(?:[^']|'')*')(?:::(?:pg_catalog\.)?(?:text|character varying|character|boolean|smallint|integer|bigint|numeric|real|double precision|uuid|date|timestamp(?: with(?:out)? time zone)?|time(?: with(?:out)? time zone)?)(?:\([0-9]+(?:, ?[0-9]+)?\))?)?$/.test(row.default_expression));
+  const transactionTime = row.identity_kind === "" && row.default_sequence_ids.length === 0
+    && /^(?:(?:pg_catalog\.)?now\(\)|CURRENT_TIMESTAMP(?:\([0-6]\))?|CURRENT_DATE)$/.test(row.default_expression ?? "");
+  if (row.unsafe_default_dependency || (!direct && !identity && (requireAllocator || (!constant && !transactionTime)))) {
+    throw new TargetSeparationError();
+  }
 }
 
 async function assertSeparateAllocators(source, destination) {
   const sourceAllocators = await resolvedAllocators(source);
   const targetAllocators = await resolvedAllocators(destination);
+  // Protect all source allocation expressions, not just statically recorded OIDs:
+  // an unowned external late-bound nextval otherwise disappears from this set.
+  for (const row of sourceAllocators) assertProvenDefault(row);
   // Protect writable source schemas and every source-owned/referenced allocator,
   // including users, but not unrelated sequences beside a shared users table.
   // Sequence writes survive transaction rollback.
   const sourceIds = new Set(sourceAllocators.flatMap((row) => [
-    ...(row.name === "users" ? [] : row.schema_sequence_ids), ...row.sequence_ids,
-    ...(row.owned_id_sequence === null ? [] : [row.owned_id_sequence]),
+    ...(row.name === "users" ? [] : row.schema_sequence_ids), ...row.sequence_ids, ...row.default_sequence_ids,
+    ...(row.owned_sequence === null ? [] : [row.owned_sequence]),
   ]));
   for (const row of targetAllocators.filter((row) => row.name !== "users")) {
-    // Pinned builtins have no pg_depend entry; custom functions do, even when
-    // pg_get_expr prints the same unqualified nextval text. Reject those identities.
-    // Permit only a direct builtin regclass nextval or a catalog-owned identity.
-    const direct = row.identity_kind === "" && row.custom_id_function === false && row.id_sequence_ids.length === 1
-      && /^(?:pg_catalog\.)?nextval\('(?:[^']|'')+'::regclass\)$/.test(row.id_default ?? "");
-    const identity = row.identity_kind !== "" && row.custom_id_function === false
-      && row.id_default === null && row.owned_id_sequence !== null;
-    if ((!direct && !identity) || [...row.sequence_ids, ...row.id_sequence_ids,
-      ...(row.owned_id_sequence === null ? [] : [row.owned_id_sequence])].some((id) => sourceIds.has(id))) {
+    const supplied = row.name === "events" ? eventColumns : rsvpColumns;
+    if (supplied.includes(row.column_name)) continue; // INSERT supplies even nulls; these defaults do not run.
+    assertProvenDefault(row, row.column_name === "id");
+    if ([...row.sequence_ids, ...row.default_sequence_ids,
+      ...(row.owned_sequence === null ? [] : [row.owned_sequence])].some((id) => sourceIds.has(id))) {
       throw new TargetSeparationError();
     }
   }
