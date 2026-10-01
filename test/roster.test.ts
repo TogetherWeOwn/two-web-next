@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { migrateRoster, upsertRosterUser } from "../src/db/roster";
 import {
