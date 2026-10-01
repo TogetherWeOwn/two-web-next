@@ -19,15 +19,15 @@ const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?
   children,
 }) => (
   <Layout title={`${title} — Together We Own`} robots={NOINDEX}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
+    <header class="bar row center">
+      <a class="brand plain" href="/">TWO</a>
       <nav aria-label="Primary">
-        <a class="btn" href={headerCta.href}>{headerCta.label}</a>
+        <a class="btn center bold caps plain" href={headerCta.href}>{headerCta.label}</a>
       </nav>
     </header>
     <main id="main" tabindex={-1}>
       <section aria-labelledby="error-heading">
-        <p class="strap" aria-hidden="true">{code}</p>
+        <p class="strap muted caps" aria-hidden="true">{code}</p>
         <h1 id="error-heading">{title}</h1>
         {children}
       </section>
@@ -43,7 +43,7 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
       The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
     </p>
     <p>
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
     <section aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
@@ -65,10 +65,10 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
       )}
       <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
       <form action="/events" method="get" role="search" class="error-events-search">
-        <label for="error-events-search">Search events</label>
-        <div>
-          <input id="error-events-search" name="q" type="search" placeholder="Search events…" autocomplete="off" data-testid="error-events-search" />
-          <button type="submit" class="btn" data-testid="error-events-search-submit">Search events</button>
+        <label for="error-events-search" class="block bold">Search events</label>
+        <div class="row">
+          <input id="error-events-search" class="inherit-font" name="q" type="search" placeholder="Search events…" autocomplete="off" data-testid="error-events-search" />
+          <button type="submit" class="btn center bold caps plain inherit-font" data-testid="error-events-search-submit">Search events</button>
         </div>
       </form>
     </section>
@@ -84,7 +84,7 @@ export const InternalErrorPage: FC = () => (
       not going anywhere.
     </p>
     <p>
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
   </ErrorShell>
@@ -97,7 +97,7 @@ export const RateLimitedPage: FC = () => (
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is not going anywhere.
     </p>
     <p>
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
   </ErrorShell>
@@ -117,7 +117,7 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
       we will see you there.
     </p>
     <p>
-      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
+      <a class="btn center bold caps plain" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
       <a href="/" data-testid="error-retry">Try again</a>
     </p>
   </ErrorShell>

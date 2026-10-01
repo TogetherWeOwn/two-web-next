@@ -39,7 +39,8 @@ describe("404 recovery markup", () => {
     expect(res.status).toBe(404);
     expect(res.headers.get("set-cookie")).toBeNull();
     expect(html).toContain('action="/events" method="get" role="search"');
-    expect(html).toContain('<label for="error-events-search">Search events</label>');
+    expect(html).toContain('for="error-events-search"');
+    expect(html).toContain('>Search events</label>');
     expect(html).toContain('name="q" type="search" placeholder="Search events…"');
     expect(html).toContain('href="/events" data-testid="error-all-events"');
     expect(html).toContain("Nothing is on the calendar right now — check back soon.");

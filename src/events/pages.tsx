@@ -103,8 +103,8 @@ const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: 
   children,
 }) => (
   <Layout title={`${title} — Together We Own`} canonical={canonical} shareTitle={shareTitle ?? title} shareDescription={description} robots={robots}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
+    <header class="bar row center">
+      <a class="brand plain" href="/">TWO</a>
       <nav aria-label="Primary">
         <a href="/events">Events</a>
       </nav>
@@ -536,7 +536,7 @@ export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl
       {!session ? (
         <section data-testid="event-join-pitch" aria-label="Join the community">
           <p>Game nights get posted here first. Join the Discord and you&apos;ll see them before they land on this page.</p>
-          <a class="btn" data-testid="discord-join" href={`/join?next=${encodeURIComponent(path)}`}>Join the Discord</a>
+          <a class="btn center bold caps plain" data-testid="discord-join" href={`/join?next=${encodeURIComponent(path)}`}>Join the Discord</a>
         </section>
       ) : null}
       <p>

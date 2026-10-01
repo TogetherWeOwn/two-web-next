@@ -9,7 +9,7 @@ import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
 
-export const SkipLink: FC = () => <a class="skip-link" href="#main">Skip to content</a>;
+export const SkipLink: FC = () => <a class="skip-link bold" href="#main">Skip to content</a>;
 
 export const Layout: FC<
   PropsWithChildren<{
@@ -57,7 +57,7 @@ export const Layout: FC<
 // events and profile shells intentionally keep their own chrome. One
 // component so a new leaf cannot ship without a way back to it.
 export const SiteFooter: FC = () => (
-  <footer>
+  <footer class="muted">
     Together We Own · adult gaming community · founded 1998
     <nav aria-label="Site">
       <a href="/about">About</a> <a href="/faq">FAQ</a> <a href="/rules">House rules</a>{" "}
@@ -88,10 +88,10 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
   appUrl,
 }) => (
   <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
+    <header class="bar row center">
+      <a class="brand plain" href="/">TWO</a>
       <nav aria-label="Primary">
-        <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+        <a class="btn center bold caps plain" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
       </nav>
     </header>
     <main id="main" tabindex={-1}>
@@ -101,7 +101,7 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
         <p>One click with Discord and we&apos;ll add you to the server — no invite link, no waiting.</p>
         <p>
           <a
-            class="btn"
+            class="btn center bold caps plain"
             href={next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord"}
             data-testid="join-oneclick"
           >
@@ -121,7 +121,7 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
             data-testid="join-widget"
           />
         ) : (
-          <p class="strap" data-testid="join-widget-fallback">
+          <p class="strap muted caps" data-testid="join-widget-fallback">
             Live server preview is unavailable — the join button above still works.
           </p>
         )}
@@ -139,10 +139,10 @@ export const Recovery: FC<{
   inviteUrl: string;
 }> = ({ title, message, retryUrl, retryLabel, inviteUrl }) => (
   <Layout title={`${title} — Together We Own`}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
+    <header class="bar row center">
+      <a class="brand plain" href="/">TWO</a>
       <nav aria-label="Primary">
-        <a class="btn" href="/join">Join with Discord</a>
+        <a class="btn center bold caps plain" href="/join">Join with Discord</a>
       </nav>
     </header>
     <main id="main" tabindex={-1}>
@@ -150,7 +150,7 @@ export const Recovery: FC<{
         <h1 id="recovery-heading">{title}</h1>
         <p class="lead">{message}</p>
         <p>
-          <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
+          <a class="btn center bold caps plain" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
           <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
         </p>
       </section>
@@ -178,34 +178,34 @@ export const Home: FC<{
     canonical={canonicalUrl(appUrl, "/")}
     shareDescription="We spent most of our life private. Now you can just turn up."
   >
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
+    <header class="bar row center">
+      <a class="brand plain" href="/">TWO</a>
       <nav aria-label="Primary">
         {session ? (
           <form method="post" action="/logout">
-            <span class="who">{session.username}</span>
-            <button type="submit" class="link">Sign out</button>
+            <span class="who muted">{session.username}</span>
+            <button type="submit" class="link inherit-font">Sign out</button>
           </form>
         ) : (
-          <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+          <a class="btn center bold caps plain" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
         )}
       </nav>
     </header>
     <main id="main" tabindex={-1}>
       {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
       <section class="hero">
-        <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
+        <p class="strap muted caps">A close-knit gaming clan / mostly evenings / 18+</p>
         <h1>The lobby is open.</h1>
         <p class="lead">We spent most of our life private. Now you can just turn up.</p>
         <p>Small enough that people notice when you come back.</p>
         {session?.member ? (
-          <a class="btn" href={inviteUrl}>Open Discord</a>
+          <a class="btn center bold caps plain" href={inviteUrl}>Open Discord</a>
         ) : (
-          <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
+          <a class="btn center bold caps plain" href="/auth/discord" data-testid="join">Join with Discord</a>
         )}
         {notice === "join_failed" && <p><a href={inviteUrl}>Join with an invite link instead</a></p>}
         {counts.memberCount != null && (
-          <p class="counts" data-testid="member-count">
+          <p class="counts muted" data-testid="member-count">
             <strong>{counts.memberCount}</strong> members
             {counts.onlineCount != null && counts.onlineCount > 0 && (
               <>
@@ -222,12 +222,12 @@ export const Home: FC<{
             {featured.map((item) => (
               <article class="card" data-testid="featured-item" key={item.id}>
                 <h3>{item.url ? <a href={item.url}>{item.title}</a> : item.title}</h3>
-                {item.body ? <p>{item.body}</p> : null}
+                {item.body ? <p class="muted">{item.body}</p> : null}
                 {(() => {
                   const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl) : null;
                   return src ? (
                   <img
-                    class="featured-image"
+                    class="featured-image block"
                     src={src}
                     alt={item.imageAlt?.trim() || item.title}
                     width="640"
@@ -256,26 +256,26 @@ export const Home: FC<{
         <p>Ranks stack — a Veteran still holds everything below.</p>
         <dl class="facts rank-stack" data-testid="rank-stack">
           {(counts.ranks.length ? counts.ranks : FALLBACK_RANKS).map((rank) => (
-            <div class="card" key={rank.key} data-rank={rank.key}>
+            <div class="card block" key={rank.key} data-rank={rank.key}>
               <dt>{rank.label}</dt>
-              <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
+              <dd class="muted">{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
             </div>
           ))}
         </dl>
       </section>
       <section aria-labelledby="home-events-heading">
-        <p class="strap">Next up</p>
+        <p class="strap muted caps">Next up</p>
         <h2 id="home-events-heading">Game nights, when they land.</h2>
         {upcomingEvents.length > 0 ? (
           <>
             <ul class="facts home-events" data-testid="home-events-list">
               {upcomingEvents.map((event) => (
                 <li class="card">
-                  <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
-                    <p><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time></p>
+                  <a class="home-event-link block plain" href={`/e/${encodeURIComponent(event.eventKey)}`}>
+                    <p class="muted"><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time></p>
                     <h3>{event.title}</h3>
-                    {event.location ? <p>{event.location}</p> : null}
-                    <p>{event.goingCount} going</p>
+                    {event.location ? <p class="muted">{event.location}</p> : null}
+                    <p class="muted">{event.goingCount} going</p>
                   </a>
                 </li>
               ))}
@@ -285,13 +285,13 @@ export const Home: FC<{
         ) : (
           <div class="card" data-testid="home-events-empty" data-state={eventsUnavailable ? "unavailable" : "empty"}>
             <h3>{eventsUnavailable ? "Game nights are unavailable right now." : "Nothing scheduled yet."}</h3>
-            <p>{eventsUnavailable
+            <p class="muted">{eventsUnavailable
               ? "We couldn’t load the schedule. The Discord is still open — check there for the next game night."
               : "Game nights get posted here. Join the Discord and you’ll hear about the next one."}</p>
           </div>
         )}
         {!session ? (
-          <p><a class="btn" href="/join" data-testid="home-events-join">Join the Discord <span aria-hidden="true">→</span></a></p>
+          <p><a class="btn center bold caps plain" href="/join" data-testid="home-events-join">Join the Discord <span aria-hidden="true">→</span></a></p>
         ) : null}
       </section>
     </main>
@@ -306,10 +306,10 @@ const Leaf: FC<PropsWithChildren<{ title: string; headingId: string; heading: st
   children,
 }) => (
   <Layout title={title}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
+    <header class="bar row center">
+      <a class="brand plain" href="/">TWO</a>
       <nav aria-label="Primary">
-        <a class="btn" href={JOIN_HREF}>Join with Discord</a>
+        <a class="btn center bold caps plain" href={JOIN_HREF}>Join with Discord</a>
       </nav>
     </header>
     <main id="main" tabindex={-1}>
@@ -324,30 +324,30 @@ const Leaf: FC<PropsWithChildren<{ title: string; headingId: string; heading: st
 
 export const About: FC = () => (
   <Leaf title="About — Together We Own" headingId="about-heading" heading="About Together We Own">
-    <p class="strap">Est. 1998</p>
+    <p class="strap muted caps">Est. 1998</p>
     <p class="lead">
       An adult gaming community that spent most of its life private. Now the doors are open: turn up, say hello,
       come back.
     </p>
     <dl data-testid="about-facts" class="facts">
-      <div class="card">
+      <div class="card block">
         <dt>Voice-first</dt>
-        <dd>The community lives in voice. Turn up, say hello, and come back — that is the whole membership path.</dd>
+        <dd class="muted">The community lives in voice. Turn up, say hello, and come back — that is the whole membership path.</dd>
       </div>
-      <div class="card">
+      <div class="card block">
         <dt>No application, no interview</dt>
-        <dd>
+        <dd class="muted">
           You start as a Prospect. Show up a few times, play, become a Member. The ladder records trust and time,
           not grind.
         </dd>
       </div>
-      <div class="card">
+      <div class="card block">
         <dt>From forum threads to voice rooms</dt>
-        <dd>Founded in 1998. Forum years, then voice years — duos, trios, quads, squads. Today: doors open.</dd>
+        <dd class="muted">Founded in 1998. Forum years, then voice years — duos, trios, quads, squads. Today: doors open.</dd>
       </div>
     </dl>
     <p>
-      <a class="btn" href={JOIN_HREF} data-testid="about-join">Join with Discord</a>{" "}
+      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="about-join">Join with Discord</a>{" "}
       <a href="/">Back to the homepage</a>
     </p>
   </Leaf>
@@ -379,7 +379,7 @@ export const Rules: FC<{ lastUpdated: { iso: string; label: string } | null }> =
       Discord before you assume.
     </p>
     {lastUpdated ? (
-      <p data-testid="rules-last-updated" class="strap">
+      <p data-testid="rules-last-updated" class="strap muted caps">
         Last updated <time datetime={lastUpdated.iso}>{lastUpdated.label}</time>
       </p>
     ) : null}
@@ -387,12 +387,12 @@ export const Rules: FC<{ lastUpdated: { iso: string; label: string } | null }> =
       {RULES.map(([name, body]) => (
         <li class="card" key={name}>
           <h2>{name}</h2>
-          <p>{body}</p>
+          <p class="muted">{body}</p>
         </li>
       ))}
     </ol>
     <p>
-      <a class="btn" href={JOIN_HREF} data-testid="rules-join">Join with Discord</a>{" "}
+      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="rules-join">Join with Discord</a>{" "}
       <a href="/">Back to the homepage</a>
     </p>
   </Leaf>
@@ -511,7 +511,7 @@ const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, st
 
 export const Faq: FC = () => (
   <Leaf title="FAQ — Together We Own" headingId="faq-heading" heading="Frequently asked questions">
-    <p class="strap">New here? Start here</p>
+    <p class="strap muted caps">New here? Start here</p>
     <p class="lead">
       Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a moderator.
     </p>
@@ -522,14 +522,14 @@ export const Faq: FC = () => (
           {group.items.map(([q, a]) => (
             <div class="card" key={q}>
               <h3>{q}</h3>
-              <p>{a}</p>
+              <p class="muted">{a}</p>
             </div>
           ))}
         </section>
       ))}
     </div>
     <p>
-      <a class="btn" href={JOIN_HREF} data-testid="faq-join">Join with Discord</a>{" "}
+      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="faq-join">Join with Discord</a>{" "}
       <a href="/">Back to the homepage</a>
     </p>
   </Leaf>
@@ -540,10 +540,10 @@ export const Faq: FC = () => (
 // it in the funnel leaf chrome. No JavaScript ships on this page.
 export const Privacy: FC<{ version: number; html: string }> = ({ version, html }) => (
   <Leaf title="Privacy policy — Together We Own" headingId="privacy-heading" heading="Privacy policy">
-    <p class="strap" data-testid="privacy-version">Version {version}</p>
+    <p class="strap muted caps" data-testid="privacy-version">Version {version}</p>
     <div data-testid="privacy-policy" dangerouslySetInnerHTML={{ __html: html }} />
     <p>
-      <a class="btn" href={JOIN_HREF} data-testid="privacy-join">Join with Discord</a>{" "}
+      <a class="btn center bold caps plain" href={JOIN_HREF} data-testid="privacy-join">Join with Discord</a>{" "}
       <a href="/">Back to the homepage</a>
     </p>
   </Leaf>
