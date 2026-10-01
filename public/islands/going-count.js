@@ -79,9 +79,9 @@
         if (latest.get(key) !== request) return;
         var list = Array.isArray(rows) ? rows : rows && rows.data;
         if (!Array.isArray(list)) return;
-        var row = list.filter(function (r) {
-          return r && r.event_key === key;
-        })[0];
+        var row = list.find(function (r) {
+          return r && typeof r === "object" && !Array.isArray(r) && r.event_key === key;
+        });
         if (!row || !Number.isSafeInteger(row.going_count) || row.going_count < 0) return;
         var capacities = nodes.map(function (node) { return capacityFor(row, node); });
         nodes.forEach(function (node, index) {

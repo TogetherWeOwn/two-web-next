@@ -358,7 +358,7 @@ export const EventsCalendarPage: FC<{
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
   return (
-    <Shell title="Events" canonical={`${appUrl}/events`} description="Game nights, tournaments and whatever else the community puts on.">
+    <Shell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on.">
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
@@ -498,7 +498,7 @@ export const EventsCalendarPage: FC<{
 };
 
 export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string }> = ({ rows, page, hasMore, totalPages, appUrl }) => (
-  <Shell title="Past events" canonical={`${appUrl}${pastEventsUrl(page)}`} robots="noindex, follow">
+  <Shell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} robots="noindex, follow">
     <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
       <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
       <div data-archive-state>

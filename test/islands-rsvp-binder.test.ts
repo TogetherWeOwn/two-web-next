@@ -235,13 +235,134 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-session-expired")!.children[1]!.href).toBe(expected);
   });
 
-  it.each(["network", "500", "422"])("announces %s failure without stealing focus or disabling retry", async (kind) => {
+  it.each([500, 422])("announces HTTP %i failure without stealing focus or disabling retry", async (status) => {
     const b = browser(); const button = b.get("rsvp-going")!; button.click();
-    if (kind === "network") b.requests[0]!.reject(new Error("offline")); else b.finish(0, Number(kind));
+    b.finish(0, status);
     await b.settle();
     expect(b.get("rsvp-failed")?.textContent).toBe("That RSVP didn't save. Try once more.");
     expect(b.get("rsvp-failed")?.focused).toBe(false); expect(button.disabled).toBe(false);
     expect(b.root.getAttribute("aria-busy")).toBeNull(); expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it.each([
+    ["open", "rsvp-going", "PUT"],
+    ["going", "rsvp-withdraw", "DELETE"],
+    ["waitlisted", "waitlist-claim", "PUT"],
+    ["waitlisted", "waitlist-leave", "DELETE"],
+  ] as const)("requires SSR recovery after response-less %s %s transport rejection", async (state, action, method) => {
+    const b = browser(state, undefined, true); b.get(action)!.click();
+    expect(b.requests[0]!.init.method).toBe(method);
+    // A lost response is not proof that the delivered transaction was refused.
+    b.requests[0]!.reject(new Error("response transport lost")); await b.settle();
+    expect(b.get("rsvp-failed")).toBeNull();
+    expect(b.get(RSVP_UNKNOWN_TESTID)?.textContent).toBe(`${RSVP_COPY.unknown} ${RSVP_COPY.refresh}`);
+    expect(b.get(RSVP_REFRESH_TESTID)?.href).toBe("/e/raid%2Fone");
+    expect(b.root.getAttribute("data-outcome-unknown")).toBe("true");
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(b.root.querySelectorAll("[data-action]").every((n) => n.disabled)).toBe(true);
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    b.root.querySelectorAll("[data-action]").forEach((n) => {
+      n.click(); n.listeners.get("click")?.({ preventDefault() {} });
+    });
+    b.root.querySelector("[data-rsvp-form]")!.listeners.get("submit")!({ preventDefault() {} });
+    expect(b.requests).toHaveLength(1);
+    expect(b.broadcasts.filter((e) => e.type === "going-count-updated")).toHaveLength(0);
+    if (state === "waitlisted" && action === "waitlist-claim") {
+      expect(b.get("waitlist-leave")?.disabled).toBe(true);
+      expect(b.get("waitlist-position")).not.toBeNull();
+    }
+  });
+
+  it.each([4, null])("replays the accepted allocation after a throttled write (capacity %s)", async (capacity) => {
+    const b = browser("going-full", undefined, true);
+    b.get("rsvp-withdraw")!.click(); b.finish(0, 204); await b.settle();
+    b.get("waitlist-join")!.click();
+    expect(b.requests[2]!.init.body).toBe('{"status":"waitlisted"}');
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 3, capacity }]); await b.settle();
+    expect(b.page.querySelector("[data-count]")?.textContent).toBe(capacity === null ? "3 going" : "3 of 4 going");
+    if (capacity !== null) expect(b.page.querySelector("[data-spots]")?.textContent).toBe("1 of 4 spots left");
+    expect(b.root.getAttribute("aria-busy")).toBe("true");
+    expect(b.get("waitlist-join")?.disabled).toBe(true);
+    expect(b.get("rsvp-going")).toBeNull();
+    b.finish(2, 429, {}, { "Retry-After": "5" }); await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("false");
+    expect(b.get("waitlist-join")).toBeNull(); expect(b.get("event-full")).toBeNull();
+    expect(b.get("rsvp-rate-limited")?.textContent).toBe("Slow down — try again in 5 seconds. Nothing changed, just wait a moment.");
+    expect(b.get("rsvp-going")?.disabled).toBe(false);
+    expect(b.requests).toHaveLength(3);
+    expect(b.broadcasts.filter((e) => e.type === "going-count-refreshed").map((e) => e.detail)).toEqual([
+      { eventKey: "raid/one", goingCount: 3, capacity },
+    ]);
+    b.get("rsvp-going")!.click();
+    expect(b.requests[3]!.init.body).toBe('{"status":"going"}');
+    expect(b.requests.filter((r) => r.init.method !== "PUT" && r.init.method !== "DELETE").map((r) => r.url)).toEqual(["/events.json?event_key=raid%2Fone"]);
+  });
+
+  it.each([401, 419, 302, 403, 422])("reconciles the retained allocation after known HTTP %i refusal", async (status) => {
+    const b = browser("full"); b.get("waitlist-join")!.click();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 3, capacity: 4 });
+    b.finish(0, status, { error: "forbidden" }); await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("false"); expect(b.get("waitlist-join")).toBeNull();
+    expect(b.get("rsvp-going")?.disabled).toBe(false); expect(b.get("rsvp-unknown")).toBeNull();
+    expect(b.requests).toHaveLength(1); expect(b.reloads()).toBe(0);
+  });
+
+  it("does not replay a busy snapshot over a newer read between refusal and ownership release", async () => {
+    const b = browser("full"); b.get("waitlist-join")!.click();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    b.finish(0, 429);
+    // Fetch's handler enables controls first; this accepted read runs before
+    // the chained finally releases write ownership and handles the buffer.
+    queueMicrotask(() => b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 }));
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("waitlist-join")?.disabled).toBe(false); expect(b.requests).toHaveLength(1);
+  });
+
+  it("discards the older allocation when a refused write requires closed-state SSR", async () => {
+    const b = browser("full"); b.get("waitlist-join")!.click();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    b.finish(0, 403, { error: "rsvp_closed" }); await b.settle();
+    expect(b.reloads()).toBe(1); expect(b.get("rsvp-going")).toBeNull();
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.requests).toHaveLength(1);
+  });
+
+  it("keeps only the latest validated busy snapshot and leaves paused controls closed", async () => {
+    const b = browser("waitlisted"); b.get("waitlist-claim")!.click();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 });
+    b.emit("going-count-refreshed", { eventKey: "other", goingCount: 0, capacity: null });
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: -1, capacity: null });
+    b.finish(0, 429); await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist");
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    const paused = browser("waitlisted", undefined, true, { rsvpOpen: false });
+    paused.get("waitlist-leave")!.click();
+    paused.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    paused.finish(0, 429); await paused.settle();
+    expect(paused.get("waitlist-claim")).toBeNull(); expect(paused.get("rsvp-going")).toBeNull();
+    expect(paused.get("rsvp-paused")).not.toBeNull(); expect(paused.requests).toHaveLength(1);
+  });
+
+  it.each(["success", "conflict", "unknown"] as const)("does not replay an older busy allocation after %s settlement", async (outcome) => {
+    const b = browser("full", undefined, true); b.get("waitlist-join")!.click();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    if (outcome === "success") b.finish(0, 201, { data: { status: "waitlisted", waitlist_position: 2 } });
+    else if (outcome === "conflict") b.finish(0, 409, { capacity: 4 });
+    else b.requests[0]!.reject(new Error("lost response"));
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("waitlist-claim")).toBeNull();
+    if (outcome === "success") {
+      expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #2 in line");
+      expect(b.requests).toHaveLength(2);
+      b.finish(1, 200, [{ event_key: "raid/one", going_count: 4, capacity: 4 }]); await b.settle();
+      b.get("waitlist-leave")!.click(); b.finish(2, 429); await b.settle();
+      expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("waitlist-claim")).toBeNull();
+      expect(b.requests).toHaveLength(3);
+    } else expect(b.requests).toHaveLength(1);
+    if (outcome === "unknown") expect(b.root.querySelectorAll("[data-action]").every((n) => n.disabled)).toBe(true);
   });
 
   it("keeps full copy and does not offer a seat claim after joining a full waitlist", async () => {

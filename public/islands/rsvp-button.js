@@ -10,8 +10,9 @@
 // `going-count-updated` CustomEvent `{eventKey, viewerState}` is broadcast
 // for the going-count badge — the button re-reads nothing itself.
 // Throttle (429) shows the CM-frozen wait copy (TOG-7976) in `role="status"`
-// with the button left enabled; other failures show the failure alert with
-// the button left enabled and focus untouched; 401/419/302-to-login shows
+// with the button left enabled; refused writes show the failure alert with
+// retry enabled and focus untouched. Response-less transport requires SSR
+// recovery with mutations disabled; 401/419/302-to-login shows
 // the session-expired notice with the SSR login link (`?next=` return path,
 // never the update endpoint, TOG-8135/TOG-9254) — never the native confirm
 // (TOG-9354). Closed/paused SSR states carry no controls; a 403 from a stale
@@ -361,11 +362,19 @@
     el.appendChild(link);
   }
 
+  var pendingCapacity = null;
+
   function reconcileCapacity(detail) {
-    if (detail.eventKey !== eventKey || root.getAttribute("aria-busy") === "true" ||
-        root.getAttribute("data-outcome-unknown") === "true") return;
+    if (detail.eventKey !== eventKey || root.getAttribute("data-outcome-unknown") === "true") return;
     if (!Number.isSafeInteger(detail.goingCount) || detail.goingCount < 0 ||
         (detail.capacity !== null && (!Number.isSafeInteger(detail.capacity) || detail.capacity < 1))) return;
+    // Accepted reads may settle during a later write. Keep only the latest
+    // snapshot, without changing the controls or requested intent mid-flight.
+    if (root.getAttribute("aria-busy") === "true") {
+      pendingCapacity = { eventKey: eventKey, goingCount: detail.goingCount, capacity: detail.capacity };
+      return;
+    }
+    pendingCapacity = null;
     var full = detail.capacity !== null && detail.goingCount >= detail.capacity;
     root.setAttribute("data-full", full ? "true" : "false");
     if (detail.capacity === null) root.removeAttribute("data-capacity");
@@ -535,11 +544,13 @@
           }
         }
         if (sessionExpiredResponse(res)) {
+          controller.refused = true;
           setBusy(false, button);
           notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, true);
           return;
         }
         if (res.status === 429) {
+          controller.refused = true;
           setBusy(false, button);
           notice(TESTID.rateLimited, "status", throttleWaitCopy(retryAfterSeconds(res)), false, false);
           return;
@@ -561,6 +572,7 @@
                 function (j) {
                   if (controller && inflight !== controller) return;
                   if (j && j.error === "forbidden") {
+                    controller.refused = true;
                     setBusy(false, button);
                     notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
                   } else {
@@ -621,6 +633,7 @@
           }
           return;
         }
+        controller.refused = res.status >= 400 && res.status < 500;
         setBusy(false, button);
         // Failure keeps the control enabled and focus stays put (null focus
         // target, TOG-6956): the alert announces without stealing focus.
@@ -628,14 +641,19 @@
       },
       function () {
         if (controller && inflight !== controller) return;
-        inflight = null;
-        setBusy(false, button);
-        notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
+        // No response cannot prove refusal or cancel a delivered transaction.
+        unknownOutcome(button);
       }
     ).finally(function () {
       // Keep ownership through body parsing; header arrival is not completion.
       if (inflight === controller) {
         inflight = null;
+        var snapshot = pendingCapacity;
+        pendingCapacity = null;
+        // Only a refused write can reuse the earlier accepted allocation.
+        // Success owns a newer refresh; unknown/closed/full outcomes must not
+        // be reopened by a pre-settlement snapshot.
+        if (controller.refused && snapshot) reconcileCapacity(snapshot);
       }
     });
   }

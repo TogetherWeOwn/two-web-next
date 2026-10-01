@@ -56,9 +56,10 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
   Writes are never aborted/replaced: aborting a fetch cannot cancel a transaction.
   This supersedes the unsafe abort-then-resend wording after the slice-2 review.
   A readable, valid stored answer is required to confirm going/waitlisted. An
-  unreadable/missing/unexpected successful answer announces an unknown outcome and
-  offers an event refresh; mutations stay disabled until SSR recovers the answer,
-  rather than asserting a failed write or blindly replaying it.
+  unreadable/missing/unexpected successful answer or response-less transport rejection
+  announces an unknown outcome and offers an event refresh; mutations stay disabled
+  until SSR recovers the answer, rather than asserting a failed write or blindly
+  replaying it. Losing transport does not prove a delivered transaction was refused.
 - States rendered: guest login link (never a dead button); closed (Cancelled /
   Not published yet / been-and-gone, `role="status"`); full + waitlist join; in-line
   position + claim-seat (locked path); You're-in + withdraw; optimistic saving in
@@ -78,6 +79,10 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
   Withdrawal does not imply a vacancy: FIFO promotion may keep the event full.
   Keep last-known capacity until the badge's latest valid aggregate reconciles the
   join/waitlist/claim controls; a failed refresh cannot invent an open seat.
+  A validated allocation received during a write is retained without changing busy
+  controls. A known-refused write (including 429) reconciles the latest retained
+  allocation at settlement. Successful writes supersede it with their own refresh;
+  unknown, closed or authoritative full outcomes never replay an older allocation.
 - Honeypot `website` field: a filled decoy answers the byte-identical success shape
   without touching limiter/auth/DB; nothing attacker-shaped logged. Per the executable
   contract (`rsvpTrapTripped`), a bare RSVP click has no form-open timestamp or
