@@ -115,6 +115,21 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])("
     expect(urlRead).not.toHaveBeenCalled();
   });
 
+  it("rejects missing or foreign Origin on removed-path POSTs before routing or DB access", async () => {
+    const dbRead = vi.fn(() => { throw new Error("origin rejection must not read the DB binding"); });
+    const bindings: Env = { ...env, APP_URL: host };
+    Object.defineProperty(bindings, "DB", { get: dbRead });
+    for (const origin of [undefined, "https://foreign.example"]) {
+      const headers = origin ? { origin } : undefined;
+      for (const path of ["/not-a-route", ...removed]) {
+        const response = await app.request(`${host}${path}`, { method: "POST", headers }, bindings);
+        expect(response.status, path).toBe(403);
+        expect(await response.json()).toEqual({ error: "cross_origin" });
+      }
+    }
+    expect(dbRead).not.toHaveBeenCalled();
+  });
+
   it("does not register diagnostic routes for any method", () => {
     expect(app.routes.filter((route) => removed.includes(route.path))).toEqual([]);
   });
