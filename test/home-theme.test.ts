@@ -11,7 +11,7 @@ const props = {
   notice: null,
   inviteUrl: "https://discord.gg/invite",
   appUrl: "https://next.example.test",
-  counts: { memberCount: null, onlineCount: null },
+  counts: { memberCount: null, onlineCount: null, ranks: [] },
   upcomingEvents: [],
   eventsUnavailable: false,
   featured: [],
@@ -62,7 +62,7 @@ describe("homepage theme", () => {
 
   it("keeps data and image policy inside the themed layout", () => {
     const html = render({
-      counts: { memberCount: 57, onlineCount: 8 },
+      counts: { memberCount: 57, onlineCount: 8, ranks: [{ key: "legend", label: "Legend", memberCount: 0 }] },
       featured: [{ id: 1, title: "Community update", body: "Fixture content", url: "/events", imageUrl: "/logo.svg", imageAlt: "TWO" }],
       upcomingEvents: [{ eventKey: "game-night", title: "Co-op evening", startsAt: new Date("2030-07-04T19:00:00Z"), timezone: "UTC", location: "Voice lobby", goingCount: 2 }],
     });
@@ -73,6 +73,8 @@ describe("homepage theme", () => {
     expect(html).toContain('href="/e/game-night"');
     expect(html).toContain("2 going");
     expect(html).toContain('aria-label="Community ladder"');
+    expect(html).toContain('data-testid="rank-stack"');
+    expect(html).toContain('data-rank="legend"><dt>Legend</dt><dd>unclaimed</dd>');
   });
 
   it("has a bounded, lazy Discord preview and an explicit unavailable state", () => {

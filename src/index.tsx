@@ -16,6 +16,7 @@ import {
   type Sql,
 } from "./sessions";
 import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
+import { discordWidgetUrl } from "./discord-widget";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -51,8 +52,6 @@ const app = new Hono<{ Bindings: Env }>();
 // the CSP report-to directive selects the modern Reporting-Endpoints group.
 // Omit the deprecated Report-To header: unlike Reporting-Endpoints, it
 // requires absolute HTTPS URLs, not this same-origin relative destination.
-import { discordWidgetUrl } from "./discord-widget";
-
 const CSP_REPORT_ENDPOINT = "/csp-reports";
 
 // The four static headers (fonts byte-identical to SECURITY_HEADERS in
@@ -252,7 +251,7 @@ app.get("/", async (c) => {
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
-  const counts = await readCounts(c.env).catch(() => ({ memberCount: null, onlineCount: null }));
+  const counts = await readCounts(c.env);
   const [upcomingEvents, featured] = await Promise.all([
     loadHomeUpcoming(() => dbFor(c)),
     dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),

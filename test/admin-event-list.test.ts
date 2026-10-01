@@ -40,23 +40,27 @@ function rowKeys(html: string): string[] {
 
 describe("admin event list query and guard (no DB)", () => {
   it("defaults to newest starts first and validates every allowlist", () => {
-    expect(parseEventListQuery({})).toEqual({ q: "", status: "", series: "", fill: "", sort: "starts_at", order: "desc", page: 1 });
+    expect(parseEventListQuery({})).toEqual({ q: "", status: "", series: "", fill: "", rsvp_open: "", sort: "starts_at", order: "desc", page: 1 });
     expect(parseEventListQuery({
-      q: "  Games & nights  ", status: "unknown", series: "unknown", fill: "unknown",
+      q: "  Games & nights  ", status: "unknown", series: "unknown", fill: "unknown", rsvp_open: "unknown",
       sort: "title; DROP TABLE events--", order: "asc;--", page: "Infinity",
-    })).toEqual({ q: "Games & nights", status: "", series: "", fill: "", sort: "starts_at", order: "desc", page: 1 });
+    })).toEqual({ q: "Games & nights", status: "", series: "", fill: "", rsvp_open: "", sort: "starts_at", order: "desc", page: 1 });
   });
 
   it.each(["0", "-1", "1.5", "1e2", "NaN", "9007199254740991"])("ignores invalid page %s", (page) => {
     expect(parseEventListQuery({ page }).page).toBe(1);
   });
 
-  it("encodes filters and preserves all of them when navigating", () => {
-    const query = parseEventListQuery({ q: 'Games & "nights"', status: "published", series: "child", fill: "has_seats", sort: "title", order: "asc", page: "2" });
+  it.each(["1", "0"])("encodes filters and preserves RSVP state %s when navigating", (rsvp_open) => {
+    const query = parseEventListQuery({ q: 'Games & "nights"', status: "published", series: "child", fill: "has_seats", rsvp_open, sort: "title", order: "asc", page: "2" });
     const url = new URL(eventListUrl(query, { page: 3 }), env.APP_URL);
     expect(Object.fromEntries(url.searchParams)).toEqual({
-      q: 'Games & "nights"', status: "published", series: "child", fill: "has_seats", sort: "title", order: "asc", page: "3",
+      q: 'Games & "nights"', status: "published", series: "child", fill: "has_seats", rsvp_open, sort: "title", order: "asc", page: "3",
     });
+  });
+
+  it.each(["", "bogus", "false"])("omits empty or invalid RSVP filter %s from navigation", (rsvp_open) => {
+    expect(new URL(eventListUrl(parseEventListQuery({ rsvp_open })), env.APP_URL).searchParams.has("rsvp_open")).toBe(false);
   });
 
   it("keeps guests and non-moderators outside the filtered, sorted list", async () => {
@@ -130,8 +134,10 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (isolated agent-tes
     expect(keys(await list({ fill })).sort()).toEqual(expected.map((k) => fixtures[k]!.eventKey).sort());
   });
 
-  it("combines search, status, series and fill without broadening results", async () => {
-    expect(keys(await list({ status: "published", series: "parent", fill: "full" }))).toEqual([fixtures.parent!.eventKey]);
+  it("combines search, status, series, fill and RSVP state without broadening results", async () => {
+    await fixture.db.update(events).set({ rsvpOpen: false }).where(eq(events.id, fixtures.parent!.id));
+    expect(keys(await list({ status: "published", series: "parent", fill: "full", rsvp_open: "0" }))).toEqual([fixtures.parent!.eventKey]);
+    expect(await list({ status: "published", series: "parent", fill: "full", rsvp_open: "1" })).toEqual([]);
     expect(await list({ q: "no match", status: "published", series: "parent", fill: "full" })).toEqual([]);
     expect(await list({ status: "draft", series: "parent", fill: "full" })).toEqual([]);
   });
@@ -173,27 +179,35 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event list (isolated agent-tes
     }
   });
 
-  it("paginates after filtering/sorting, carries all query values and logs only displayed rows", async () => {
+  it.each(["1", "0"])("paginates RSVP state %s with every filter preserved and logs only displayed rows", async (rsvp_open) => {
     await fixture.db.insert(events).values(Array.from({ length: EVENT_PAGE_SIZE + 2 }, (_, i) => ({
       eventKey: `list-test-page-${i}`, title: `Page fixture & nights ${String(i).padStart(2, "0")}`,
-      status: "published", capacity: 4,
+      status: "published", capacity: 4, rsvpOpen: rsvp_open === "1",
       startsAt: new Date("2026-12-01T20:00:00Z"), endsAt: new Date("2026-12-01T22:00:00Z"),
     })));
-    const query = "?q=Page+fixture+%26+nights&status=published&series=standalone&fill=has_seats&sort=title&order=asc";
+    await fixture.db.insert(events).values({
+      eventKey: "list-test-page-opposite", title: "Page fixture & nights 00 opposite",
+      status: "published", capacity: 4, rsvpOpen: rsvp_open !== "1",
+      startsAt: new Date("2026-12-01T20:00:00Z"), endsAt: new Date("2026-12-01T22:00:00Z"),
+    });
+    const query = `?q=Page+fixture+%26+nights&status=published&series=standalone&fill=has_seats&rsvp_open=${rsvp_open}&sort=title&order=asc`;
     const first = await (await request(query)).text();
     expect(rowKeys(first)).toHaveLength(EVENT_PAGE_SIZE);
     expect(link(first, "prev")).toBeUndefined();
     const next = new URL(link(first, "next")!, env.APP_URL);
     expect(Object.fromEntries(next.searchParams)).toEqual({
-      q: "Page fixture & nights", status: "published", series: "standalone", fill: "has_seats", sort: "title", order: "asc", page: "2",
+      q: "Page fixture & nights", status: "published", series: "standalone", fill: "has_seats", rsvp_open, sort: "title", order: "asc", page: "2",
     });
     const second = await (await request(next.search)).text();
     expect(rowKeys(second)).toEqual(["list-test-page-25", "list-test-page-26"]);
     expect(link(second, "next")).toBeUndefined();
-    expect(new URL(link(second, "prev")!, env.APP_URL).searchParams.has("page")).toBe(false);
+    const previous = new URL(link(second, "prev")!, env.APP_URL);
+    expect(previous.searchParams.has("page")).toBe(false);
+    expect(previous.searchParams.get("rsvp_open")).toBe(rsvp_open);
     expect([...rowKeys(first), ...rowKeys(second)]).toHaveLength(new Set([...rowKeys(first), ...rowKeys(second)]).size);
     const sortLink = second.match(/href="([^"]+)" aria-label="Sort by title descending"/)![1]!.replaceAll("&amp;", "&");
     expect(new URL(sortLink, env.APP_URL).searchParams.has("page")).toBe(false);
+    expect(new URL(sortLink, env.APP_URL).searchParams.get("rsvp_open")).toBe(rsvp_open);
     const [log] = await fixture.db.select().from(memberDataAccessLogs)
       .where(and(eq(memberDataAccessLogs.viewerDiscordId, viewer), eq(memberDataAccessLogs.subjectCount, EVENT_PAGE_SIZE)));
     expect(log!.subjectUserIds.sort()).toEqual(rowKeys(first).sort());

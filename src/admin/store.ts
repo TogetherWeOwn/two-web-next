@@ -6,9 +6,9 @@
 // - spatie LogsActivity dirty-only audit on both resources (M7).
 // - AccessRecorder one-row-per-request access log (M5).
 //
-// Capacity edits share the RSVP service's event-row FOR UPDATE lock: validation,
-// the edit and FIFO promotions commit together. Routes dispatch the write-back
-// only after commit; mirror stamps on promoted answers are reset in that write.
+// Pause/reopen and capacity edits share the RSVP service's event-row FOR UPDATE
+// lock. Validation, edits and FIFO promotions commit together; routes dispatch
+// write-back only after commit, with promoted answers' mirror stamps reset.
 
 import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
@@ -17,7 +17,7 @@ import { activityLog, events, featuredContents, memberDataAccessLogs, rsvps } fr
 import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
 import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
-import { CAPACITY_BELOW_GOING, goingCount, promoteWaitlist } from "../events/waitlist";
+import { CAPACITY_BELOW_GOING, goingCount, lockWaitlist, promoteWaitlist } from "../events/waitlist";
 
 export type Actor = { id: string; username: string };
 
@@ -325,6 +325,45 @@ export async function transitionEvent(
   });
 }
 
+/** Pause/reopen keeps the event published; only a changed flag needs a sync. */
+export async function setRsvpOpen(
+  db: Db,
+  actor: Actor,
+  eventKey: string,
+  open: boolean,
+  clock: () => Date = () => new Date(),
+): Promise<{ row: EventRow; writeBack: WriteBack }> {
+  return db.transaction(async (tx) => {
+    // Share the RSVP writer's event lock. Check the clock after acquiring it,
+    // so a wait that crosses the end cannot reopen an expired event.
+    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
+    if (!locked) throw new NotFoundError("event");
+    // A mirror-stamp writer can hold a waiter row past expiry. Finish that
+    // promotion-row wait too before judging whether reopening is allowed.
+    if (open && !locked.rsvpOpen && locked.status === "published") await lockWaitlist(tx, locked.id);
+    const now = clock();
+    if (locked.status !== "published" || locked.endsAt <= now) {
+      throw new ValidationError({ rsvp_open: "Only published events that have not ended can pause or reopen RSVPs." });
+    }
+    if (locked.rsvpOpen === open) return { row: locked, writeBack: null };
+    const [row] = await tx.update(events).set({ rsvpOpen: open, updatedAt: now })
+      .where(eq(events.eventKey, eventKey)).returning();
+    if (!row) throw new Error("event RSVP toggle returned no row");
+    // Withdrawals/capacity edits leave the line frozen while paused. Reopening
+    // settles those vacancies in FIFO order before the same event sync is queued.
+    if (open) await promoteWaitlist(tx, row, clock);
+    await tx.insert(activityLog).values({
+      logName: "default",
+      description: `${open ? "reopened" : "paused"} RSVPs for event ${row.title}`,
+      subjectType: "Event",
+      subjectId: row.eventKey,
+      causerId: actor.id,
+      properties: { rsvpOpen: { before: locked.rsvpOpen, after: open } },
+    });
+    return { row, writeBack: { eventKey: row.eventKey, status: "published" } };
+  });
+}
+
 export class NotFoundError extends Error {
   constructor(readonly what: string) {
     super(`${what} not found`);
@@ -337,6 +376,7 @@ export async function listEvents(db: Db, params: EventListParams): Promise<Event
   const conds = [];
   if (opts.q) conds.push(ilike(events.title, `%${opts.q}%`));
   if (opts.status) conds.push(eq(events.status, opts.status));
+  if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
   if (opts.series === "parent") conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
   if (opts.series === "child") conds.push(isNotNull(events.parentEventId));
   if (opts.series === "standalone") conds.push(and(isNull(events.parentEventId), isNull(events.recurrenceFrequency)));

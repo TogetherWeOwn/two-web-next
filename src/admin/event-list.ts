@@ -6,6 +6,7 @@ export type EventListQuery = {
   status: "" | "draft" | "published" | "cancelled" | "past";
   series: "" | "parent" | "child" | "standalone";
   fill: "" | "full" | "has_seats" | "unlimited";
+  rsvp_open: "" | "1" | "0";
   sort: EventSort;
   order: "asc" | "desc";
   page: number;
@@ -24,6 +25,7 @@ export function parseEventListQuery(params: EventListParams): EventListQuery {
     status: status === "draft" || status === "published" || status === "cancelled" || status === "past" ? status : "",
     series: series === "parent" || series === "child" || series === "standalone" ? series : "",
     fill: fill === "full" || fill === "has_seats" || fill === "unlimited" ? fill : "",
+    rsvp_open: params.rsvp_open === "1" || params.rsvp_open === "0" ? params.rsvp_open : "",
     sort: sort === "title" || sort === "status" || sort === "starts_at" ? sort : "starts_at",
     order: params.order === "asc" ? "asc" : "desc",
     // Keep the offset within a safe integer, even for adversarial page values.
@@ -35,7 +37,7 @@ export function parseEventListQuery(params: EventListParams): EventListQuery {
 export function eventListUrl(query: EventListQuery, changes: Partial<EventListQuery> = {}): string {
   const next = { ...query, ...changes };
   const params = new URLSearchParams();
-  for (const key of ["q", "status", "series", "fill"] as const) {
+  for (const key of ["q", "status", "series", "fill", "rsvp_open"] as const) {
     if (next[key]) params.set(key, next[key]);
   }
   params.set("sort", next.sort);

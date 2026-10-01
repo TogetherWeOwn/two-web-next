@@ -1,5 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
-import type { Counts } from "./counts";
+import type { Counts, Rank } from "./counts";
 import type { VisibleFeatured } from "./featured";
 import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
@@ -166,6 +166,10 @@ export const Recovery: FC<{
   </Layout>
 );
 
+const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map((label) => ({
+  key: label.toLowerCase(), label, memberCount: null,
+}));
+
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
@@ -223,7 +227,7 @@ export const Home: FC<{
         {counts.memberCount != null && (
           <p class="counts" data-testid="member-count">
             <strong>{counts.memberCount}</strong> members
-            {counts.onlineCount != null && (
+            {counts.onlineCount != null && counts.onlineCount > 0 && (
               <>
                 {" · "}<strong>{counts.onlineCount}</strong> online
               </>
@@ -281,7 +285,15 @@ export const Home: FC<{
       </div>
       <section aria-label="Community ladder" class="community-ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
-        <p>Ranks stack: a Veteran still holds everything below. Legend is still unclaimed.</p>
+        <p>Ranks stack — a Veteran still holds everything below.</p>
+        <dl class="facts rank-stack" data-testid="rank-stack">
+          {(counts.ranks.length ? counts.ranks : FALLBACK_RANKS).map((rank) => (
+            <div class="card" key={rank.key} data-rank={rank.key}>
+              <dt>{rank.label}</dt>
+              <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
+            </div>
+          ))}
+        </dl>
       </section>
       <section aria-labelledby="home-events-heading">
         <p class="strap">Next up</p>
