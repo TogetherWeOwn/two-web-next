@@ -15,8 +15,7 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
-import { discordWidgetUrl } from "./discord-widget";
+import { addGuildMember, authorizeUrl, exchangeCode, failureMeta, fetchUser, isProviderOutage } from "./discord";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -42,6 +41,9 @@ import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from ".
 import { upBody } from "./up";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
+import { rulesLastUpdated } from "./rules-last-updated";
+
+export { rulesLastUpdated } from "./rules-last-updated";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -78,8 +80,8 @@ const staticSecurityHeaders = secureHeaders({
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
-    // Only homepage/join reads embed the widget; other routes cannot frame anything.
-    frameSrc: [(c) => ["/", "/join"].includes(c.req.path) && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com/widget" : "'none'"],
+    // Only join reads embed the widget; other routes cannot frame anything.
+    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com/widget" : "'none'"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     fontSrc: ["'self'"],
@@ -187,7 +189,8 @@ async function issueSession(
       member: row.member,
     });
   } catch (err) {
-    console.warn("roster upsert failed", { user: row.userId, error: String(err) });
+    // Driver messages can carry DSN fragments; the class name is the whole story here.
+    console.warn("roster upsert failed", { user: row.userId, exception: (err as Error)?.constructor?.name ?? "unknown" });
   }
   const token = newSessionToken();
   await store.create({
@@ -241,7 +244,18 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
   return { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator };
 }
 
-const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
+// One banner sentence per ordinary-login failure meaning (TOG-10355): denied
+// (they cancelled) is distinct from unavailable (Discord did not answer) and
+// from the generic/expired "didn't complete". Discord's error_description is
+// never echoed anywhere — the banner is our copy.
+const NOTICES = new Set([
+  "joined",
+  "already_member",
+  "join_failed",
+  "signin_failed",
+  "signin_denied",
+  "signin_unavailable",
+]);
 
 app.get("/", async (c) => {
   // A DB outage must not break the funnel, including session setup. Fail closed to guest.
@@ -263,7 +277,7 @@ app.get("/", async (c) => {
   return c.html(
     <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
       counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
-      widgetUrl={discordWidgetUrl(c.env.DISCORD_GUILD_ID)} imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
+      imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
   );
 });
 
@@ -290,29 +304,6 @@ for (const path of ["/about", "/faq"] as const) {
 // Static house rules (ports two-web `Route::view('/rules')`, TOG-5147): no database — renders
 // even when the bot's database is down. The last-updated stamp comes from config, and an empty
 // or unparseable value hides the stamp instead of 500ing (TOG-7323).
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-export function rulesLastUpdated(raw: string | undefined): { iso: string; label: string } | null {
-  const value = raw?.trim() ?? "";
-  if (value === "") return null;
-  const invalid = () => {
-    console.warn("Invalid community.rules_last_updated — hiding /rules stamp");
-    return null;
-  };
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  const year = m?.[1];
-  const mon = m?.[2];
-  const dayStr = m?.[3];
-  if (!year || !mon || !dayStr) return invalid();
-  const month = MONTHS[Number(mon) - 1];
-  const day = Number(dayStr);
-  if (month === undefined || day < 1 || day > 31) return invalid();
-  return { iso: `${year}-${mon}-${dayStr}`, label: `${day} ${month} ${year}` };
-}
-
 app.get("/rules", (c) => {
   const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
   c.header("cache-control", "public, max-age=3600");
@@ -453,6 +444,15 @@ app.get("/auth/discord/callback", async (c) => {
   deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
   const code = c.req.query("code");
   const state = c.req.query("state");
+  // A consent-screen refusal arrives as an `error` param before any code
+  // exists. Denied gets its own sentence (the member chose this); any other
+  // OAuth error keeps the generic one. Legacy DiscordLoginTest: the
+  // error_description is never echoed — we render only our own copy.
+  const oauthError = c.req.query("error");
+  if (oauthError) {
+    return c.redirect(oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed", 302);
+  }
+
   if (!code || !state || !expected || state !== expected) return c.redirect("/?n=signin_failed", 302);
 
   let accessToken: string;
@@ -461,8 +461,11 @@ app.get("/auth/discord/callback", async (c) => {
     accessToken = await exchangeCode(code, c.env.DISCORD_CLIENT_ID, c.env.DISCORD_CLIENT_SECRET, redirectUri(c.env));
     user = await fetchUser(accessToken);
   } catch (err) {
-    console.warn("discord sign-in failed", { error: String(err) });
-    return c.redirect("/?n=signin_failed", 302);
+    // Bounded like the join route: exception class + kind + status, never the
+    // message (the token-exchange error body can quote the client secret).
+    const meta = failureMeta(err);
+    console.warn("discord sign-in failed", { exception: meta.exception, kind: meta.kind, status: meta.status });
+    return c.redirect(isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed", 302);
   }
 
   // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and

@@ -72,7 +72,7 @@
     if (active) active.abort();
     var controller = new AbortController();
     active = controller;
-    if (opts.skeleton) setLoading(true);
+    setLoading(!!opts.skeleton);
     try {
       var response = await fetch(url.pathname + url.search, {
         method: "GET",

@@ -22,8 +22,8 @@ function directives(res: Response): Record<string, string> {
 }
 
 describe("route CSP (local fixtures, no DB)", () => {
-  it.each(["GET", "HEAD"])("%s homepage and join permit only the Discord widget path", async (method) => {
-    for (const path of ["/", "/join?next=/events"]) {
+  it.each(["GET", "HEAD"])("%s join permits only the Discord widget path", async (method) => {
+    for (const path of ["/join", "/join?next=/events"]) {
       const res = await app.request(path, { method }, env);
       expect(res.status).toBe(200);
       const csp = directives(res);
@@ -36,6 +36,13 @@ describe("route CSP (local fixtures, no DB)", () => {
       expect(res.headers.get("x-frame-options")).toBe("DENY");
       if (method === "GET") expect(await res.text()).toContain("https://discord.com/widget?id=");
     }
+  });
+
+  it.each(["GET", "HEAD"])("%s homepage cannot embed Discord", async (method) => {
+    const res = await app.request("/", { method }, env);
+    expect(res.status).toBe(200);
+    expect(directives(res)["frame-src"]).toBe("'none'");
+    if (method === "GET") expect(await res.text()).not.toContain("<iframe");
   });
 
   it.each(["/about", "/faq", "/privacy", "/join/discord", "/join/callback", "/join/recovery", "/join/", "/JOIN", "/admin", "/profile", "/missing"])("%s does not gain iframe permission", async (path) => {

@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Home, Layout } from "../src/pages";
 import { discordWidgetUrl } from "../src/discord-widget";
+import { FALLBACK_INVITE } from "../src/invite";
 import type { Session } from "../src/env";
 import app from "./app";
 
@@ -15,7 +16,6 @@ const props = {
   upcomingEvents: [],
   eventsUnavailable: false,
   featured: [],
-  widgetUrl: discordWidgetUrl("123456789012345678"),
 };
 const session: Session = { id: "fixture", username: "Player <script>", avatar: null, member: false, moderator: false };
 const render = (overrides = {}) => Home({ ...props, ...overrides })!.toString();
@@ -77,22 +77,46 @@ describe("homepage theme", () => {
     expect(html).toContain('data-rank="legend"><dt>Legend</dt><dd>unclaimed</dd>');
   });
 
-  it("has a bounded, lazy Discord preview and an explicit unavailable state", () => {
-    const html = render();
+  it.each([null, session, { ...session, member: true }])("links every account state to the existing join preview (%#)", (session) => {
+    const html = render({ session });
+    expect(html).toContain('href="/join#join-heading" data-testid="home-widget-link"');
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("https://discord.com/widget");
+  });
+
+  it.each(["", "javascript:alert(1)", "http://discord.gg/invite", "https://invalid.example/invite"])("routes the new invite fallback through normalization (%s)", async (inviteUrl) => {
+    const env = {
+      APP_URL: props.appUrl, DISCORD_GUILD_ID: "123456789012345678", DISCORD_INVITE_URL: inviteUrl,
+      DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture", DISCORD_BOT_TOKEN: "fixture",
+      SESSION_SECRET: "fixture-secret-longer-than-32-bytes",
+    };
+    const response = await app.request("/", {}, env);
+    expect(await response.text()).toContain('href="/discord" data-testid="home-discord-invite"');
+    const redirect = await app.request("/discord", {}, env);
+    expect(redirect.status).toBe(302);
+    expect(redirect.headers.get("location")).toBe(FALLBACK_INVITE);
+    expect(redirect.headers.get("cache-control")).toContain("no-store");
+    expect(redirect.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("retains the disclosed join-only widget and the linked section target", async () => {
+    const response = await app.request("/join", {}, {
+      APP_URL: props.appUrl, DISCORD_GUILD_ID: "123456789012345678", DISCORD_INVITE_URL: props.inviteUrl,
+      DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture", DISCORD_BOT_TOKEN: "fixture",
+      SESSION_SECRET: "fixture-secret-longer-than-32-bytes",
+    });
+    const html = await response.text();
+    expect(html).toContain('id="join-heading"');
     expect(html).toContain('src="https://discord.com/widget?id=123456789012345678&amp;theme=dark"');
     expect(html).toContain('sandbox="allow-scripts allow-same-origin" loading="lazy" referrerpolicy="no-referrer"');
-    expect(html).toContain('data-testid="home-widget"');
-    const fallback = render({ widgetUrl: null });
-    expect(fallback).not.toContain("<iframe");
-    expect(fallback).toContain('data-testid="home-widget-fallback"');
-    expect(fallback).toContain('data-testid="join"');
+    expect(html).toContain('data-testid="join-widget"');
   });
 
   it.each([undefined, "guild", "123", "1234567890&evil=1", "https://evil.test"])("rejects invalid widget identifiers (%s)", (id) => {
     expect(discordWidgetUrl(id)).toBeNull();
   });
 
-  it("allows only self fonts and the existing Discord widget path in the CSP", async () => {
+  it("allows only self fonts and keeps the homepage frame policy closed", async () => {
     const response = await app.request("/", {}, {
       APP_URL: "https://next.example.test", DISCORD_GUILD_ID: "123456789012345678", DISCORD_INVITE_URL: props.inviteUrl,
       DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture", DISCORD_BOT_TOKEN: "fixture",
@@ -100,12 +124,14 @@ describe("homepage theme", () => {
     });
     const csp = response.headers.get("content-security-policy")!;
     expect(csp).toContain("font-src 'self'");
-    expect(csp).toContain("frame-src https://discord.com/widget;");
+    expect(csp).toContain("frame-src 'none';");
     expect(csp).toContain("script-src 'self'");
     expect(csp).toContain("style-src 'self'");
     expect(csp).not.toContain("unsafe-inline");
     expect(csp).not.toContain("*");
-    expect(await response.text()).toContain('data-testid="home-widget"');
+    const html = await response.text();
+    expect(html).toContain('data-testid="home-widget-link"');
+    expect(html).not.toContain("<iframe");
   });
 
   it("keeps the responsive, focus and reduced-motion rules external and compact", () => {

@@ -73,13 +73,27 @@ export const SiteFooter: FC = () => (
   </footer>
 );
 
-export type Notice = "joined" | "already_member" | "join_failed" | "signin_failed" | null;
+export type Notice =
+  | "joined"
+  | "already_member"
+  | "join_failed"
+  | "signin_failed"
+  | "signin_denied"
+  | "signin_unavailable"
+  | null;
 
+// One actionable sentence per failure meaning (legacy auth-discord.php, matched
+// by meaning, not translation key): denied says "you cancelled", unavailable
+// says "this is on Discord, not you — try again in a minute", the generic
+// sentence covers an expired or otherwise incomplete attempt. Nobody's browser
+// ever shows Discord's error_description.
 const NOTICES: Record<Exclude<Notice, null>, string> = {
   joined: "You're in. Welcome to the TWO Discord.",
   already_member: "Signed in. You're already in the TWO Discord.",
   join_failed: "Signed in, but we couldn't add you to the Discord automatically. Use the invite link below.",
   signin_failed: "Discord sign-in didn't complete. Please try again.",
+  signin_denied: "You cancelled the Discord sign-in, so we didn't sign you in. Nothing changed — try again whenever you like.",
+  signin_unavailable: "Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute.",
 };
 
 const JOIN_HREF = "/join";
@@ -179,9 +193,8 @@ export const Home: FC<{
   upcomingEvents: HomeEvent[];
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
-  widgetUrl?: string | null;
   imageHosts?: string;
-}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, widgetUrl, imageHosts }) => (
+}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -274,14 +287,9 @@ export const Home: FC<{
         </section>
         <section class="discord-preview" aria-labelledby="discord-heading">
           <h2 id="discord-heading">In the Discord</h2>
-          {widgetUrl ? (
-            <iframe title="TWO Discord server preview" src={widgetUrl} width="350" height="500"
-              sandbox="allow-scripts allow-same-origin" loading="lazy" referrerpolicy="no-referrer"
-              data-testid="home-widget" />
-          ) : (
-            <p data-testid="home-widget-fallback">Live server preview is unavailable. You can still join with Discord.</p>
-          )}
-          <p><a href={inviteUrl}>Open Discord</a></p>
+          <p>Visit the join page for the server preview and ways to join.</p>
+          <p><a href="/join#join-heading" data-testid="home-widget-link">View the Discord lobby</a></p>
+          <p><a href="/discord" data-testid="home-discord-invite">Open Discord</a></p>
         </section>
       </div>
       <section aria-label="Community ladder" class="community-ladder">

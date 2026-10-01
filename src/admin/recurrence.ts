@@ -78,16 +78,23 @@ export function occurrences(
   const localStart = utcToWall(startsAt, timezone);
   const localEnd = utcToWall(endsAt, timezone);
   const endDate = endsOn ? endsOn.toISOString().slice(0, 10) : null;
+  // Seed's real elapsed length. When gap resolution lands the end on or before
+  // the start (a spring-forward can map both walls to the same instant), the
+  // occurrence keeps this duration from its resolved start instead of storing
+  // a zero-length meeting the event parser would reject.
+  const durationMs = endsAt.getTime() - startsAt.getTime();
   const out = new Map<number, Occurrence>();
   for (let index = 1; index <= limit; index++) {
     const step = index - 1;
     const days = frequency === "weekly" ? 7 * step : 0;
     const startWall = addDaysToWall(localStart, days);
     if (endDate !== null && startWall.slice(0, 10) > endDate) break;
-    out.set(index, {
-      startsAt: index === 1 ? startsAt : resolveWall(startWall, timezone),
-      endsAt: index === 1 ? endsAt : resolveWall(addDaysToWall(localEnd, days), timezone),
-    });
+    const starts = index === 1 ? startsAt : resolveWall(startWall, timezone);
+    let ends = index === 1 ? endsAt : resolveWall(addDaysToWall(localEnd, days), timezone);
+    if (index > 1 && durationMs > 0 && ends.getTime() <= starts.getTime()) {
+      ends = new Date(starts.getTime() + durationMs);
+    }
+    out.set(index, { startsAt: starts, endsAt: ends });
   }
   return out;
 }
