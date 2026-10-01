@@ -62,8 +62,12 @@ it.each(["/events", "/events?view=calendar&month=2030-01", "/events?q=no-such-ev
   expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
   expect(html).toContain('<nav aria-label="Site">');
   expect(html).toContain('class="schedule-heading"');
-  const script = path === "/events/past" ? "past-events" : "events-calendar";
-  expect(html.match(/<script\b[^>]*>/g)).toEqual([`<script src="/islands/${script}.js" defer="">`]);
+  const scripts = path === "/events/past" ? ['<script src="/islands/past-events.js" defer="">'] : [
+    '<script src="/islands/events-calendar.js" defer="">',
+    // Main's signed-in tab recovery controller is first-party, not vendor JS.
+    '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync">',
+  ];
+  expect(html.match(/<script\b[^>]*>/g)).toEqual(scripts);
 });
 
 it.each([
@@ -95,6 +99,21 @@ it("keeps event detail outside the schedule-only theme", async () => {
   const html = await (await pageShellFixture().request(`/e/${EVENT_KEY}`)).text();
   expect(html).not.toContain('href="/theme.css"');
   expect(html).not.toContain('class="events-page"');
+});
+
+it("serves a recovery HTML shell and bool-only status to guests without a session", async () => {
+  const { env } = pageShellFixture();
+  const recovery = await app.request(new URL("/auth/recover?next=%2Fprofile", env.APP_URL).toString(), {}, env);
+  expect(recovery.status).toBe(200);
+  expect(recovery.headers.get("content-type")).toContain("text/html");
+  const html = await recovery.text();
+  assertShell(html);
+  expect(html).toContain("Your earlier changes were not saved");
+  expect(html).toContain('href="/auth/discord?next=%2Fprofile"');
+  const status = await app.request(new URL("/auth/status", env.APP_URL).toString(), {}, env);
+  expect(status.status).toBe(200);
+  expect(status.headers.get("content-type")).toContain("application/json");
+  expect(await status.json()).toEqual({ authenticated: false });
 });
 
 it("renders the join-attempt fixture through the mounted detail route", async () => {
