@@ -1,4 +1,6 @@
 # Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
+# TrustHosts has no loopback exemption: local requests must match this hostname.
+APP_URL=http://localhost:8787
 DISCORD_CLIENT_SECRET=
 DISCORD_BOT_TOKEN=
 # 32+ random bytes, e.g. `openssl rand -base64 48`

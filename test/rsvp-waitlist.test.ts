@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { adminApp } from "../src/admin/routes";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";

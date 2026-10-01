@@ -4,7 +4,7 @@
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
-import { NotFoundError, createEvent, getEvent, recordAccess, transitionEvent, updateEvent } from "../admin/store";
+import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
 import { memberAccessLog } from "../access-log";
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
@@ -33,7 +33,7 @@ import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswe
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -370,21 +370,20 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  for (const action of ["publish", "cancel"] as const) {
+  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
     app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
       const who = await moderator(c);
       if (who instanceof Response) return who;
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       try {
-        const { row, writeBack } = await transitionEvent(
-          db,
-          { id: who.id, username: who.username },
-          c.req.param("key"),
-          action === "publish" ? "published" : "cancelled",
-        );
+        const actor = { id: who.id, username: who.username };
+        const key = c.req.param("key");
+        const { row, writeBack } = action === "rsvp-pause" || action === "rsvp-reopen"
+          ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
+          : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
         if (writeBack) await dispatchWriteBack(c.env, writeBack);
-        return c.json({ data: eventJson({ ...row, goingCount: 0 }) });
+        return c.json({ data: eventJson(await withGoingCount(db, row)) });
       } catch (err) {
         if (err instanceof ValidationError) return invalid(c, err);
         if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
@@ -401,7 +400,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null,
     waitlist_position: a.waitlistPosition,
   } });
-  const closed = (c: Ctx) => c.json({ reason: "event_not_open", message: "This event is not taking RSVPs." }, 403);
+  const closed = (c: Ctx, why: string) => c.json({ reason: "event_not_open", why, message: "This event is not taking RSVPs." }, 403);
 
   async function member(c: Ctx): Promise<Session | Response> {
     // Non-rotating: concurrent writes with one cookie must all authenticate.
@@ -437,7 +436,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!r.ok) {
       if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
       if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
-      return closed(c);
+      return closed(c, r.why);
     }
     await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);

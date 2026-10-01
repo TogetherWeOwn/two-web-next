@@ -43,6 +43,8 @@
   { "method": "POST", "path": "/admin/events/:key", "auth": "moderator" },
   { "method": "POST", "path": "/admin/events/:key/cancel", "auth": "moderator" },
   { "method": "POST", "path": "/admin/events/:key/publish", "auth": "moderator" },
+  { "method": "POST", "path": "/admin/events/:key/rsvp-pause", "auth": "moderator" },
+  { "method": "POST", "path": "/admin/events/:key/rsvp-reopen", "auth": "moderator" },
   { "method": "POST", "path": "/admin/featured", "auth": "moderator" },
   { "method": "POST", "path": "/admin/featured/:id", "auth": "moderator" },
   { "method": "POST", "path": "/admin/featured/:id/delete", "auth": "moderator" },
@@ -52,6 +54,8 @@
   { "method": "POST", "path": "/events", "auth": "moderator" },
   { "method": "POST", "path": "/events/:key/cancel", "auth": "moderator" },
   { "method": "POST", "path": "/events/:key/publish", "auth": "moderator" },
+  { "method": "POST", "path": "/events/:key/rsvp-pause", "auth": "moderator" },
+  { "method": "POST", "path": "/events/:key/rsvp-reopen", "auth": "moderator" },
   { "method": "POST", "path": "/logout", "auth": "public" },
   { "method": "POST", "path": "/members/:user", "auth": "member-owner" },
   { "method": "PUT", "path": "/events/:key/rsvp", "auth": "member-decoy" }

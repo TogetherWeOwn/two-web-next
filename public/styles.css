@@ -21,6 +21,8 @@ dl.facts > div { display: block; }
 .card dt, .card h2, .card h3 { margin: 0 0 .25rem; font-size: 1.05rem; }
 .card dd, .card p { margin: 0; color: var(--muted); }
 .counts { color: var(--muted); font-size: .95rem; }
+.rank-stack { grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); }
+.rank-stack dd { font-variant-numeric: tabular-nums; }
 .home-events { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .home-event-link { display: block; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
 .home-event-link h3 { margin: .5rem 0; }

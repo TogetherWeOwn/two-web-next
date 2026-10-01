@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 
 // Local outage fixture: never constructs a connection or reads any database.

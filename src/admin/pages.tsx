@@ -185,6 +185,18 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
   </Shell>
 );
 
+const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
+  if (row.status !== "published" || row.endsAt <= new Date()) return null;
+  const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
+  return (
+    <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
+      <button type="submit" class="link" data-testid={action}>
+        {row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
+      </button>
+    </form>
+  );
+};
+
 export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
   <Shell title={`Join attempt ${row.id}`}>
     <section>
@@ -237,6 +249,14 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
                 {s === "" ? "All" : s}
               </option>
             ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="rsvp_open">RSVPs</label>
+          <select id="rsvp_open" name="rsvp_open">
+            <option value="" selected={query.rsvp_open === ""}>All</option>
+            <option value="1" selected={query.rsvp_open === "1"}>Open</option>
+            <option value="0" selected={query.rsvp_open === "0"}>Paused</option>
           </select>
         </div>
         <div class="field">
@@ -297,6 +317,7 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
                       <button type="submit" class="link">Cancel</button>
                     </form>
                   ) : null}
+                  <RsvpAction row={r} />
                 </td>
               </tr>
             ))
@@ -433,6 +454,7 @@ export const EventFormPage: FC<{
                   <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
                 </form>
               ) : null}
+              <RsvpAction row={row} />
             </div>
           </section>
         ) : null}

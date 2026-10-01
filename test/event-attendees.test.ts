@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import { listGoingAttendees } from "../src/events/reads";
