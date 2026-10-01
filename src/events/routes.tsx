@@ -33,7 +33,7 @@ import {
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
-import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
+import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
@@ -93,6 +93,15 @@ async function feedResponse(c: Ctx, body: string, headers: Record<string, string
     return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
   }
   return new Response(body, { status: 200, headers: { ...headers, etag } });
+}
+
+async function calendarFeedResponse(c: Ctx, build: () => string, headers: Record<string, string>): Promise<Response> {
+  try {
+    return feedResponse(c, build(), headers);
+  } catch (error) {
+    if (!(error instanceof IcsSequenceRangeError)) throw error;
+    return c.text("Calendar revision unavailable", 503, { "cache-control": "no-store" });
+  }
 }
 
 export function registerEventRoutes(app: App, readSession: SessionReader, readFragmentSession: SessionReader): void {
@@ -253,7 +262,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published", "cancelled"]);
-    return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL), {
+    return calendarFeedResponse(c, () => eventsIcsCollection(rows, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": 'inline; filename="events.ics"',
       "cache-control": "max-age=300, public",
@@ -272,7 +281,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       const session = await readSession(c);
       if (!session?.moderator) return c.text("Forbidden", 403);
     }
-    return feedResponse(c, eventIcs(e, c.env.APP_URL), {
+    return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
       "cache-control": "max-age=300, private",

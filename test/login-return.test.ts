@@ -118,6 +118,26 @@ const finishLogin = (e: Env, state: string | null, j: Jar, extra = "code=abc") =
 afterEach(() => vi.unstubAllGlobals());
 
 describe("login_next (legacy ReturnToPageTest)", () => {
+  it.each([
+    ["%2Fe%2Fsunday-squad-01", "/e/sunday-squad-01"],
+    ["https%3A%2F%2Fevil.test", "/?n=joined"],
+  ])("retains guarded return behavior through the legacy alias (%s)", async (next, destination) => {
+    mockDiscord();
+    const { env } = isolated();
+    const alias = await app.request(`/auth/discord/redirect?next=${next}&state=untrusted&code=untrusted`, {}, env);
+    expect(alias.status).toBe(302);
+    expect(alias.headers.get("cache-control")).toBe("no-store");
+    const location = alias.headers.get("location")!;
+    expect(location).not.toContain("untrusted");
+    const start = await app.request(location, {}, env);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const cb = await finishLogin(env, state, jarFrom(start));
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get("location")).toBe(destination);
+    expect(setCookies(cb)).toContain(`${LOGIN_NEXT_COOKIE}=; Max-Age=0`);
+    expect(setCookies(cb)).toContain(`${LOGIN_INTENDED_COOKIE}=; Max-Age=0`);
+  });
+
   it("carries a safe ?next= through OAuth and lands there exactly once", async () => {
     mockDiscord();
     const { env } = isolated();
