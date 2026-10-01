@@ -27,7 +27,7 @@ import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
-import { dbFor } from "./db";
+import { dbFor, type EnvWithAdminDb } from "./db";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./guard";
 import type { SessionStore } from "../sessions";
@@ -50,7 +50,7 @@ import {
 import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
-import { dashboardJoinFunnel } from "./join-funnel";
+import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listJoinAttempts, listRoster } from "./reads";
 import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
@@ -119,14 +119,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     // Funnel counts are outcomes only (no member data): no access-log subjects.
     // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
     const db = await dbFor(c);
-    // Optional widget: 60 s cache scoped to the DB identity and a bounded read
-    // (join-funnel.ts), so a failing or blocked aggregate omits the widget
-    // instead of holding or failing the dashboard. Identity is the connection
-    // string in production, the injected Db object in tests.
-    const funnel = db ? await dashboardJoinFunnel(db, databaseUrl(c.env) ?? db) : undefined;
-    // Normalized queries + counts only; a failing or blocked read resolves
-    // undefined itself, so the widget is omitted — the dashboard never waits.
-    const zeroSearches = db ? await topZeroResultSearches(db) : undefined;
+    // Match dbFor's precedence: an injected ADMIN_DB overrides either URL.
+    const identity = (c.env as EnvWithAdminDb).ADMIN_DB || databaseUrl(c.env) || db;
+    // Start both optional analytics reads together with the same 500 ms budget,
+    // rather than stacking their deadlines. Failed/blocked widgets are omitted;
+    // authorization and the guard's critical access-log write stay fail-closed.
+    const [funnel, zeroSearches] = db ? await Promise.all([
+      dashboardJoinFunnel(db, identity),
+      topZeroResultSearches(db, 10, FUNNEL_READ_DEADLINE_MS),
+    ]) : [undefined, undefined];
     return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />);
   });
 
