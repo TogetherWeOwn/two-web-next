@@ -97,11 +97,11 @@ describe("draft ICS conditional authorization (fixture-only)", () => {
         actor === "forged moderator" ? "different-test-signing-secret-at-least-32-bytes" : SECRET,
       );
       if (actor === "member") expect(await source.store.get(visitor!.tokenHash)).toMatchObject({ moderator: false, member: true });
-      if (actor === "expired moderator") expect(await source.store.get(visitor!.tokenHash)).toBeNull();
       // A forged signature must fail even though its token names a live moderator.
       if (actor === "forged moderator") expect(await source.store.get(visitor!.tokenHash)).toMatchObject({ moderator: true });
       const response = await source.request(visitor?.cookie, etag);
       await expectForbidden(response, source.row);
+      if (actor === "expired moderator") expect(await source.store.get(visitor!.tokenHash)).toBeNull();
       if (actor !== "member") expect(response.headers.get("set-cookie")).toBeNull();
       if (actor === "forged moderator") expect(await source.store.get(visitor!.tokenHash)).toMatchObject({ moderator: true });
     },
