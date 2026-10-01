@@ -350,7 +350,7 @@ const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
       {children(id)}
       {hint ? <p class="hint">{hint}</p> : null}
       {err ? (
-        <p class="error" role="alert" data-testid={`error-${name}`}>
+        <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>
           {err}
         </p>
       ) : null}
@@ -391,10 +391,12 @@ export const EventFormPage: FC<{
             {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
           </Field>
           <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />}
+            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required
+              aria-invalid={errors.starts_at ? "true" : undefined} aria-describedby={errors.starts_at ? `${id}-error` : undefined} />}
           </Field>
           <Field name="ends_at" label="Ends (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required />}
+            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required
+              aria-invalid={errors.ends_at ? "true" : undefined} aria-describedby={errors.ends_at ? `${id}-error` : undefined} />}
           </Field>
           <Field
             name="timezone"
@@ -402,7 +404,8 @@ export const EventFormPage: FC<{
             errors={errors}
             hint="The IANA zone the wall time above is typed in. Storage is UTC."
           >
-            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
+            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"}
+              aria-invalid={errors.timezone ? "true" : undefined} aria-describedby={errors.timezone ? `${id}-error` : undefined} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
             {(id) => <input id={id} name="location" type="text" value={val(values, "location")} maxlength={255} />}
