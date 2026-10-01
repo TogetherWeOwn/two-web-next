@@ -3,6 +3,7 @@ import type { Counts, Rank } from "./counts";
 import type { VisibleFeatured } from "./featured";
 import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
+import type { JoinResult } from "./return-journey";
 import type { HomeEvent } from "./events/reads";
 import { cardTimeLabel, isValidZone } from "./islands/contracts";
 import { canonicalUrl } from "./seo";
@@ -11,6 +12,28 @@ const SITE_NAME = "Together We Own";
 
 export const SkipLink: FC = () => <a class="skip-link" href="#main">Skip to content</a>;
 
+export const FeaturedContentItem: FC<{ row: VisibleFeatured; appUrl: string; imageHosts?: string }> = ({ row, appUrl, imageHosts }) => {
+  const src = row.imageUrl ? featuredImageSrc(row.imageUrl, appUrl, imageHosts) : null;
+  return (
+    <article class="card" data-testid="featured-item">
+      <h3>{row.url ? <a href={row.url}>{row.title}</a> : row.title}</h3>
+      {row.body ? <p>{row.body}</p> : null}
+      {src ? (
+        <img
+          class="featured-image"
+          src={src}
+          alt={row.imageAlt?.trim() || row.title}
+          width="640"
+          height="360"
+          loading="lazy"
+          decoding="async"
+          referrerpolicy="no-referrer"
+        />
+      ) : null}
+    </article>
+  );
+};
+
 export const Layout: FC<
   PropsWithChildren<{
     title: string;
@@ -18,19 +41,20 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
+    theme?: "home";
   }>
-> = ({ title, canonical, shareTitle, shareDescription, robots, children }) => (
+> = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <meta name="theme-color" content="#0b0714" />
+      <meta name="theme-color" content="#151720" />
       <link rel="manifest" href="/site.webmanifest" />
       <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
       <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
       {robots ? <meta name="robots" content={robots} /> : null}
       <title>{title}</title>
-      <meta name="description" content="Together We Own: a close-knit adult gaming community, founded 1998." />
+      <meta name="description" content={shareDescription || "Together We Own: a close-knit adult gaming community, founded 1998."} />
       {canonical ? (
         <>
           <link rel="canonical" href={canonical} />
@@ -46,8 +70,14 @@ export const Layout: FC<
       ) : null}
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
+      {theme === "home" ? (
+        <>
+          <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+          <link rel="stylesheet" href="/theme.css" />
+        </>
+      ) : null}
     </head>
-    <body><SkipLink />{children}</body>
+    <body class={theme === "home" ? "homepage-theme" : undefined}><SkipLink />{children}</body>
   </html>
 );
 
@@ -66,26 +96,61 @@ export const SiteFooter: FC = () => (
   </footer>
 );
 
-export type Notice = "joined" | "already_member" | "join_failed" | "signin_failed" | null;
+export type Notice =
+  | "joined"
+  | "already_member"
+  | "join_failed"
+  | "signin_failed"
+  | "signin_denied"
+  | "signin_unavailable"
+  | null;
 
+// One actionable sentence per failure meaning (legacy auth-discord.php, matched
+// by meaning, not translation key): denied says "you cancelled", unavailable
+// says "this is on Discord, not you — try again in a minute", the generic
+// sentence covers an expired or otherwise incomplete attempt. Nobody's browser
+// ever shows Discord's error_description.
 const NOTICES: Record<Exclude<Notice, null>, string> = {
   joined: "You're in. Welcome to the TWO Discord.",
   already_member: "Signed in. You're already in the TWO Discord.",
   join_failed: "Signed in, but we couldn't add you to the Discord automatically. Use the invite link below.",
   signin_failed: "Discord sign-in didn't complete. Please try again.",
+  signin_denied: "You cancelled the Discord sign-in, so we didn't sign you in. Nothing changed — try again whenever you like.",
+  signin_unavailable: "Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute.",
 };
 
 const JOIN_HREF = "/join";
+
+// One-shot join confirmation (legacy join_result flash → data-testid="join-result",
+// JoinResultCopyTest/AlreadyMemberReinviteTest). A member who was already in the
+// guild gets the reinvite action — /discord resolves to the live invite — never
+// the bare homepage "Open Discord".
+export const JoinResultBanner: FC<{ result: JoinResult }> = ({ result }) => (
+  <p class="notice" role="status" data-testid="join-result">
+    {result === "added" ? (
+      <>You are in. Finish Discord's rules screening before you can post.</>
+    ) : (
+      <>
+        You are already in the server.{" "}
+        <a href="/discord" data-testid="reinvite-link">
+          Rejoin with the Discord invite
+        </a>
+      </>
+    )}
+  </p>
+);
 
 // Join carries the same share tags as home (TOG-5624): the funnel lives on
 // shared links. The intro doubles as the share description, same as legacy.
 export const JOIN_INTRO = "Approve once with Discord and we will add you to the server.";
 
-export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string }> = ({
+export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string; joinResult?: JoinResult | null }> = ({
   inviteUrl,
   widgetUrl,
   next,
   appUrl,
+  joinResult,
+
 }) => (
   <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
     <header class="bar">
@@ -95,6 +160,7 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
       </nav>
     </header>
     <main id="main" tabindex={-1}>
+      {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <section aria-labelledby="join-heading">
         <h1 id="join-heading">Join Together We Own</h1>
         <p class="lead">{JOIN_INTRO}</p>
@@ -166,6 +232,7 @@ const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Leg
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
+  joinResult?: JoinResult | null;
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
@@ -173,32 +240,54 @@ export const Home: FC<{
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
   imageHosts?: string;
-}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
+}> = ({ session, notice, joinResult, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
     shareDescription="We spent most of our life private. Now you can just turn up."
+    theme="home"
   >
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav aria-label="Primary">
+    <header class="bar site-header">
+      <nav class="main-nav" aria-label="Primary">
+        <a href="/" aria-current="page">Home</a>
+        <a href="/events">Events</a>
+      </nav>
+      <a class="brand" href="/" aria-label="Together We Own homepage">
+        <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+      </a>
+      <nav class="header-account" aria-label="Account">
         {session ? (
           <form method="post" action="/logout">
+            <span class="account-caption">Signed in</span>
             <span class="who">{session.username}</span>
             <button type="submit" class="link">Sign out</button>
           </form>
         ) : (
-          <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+          <div>
+            <span class="account-caption">Welcome, guest</span>
+            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+          </div>
         )}
       </nav>
     </header>
     <main id="main" tabindex={-1}>
-      {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
-      <section class="hero">
+      {/*
+        The flashed join confirmation takes the notice slot: both carry the same
+        event, and the banner is the richer of the two (reinvite action, exact
+        confirmation copy). A bare ?n= still renders its notice when no flash is
+        pending.
+      */}
+      {joinResult ? (
+        <JoinResultBanner result={joinResult} />
+      ) : (
+        notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>
+      )}
+      <section class="hero" aria-labelledby="home-heading">
+        <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
         <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
-        <h1>The lobby is open.</h1>
+        <h1 id="home-heading">The lobby is open.</h1>
         <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-        <p>Small enough that people notice when you come back.</p>
         {session?.member ? (
           <a class="btn" href={inviteUrl}>Open Discord</a>
         ) : (
@@ -220,39 +309,26 @@ export const Home: FC<{
         <section aria-labelledby="featured-heading" data-testid="featured-content">
           <h2 id="featured-heading">From the community team</h2>
           <div class="facts">
-            {featured.map((item) => (
-              <article class="card" data-testid="featured-item" key={item.id}>
-                <h3>{item.url ? <a href={item.url}>{item.title}</a> : item.title}</h3>
-                {item.body ? <p>{item.body}</p> : null}
-                {(() => {
-                  const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl, imageHosts) : null;
-                  return src ? (
-                  <img
-                    class="featured-image"
-                    src={src}
-                    alt={item.imageAlt?.trim() || item.title}
-                    width="640"
-                    height="360"
-                    loading="lazy"
-                    decoding="async"
-                    referrerpolicy="no-referrer"
-                  />
-                  ) : null;
-                })()}
-              </article>
-            ))}
+            {featured.map((item) => <FeaturedContentItem key={item.id} row={item} appUrl={appUrl} imageHosts={imageHosts} />)}
           </div>
         </section>
       ) : null}
-      <section>
-        <h2>No application. No interview.</h2>
-        <p>Show up a few times. Play. Become a Member. The ladder records trust and time, not grind.</p>
-      </section>
-      <section>
-        <h2>Not a crowd. A place that knows your name.</h2>
-        <p>The community is voice-first. Game nights get posted in the Discord first.</p>
-      </section>
-      <section aria-label="Community ladder">
+      <div class="community-grid">
+        <section class="community-intro" aria-labelledby="community-heading">
+          <h2 id="community-heading">No application. No interview.</h2>
+          <p>Show up a few times. Play. Become a Member. The ladder records trust and time, not grind.</p>
+          <p>Small enough that people notice when you come back.</p>
+          <h3>Not a crowd. A place that knows your name.</h3>
+          <p>The community is voice-first. Game nights get posted in the Discord first.</p>
+        </section>
+        <section class="discord-preview" aria-labelledby="discord-heading">
+          <h2 id="discord-heading">In the Discord</h2>
+          <p>Visit the join page for the server preview and ways to join.</p>
+          <p><a href="/join#join-heading" data-testid="home-widget-link">View the Discord lobby</a></p>
+          <p><a href="/discord" data-testid="home-discord-invite">Open Discord</a></p>
+        </section>
+      </div>
+      <section aria-label="Community ladder" class="community-ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
         <p>Ranks stack — a Veteran still holds everything below.</p>
         <dl class="facts rank-stack" data-testid="rank-stack">
