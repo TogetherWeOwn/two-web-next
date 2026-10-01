@@ -13,7 +13,7 @@ import { reconcileEvents } from "../src/jobs/cron";
 import { trackingQueue } from "../src/jobs/ledger";
 import { BotTransportError } from "../src/jobs/types";
 import { pgQueueLedger, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
-import { uniqueKey } from "../src/jobs/sync-event";
+import { handleSyncEvent, uniqueKey } from "../src/jobs/sync-event";
 import type { BotClient, QueueMessage } from "../src/jobs/types";
 import { enqueueSyncEvent, handleQueue } from "../src/jobs/worker";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -600,6 +600,65 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
     expect((await pgEventStore(sql).pendingSync(eventKey))!.nextAttemptAt).toBeNull();
   });
+
+  for (const persistenceFault of [false, true]) {
+    it(`keeps authoritative Retry-After across early carriers and reconciliation (defer fault=${persistenceFault})`, async () => {
+      await seed();
+      await enqueueEventSync(env, eventKey, "published");
+      const original = sent[0]!.body;
+      const bot = botDouble();
+      bot.upsertEvent.mockResolvedValueOnce({ ok: false, code: "rate_limited", status: 429, requestId: null,
+        message: "slow down", retryable: true, retryAfterSeconds: 3600 });
+      const start = new Date("2099-01-01T00:00:00Z").getTime();
+      let clock = start;
+      const events = pgEventStore(sql);
+      const dependencies = { bot, events, now: () => new Date(clock) };
+      if (persistenceFault) {
+        // A sequence increment survives a rejected statement, so only the first
+        // long defer fails. All prepare/claim/defer/eligibility SQL remains real.
+        await sql`create sequence retry_after_defer_faults`;
+        await sql`create function reject_first_long_defer() returns trigger language plpgsql as $$
+          begin
+            if new.request_attempts = old.request_attempts
+              and new.next_attempt_at > old.next_attempt_at + interval '1 minute'
+              and nextval('retry_after_defer_faults') = 1 then
+              raise exception 'test rejects first Retry-After persistence';
+            end if;
+            return new;
+          end;
+        $$`;
+        await sql`create trigger reject_first_long_defer before update on event_sync_attempts
+          for each row execute function reject_first_long_defer()`;
+        await expect(handleSyncEvent(original, 1, dependencies)).rejects.toMatchObject({
+          message: "test rejects first Retry-After persistence", code: "P0001",
+        });
+      } else {
+        expect(await handleSyncEvent(original, 1, dependencies)).toEqual({ retryInSeconds: 3600 });
+      }
+      const pending = (await events.pendingSync(eventKey))!;
+      expect(pending).toMatchObject({ idempotencyKey: original.idempotencyKey, state: "pending",
+        requestAttempts: 1, nextAttemptAt: new Date(start + 3600_000) });
+      if (persistenceFault) expect(await sql`select last_value from retry_after_defer_faults`).toEqual([{ last_value: "2" }]);
+      expect(await sql`select synced_revision, discord_event_id from events where event_key = ${eventKey}`)
+        .toEqual([{ synced_revision: "0", discord_event_id: null }]);
+      clock = start + 10_000;
+      expect(await handleSyncEvent(original, 2, dependencies)).toEqual({ retryInSeconds: 3590 });
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      await sql`update job_unique_locks set expires_at = now() - interval '1 second'`;
+      for (const minutes of [10, 20, 30, 50]) await reconcileEvents({ events,
+        queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)), lock: pgUniqueLock(sql),
+        now: () => new Date(start + minutes * 60_000) });
+      expect(sent).toHaveLength(1);
+      expect((await events.pendingSync(eventKey))!.requestAttempts).toBe(1);
+      clock = start + 3600_000;
+      expect(await handleSyncEvent(original, 3, dependencies)).toEqual({ done: true });
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(2);
+      expect(bot.upsertEvent.mock.calls[1]).toEqual(bot.upsertEvent.mock.calls[0]);
+      expect(await sql`select idempotency_key, state, request_attempts from event_sync_attempts`)
+        .toEqual([{ idempotency_key: original.idempotencyKey, state: "succeeded", request_attempts: 2 }]);
+      expect(await events.pendingSync(eventKey)).toBeNull();
+    });
+  }
 
   it("redundant queued keys do not send another bot request for a clean revision", async () => {
     await seed();

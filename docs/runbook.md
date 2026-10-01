@@ -332,7 +332,9 @@ Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
 Sync requests independently persist `request_attempts` and `next_attempt_at`:
 claims lease the request for 300 seconds; backoff (`10,60,300,900,3600`) and the
-bot's authoritative Retry-After persist before retry. An early/recovered carrier
+bot's authoritative Retry-After persist before retry. A failed deadline write
+retries the same selected absolute deadline (or exhausted null), never a shorter
+generic backoff; the local error still propagates. An early/recovered carrier
 cannot contact the bot before eligibility or reset the six-request budget.
 Generic sync throws may call `m.retry()` without a delay, but persisted
 eligibility still prevents an early bot call. Reconciliation skips legitimately

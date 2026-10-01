@@ -57,9 +57,11 @@ export async function handleSyncEvent(
   // A never-attempted snapshot may have become obsolete since preparation.
   // Its atomic first claim retires it without remote I/O or revision acknowledgement.
   if (attempt.state !== "pending") return { done: true };
+  let retryDeadline: Date | null | undefined;
   const retry = async (seconds: number): Promise<Outcome> => {
     const exhausted = attempt.requestAttempts >= SYNC_EVENT.tries;
-    await deps.events.deferSync(attempt, exhausted ? null : new Date(now().getTime() + seconds * 1000));
+    retryDeadline = exhausted ? null : new Date(now().getTime() + seconds * 1000);
+    await deps.events.deferSync(attempt, retryDeadline);
     return exhausted || attempts >= SYNC_EVENT.tries
       ? { failed: "carrier exhausted; unresolved identity retained" }
       : { retryInSeconds: seconds };
@@ -77,6 +79,12 @@ export async function handleSyncEvent(
     await deps.events.completeSync(attempt, answer.discordEventId);
     return { done: true };
   } catch (e) {
+    if (retryDeadline !== undefined) {
+      // A known refusal's persistence failure is not transport ambiguity. Retry
+      // the same absolute deadline (including exhausted null), never shorter backoff.
+      await deps.events.deferSync(attempt, retryDeadline);
+      throw e;
+    }
     if (e instanceof BotTerminalError) return { failed: e.message, definitive: true };
     // Transport loss and local completion failure are both ambiguous. Never
     // replace their identity even at the carrier/request cap.

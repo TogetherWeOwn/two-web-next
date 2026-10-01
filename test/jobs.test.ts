@@ -4,7 +4,7 @@ import { CALL_INTERNAL_ACTION, PRUNE_CRON, RECONCILE_CRON, SYNC_EVENT } from "..
 import { consume } from "../src/jobs/consumer";
 import { reconcileEvents, runScheduled, type SingleFlight } from "../src/jobs/cron";
 import { trackingQueue } from "../src/jobs/ledger";
-import { dispatchSyncEvent, uniqueKey } from "../src/jobs/sync-event";
+import { dispatchSyncEvent, handleSyncEvent, uniqueKey } from "../src/jobs/sync-event";
 import { BotTransportError } from "../src/jobs/types";
 import type { BotClient, BotFailure, EventStore, QueueLedger, TxClient, UniqueLock } from "../src/jobs/types";
 
@@ -112,6 +112,27 @@ describe("SyncEventToDiscord", () => {
     expect(b.acked).toBe(true);
     expect(b.retried).toBeUndefined();
   });
+
+  for (const exhausted of [false, true]) {
+    it(`retries a failed explicit deadline write unchanged, including the exhausted null deadline (${exhausted})`, async () => {
+      const start = 1_000_000;
+      let clock = start;
+      const error = new Error("retry deadline unavailable");
+      const deferSync = vi.fn<EventStore["deferSync"]>()
+        .mockImplementationOnce(async () => { clock += 5000; throw error; })
+        .mockResolvedValue(undefined);
+      const events = store({ deferSync, claimSync: async (attempt) => ({ ...attempt, requestAttempts: exhausted ? 6 : 1 }) });
+      const bot = { upsertEvent: vi.fn(async () => fail({ retryAfterSeconds: 42 })) } as unknown as BotClient;
+      await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "same-key" }, 1,
+        { bot, events, now: () => new Date(clock) })).rejects.toBe(error);
+      const deadline = exhausted ? null : new Date(start + 42_000);
+      expect(deferSync.mock.calls.map(([, at]) => at)).toEqual([deadline, deadline]);
+      expect(deferSync.mock.calls.map(([attempt]) => ({ key: attempt.idempotencyKey, requests: attempt.requestAttempts })))
+        .toEqual(Array(2).fill({ key: "same-key", requests: exhausted ? 6 : 1 }));
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      expect(events.mirrored).toEqual([]);
+    });
+  }
 
   it("duplicate delivery reuses the key and replays the original answer, mirroring once", async () => {
     const seen = new Map<string, string>();
