@@ -7,6 +7,7 @@ const raw = process.env.DATABASE_URL;
 const url = raw ? testDatabaseUrl(raw).href : undefined;
 
 describe.skipIf(!url)("homepage read cancellation (isolated test DB)", () => {
+  // Canonical migration setup and disposal need headroom; the read stays bounded below.
   it.each(["events", "rsvps"] as const)("cancels the read blocked on %s and leaves no lock-waiting backend", async (table) => {
     // The shared fixture validates before connecting and pins the password/port.
     // Two connections let the lock holder and read race inside our own schema.
@@ -36,5 +37,5 @@ describe.skipIf(!url)("homepage read cancellation (isolated test DB)", () => {
     } finally {
       await fixture.dispose();
     }
-  });
+  }, 15_000);
 });

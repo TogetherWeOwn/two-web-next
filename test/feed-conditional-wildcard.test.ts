@@ -19,10 +19,10 @@ const KEY = "01J0000000000000000000ABCD";
 const EVENT_PATH = `/events/${KEY}.ics`;
 const row = {
   id: 1, eventKey: KEY, title: "Synthetic calendar event", game: null,
-  agentGrantId: null, proofMarker: null, agentVersion: 1, icsSequence: 1782907200n,
+  agentGrantId: null, proofMarker: null, agentVersion: 1,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-  parentEventId: null, recurrenceIndex: null,
+  parentEventId: null, recurrenceIndex: null, icsSequence: 0n,
   description: "Bring stims.", startsAt: new Date("2026-07-15T18:00:00Z"),
   endsAt: new Date("2026-07-15T20:00:00Z"), timezone: "UTC", location: null,
   capacity: null, status: "published", rsvpOpen: true, createdBy: null,
