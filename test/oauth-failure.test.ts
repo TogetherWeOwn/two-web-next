@@ -1,5 +1,6 @@
-// route-inventory: GET /join/callback (failure paths — no new routes)
 // TOG-10355: OAuth failure classification + redaction acceptance net.
+// Failure-path suite for GET /join/callback (no new routes).
+// route-inventory: GET /join/callback
 //
 // Ports the two legacy failure suites onto the Workers stack:
 //   - two-web JoinCallbackFailureTest: a 400 + `invalid_grant` body (or a
@@ -258,7 +259,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     // One bounded correlation line: class + kind + status + source + outcome.
     const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
     expect(exchangeLine).toHaveLength(1);
-    expect(exchangeLine[0].args[1]).toEqual({
+    expect(exchangeLine[0]!.args[1]).toEqual({
       exception: "DiscordError",
       kind: "expired_grant",
       status: 400,
@@ -278,7 +279,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     expect(html).toContain("Discord is unreachable");
     expect(html).not.toContain("approval expired");
     const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
-    expect(exchangeLine[0].args[1]).toMatchObject({ kind: "provider_outage", outcome: "error", status: 503 });
+    expect(exchangeLine[0]!.args[1]).toMatchObject({ kind: "provider_outage", outcome: "error", status: 503 });
     leakFree(html, logs);
   });
 
@@ -290,7 +291,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     expect(res.status).toBe(503);
     expect(html).toContain("Discord is unreachable");
     const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
-    expect(exchangeLine[0].args[1]).toMatchObject({ exception: "DiscordError", kind: "transport_failure", outcome: "error" });
+    expect(exchangeLine[0]!.args[1]).toMatchObject({ exception: "DiscordError", kind: "transport_failure", outcome: "error" });
     leakFree(html, logs);
   });
 
@@ -312,7 +313,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     expect(res.status).toBe(503);
     expect(html).toContain("Discord is unreachable");
     const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
-    expect(exchangeLine[0].args[1]).toEqual({
+    expect(exchangeLine[0]!.args[1]).toEqual({
       exception: "SecretLeakError",
       kind: "unknown",
       status: null,
@@ -329,7 +330,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     const res = await app.request("/join/callback?code=abc&state=forged", {}, e);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Join link expired");
-    expect(logs.filter((l) => JSON.stringify(l.args).includes("join journey"))[0].args[1]).toMatchObject({
+    expect(logs.filter((l) => JSON.stringify(l.args).includes("join journey"))[0]!.args[1]).toMatchObject({
       exception: "InvalidState",
       outcome: "expired",
     });
@@ -373,7 +374,7 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
     const signLine = logs.filter((l) => JSON.stringify(l.args).includes("sign-in failed"));
     expect(signLine).toHaveLength(1);
-    expect(signLine[0].args[1]).toEqual({ exception: "DiscordError", kind: "expired_grant", status: 400 });
+    expect(signLine[0]!.args[1]).toEqual({ exception: "DiscordError", kind: "expired_grant", status: 400 });
     leakFree(logs, res.headers.get("location"));
   });
 
@@ -417,7 +418,7 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(calls.some((c) => c.method === "PUT" && c.url.includes("/members/42"))).toBe(true);
     const rosterLine = logs.filter((l) => JSON.stringify(l.args).includes("roster upsert failed"));
     expect(rosterLine).toHaveLength(1);
-    expect(rosterLine[0].args[1]).toEqual({ user: "42", exception: "Error" });
+    expect(rosterLine[0]!.args[1]).toEqual({ user: "42", exception: "Error" });
     leakFree(logs, res.headers.getSetCookie());
   });
 
@@ -436,7 +437,7 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(cookie).toContain("__Host-two_session=");
 
     const throwing = createMemorySessionStore();
-    (throwing as { get: () => Promise<never> }).get = async () => {
+    (throwing as unknown as { get: () => Promise<never> }).get = async () => {
       throw new Error(`connect ECONNREFUSED postgres://bot:${SECRET}@db.internal:5432/two`);
     };
     const logs = captureLogs();
@@ -445,7 +446,7 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(await res.text()).toContain("Profiles temporarily unavailable");
     const gateLine = logs.filter((l) => JSON.stringify(l.args).includes("could not resolve the session"));
     expect(gateLine).toHaveLength(1);
-    expect(gateLine[0].args[1]).toEqual({ exception: "Error" });
+    expect(gateLine[0]!.args[1]).toEqual({ exception: "Error" });
     leakFree(logs);
   });
 });
