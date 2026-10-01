@@ -77,6 +77,11 @@ export function ulid(now = Date.now()): string {
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
+// Keep explicit keys safe for PostgreSQL text/varchar(26), including denied
+// audits and lock names. Never truncate or repair a key into another identity.
+const storedEventKey = (key: unknown): string | null =>
+  typeof key === "string" && key !== "" && key.length <= 26 && !/[\u0000\uD800-\uDFFF]/u.test(key) ? key : null;
+
 // Nesting bound for the payload digest: comfortably above every real agent
 // event body (3 levels), far below stack exhaustion (~10k frames in a Worker).
 export const MAX_DIGEST_DEPTH = 100;
@@ -153,6 +158,7 @@ export function validateFields(raw: unknown): { ok: true; fields: Fields } | { o
   let capacity: number | null = null;
   if (raw.capacity !== undefined && raw.capacity !== null) {
     if (typeof raw.capacity !== "number" || !Number.isInteger(raw.capacity) || raw.capacity < 1) bad("capacity", "The capacity field must be an integer of at least 1.");
+    else if (raw.capacity > 2147483647) bad("capacity", "The capacity field must not be greater than 2147483647.");
     else capacity = raw.capacity;
   }
   if (timezone && !e.timezone) {
@@ -258,7 +264,7 @@ export async function handleAgentEvent(
     return limited;
   }
 
-  const eventKeyIn = typeof doc.event_key === "string" ? doc.event_key : null;
+  const eventKeyIn = storedEventKey(doc.event_key);
   try {
     const lockName = op === "create" || op === "read" ? `agent-event-grant:${grant.id}` : `agent-event:${eventKeyIn ?? `owned:${grant.id}`}`;
     const committed = await sql.begin(async (tx) => {
@@ -377,7 +383,7 @@ async function rateLimit(sql: Sql, cfg: IngressConfig, grant: Grant, op: Op): Pr
 
 async function audit(sql: Tx, grant: Grant | null, operation: string, eventKey: string | null, key: string | null, dig: string | null, requestId: string, result: string, reason: string | null): Promise<void> {
   await sql`INSERT INTO agent_event_audits (grant_id, operation, event_key, idempotency_key, payload_digest, request_id, result, reason_code)
-            VALUES (${grant?.id ?? null}, ${operation.slice(0, 32)}, ${eventKey}, ${key}, ${dig}, ${requestId}, ${result}, ${reason})`;
+            VALUES (${grant?.id ?? null}, ${operation.slice(0, 32)}, ${storedEventKey(eventKey)}, ${key}, ${dig}, ${requestId}, ${result}, ${reason})`;
 }
 
 const rid = (requestId: string) => ({ request_id: requestId });
@@ -469,8 +475,9 @@ async function ownedEvent(tx: Tx, grant: Grant, key: unknown): Promise<Row | "ev
     const [owned] = await tx`SELECT * FROM events WHERE agent_grant_id = ${grant.id} FOR UPDATE`;
     return owned ?? "event_not_found";
   }
-  if (typeof key !== "string" || key === "") return "event_not_found";
-  const [event] = await tx`SELECT * FROM events WHERE event_key = ${key} FOR UPDATE`;
+  const keyIn = storedEventKey(key);
+  if (keyIn === null) return "event_not_found";
+  const [event] = await tx`SELECT * FROM events WHERE event_key = ${keyIn} FOR UPDATE`;
   if (!event) return "event_not_found";
   return event.agent_grant_id === grant.id ? event : "foreign_event";
 }

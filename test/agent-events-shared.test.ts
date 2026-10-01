@@ -118,6 +118,39 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     expect((await app.request(`/e/${event_key}`, {}, env)).status).toBe(410);
   });
 
+  it("advances calendar revisions for agent writes, not reads, replays or denials", async () => {
+    const event_key = await create();
+    const revision = async () => {
+      const [row] = await fixture.client`SELECT ics_sequence::text AS revision FROM events WHERE event_key = ${event_key}`;
+      return BigInt(row!.revision);
+    };
+    const created = await revision();
+    expect(created).toBeGreaterThan(0n);
+    const publish = { event_key, idempotency_key: randomUUID() };
+    expect((await call("publish", publish)).status).toBe(200);
+    const published = await revision();
+    expect(published).toBeGreaterThan(created);
+    const feed = await app.request("/events.ics", {}, env);
+    expect(feed.status).toBe(200);
+    expect(await feed.text()).toContain(`SEQUENCE:${published}\r\n`);
+    expect((await call("publish", publish)).body.replayed).toBe(true);
+    expect((await call("read", { event_key })).status).toBe(200);
+    expect(await revision()).toBe(published);
+    const update = { event_key, version: 1, fields: { ...fields, title: "Calendar correction" }, idempotency_key: randomUUID() };
+    expect((await call("update", update)).status).toBe(200);
+    const edited = await revision();
+    expect(edited).toBeGreaterThan(published);
+    expect((await call("update", update)).body.replayed).toBe(true);
+    expect((await call("update", { ...update, idempotency_key: randomUUID() })).body.reason).toBe("stale_version");
+    expect(await revision()).toBe(edited);
+    const cancel = { event_key, idempotency_key: randomUUID() };
+    expect((await call("cancel", cancel)).status).toBe(200);
+    const cancelled = await revision();
+    expect(cancelled).toBeGreaterThan(edited);
+    expect((await call("cancel", cancel)).body.replayed).toBe(true);
+    expect(await revision()).toBe(cancelled);
+  });
+
   it("racing duplicate publish requests commit one result and enqueue once", async () => {
     const event_key = await create();
     const idempotency_key = randomUUID();

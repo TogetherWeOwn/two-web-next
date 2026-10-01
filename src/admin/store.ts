@@ -27,7 +27,7 @@ export type FeaturedRow = typeof featuredContents.$inferSelect;
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
 
-const AUDIT_EXCLUDE = new Set(["discordEventId"]);
+const AUDIT_EXCLUDE = new Set(["discordEventId", "icsSequence"]);
 
 function dirty<T extends Record<string, unknown>>(before: T, after: Partial<T>): Record<string, { before: unknown; after: unknown }> {
   const out: Record<string, { before: unknown; after: unknown }> = {};
@@ -504,6 +504,12 @@ export async function listFeatured(db: Db, opts: { published?: boolean }): Promi
       .orderBy(asc(featuredContents.position));
   }
   return db.select().from(featuredContents).orderBy(asc(featuredContents.position));
+}
+
+/** Imported source IDs are independent of native IDs; never fall back to a native match. */
+export async function getFeaturedIdByLegacyId(db: Db, legacyId: string): Promise<number | null> {
+  const [row] = await db.select({ id: featuredContents.id }).from(featuredContents).where(eq(featuredContents.legacyId, legacyId));
+  return row?.id ?? null;
 }
 
 export async function getFeatured(db: Db, id: number): Promise<FeaturedRow | null> {

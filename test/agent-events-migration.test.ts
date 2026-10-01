@@ -12,12 +12,12 @@ const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url).hr
 const journal = JSON.parse(readFileSync(`${migrationsFolder}/meta/_journal.json`, "utf8")) as {
   entries: { tag: string }[];
 };
-const migrationIndex = journal.entries.findIndex(({ tag }) => tag === "1014_shared-agent-events");
-if (migrationIndex < 1) throw new Error("Canonical migration 1014 is missing from the journal");
+const migrationIndex = journal.entries.findIndex(({ tag }) => tag === "1015_shared-agent-events");
+if (migrationIndex < 1) throw new Error("Canonical migration 1015 is missing from the journal");
 const migrations = readMigrationFiles({ migrationsFolder });
-const migration1014 = migrations[migrationIndex]!;
+const migration1015 = migrations[migrationIndex]!;
 
-// This fixture deliberately stops before 1014; createMemberDataFixture already
+// This fixture deliberately stops before 1015; createMemberDataFixture already
 // applies it. Keep all scratch DDL and cleanup local to this test file.
 async function createMigrationFixture(raw: string) {
   const url = testDatabaseUrl(raw); // Guard before constructing either driver.
@@ -71,7 +71,7 @@ async function createMigrationFixture(raw: string) {
     throw error;
   }
   // Match Drizzle's transactional migration boundary, including the final DROP.
-  const migrate = () => client.begin((sql) => apply(sql, migration1014.sql));
+  const migrate = () => client.begin((sql) => apply(sql, migration1015.sql));
   return { client, schemaName, migrate, dispose };
 }
 
@@ -166,17 +166,19 @@ async function catalog({ client, schemaName }: MigrationFixture) {
   };
 }
 
-it("appends the shared migration after hot-path indexes with a linked, index-preserving snapshot", () => {
+it("appends the shared migration after calendar revisions with a linked, index-preserving snapshot", () => {
   const entries = JSON.parse(readFileSync(`${migrationsFolder}/meta/_journal.json`, "utf8")).entries as {
     idx: number; when: number; tag: string;
   }[];
   const previous = entries[migrationIndex - 1]!;
   const shared = entries[migrationIndex]!;
-  expect(previous.tag).toBe("1013_hot-path-indexes");
+  expect(previous.tag).toBe("1014_event-ics-sequence");
+  expect(entries[migrationIndex - 2]!.tag).toBe("1013_hot-path-indexes");
   expect(shared.idx).toBe(previous.idx + 1);
   expect(shared.when).toBeGreaterThan(previous.when);
-  const before = JSON.parse(readFileSync(`${migrationsFolder}/meta/1013_snapshot.json`, "utf8"));
-  const after = JSON.parse(readFileSync(`${migrationsFolder}/meta/1014_snapshot.json`, "utf8"));
+  const before = JSON.parse(readFileSync(`${migrationsFolder}/meta/1014_snapshot.json`, "utf8"));
+  const after = JSON.parse(readFileSync(`${migrationsFolder}/meta/1015_snapshot.json`, "utf8"));
+  expect(after.tables["public.events"].columns.ics_sequence).toEqual(before.tables["public.events"].columns.ics_sequence);
   expect(after.prevId).toBe(before.id);
   expect(after.id).not.toBe(before.id);
   expect(before.tables["public.agent_events"]).toBeDefined();
@@ -191,7 +193,7 @@ it("refuses a different agent-testdb database before connecting", async () => {
     .rejects.toThrow("refusing before connecting");
 });
 
-describe.skipIf(!process.env.DATABASE_URL)("1014 populated shared-agent-events migration (owned test schema)", () => {
+describe.skipIf(!process.env.DATABASE_URL)("1015 populated shared-agent-events migration (owned test schema)", () => {
   let fixture: MigrationFixture;
   beforeEach(async () => {
     fixture = await createMigrationFixture(process.env.DATABASE_URL!);
@@ -212,6 +214,10 @@ describe.skipIf(!process.env.DATABASE_URL)("1014 populated shared-agent-events m
     const migrated = await sql`SELECT event_key, agent_grant_id, proof_marker, agent_version, status,
       title, game, description, starts_at, ends_at, timezone, location, capacity, created_at, updated_at
       FROM events WHERE agent_grant_id IS NOT NULL ORDER BY event_key`;
+    const revisions = await sql`SELECT event_key, ics_sequence::text AS revision
+      FROM events WHERE agent_grant_id IS NOT NULL ORDER BY event_key`;
+    expect(revisions.map(({ revision }) => revision)).toEqual(legacyEvents.map((event) =>
+      String(Math.floor(new Date(event.updated_at).getTime() / 1000))));
     expect(Array.from(migrated)).toEqual(legacyEvents.map((event) => ({
       event_key: event.event_key, agent_grant_id: event.grant_id, proof_marker: event.proof_marker,
       agent_version: event.version, status: event.status, title: event.title, game: event.game,
@@ -335,6 +341,8 @@ describe.skipIf(!process.env.DATABASE_URL)("1014 populated shared-agent-events m
     await sql`DELETE FROM agent_event_grants WHERE id = ${first.grant_id}`;
     expect(await snapshot(sql, "events")).toEqual(eventsBefore.map((row) => ({
       ...row, agent_grant_id: row.agent_grant_id === first.grant_id ? null : row.agent_grant_id,
+      // SET NULL changes the shared row, so the calendar trigger advances once.
+      ics_sequence: row.agent_grant_id === first.grant_id ? Number(row.ics_sequence) + 1 : row.ics_sequence,
     })));
     // Audit evidence has its own SET NULL FK; replay keys retain their existing
     // grant-delete CASCADE policy. Neither FK may delete the shared event.

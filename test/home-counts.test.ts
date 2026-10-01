@@ -68,7 +68,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     // Keep event/featured reads local and separate from the bot-view socket.
     // A counts failure must not take either of these homepage sections down.
     const event: typeof events.$inferSelect = {
-      id: 1, eventKey: "counts-game-night", title: "Counts fixture game night", game: null, description: null,
+      id: 1, icsSequence: 1n, eventKey: "counts-game-night", title: "Counts fixture game night", game: null, description: null,
       startsAt: new Date(NOW + 3600_000), endsAt: new Date(NOW + 7200_000), timezone: "UTC", location: "Lobby",
       capacity: null, status: "published", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
       agentGrantId: null, proofMarker: null, agentVersion: 1,
