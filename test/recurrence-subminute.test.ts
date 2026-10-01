@@ -45,10 +45,10 @@ describe("recurrence preserves stored sub-minute times", () => {
     expect(utcToWall(second.startsAt, "Asia/Kathmandu")).toBe("2026-10-11 20:00");
   });
 
-  it("chooses the first occurrence of a fold, including its seconds and milliseconds", () => {
+  it("chooses the second occurrence of a fold, including its seconds and milliseconds", () => {
     const schedule = occurrences(new Date("2026-10-18T00:30:27.125Z"), new Date("2026-10-18T00:45:44.875Z"), "Europe/London", "weekly", 3);
-    expect(schedule.get(2)!.startsAt.toISOString()).toBe("2026-10-25T00:30:27.125Z");
-    expect(schedule.get(2)!.endsAt.toISOString()).toBe("2026-10-25T00:45:44.875Z");
+    expect(schedule.get(2)!.startsAt.toISOString()).toBe("2026-10-25T01:30:27.125Z");
+    expect(schedule.get(2)!.endsAt.toISOString()).toBe("2026-10-25T01:45:44.875Z");
     expect(schedule.get(3)!.startsAt.toISOString()).toBe("2026-11-01T01:30:27.125Z");
   });
 
