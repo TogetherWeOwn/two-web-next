@@ -126,7 +126,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     expect(html).toContain('<strong>12</strong> online');
     for (const [rank, value] of [["Prospect", "24"], ["Member", "40"], ["Soldier", "20"],
       ["Veteran", ""], ["Legend", "unclaimed"]]) {
-      expect(html).toContain(`<dt>${rank}</dt><dd>${value}</dd>`);
+      expect(html).toContain(`<dt>${rank}</dt><dd class="mt">${value}</dd>`);
     }
     const ordered = ["prospect", "member", "soldier", "veteran", "legend"].map((key) => html.indexOf(`data-rank="${key}"`));
     expect(ordered).toEqual([...ordered].sort((a, b) => a - b));
@@ -158,7 +158,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = ${new Date(NOW + offset).toISOString()}::text`;
     const html = await home();
     emptyCounts(html);
-    expect(html).toContain('<dt>Member</dt><dd>40</dd>');
+    expect(html).toContain('<dt>Member</dt><dd class="mt">40</dd>');
   });
 
   it("degrades invalid timestamp text with HTTP 200", async () => {
@@ -182,7 +182,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     const html = await home();
     emptyCounts(html);
     for (const rank of ["Prospect", "Member", "Soldier", "Veteran", "Legend"]) {
-      expect(html).toContain(`<dt>${rank}</dt><dd></dd>`);
+      expect(html).toContain(`<dt>${rank}</dt><dd class="mt"></dd>`);
     }
     expect(html).not.toContain("unclaimed"); // Unknown is not zero.
     expect(warn).toHaveBeenCalledTimes(2);
