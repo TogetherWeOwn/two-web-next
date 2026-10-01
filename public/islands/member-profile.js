@@ -1,7 +1,4 @@
-// Enhances the SSR POST/_method=PATCH form: one PATCH per valid save, no polling.
-// Cancel restores accepted values and ignores pending completions. Failures keep
-// input; notices and focus follow src/islands/contracts.ts.
-
+// Enhances the SSR PATCH form: one save per submit; notices per contracts.ts.
 (function () {
   var root = document.querySelector('[data-island="member-profile"]');
   if (!root) return;
@@ -12,10 +9,22 @@
   var editControl = profileElement("edit-control", root);
   var inflight = false;
   var generation = 0;
+  var sessionExpired = false;
+
+  function expiredNotice() {
+    sessionExpired = true;
+    notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
+  }
+  window.addEventListener("two:session-expired", function (event) {
+    event.preventDefault();
+    expiredNotice();
+  });
 
   function profileElement(name, scope) {
     return (scope || document).querySelector('[data-testid="profile-' + name + '"]');
   }
+
+  function tag(name) { return document.createElement(name); }
 
   function gameNames(text) {
     var games = [];
@@ -27,12 +36,9 @@
   }
 
   function accepted(body) {
-    // Match the server's normalization; success returns no profile fields.
     var games = gameNames(body.games_text);
     var values = { bio: body.bio.trim(), games_text: games.join("\n"), timezone: body.timezone };
-    var unchanged = Object.keys(values).every(function (key) {
-      return form.elements[key].value === body[key];
-    });
+    var unchanged = Object.keys(values).every(function (key) { return form.elements[key].value === body[key]; });
     Object.keys(values).forEach(function (key) {
       // Reset to the accepted save, not SSR.
       form.elements[key].defaultValue = values[key];
@@ -48,16 +54,16 @@
     var list = profileElement("games");
     if (list) {
       list.textContent = "";
-      var content = document.createElement(games.length ? "ul" : "p");
+      var content = tag(games.length ? "ul" : "p");
       if (!games.length) content.textContent = "No games listed yet.";
       games.forEach(function (game) {
-        var li = document.createElement("li");
+        var li = tag("li");
         li.textContent = game;
         content.appendChild(li);
       });
       list.appendChild(content);
     }
-    // If a newer draft was typed while saving, keep it reachable too.
+    // Keep a newer draft reachable.
     form.hidden = unchanged && !!edit && !!editControl;
     if (editControl) editControl.hidden = !form.hidden;
   }
@@ -88,14 +94,14 @@
   function notice(testid, role, text, loginLink) {
     var old = root.querySelector('[data-testid="' + testid + '"]');
     if (old) old.remove();
-    var el = document.createElement("div");
+    var el = tag("div");
     el.setAttribute("data-testid", testid);
     el.setAttribute("role", role);
     el.setAttribute("tabindex", "-1");
     if (Array.isArray(text)) {
-      var ul = document.createElement("ul");
+      var ul = tag("ul");
       text.forEach(function (message) {
-        var li = document.createElement("li");
+        var li = tag("li");
         li.textContent = message;
         ul.appendChild(li);
       });
@@ -103,8 +109,8 @@
     } else el.textContent = text;
     if (loginLink) {
       el.appendChild(document.createTextNode(" "));
-      var a = document.createElement("a");
-      a.href = "/auth/discord?next=" + encodeURIComponent(location.pathname);
+      var a = tag("a");
+      a.href = "/auth/recover?next=" + encodeURIComponent(location.pathname + (location.search || ""));
       a.textContent = "Log in with Discord";
       el.appendChild(a);
     }
@@ -119,12 +125,9 @@
   function clearNotices() {
     root.querySelectorAll("[data-testid^='profile-']").forEach(function (n) {
       var t = n.getAttribute("data-testid");
+      if (t === "profile-session-expired" && sessionExpired) return;
       if (t === "profile-error" || t === "profile-save-failed" || t === "profile-session-expired" || t === "profile-saved") n.remove();
     });
-  }
-
-  function errorList(errors) {
-    notice("profile-error", "alert", errors);
   }
 
   if (edit) edit.addEventListener("click", function () {
@@ -136,22 +139,20 @@
   });
 
   form.addEventListener("reset", function () {
-    // Cancel discards the draft; late completions must not repaint or unlock a newer save.
+    // Cancel discards the draft; late completions must not repaint.
     var cancelled = ++generation;
     inflight = false;
+    sessionExpired = false;
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
-    setTimeout(function () {
-      if (cancelled !== generation) return;
-      var h = profileElement("name");
-      if (h) h.focus();
-    }, 0);
+    setTimeout(function () { if (cancelled !== generation) return; var h = profileElement("name"); if (h) h.focus(); }, 0);
   });
 
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
     if (inflight) return;
+    if (sessionExpired) return expiredNotice();
     var f = form.elements;
     var body = {
       bio: f.bio.value,
@@ -162,7 +163,7 @@
     };
     clearNotices();
     var errs = clientErrors(body.bio, body.games_text, body.timezone);
-    if (errs.length) return errorList(errs);
+    if (errs.length) return notice("profile-error", "alert", errs);
     inflight = true;
     var request = ++generation;
     fetch("/members/" + encodeURIComponent(id), {
@@ -182,11 +183,11 @@
         if (res.status === 422) {
           return res.json().then(function (j) {
             if (request !== generation) return;
-            errorList(Object.keys(j.errors || {}).map(function (k) { return j.errors[k]; }));
+            notice("profile-error", "alert", Object.keys(j.errors || {}).map(function (k) { return j.errors[k]; }));
           });
         }
         if (res.status === 401 || res.status === 419 || res.type === "opaqueredirect" || res.status === 302) {
-          return notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
+          return expiredNotice();
         }
         saveFailed();
       })
@@ -194,8 +195,6 @@
         if (request !== generation) return;
         saveFailed();
       })
-      .then(function () {
-        if (request === generation) inflight = false;
-      });
+      .then(function () { if (request === generation) inflight = false; });
   });
 })();

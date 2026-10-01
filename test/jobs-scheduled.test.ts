@@ -95,7 +95,8 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
       const ledger = pgQueueLedger(sql);
       await ledger.reserved(message.jobId!);
       await ledger.dequeued(message.jobId!);
-      await pgUniqueLock(sql).release(uniqueKey("first"));
+      expect(message.kind).toBe("sync-event");
+      if (message.kind === "sync-event") await pgUniqueLock(sql).release(uniqueKey("first"), message.leaseToken!);
       consumed = true;
     });
     await handleScheduled(controller(RECONCILE_CRON), env);

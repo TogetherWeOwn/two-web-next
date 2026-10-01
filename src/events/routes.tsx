@@ -2,15 +2,18 @@
 // routes and EventPolicy: drafts 403 for non-moderators, cancelled 410 + noindex,
 // /events.json needs a session, writes are moderator-only and enqueue the Discord
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import { dbFor } from "../admin/db";
+import { requestBodyLimit } from "../body-limit";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
 import { memberAccessLog } from "../access-log";
 import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
+import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
+import { takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
@@ -150,7 +153,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // this month. An unparseable month is a page, never a 500.
     const month =
       parseCalendarMonth(c.req.query("month")) ??
-      (upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
+      parseCalendarMonth(upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
       currentCalendarMonth(now);
 
     const state = { view, month, q, past };
@@ -176,10 +179,29 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       }
     }
 
+    // One-shot join confirmation (legacy join_result flash): /events is a
+    // join-CTA landing (`/join?next=/events`), so it consumes and renders the
+    // banner exactly once like /, /join, /profile and /e/:key (TOG-10356
+    // review). Island fragment swaps must not consume it: the banner renders
+    // outside the swapped zones, so a fragment would eat the flash without
+    // ever displaying it — the pending value survives for the next full load.
+    const island = c.req.header("x-two-island") === "events-calendar";
+    const joinResult = island ? null : await takeJoinResult(c);
     // Search analytics must run per request, not only on shared-cache misses.
-    c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
+    c.header("cache-control", session || searching || joinResult ? "private, no-store" : "public, max-age=60");
     if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
+    // Guest sign-in links carry this page as ?next= so the OAuth round trip
+    // lands back here (TOG-10356). Rooted pathname + search only — the
+    // journey guard re-validates before any redirect, so a hostile query can
+    // at worst fall back to the default landing, never off-app.
+    let loginReturnTo: string | null = null;
+    try {
+      const u = new URL(c.req.url);
+      loginReturnTo = u.pathname + u.search;
+    } catch {
+      loginReturnTo = "/events";
+    }
     return c.html(
       <EventsCalendarPage
         state={state}
@@ -190,8 +212,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         emptyState={emptyState}
         discordFailed={discordFailed}
         member={session?.member ?? false}
-        inviteUrl={c.env.DISCORD_INVITE_URL}
+        inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
         appUrl={c.env.APP_URL}
+        loginReturnTo={loginReturnTo}
+        joinResult={joinResult}
       />,
     );
   });
@@ -214,7 +238,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
+    const eventKey = c.req.query("event_key");
+    if (eventKey !== undefined && !KEY_RE.test(eventKey)) return c.json({ error: "invalid_event_key" }, 422);
+    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator, eventKey });
     const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
     const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
     const body = JSON.stringify({ data, page, limit });
@@ -230,7 +256,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published"]);
     const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
-    return feedResponse(c, eventsRss(rows, c.env.APP_URL, rows.length ? built : new Date()), {
+    return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
     });
@@ -276,11 +302,23 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return c.text("Events temporarily unavailable", 503);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
+    // The live page personalizes on the session (member/guest join pitch)
+    // and on the one-shot join confirmation, so it is never share-cached
+    // (main W16) and always varies on the cookie (TOG-10356 finding 5). The
+    // cancelled page is viewer-independent: it renders before any session
+    // read, so a store outage or a rotated cookie can never turn the static
+    // cancellation into a 500 (TOG-10356 review). Its no-store posture stays
+    // even without a session exit: nothing viewer-specific here may be
+    // cached. The draft gate below still reads the session first — a
+    // signed-in rotation there makes its 403 viewer-specific too.
     if (e.status === "cancelled") {
       c.header("x-robots-tag", "noindex, nofollow");
+      c.header("cache-control", "private, no-store");
+      c.header("vary", "Cookie");
       return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
     }
-    // The guest join pitch and waitlist position depend on the viewer; never share-cache this HTML.
+    // Never share-cache this HTML: the guest join pitch, the waitlist
+    // position and the one-shot join banner all depend on the viewer/cookies.
     c.header("cache-control", "private, no-store");
     c.header("vary", "Cookie");
     // The injected reader uses only bindings/cookies; this route additionally
@@ -288,6 +326,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const session = await readSession(c as unknown as Ctx);
     if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
     if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
+    // One-shot join confirmation (legacy join_result flash): the event page
+    // is a join-CTA landing (`/join?next=/e/<key>`), so it consumes and
+    // renders the banner exactly once like /, /join and /profile.
+    const joinResult = await takeJoinResult(c);
     const [neighbors, related, attendees, position] = await Promise.all([
       getEventNeighbors(db, e),
       listRelatedEvents(db, e),
@@ -298,7 +340,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       c.set("viewerId", session.id);
       c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
     }
-    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
+    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
@@ -310,7 +352,15 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  async function body(c: Ctx): Promise<Record<string, unknown>> {
+  const moderatorGate: MiddlewareHandler<{ Bindings: Env; Variables: { eventModerator: Session } }> = async (c, next) => {
+    // The session reader uses only bindings/cookies, not this gate's variables.
+    const who = await moderator(c as unknown as Ctx);
+    if (who instanceof Response) return who;
+    c.set("eventModerator", who);
+    await next();
+  };
+
+  async function body(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
     // Media types are case-insensitive (RFC 2045 §5.1): normalize before the
     // JSON check so `Application/Json` cannot smuggle a body past the trap.
     // Forms parse with all values preserved: duplicate keys arrive as arrays
@@ -323,7 +373,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   }
 
-  async function eventBody(c: Ctx): Promise<Record<string, unknown>> {
+  async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
     // Event edits must not turn malformed/non-object JSON into an empty PATCH.
     // Keep the RSVP trap's permissive body parsing independent of this admission.
     if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json")) return body(c);
@@ -334,11 +384,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return input as Record<string, unknown>;
   }
 
-  const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
+  const invalid = (c: Pick<Ctx, "json">, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
 
-  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-    const who = await moderator(c);
-    if (who instanceof Response) return who;
+  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
+    const who = c.get("eventModerator");
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     try {
@@ -350,9 +399,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-    const who = await moderator(c);
-    if (who instanceof Response) return who;
+  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
+    const who = c.get("eventModerator");
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     const key = c.req.param("key");
@@ -393,9 +441,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-      const who = await moderator(c);
-      if (who instanceof Response) return who;
+    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("action"), async (c) => {
+      const who = c.get("eventModerator");
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       try {
@@ -432,7 +479,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  app.put("/events/:key/rsvp", async (c) => {
+  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
     c.header("cache-control", "private, no-store");
     const input = await body(c);
     // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
@@ -464,7 +511,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
   });
 
-  app.delete("/events/:key/rsvp", async (c) => {
+  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
     c.header("cache-control", "private, no-store");
     // Both sources are evaluated independently, with ALL values preserved:
     // `query()` is first-wins, so duplicates use `queries()` — an empty query

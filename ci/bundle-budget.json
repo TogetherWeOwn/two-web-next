@@ -1,13 +1,45 @@
 {
-  "$comment": "Per-file budgets for unbundled public assets. Baseline 2026-09-30 (raw/gzip bytes): events-calendar 8108/2793, going-count 2776/1145, member-profile 5193/1977, past-events 3778/1434, styles 2087/882. Ceilings leave roughly 25-45% headroom, not room for a framework import. The rebased copy-link island is initially budgeted at raw/gzip 2441/1009 bytes (ceilings 3072/1280). Stylesheet declarations and server-rendered class tokens are factored and minified; browser computed-style/bounds equivalence is checked against the pre-factor stylesheet. The newly merged avatar island (610 raw bytes) starts at 1024/512 raw/gzip ceilings. The admin-event-editor island has an initial 2026-10-01 baseline of 979/482 raw/gzip bytes and ceilings of 1280/640 (31-33% headroom); all pre-existing ceilings remain unchanged. The stylesheet ceilings remain 3072/1280 raw/gzip; growth on main must be optimized without removing styles or raising these ceilings here. Every JavaScript file under public/islands at any depth must have a budget. Raising a ceiling requires a separate deliberate PR explaining the growth; never relax a budget just to make CI green.",
+  "$comment": "Per-file budgets for unbundled public assets. Baseline 2026-09-30 (raw/gzip bytes): events-calendar 8108/2793, going-count 2776/1145, member-profile 5193/1977, past-events 3778/1434, styles 2087/882. Ceilings leave roughly 25-45% headroom, not room for a framework import. The rebased copy-link island is initially budgeted at raw/gzip 2441/1009 bytes (ceilings 3072/1280). Stylesheet declarations and server-rendered class tokens are factored and minified; browser computed-style/bounds equivalence is checked against the pre-factor stylesheet. The newly merged avatar island (610 raw bytes) starts at 1024/512 raw/gzip ceilings. The admin-event-editor island has an initial 2026-10-01 baseline of 979/482 raw/gzip bytes and ceilings of 1280/640 (31-33% headroom); all pre-existing ceilings remain unchanged. The stylesheet ceilings remain 3072/1280 raw/gzip; growth on main must be optimized without removing styles or raising these ceilings here. Every JavaScript file under public/islands at any depth must have a budget. Raising a ceiling requires a separate deliberate PR explaining the growth; never relax a budget just to make CI green. The 2026-10-01 reconciliation adds two main-introduced islands with measured baselines and 25-30% headroom: admin-event-text-limits 1594/725 (ceilings 2048/1024) and auth-status 4152/1576 (ceilings 5120/2048). Main's theme architecture pushed public/styles.css to 3930/1527 and going-count.js to 5321/2062 raw/gzip, beyond their legacy ceilings; those two entries keep their legacy values here and the growth is handled by a separate ceiling-raise PR, so this checker intentionally reports them over budget until that PR lands.",
   "budgets": {
-    "public/islands/admin-event-editor.js": { "maxRawBytes": 1280, "maxGzipBytes": 640 },
-    "public/islands/avatar.js": { "maxRawBytes": 1024, "maxGzipBytes": 512 },
-    "public/islands/copy-link.js": { "maxRawBytes": 3072, "maxGzipBytes": 1280 },
-    "public/islands/events-calendar.js": { "maxRawBytes": 10240, "maxGzipBytes": 3584 },
-    "public/islands/going-count.js": { "maxRawBytes": 4096, "maxGzipBytes": 1536 },
-    "public/islands/member-profile.js": { "maxRawBytes": 7168, "maxGzipBytes": 2560 },
-    "public/islands/past-events.js": { "maxRawBytes": 5120, "maxGzipBytes": 2048 },
-    "public/styles.css": { "maxRawBytes": 3072, "maxGzipBytes": 1280 }
+    "public/islands/admin-event-editor.js": {
+      "maxRawBytes": 1280,
+      "maxGzipBytes": 640
+    },
+    "public/islands/admin-event-text-limits.js": {
+      "maxRawBytes": 2048,
+      "maxGzipBytes": 1024
+    },
+    "public/islands/auth-status.js": {
+      "maxRawBytes": 5120,
+      "maxGzipBytes": 2048
+    },
+    "public/islands/avatar.js": {
+      "maxRawBytes": 1024,
+      "maxGzipBytes": 512
+    },
+    "public/islands/copy-link.js": {
+      "maxRawBytes": 3072,
+      "maxGzipBytes": 1280
+    },
+    "public/islands/events-calendar.js": {
+      "maxRawBytes": 10240,
+      "maxGzipBytes": 3584
+    },
+    "public/islands/going-count.js": {
+      "maxRawBytes": 4096,
+      "maxGzipBytes": 1536
+    },
+    "public/islands/member-profile.js": {
+      "maxRawBytes": 7168,
+      "maxGzipBytes": 2560
+    },
+    "public/islands/past-events.js": {
+      "maxRawBytes": 5120,
+      "maxGzipBytes": 2048
+    },
+    "public/styles.css": {
+      "maxRawBytes": 3072,
+      "maxGzipBytes": 1280
+    }
   }
 }

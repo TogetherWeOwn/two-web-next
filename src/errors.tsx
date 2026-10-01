@@ -3,7 +3,7 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
 import { notFoundSuggestions, type SuggestedEvent } from "./events/suggestions";
-import { Layout, SiteFooter } from "./pages";
+import { RecoveryShell } from "./pages";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
 // errors/*.blade.php views (TOG-5626/TOG-6788). No session or cookie reads.
@@ -12,41 +12,21 @@ const NOINDEX = "noindex, nofollow";
 
 const JOIN_HREF = "/auth/discord";
 
-const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?: { href: string; label: string } }>> = ({
-  code,
-  title,
-  headerCta = { href: JOIN_HREF, label: "Sign in with Discord" },
-  children,
-}) => (
-  <Layout title={`${title} — Together We Own`} robots={NOINDEX}>
-    <header class="bar rw ct">
-      <a class="brand pl" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="bt ct bd cp pl" href={headerCta.href}>{headerCta.label}</a>
-      </nav>
-    </header>
-    <main id="main" tabindex={-1}>
-      <section aria-labelledby="error-heading">
-        <p class="st mt cp" aria-hidden="true">{code}</p>
-        <h1 id="error-heading">{title}</h1>
-        {children}
-      </section>
-    </main>
-    <SiteFooter />
-  </Layout>
+const ErrorShell: FC<PropsWithChildren<{
+  code: string;
+  title: string;
+  headerCta?: { href: string; label: string };
+  supportingContent?: PropsWithChildren["children"];
+}>> = ({ code, title, headerCta, supportingContent, children }) => (
+  <RecoveryShell code={code} title={title} headingId="error-heading" robots={NOINDEX} headerCta={headerCta} supportingContent={supportingContent}>
+    {children}
+  </RecoveryShell>
 );
 
 // 404 recovery stays available even when the optional event lookup fails.
 export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestions = [] }) => (
-  <ErrorShell code="404" title="We cannot find that page">
-    <p class="ld">
-      The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
-    </p>
-    <p>
-      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
-      <a href="/" data-testid="error-home">Back to the homepage</a>
-    </p>
-    <section aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
+  <ErrorShell code="404" title="We cannot find that page" supportingContent={
+    <section class="recovery-events" aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
       <h2 id="error-events-heading">Happening soon</h2>
       {suggestions.length ? (
         <ul class="ft">
@@ -72,6 +52,14 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
         </div>
       </form>
     </section>
+  }>
+    <p class="ld">
+      The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
+    </p>
+    <p class="recovery-actions">
+      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a href="/" data-testid="error-home">Back to the homepage</a>
+    </p>
   </ErrorShell>
 );
 
@@ -83,7 +71,7 @@ export const InternalErrorPage: FC = () => (
       It is not you. We have logged the failure and the team will take a look. Try again in a minute — the lobby is
       not going anywhere.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
@@ -96,10 +84,17 @@ export const RateLimitedPage: FC = () => (
     <p class="ld">
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is not going anywhere.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
+  </ErrorShell>
+);
+
+export const PayloadTooLargePage: FC = () => (
+  <ErrorShell code="413" title="That request is too large">
+    <p class="ld">Reduce the size of your request and try again.</p>
+    <p><a href="/">Back to the homepage</a></p>
   </ErrorShell>
 );
 
@@ -116,7 +111,7 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
       The site is down for a minute of maintenance. The Discord server never closes — come in through the invite and
       we will see you there.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="bt ct bd cp pl" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
       <a href="/" data-testid="error-retry">Try again</a>
     </p>
@@ -162,6 +157,17 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   c.header("cache-control", "no-store, private");
   c.status(429);
   return c.html(<RateLimitedPage />);
+}
+
+// Like the shared 429 response: one static envelope for API/JSON callers,
+// a branded page for browsers, and no request body, field names or stack traces.
+export function payloadTooLarge(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  c.status(413);
+  if (c.req.path.startsWith("/api/") || (c.req.header("accept") ?? "").includes("application/json")) {
+    return c.json({ reason: "payload_too_large", message: "Reduce the size of your request and try again." });
+  }
+  return c.html(<PayloadTooLargePage />);
 }
 
 export function maintenanceHandler(inviteUrl: string): (c: Context) => Response | Promise<Response> {

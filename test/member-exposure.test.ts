@@ -5,7 +5,7 @@
 // W15 Pest port: assert exposure on the mounted worker, not only isolated routers.
 // Legacy assertion mapping and intentional port differences: docs/w15-member-data-parity.md.
 import { Hono } from "hono";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import rawApp from "../src/index";
 import app from "./app";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
@@ -23,6 +23,7 @@ const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured",
 const OTHER_READS = [
   "/", "/discord", "/about", "/faq", "/rules", "/privacy", "/join", "/join/discord", "/join/callback",
   "/sitemap_index.xml", "/robots.txt", "/up", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect",
+  "/auth/status", "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
   "/events", "/events/past", "/events.json", "/e/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) => router.routes
@@ -35,12 +36,14 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     ...ADMIN_READS.map((path) => `GET /admin${path === "/" ? "" : path}`),
     // ALL includes middleware as well as handlers. Pin their multiplicity;
     // filtering wildcards or deduplicating would hide added ALL endpoints.
-    // The three global ALL /* registrations are the composed security/robots
-    // headers, strict per-environment trustHosts guard and same-origin guard.
+    // The five global ALL /* registrations are the composed security/robots
+    // headers, strict per-environment trustHosts guard, same-origin guard,
+    // auth-status controller injection and expired-write banner consumption.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
+    // Profile paths each register the gate, post-audit flash consumption and logger.
     // The event-page access logger is a second GET handler on the same route.
     "GET /e/:key",
-    "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
+    "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*", "ALL /members/*",
   ].sort());
 }
 
@@ -66,13 +69,27 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
   let fixture: MemberDataFixture;
   let db: Db;
   let sessions = createMemorySessionStore();
-  const bindings = () => ({ ...env, ADMIN_DB: db, SESSION_STORE: sessions });
+  let remoteFetch: MockInstance<typeof fetch>;
+  const bindings = () => ({
+    ...env, ADMIN_DB: db, SESSION_STORE: sessions,
+    DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+  });
   const request = (path: string, init: RequestInit = {}) => app.request(path, init, bindings());
   const headers = async (actor: typeof MEMBER) => ({ cookie: await cookieFor(sessions, actor) });
 
   beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
-  beforeEach(async () => { await fixture.reset(); await seed(db); sessions = createMemorySessionStore(); });
-  afterEach(() => fixture?.reset());
+  beforeEach(async () => {
+    remoteFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected external fetch"));
+    await fixture.reset(); await seed(db); sessions = createMemorySessionStore();
+  });
+  afterEach(async () => {
+    try {
+      await fixture?.reset();
+      expect(remoteFetch).not.toHaveBeenCalled();
+    } finally {
+      remoteFetch?.mockRestore();
+    }
+  });
   afterAll(() => fixture?.dispose());
 
   it.each(["text/html", "application/json"])("guest %s: no profile/member data or writes", async (accept) => {
@@ -83,12 +100,26 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
       const body = await res.text();
       for (const personal of PERSONAL_STRINGS) expect(body).not.toContain(personal);
     }
-    const write = await request(`/members/${SUBJECT.userId}`, {
-      method: "PATCH", headers: { accept, origin: env.APP_URL, "content-type": "application/json" }, body: JSON.stringify({ bio: "smuggled" }),
-    });
-    expect(write.status).toBe(302); // W7 restores an owner-only HTTP writer, unlike legacy Livewire.
-    expect((await db.select().from(profiles))[0]!.bio).toBe(PERSONAL_STRINGS[1]);
-    expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
+    for (const method of ["POST", "PATCH"]) {
+      for (const contentType of ["application/json", "application/x-www-form-urlencoded"]) {
+        const json = accept === "application/json" || contentType === "application/json";
+        const body = contentType === "application/json" ? JSON.stringify({ bio: "smuggled" })
+          : `${method === "POST" ? "_method=PATCH&" : ""}bio=smuggled`;
+        const write = await request(`/members/${SUBJECT.userId}`, {
+          method, headers: { accept, origin: env.APP_URL, "content-type": contentType }, body,
+        });
+        // Unsafe guest requests never redirect into OAuth or replay the body.
+        expect(write.status).toBe(json ? 401 : 303);
+        if (json) {
+          expect(write.headers.get("location")).toBeNull();
+          expect(await write.clone().json()).toEqual({ error: "Unauthorized", recovery: "/auth/recover?next=%2Fprofile" });
+        } else expect(write.headers.get("location")).toBe("/auth/recover?next=%2Fprofile");
+        const responseBody = await write.text();
+        for (const personal of [...PERSONAL_STRINGS, "smuggled"]) expect(responseBody).not.toContain(personal);
+        expect((await db.select().from(profiles))[0]!.bio).toBe(PERSONAL_STRINGS[1]);
+        expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
+      }
+    }
   });
 
   it.each(["guest", "non-member", "member", "moderator"])("%s: every registered admin GET has the same gate", async (role) => {
@@ -139,7 +170,7 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
   });
 
   it("public pages contain no member data in HTML/source; RSVP counts remain public", async () => {
-    for (const path of ["/", "/events", "/events/past", "/join", "/about", "/faq", "/rules", "/privacy", "/sitemap_index.xml", `/e/${EVENT_KEY}`]) {
+    for (const path of ["/", "/events", "/events/past", "/join", "/about", "/faq", "/rules", "/privacy", "/auth/recover", "/auth/status", "/sitemap_index.xml", `/e/${EVENT_KEY}`]) {
       const res = await request(path);
       expect(res.status, path).toBe(200);
       const body = await res.text();

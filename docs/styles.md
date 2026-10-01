@@ -1,9 +1,13 @@
 # Small, external stylesheet
 
-`public/styles.css` is minified and declaration-factored to fit the original
-3072-byte raw / 1280-byte gzip ceiling. The ceiling is not adjusted when main
-grows. The matching class composition lives in server-rendered page components;
-islands continue to select stable data attributes, not these styling tokens.
+`public/styles.css` is minified and declaration-factored. The ceiling is not
+adjusted when main grows: raising it requires a separate deliberate PR. Main's
+2026-10-01 theme architecture grew the sheet past the original 3072/1280
+raw/gzip ceiling (3930/1527 measured, factored); that growth is documented and
+routed as a separate ceiling-raise PR, and `ci/bundle-budget.json` keeps the
+legacy values until it lands. The matching class composition lives in
+server-rendered page components; islands continue to select stable data
+attributes, not these styling tokens.
 
 ## Tokens
 
@@ -25,6 +29,18 @@ Shared declarations use `rw` (flex), `ct` (center alignment), `bk` (block),
 Do not add just the compact structural token when its shared declarations are
 also required. Preserve the avatar's `[hidden]` rule after composing flex/block
 utilities: native hidden must still override both image and initial displays.
+
+Classes introduced by main's theme architecture keep their names verbatim
+(`site-header`, `main-nav`, `hero-detail*`, `community-*`, `recovery-*`,
+`profile-*`, `featured-*`, `admin-table` since the 2026-10-01 merge): only the
+legacy names in the table above are tokenized. `public/theme.css` and
+`public/profile-theme.css` are served with tokenized selectors; they must equal
+the mechanical selector rename of the originals in `test/helpers/theme-baseline.css`
+and `test/helpers/profile-theme-baseline.css`, which the equivalence suite
+asserts offline and layers into both comparison sides for themed rows. Base
+`.field` labels, inputs, selects, `.card` paragraph/dd text and `footer` carry
+their muted/bold/inherited-font declarations directly, so classless main markup
+matches the baseline without per-element utilities.
 
 ## Equivalence and gates
 

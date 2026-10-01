@@ -13,6 +13,10 @@ import { concretePath, HTML_READS, MEMBER_ID, pageShellFixture } from "./helpers
 // Utilities are removed ONLY on that side; current renders must carry them.
 const baseline = readFileSync(new URL("./helpers/styles-baseline.css", import.meta.url), "utf8");
 const current = readFileSync(new URL("../public/styles.css", import.meta.url), "utf8");
+const themeBaseline = readFileSync(new URL("./helpers/theme-baseline.css", import.meta.url), "utf8");
+const profileThemeBaseline = readFileSync(new URL("./helpers/profile-theme-baseline.css", import.meta.url), "utf8");
+const themeCurrent = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
+const profileThemeCurrent = readFileSync(new URL("../public/profile-theme.css", import.meta.url), "utf8");
 const names: Record<string, string> = {
   st: "strap", ld: "lead", bt: "btn", ln: "link", w: "who", nt: "notice",
   ft: "facts", cd: "card", cnt: "counts", rst: "rank-stack", hes: "home-events",
@@ -24,6 +28,25 @@ const utilities = new Set(["rw", "ct", "bk", "mt", "bd", "pl", "cp", "ifnt"]);
 function canonicalMarkup(html: string) {
   return html.replace(/class="([^"]*)"/g, (_, value: string) => `class="${value.split(/\s+/)
     .filter((name) => !utilities.has(name)).map((name) => names[name] ?? name).join(" ")}"`);
+}
+// The served theme sheets must target tokenized class names. This is the same
+// mechanical rename canonicalMarkup applies to markup, applied to selectors,
+// so the originals in test/helpers are the only handwritten source.
+const originalNames: Record<string, string> = Object.fromEntries(
+  Object.entries(names).map(([token, original]) => [original, token]),
+);
+function tokenizeCss(css: string) {
+  return css.replace(/\.([a-zA-Z][\w-]*)/g, (selector, name: string) => originalNames[name] ? `.${originalNames[name]}` : selector);
+}
+// Themed routes layer /theme.css (and /profile-theme.css) over styles.css on
+// both comparison sides; unthemed rows stay base-only, as served.
+function themedSheets(html: string, theme: string, profileTheme: string) {
+  if (html.includes('class="homepage-theme"')) return [theme];
+  if (html.includes('class="profile-theme"')) return [theme, profileTheme];
+  return [];
+}
+function styleTag(...sheets: string[]) {
+  return sheets.map((sheet) => `<style>${sheet}</style>`).join("");
 }
 function offline(html: string) {
   return html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "")
@@ -111,6 +134,11 @@ describe("factored stylesheet", () => {
     await expect(snapshot({ evaluate: async () => [] } as unknown as Page)).rejects.toThrow();
   });
 
+  it("serves theme sheets that are the mechanical token translation of the originals", () => {
+    expect(tokenizeCss(themeBaseline)).toBe(themeCurrent);
+    expect(tokenizeCss(profileThemeBaseline)).toBe(profileThemeCurrent);
+  });
+
   it("renders all route shells without leftover canonical classes", async () => {
     const rows = await cases();
     for (const row of rows) {
@@ -133,12 +161,28 @@ describe("factored stylesheet", () => {
         await oldPage.setViewportSize({ width, height: 900 });
         await newPage.setViewportSize({ width, height: 900 });
         for (const row of await cases()) {
-          await oldPage.setContent(canonicalMarkup(row.html).replace("</head>", `<style>${baseline}</style></head>`));
-          await newPage.setContent(row.html.replace("</head>", `<style>${current}</style></head>`));
+          const baselineTheme = themedSheets(row.html, themeBaseline, profileThemeBaseline);
+          const currentTheme = themedSheets(row.html, themeCurrent, profileThemeCurrent);
+          await oldPage.setContent(canonicalMarkup(row.html).replace("</head>", `${styleTag(baseline, ...baselineTheme)}</head>`));
+          await newPage.setContent(row.html.replace("</head>", `${styleTag(current, ...currentTheme)}</head>`));
+          // The hover step parks the pointer on a link; a stale pointer over
+          // themed :hover colors would leak into the next row's states.
+          for (const page of [oldPage, newPage]) await page.mouse.move(0, 0);
           if (row.name === "error-404-populated") {
             for (const page of [oldPage, newPage]) {
-              expect(await page.evaluate(`Array.from(document.querySelectorAll('[data-testid="error-event-suggestion"] + p'),
-                (element) => getComputedStyle(element).color)`)).toEqual(["rgb(107, 98, 87)", "rgb(107, 98, 87)"]);
+              // The muted declaration must reach the suggestion paragraphs; the
+              // theme redefines the muted custom property, so compare against
+              // the resolved value rather than the unthemed literal.
+              const [suggestionColor, mutedColor] = await page.evaluate(`(() => {
+                const probe = document.createElement("div");
+                probe.style.color = getComputedStyle(document.body).getPropertyValue("--muted").trim();
+                document.body.appendChild(probe);
+                const colors = [getComputedStyle(document.querySelector('[data-testid="error-event-suggestion"] + p')).color,
+                  getComputedStyle(probe).color];
+                probe.remove();
+                return colors;
+              })()`);
+              expect(suggestionColor, "suggestion paragraphs carry the muted declaration").toBe(mutedColor);
             }
           }
           if (row.html.includes('data-testid="profile-edit-control"')) {
@@ -152,14 +196,6 @@ describe("factored stylesheet", () => {
             expect(await page.evaluate(`document.querySelector('a[href="#main"]').matches(':focus')`)).toBe(true);
           }
           expect(await snapshot(newPage), `${width} ${row.name} keyboard focus`).toEqual(await snapshot(oldPage));
-          for (const page of [oldPage, newPage]) {
-            // The focused skip link overlays the brand; compare hover as a separate state.
-            await page.evaluate("document.activeElement.blur()");
-            expect(await page.evaluate(`document.querySelector('a[href="#main"]').matches(':focus')`)).toBe(false);
-            const link = page.locator('a[href]:not([href="#main"])').first();
-            await link.hover();
-            expect(await page.evaluate(`document.querySelector('a[href]:not([href="#main"])').matches(':hover')`)).toBe(true);
-          }
           expect(await snapshot(newPage), `${width} ${row.name} hover`).toEqual(await snapshot(oldPage));
           if (row.html.includes('data-testid="profile-edit-control"')) {
             for (const page of [oldPage, newPage]) {

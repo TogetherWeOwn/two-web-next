@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
 import app from "./app";
+import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -70,8 +71,12 @@ async function validator(body: string) {
 async function replacement(response: Response, source: ReturnType<typeof fixture>, consumed: { cookie: string; tokenHash: string }) {
   expect(await source.store.get(consumed.tokenHash)).toBeNull();
   const cookies = response.headers.getSetCookie();
-  expect(cookies).toHaveLength(1);
-  const setCookie = cookies[0]!;
+  expect(cookies).toHaveLength(2);
+  expect(cookies.filter((cookie) => cookie.startsWith(`${AUTH_STATUS_COOKIE}=`))).toHaveLength(1);
+  // The companion liveness hash cannot replace the one-use login token.
+  const replacements = cookies.filter((cookie) => cookie.startsWith(`${COOKIE}=`));
+  expect(replacements).toHaveLength(1);
+  const setCookie = replacements[0]!;
   for (const flag of ["Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=2592000"]) {
     expect(setCookie.split("; ")).toContain(flag);
   }
@@ -107,6 +112,8 @@ describe("draft ICS rotated session delivery (fixture-only)", () => {
     expect(first.headers.get("cache-control")).toBe("max-age=300, private");
     const current = await replacement(first, source, original);
     await expectForbidden(await source.request(original.cookie, etag));
+    const statusOnly = first.headers.getSetCookie().find((cookie) => cookie.startsWith(`${AUTH_STATUS_COOKIE}=`))!.split(";")[0]!;
+    await expectForbidden(await source.request(statusOnly, etag));
 
     const unchanged = await source.request(current.cookie, etag);
     expect(unchanged.status).toBe(304);

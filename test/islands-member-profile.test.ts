@@ -40,16 +40,15 @@ const seed = (id: string, username: string) => ({
   id, username, avatar: null, bio: null, games: [], timezone: null, joinedAt: new Date("2024-03-15T00:00:00Z"),
 });
 
-async function setup() {
-  const sessions = createMemorySessionStore();
+async function setup(clock: () => number = Date.now) {
+  const sessions = createMemorySessionStore(clock);
   const store = createMemoryProfileStore([seed(ALICE, "alice"), seed(BOB, "bob")]);
   const app = profilesApp({ sessionStore: sessions, store, accessLog: async () => true, throttle: async () => ({ limited: false }) });
-  const cookie = async (userId: string, username: string) => {
-    const token = newSessionToken();
+  const cookie = async (userId: string, username: string, token = newSessionToken()) => {
     await sessions.create({ tokenHash: await hashToken(token), userId, username, avatar: null, member: true, moderator: false, expiresAt: new Date(Date.now() + 3600_000) });
     return (await serializeSigned("__Host-two_session", token, SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
   };
-  return { app, store, cookie };
+  return { app, store, sessions, cookie };
 }
 
 const patch = (app: ReturnType<typeof profilesApp>, id: string, cookie: string, body: Record<string, unknown>) =>
@@ -70,6 +69,71 @@ describe("member-profile requests fired", () => {
     expect(js.match(/fetch\(/g)?.length).toBe(1);
     expect(js).toContain('method: "PATCH"');
     expect(js).toContain('addEventListener("reset"');
+  });
+});
+
+describe("member-profile session recovery", () => {
+  const draft = { bio: "Unsaved bio", games_text: "Go\nChess", timezone: "Asia/Tokyo", website: "", formOpenedAt: Date.now() - 5000 };
+
+  it("keeps the rotated status probe active without letting an old signed login cookie read or write", async () => {
+    const { app, store, sessions, cookie } = await setup();
+    const originalToken = newSessionToken();
+    const originalCookie = await cookie(ALICE, "alice", originalToken);
+    const originalHash = await hashToken(originalToken);
+    const statusHash = (await sessions.statusHash(originalHash))!;
+    const replacementToken = newSessionToken();
+    const replacementHash = await hashToken(replacementToken);
+    expect(await sessions.rotate(originalHash, {
+      tokenHash: replacementHash, userId: ALICE, username: "alice", avatar: null,
+      member: true, moderator: false, expiresAt: new Date(Date.now() + 3600_000),
+    })).toBe(true);
+    expect(await sessions.statusHash(replacementHash)).toBe(statusHash);
+    expect(await sessions.isActive(statusHash)).toBe(true);
+    expect(await sessions.statusHash(originalHash)).toBeNull();
+    expect(await sessions.get(originalHash)).toBeNull();
+    const read = await app.request(`/members/${ALICE}`, { headers: { cookie: originalCookie } }, env);
+    expect(read.status).toBe(302);
+    expect(await read.text()).not.toContain('data-testid="profile-form"');
+    const rejected = await patch(app, ALICE, originalCookie, draft);
+    expect(rejected.status).toBe(401);
+    expect(rejected.headers.get("location")).toBeNull();
+    expect(await rejected.json()).toEqual({ error: "Unauthorized", recovery: "/auth/recover?next=%2Fprofile" });
+    expect(store.rows.get(ALICE)).toMatchObject({ bio: null, games: [], timezone: null });
+    expect(await sessions.isActive(statusHash)).toBe(true);
+
+    // Sign the already rotated token without issuing a new store row/probe key.
+    const replacementCookie = (await serializeSigned("__Host-two_session", replacementToken, SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+    const accepted = await patch(app, ALICE, replacementCookie, draft);
+    expect(accepted.status).toBe(200);
+    expect(store.rows.get(ALICE)).toMatchObject({ bio: draft.bio, games: ["Go", "Chess"], timezone: draft.timezone });
+    expect(await sessions.statusHash(replacementHash)).toBe(statusHash);
+  });
+
+  it.each(["expired", "revoked"] as const)("rejects a cookie marked %s with explicit recovery for JSON and no-JS writes, without saving the draft", async (state) => {
+    let now = Date.now();
+    const { app, store, sessions, cookie } = await setup(() => now);
+    const token = newSessionToken();
+    const signedCookie = await cookie(ALICE, "alice", token);
+    const tokenHash = await hashToken(token);
+    expect(await sessions.isActive(tokenHash)).toBe(true);
+    if (state === "revoked") await sessions.revoke(tokenHash);
+    else now += 7200_000;
+    expect(await sessions.isActive(tokenHash)).toBe(false);
+    expect(await sessions.statusHash(tokenHash)).toBeNull();
+
+    const json = await patch(app, ALICE, signedCookie, draft);
+    expect(json.status).toBe(401);
+    expect(json.headers.get("location")).toBeNull();
+    expect(await json.json()).toEqual({ error: "Unauthorized", recovery: "/auth/recover?next=%2Fprofile" });
+    const form = await app.request(`/members/${ALICE}`, {
+      method: "POST",
+      headers: { cookie: signedCookie, "content-type": "application/x-www-form-urlencoded", origin: env.APP_URL, referer: `${env.APP_URL}/members/${ALICE}?edit=1` },
+      body: new URLSearchParams({ ...draft, formOpenedAt: String(draft.formOpenedAt), _method: "PATCH" }).toString(),
+    }, env);
+    expect(form.status).toBe(303);
+    expect(form.headers.get("location")).toBe(`/auth/recover?next=${encodeURIComponent(`/members/${ALICE}?edit=1`)}`);
+    expect(form.headers.get("location")).not.toContain("Unsaved");
+    expect(store.rows.get(ALICE)).toMatchObject({ bio: null, games: [], timezone: null });
   });
 });
 

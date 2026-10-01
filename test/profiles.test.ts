@@ -12,7 +12,7 @@
 // - Live (agent-testdb, skipped without DATABASE_URL): real users/profiles/
 //   member_data_access_logs rows through the drizzle store.
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import type { AccessEntry } from "../src/access-log";
@@ -21,6 +21,7 @@ import { createDb } from "../src/db/index";
 import { profiles, users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
+import { JOIN_RESULT_COOKIE } from "../src/return-journey";
 import { recordAccess } from "../src/admin/store";
 import { profilesApp, PROFILE_WRITE_THROTTLE_PER_MINUTE } from "../src/profiles/routes";
 import { createDbProfileStore, createMemoryProfileStore, type MemberView } from "../src/profiles/store";
@@ -91,12 +92,12 @@ function harness(opts: { logDown?: boolean; throttle?: (b: string) => Promise<{ 
 }
 
 describe("exposure matrix: who sees what (memory doubles)", () => {
-  it("guest: redirected to Discord OAuth on every route, nothing rendered, nothing logged", async () => {
+  it("guest: reads go to OAuth, writes to explicit recovery, nothing rendered or logged", async () => {
     const { app, log } = harness();
     for (const [method, path] of [["GET", "/profile"], ["GET", `/members/${ALICE.userId}`], ["PATCH", `/members/${ALICE.userId}`]] as const) {
       const res = await app.request(path, { method }, env);
-      expect(res.status, `${method} ${path}`).toBe(302);
-      expect(res.headers.get("location")).toBe("/auth/discord");
+      expect(res.status, `${method} ${path}`).toBe(method === "PATCH" ? 303 : 302);
+      expect(res.headers.get("location")).toBe(method === "PATCH" ? "/auth/recover?next=%2Fprofile" : "/auth/discord");
       expect(await res.text()).not.toContain("alice");
     }
     expect(log).toHaveLength(0);
@@ -175,6 +176,27 @@ describe("member-access-log (memory doubles)", () => {
     });
   });
 
+  it.each(["/profile", `/members/${ALICE.userId}`])("HEAD %s leaves the banner for exactly one visible GET", async (path) => {
+    const { app, sessions } = harness();
+    const session = await cookieFor(sessions, BOB);
+    const flash = (await serializeSigned(JOIN_RESULT_COOKIE, "already_member", SESSION_SECRET, {
+      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+    })).split(";")[0]!;
+    const cookie = `${session}; ${flash}`;
+    const head = await app.request(path, { method: "HEAD", headers: { cookie } }, env);
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(head.headers.getSetCookie().some((c) => c.startsWith(`${JOIN_RESULT_COOKIE}=`))).toBe(false);
+
+    const first = await app.request(path, { headers: { cookie } }, env);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    expect(await first.text()).toContain('data-testid="join-result"');
+    expect(first.headers.getSetCookie().join("\n")).toContain(`${JOIN_RESULT_COOKIE}=; Max-Age=0`);
+    const second = await app.request(path, { headers: { cookie: session } }, env);
+    expect(await second.text()).not.toContain('data-testid="join-result"');
+  });
+
   it("a moderator's read is logged the same as a member's", async () => {
     const { app, sessions, log } = harness();
     await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, MOD) } }, env);
@@ -205,6 +227,58 @@ describe("member-access-log (memory doubles)", () => {
     expect(body).not.toContain("alice");
     expect(JSON.stringify(spy.mock.calls)).not.toContain(ALICE.userId);
     spy.mockRestore();
+  });
+
+  it.each(["already_member", "added"])("audit-failure 503 preserves %s until one successful display", async (result) => {
+    const opts = { logDown: true };
+    const { app, sessions, log } = harness(opts);
+    const session = await cookieFor(sessions, BOB);
+    const flash = (await serializeSigned(JOIN_RESULT_COOKIE, result, SESSION_SECRET, {
+      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+    })).split(";")[0]!;
+    const jar = new Map([session, flash].map((pair) => [pair.slice(0, pair.indexOf("=")), pair]));
+    const apply = (res: Response) => {
+      for (const cookie of res.headers.getSetCookie()) {
+        const pair = cookie.split(";")[0]!;
+        const name = pair.slice(0, pair.indexOf("="));
+        if (/max-age=0/i.test(cookie)) jar.delete(name);
+        else jar.set(name, pair);
+      }
+    };
+    const get = () => app.request(`/members/${ALICE.userId}`, {
+      headers: { cookie: [...jar.values()].join("; ") },
+    }, env);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const refused = await get();
+      expect(refused.status).toBe(503);
+      expect(refused.headers.get("cache-control")).toBe("private, no-store");
+      expect(await refused.text()).toBe("Member data is temporarily unavailable.");
+      expect(log).toHaveLength(0);
+      expect(spy).toHaveBeenCalled();
+      apply(refused);
+      expect(jar.get(JOIN_RESULT_COOKIE)).toBe(flash);
+
+      opts.logDown = false;
+      const first = await get();
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("private, no-store");
+      const html = await first.text();
+      expect(html).toContain('data-testid="join-result"');
+      if (result === "already_member") expect(html).toContain('data-testid="reinvite-link"');
+      else expect(html).toContain("You are in. Finish Discord&#39;s rules screening before you can post.");
+      expect(log).toHaveLength(1);
+      expect(log[0]?.subjectUserIds).toEqual([ALICE.userId]);
+      apply(first);
+      expect(jar.has(JOIN_RESULT_COOKIE)).toBe(false);
+
+      const second = await get();
+      expect(second.status).toBe(200);
+      expect(await second.text()).not.toContain('data-testid="join-result"');
+      expect(log).toHaveLength(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("MEMBER_ACCESS_LOG_ENFORCE=false degrades: served, but still logged loudly", async () => {
@@ -288,6 +362,29 @@ describe("PATCH /members/:user (memory doubles)", () => {
       expect(html).toContain('<div role="alert" tabindex="-1" data-testid="profile-error"><ul>');
       expect(html).not.toContain('<ul role="alert"');
     }
+    expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
+  });
+
+  it.each([false, true])("upload read failures return 400 without saving (partial: %s)", async (partial) => {
+    const { app, sessions, store } = harness();
+    const escaped = vi.fn((_err: Error, c: Context) => c.text("Internal Server Error", 500));
+    app.onError(escaped);
+    const save = vi.spyOn(store, "save");
+    let reads = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (partial && reads++ === 0) controller.enqueue(new TextEncoder().encode('{"bio":'));
+        else controller.error(new Error("fixture upload failure, do not expose"));
+      },
+    }, { highWaterMark: 0 });
+    const response = await app.request(new Request(`http://localhost/members/${ALICE.userId}`, {
+      method: "PATCH", body, duplex: "half",
+      headers: { cookie: await cookieFor(sessions, ALICE), "content-type": "application/json" },
+    } as RequestInit), undefined, env);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Bad request");
+    expect(escaped).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
     expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
   });
 

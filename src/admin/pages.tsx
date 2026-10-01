@@ -5,7 +5,8 @@
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
-import { SkipLink } from "../pages";
+import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
+import { FeaturedContentItem, SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
 import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
@@ -39,7 +40,7 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
         </nav>
       </header>
       <main id="main" tabindex={-1}>{children}</main>
-      <footer class="mt">Together We Own · moderators only</footer>
+      <footer>Together We Own · moderators only</footer>
     </body>
   </html>
 );
@@ -68,13 +69,13 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
           <h2>
             <a href="/admin/events">Events</a>
           </h2>
-          <p class="mt">Drafts, publishing, cancellations. Create-as-draft; events are never deleted.</p>
+          <p>Drafts, publishing, cancellations. Create-as-draft; events are never deleted.</p>
         </li>
         <li class="cd">
           <h2>
             <a href="/admin/featured">Featured content</a>
           </h2>
-          <p class="mt">Landing-page slots: publish toggle, ordering, show window.</p>
+          <p>Landing-page slots: publish toggle, ordering, show window.</p>
         </li>
       </ul>
       {funnel ? (
@@ -146,12 +147,12 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQ
       <p class="hn">Read-only. Last {JOIN_RETENTION_DAYS} days, newest first. Search is an exact Discord id or request id.</p>
       <form method="get" action="/admin/join-attempts" class="flt rw">
         <div class="fd">
-          <label for="q" class="bk bd">Discord id or request id</label>
-          <input class="ifnt" id="q" name="q" type="search" value={query.q} />
+          <label for="q">Discord id or request id</label>
+          <input id="q" name="q" type="search" value={query.q} />
         </div>
         <div class="fd">
-          <label for="outcome" class="bk bd">Outcome</label>
-          <select class="ifnt" id="outcome" name="outcome">
+          <label for="outcome">Outcome</label>
+          <select id="outcome" name="outcome">
             {["", ...outcomes].map((o) => (
               <option value={o} selected={o === query.outcome}>
                 {o === "" ? "All" : o}
@@ -255,12 +256,12 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
         <div class="fd">
-          <label for="q" class="bk bd">Search</label>
-          <input class="ifnt" id="q" name="q" type="search" value={query.q} />
+          <label for="q">Search</label>
+          <input id="q" name="q" type="search" value={query.q} />
         </div>
         <div class="fd">
-          <label for="status" class="bk bd">Status</label>
-          <select class="ifnt" id="status" name="status">
+          <label for="status">Status</label>
+          <select id="status" name="status">
             {["", "draft", "published", "cancelled", "past"].map((s) => (
               <option value={s} selected={s === query.status}>
                 {s === "" ? "All" : s}
@@ -269,24 +270,24 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
           </select>
         </div>
         <div class="fd">
-          <label for="rsvp_open" class="bk bd">RSVPs</label>
-          <select class="ifnt" id="rsvp_open" name="rsvp_open">
+          <label for="rsvp_open">RSVPs</label>
+          <select id="rsvp_open" name="rsvp_open">
             <option value="" selected={query.rsvp_open === ""}>All</option>
             <option value="1" selected={query.rsvp_open === "1"}>Open</option>
             <option value="0" selected={query.rsvp_open === "0"}>Paused</option>
           </select>
         </div>
         <div class="fd">
-          <label for="series" class="bk bd">Series</label>
-          <select class="ifnt" id="series" name="series">
+          <label for="series">Series</label>
+          <select id="series" name="series">
             {[["", "All"], ["parent", "Parent"], ["child", "Child"], ["standalone", "Standalone"]].map(([value, label]) => (
               <option value={value} selected={value === query.series}>{label}</option>
             ))}
           </select>
         </div>
         <div class="fd">
-          <label for="fill" class="bk bd">Fill</label>
-          <select class="ifnt" id="fill" name="fill">
+          <label for="fill">Fill</label>
+          <select id="fill" name="fill">
             {[["", "All"], ["full", "Full"], ["has_seats", "Has seats"], ["unlimited", "Unlimited"]].map(([value, label]) => (
               <option value={value} selected={value === query.fill}>{label}</option>
             ))}
@@ -363,7 +364,7 @@ const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
   const id = `f-${name.replace(/[^a-z0-9]+/gi, "-")}`;
   return (
     <div class="fd">
-      <label for={id} class="bk bd">{label}</label>
+      <label for={id}>{label}</label>
       {children(id)}
       {hint ? <p class="hn">{hint}</p> : null}
       {err ? (
@@ -398,23 +399,25 @@ export const EventFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}
-          data-event-draft={mode === "edit" && Object.keys(errors).length > 0 ? "" : undefined}>
+        <form method="post" action={action} data-event-editor=""
+          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required
+              aria-invalid={errors.title ? "true" : undefined} aria-describedby={errors.title ? `${id}-error` : undefined} />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="game" type="text" value={val(values, "game")} maxlength={100} />}
+            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100}
+              aria-invalid={errors.game ? "true" : undefined} aria-describedby={errors.game ? `${id}-error` : undefined} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
-            {(id) => <textarea class="ifnt" id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
+            {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
           </Field>
           <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="starts_at" type="text" value={val(values, "starts_at")} required
+            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required
               aria-invalid={errors.starts_at ? "true" : undefined} aria-describedby={errors.starts_at ? `${id}-error` : undefined} />}
           </Field>
           <Field name="ends_at" label="Ends (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="ends_at" type="text" value={val(values, "ends_at")} required
+            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required
               aria-invalid={errors.ends_at ? "true" : undefined} aria-describedby={errors.ends_at ? `${id}-error` : undefined} />}
           </Field>
           <Field
@@ -423,31 +426,32 @@ export const EventFormPage: FC<{
             errors={errors}
             hint="The IANA zone the wall time above is typed in. Storage is UTC."
           >
-            {(id) => <input class="ifnt" id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"}
+            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"}
               aria-invalid={errors.timezone ? "true" : undefined} aria-describedby={errors.timezone ? `${id}-error` : undefined} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="location" type="text" value={val(values, "location")} maxlength={255} />}
+            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255}
+              aria-invalid={errors.location ? "true" : undefined} aria-describedby={errors.location ? `${id}-error` : undefined} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
+            {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
           </Field>
           {mode === "new" ? (
             <fieldset>
               <legend>Repeat</legend>
               <Field name="recurrence_frequency" label="Repeats" errors={errors} hint="Empty = a one-off event. Weeks keep the same wall time in the zone above across clock changes.">
                 {(id) => (
-                  <select class="ifnt" id={id} name="recurrence_frequency">
+                  <select id={id} name="recurrence_frequency">
                     <option value="" selected={val(values, "recurrence_frequency") === ""}>Does not repeat</option>
                     <option value="weekly" selected={val(values, "recurrence_frequency") === "weekly"}>Weekly</option>
                   </select>
                 )}
               </Field>
               <Field name="recurrence_count" label="Occurrences (including the first, max 52)" errors={errors}>
-                {(id) => <input class="ifnt" id={id} name="recurrence_count" type="text" inputmode="numeric" value={val(values, "recurrence_count")} />}
+                {(id) => <input id={id} name="recurrence_count" type="text" inputmode="numeric" value={val(values, "recurrence_count")} />}
               </Field>
               <Field name="recurrence_ends_on" label="Repeat until (YYYY-MM-DD)" errors={errors}>
-                {(id) => <input class="ifnt" id={id} name="recurrence_ends_on" type="text" value={val(values, "recurrence_ends_on")} />}
+                {(id) => <input id={id} name="recurrence_ends_on" type="text" value={val(values, "recurrence_ends_on")} />}
               </Field>
             </fieldset>
           ) : row?.recurrenceFrequency ? (
@@ -488,8 +492,8 @@ export const EventFormPage: FC<{
               <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
               <input type="hidden" name="roster_order" value={rosterQuery.order} />
               <div class="fd">
-                <label for="roster-q" class="bk bd">Search members</label>
-                <input class="ifnt" id="roster-q" name="roster_q" type="search" value={rosterQuery.q} />
+                <label for="roster-q">Search members</label>
+                <input id="roster-q" name="roster_q" type="search" value={rosterQuery.q} />
               </div>
               <div class="fd"><button type="submit" class="bt ct bd cp pl">Search</button></div>
             </form>
@@ -522,12 +526,13 @@ export const EventFormPage: FC<{
           </section>
         ) : null}
       </section>
-      {mode === "edit" ? <script src="/islands/admin-event-editor.js" defer /> : null}
+      <script type="module" src="/islands/admin-event-text-limits.js" />
+      <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
 };
 
-export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }> = ({ rows, query }) => (
+export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; now?: Date }> = ({ rows, query, now = new Date() }) => (
   <Shell title="Featured content">
     <section>
       <h1>Featured content</h1>
@@ -538,12 +543,12 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }>
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
         <div class="fd">
-          <label for="q" class="bk bd">Search titles</label>
-          <input class="ifnt" id="q" name="q" type="search" value={query.q} />
+          <label for="q">Search titles</label>
+          <input id="q" name="q" type="search" value={query.q} />
         </div>
         <div class="fd">
-          <label for="published" class="bk bd">Published</label>
-          <select class="ifnt" id="published" name="published">
+          <label for="published">Published</label>
+          <select id="published" name="published">
             <option value="" selected={query.published === ""}>All</option>
             <option value="1" selected={query.published === "1"}>Published</option>
             <option value="0" selected={query.published === "0"}>Unpublished</option>
@@ -551,11 +556,13 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }>
         </div>
         <div class="fd"><button type="submit" class="bt ct bd cp pl">Filter</button></div>
       </form>
-      <table class="tbl" data-testid="featured-table">
+      <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="featured-table-scroll" role="region" aria-label="Featured content list" aria-describedby="featured-scroll-hint" tabindex={0} data-testid="featured-table-scroll">
+      <table class="tbl featured-table" data-testid="featured-table">
         <thead>
           <tr>
             <th scope="col">Title</th>
-            <th scope="col">Published</th>
+            <th scope="col">Status</th>
             <TableSortHeader label="Position" active={query.sort === "position"} order={query.order} url={(order) => featuredListUrl(query, { sort: "position", order })} />
             <th scope="col">Window (UTC)</th>
             <TableSortHeader label="Last changed" active={query.sort === "updated_at"} order={query.order} url={(order) => featuredListUrl(query, { sort: "updated_at", order })} />
@@ -574,10 +581,11 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }>
                 <td>
                   <a href={`/admin/featured/${r.id}`}>{r.title}</a>
                 </td>
-                <td data-testid={`featured-published-${r.id}`}>{r.isPublished ? "yes" : "no"}</td>
+                <td data-testid={`featured-status-${r.id}`}><FeaturedStatusBadge row={r} now={now} /></td>
                 <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
                 <td>
-                  {r.startsAt ? r.startsAt.toISOString() : "—"} → {r.endsAt ? r.endsAt.toISOString() : "—"}
+                  <span class="featured-window-bound">{r.startsAt ? <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time> : "—"}</span>
+                  <span class="featured-window-bound">→ {r.endsAt ? <time datetime={r.endsAt.toISOString()}>{r.endsAt.toISOString()}</time> : "—"}</span>
                 </td>
                 <td><time datetime={r.updatedAt.toISOString()}>{r.updatedAt.toISOString()}</time></td>
               </tr>
@@ -585,6 +593,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }>
           )}
         </tbody>
       </table>
+      </div>
     </section>
   </Shell>
 );
@@ -594,13 +603,28 @@ export const FeaturedFormPage: FC<{
   row?: FeaturedRow;
   values: Record<string, unknown>;
   errors: Record<string, string>;
-}> = ({ mode, row, values, errors }) => {
+  now?: Date;
+  appUrl: string;
+  imageHosts?: string;
+}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked = values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
-      <section>
+      <section class="featured-form">
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
+        {mode === "edit" && row ? (
+          <section class="featured-preview" aria-labelledby="featured-preview-heading" data-testid="featured-preview">
+            <h2 id="featured-preview-heading">Homepage preview</h2>
+            <p>Last saved content, checked at <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to refresh this preview.</p>
+            <p>Status: <FeaturedStatusBadge row={row} now={now} /></p>
+            {currentlyVisible(row, now) ? (
+              <FeaturedContentItem row={row} appUrl={appUrl} imageHosts={imageHosts} />
+            ) : (
+              <p data-testid="featured-preview-hidden">This slot is not currently visible on the homepage.</p>
+            )}
+          </section>
+        ) : null}
         {Object.keys(errors).length > 0 ? (
           <p class="nt" role="alert" data-testid="form-errors">
             Check the highlighted fields and try again.
@@ -608,16 +632,16 @@ export const FeaturedFormPage: FC<{
         ) : null}
         <form method="post" action={action}>
           <Field name="title" label="Headline" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="title" type="text" value={val(values, "title")} maxlength={255} required />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={255} required />}
           </Field>
           <Field name="body" label="Body" errors={errors}>
-            {(id) => <textarea class="ifnt" id={id} name="body" rows={4}>{val(values, "body")}</textarea>}
+            {(id) => <textarea id={id} name="body" rows={4}>{val(values, "body")}</textarea>}
           </Field>
           <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="url" type="url" value={val(values, "url")} />}
+            {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
-          <Field name="image_url" label="Image URL" errors={errors} hint="Full URL on this site or https://cdn.discordapp.com. Other image hosts are blocked by the site's security policy.">
-            {(id) => <input class="ifnt" id={id} name="image_url" type="url" value={val(values, "image_url")} />}
+          <Field name="image_url" label="Image URL" errors={errors} hint="HTTPS URL on cdn.discordapp.com or a configured approved public host. Other image hosts are blocked by the site's security policy.">
+            {(id) => <input id={id} name="image_url" type="url" value={val(values, "image_url")} />}
           </Field>
           <Field
             name="image_alt"
@@ -625,22 +649,22 @@ export const FeaturedFormPage: FC<{
             errors={errors}
             hint="Required when an image URL is set — one plain sentence for screen-reader visitors."
           >
-            {(id) => <input class="ifnt" id={id} name="image_alt" type="text" value={val(values, "image_alt")} maxlength={255} />}
+            {(id) => <input id={id} name="image_alt" type="text" value={val(values, "image_alt")} maxlength={255} />}
           </Field>
           <div class="fd">
-            <label for="f-is-published" class="bk bd">Published</label>
-            <input class="ifnt" id="f-is-published" name="is_published" type="checkbox" checked={checked} />
+            <label for="f-is-published">Published</label>
+            <input id="f-is-published" name="is_published" type="checkbox" checked={checked} />
           </div>
           <Field name="position" label="Position (lower appears first)" errors={errors}>
             {(id) => (
-              <input class="ifnt" id={id} name="position" type="text" inputmode="numeric" value={val(values, "position") || "0"} />
+              <input id={id} name="position" type="text" inputmode="numeric" value={val(values, "position") || "0"} />
             )}
           </Field>
-          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="starts_at" type="text" value={val(values, "starts_at")} />}
+          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
+            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} />}
           </Field>
-          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
-            {(id) => <input class="ifnt" id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
+          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
+            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
           </Field>
           <div class="act rw ct">
             <button type="submit" class="bt ct bd cp pl" data-testid="save-featured">

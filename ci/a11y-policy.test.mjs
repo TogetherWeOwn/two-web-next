@@ -106,6 +106,34 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   }
 });
 
+test("the required CI job has a bounded coverage allowance without relaxing its gates", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  assert(check, "Required check job must exist");
+  assert.match(check.split("\n    steps:\n")[0], /\n    timeout-minutes: 20\n/);
+  assert.match(check, /\n      - run: npm ci\n/);
+  const steps = check.split(/\n      - /).slice(1);
+  for (const command of [
+    "npm run deps:audit:selftest",
+    "npm run deps:audit",
+    "timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads",
+    "npm run test:smoke",
+    "npm run db:migrate",
+    "npm run config:check",
+    "npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs",
+    "npm run test:cutover",
+    "bash ci/neon-backup-selftest.sh",
+    "bash ci/check-migration-numbers.sh",
+    "node --test ci/production-deploy-gate.test.mjs",
+    "npx wrangler deploy --dry-run --outdir dist",
+    "npx wrangler deploy --dry-run --env production --outdir dist-production",
+  ]) {
+    const step = steps.find((entry) => entry.split("\n").includes(`        run: ${command}`));
+    assert(step, `Required gate missing: ${command}`);
+    assert.doesNotMatch(step, /^        (?:if|continue-on-error):/m, `Required gate must not be bypassed: ${command}`);
+  }
+});
+
 test("WCAG 2.0, 2.1 and 2.2 A/AA are included, and even minor violations fail", () => {
   assert.deepEqual(WCAG_AA_TAGS, ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]);
   assert.doesNotThrow(() => assertNoViolations({ violations: [] }, "clean"));

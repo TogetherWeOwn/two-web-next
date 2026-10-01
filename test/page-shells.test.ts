@@ -13,7 +13,7 @@ function assertShell(html: string) {
   expect(html.match(/<a\b[^>]*href="#main"[^>]*>/g)).toHaveLength(1);
   // First child of body is stronger than first anchor: no button/input/positive
   // tabindex can silently get ahead of the bypass link.
-  expect(html).toMatch(/<body>\s*<a class="sl[^"]*" href="#main">Skip to content<\/a>/);
+  expect(html).toMatch(/<body(?: class="(?:homepage|profile)-theme")?>\s*<a class="sl[^"]*" href="#main">Skip to content<\/a>/);
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   expect(html).toContain('rel="stylesheet" href="/styles.css"');
 }
@@ -49,6 +49,21 @@ describe("every GET HTML route uses an accessible page shell (local fixtures)", 
     expect(response.headers.get("content-type")).toContain("text/html");
     assertShell(await response.text());
   });
+});
+
+it("serves a recovery HTML shell and bool-only status to guests without a session", async () => {
+  const { env } = pageShellFixture();
+  const recovery = await app.request(new URL("/auth/recover?next=%2Fprofile", env.APP_URL).toString(), {}, env);
+  expect(recovery.status).toBe(200);
+  expect(recovery.headers.get("content-type")).toContain("text/html");
+  const html = await recovery.text();
+  assertShell(html);
+  expect(html).toContain("Your earlier changes were not saved");
+  expect(html).toContain('href="/auth/discord?next=%2Fprofile"');
+  const status = await app.request(new URL("/auth/status", env.APP_URL).toString(), {}, env);
+  expect(status.status).toBe(200);
+  expect(status.headers.get("content-type")).toContain("application/json");
+  expect(await status.json()).toEqual({ authenticated: false });
 });
 
 it("renders the join-attempt fixture through the mounted detail route", async () => {
