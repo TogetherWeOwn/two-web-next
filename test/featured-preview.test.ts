@@ -10,7 +10,7 @@ const before = new Date(now.getTime() - 1);
 const after = new Date(now.getTime() + 1);
 const appUrl = "https://next.example.test";
 const row: FeaturedRow = {
-  id: 1, title: "Friday games", body: "Bring a friend.\nEveryone is welcome.",
+  id: 1, legacyId: null, title: "Friday games", body: "Bring a friend.\nEveryone is welcome.",
   url: "https://example.test/games", imageUrl: "https://cdn.discordapp.com/photo.jpg", imageAlt: "Friends playing together",
   isPublished: true, position: 0, startsAt: before, endsAt: after, createdBy: "moderator",
   createdAt: before, updatedAt: before,

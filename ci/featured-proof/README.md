@@ -4,11 +4,19 @@ This is the bounded offline CI lane authorized by [TOG-11003](/TOG/issues/TOG-11
 
 Existing capacity evidence: `.github/workflows/ci.yml` uses `ubuntu-latest`; main `8dedb9afa6aa64532e8fe9f956ff14006f9787d3` passed [CI run 36795810399](https://github.com/TogetherWeOwn/two-web-next/actions/runs/36795810399). This branch is rebased onto that green main, integrating the diagnostics-parity repair (PR #100) without touching its assertions. The current main workflow directory did not expose a reusable saved-fixture capture entry point. This does not claim no browser runner exists globally.
 
-## Invocation and containment
+## Current-source PR proof
+
+[TOG-10827](/TOG/issues/TOG-10827) adds a separate `current-source` PR job in the same pinned browser container. It generates fictional saved edit/list/scheduled pages from the exact checked-out PR head with `current-fixtures.ts`, then `capture-current.cjs` captures all three at 1280×900 and 390×844. The generated manifest pins source SHA, clock and HTML hashes; `report.json` records browser version, CI run, image pin, six state checks, element bounds and document overflow. Any horizontal overflow, failed state, missing stylesheet or attempted network request fails the job. QA still independently inspects all six PNGs on [TOG-10954](/TOG/issues/TOG-10954).
+
+The fixtures embed the current external stylesheet as a data URL, only for offline capture; deployed markup/CSP are unchanged. They contain no images, real user data, database access, server, auth or form submission. Separate fixture route tests verify that saved image sources emitted by the preview are allowed by the actual response CSP. This is current-source SSR/layout evidence, **not staging deployment or save-interaction proof**.
+
+PR source changes run this new job automatically. Manual `workflow_dispatch` retains the frozen-input `capture` job below; its files, hashes and original source attribution are unchanged and must never be relabelled as new-head evidence. The current-source artifacts are named `featured-current-source-<run-id>-<attempt>` and include six PNGs, manifest and report.
+
+## Frozen-input invocation and containment
 
 - Service/repository: GitHub Actions, `TogetherWeOwn/two-web-next`.
 - Entry point: `.github/workflows/featured-offline-proof.yml`, job `capture` on the existing `ubuntu-latest` lane.
-- Runs on PR changes to this kit/workflow, or an explicitly authorized `workflow_dispatch` after merge. No automatic main/deployment job is added.
+- Runs on an explicitly authorized `workflow_dispatch`; PR changes use the separate current-source job above. No automatic main/deployment job is added.
 - Browser image: `mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d`. The public MCR manifest resolved this digest on 2026-09-30; amd64 manifest is `sha256:65cefd09a5e943921ecd3a6e5414c603db2eb161e9eb48f2e2ccc63486dc7dc0`.
 - Matching `playwright@1.58.2` npm module is installed **only inside the CI container**, under `RUNNER_TEMP`, with scripts/browser downloads disabled. No root app dependency changes, host installs or browser installs.
 - The guard executes the unchanged driver as `node capture-featured-proof.cjs <fixture-directory> <new-output-directory>`. The workflow invokes the guard with `node ci/featured-proof/run-capture.cjs ci/featured-proof/fixtures "$PROOF_OUTPUT"`.

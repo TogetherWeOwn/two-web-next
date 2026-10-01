@@ -33,7 +33,7 @@ import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswe
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -279,13 +279,17 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const session = await readSession(c as unknown as Ctx);
     if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
     if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
-    const position = session ? await waitlistPosition(db, e.id, session.id) : null;
-    const attendees = session?.member ? await listGoingAttendees(db, e.id) : [];
+    const [neighbors, related, attendees, position] = await Promise.all([
+      getEventNeighbors(db, e),
+      listRelatedEvents(db, e),
+      session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+      session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+    ]);
     if (attendees.length > 0 && session) {
       c.set("viewerId", session.id);
       c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
     }
-    return c.html(<EventPage e={e} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
+    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------
