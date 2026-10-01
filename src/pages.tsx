@@ -42,7 +42,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home";
+    theme?: "home" | "profile";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -71,14 +71,15 @@ export const Layout: FC<
       ) : null}
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
-      {theme === "home" ? (
+      {theme ? (
         <>
           <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
           <link rel="stylesheet" href="/theme.css" />
+          {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
         </>
       ) : null}
     </head>
-    <body class={theme === "home" ? "homepage-theme" : undefined}><SkipLink />{children}</body>
+    <body class={theme === "home" ? "homepage-theme" : theme === "profile" ? "profile-theme" : undefined}><SkipLink />{children}</body>
   </html>
 );
 

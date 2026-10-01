@@ -67,13 +67,36 @@
           return r && typeof r === "object" && !Array.isArray(r) && r.event_key === key;
         });
         if (!row || !Number.isSafeInteger(row.going_count) || row.going_count < 0) return;
+        // The keyed snapshot carries the current cap (`eventJson`); a
+        // moderator capacity edit between SSR and refresh must move both
+        // displays, not just the count. An absent key is an older shape:
+        // keep this refresh on the SSR cap. Any other malformed capacity
+        // rejects the row as a whole, like a malformed count.
+        var fromSnapshot = row.capacity !== undefined;
+        if (fromSnapshot && row.capacity !== null &&
+            (!Number.isSafeInteger(row.capacity) || row.capacity < 1)) return;
+        var snapshotCapacity = fromSnapshot ? row.capacity : null;
         nodes.forEach(function (node) {
-          var capacity = node.getAttribute("data-capacity");
+          var capacity;
+          if (fromSnapshot) {
+            capacity = snapshotCapacity;
+            node.setAttribute("data-capacity", capacity === null ? "" : String(capacity));
+          } else {
+            var raw = node.getAttribute("data-capacity");
+            capacity = raw === "" || raw === null ? null : Number(raw);
+          }
           var count = node.querySelector("[data-count]");
-          if (count) count.textContent = countText(row.going_count, capacity === "" ? null : Number(capacity));
+          if (count) count.textContent = countText(row.going_count, capacity);
           var spots = node.querySelector("[data-spots]");
-          if (spots && capacity !== "" && capacity !== null) {
-            spots.textContent = spotsLeftText(row.going_count, Number(capacity));
+          if (capacity === null) {
+            // A lifted cap leaves no seats to count: restore the uncapped
+            // shape SSR renders (no spots line) rather than a stale number.
+            // A newly introduced cap without a spots node only moves the
+            // count; the line materializes on the next full render — the
+            // binder patches nodes in place, never invents markup.
+            if (fromSnapshot && spots && typeof spots.remove === "function") spots.remove();
+          } else if (spots) {
+            spots.textContent = spotsLeftText(row.going_count, capacity);
           }
           var ann = node.querySelector("[data-announcement]");
           if (ann && state) {
