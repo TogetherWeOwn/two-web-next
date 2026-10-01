@@ -49,7 +49,9 @@ import {
 } from "./store";
 import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
-import { getJoinAttempt, joinFunnelStats, listJoinAttempts, listRoster } from "./reads";
+import { databaseUrl } from "../db/connection";
+import { dashboardJoinFunnel } from "./join-funnel";
+import { getJoinAttempt, listJoinAttempts, listRoster } from "./reads";
 import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
@@ -117,7 +119,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     // Funnel counts are outcomes only (no member data): no access-log subjects.
     // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
     const db = await dbFor(c);
-    const funnel = db ? await joinFunnelStats(db) : undefined;
+    // Optional widget: 60 s cache scoped to the DB identity and a bounded read
+    // (join-funnel.ts), so a failing or blocked aggregate omits the widget
+    // instead of holding or failing the dashboard. Identity is the connection
+    // string in production, the injected Db object in tests.
+    const funnel = db ? await dashboardJoinFunnel(db, databaseUrl(c.env) ?? db) : undefined;
     // Normalized queries + counts only; a failing or blocked read resolves
     // undefined itself, so the widget is omitted — the dashboard never waits.
     const zeroSearches = db ? await topZeroResultSearches(db) : undefined;
