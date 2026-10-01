@@ -311,6 +311,10 @@
       controls.appendChild(pos);
     }
     pos.textContent = waitlistPositionCopy(position === undefined ? null : position);
+    if (root.getAttribute("data-full") === "true") {
+      var staleClaim = root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]');
+      if (staleClaim) staleClaim.remove();
+    }
     if (root.getAttribute("data-full") !== "true" && root.getAttribute("data-paused") !== "true" && !root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]')) {
       var claim = document.createElement("button");
       claim.setAttribute("type", "submit");

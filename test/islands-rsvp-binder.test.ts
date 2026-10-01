@@ -172,6 +172,18 @@ describe("RsvpButton shipped binder", () => {
     expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "going" });
   });
 
+  it("removes the old claim when the locked server keeps a claimant waitlisted", async () => {
+    const b = browser("waitlisted"); expect(b.get("waitlist-claim")).not.toBeNull();
+    b.get("waitlist-claim")!.click();
+    b.finish(0, 200, { data: { status: "waitlisted", waitlist_position: 2 } }); await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #2 in line");
+    expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "waitlisted" });
+    b.get("waitlist-leave")!.click(); expect(b.requests[1]!.init.method).toBe("DELETE");
+    b.finish(1, 204); await b.settle();
+    expect(b.get("waitlist-join")).not.toBeNull(); expect(b.get("rsvp-going")).toBeNull();
+  });
+
   it("transitions actual open SSR to a usable waitlist action after a capacity conflict", async () => {
     const b = browser(); expect(b.get("waitlist-join")).toBeNull();
     b.get("rsvp-going")!.click(); b.finish(0, 409, { capacity: 4 }); await b.settle();

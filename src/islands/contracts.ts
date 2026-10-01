@@ -578,10 +578,9 @@ export function shouldRefreshGoing(detailKey: string, islandKey: string): boolea
  * surface: two-web PR #431 (TOG-7297 all-clear) with the clock-ended hole
  * tracked as TOG-7419.
  *
- * Slice state: no binder and no SSR exist yet (TOG-9839, gated on W9 routes
- * TOG-9688). This section is the build-from contract; the drift tests
- * (test/islands-rsvp-button.test.ts) pin it and skip the binder/SSR/server
- * rows with the blocker named.
+ * Slice 2 adds the SSR form and shipped binder. Drift tests execute both.
+ * Writes serialize until the response body settles; an abort cannot undo a
+ * transaction, so repeated activations during saving fire no replacement.
  *
  * NOTE on re-spec §2: it lists PUT statuses as "going / waitlisted / none".
  * Legacy accepts the full RsvpStatus enum and "none" is the withdraw
