@@ -14,7 +14,7 @@ function deferred<T>() {
 }
 
 type ResponseFixture = { ok: boolean; status: number; type?: string; json?: () => Promise<unknown> };
-const success = () => ({ ok: true, status: 200 });
+const success = () => ({ ok: true, status: 200, json: async () => ({ saved: true, message: "Profile saved." }) });
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 // Only the DOM surface used by the shipped binder. Network and reset timers

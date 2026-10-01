@@ -114,17 +114,50 @@
     });
   }
 
+  var SAVE_FAILED_COPY = "Could not save your profile. Your changes are still here — try again.";
+  var GENERIC_INVALID_COPY = "Could not save your profile. Check the form and try again.";
+  var ERROR_BOUND = 500;
+
+  function boundError(text) {
+    var chars = Array.from(String(text));
+    return chars.length > ERROR_BOUND ? chars.slice(0, ERROR_BOUND).join("") : chars.join("");
+  }
+
+  function isSavedAck(j) {
+    return !!j && typeof j === "object" && !Array.isArray(j) && j.saved === true;
+  }
+
+  function validationMessages(j) {
+    var out = [];
+    if (j && typeof j === "object" && !Array.isArray(j)) {
+      var bag = j.errors;
+      if (bag && typeof bag === "object" && !Array.isArray(bag)) {
+        Object.keys(bag).forEach(function (k) {
+          var m = bag[k];
+          if (typeof m === "string" && m.trim() !== "") out.push(boundError(m));
+        });
+      }
+    }
+    return out.length ? out : [GENERIC_INVALID_COPY];
+  }
+
+  function saveFailed() {
+    notice("profile-save-failed", "alert", SAVE_FAILED_COPY);
+  }
+
   function errorList(errors) {
     var old = root.querySelector('[data-testid="profile-error"]');
     if (old) old.remove();
+    var list = Array.isArray(errors) && errors.length ? errors : [GENERIC_INVALID_COPY];
     var alert = document.createElement("div");
     alert.setAttribute("role", "alert");
     alert.setAttribute("tabindex", "-1");
     alert.setAttribute("data-testid", "profile-error");
     var ul = document.createElement("ul");
-    errors.forEach(function (m) {
+    list.forEach(function (m) {
       var li = document.createElement("li");
-      li.textContent = m;
+      // textContent keeps server strings literal; bound above for 422 maps.
+      li.textContent = typeof m === "string" ? boundError(m) : GENERIC_INVALID_COPY;
       ul.appendChild(li);
     });
     alert.appendChild(ul);
@@ -180,25 +213,57 @@
     })
       .then(function (res) {
         if (request !== generation) return;
-        if (res.ok) {
-          accepted(body);
-          notice("profile-saved", "status", "Profile saved.");
+        if (res.status === 422) {
+          var invalid = function (j) {
+            if (request !== generation) return;
+            errorList(validationMessages(j));
+          };
+          var rejected = function () {
+            if (request !== generation) return;
+            errorList([]);
+          };
+          try {
+            var problems = res.json();
+            if (problems && typeof problems.then === "function") return problems.then(invalid, rejected);
+            invalid(problems);
+          } catch (e) {
+            rejected();
+          }
           return;
         }
-        if (res.status === 422) {
-          return res.json().then(function (j) {
+        if (res.ok) {
+          // The save counts only with the server's explicit acknowledgement.
+          // Any other 2xx body keeps the draft and reports a retryable failure.
+          var admit = function (j) {
             if (request !== generation) return;
-            errorList(Object.keys(j.errors || {}).map(function (k) { return j.errors[k]; }));
-          });
+            if (isSavedAck(j)) {
+              accepted(body);
+              notice("profile-saved", "status", "Profile saved.");
+            } else {
+              saveFailed();
+            }
+          };
+          var unproven = function () {
+            if (request !== generation) return;
+            saveFailed();
+          };
+          try {
+            var ack = res.json();
+            if (ack && typeof ack.then === "function") return ack.then(admit, unproven);
+            admit(ack);
+          } catch (e) {
+            unproven();
+          }
+          return;
         }
         if (res.status === 401 || res.status === 419 || res.type === "opaqueredirect" || res.status === 302) {
           return notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
         }
-        notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
+        saveFailed();
       })
       .catch(function () {
         if (request !== generation) return;
-        notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
+        saveFailed();
       })
       .then(function () {
         if (request === generation) inflight = false;
