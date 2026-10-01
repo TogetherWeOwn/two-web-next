@@ -1,5 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
-import { Layout } from "../pages";
+import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
 import {
   CALENDAR_DAY_TESTID,
@@ -125,16 +125,42 @@ const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: 
   </Layout>
 );
 
+const ScheduleShell: FC<PropsWithChildren<{
+  title: string; canonical: string; description?: string; robots?: string; member?: boolean;
+}>> = ({ title, canonical, description, robots, member, children }) => (
+  <Layout title={`${title} — Together We Own`} canonical={canonical} shareDescription={description} robots={robots} theme="home">
+    <SiteHeader active="events">
+      {member ? <a class="btn" href="/discord">Open Discord</a> : undefined}
+    </SiteHeader>
+    <main class="events-page" id="main" tabindex={-1}>{children}</main>
+    <SiteFooter />
+  </Layout>
+);
+
+const ScheduleDate: FC<{ date: Date; zone: string }> = ({ date, zone }) => {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", timeZone: zone }).formatToParts(date);
+  } catch {
+    parts = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", timeZone: "UTC" }).formatToParts(date);
+  }
+  return (
+    <span class="schedule-date" aria-hidden="true">
+      <span>{parts.find((p) => p.type === "month")?.value}</span>
+      <strong>{parts.find((p) => p.type === "day")?.value}</strong>
+    </span>
+  );
+};
+
 const Card: FC<{ e: PublicEvent }> = ({ e }) => (
-  <li data-testid="event-card" data-event-key={e.eventKey}>
-    <h2>
-      <a href={`/e/${e.eventKey}`}>{e.title}</a>
-    </h2>
-    <p>
-      <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
-      {e.game ? ` · ${e.game}` : ""}
-    </p>
-    <p>{goingCountText(e.goingCount, e.capacity)}</p>
+  <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
+    <ScheduleDate date={e.startsAt} zone={e.timezone} />
+    <div class="schedule-info">
+      <h2><a href={`/e/${e.eventKey}`}>{e.title}</a></h2>
+      <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time></p>
+      {e.game ? <p>{e.game}</p> : null}
+    </div>
+    <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
   </li>
 );
 
@@ -163,40 +189,31 @@ const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; i
   const transient = isTransient(e);
   return (
     <li>
-      <article id={`event-${rowKey(e)}`} data-event-key={rowKey(e)} data-testid={EVENT_CARD_TESTID} tabindex={-1}>
-        <h3>{transient ? rowTitle(e) : <a href={`/e/${e.eventKey}`}>{rowTitle(e)}</a>}</h3>
-        {!transient && e.game ? <p>{e.game}</p> : null}
-        {!transient && e.status === "draft" ? <span data-testid={EVENT_DRAFT_TESTID}>Draft</span> : null}
-        {!transient && e.status === "cancelled" ? <span data-testid={EVENT_CANCELLED_TESTID}>Cancelled</span> : null}
-        {!transient ? (
-          <span data-testid="event-going-count">{goingCountText(e.goingCount, e.capacity)}</span>
-        ) : null}
-        <p>
-          <time datetime={e.startsAt.toISOString()}>{cardTimeLabel(e.startsAt, tz)}</time>
-          {e.endsAt ? <>{" · "}<span>{wallTimeHm(e.endsAt, tz)}</span></> : null}
-          {" "}
-          <span>{tz}</span>
-          {rowLocation(e) ? (
-            <>
-              {" · "}
-              <span>{rowLocation(e)}</span>
-            </>
+      <article class="schedule-row" id={`event-${rowKey(e)}`} data-event-key={rowKey(e)} data-testid={EVENT_CARD_TESTID} tabindex={-1}>
+        <ScheduleDate date={e.startsAt} zone={tz} />
+        <div class="schedule-info">
+          <h3>{transient ? rowTitle(e) : <a href={`/e/${e.eventKey}`}>{rowTitle(e)}</a>}</h3>
+          {!transient && e.game ? <p>{e.game}</p> : null}
+          {!transient && e.status === "draft" ? <span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>Draft</span> : null}
+          {!transient && e.status === "cancelled" ? <span class="schedule-badge" data-testid={EVENT_CANCELLED_TESTID}>Cancelled</span> : null}
+          <p>
+            <time datetime={e.startsAt.toISOString()}>{cardTimeLabel(e.startsAt, tz)}</time>
+            {e.endsAt ? <>{" · "}<span>{wallTimeHm(e.endsAt, tz)}</span></> : null}
+            {" "}<span>{tz}</span>
+            {rowLocation(e) ? <>{" · "}<span>{rowLocation(e)}</span></> : null}
+          </p>
+          {e.description ? <p>{e.description}</p> : null}
+        </div>
+        <div class="schedule-actions">
+          {!transient ? (
+            <span class="schedule-attendance" data-testid="event-going-count">{goingCountText(e.goingCount, e.capacity)}</span>
           ) : null}
-        </p>
-        {e.description ? <p>{e.description}</p> : null}
-        {isPast ? null : transient ? (
-          <p>
-            <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>
-              {EVENTS_EMPTY_COPY.discordRsvp}
-            </a>
-          </p>
-        ) : member ? null : (
-          <p>
-            <a href="/auth/discord" data-testid="signin">
-              {EVENTS_EMPTY_COPY.signIn}
-            </a>
-          </p>
-        )}
+          {isPast ? null : transient ? (
+            <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>{EVENTS_EMPTY_COPY.discordRsvp}</a>
+          ) : member ? null : (
+            <a href="/auth/discord" data-testid="signin">{EVENTS_EMPTY_COPY.signIn}</a>
+          )}
+        </div>
       </article>
     </li>
   );
@@ -270,8 +287,8 @@ const MonthGrid: FC<{ state: CalendarState; weeks: CalendarDay<CalRow>[][]; zone
   weeks,
   zone,
 }) => (
-  <div>
-    <p>
+  <div class="schedule-month">
+    <p class="schedule-month-nav">
       <a href={calendarUrl({ ...state, month: addCalendarMonth(state.month, -1) })} aria-label={CALENDAR_PREV_LABEL}>
         ←
       </a>{" "}
@@ -357,7 +374,7 @@ export const EventsCalendarPage: FC<{
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
   return (
-    <Shell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on.">
+    <ScheduleShell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on." member={member}>
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
@@ -367,9 +384,12 @@ export const EventsCalendarPage: FC<{
         data-load-error={EVENTS_CALENDAR_FETCH_FAILED}
         aria-labelledby="events-heading"
       >
-        <h1 id="events-heading" tabindex={-1}>
-          Events
-        </h1>
+        <div class="schedule-heading">
+          <p class="strap">Community schedule</p>
+          <h1 id="events-heading" tabindex={-1}>Events</h1>
+          <p>Game nights, tournaments and whatever else the community puts on.</p>
+          {!member ? <a class="btn" href="/join">Join the Discord</a> : null}
+        </div>
 
         {/* Live regions OUTSIDE the swapped zones (legacy TOG-5416): they must
             announce without being re-created. */}
@@ -387,7 +407,7 @@ export const EventsCalendarPage: FC<{
         </p>
 
         <div data-cal-zone="head">
-          <div role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
+          <div class="schedule-views" role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
             <a
               href={calendarUrl({ ...state, view: "list" })}
               aria-current={state.view === "list" ? "page" : undefined}
@@ -409,7 +429,8 @@ export const EventsCalendarPage: FC<{
             </a>{" "}
             <a href={EVENTS_SUBSCRIBE_URL} data-testid={EVENTS_SUBSCRIBE_TESTID}>
               {EVENTS_EMPTY_COPY.subscribe}
-            </a>
+            </a>{" "}
+            <a href="/events.rss">RSS feed</a>
           </p>
         </div>
 
@@ -428,6 +449,7 @@ export const EventsCalendarPage: FC<{
             aria-label={EVENTS_SEARCH_LABEL}
             data-testid={EVENTS_SEARCH_TESTID}
           />
+          <button class="btn" type="submit">Search</button>
           <span data-cal-zone="actions">
             {searching ? (
               <a href={calendarUrl({ ...state, q: "" })} data-testid={EVENTS_SEARCH_CLEAR_TESTID}>
@@ -492,14 +514,18 @@ export const EventsCalendarPage: FC<{
         <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }} />
       </section>
       <script src="/islands/events-calendar.js" defer />
-    </Shell>
+    </ScheduleShell>
   );
 };
 
 export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string }> = ({ rows, page, hasMore, totalPages, appUrl }) => (
-  <Shell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} robots="noindex, follow">
+  <ScheduleShell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} description="Look back at the community’s game nights and tournaments." robots="noindex, follow">
     <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
-      <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
+      <div class="schedule-heading">
+        <p class="strap">The archive</p>
+        <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
+        <p>Game nights we’ve shared. Find the next one in the upcoming schedule.</p>
+      </div>
       <div data-archive-state>
         {rows.length === 0 ? (
           totalPages === 0 ? (
@@ -523,7 +549,7 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
       <p role="status" data-archive-feedback></p>
     </section>
     <script src="/islands/past-events.js" defer />
-  </Shell>
+  </ScheduleShell>
 );
 
 export const EventPage: FC<{

@@ -9,7 +9,9 @@ import { concretePath, EVENT_KEY, HTML_READS, NON_HTML_READS, pageShellFixture }
 function assertShell(html: string) {
   expect(html.match(/<main\b[^>]*>/g)).toHaveLength(1);
   expect(html.match(/\bid="main"/g)).toHaveLength(1);
-  expect(html).toMatch(/<main id="main" tabindex="-1">/);
+  const main = html.match(/<main\b[^>]*>/)![0];
+  expect(main).toContain('id="main"');
+  expect(main).toContain('tabindex="-1"');
   expect(html.match(/<a\b[^>]*href="#main"[^>]*>/g)).toHaveLength(1);
   // First child of body is stronger than first anchor: no button/input/positive
   // tabindex can silently get ahead of the bypass link.
@@ -49,6 +51,25 @@ describe("every GET HTML route uses an accessible page shell (local fixtures)", 
     expect(response.headers.get("content-type")).toContain("text/html");
     assertShell(await response.text());
   });
+});
+
+it.each(["/events", "/events?view=calendar&month=2030-01", "/events?q=no-such-event", "/events/past"])("%s opts into the shared schedule theme without vendor scripts", async (path) => {
+  const html = await (await pageShellFixture().request(path)).text();
+  assertShell(html);
+  expect(html).toContain('class="homepage-theme"');
+  expect(html).toContain('rel="stylesheet" href="/theme.css"');
+  expect(html).toContain('class="bar site-header"');
+  expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
+  expect(html).toContain('<nav aria-label="Site">');
+  expect(html).toContain('class="schedule-heading"');
+  const script = path === "/events/past" ? "past-events" : "events-calendar";
+  expect(html.match(/<script\b[^>]*>/g)).toEqual([`<script src="/islands/${script}.js" defer="">`]);
+});
+
+it("keeps event detail outside the schedule-only theme", async () => {
+  const html = await (await pageShellFixture().request(`/e/${EVENT_KEY}`)).text();
+  expect(html).not.toContain('href="/theme.css"');
+  expect(html).not.toContain('class="events-page"');
 });
 
 it("renders the join-attempt fixture through the mounted detail route", async () => {

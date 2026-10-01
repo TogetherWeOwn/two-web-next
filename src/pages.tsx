@@ -58,11 +58,28 @@ export const Layout: FC<
   </html>
 );
 
-// The site footer carries the static-leaf links on the funnel + leaf + error
-// shells (home, join, recovery, about/faq/rules/privacy, branded errors —
-// ports the legacy home footer: About, FAQ, House rules, Privacy). Admin,
-// events and profile shells intentionally keep their own chrome. One
-// component so a new leaf cannot ship without a way back to it.
+export const SiteHeader: FC<PropsWithChildren<{ active: "home" | "events" }>> = ({ active, children }) => (
+  <header class="bar site-header">
+    <nav class="main-nav" aria-label="Primary">
+      <a href="/" aria-current={active === "home" ? "page" : undefined}>Home</a>
+      <a href="/events" aria-current={active === "events" ? "page" : undefined}>Events</a>
+    </nav>
+    <a class="brand" href="/" aria-label="Together We Own homepage">
+      <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+    </a>
+    <nav class="header-account" aria-label="Account">
+      {children ?? (
+        <div>
+          <span class="account-caption">Welcome, guest</span>
+          <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+        </div>
+      )}
+    </nav>
+  </header>
+);
+
+// Shared static-leaf links for the funnel, themed schedule, leaf and error shells.
+// Admin, event detail and profile shells retain their own chrome.
 export const SiteFooter: FC = () => (
   <footer>
     Together We Own · adult gaming community · founded 1998
@@ -201,29 +218,15 @@ export const Home: FC<{
     shareDescription="We spent most of our life private. Now you can just turn up."
     theme="home"
   >
-    <header class="bar site-header">
-      <nav class="main-nav" aria-label="Primary">
-        <a href="/" aria-current="page">Home</a>
-        <a href="/events">Events</a>
-      </nav>
-      <a class="brand" href="/" aria-label="Together We Own homepage">
-        <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
-      </a>
-      <nav class="header-account" aria-label="Account">
-        {session ? (
-          <form method="post" action="/logout">
-            <span class="account-caption">Signed in</span>
-            <span class="who">{session.username}</span>
-            <button type="submit" class="link">Sign out</button>
-          </form>
-        ) : (
-          <div>
-            <span class="account-caption">Welcome, guest</span>
-            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
-          </div>
-        )}
-      </nav>
-    </header>
+    <SiteHeader active="home">
+      {session ? (
+        <form method="post" action="/logout">
+          <span class="account-caption">Signed in</span>
+          <span class="who">{session.username}</span>
+          <button type="submit" class="link">Sign out</button>
+        </form>
+      ) : undefined}
+    </SiteHeader>
     <main id="main" tabindex={-1}>
       {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
       <section class="hero" aria-labelledby="home-heading">
