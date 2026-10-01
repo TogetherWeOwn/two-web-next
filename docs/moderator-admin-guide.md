@@ -80,8 +80,8 @@ Double-check the event/slot and intended action before pressing one.
    | Starts / Ends | Required local wall time, `YYYY-MM-DD HH:mm`; end must be after start. |
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
    | Location | Optional, at most 255 characters. |
-   | Capacity | Empty = unlimited; otherwise a positive whole number. |
-   | Repeats (new events only) | **Does not repeat** or **Weekly**. Weekly requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. |
+   | Capacity | Empty = unlimited; otherwise a positive whole number. On edit, it cannot be lower than the current **Going** count; equality is allowed. |
+   | Repeats (new events only) | **Does not repeat** or **Weekly**. Weekly requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. Every series is capped at 52 total occurrences, even with only a Repeat until date. |
 
 3. Press **Create draft**. Creation always starts as `draft`; you cannot publish
    by changing a form field. After creation you land on the edit screen.
@@ -151,8 +151,11 @@ series cancel or repeat-rule editor.
 The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
 **Answered** (UTC), newest responses first. The count includes all answers,
 not only going seats. This is a read-only roster: no adding/removing answers,
-changing seats or exporting members. Read it only for authorized moderation;
-member-data reads are audited and must stop if audit delivery fails.
+changing seats or exporting members. Read it only for authorized moderation.
+Reads of other members are access-logged; empty rosters and self-only reads create
+no access row. Audit-write failures block the response under the default
+fail-closed policy, not every deployment configuration. Stop and escalate any
+reported audit failure; a rendered page is not proof that logging succeeded.
 
 ## Featured content settings and homepage delivery
 
@@ -206,8 +209,13 @@ anonymity. Source is attribution, not authenticated identity. Select an outcome
 link to open `/admin/join-attempts/:id`: it shows **Outcome**, **Source**,
 **Attempted at (UTC)** and **Trace** (**Request ID**, **Discord ID**) as recorded.
 Missing identifiers appear as a dash. Use **Back to join attempts** to return.
-There is no edit, delete, retry or pagination control; detail reads are audited
-and must stop if audit delivery fails.
+There is no edit, delete, retry or pagination control. The list declares recorded
+Discord IDs for access logging; a detail declares a subject only when its Discord
+ID maps to a stored user, regardless of that user's current membership flag.
+Missing/unmapped IDs on a detail, empty lists and self-only reads create no access
+row. Audit-write failures block the response under the default fail-closed policy,
+not every deployment configuration. Stop and escalate any reported audit failure;
+a rendered detail is not proof that an access row was written.
 
 For outcome meanings and safe escalation, use the
 [join troubleshooting guide](troubleshooting-join.md#moderator-diagnostics-and-escalation).
@@ -229,8 +237,12 @@ sections when their data is available:
   The widget query does not itself apply a 90-day cutoff. Treat repeated misses
   as content-planning hints, not promises of demand or a way to identify someone.
 
-A missing section is not proof of zero incidents: missing database configuration
-omits widgets and a failing/slow missed-search query can omit that section.
+A missing section is not proof of zero incidents: a failing/slow optional
+missed-search query can omit that section while the dashboard remains available.
+Missing database configuration is different: normal signed-in session resolution
+and admin access are unavailable, not just the widgets. A signed-session request
+can return 503; guests still go to sign-in. Stop and escalate rather than assuming
+an otherwise usable panel with empty counts.
 There is no activity-log/member-access-log viewer, user editor, role/ban manager
 or join-attempt mutation screen here.
 
@@ -277,7 +289,7 @@ For maintainers checking this guide:
   homepage visibility windows and the accepted image hosts.
 - [Admin guard](../src/admin/guard.ts), [access log](../src/access-log.ts),
   [roles](../src/roles.ts) and [throttling](../src/throttle.ts): permissions,
-  fail-closed member-data reads and request limits.
+  member-data access logging, its default fail-closed policy and request limits.
 - [Event sync](../src/events/sync.ts), [public event reads](../src/events/reads.ts)
   and [RSVP rules](../src/events/rsvp.ts): asynchronous write-back and public behavior.
 - [App routes](../src/index.tsx), [public pages](../src/pages.tsx),

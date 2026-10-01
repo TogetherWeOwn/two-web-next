@@ -101,8 +101,13 @@ The table is not a complete sign-in history: `/auth/discord/callback` does not
 write join-attempt rows, throttled requests do not reach the recorder, and a
 missing join store can leave no row. The current live add-member call also
 leaves Request ID empty; do not promise a trace ID or infer success from an
-absent row. Moderator access to these diagnostics is audited; a 503 on member
-data is a stop condition, not a reason to find another access path.
+absent row. The list declares recorded Discord IDs for access logging; a detail
+logs a subject only when its Discord ID maps to a stored user other than the
+viewer, regardless of current membership. Missing/unmapped detail IDs, empty
+lists and self-only reads create no access row. Audit-write failures block the
+response under the default fail-closed policy, not every deployment configuration.
+A rendered page is not proof of an audit row. Any reported audit failure or 503
+on member data is a stop condition, not a reason to find another access path.
 
 Escalate to the site maintainers/engineering with:
 
