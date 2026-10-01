@@ -38,6 +38,9 @@
 
   async function copy() {
     const mine = ++latest;
+    // Drop the previous owner's feedback even if this attempt remains pending.
+    clearTimeout(timer);
+    toast.textContent = "";
     const text = link.getAttribute("data-copy-link");
     let copied = false;
     try {
@@ -59,7 +62,6 @@
       copied = false;
     }
     if (mine !== latest) return;
-    clearTimeout(timer);
     toast.textContent = copied
       ? "Event link copied."
       : "That link didn't copy — copy it from the address bar.";
