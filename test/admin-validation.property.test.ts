@@ -91,7 +91,7 @@ describe("seeded admin event validation properties", () => {
         expectFieldError(() => wallToUtc(wall, transition.zone), "wall");
         expectFieldError(() => parseEventForm({ ...FORM, timezone: transition.zone, starts_at: wall }, {
           startsAtUtc: "2026-01-01T12:00:00Z",
-        }), "wall");
+        }), "starts_at");
       }), { ...OPTIONS, examples: [[0], [transition.width - 1]] });
     });
 

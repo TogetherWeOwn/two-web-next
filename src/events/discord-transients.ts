@@ -11,6 +11,7 @@
 
 import type { Env } from "../env";
 import type { DiscordTransient } from "../islands/contracts";
+import { admitScheduledEvent, type AdmittedScheduledEvent } from "./discord-transient-shape";
 
 const API = "https://discord.com/api/v10";
 
@@ -30,17 +31,7 @@ export interface DiscordEventsSource {
   lastReadFailed(): boolean;
 }
 
-type GuildScheduledEvent = {
-  id: string;
-  name: string;
-  description?: string | null;
-  scheduled_start_time: string;
-  scheduled_end_time?: string | null;
-  status?: number;
-  entity_metadata?: { location?: string | null } | null;
-};
-
-function toTransient(row: GuildScheduledEvent): DiscordTransient | null {
+function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
   const startsAt = new Date(row.scheduled_start_time);
   if (Number.isNaN(startsAt.getTime())) return null;
   const ends = row.scheduled_end_time == null ? null : new Date(row.scheduled_end_time);
@@ -49,8 +40,8 @@ function toTransient(row: GuildScheduledEvent): DiscordTransient | null {
     discordId: row.id,
     status: row.status === 2 ? "active" : "scheduled",
     title: row.name,
-    description: row.description ?? null,
-    location: row.entity_metadata?.location ?? null,
+    description: row.description,
+    location: row.location,
     startsAt,
     // Preserve no-end voice/stage events; Discord's live status is their boundary.
     endsAt: ends,
@@ -74,7 +65,7 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
       const deadline = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error("DiscordReadDeadline")), DISCORD_READ_DEADLINE_MS);
       });
-      const read = async (): Promise<GuildScheduledEvent[]> => {
+      const read = async (): Promise<unknown> => {
         const res = await fetch(`${API}/guilds/${env.DISCORD_GUILD_ID}/scheduled-events`, {
           headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
           signal: controller.signal,
@@ -96,17 +87,18 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
           if (done) break;
           json += decoder.decode(value, { stream: true });
         }
-        return JSON.parse(json + decoder.decode()) as GuildScheduledEvent[];
+        return JSON.parse(json + decoder.decode()) as unknown;
       };
       try {
-        const rows = await Promise.race([read(), deadline]);
+        const rows: unknown = await Promise.race([read(), deadline]);
         if (!Array.isArray(rows)) {
           failed = true;
           return [];
         }
         const horizon = now.getTime() + HORIZON_MS;
         return rows
-          .filter((r) => LIVE_STATUSES.has(r.status ?? 1) && r.id && r.name)
+          .map(admitScheduledEvent)
+          .filter((r): r is AdmittedScheduledEvent => r !== null && LIVE_STATUSES.has(r.status ?? 1))
           .map(toTransient)
           .filter((t): t is DiscordTransient => t !== null && t.startsAt.getTime() <= horizon);
       } catch {

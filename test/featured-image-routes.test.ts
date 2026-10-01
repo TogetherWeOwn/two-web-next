@@ -1,6 +1,7 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
+import app from "./app";
 import { createFeatured, getFeatured, updateFeatured } from "../src/admin/store";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Db } from "../src/db/index";
@@ -11,6 +12,7 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
   createFeatured: vi.fn(),
   getFeatured: vi.fn(),
   updateFeatured: vi.fn(),
+  recordAccess: vi.fn().mockResolvedValue(true),
 }));
 
 const env: EnvWithAdminDb = {
@@ -32,7 +34,7 @@ const env: EnvWithAdminDb = {
 
 const existing = {
   id: 1, legacyId: null, title: "Featured", body: null, url: null, imageUrl: null, imageAlt: null,
-  isPublished: false, position: 0, startsAt: null, endsAt: null, createdBy: null,
+  isPublished: false, position: 0, startsAt: null, endsAt: null, startsAtText: null, endsAtText: null, createdBy: null,
   createdAt: new Date(0), updatedAt: new Date(0),
 };
 
@@ -56,6 +58,42 @@ async function post(path: string, imageUrl: string, bindings = env) {
     body: new URLSearchParams({ title: "Featured", image_url: imageUrl, image_alt: "Players together" }),
   }, bindings);
 }
+
+describe("featured preview response image policy (local fixtures)", () => {
+  it.each([
+    ["https://cdn.discordapp.com/photo.jpg", "https://cdn.discordapp.com"],
+    ["https://images.unsplash.com/photo.jpg", "https://images.unsplash.com"],
+    ["https://unapproved.com/photo.jpg", null],
+  ])("only emits a CSP-permitted saved image for %s", async (imageUrl, allowedOrigin) => {
+    vi.mocked(getFeatured).mockResolvedValue({ ...existing, isPublished: true, imageUrl, imageAlt: "Players together" });
+    const store = createMemorySessionStore();
+    const token = newSessionToken();
+    await store.create({
+      tokenHash: await hashToken(token), userId: "111", username: "mod", avatar: null,
+      member: true, moderator: true, expiresAt: new Date(Date.now() + 3600_000),
+    });
+    const cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+    const bindings = { ...env, SESSION_STORE: store };
+    for (const [path, init] of [
+      ["/admin/featured/1", { headers: { cookie } }],
+      ["/admin/featured/1", {
+        method: "POST", headers: { cookie, origin: env.APP_URL },
+        body: new URLSearchParams({ title: "", image_url: "https://unapproved.com/bad.jpg" }),
+      }],
+    ] as const) {
+      const res = await app.request(path, init, bindings);
+      expect(res.status).toBe("method" in init ? 422 : 200);
+      const html = await res.text();
+      const csp = res.headers.get("content-security-policy")!;
+      expect(csp).not.toContain("unsafe-inline");
+      if (allowedOrigin) {
+        expect(html).toContain(`src="${imageUrl}"`);
+        const imgSrc = csp.split(";").find((directive) => directive.trim().startsWith("img-src "))!;
+        expect(imgSrc.split(/\s+/)).toContain(allowedOrigin);
+      } else expect(html).not.toContain("<img");
+    }
+  });
+});
 
 describe("featured create/edit image validation (local fixtures)", () => {
   for (const path of ["/featured", "/featured/1"]) {

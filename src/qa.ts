@@ -18,6 +18,10 @@ export const QA_IDENTITIES: Record<string, QaIdentity> = {
   "qa-moderator": { discordId: "900000000000001397", username: "QA Moderator", moderator: true },
 };
 
+export function qaIdentity(name: string): QaIdentity | undefined {
+  return Object.hasOwn(QA_IDENTITIES, name) ? QA_IDENTITIES[name] : undefined;
+}
+
 export const STAGING_APP_URL = "https://next.togetherweown.com";
 
 export function qaEnabled(appUrl: string, qaToken: string | undefined): boolean {

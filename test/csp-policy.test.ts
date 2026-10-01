@@ -22,26 +22,36 @@ function directives(res: Response): Record<string, string> {
 }
 
 describe("route CSP (local fixtures, no DB)", () => {
-  it.each(["GET", "HEAD"])("%s /join permits only the Discord widget origin", async (method) => {
-    const res = await app.request("/join?next=/events", { method }, env);
-    expect(res.status).toBe(200);
-    const csp = directives(res);
-    expect(csp["frame-src"]).toBe("https://discord.com");
-    expect(csp["default-src"]).toBe("'self'");
-    expect(csp["script-src"]).toBe("'self'");
-    expect(csp["style-src"]).toBe("'self'");
-    expect(csp["frame-ancestors"]).toBe("'none'");
-    expect(res.headers.get("x-frame-options")).toBe("DENY");
-    if (method === "GET") expect(await res.text()).toContain("https://discord.com/widget?id=");
+  it.each(["GET", "HEAD"])("%s join permits only the Discord widget path", async (method) => {
+    for (const path of ["/join", "/join?next=/events"]) {
+      const res = await app.request(path, { method }, env);
+      expect(res.status).toBe(200);
+      const csp = directives(res);
+      expect(csp["frame-src"]).toBe("https://discord.com/widget");
+      expect(csp["default-src"]).toBe("'self'");
+      expect(csp["script-src"]).toBe("'self'");
+      expect(csp["style-src"]).toBe("'self'");
+      expect(csp["font-src"]).toBe("'self'");
+      expect(csp["frame-ancestors"]).toBe("'none'");
+      expect(res.headers.get("x-frame-options")).toBe("DENY");
+      if (method === "GET") expect(await res.text()).toContain("https://discord.com/widget?id=");
+    }
   });
 
-  it.each(["/", "/about", "/faq", "/privacy", "/join/discord", "/join/callback", "/join/recovery", "/join/", "/JOIN", "/admin", "/profile", "/missing"])("%s does not gain iframe permission", async (path) => {
+  it.each(["GET", "HEAD"])("%s homepage cannot embed Discord", async (method) => {
+    const res = await app.request("/", { method }, env);
+    expect(res.status).toBe(200);
+    expect(directives(res)["frame-src"]).toBe("'none'");
+    if (method === "GET") expect(await res.text()).not.toContain("<iframe");
+  });
+
+  it.each(["/about", "/faq", "/privacy", "/join/discord", "/join/callback", "/join/recovery", "/join/", "/JOIN", "/admin", "/profile", "/missing"])("%s does not gain iframe permission", async (path) => {
     const res = await app.request(path, {}, env);
     expect(directives(res)["frame-src"]).toBe("'none'");
   });
 
-  it("POST /join cannot gain the page's frame permission", async () => {
-    const res = await app.request("/join", { method: "POST" }, env);
+  it.each(["/", "/join"])("POST %s cannot gain the page's frame permission", async (path) => {
+    const res = await app.request(path, { method: "POST" }, env);
     expect(directives(res)["frame-src"]).toBe("'none'");
   });
 

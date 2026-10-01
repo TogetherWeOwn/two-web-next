@@ -196,7 +196,7 @@ describe("Discord transient end-to-end deadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(["{", "{}", "null", "[null]"])("retains failure semantics for malformed payload %s", async (body) => {
+  it.each(["{", "{}", "null"])("retains failure semantics for malformed payload %s", async (body) => {
     const response = new Response(body);
     const fetchMock = mockFetch(response);
     const source = liveDiscordEventsSource(env);
@@ -204,6 +204,14 @@ describe("Discord transient end-to-end deadline", () => {
     expect(source.lastReadFailed()).toBe(true);
     expect(response.body!.locked).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a malformed row alone without flagging a read failure", async () => {
+    const fetchMock = mockFetch(new Response("[null]"));
+    const source = liveDiscordEventsSource(env);
+    expect(await source.upcoming(now)).toEqual([]);
+    expect(source.lastReadFailed()).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
