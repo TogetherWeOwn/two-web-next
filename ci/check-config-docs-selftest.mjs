@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -116,6 +116,98 @@ test("does not interpret JSON var data or deployment metadata as declarations", 
   })), set("DATA", "OTHER_DATA"));
 });
 
+async function withLocalProxy(create, use, remove = rmSync) {
+  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "config-local-"));
+  const errors = [];
+  let proxy;
+  try {
+    proxy = await create(dir);
+    await use(proxy);
+  } catch (error) {
+    errors.push(error);
+  } finally {
+    try {
+      await proxy?.dispose();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      remove(dir, { recursive: true, force: true });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 1) throw new AggregateError(errors, "Local config test teardown failed");
+  if (errors.length) throw errors[0];
+}
+
+test("local proxy scratch is removed on success after disposal", async () => {
+  let owned;
+  let disposed = false;
+  await withLocalProxy((dir) => {
+    owned = dir;
+    writeFileSync(join(dir, "fixture"), "offline");
+    return { dispose: async () => {
+      assert.ok(existsSync(dir));
+      disposed = true;
+    } };
+  }, () => {});
+  assert.equal(disposed, true);
+  assert.equal(existsSync(owned), false);
+});
+
+test("local proxy scratch is removed after fixture or startup failure", async () => {
+  const failure = new Error("fixture/startup failed");
+  let owned;
+  await assert.rejects(withLocalProxy((dir) => {
+    owned = dir;
+    writeFileSync(join(dir, "fixture"), "offline");
+    throw failure;
+  }, () => assert.fail("must not use a missing proxy")), (error) => error === failure);
+  assert.equal(existsSync(owned), false);
+});
+
+test("local proxy scratch is removed and proxy disposed after assertion failure", async () => {
+  let owned;
+  let disposed = false;
+  await assert.rejects(withLocalProxy((dir) => {
+    owned = dir;
+    return { dispose: async () => { disposed = true; } };
+  }, () => assert.fail("original assertion")), /original assertion/);
+  assert.equal(disposed, true);
+  assert.equal(existsSync(owned), false);
+});
+
+test("local proxy scratch is removed even when disposal rejects", async () => {
+  const failure = new Error("dispose rejected");
+  let owned;
+  await assert.rejects(withLocalProxy((dir) => {
+    owned = dir;
+    writeFileSync(join(dir, "fixture"), "offline");
+    return { dispose: async () => { throw failure; } };
+  }, () => {}), (error) => error === failure);
+  assert.equal(existsSync(owned), false);
+});
+
+test("local proxy teardown preserves assertion, disposal and removal failures", async () => {
+  const assertionFailure = new Error("original assertion");
+  const disposeFailure = new Error("dispose rejected");
+  const removeFailure = new Error("remove failed");
+  let owned;
+  await assert.rejects(withLocalProxy((dir) => {
+    owned = dir;
+    return { dispose: async () => { throw disposeFailure; } };
+  }, () => { throw assertionFailure; }, (dir, options) => {
+    rmSync(dir, options);
+    throw removeFailure;
+  }), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [assertionFailure, disposeFailure, removeFailure]);
+    return true;
+  });
+  assert.equal(existsSync(owned), false);
+});
+
 test("local config starts with the passwordless test URL and no Hyperdrive", async () => {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const config = readWranglerConfig(readFileSync(join(root, "wrangler.local.jsonc"), "utf8"));
@@ -128,26 +220,22 @@ test("local config starts with the passwordless test URL and no Hyperdrive", asy
     assert.ok(entry.queue.endsWith("-local"));
     assert.notEqual(entry.remote, true);
   }
-  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "config-local-"));
-  let proxy;
-  try {
+  const url = "postgres://agent_test@agent-testdb:5432/two_web_next";
+  await withLocalProxy(async (dir) => {
     // Scratch .dev.vars is test-only; never load the workspace's auth secrets.
     config.main = resolve(root, config.main);
     config.assets.directory = resolve(root, config.assets.directory);
     writeFileSync(join(dir, "wrangler.json"), JSON.stringify(config));
-    const url = "postgres://agent_test@agent-testdb:5432/two_web_next";
     writeFileSync(join(dir, ".dev.vars"), `DATABASE_URL=${url}\n`);
     // https://developers.cloudflare.com/workers/wrangler/api/#getplatformproxy
-    proxy = await getPlatformProxy({ configPath: join(dir, "wrangler.json"), persist: false });
+    return getPlatformProxy({ configPath: join(dir, "wrangler.json"), persist: false });
+  }, (proxy) => {
     assert.equal(proxy.env.DATABASE_URL, url);
     assert.equal(proxy.env.DB, undefined);
     assert.equal(proxy.env.HYPERDRIVE, undefined);
     assert.equal(typeof proxy.env.SYNC_EVENT_QUEUE.send, "function");
     assert.equal(typeof proxy.env.INTERNAL_ACTION_QUEUE.send, "function");
-  } finally {
-    await proxy?.dispose();
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test("requires inventory rows, not incidental mentions in prose", () => {
