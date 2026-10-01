@@ -24,6 +24,7 @@ function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknown> {
     description: "A local-only community game night used to measure the real event page.",
     startsAt, endsAt: new Date(startsAt.getTime() + 7200_000), timezone: "Europe/London",
     location: "Community voice channel", capacity: 20, status: "published", discordEventId: null,
+    discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
     createdAt: startsAt, updatedAt: startsAt,
