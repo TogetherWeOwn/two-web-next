@@ -106,14 +106,16 @@ export interface PruneStores {
   sessions: SessionSweeper;
 }
 
-/** ShouldBeUnique: acquire returns false while another holder's lock is live. */
+/** ShouldBeUnique: acquire returns an ownership token, or null while a holder's lock is live. */
 export interface UniqueLock {
-  acquire(key: string, ttlSeconds: number): Promise<boolean>;
-  release(key: string): Promise<void>;
+  acquire(key: string, ttlSeconds: number): Promise<string | null>;
+  /** Compare-and-delete: an expired carrier cannot release a successor's lease. */
+  release(key: string, leaseToken: string): Promise<void>;
 }
 
 export type QueueMessage =
-  | { kind: "sync-event"; eventKey: string; idempotencyKey: string; jobId?: string }
+  // Optional only for pre-fencing messages: those finish without releasing a lock (TTL recovers it).
+  | { kind: "sync-event"; eventKey: string; idempotencyKey: string; leaseToken?: string; jobId?: string }
   | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
   | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string };
 

@@ -6,6 +6,8 @@ export type Outcome = { done: true } | { retryInSeconds: number } | { failed: st
 
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
+const LOCK_TIMEOUT_MS = 2000;
+
 /** Producer: idempotency key minted once, here (the constructor in Laravel), and carried on every retry. */
 export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },
@@ -16,16 +18,25 @@ export async function dispatchSyncEvent(
 ): Promise<boolean> {
   signal?.throwIfAborted();
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
-  if (!(await lock.acquire(uniqueKey(eventKey), SYNC_EVENT.uniqueForSeconds))) return false;
+  const key = uniqueKey(eventKey);
+  const leaseToken = await lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+  if (!leaseToken) return false;
   try {
     signal?.throwIfAborted();
     await queue.send(
-      { kind: "sync-event", eventKey, idempotencyKey },
+      { kind: "sync-event", eventKey, idempotencyKey, leaseToken },
       { delaySeconds: SYNC_EVENT.debounceSeconds },
     );
   } catch (err) {
-    // No accepted message owns this lock. Allow the next edit/reconcile to retry.
-    await lock.release(uniqueKey(eventKey)).catch(() => {});
+    // Failed send: compensate only this acquisition, never a newer holder.
+    // Like terminal cleanup, a wedged DELETE must not hold dispatch hostage.
+    // TTL recovers a stuck lease; a late DELETE remains fenced by this token.
+    let t: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<void>((resolve) => { t = setTimeout(resolve, LOCK_TIMEOUT_MS); });
+    await Promise.race([
+      Promise.resolve().then(() => lock.release(key, leaseToken)).catch(() => {}),
+      timeout,
+    ]).finally(() => clearTimeout(t));
     throw err;
   }
   return true;

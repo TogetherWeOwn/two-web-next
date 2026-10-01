@@ -84,7 +84,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv, ct
     };
     const successorLock: UniqueLock = {
       acquire: (key, ttl) => successorSql(env, (sql) => pgUniqueLock(sql).acquire(key, ttl)),
-      release: (key) => successorSql(env, (sql) => pgUniqueLock(sql).release(key)),
+      release: (key, leaseToken) => successorSql(env, (sql) => pgUniqueLock(sql).release(key, leaseToken)),
     };
     await consume(batch, { bot, events: pgEventStore(sql), lock: pgUniqueLock(cleanupSql), ledger,
       needsSync: pgEventStore(cleanupSql).needsSync,
