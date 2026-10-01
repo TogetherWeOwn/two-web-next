@@ -320,10 +320,17 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   // The show-window is UTC on both sides (legacy labels it "(UTC)").
   for (const [raw, key] of [[startsRaw, "starts_at"], [endsRaw, "ends_at"]] as const) {
     if (raw !== null) {
-      const wall = parseWall(raw);
-      if (!wall) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm, UTC).";
-      else if (key === "starts_at") startsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
-      else endsAtUtc = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi));
+      // Featured windows support the stored precision; event wall times still speak minutes.
+      const match = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(raw);
+      const wall = match && parseWall(match[1]!);
+      const seconds = Number(match?.[2] ?? 0);
+      const milliseconds = Number((match?.[3] ?? "").padEnd(3, "0"));
+      if (!wall || seconds > 59) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm[:ss[.SSS]], UTC).";
+      else {
+        const instant = new Date(Date.UTC(wall.y, wall.mo - 1, wall.d, wall.h, wall.mi, seconds, milliseconds));
+        if (key === "starts_at") startsAtUtc = instant;
+        else endsAtUtc = instant;
+      }
     }
   }
   if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The window ends after it starts.";

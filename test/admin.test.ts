@@ -337,8 +337,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(editHtml).toContain(`name="image_alt" type="text" value="${fields.image_alt}"`);
     expect(editHtml).toMatch(/name="is_published"[^>]*checked/);
     expect(editHtml).toContain('name="position" type="text" inputmode="numeric" value="2"');
-    expect(editHtml).toContain(`name="starts_at" type="text" value="${fields.starts_at}"`);
-    expect(editHtml).toContain(`name="ends_at" type="text" value="${fields.ends_at}"`);
+    expect(editHtml).toContain(`name="starts_at" type="text" value="${fields.starts_at}:00.000"`);
+    expect(editHtml).toContain(`name="ends_at" type="text" value="${fields.ends_at}:00.000"`);
     expect(await db.select().from(activityLog)).toEqual(auditsBeforeReads);
     expect(dispatchWriteBack).not.toHaveBeenCalled();
   });

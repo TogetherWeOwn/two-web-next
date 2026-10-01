@@ -455,8 +455,7 @@ function eventValues(row: EventRow): Record<string, unknown> {
 }
 
 function featuredValues(row: FeaturedRow): Record<string, unknown> {
-  const wall = (d: Date | null) =>
-    d === null ? "" : `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  const wall = (d: Date | null) => d === null ? "" : d.toISOString().slice(0, -1).replace("T", " ");
   return {
     title: row.title,
     body: row.body ?? "",
@@ -468,10 +467,6 @@ function featuredValues(row: FeaturedRow): Record<string, unknown> {
     starts_at: wall(row.startsAt),
     ends_at: wall(row.endsAt),
   };
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
 }
 
 export { SESSION_GUEST_REDIRECT };
