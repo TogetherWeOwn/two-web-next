@@ -32,3 +32,11 @@ export function requireRemoteReceipt(r: RemoteReceipt, now = Date.now()) {
     throw new Error("remote_staging_target_not_verified");
   }
 }
+
+export const REFUSAL_REASONS = [
+  "receipt_unparseable", "receipt_not_object", "receipt_stale_or_unparseable_time", "receipt_target_mismatch",
+  "binding_missing_or_not_hyperdrive", "binding_host_missing", "binding_host_direct_or_local",
+  "binding_database_mismatch", "binding_user_mismatch", "binding_password_missing", "binding_port_invalid",
+  "preflight_internal_error",
+] as const;
+

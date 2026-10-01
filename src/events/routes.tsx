@@ -6,12 +6,15 @@ import type { Context, Hono, MiddlewareHandler } from "hono";
 import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
-import { memberAccessLog } from "../access-log";
+import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
+import { notFoundSuggestions } from "./suggestions";
 import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
+import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
-import { rateLimitExceeded } from "../errors";
+import { NotFoundPage, rateLimitExceeded } from "../errors";
+import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
@@ -151,7 +154,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // this month. An unparseable month is a page, never a 500.
     const month =
       parseCalendarMonth(c.req.query("month")) ??
-      (upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
+      parseCalendarMonth(upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
       currentCalendarMonth(now);
 
     const state = { view, month, q, past };
@@ -177,10 +180,29 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       }
     }
 
+    // One-shot join confirmation (legacy join_result flash): /events is a
+    // join-CTA landing (`/join?next=/events`), so it consumes and renders the
+    // banner exactly once like /, /join, /profile and /e/:key (TOG-10356
+    // review). Island fragment swaps must not consume it: the banner renders
+    // outside the swapped zones, so a fragment would eat the flash without
+    // ever displaying it — the pending value survives for the next full load.
+    const island = c.req.header("x-two-island") === "events-calendar";
+    const joinResult = island ? null : await takeJoinResult(c);
     // Search analytics must run per request, not only on shared-cache misses.
-    c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
+    c.header("cache-control", session || searching || joinResult ? "private, no-store" : "public, max-age=60");
     if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
+    // Guest sign-in links carry this page as ?next= so the OAuth round trip
+    // lands back here (TOG-10356). Rooted pathname + search only — the
+    // journey guard re-validates before any redirect, so a hostile query can
+    // at worst fall back to the default landing, never off-app.
+    let loginReturnTo: string | null = null;
+    try {
+      const u = new URL(c.req.url);
+      loginReturnTo = u.pathname + u.search;
+    } catch {
+      loginReturnTo = "/events";
+    }
     return c.html(
       <EventsCalendarPage
         state={state}
@@ -191,8 +213,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         emptyState={emptyState}
         discordFailed={discordFailed}
         member={session?.member ?? false}
-        inviteUrl={c.env.DISCORD_INVITE_URL}
+        inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
         appUrl={c.env.APP_URL}
+        loginReturnTo={loginReturnTo}
+        joinResult={joinResult}
       />,
     );
   });
@@ -233,7 +257,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published"]);
     const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
-    return feedResponse(c, eventsRss(rows, c.env.APP_URL, rows.length ? built : new Date()), {
+    return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
     });
@@ -269,39 +293,49 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     });
   });
 
-  app.get("/e/:key", memberAccessLog(async (c) => {
-    const db = await dbFor(c);
-    return db ? (entry) => recordAccess(db, entry) : null;
-  }), async (c) => {
-    const key = c.req.param("key") ?? "";
-    if (!KEY_RE.test(key)) return c.notFound();
-    const db = await dbFor(c);
-    if (!db) return c.text("Events temporarily unavailable", 503);
-    const e = await getPublicEvent(db, key);
-    if (!e) return c.notFound();
-    if (e.status === "cancelled") {
-      c.header("x-robots-tag", "noindex, nofollow");
-      return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
-    }
-    // The guest join pitch and waitlist position depend on the viewer; never share-cache this HTML.
-    c.header("cache-control", "private, no-store");
+  app.get("/e/:key", async (c) => {
+    let viewer: string | null = null;
+    // Observe the entire existing handler, not only the attendee helper. An
+    // anonymous viewer can release classified public records, never member keys.
     c.header("vary", "Cookie");
-    // The injected reader uses only bindings/cookies; this route additionally
-    // carries the access middleware's request-local variables.
-    const session = await readSession(c as unknown as Ctx);
-    if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
-    if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
-    const [neighbors, related, attendees, position] = await Promise.all([
-      getEventNeighbors(db, e),
-      listRelatedEvents(db, e),
-      session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
-      session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
-    ]);
-    if (attendees.length > 0 && session) {
-      c.set("viewerId", session.id);
-      c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
-    }
-    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
+    await memberReadBoundary(c, () => ({ viewer, resource: "member", action: "list", route: "events.page" }), async (entry) => {
+      const db = await dbFor(c);
+      if (!db) throw new Error("Event audit database unavailable");
+      return recordAccess(db, entry);
+    }, async () => {
+      const notFound = async () => {
+        c.header("x-robots-tag", "noindex, nofollow");
+        return bufferedMemberHtml(c, <NotFoundPage suggestions={await notFoundSuggestions(c.env)} />, 404);
+      };
+      const render = async () => {
+        const key = c.req.param("key") ?? "";
+        if (!KEY_RE.test(key)) return notFound();
+        const db = await dbFor(c);
+        if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
+        const e = await getPublicEvent(db, key);
+        if (!e) return notFound();
+        if (e.status === "cancelled") {
+          c.header("x-robots-tag", "noindex, nofollow");
+          return bufferedMemberHtml(c, <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
+        }
+        const session = await readSession(c);
+        viewer = session?.id ?? null;
+        if (e.status === "draft" && !session?.moderator) return bufferedMemberText(c, "Forbidden", 403);
+        if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
+        const joinResult = await readJoinResult(c);
+        const [neighbors, related, attendees, position] = await Promise.all([
+          getEventNeighbors(db, e),
+          listRelatedEvents(db, e),
+          session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+          session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+        ]);
+        return bufferedMemberHtml(c, <EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
+      };
+      await render();
+    });
+    // Consume only after the keyed boundary allows a visible response.
+    if (c.res.status === 200) await takeJoinResult(c);
+    return c.res;
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------

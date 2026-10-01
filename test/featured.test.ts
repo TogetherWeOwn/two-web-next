@@ -38,7 +38,8 @@ describe("featured homepage fallback (local fixtures)", () => {
   it("a database read failure omits the section, keeps the funnel and strict CSP", async () => {
     // Real Drizzle query construction with a local failing transport: no connection.
     const db = drizzle.mock();
-    vi.spyOn(db, "select").mockImplementation(() => { throw new Error("database unavailable"); });
+    const session = Reflect.get(db, "session") as { prepareQuery: () => unknown };
+    vi.spyOn(session, "prepareQuery").mockImplementation(() => { throw new Error("database unavailable"); });
     const res = await app.request("/", {}, { ...env, ADMIN_DB: db } as Env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -54,7 +55,8 @@ describe("featured homepage fallback (local fixtures)", () => {
     const db = drizzle.mock();
     let rejectRead!: (error: Error) => void;
     vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]); // only featured stalls in this test
-    const transaction = vi.spyOn(db, "transaction").mockImplementation(() => new Promise((_, reject) => { rejectRead = reject; }));
+    const session = Reflect.get(db, "session") as { transaction: () => Promise<unknown> };
+    const transaction = vi.spyOn(session, "transaction").mockImplementation(() => new Promise((_, reject) => { rejectRead = reject; }));
     vi.useFakeTimers();
     try {
       const response = app.request("/", {}, { ...env, ADMIN_DB: db } as Env);

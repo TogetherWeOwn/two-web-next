@@ -3,8 +3,10 @@ import type { Counts, Rank } from "./counts";
 import type { VisibleFeatured } from "./featured";
 import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
+import type { JoinResult } from "./return-journey";
 import type { HomeEvent } from "./events/reads";
 import { cardTimeLabel, isValidZone } from "./islands/contracts";
+import { inviteDestination } from "./invite";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
@@ -40,7 +42,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home";
+    theme?: "home" | "profile";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -69,14 +71,15 @@ export const Layout: FC<
       ) : null}
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
-      {theme === "home" ? (
+      {theme ? (
         <>
           <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
           <link rel="stylesheet" href="/theme.css" />
+          {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
         </>
       ) : null}
     </head>
-    <body class={theme === "home" ? "homepage-theme" : undefined}><SkipLink />{children}</body>
+    <body class={theme === "home" ? "homepage-theme" : theme === "profile" ? "profile-theme" : undefined}><SkipLink />{children}</body>
   </html>
 );
 
@@ -93,6 +96,64 @@ export const SiteFooter: FC = () => (
       <a href="/privacy">Privacy</a>
     </nav>
   </footer>
+);
+
+type HeaderCta = { href: string; label: string };
+
+export const SiteHeader: FC<{
+  session?: Session | null;
+  home?: boolean;
+  cta?: HeaderCta;
+}> = ({ session, home, cta = { href: "/auth/discord", label: "Sign in with Discord" } }) => (
+  <header class="bar site-header">
+    <nav class="main-nav" aria-label="Primary">
+      <a href="/" aria-current={home ? "page" : undefined}>Home</a>
+      <a href="/events">Events</a>
+    </nav>
+    <a class="brand" href="/" aria-label="Together We Own homepage">
+      <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+    </a>
+    <nav class="header-account" aria-label="Account">
+      {session ? (
+        <form method="post" action="/logout">
+          <span class="account-caption">Signed in</span>
+          <span class="who">{session.username}</span>
+          <button type="submit" class="link">Sign out</button>
+        </form>
+      ) : (
+        <div>
+          <span class="account-caption">Welcome, guest</span>
+          <a class="btn" href={cta.href} data-testid="signin">{cta.label}</a>
+        </div>
+      )}
+    </nav>
+  </header>
+);
+
+// Presentational only: error and OAuth recovery routes must not read sessions
+// or require a database just to render a way back into the community.
+export const RecoveryShell: FC<PropsWithChildren<{
+  title: string;
+  headingId: string;
+  code?: string;
+  robots?: string;
+  headerCta?: HeaderCta;
+  supportingContent?: PropsWithChildren["children"];
+}>> = ({ title, headingId, code, robots, headerCta, supportingContent, children }) => (
+  <Layout title={`${title} — Together We Own`} robots={robots} theme="home">
+    <SiteHeader cta={headerCta} />
+    <main id="main" tabindex={-1}>
+      <section class="hero recovery-hero" aria-labelledby={headingId}>
+        <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
+        {code ? <p class="recovery-code" aria-hidden="true">{code}</p> : <p class="strap">Let&apos;s get you back to the lobby</p>}
+        <h1 id={headingId}>{title}</h1>
+        {children}
+      </section>
+      {supportingContent}
+    </main>
+    <SiteFooter />
+  </Layout>
 );
 
 export type Notice =
@@ -120,15 +181,36 @@ const NOTICES: Record<Exclude<Notice, null>, string> = {
 
 const JOIN_HREF = "/join";
 
+// One-shot join confirmation (legacy join_result flash → data-testid="join-result",
+// JoinResultCopyTest/AlreadyMemberReinviteTest). A member who was already in the
+// guild gets the reinvite action — /discord resolves to the live invite — never
+// the bare homepage "Open Discord".
+export const JoinResultBanner: FC<{ result: JoinResult }> = ({ result }) => (
+  <p class="notice" role="status" data-testid="join-result">
+    {result === "added" ? (
+      <>You are in. Finish Discord's rules screening before you can post.</>
+    ) : (
+      <>
+        You are already in the server.{" "}
+        <a href="/discord" data-testid="reinvite-link">
+          Rejoin with the Discord invite
+        </a>
+      </>
+    )}
+  </p>
+);
+
 // Join carries the same share tags as home (TOG-5624): the funnel lives on
 // shared links. The intro doubles as the share description, same as legacy.
 export const JOIN_INTRO = "Approve once with Discord and we will add you to the server.";
 
-export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string }> = ({
+export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string; joinResult?: JoinResult | null }> = ({
   inviteUrl,
   widgetUrl,
   next,
   appUrl,
+  joinResult,
+
 }) => (
   <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
     <header class="bar">
@@ -138,6 +220,7 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
       </nav>
     </header>
     <main id="main" tabindex={-1}>
+      {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <section aria-labelledby="join-heading">
         <h1 id="join-heading">Join Together We Own</h1>
         <p class="lead">{JOIN_INTRO}</p>
@@ -181,25 +264,13 @@ export const Recovery: FC<{
   retryLabel: string;
   inviteUrl: string;
 }> = ({ title, message, retryUrl, retryLabel, inviteUrl }) => (
-  <Layout title={`${title} — Together We Own`}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="btn" href="/join">Join with Discord</a>
-      </nav>
-    </header>
-    <main id="main" tabindex={-1}>
-      <section aria-labelledby="recovery-heading">
-        <h1 id="recovery-heading">{title}</h1>
-        <p class="lead">{message}</p>
-        <p>
-          <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
-          <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
-        </p>
-      </section>
-    </main>
-    <SiteFooter />
-  </Layout>
+  <RecoveryShell title={title} headingId="recovery-heading" headerCta={{ href: "/join", label: "Join with Discord" }}>
+    <p class="lead">{message}</p>
+    <p class="recovery-actions">
+      <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
+      <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
+    </p>
+  </RecoveryShell>
 );
 
 const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map((label) => ({
@@ -209,6 +280,7 @@ const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Leg
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
+  joinResult?: JoinResult | null;
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
@@ -216,38 +288,28 @@ export const Home: FC<{
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
   imageHosts?: string;
-}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
+}> = ({ session, notice, joinResult, inviteUrl: configuredInviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => {
+  const inviteUrl = inviteDestination(configuredInviteUrl);
+  return (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
     shareDescription="We spent most of our life private. Now you can just turn up."
     theme="home"
   >
-    <header class="bar site-header">
-      <nav class="main-nav" aria-label="Primary">
-        <a href="/" aria-current="page">Home</a>
-        <a href="/events">Events</a>
-      </nav>
-      <a class="brand" href="/" aria-label="Together We Own homepage">
-        <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
-      </a>
-      <nav class="header-account" aria-label="Account">
-        {session ? (
-          <form method="post" action="/logout">
-            <span class="account-caption">Signed in</span>
-            <span class="who">{session.username}</span>
-            <button type="submit" class="link">Sign out</button>
-          </form>
-        ) : (
-          <div>
-            <span class="account-caption">Welcome, guest</span>
-            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
-          </div>
-        )}
-      </nav>
-    </header>
+    <SiteHeader session={session} home />
     <main id="main" tabindex={-1}>
-      {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
+      {/*
+        The flashed join confirmation takes the notice slot: both carry the same
+        event, and the banner is the richer of the two (reinvite action, exact
+        confirmation copy). A bare ?n= still renders its notice when no flash is
+        pending.
+      */}
+      {joinResult ? (
+        <JoinResultBanner result={joinResult} />
+      ) : (
+        notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>
+      )}
       <section class="hero" aria-labelledby="home-heading">
         <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -340,7 +402,8 @@ export const Home: FC<{
     </main>
     <SiteFooter />
   </Layout>
-);
+  );
+};
 
 const Leaf: FC<PropsWithChildren<{ title: string; canonical: string; headingId: string; heading: string }>> = ({
   title,
