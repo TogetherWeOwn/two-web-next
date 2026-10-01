@@ -12,9 +12,10 @@ Supply `LEGACY_DATABASE_URL` and `DATABASE_URL` through the operator's approved
 environment/secret injection. Do not put connection strings on the command line,
 in shell history, or in reports. The source connection must select the legacy
 schema through its search path; the destination must select the migrated Next
-schema. The script never changes either search path. Username, database, password
-and port come from each URL, not inherited `PG*` defaults. An omitted URL port
-is pinned to 5432; an explicit nonzero URL port is honored.
+schema. The script never changes either search path. Host, username, database,
+password and port come from each URL, not inherited `PG*` defaults. IPv6 brackets
+are removed before handing the hostname to the driver. An omitted URL port is
+pinned to 5432; an explicit nonzero URL port is honored.
 
 ```sh
 node bin/import/events-rsvps.mjs             # default: read-only dry run
@@ -38,9 +39,9 @@ validation error, not a reason to overwrite source identity.
 Waitlist ordering consumers must use `ORDER BY created_at, COALESCE(legacy_id, id), id`,
 not destination ID alone. This preserves the source equal-time FIFO relation;
 mixed native/imported ties are deterministic but do not represent historical
-ordering between independent ID namespaces. Next has no automatic promotion
-implementation yet; this importer preserves its necessary ordering data, not a
-promotion service.
+ordering between independent ID namespaces. Next's waitlist ranking, row locks
+and automatic promotion use that same ordering key. The importer itself never
+promotes answers or sends Discord sync jobs.
 
 Imported content and timestamps replace the same fields on matching rows;
 unchanged rows are not rewritten. Re-runs preserve destination row IDs. No rows

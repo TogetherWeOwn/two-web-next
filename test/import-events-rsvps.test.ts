@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createImportFixtureClients } from "./helpers/import-events-rsvps-db";
 // Standalone operator scripts intentionally run directly under Node, not the TS app.
 // @ts-expect-error standalone mjs has no type declarations
 import { connectDatabase, main, parentFirst, parseArgs, reportExitCode } from "../bin/import/events-rsvps.mjs";
@@ -46,6 +47,43 @@ describe("legacy events import controls", () => {
       expect(client.options.port).toEqual([port]);
     } finally {
       await client?.end({ timeout: 2 });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    ["postgres://operator@[::1]:5432/database", "::1"],
+    ["postgres://operator@[2001:db8::1]:15432/database", "2001:db8::1"],
+    ["postgres://operator@synthetic.invalid/database", "synthetic.invalid"],
+    ["postgres://operator@127.0.0.1/database", "127.0.0.1"],
+  ])("pins the parsed hostname without connecting: %s", async (url, host) => {
+    vi.stubEnv("PGHOST", "inherited.invalid");
+    let client;
+    try {
+      client = connectDatabase(url);
+      expect(client.options.host).toEqual([host]);
+    } finally {
+      await client?.end({ timeout: 2 });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    "postgres://agent_test@agent-testdb/two_web_next",
+    "postgres://agent_test@agent-testdb:5432/two_web_next",
+  ])("pins both raw fixture clients to the authorized port without connecting: %s", async (url) => {
+    vi.stubEnv("PGPORT", "6432");
+    let clients;
+    try {
+      clients = createImportFixtureClients(url, "synthetic_legacy", "synthetic_target");
+      for (const client of Object.values(clients)) {
+        expect(client.options.port).toEqual([5432]);
+        expect(client.options.host).toEqual(["agent-testdb"]);
+      }
+      expect(clients.legacy.options.connection.search_path).toBe("synthetic_legacy");
+      expect(clients.target.options.connection.search_path).toBe("synthetic_target");
+    } finally {
+      await Promise.all(Object.values(clients ?? {}).map((client) => client.end({ timeout: 2 })));
       vi.unstubAllEnvs();
     }
   });

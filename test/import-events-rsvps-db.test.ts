@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
+import { eq } from "drizzle-orm";
+import { events } from "../src/db/admin-schema";
+import { lockWaitlist, promoteWaitlist, waitlistPosition } from "../src/events/waitlist";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import { createImportFixtureClients } from "./helpers/import-events-rsvps-db";
 // @ts-expect-error standalone mjs has no type declarations
 import { importEventsRsvps, reportExitCode } from "../bin/import/events-rsvps.mjs";
 
@@ -23,9 +27,7 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     }
     fixture = await createMemberDataFixture(safe.href);
     legacySchema = `${fixture.schemaName}_legacy`;
-    const options = { max: 1, password: () => safe.password, onnotice: () => {} };
-    legacy = postgres(safe.href, { ...options, connection: { search_path: legacySchema, timezone: "Pacific/Honolulu" } });
-    target = postgres(safe.href, { ...options, connection: { search_path: fixture.schemaName, timezone: "Asia/Tokyo" } });
+    ({ legacy, target } = createImportFixtureClients(safe.href, legacySchema, fixture.schemaName));
   });
 
   beforeEach(async () => {
@@ -49,6 +51,14 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
       finally { await fixture.dispose(); }
     }
   });
+
+  async function promoteImportedWaitlist(eventId: number) {
+    await fixture.db.transaction(async (tx) => {
+      const [ev] = await tx.select().from(events).where(eq(events.id, eventId)).for("update");
+      await lockWaitlist(tx, eventId);
+      await promoteWaitlist(tx, ev!, () => new Date("2026-10-01T00:00:00Z"));
+    });
+  }
 
   it("dry-run reads and counts but changes neither rows nor sequences", async () => {
     const before = await target`select * from events order by id`;
@@ -168,6 +178,12 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     expect((await target`select id from rsvps where legacy_id = 71`)[0]!.id).toBe(later[0]!.id);
     const replay = await importEventsRsvps(legacy, target, { dryRun: false });
     expect(replay.rsvps).toMatchObject({ unchanged: 4, inserted: 0, updated: 0 });
+    const [child] = await target`select id from events where event_key = '01K00000000000000000000010'`;
+    expect(await waitlistPosition(fixture.db, child!.id, '100000000000000901')).toBe(1);
+    expect(await waitlistPosition(fixture.db, child!.id, '100000000000000902')).toBe(2);
+    await promoteImportedWaitlist(child!.id);
+    expect(await target`select user_id from rsvps where event_id = ${child!.id} and status = 'going'`)
+      .toMatchObject([{ user_id: '100000000000000901' }]);
   });
 
   it("backfills exact bigint ordering on existing pairs without renumbering or deleting native rows", async () => {
@@ -192,6 +208,14 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     expect((await target`select * from rsvps where id = ${native!.id}`)[0]).toEqual(native);
     const replay = await importEventsRsvps(legacy, target, { dryRun: false });
     expect(replay.rsvps).toMatchObject({ unchanged: 3, updated: 0 });
+    expect(await waitlistPosition(fixture.db, 600, 'synthetic-native')).toBe(1);
+    expect(await waitlistPosition(fixture.db, 600, '100000000000000901')).toBe(2);
+    expect(await waitlistPosition(fixture.db, 600, '100000000000000902')).toBe(3);
+    await target`update events set capacity = 2 where id = 600`;
+    await promoteImportedWaitlist(600);
+    const promoted = await target`select user_id from rsvps where event_id = 600 and status = 'going' order by created_at`;
+    expect(promoted.map((row) => row.user_id)).toEqual(['synthetic-native', '100000000000000901']);
+    expect(await waitlistPosition(fixture.db, 600, '100000000000000902')).toBe(1);
   });
 
   it("rejects conflicting source identity without partially updating the destination", async () => {

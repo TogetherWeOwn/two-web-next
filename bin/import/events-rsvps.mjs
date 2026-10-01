@@ -207,9 +207,11 @@ export function connectDatabase(raw) {
     || url.pathname.length < 2 || port < 1) throw new Error("Expected a complete PostgreSQL URL from env.");
   return postgres(raw, {
     max: 1, prepare: false, fetch_types: false, connect_timeout: 10, onnotice: () => {},
-    // Never fall back to inherited PGUSER/PGPASSWORD/PGDATABASE/PGPORT settings.
+    // Never fall back to inherited PGHOST/PGUSER/PGPASSWORD/PGDATABASE/PGPORT settings.
+    // The driver's URL parser splits IPv6 on colons; an explicit array preserves it.
+    host: [url.hostname.replace(/^\[|\]$/g, "")],
     username: decodeURIComponent(url.username), database: decodeURIComponent(url.pathname.slice(1)),
-    password: () => decodeURIComponent(url.password), port,
+    password: () => decodeURIComponent(url.password), port: [port],
   });
 }
 
