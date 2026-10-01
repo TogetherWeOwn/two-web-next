@@ -63,6 +63,43 @@ different app fails the synchronous add on every attempt (verified against
 the staging Discord app at W6 sign-off, not in CI: CI never holds real
 Discord credentials).
 
+## Cutover guest-GET probes
+
+[Cutover checker](cutover-check.md) maps every path/pattern in these tables to
+an explicit expected response. A new unmapped row fails both the checker and
+its local-only selftest. Parameterized routes use a published sitemap event
+(or `--event-key`) and an anonymous member probe; wildcards mean representative
+paths, not enumeration of an infinite URL space. Feed probes are `/events.ics`,
+`/events/{key}.ics` and `/events.rss`.
+
+The OAuth aliases mentioned above remain frozen too:
+
+| Path | Anonymous GET contract |
+|---|---|
+| `/auth/discord` | 302 to Discord authorize, callback on the target host |
+| `/auth/discord/callback` | 302 to `/?n=signin_failed` without code/state |
+
+Retired paths, carried forward from legacy `ci/live-seo-probe.mjs`, plus the
+PHP/Livewire-only surfaces: these are **404**, not a soft-404 200 or a redirect
+to an error page, on the Next candidate in both phases.
+
+| Path | Anonymous GET contract |
+|---|---|
+| `/about-us/` | 404 |
+| `/news/` | 404 |
+| `/members` | 404 (distinct from member-gated `/members/{user}`) |
+| `/gamipress/points/` | 404 |
+| `/events/month/2024-01/` | 404 |
+| `/this-url-never-existed-abc123xyz/` | 404 (never existed) |
+| `/wp-json/` | 404 |
+| `/wp-login.php` | 404 |
+| `/livewire/livewire.js` | 404 |
+| `/livewire/update` | 404 (GET only; no mutation) |
+| `/auth/discord/redirect` | 404 (legacy alias deliberately not ported) |
+| `/health` | 404 (removed Next-only diagnostic; `/up` is the health endpoint) |
+| `/healthz` | 404 (removed Next-only diagnostic, not an alias for `/up`) |
+| `/db-ping` | 404 (removed Next-only diagnostic, no database probe) |
+
 ## Rules
 
 - Funnel leaves (`/discord`, `/about`, `/faq`, `/rules`) stay DB-free: no
