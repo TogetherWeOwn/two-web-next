@@ -22,9 +22,11 @@ export function contentExpectations(scenario) {
     const empty = scenario.route === "/__a11y/404-empty";
     const suggestions = '[data-testid="error-event-suggestions"]';
     return [
-      { selector: `${suggestions} .card`, count: empty ? 0 : 1 },
+      { selector: `${suggestions} .card`, count: empty ? 0 : 2 },
       ...(empty ? [{ selector: '[data-testid="error-events-empty"]', text: "Nothing is on the calendar right now — check back soon." }] : [
-        { selector: `${suggestions} .card > a`, text: "Friday night games", attributes: { href: "/e/01J00000000000000000000015" } },
+        { selector: `${suggestions} .card > a`, count: 2 },
+        { selector: `${suggestions} .card > a[href="/e/01J00000000000000000000015"]`, text: "Friday night games" },
+        { selector: `${suggestions} .card > a[href="/e/01J00000000000000000000019"]`, text: "Full co-op night" },
       ]),
       { selector: '.error-events-search input', attributes: { name: "q" } },
     ];

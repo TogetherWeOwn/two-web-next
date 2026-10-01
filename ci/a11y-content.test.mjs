@@ -48,7 +48,13 @@ test("404 audit distinguishes populated suggestions from their empty fallback", 
   const empty = { route: "/__a11y/404-empty", status: 404 };
   for (const scenario of [populated, empty]) await assertAuditContent(fixturePage(scenario), scenario);
   const cards = '[data-testid="error-event-suggestions"] .card';
-  await assert.rejects(assertAuditContent(fixturePage(populated, { [cards]: { count: 0 } }), populated), /Fixture content count/);
+  assert.equal(contentExpectations(populated).find((item) => item.selector === cards).count, 2);
+  for (const count of [0, 1, 3]) await assert.rejects(assertAuditContent(fixturePage(populated, { [cards]: { count } }), populated), /Fixture content count/);
+  for (const key of ["01J00000000000000000000015", "01J00000000000000000000019"]) {
+    const link = `${cards} > a[href="/e/${key}"]`;
+    await assert.rejects(assertAuditContent(fixturePage(populated, { [link]: { count: 0 } }), populated), /Fixture content count/);
+    await assert.rejects(assertAuditContent(fixturePage(populated, { [link]: { text: "Wrong event" } }), populated), /Fixture content text/);
+  }
   await assert.rejects(assertAuditContent(fixturePage(empty, { [cards]: { count: 1 } }), empty), /Fixture content count/);
   assert(coverage[populated.route].cases.some((item) => item.status === 404));
   assert(coverage[empty.route].cases.some((item) => item.status === 404));
