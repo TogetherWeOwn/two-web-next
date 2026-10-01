@@ -9,7 +9,7 @@ import test from "node:test";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
-import { migrationConfig, runMigration, safeMigrationError } from "./neon-migrate.mjs";
+import { migrationClient, migrationConfig, runMigration, safeMigrationError } from "./neon-migrate.mjs";
 
 const mainEnv = { GITHUB_REF: "refs/heads/main", MIGRATION_TARGET: "staging" };
 const script = fileURLToPath(new URL("./neon-migrate.mjs", import.meta.url));
@@ -32,7 +32,7 @@ function testAdminUrl() {
 async function fixture(callback) {
   const url = testAdminUrl();
   const name = `web_migrate_test_${randomUUID().replaceAll("-", "")}`;
-  const options = { max: 1, password: () => decodeURIComponent(url.password), onnotice: () => {}, connect_timeout: 5 };
+  const options = { port: 5432, max: 1, password: () => decodeURIComponent(url.password), onnotice: () => {}, connect_timeout: 5 };
   const admin = postgres(url.href, options);
   let client;
   let created = false;
@@ -98,13 +98,47 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
   for (const raw of ["secret-value", "postgres://user:DO_NOT_ECHO@localhost/postgres",
     "postgres://user:DO_NOT_ECHO@ep-stub-pooler.eu.aws.neon.tech/db?sslmode=require",
     "postgres://user:DO_NOT_ECHO@ep-stub.eu.aws.neon.tech/db?sslmode=disable"]) {
-    try { migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: raw }); assert.fail("accepted unsafe endpoint"); }
-    catch (error) { assert.doesNotMatch(safeMigrationError(error), /DO_NOT_ECHO|secret-value|postgres:\/\//); }
+    assert.throws(() => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: raw }), (error) => {
+      assert.doesNotMatch(safeMigrationError(error), /DO_NOT_ECHO|secret-value|postgres:\/\//);
+      return true;
+    });
   }
   const staging = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
   assert.equal(migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging }).target, "staging");
   assert.equal(migrationConfig({ ...mainEnv, MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true", NEON_PRODUCTION_DATABASE_URL: staging }).target, "production");
   assert.doesNotMatch(safeMigrationError(new Error("DO_NOT_ECHO postgres://credentials/ SQL")), /DO_NOT_ECHO|postgres:\/\/credentials|SQL/);
+});
+
+test("driver configuration strips optional channel binding and pins the port despite PGPORT", async () => {
+  const priorPort = process.env.PGPORT;
+  process.env.PGPORT = "5433";
+  try {
+    const staging = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
+    for (const binding of ["", "&channel_binding=prefer", "&channel_binding=disable"]) {
+      const config = migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging + binding });
+      assert.equal(config.url.searchParams.has("channel_binding"), false);
+      const client = migrationClient(config); // Lazy constructor only: no Neon connection.
+      try {
+        assert.deepEqual(client.options.port, [5432]);
+        assert.equal(client.options.connection.channel_binding, undefined);
+        assert.equal(client.options.ssl.rejectUnauthorized, true);
+      } finally { await client.end(); }
+    }
+    for (const binding of ["require", "invalid", "prefer&channel_binding=require"]) {
+      assert.throws(() => migrationConfig({ ...mainEnv,
+        NEON_STAGING_DATABASE_URL: `${staging}&channel_binding=${binding}` }), /channel binding/);
+    }
+    const url = testAdminUrl();
+    url.port = "";
+    url.pathname = `/web_migrate_test_${randomUUID().replaceAll("-", "")}`;
+    const client = migrationClient(migrationConfig({ ...mainEnv, CI: process.env.CI,
+      GITHUB_ACTIONS: process.env.GITHUB_ACTIONS, NEON_STAGING_DATABASE_URL: url.href }, { testDatabase: true }));
+    try { assert.deepEqual(client.options.port, [5432]); }
+    finally { await client.end(); }
+  } finally {
+    if (priorPort === undefined) delete process.env.PGPORT;
+    else process.env.PGPORT = priorPort;
+  }
 });
 
 test("fresh database: plan is read-only, apply includes bootstraps, zero-pending and idempotent", async () => {
@@ -115,6 +149,8 @@ test("fresh database: plan is read-only, apply includes bootstraps, zero-pending
     await run("apply");
     assert.equal((await run("verify")).length, 0);
     await run("apply");
+    // The canonical Drizzle migrator must recognize this runner's exact ledger.
+    await migrate(drizzle(client), { migrationsFolder: source });
     assert.equal(Number((await client`select count(*) from drizzle.__drizzle_migrations`)[0].count), journal.entries.length);
     assert.ok(output.some((line) => /Pre-migration Neon PITR timestamp \(UTC\): \d{4}-.*Z/.test(line)));
     assert.ok(output.some((line) => line.includes("0000_init-users")));
@@ -156,6 +192,41 @@ test("gapped/newer history and concurrent migration lock are refused", async () 
   });
 });
 
+test("connection loss after the PITR receipt fails closed while another session owns the lock", async () => {
+  await fixture(async ({ client, env, output }) => {
+    let interrupted;
+    try {
+      const operation = runMigration("apply", env, { testDatabase: true, report: (line) => {
+        output.push(line);
+        if (!line.startsWith("Pre-migration Neon PITR timestamp")) return;
+        interrupted = (async () => {
+          // Select only the lock holder in our UUID-owned fixture, never other backends.
+          const holders = await client`select a.pid from pg_locks l join pg_stat_activity a using (pid)
+            where a.datname = current_database() and l.locktype = 'advisory'
+              and l.classid = 0 and l.objid = 11161001 and l.granted`;
+          assert.equal(holders.length, 1);
+          const [result] = await client`select pg_terminate_backend(${holders[0].pid}) as terminated`;
+          assert.equal(result.terminated, true);
+          await client`select pg_advisory_lock(11161001)`;
+        })();
+        return interrupted;
+      } });
+      await assert.rejects(operation, (error) => {
+        assert.match(safeMigrationError(error), /database details withheld/);
+        return true;
+      });
+      assert.ok(interrupted, "the actual runner reached its pre-DDL PITR receipt");
+      await interrupted;
+      assert.equal((await client`select to_regclass('public.users') as users`)[0].users, null);
+      assert.equal((await client`select to_regclass('drizzle.__drizzle_migrations') as ledger`)[0].ledger, null);
+      assert.ok(!output.includes("Post-check: zero pending web migrations."));
+    } finally {
+      try { if (interrupted) await interrupted; }
+      finally { await client`select pg_advisory_unlock(11161001)`; }
+    }
+  });
+});
+
 test("failed SQL rolls back the full pending batch; timestamp survives and errors withhold SQL", async () => {
   await fixture(async ({ client, run, output }) => {
     await client`create table profiles (fixture_only integer)`;
@@ -164,7 +235,7 @@ test("failed SQL rolls back the full pending batch; timestamp survives and error
     assert.ok(failure);
     assert.match(safeMigrationError(failure), /database details withheld/);
     assert.equal((await client`select to_regclass('public.users') as users`)[0].users, null);
-    assert.equal(Number((await client`select count(*) from drizzle.__drizzle_migrations`)[0].count), 0);
+    assert.equal((await client`select to_regclass('drizzle.__drizzle_migrations') as ledger`)[0].ledger, null);
     assert.ok(output.some((line) => line.startsWith("Pre-migration Neon PITR timestamp")));
   });
 });

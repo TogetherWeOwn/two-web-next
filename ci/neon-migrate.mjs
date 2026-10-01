@@ -2,8 +2,6 @@ import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
-import { drizzle } from "drizzle-orm/postgres-js";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
@@ -42,6 +40,12 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     || [...url.searchParams.keys()].some((key) => !["sslmode", "channel_binding"].includes(key))) {
     refuse("Migrations require a direct Neon endpoint with TLS; value withheld.");
   }
+  const bindings = url.searchParams.getAll("channel_binding");
+  if (bindings.includes("require")) refuse("Required channel binding is unsupported by the migration driver.");
+  if (bindings.some((value) => !["prefer", "disable"].includes(value))) refuse("Invalid channel binding option; value withheld.");
+  // postgres.js forwards unknown URL options as startup settings, not libpq flags.
+  url.searchParams.delete("channel_binding");
+  url.port = "5432";
   return { target, url, testDatabase };
 }
 
@@ -82,48 +86,67 @@ export function safeMigrationError(error) {
   return "Migration failed; database details withheld. Stop and investigate with the authorized database operator; do not substitute credentials.";
 }
 
-export async function runMigration(mode, env = process.env, options = {}) {
-  if (!["plan", "apply", "verify"].includes(mode)) refuse("Mode must be plan, apply or verify.");
-  const config = migrationConfig(env, options);
-  const migrations = journal();
-  const report = options.report ?? console.log;
-  const summary = (text) => {
-    report(text);
-    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${text}\n`);
-  };
-  const client = postgres(config.url.href, {
-    max: 1, idle_timeout: 0, max_lifetime: 0, connect_timeout: 10,
+export function migrationClient(config) {
+  return postgres(config.url.href, {
+    port: 5432, max: 1, idle_timeout: 0, max_lifetime: 0, connect_timeout: 10,
     password: () => decodeURIComponent(config.url.password),
     ssl: config.testDatabase ? false : { rejectUnauthorized: true },
     connection: { statement_timeout: 120000, lock_timeout: 10000 },
     onnotice: () => {},
   });
-  let locked = false;
+}
+
+export async function runMigration(mode, env = process.env, options = {}) {
+  if (!["plan", "apply", "verify"].includes(mode)) refuse("Mode must be plan, apply or verify.");
+  const config = migrationConfig(env, options);
+  const migrations = journal();
+  const report = options.report ?? console.log;
+  const summary = async (text) => {
+    await report(text);
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${text}\n`);
+  };
+  const client = migrationClient(config);
+  const plan = async (connection) => {
+    const pending = await pendingMigrations(connection, migrations);
+    await summary(`### Web migrations: ${config.target} / ${mode}`);
+    await summary(`Pending: ${pending.length}${pending.length ? ` (${pending.map((entry) => entry.tag).join(", ")})` : ""}`);
+    return pending;
+  };
   try {
-    if (mode === "apply") {
-      const [lock] = await client`select pg_try_advisory_lock(${lockKey}) as acquired`;
-      if (!lock.acquired) refuse("Another web migration holds the database lock; retry only after it finishes.");
-      locked = true;
+    if (mode !== "apply") {
+      const pending = await plan(client);
+      if (mode === "verify" && pending.length) refuse("Post-check failed: web migrations remain pending.");
+      return pending;
     }
-    const pending = await pendingMigrations(client, migrations);
-    summary(`### Web migrations: ${config.target} / ${mode}`);
-    summary(`Pending: ${pending.length}${pending.length ? ` (${pending.map((entry) => entry.tag).join(", ")})` : ""}`);
-    if (mode === "verify" && pending.length) refuse("Post-check failed: web migrations remain pending.");
-    if (mode !== "apply") return pending;
-    const [clock] = await client`select clock_timestamp() as timestamp`;
-    summary(`Pre-migration Neon PITR timestamp (UTC): ${clock.timestamp.toISOString()}`);
-    summary(`Release: ${/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? "") ? env.GITHUB_SHA : "local selftest"}`);
-    // Same journal and ledger as db:migrate. All pending SQL runs transactionally.
-    // Source: https://orm.drizzle.team/docs/migrations (runtime migration option).
-    await migrate(drizzle(client), { migrationsFolder });
-    const remaining = await pendingMigrations(client, migrations);
-    if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
-    summary("Post-check: zero pending web migrations.");
+    // sql.begin pins one connection and rejects on loss: never resume unlocked.
+    // Sources: https://github.com/porsager/postgres#transactions
+    // https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS
+    const remaining = await client.begin(async (transaction) => {
+      const [lock] = await transaction`select pg_try_advisory_xact_lock(${lockKey}) as acquired`;
+      if (!lock.acquired) refuse("Another web migration holds the database lock; retry only after it finishes.");
+      const pending = await plan(transaction);
+      const [clock] = await transaction`select clock_timestamp() as timestamp`;
+      await summary(`Pre-migration Neon PITR timestamp (UTC): ${clock.timestamp.toISOString()}`);
+      await summary(`Release: ${/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? "") ? env.GITHUB_SHA : "local selftest"}`);
+      // Keep Drizzle's journal SQL/hash/timestamp and default ledger format, but
+      // include ledger setup and history validation in the same locked transaction.
+      // Source: https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-orm/src/pg-core/dialect.ts
+      await transaction`create schema if not exists drizzle`;
+      await transaction`create table if not exists drizzle.__drizzle_migrations (
+        id serial primary key, hash text not null, created_at bigint
+      )`;
+      for (const migration of pending) {
+        for (const statement of migration.sql) await transaction.unsafe(statement);
+        await transaction`insert into drizzle.__drizzle_migrations (hash, created_at)
+          values (${migration.hash}, ${migration.folderMillis})`;
+      }
+      const remaining = await pendingMigrations(transaction, migrations);
+      if (remaining.length) refuse("Post-check failed: web migrations remain pending.");
+      return remaining;
+    });
+    await summary("Post-check: zero pending web migrations.");
     return remaining;
-  } finally {
-    try { if (locked) await client`select pg_advisory_unlock(${lockKey})`; }
-    finally { await client.end({ timeout: 5 }); }
-  }
+  } finally { await client.end({ timeout: 5 }); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

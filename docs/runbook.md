@@ -139,8 +139,12 @@ migration or Neon branch creation is performed by its selftest.
   `NEON_PRODUCTION_DATABASE_URL` **only on the production Environment**, using
   the authorized operator's secret-provisioning path. Verify the intended Neon
   project/branch/database and direct endpoint out of band; a hostname alone
-  cannot distinguish staging from production. Never copy credentials to argv,
-  comments, code or logs. No `DATABASE_URL`/Hyperdrive/alternate-secret fallback.
+  cannot distinguish staging from production. The driver pins port 5432, uses
+  certificate-verified TLS, strips optional `channel_binding=prefer|disable`, and
+  refuses `channel_binding=require` (unsupported by postgres.js) before connecting.
+  Never weaken a required channel-binding policy just to run migrations; stop and
+  coordinate a compatible driver. Never copy credentials to argv, comments, code
+  or logs. No `DATABASE_URL`/Hyperdrive/alternate-secret fallback.
 - GitHub's `secrets` context also resolves repository/organization secrets.
   Therefore verify the selected name exists at Environment scope before using
   this workflow; do not rely on an existing repo-scoped backup secret when the
@@ -160,10 +164,13 @@ available. The workflow validates migration numbers, then:
 1. `plan` reads the canonical SQL/journal and `drizzle.__drizzle_migrations`,
    lists pending tags and counts in logs/job summary, and performs **no DDL**.
    This is a journal diff, not a SQL execution rehearsal.
-2. `apply` acquires the web advisory lock, rechecks history, records the database
-   clock's UTC **pre-migration Neon PITR timestamp** and release SHA in the job
-   summary **before DDL**, then applies the pending batch transactionally using
-   Drizzle. URLs and raw database/SQL errors are never printed.
+2. `apply` starts one connection-bound transaction, acquires the web transaction
+   advisory lock, rechecks history, and records the database clock's UTC
+   **pre-migration Neon PITR timestamp** and release SHA in the job summary
+   **before DDL**. Ledger initialization, canonical Drizzle journal SQL and
+   hash/timestamp inserts, and the zero-pending check all run in that transaction.
+   Connection loss fails closed, never reconnects mid-apply; the success receipt
+   is printed only after commit. URLs and raw database/SQL errors are never printed.
 3. Both `apply` and the final `verify` require **zero pending web migrations**.
    Save the workflow URL, release SHA, timestamp and count with release evidence
    before the Worker deployment. A successful journal check does not establish
@@ -181,8 +188,10 @@ errors are deliberately redacted; the authorized database operator investigates
 using controlled provider-side evidence. Do not cancel in-flight DDL casually.
 
 **Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
-the pending transaction (the empty Drizzle schema/ledger may remain on a fresh
-DB). After a successful but harmful migration, prefer a reviewed forward repair.
+the pending transaction, including ledger initialization on a fresh DB. Existing
+history stays intact. On connection loss, do not infer commit success: re-plan and
+verify under the approved recovery procedure before retrying. After a successful
+but harmful migration, prefer a reviewed forward repair.
 If authorized PITR is required, pause writers and coordinate **both** consumers,
 verify the recorded timestamp is eligible, and use Neon's documented restore
 procedure. Restore can overwrite all databases on the branch and lose later
@@ -206,12 +215,18 @@ It creates UUID-owned test databases, uses stub Environment URLs, and drops only
 those databases in `finally`. CI supplies `MIGRATION_TEST_DATABASE_URL` for its
 throwaway Postgres. It proves production refusal (including the actual workflow
 shell gate), target/ref/URL isolation, read-only planning, fresh and partial
-apply, repeat no-op, history drift/newer/gaps, locking, transactional rollback,
-PITR timestamp recording and error redaction. It never falls back to a remote
-URL; any non-test endpoint is refused before connecting.
+apply, Drizzle-ledger compatibility, repeat no-op, history drift/newer/gaps,
+locking (including termination of only its own migration backend while a second
+fixture connection takes the lock), transactional rollback of ledger setup,
+PITR timestamp recording, error redaction, normalized driver options and hostile
+ambient `PGPORT`. It never falls back to a remote URL; any non-test endpoint is
+refused before connecting.
 
 Sources: [GitHub Environment protection and secrets](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
-[Drizzle runtime migration semantics](https://orm.drizzle.team/docs/migrations),
+[Drizzle migration semantics](https://orm.drizzle.team/docs/migrations),
+[Drizzle PostgreSQL ledger format](https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-orm/src/pg-core/dialect.ts),
+[postgres.js transactions](https://github.com/porsager/postgres#transactions),
+[PostgreSQL advisory-lock lifetime](https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS),
 [Neon branch restore and constraints](https://neon.com/docs/introduction/branch-restore).
 
 ### Worker rollback
