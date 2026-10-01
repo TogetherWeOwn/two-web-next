@@ -17,7 +17,7 @@ concurrency:
 jobs:
   deploy-staging:
     name: deploy-staging
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
     # Production-style gate: GitHub Environment protection rules (required
     # reviewers, etc.) apply to staging deploys the same way they would to prod.

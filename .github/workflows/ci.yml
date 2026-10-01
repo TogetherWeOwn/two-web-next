@@ -19,7 +19,7 @@ concurrency:
 jobs:
   a11y:
     name: a11y
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
     services:
       postgres:
@@ -58,7 +58,7 @@ jobs:
     needs: a11y
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 10
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
     services:
