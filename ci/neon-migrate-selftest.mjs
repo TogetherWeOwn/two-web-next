@@ -227,6 +227,46 @@ test("connection loss after the PITR receipt fails closed while another session 
   });
 });
 
+test("hostile database search_path cannot misroute canonical DDL into a shadow schema", async () => {
+  await fixture(async ({ client, run, output }) => {
+    await client`create schema "other"`;
+    const [db] = await client`select current_database() as name`;
+    // A hostile role/database default, as Neon staging could carry. The
+    // runner must still apply unqualified canonical SQL to `public`.
+    await client.unsafe(`alter database "${db.name}" set search_path = "other", public`);
+    await run("apply");
+    const columns = await client`select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = 'events'`;
+    assert.ok(columns.some((row) => row.column_name === "ics_sequence"),
+      "migration 1014 must add ics_sequence to public.events");
+    const shadow = await client`select table_name from information_schema.tables
+      where table_schema = 'other'`;
+    assert.deepEqual(shadow.map((row) => row.table_name), [],
+      "no canonical table may land in the shadow schema");
+    assert.equal((await run("verify")).length, 0);
+    assert.ok(output.includes("Post-check: zero pending web migrations."));
+  });
+});
+
+test("hostile database DateStyle cannot skew the PITR receipt", async () => {
+  await fixture(async ({ client, run, output }) => {
+    const [db] = await client`select current_database() as name`;
+    await client.unsafe(`alter database "${db.name}" set datestyle to 'SQL, DMY'`);
+    await run("apply");
+    const line = output.find((entry) => entry.startsWith("Pre-migration Neon PITR timestamp (UTC): "));
+    assert.ok(line, "apply must record a PITR receipt");
+    const stamp = line.match(/\(UTC\): (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+)Z/)?.[1];
+    assert.ok(stamp, "PITR receipt must stay ISO UTC text under a hostile DateStyle");
+    const reported = Date.parse(`${stamp.slice(0, 23)}Z`);
+    // epoch extraction is numeric and immune to DateStyle: the receipt must
+    // name the actual migration time, not a month/day-swapped impostor.
+    const [now] = await client`select extract(epoch from clock_timestamp()) as epoch`;
+    assert.ok(Math.abs(reported / 1000 - Number(now.epoch)) < 300,
+      "PITR receipt must match the server clock within five minutes");
+    assert.equal((await run("verify")).length, 0);
+  });
+});
+
 test("failed SQL rolls back the full pending batch; timestamp survives and errors withhold SQL", async () => {
   await fixture(async ({ client, run, output }) => {
     await client`create table profiles (fixture_only integer)`;
