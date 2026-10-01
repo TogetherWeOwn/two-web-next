@@ -115,8 +115,9 @@ export const ProfilePage: FC<{
             ) : null}
             <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
               <input type="hidden" name="_method" value="PATCH" />
-              <label>Bio <textarea name="bio" maxlength="1000">{form.bio}</textarea></label>
-              <label>Games (one per line) <textarea name="games_text" maxlength="1700">{form.games_text}</textarea></label>
+              {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
+              <label>Bio <textarea name="bio">{form.bio}</textarea></label>
+              <label>Games (one per line) <textarea name="games_text">{form.games_text}</textarea></label>
               <label>Timezone <input name="timezone" value={form.timezone} placeholder="Europe/London" /></label>
               <div aria-hidden="true" class="sr-only">
                 <label>Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" /></label>

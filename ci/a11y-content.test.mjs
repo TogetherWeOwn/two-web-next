@@ -43,6 +43,17 @@ test("the waitlisted event fixture cannot silently render as going", async () =>
   assert.deepEqual(contentExpectations({ ...scenario, status: 410 }), []);
 });
 
+test("404 audit distinguishes populated suggestions from their empty fallback", async () => {
+  const populated = { route: "/__a11y/404", status: 404 };
+  const empty = { route: "/__a11y/404-empty", status: 404 };
+  for (const scenario of [populated, empty]) await assertAuditContent(fixturePage(scenario), scenario);
+  const cards = '[data-testid="error-event-suggestions"] .card';
+  await assert.rejects(assertAuditContent(fixturePage(populated, { [cards]: { count: 0 } }), populated), /Fixture content count/);
+  await assert.rejects(assertAuditContent(fixturePage(empty, { [cards]: { count: 1 } }), empty), /Fixture content count/);
+  assert(coverage[populated.route].cases.some((item) => item.status === 404));
+  assert(coverage[empty.route].cases.some((item) => item.status === 404));
+});
+
 test("home assertions require member, online, numeric and zero-rank content before axe", async () => {
   const assertions = await assertAuditContent(fixturePage(home), home);
   assert(assertions.some((item) => item.text === "84 members · 12 online"));

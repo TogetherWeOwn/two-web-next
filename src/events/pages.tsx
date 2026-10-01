@@ -1,5 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
-import { Layout, SiteFooter, ThemeHeader } from "../pages";
+import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
 import {
   CALENDAR_DAY_TESTID,
@@ -548,7 +548,7 @@ const EventDetailShell: FC<PropsWithChildren<{
 }>> = ({ title, canonical, robots, description, session, account, children }) => (
   <Layout title={`${title} — Together We Own`} canonical={canonical}
     shareTitle={`${title} — Together We Own`} shareDescription={description} robots={robots} theme="event">
-    <ThemeHeader session={session} current="events" account={account} />
+    <SiteHeader session={session} current="events" account={account} />
     <main id="main" tabindex={-1}>
       <nav class="event-back" aria-label="Event calendar"><a href="/events">← All events</a></nav>
       {children}

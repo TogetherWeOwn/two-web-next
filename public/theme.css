@@ -1,4 +1,4 @@
-/* Base theme for opted-in home/event shells. Other shells retain styles.css. */
+/* Base theme for opted-in home, event and error/recovery shells, layered over styles.css. */
 @font-face { font-family: Display; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/display-latin-500.woff2') format('woff2'); }
 @font-face { font-family: Display; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/display-latin-700.woff2') format('woff2'); }
 .homepage-theme {
@@ -100,6 +100,19 @@
   .homepage-theme .community-grid { grid-template-columns: 1fr; gap: 0; }
   .homepage-theme section { padding: 2rem 0; }
 }
+/* Keep recovery content readable, including the optional 404 search. */
+.homepage-theme .recovery-hero h1 { font-size: clamp(2.3rem, 5vw, 4rem); max-width: 22ch; text-wrap: balance; }
+.homepage-theme .recovery-code { font: 700 clamp(7rem, 15vw, 12rem)/.9 Display, 'Arial Narrow', sans-serif; letter-spacing: -.05em; color: var(--brand); margin: 0 0 1rem; font-variant-numeric: tabular-nums; }
+.homepage-theme .recovery-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 1rem 1.5rem; margin: 0; max-width: 100%; }
+.homepage-theme .recovery-actions a { overflow-wrap: anywhere; }
+.homepage-theme .recovery-events { max-width: 52rem; margin: auto; }
+.homepage-theme .recovery-events .facts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); }
+.homepage-theme .recovery-events .card > a { font: 700 1.5rem/1.2 Display, 'Arial Narrow', sans-serif; }
+.homepage-theme .error-events-search { margin-top: 2rem; }
+.homepage-theme .error-events-search input { background: var(--surface); color: var(--ink); border-color: var(--muted); min-height: 52px; }
+.homepage-theme .error-events-search input::placeholder { color: var(--muted); opacity: 1; }
+.homepage-theme .error-events-search button { font: 700 1.1rem/1.2 Display, 'Arial Narrow', sans-serif; }
+.homepage-theme .error-events-search :focus-visible { outline: 3px solid var(--brand); outline-offset: 5px; }
 @media (prefers-reduced-motion: no-preference) {
   .homepage-theme .btn { transition: background-color .15s ease, color .15s ease, transform .15s ease; }
 }

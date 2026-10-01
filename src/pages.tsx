@@ -82,12 +82,33 @@ export const Layout: FC<
   </html>
 );
 
-export const ThemeHeader: FC<{ session?: Session | null; current: "home" | "events"; account?: boolean }> = ({
-  session, current, account = true,
-}) => (
+// The site footer carries the static-leaf links on the funnel + leaf + error
+// shells (home, join, recovery, about/faq/rules/privacy, branded errors —
+// ports the legacy home footer: About, FAQ, House rules, Privacy). Admin,
+// events and profile shells intentionally keep their own chrome. One
+// component so a new leaf cannot ship without a way back to it.
+export const SiteFooter: FC = () => (
+  <footer>
+    Together We Own · adult gaming community · founded 1998
+    <nav aria-label="Site">
+      <a href="/about">About</a> <a href="/faq">FAQ</a> <a href="/rules">House rules</a>{" "}
+      <a href="/privacy">Privacy</a>
+    </nav>
+  </footer>
+);
+
+type HeaderCta = { href: string; label: string };
+
+export const SiteHeader: FC<{
+  session?: Session | null;
+  home?: boolean;
+  current?: "events";
+  account?: boolean;
+  cta?: HeaderCta;
+}> = ({ session, home, current, account = true, cta = { href: "/auth/discord", label: "Sign in with Discord" } }) => (
   <header class="bar site-header">
     <nav class="main-nav" aria-label="Primary">
-      <a href="/" aria-current={current === "home" ? "page" : undefined}>Home</a>
+      <a href="/" aria-current={home ? "page" : undefined}>Home</a>
       <a href="/events" aria-current={current === "events" ? "location" : undefined}>Events</a>
     </nav>
     <a class="brand" href="/" aria-label="Together We Own homepage">
@@ -104,7 +125,7 @@ export const ThemeHeader: FC<{ session?: Session | null; current: "home" | "even
         ) : (
           <div>
             <span class="account-caption">Welcome, guest</span>
-            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+            <a class="btn" href={cta.href} data-testid="signin">{cta.label}</a>
           </div>
         )}
       </nav>
@@ -112,19 +133,30 @@ export const ThemeHeader: FC<{ session?: Session | null; current: "home" | "even
   </header>
 );
 
-// The site footer carries the static-leaf links on the funnel + leaf + error
-// shells (home, join, recovery, about/faq/rules/privacy, branded errors —
-// ports the legacy home footer: About, FAQ, House rules, Privacy). Admin,
-// events and profile shells intentionally keep their own chrome. One
-// component so a new leaf cannot ship without a way back to it.
-export const SiteFooter: FC = () => (
-  <footer>
-    Together We Own · adult gaming community · founded 1998
-    <nav aria-label="Site">
-      <a href="/about">About</a> <a href="/faq">FAQ</a> <a href="/rules">House rules</a>{" "}
-      <a href="/privacy">Privacy</a>
-    </nav>
-  </footer>
+// Presentational only: error and OAuth recovery routes must not read sessions
+// or require a database just to render a way back into the community.
+export const RecoveryShell: FC<PropsWithChildren<{
+  title: string;
+  headingId: string;
+  code?: string;
+  robots?: string;
+  headerCta?: HeaderCta;
+  supportingContent?: PropsWithChildren["children"];
+}>> = ({ title, headingId, code, robots, headerCta, supportingContent, children }) => (
+  <Layout title={`${title} — Together We Own`} robots={robots} theme="home">
+    <SiteHeader cta={headerCta} />
+    <main id="main" tabindex={-1}>
+      <section class="hero recovery-hero" aria-labelledby={headingId}>
+        <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
+        {code ? <p class="recovery-code" aria-hidden="true">{code}</p> : <p class="strap">Let&apos;s get you back to the lobby</p>}
+        <h1 id={headingId}>{title}</h1>
+        {children}
+      </section>
+      {supportingContent}
+    </main>
+    <SiteFooter />
+  </Layout>
 );
 
 export type Notice =
@@ -235,25 +267,13 @@ export const Recovery: FC<{
   retryLabel: string;
   inviteUrl: string;
 }> = ({ title, message, retryUrl, retryLabel, inviteUrl }) => (
-  <Layout title={`${title} — Together We Own`}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="btn" href="/join">Join with Discord</a>
-      </nav>
-    </header>
-    <main id="main" tabindex={-1}>
-      <section aria-labelledby="recovery-heading">
-        <h1 id="recovery-heading">{title}</h1>
-        <p class="lead">{message}</p>
-        <p>
-          <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
-          <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
-        </p>
-      </section>
-    </main>
-    <SiteFooter />
-  </Layout>
+  <RecoveryShell title={title} headingId="recovery-heading" headerCta={{ href: "/join", label: "Join with Discord" }}>
+    <p class="lead">{message}</p>
+    <p class="recovery-actions">
+      <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
+      <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
+    </p>
+  </RecoveryShell>
 );
 
 const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map((label) => ({
@@ -278,7 +298,7 @@ export const Home: FC<{
     shareDescription="We spent most of our life private. Now you can just turn up."
     theme="home"
   >
-    <ThemeHeader session={session} current="home" />
+    <SiteHeader session={session} home />
     <main id="main" tabindex={-1}>
       {/*
         The flashed join confirmation takes the notice slot: both carry the same
