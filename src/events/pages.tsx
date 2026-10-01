@@ -532,9 +532,9 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
 // journey lands the guest back here after joining. The
 // one-shot join confirmation renders above the pitch when this page is the
 // join landing (TOG-10356): the newly authenticated member would otherwise see
-// neither the banner nor the guest pitch. Attendees/member-stats shell is
-// main's advance — kept verbatim.
-export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string; session?: Session | null; joinResult?: JoinResult | null }> = ({ e, attendees = [], appUrl, jsonLd, session, joinResult }) => {
+// neither the banner nor the guest pitch. Attendees/member-stats shell and
+// waitlist position are main's advance — kept verbatim.
+export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string; session?: Session | null; joinResult?: JoinResult | null; waitlistPosition?: number | null }> = ({ e, attendees = [], appUrl, jsonLd, session, joinResult, waitlistPosition }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -544,7 +544,7 @@ export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl
       {e.status === "draft" ? <p class="notice" data-testid="event-draft">Draft</p> : null}
       {e.status === "past" ? <p class="notice" data-testid="event-past">Past event</p> : null}
       {e.status === "cancelled" ? <p class="notice" data-testid="event-cancelled">Cancelled</p> : null}
-      <h1>{e.title}</h1>
+      <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <p>
         <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>

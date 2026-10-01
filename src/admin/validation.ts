@@ -217,12 +217,16 @@ export function parseEventForm(
   }
 
   let capacity: number | null = null;
-  const capRaw = str(data.capacity);
-  if (capRaw !== null) {
+  // Forms carry strings; JSON and stored PATCH defaults carry numbers. A non-string
+  // value must not silently erase a cap and bypass the occupied-seat guard.
+  const capRaw = typeof data.capacity === "number" ? String(data.capacity) : str(data.capacity);
+  const capError = "Capacity is a headcount from 1 to 2147483647, or empty for unlimited.";
+  if (data.capacity != null && typeof data.capacity !== "string" && typeof data.capacity !== "number") {
+    fields.capacity = capError;
+  } else if (capRaw !== null) {
     const value = Number(capRaw);
-    if (!/^\d+$/.test(capRaw) || !Number.isInteger(value) || value < 1 || value > 2_147_483_647) {
-      fields.capacity = "Capacity is a headcount from 1 to 2147483647, or empty for unlimited.";
-    } else capacity = value;
+    if (!/^\d+$/.test(capRaw) || !Number.isInteger(value) || value < 1 || value > 2_147_483_647) fields.capacity = capError;
+    else capacity = value;
   }
 
   const startsRaw = str(data.starts_at);

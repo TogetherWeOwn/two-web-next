@@ -26,7 +26,7 @@ import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { sitemapEvents } from "./events/reads";
+import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
@@ -233,8 +233,12 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
 const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
 
 app.get("/", async (c) => {
-  // Optional homepage data must not take down the funnel during a DB outage.
-  const session = await readSession(c).catch(() => null);
+  // A DB outage must not break the funnel, including session setup. Fail closed to guest.
+  const session = await readSession(c).catch(() => {
+    // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
+    console.warn("Home session unavailable; serving as guest.", { exception: "SessionReadFailure" });
+    return null;
+  });
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
@@ -245,10 +249,14 @@ app.get("/", async (c) => {
   // explanation wins over an older journey's success (TOG-10356 review).
   const flashed = await takeJoinResult(c);
   const joinResult = notice === "join_failed" || notice === "signin_failed" ? null : flashed;
-  const featured = await dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []);
+  const [upcomingEvents, featured] = await Promise.all([
+    loadHomeUpcoming(() => dbFor(c)),
+    dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),
+  ]);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} joinResult={joinResult} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL} counts={counts} featured={featured} />,
+    <Home session={session} notice={notice} joinResult={joinResult} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
+      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured} />,
   );
 });
 
