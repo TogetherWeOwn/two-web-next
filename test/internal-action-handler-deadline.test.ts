@@ -31,8 +31,13 @@ function memLedger() {
   return { ledger, rows };
 }
 const store = (): EventStore => ({
-  find: async () => null,
-  recordMirrored: async () => {},
+  prepareSync: async () => null,
+  completeSync: async () => {},
+  claimSync: async () => null,
+  deferSync: async () => {},
+  failSync: async () => {},
+  needsSync: async () => false,
+  pendingSync: async () => null,
   closeFinished: async () => 0,
   materializeSeries: async () => 0,
   staleEventKeys: async () => [],
