@@ -75,7 +75,29 @@ reset_store() { rm -rf "$STUB_R2"; mkdir -p "$STUB_R2"; }
 expect_failure() {
   if "$@" > "$T/out" 2> "$T/err"; then fail "expected failure: $*"; fi
 }
-# Regression first: successful PUT/GET transport is not proof of correct bytes.
+# EOF must not hide a final missing archive or unpaired receipt in either mode.
+for mode in compatibility strict; do
+  check_args=(check staging)
+  [ "$mode" = compatibility ] || check_args+=(--require-verified)
+  for termination in newline eof; do
+    format='%s\n'
+    [ "$termination" = newline ] || format='%s'
+    for entry in "$KEY" "$KEY.digest.json"; do
+      reset_store
+      mkdir -p "$(dirname "$MANIFEST")"
+      printf "$format" "$entry" > "$MANIFEST"
+      expect_failure "$BIN" "${check_args[@]}"
+      if [ "$entry" = "$KEY" ]; then
+        grep -qxF "missing: $KEY" "$T/err" || fail "final missing archive skipped"
+      else
+        grep -qxF "corrupt: $entry (unpaired receipt)" "$T/err" || fail "final unpaired receipt skipped"
+      fi
+      ! grep -q '^check: ' "$T/out" || fail "invalid final entry reported success"
+      ok "$mode check rejects $entry with $termination termination"
+    done
+  done
+done
+# Successful PUT/GET transport is not proof of correct bytes.
 for mode in truncate alter; do
   reset_store
   expect_failure env STUB_CORRUPTION="$mode" "$BIN" backup staging
@@ -99,6 +121,19 @@ ok "exact backup publishes archive and independently checked digest receipt"
 "$BIN" check staging > "$T/out"
 grep -qxF "verified: $KEY" "$T/out" || fail "healthy check not verified"
 ok "check reports exact stored archive as verified"
+# Put the archive after its receipt so the last unterminated entry needs hashing.
+for mode in compatibility strict; do
+  check_args=(check staging)
+  [ "$mode" = compatibility ] || check_args+=(--require-verified)
+  printf '%s\n%s' "$KEY.digest.json" "$KEY" > "$MANIFEST"
+  "$BIN" "${check_args[@]}" > "$T/out"
+  grep -qxF "verified: $KEY" "$T/out" || fail "final exact archive not verified"
+  grep -qxF 'check: all manifest archives byte-verified' "$T/out" || fail "exact EOF check failed"
+  expect_failure env STUB_CORRUPTION=alter "$BIN" "${check_args[@]}"
+  grep -q 'corrupt:' "$T/err" || fail "final corrupt archive skipped"
+  ok "$mode check hashes the final archive without a newline"
+done
+printf '%s\n%s\n' "$KEY" "$KEY.digest.json" > "$MANIFEST"
 for mode in truncate alter; do
   expect_failure env STUB_CORRUPTION="$mode" "$BIN" check staging
   grep -q 'corrupt:' "$T/err" || fail "check did not classify corruption"
@@ -115,13 +150,18 @@ expect_failure "$BIN" check staging
 grep -q 'unverified:' "$T/out" || fail "lost paired receipt not unverified"
 ok "a missing manifest-paired receipt cannot downgrade to legacy success"
 # A pre-receipt manifest is transport-only, never byte-verified.
-printf '%s\n' "$KEY" > "$MANIFEST"
-"$BIN" check staging > "$T/out"
-grep -qxF "unverified: $KEY (receipt unavailable)" "$T/out" || fail "legacy classification missing"
-! grep -q '^verified:' "$T/out" || fail "legacy archive reported verified"
-expect_failure "$BIN" check staging --require-verified
-expect_failure "$BIN" promote-weekly staging
-ok "legacy check is explicit; strict check and promotion refuse missing receipts"
+for termination in newline eof; do
+  format='%s\n'
+  [ "$termination" = newline ] || format='%s'
+  printf "$format" "$KEY" > "$MANIFEST"
+  "$BIN" check staging > "$T/out"
+  grep -qxF "unverified: $KEY (receipt unavailable)" "$T/out" || fail "legacy classification missing"
+  grep -qxF 'check: 1 legacy archive(s) unverified; available receipts verified' "$T/out" || fail "legacy summary missing"
+  ! grep -q '^verified:' "$T/out" || fail "legacy archive reported verified"
+  expect_failure "$BIN" check staging --require-verified
+  expect_failure "$BIN" promote-weekly staging
+  ok "legacy $termination check is explicit; strict check and promotion refuse missing receipts"
+done
 cp "$T/good-receipt" "$RECEIPT"
 printf '%s\n%s\n' "$KEY" "$KEY.digest.json" > "$MANIFEST"
 cp "$MANIFEST" "$T/manifest-before"

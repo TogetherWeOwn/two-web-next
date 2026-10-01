@@ -299,7 +299,7 @@ do_check() {
   dir="$(remote_tmp)"
   trap 'rm -rf "$dir"' EXIT
   fetch_manifest "$dir/MANIFEST.txt"
-  while IFS= read -r key; do
+  while IFS= read -r key || [ -n "$key" ]; do
     [ -n "$key" ] || continue
     # A sidecar is verified with its archive, never as an independent backup.
     case "$key" in
