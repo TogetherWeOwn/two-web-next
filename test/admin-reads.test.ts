@@ -8,11 +8,12 @@
 
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { JOIN_RETENTION_DAYS, joinFunnelStats } from "../src/admin/reads";
 import { activityLog, events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import type { Db } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { joinAttempts, users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
@@ -56,7 +57,7 @@ describe("admin pt2 guard pins (memory store, no DB)", () => {
     const store = createMemorySessionStore();
     const app = adminApp(store);
     expect((await app.request("/join-attempts", {}, env)).status).toBe(302);
-    const cookie = await cookieFor(store, { userId: "222", username: "pleb", moderator: false });
+    const cookie = await cookieFor(store, { userId: "10000000000000222", username: "pleb", moderator: false });
     for (const path of ["/join-attempts", "/join-attempts?q=1", "/events/abc"]) {
       expect((await app.request(path, { headers: { cookie } }, env)).status, path).toBe(403);
     }
@@ -64,7 +65,7 @@ describe("admin pt2 guard pins (memory store, no DB)", () => {
 
   it("offers no write verb on the join viewer, moderators included (JoinAttemptPolicy)", async () => {
     const store = createMemorySessionStore();
-    const cookie = await cookieFor(store, { userId: "111", username: "mod", moderator: true });
+    const cookie = await cookieFor(store, { userId: "10000000000000111", username: "mod", moderator: true });
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
       const res = await adminApp(store).request(
         "/join-attempts",
@@ -77,10 +78,13 @@ describe("admin pt2 guard pins (memory store, no DB)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: Db;
   const store = createMemorySessionStore();
-  const modId = `reads-mod-${Date.now()}`;
-  const liveEnv = { ...env, ADMIN_DB: db } as Env;
+  const modId = "100000000000000111";
+  const liveEnv = () => ({ ...env, ADMIN_DB: db }) as Env;
+  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
+  afterAll(() => fixture?.dispose());
   const app = () => adminApp({ sessionStore: store, db });
   let cookie = "";
 
@@ -116,18 +120,18 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
 
   it("roster: read-only list of member/status/answered, subjects access-logged", async () => {
     const ev = await seedEvent("published");
-    await db.insert(users).values({ id: "900", username: "alice" });
+    await db.insert(users).values({ id: "10000000000000900", username: "alice" });
     await db.insert(rsvps).values([
-      { eventId: ev.id, userId: "900", status: "going", updatedAt: new Date("2026-10-02T10:00:00Z") },
-      { eventId: ev.id, userId: "901", status: "maybe", updatedAt: new Date("2026-10-03T10:00:00Z") },
+      { eventId: ev.id, userId: "10000000000000900", status: "going", updatedAt: new Date("2026-10-02T10:00:00Z") },
+      { eventId: ev.id, userId: "10000000000000901", status: "maybe", updatedAt: new Date("2026-10-03T10:00:00Z") },
     ]);
-    const res = await app().request(`/events/${ev.eventKey}`, { headers: { cookie } }, liveEnv);
+    const res = await app().request(`/events/${ev.eventKey}`, { headers: { cookie } }, liveEnv());
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("RSVPs (2)");
     expect(html).toContain("alice");
     expect(html).toContain("Unknown member"); // no users row: do not expose an opaque id
-    expect(html).not.toContain("901");
+    expect(html).not.toContain("10000000000000901");
     expect(html).toContain("2026-10-03T10:00:00.000Z");
     // Newest answer first.
     expect(html.indexOf("Unknown member")).toBeLessThan(html.indexOf("alice"));
@@ -135,17 +139,17 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
     const logs = await db.select().from(memberDataAccessLogs);
     expect(logs).toHaveLength(1);
     expect(logs[0]?.route).toBe("admin.events.edit");
-    expect(logs[0]?.subjectUserIds).toEqual(["900", "901"]);
+    expect(logs[0]?.subjectUserIds).toEqual(["10000000000000900", "10000000000000901"]);
     expect(logs[0]?.viewerDiscordId).toBe(modId);
   });
 
   it("roster is scoped to its event and empty state renders", async () => {
     const a = await seedEvent();
     const b = await seedEvent();
-    await db.insert(rsvps).values({ eventId: b.id, userId: "777", status: "going" });
-    const html = await (await app().request(`/events/${a.eventKey}`, { headers: { cookie } }, liveEnv)).text();
+    await db.insert(rsvps).values({ eventId: b.id, userId: "10000000000000777", status: "going" });
+    const html = await (await app().request(`/events/${a.eventKey}`, { headers: { cookie } }, liveEnv())).text();
     expect(html).toContain("No RSVPs yet.");
-    expect(html).not.toContain("777");
+    expect(html).not.toContain("10000000000000777");
   });
 
   it("funnel stats: per-outcome counts inside the retention window only", async () => {
@@ -153,21 +157,21 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
     const day = 86_400_000;
     const at = (d: number) => new Date(now.getTime() - d * day);
     await db.insert(joinAttempts).values([
-      { outcome: "added", source: "site", discordId: "1", createdAt: at(1) },
-      { outcome: "added", source: "site", discordId: "2", createdAt: at(30) },
-      { outcome: "added", source: "site", discordId: "3", createdAt: at(JOIN_RETENTION_DAYS - 1) },
-      { outcome: "added", source: "site", discordId: "4", createdAt: at(JOIN_RETENTION_DAYS + 1) }, // pruned
-      { outcome: "already_member", discordId: "5", createdAt: at(2) },
-      { outcome: "denied", discordId: "6", createdAt: at(3) },
-      { outcome: "denied", discordId: "7", createdAt: at(200) }, // pruned
+      { outcome: "added", source: "site", discordId: "100000000000001", createdAt: at(1) },
+      { outcome: "added", source: "site", discordId: "100000000000002", createdAt: at(30) },
+      { outcome: "added", source: "site", discordId: "100000000000003", createdAt: at(JOIN_RETENTION_DAYS - 1) },
+      { outcome: "added", source: "site", discordId: "100000000000004", createdAt: at(JOIN_RETENTION_DAYS + 1) }, // pruned
+      { outcome: "already_member", discordId: "100000000000005", createdAt: at(2) },
+      { outcome: "denied", discordId: "100000000000006", createdAt: at(3) },
+      { outcome: "denied", discordId: "100000000000007", createdAt: at(200) }, // pruned
       { outcome: "degraded", createdAt: at(4) },
     ]);
     expect(await joinFunnelStats(db, now)).toEqual({ added: 3, already_member: 1, degraded: 1, denied: 1 });
   });
 
   it("dashboard shows the funnel and logs no member subjects for it", async () => {
-    await db.insert(joinAttempts).values([{ outcome: "added", discordId: "1" }, { outcome: "added", discordId: "2" }]);
-    const res = await app().request("/", { headers: { cookie } }, liveEnv);
+    await db.insert(joinAttempts).values([{ outcome: "added", discordId: "100000000000001" }, { outcome: "added", discordId: "100000000000002" }]);
+    const res = await app().request("/", { headers: { cookie } }, liveEnv());
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toMatch(/data-testid="funnel-added"[^>]*>2</);
@@ -177,36 +181,44 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
   it("join viewer: newest first, outcome filter, exact id search, subjects logged", async () => {
     const t = (m: number) => new Date(Date.now() - m * 60_000);
     await db.insert(joinAttempts).values([
-      { outcome: "added", source: "site", requestId: "req-a", discordId: "1001", createdAt: t(5) },
-      { outcome: "denied", source: "site", requestId: "req-b", discordId: "1002", createdAt: t(4) },
-      { outcome: "denied", source: "bot", requestId: "req-c", discordId: "10020", createdAt: t(3) },
+      { outcome: "added", source: "site", requestId: "req-a", discordId: "100000000000001001", createdAt: t(5) },
+      { outcome: "denied", source: "site", requestId: "req-b", discordId: "100000000000001002", createdAt: t(4) },
+      { outcome: "denied", source: "bot", requestId: "req-c", discordId: "1000000000000010020", createdAt: t(3) },
     ]);
-    const all = await (await app().request("/join-attempts", { headers: { cookie } }, liveEnv)).text();
+    const all = await (await app().request("/join-attempts", { headers: { cookie } }, liveEnv())).text();
     expect(all.indexOf("req-c")).toBeLessThan(all.indexOf("req-a"));
 
-    const denied = await (await app().request("/join-attempts?outcome=denied", { headers: { cookie } }, liveEnv)).text();
+    const denied = await (await app().request("/join-attempts?outcome=denied", { headers: { cookie } }, liveEnv())).text();
     expect(denied).toContain("req-b");
     expect(denied).not.toContain("req-a");
 
-    // Exact: 1002 must not match 10020.
-    const exact = await (await app().request("/join-attempts?q=1002", { headers: { cookie } }, liveEnv)).text();
+    // Exact: a member key must not match the same digits with an extra suffix.
+    const exact = await (await app().request("/join-attempts?q=100000000000001002", { headers: { cookie } }, liveEnv())).text();
     expect(exact).toContain("req-b");
     expect(exact).not.toContain("req-c");
-    const byReq = await (await app().request("/join-attempts?q=req-c", { headers: { cookie } }, liveEnv)).text();
-    expect(byReq).toContain("10020");
+    const byReq = await (await app().request("/join-attempts?q=req-c", { headers: { cookie } }, liveEnv())).text();
+    expect(byReq).toContain("1000000000000010020");
     expect(byReq).not.toContain("req-a");
 
     const logs = await db.select().from(memberDataAccessLogs);
+    // SQL without ORDER BY has no first-row contract. Require exactly one
+    // audit row per request and all four exact subject sets, in any row order.
+    expect(logs).toHaveLength(4);
     expect(logs.every((l) => l.route === "admin.join-attempts.index")).toBe(true);
-    expect(logs[0]?.subjectUserIds).toEqual(["1001", "10020", "1002"].sort());
+    expect(logs).toEqual(expect.arrayContaining([
+      ["100000000000001001", "100000000000001002", "1000000000000010020"].sort(), // All attempts.
+      ["100000000000001002", "1000000000000010020"].sort(), // Outcome filter.
+      ["100000000000001002"], // Exact Discord id.
+      ["1000000000000010020"], // Exact request id.
+    ].map((subjectUserIds) => expect.objectContaining({ subjectUserIds }))));
   });
 
   it("join viewer hides rows past the retention window and never writes", async () => {
     await db.insert(joinAttempts).values([
-      { outcome: "added", requestId: "req-old", discordId: "1", createdAt: new Date(Date.now() - 100 * 86_400_000) },
-      { outcome: "added", requestId: "req-new", discordId: "2" },
+      { outcome: "added", requestId: "req-old", discordId: "100000000000001", createdAt: new Date(Date.now() - 100 * 86_400_000) },
+      { outcome: "added", requestId: "req-new", discordId: "100000000000002" },
     ]);
-    const html = await (await app().request("/join-attempts", { headers: { cookie } }, liveEnv)).text();
+    const html = await (await app().request("/join-attempts", { headers: { cookie } }, liveEnv())).text();
     expect(html).toContain("req-new");
     expect(html).not.toContain("req-old");
     expect(await db.select().from(joinAttempts)).toHaveLength(2);
@@ -214,7 +226,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
 
   it("publish/cancel parity with the W8 status machine", async () => {
     const post = (path: string) =>
-      app().request(path, { method: "POST", headers: { cookie, origin: APP_URL } }, liveEnv);
+      app().request(path, { method: "POST", headers: { cookie, origin: APP_URL } }, liveEnv());
     const status = async (key: string) => (await db.select().from(events).where(eq(events.eventKey, key)))[0]!.status;
 
     // draft → cancelled directly is allowed and terminal.
