@@ -33,7 +33,7 @@ async function main() {
   const fixtures = [
     ["edit.html", jsx(FeaturedFormPage, { mode: "edit", row, values, errors: {}, now, appUrl: "https://next.example.test" })],
     ["list.html", jsx(FeaturedPage, { rows, now })],
-    ["scheduled.html", jsx(FeaturedFormPage, { mode: "edit", row: scheduled, values: { ...values, title: scheduled.title }, errors: {}, now, appUrl: "https://next.example.test" })],
+    ["scheduled.html", jsx(FeaturedFormPage, { mode: "edit", row: scheduled, values: { ...values, title: scheduled.title, starts_at: "2026-10-01 20:00", ends_at: "" }, errors: {}, now, appUrl: "https://next.example.test" })],
   ] as const;
   await mkdir(output); // Refuse to overwrite another evidence bundle.
   const manifest = [];

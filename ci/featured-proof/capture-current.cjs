@@ -50,6 +50,11 @@ async function main() {
             for (const status of ['live', 'scheduled', 'expired', 'unpublished']) {
               const badge = page.locator(`[data-status="${status}"]`);
               check(`${status} label visible`, await badge.isVisible() && (await badge.innerText()) === status);
+              check(`${status} label fits one line`, await badge.evaluate(el => {
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                return range.getClientRects().length === 1;
+              }));
             }
           } else {
             check('scheduled label', await page.locator('[data-status="scheduled"]').isVisible());

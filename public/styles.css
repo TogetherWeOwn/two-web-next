@@ -60,6 +60,8 @@ dl.facts > div { display: block; }
 .featured-status-expired, .featured-status-unpublished { color: var(--muted); }
 @media (max-width: 40rem) {
   .featured-table th, .featured-table td { padding: .5rem .25rem; }
+  .featured-table th:nth-child(2) { width: 7rem; }
+  .featured-table th:nth-child(3) { width: 4.5rem; }
 }
 
 /* Visually hidden but announced (island live regions, sr headings). */
