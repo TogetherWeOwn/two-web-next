@@ -33,6 +33,7 @@ import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
+import { recordPageView } from "./pageviews";
 import { registerJoinRoutes } from "./join/route";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
@@ -111,6 +112,11 @@ app.use("*", (c, next) => requestLog(c, async () => {
   try {
     await staticSecurityHeaders(c, next);
     await robotsTag(c, async () => {});
+    // Staging-only first-party page-view counts (TOG-11885 experiment): rides
+    // this existing middleware slot so the pinned ALL /* multiplicity in
+    // test/member-exposure.test.ts is unchanged. Best-effort, never throws,
+    // never alters the response.
+    recordPageView(c);
   } catch (err) {
     // Handler errors already became responses; one thrown by this
     // post-processing would skip requestLog, so settle the final 500 here.
