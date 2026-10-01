@@ -36,7 +36,8 @@ export const URL_CASES = [
   { frozen: '/members/{user}', path: '/members/{user}', status: 302, redirect: '/auth/discord' },
   { frozen: '/admin/*', path: '/admin', status: 302, redirect: '/auth/discord' },
   { frozen: '/admin/*', path: '/admin/events', status: 302, redirect: '/auth/discord' },
-  { frozen: '/healthz', path: '/healthz', status: 200 },
+  ...['/health', '/healthz', '/db-ping'].map(path =>
+    ({ frozen: path, path, status: 404 })),
   { frozen: '/up', path: '/up', status: 200 },
   // Retired URLs from legacy ci/live-seo-probe.mjs plus PHP/Livewire endpoints.
   ...['/about-us/', '/news/', '/members', '/gamipress/points/', '/events/month/2024-01/',

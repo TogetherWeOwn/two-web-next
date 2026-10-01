@@ -96,6 +96,9 @@ to an error page, on the Next candidate in both phases.
 | `/livewire/livewire.js` | 404 |
 | `/livewire/update` | 404 (GET only; no mutation) |
 | `/auth/discord/redirect` | 404 (legacy alias deliberately not ported) |
+| `/health` | 404 (removed Next-only diagnostic; `/up` is the health endpoint) |
+| `/healthz` | 404 (removed Next-only diagnostic, not an alias for `/up`) |
+| `/db-ping` | 404 (removed Next-only diagnostic, no database probe) |
 
 ## Rules
 

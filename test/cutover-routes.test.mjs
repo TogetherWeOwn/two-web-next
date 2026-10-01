@@ -3,6 +3,39 @@ import app from '../src/index';
 import { parseArgs, runChecks } from '../ci/cutover-check.mjs';
 
 const leaves = ['/about', '/faq', '/rules', '/privacy'];
+const retiredDiagnostics = ['/health', '/healthz', '/db-ping'];
+
+for (const phase of ['before', 'after']) {
+  it(`${phase} URL gates accept actual retired diagnostic 404s without reading the DB`, async () => {
+    const target = phase === 'before' ? 'next.togetherweown.com' : 'togetherweown.com';
+    const options = parseArgs(['--phase', phase, '--target', target, '--event-key', 'fixture']);
+    const env = { APP_URL: `https://${target}` };
+    for (const binding of ['DB', 'DATABASE_URL']) {
+      Object.defineProperty(env, binding, { get() { throw new Error(`retired diagnostics must not read ${binding}`); } });
+    }
+    const seen = [];
+    const result = await runChecks(options, {
+      resolver: { resolve4: async () => ['127.0.0.1'], resolve6: async () => [] },
+      request: async url => {
+        const parsed = new URL(url);
+        if (parsed.hostname !== target || !retiredDiagnostics.includes(parsed.pathname)) {
+          return { status: 404, headers: {}, body: '', tlsVerified: true };
+        }
+        seen.push(parsed.pathname);
+        const response = await app.request(url, {}, env);
+        expect(response.status).toBe(404);
+        expect(response.headers.getSetCookie()).toHaveLength(0);
+        return { status: response.status, headers: Object.fromEntries(response.headers),
+          body: await response.text(), tlsVerified: true };
+      },
+    });
+    // Unrelated gates deliberately fail; all three diagnostic gates must exist and pass.
+    expect(seen.sort()).toEqual([...retiredDiagnostics].sort());
+    const diagnosticChecks = result.checks.filter(check => retiredDiagnostics.some(path => check.id === `url:${path}`));
+    expect(diagnosticChecks).toHaveLength(retiredDiagnostics.length);
+    expect(diagnosticChecks.filter(check => !check.ok)).toEqual([]);
+  });
+}
 
 // Feed the real DB-free route HTML into the gate; synthetic canonical markup
 // must not conceal a missing tag in the application. No sockets or DB bindings.

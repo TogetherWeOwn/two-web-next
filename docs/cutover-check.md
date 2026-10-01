@@ -85,7 +85,9 @@ path/pattern in the URL-freeze tables. Adding an unmapped row fails the checker
 and selftest. Concrete checks include guest `/events.json` 401, guest
 profile/member/admin 302 to `/auth/discord`, `/join/callback` 200 recovery
 without a code, login callback 302 to `/?n=signin_failed`, and 404s for retired
-WordPress/PHP/Livewire surfaces. `/discord` must be exactly 302, no-store, to a
+WordPress/PHP/Livewire surfaces and removed Next diagnostics (`/health`,
+`/healthz`, `/db-ping`) in both phases. `/up` is the sole health endpoint;
+retired diagnostics must not return 200 or redirect to it. `/discord` must be exactly 302, no-store, to a
 Discord **invite path**, not another OAuth or error URL. OAuth start Locations
 must advertise the target-host callback.
 
@@ -110,8 +112,11 @@ npm run check
 HTTP/TLS servers, injected DNS stubs, disposable certificates and local files.
 They do not query real domains, follow external redirects, use Discord secrets
 or connect to any database. Vitest also feeds actual Hono-rendered static-leaf
-HTML into the canonical/indexing gates in both phases (`test/cutover-routes.test.mjs`);
-these are in-process requests with no database bindings or live sockets. The rest of the suite uses local fixtures when
+HTML into the canonical/indexing gates and actual retired diagnostic responses
+into the URL-status gates in both phases (`test/cutover-routes.test.mjs`).
+Diagnostic fixtures pin 404 independently of `URL_CASES` and reject 200s/redirects;
+the actual-route tests throw on any database-binding read. These are in-process
+requests with no database connections or live sockets. The rest of the suite uses local fixtures when
 `DATABASE_URL` is unset, or approved agent-testdb/CI service containers only.
 
 Implementation references:

@@ -42,7 +42,8 @@ function fixture(url, phase) {
   }
   const row = URL_CASES.find(row => row.path.replace('{key}', eventKey).replace('{user}', '0') === path);
   assert.ok(row, `unrecognised fixture URL ${url}`);
-  const response = { status: row.status, headers, body: '' };
+  // Pin the retired diagnostic contract independently of the checker table.
+  const response = { status: ['/health', '/healthz', '/db-ping'].includes(path) ? 404 : row.status, headers, body: '' };
   if (pathname === '/sitemap_index.xml') {
     headers['content-type'] = 'application/xml';
     response.body = `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${origin}/</loc></url><url><loc>${origin}/e/${eventKey}</loc></url></urlset>`;
@@ -119,6 +120,27 @@ for (const phase of ['before', 'after']) {
     });
   });
 }
+
+test('retired diagnostics reject soft-404s and redirects in both phases', async () => {
+  for (const phase of ['before', 'after']) {
+    for (const path of ['/health', '/healthz', '/db-ping']) {
+      for (const status of [200, 302]) {
+        const result = await runChecks(options(phase), {
+          freeze, resolver: stubDns(), request: async url => {
+            const response = fixture(url, phase);
+            if (new URL(url).hostname === options(phase).target && new URL(url).pathname === path) {
+              response.status = status;
+              response.headers.location = '/up';
+            }
+            return { ...response, tlsVerified: true };
+          },
+        });
+        assert.equal(result.ok, false, `${phase} ${path} ${status}`);
+        assert.deepEqual(result.checks.filter(check => !check.ok).map(check => check.id), [`url:${path}`]);
+      }
+    }
+  }
+});
 
 test('freeze mapping rejects newly documented paths instead of silently skipping them', () => {
   assert.deepEqual(uncoveredFrozenPaths(freeze), []);
