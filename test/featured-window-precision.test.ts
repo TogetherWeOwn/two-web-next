@@ -137,7 +137,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured edit precision (isolated te
     const store = createMemorySessionStore();
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "precision-mod", username: "moderator",
+      tokenHash: await hashToken(token), userId: "333333333333333333", username: "moderator",
       avatar: null, member: true, moderator: true, expiresAt: new Date("2030-01-01T00:00:00Z"),
     });
     cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {

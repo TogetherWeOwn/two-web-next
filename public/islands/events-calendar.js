@@ -225,7 +225,13 @@
     load(target, true, { skeleton: true, syncInput: true, control: control });
   });
 
-  input.addEventListener("input", function () {
+  // IME composition: partial text is not a query. While composing, typing still
+  // supersedes an active search but schedules nothing; compositionend schedules
+  // the single search from the committed value (a trailing input event only
+  // reschedules that same timer, so it cannot double-submit).
+  var composing = false;
+
+  function scheduleSearch() {
     inputRevision += 1;
     cancelDebounce();
     // Typing supersedes a search immediately, not just when the next fetch starts.
@@ -237,15 +243,32 @@
       // Revoked owners cannot release loading inherited from navigation in finally.
       setLoading(false);
     }
+    if (composing) return;
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
       load(searchUrl(input.value), true, { search: true });
     }, DEBOUNCE_MS);
+  }
+
+  input.addEventListener("compositionstart", function () {
+    composing = true;
+    scheduleSearch();
+  });
+
+  input.addEventListener("compositionend", function () {
+    composing = false;
+    scheduleSearch();
+  });
+
+  input.addEventListener("input", function (event) {
+    if (event && event.isComposing) composing = true;
+    scheduleSearch();
   });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     cancelDebounce();
+    if (composing || (event && event.isComposing)) return;
     load(searchUrl(input.value), true, { search: true });
   });
 
