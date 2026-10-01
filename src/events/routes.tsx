@@ -84,14 +84,14 @@ async function sha256Etag(body: string): Promise<string> {
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }
 
-/** Strong validator over the bytes; 304 on a matching If-None-Match. Sessionless: sets no cookie. */
+/** Strong validator over the bytes; preserve queued headers, but never read or issue a session here. */
 async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
   const etag = await sha256Etag(body);
   const inm = c.req.header("if-none-match");
   if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))) {
-    return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
+    return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }
-  return new Response(body, { status: 200, headers: { ...headers, etag } });
+  return c.body(body, 200, { ...headers, etag });
 }
 
 async function calendarFeedResponse(c: Ctx, build: () => string, headers: Record<string, string>): Promise<Response> {
