@@ -9,10 +9,10 @@
 // W8: events sync carrier (unit, no DB) + public pages / JSON / moderator round-trips
 // (agent-testdb; skipped without DATABASE_URL like test/admin.test.ts).
 import { serializeSigned } from "hono/utils/cookie";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { buildSyncMessage, enqueueEventSync } from "../src/events/sync";
 import { SYNC_EVENT, backoffFor } from "../src/jobs/constants";
@@ -92,12 +92,19 @@ async function cookieFor(store: SessionStore, row: { userId: string; moderator: 
 }
 
 describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: MemberDataFixture["db"];
+  beforeAll(async () => {
+    // Replay every canonical migration into a guarded, owned schema (never public).
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(async () => { await fixture?.dispose(); });
   const store = createMemorySessionStore();
   const sent: QueueMessage[] = [];
   const env = {
     ...baseEnv,
-    ADMIN_DB: db,
+    get ADMIN_DB() { return db; },
     SESSION_STORE: store,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
     SYNC_EVENT_QUEUE: { send: async (m: QueueMessage) => void sent.push(m) },

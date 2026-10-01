@@ -514,7 +514,7 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string; session?: Session | null }> = ({ e, attendees = [], appUrl, jsonLd, session }) => {
+export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string; session?: Session | null; waitlistPosition?: number | null }> = ({ e, attendees = [], appUrl, jsonLd, session, waitlistPosition }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -524,7 +524,7 @@ export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl
       {e.status === "draft" ? <p class="notice" data-testid="event-draft">Draft</p> : null}
       {e.status === "past" ? <p class="notice" data-testid="event-past">Past event</p> : null}
       {e.status === "cancelled" ? <p class="notice" data-testid="event-cancelled">Cancelled</p> : null}
-      <h1>{e.title}</h1>
+      <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
       <p>
         <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
       </p>

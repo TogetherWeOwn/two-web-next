@@ -28,7 +28,8 @@ function eventRow(n: number): typeof events.$inferSelect {
   return {
     id: n, eventKey: `archive-${n}`, title: `Past game ${n}`, game: "Chess", description: null,
     startsAt: date, endsAt: date, timezone: "UTC", location: null, capacity: 10, status: "past",
-    discordEventId: null, syncRevision: 1, syncedRevision: 0, createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
+    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    syncRevision: 1, syncedRevision: 0, createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
     recurrenceCount: null, recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
     createdAt: date, updatedAt: date,
   };

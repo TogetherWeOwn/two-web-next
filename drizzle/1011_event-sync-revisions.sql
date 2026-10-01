@@ -5,15 +5,14 @@ CREATE TABLE "event_sync_attempts" (
 	"action" text NOT NULL,
 	"payload" jsonb NOT NULL,
 	"mirrored_at" timestamp with time zone NOT NULL,
-	"state" text DEFAULT 'pending' NOT NULL
+	"state" text DEFAULT 'pending' NOT NULL,
+	"request_attempts" integer DEFAULT 0 NOT NULL,
+	"next_attempt_at" timestamp with time zone DEFAULT now()
 );
 --> statement-breakpoint
-ALTER TABLE "events" ADD COLUMN "sync_revision" bigint DEFAULT 1 NOT NULL;
---> statement-breakpoint
-ALTER TABLE "events" ADD COLUMN "synced_revision" bigint DEFAULT 0 NOT NULL;
---> statement-breakpoint
-ALTER TABLE "event_sync_attempts" ADD CONSTRAINT "event_sync_attempts_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;
---> statement-breakpoint
+ALTER TABLE "events" ADD COLUMN "sync_revision" bigint DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "events" ADD COLUMN "synced_revision" bigint DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "event_sync_attempts" ADD CONSTRAINT "event_sync_attempts_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "event_sync_attempts_pending_idx" ON "event_sync_attempts" USING btree ("event_id") WHERE "event_sync_attempts"."state" = 'pending';
 --> statement-breakpoint
 -- The revision is an event-level outbox: it commits/rolls back with the write,

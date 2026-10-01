@@ -40,6 +40,8 @@ export const events = pgTable(
     // Database triggers advance this outbox revision with event/RSVP writes.
     syncRevision: bigint("sync_revision", { mode: "number" }).notNull().default(1),
     syncedRevision: bigint("synced_revision", { mode: "number" }).notNull().default(0),
+    discordSyncFailedAt: timestamp("discord_sync_failed_at", { withTimezone: true }),
+    discordSyncFailureCode: text("discord_sync_failure_code"),
     createdBy: text("created_by"),
     // Pause flag (TOG-8725): a published event stays visible while taking no
     // new answers. Default true so every row written by a caller that does
@@ -182,6 +184,9 @@ export const rsvps = pgTable(
       .notNull()
       .references(() => events.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
+    // Source tie-break survives orphan recovery; native answers leave it null.
+    // FIFO: created_at, coalesce(legacy_id, id), id. Do not JSON-serialize this bigint.
+    legacyId: bigint("legacy_id", { mode: "bigint" }),
     // going | maybe | not_going | waitlisted (src/islands/contracts.ts RSVP_STATUSES).
     status: text("status").notNull(),
     // Null until the Discord mirror has caught up with this answer. Every write resets it

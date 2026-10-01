@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import app from "../src/index";
 import { featuredContents } from "../src/db/admin-schema";
 import { FEATURED_READ_DEADLINE_MS, listVisibleFeatured } from "../src/featured";
+import * as eventReads from "../src/events/reads";
 import { featuredImageAllowed, featuredImageSrc } from "../src/featured-image";
 import { adminApp } from "../src/admin/routes";
 import { serializeSigned } from "hono/utils/cookie";
@@ -51,6 +52,7 @@ describe("featured homepage fallback (local fixtures)", () => {
   it("serves guest 200 at the deadline when featured connection acquisition stalls", async () => {
     const db = drizzle.mock();
     let rejectRead!: (error: Error) => void;
+    vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]); // only featured stalls in this test
     const transaction = vi.spyOn(db, "transaction").mockImplementation(() => new Promise((_, reject) => { rejectRead = reject; }));
     vi.useFakeTimers();
     try {

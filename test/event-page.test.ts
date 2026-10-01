@@ -20,7 +20,8 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     id: 1, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
     startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC",
     location: "The lobby & voice channel", capacity: 10, status: "published", rsvpOpen: true,
-    discordEventId: null, syncRevision: 1, syncedRevision: 0, createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
+    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    syncRevision: 1, syncedRevision: 0, createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
     ...over,
   };

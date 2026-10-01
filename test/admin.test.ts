@@ -28,11 +28,11 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { activityLog, events, featuredContents, memberDataAccessLogs } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
@@ -150,12 +150,19 @@ describe("admin guard pins (memory store, no DB)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: MemberDataFixture["db"];
+  beforeAll(async () => {
+    // Replay every canonical migration into a guarded, owned schema (never public).
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(async () => { await fixture?.dispose(); });
   const store = createMemorySessionStore();
   const modId = `admintest-mod-${Date.now()}`;
   let cookie = "";
   // Sessions resolve through the memory store; admin tables through ADMIN_DB.
-  const liveEnv = { ...env, ADMIN_DB: db } as Env;
+  const liveEnv = { ...env, get ADMIN_DB() { return db; } } as Env;
 
   const form = (fields: Record<string, string>) => ({
     method: "POST" as const,

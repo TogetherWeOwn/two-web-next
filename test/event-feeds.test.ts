@@ -3,10 +3,10 @@
 // route-inventory: GET /events/:file{.+\.ics}
 // W9 calendar feeds: byte-level fixtures pinned to two-web's EventIcs/EventRss/EventGoogleCalendar
 // output, plus route tests (agent-testdb; skipped without DATABASE_URL).
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "../src/index";
 import { events } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { eventIcs, eventsIcsCollection, eventsRss, googleCalendarUrl, webcalUrl } from "../src/events/feeds";
 
@@ -103,8 +103,15 @@ describe("feed builders (byte fixtures)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
-  const env = { APP_URL, ADMIN_DB: db, SESSION_SECRET: "test-session-secret-at-least-32-bytes-long" } as unknown as Env;
+  let fixture: MemberDataFixture;
+  let db: MemberDataFixture["db"];
+  beforeAll(async () => {
+    // Replay every canonical migration into a guarded, owned schema (never public).
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(async () => { await fixture?.dispose(); });
+  const env = { APP_URL, get ADMIN_DB() { return db; }, SESSION_SECRET: "test-session-secret-at-least-32-bytes-long" } as unknown as Env;
   const req = (path: string, init: RequestInit = {}) => app.request(path, init, env);
   const ins = (key: string, status: "draft" | "published" | "cancelled" | "past", endsAt = "2099-01-02T00:00:00Z") =>
     db.insert(events).values({ eventKey: key, title: `t-${key}`, startsAt: new Date("2099-01-01T00:00:00Z"), endsAt: new Date(endsAt), timezone: "UTC", status } as never);
