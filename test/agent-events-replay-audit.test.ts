@@ -79,7 +79,7 @@ describe.skipIf(!process.env.DATABASE_URL)("successful replay audit receipts (is
     const hits = () => sql`SELECT bucket, count(*)::int AS n FROM agent_event_hits
       WHERE bucket IN (${`mutating:${grantId}`}, ${`read:${grantId}`}, ${`shield:${verifier}`}) GROUP BY bucket ORDER BY bucket`;
     const secretFree = async () => {
-      const dump = JSON.stringify(await sql`SELECT * FROM agent_event_audits WHERE grant_id = ${grantId}`);
+      const dump = JSON.stringify(await sql`SELECT * FROM agent_event_audits`);
       expect(dump).not.toContain(credential);
       expect(dump).not.toContain(verifier);
     };
@@ -203,6 +203,73 @@ describe.skipIf(!process.env.DATABASE_URL)("successful replay audit receipts (is
     expect((await c.call(body, small)).status).toBe(429);
     expect(await sql`SELECT * FROM agent_event_audits WHERE grant_id = ${c.grantId}`).toEqual(audits);
     expect(await c.hits()).toEqual(hits);
+  });
+
+  it.each(["grant", "audit table"] as const)("bounds fast replay and its failure receipt while the %s is locked", async (lockedResource) => {
+    const c = await caller();
+    const key = randomUUID();
+    const body = { op: "create", idempotency_key: key, fields };
+    const small = { ...cfg, lockWaitMs: 50 };
+    const first = await c.call(body, small);
+    expect(first.status).toBe(201);
+    const saved = await c.stored(key);
+    const event = await c.event();
+    const hits = await c.hits();
+    const writes = writeBack.mock.calls.length;
+    const reads = observe.mock.calls.length;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let signal!: () => void;
+    const locked = new Promise<void>((resolve) => { signal = resolve; });
+    const rollback = new Error("fixture lock rollback");
+    const holder = sql.begin(async (tx) => {
+      if (lockedResource === "grant") await tx`DELETE FROM agent_event_grants WHERE id = ${c.grantId}`;
+      else await tx`LOCK TABLE agent_event_audits IN ACCESS EXCLUSIVE MODE`;
+      signal();
+      await held;
+      throw rollback;
+    }).catch((err) => { if (err !== rollback) throw err; });
+    let pending: Promise<Answer> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let busy!: Answer;
+    try {
+      await Promise.race([locked, holder.then(() => { throw new Error("lock holder ended before release"); })]);
+      pending = c.call(body, small);
+      busy = await Promise.race([pending, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("fast replay or failure receipt blocked beyond 750ms with lockWaitMs=50")), 750);
+      })]);
+      // Assert before releasing the lock: cleanup cannot mask a hung request.
+      expect(busy.status).toBe(503);
+      expect(busy.body.reason).toBe("operation_busy");
+      expect(busy.body.request_id).not.toBe(first.body.request_id);
+      expect(busy.body.replayed).toBeUndefined();
+    } finally {
+      if (timer) clearTimeout(timer);
+      release();
+      await holder;
+      await pending;
+    }
+    const rows = await sql`SELECT * FROM agent_event_audits WHERE idempotency_key = ${key} ORDER BY id`;
+    expect(rows.filter((r) => r.result === "replayed")).toHaveLength(0);
+    if (lockedResource === "grant") {
+      expect(rows).toHaveLength(2);
+      expect(rows[1]).toMatchObject({ grant_id: null, event_key: first.body.event_key, operation: "create",
+        request_id: busy.body.request_id, result: "error", reason_code: "operation_busy", payload_digest: await digest(body) });
+    } else expect(rows).toHaveLength(1); // No receipt is writable under a table lock; never claim success.
+    expect(await c.stored(key)).toEqual(saved);
+    expect(await c.event()).toEqual(event);
+    const after = await c.hits();
+    expect(after.filter((r) => !r.bucket.startsWith("shield:"))).toEqual(hits.filter((r) => !r.bucket.startsWith("shield:")));
+    expect(after.find((r) => r.bucket.startsWith("shield:"))!.n).toBe(hits.find((r) => r.bucket.startsWith("shield:"))!.n + 1);
+    expect(writeBack.mock.calls).toHaveLength(writes);
+    expect(observe.mock.calls).toHaveLength(reads);
+    const retry = await c.call(body, small);
+    expect(retry).toEqual({ status: first.status, body: { ...first.body, replayed: true, request_id: retry.body.request_id } });
+    expect(retry.body.request_id).not.toBe(busy.body.request_id);
+    expect((await c.receipts(key)).filter((r) => r.result === "replayed")).toHaveLength(1);
+    expect(await c.stored(key)).toEqual(saved);
+    expect(await c.event()).toEqual(event);
+    await c.secretFree();
   });
 
   it("retains historical double-encoded replay evidence on the shared-event head", async (context) => {
