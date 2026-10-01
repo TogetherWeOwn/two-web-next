@@ -72,7 +72,10 @@ beforeEach(() => {
   vi.mocked(listCalendarPast).mockResolvedValue([eventRow(2, new Date("2020-01-12T20:00:00Z"))]);
   vi.spyOn(console, "info").mockImplementation(() => {});
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("calendar native search state", () => {
   it.each([
@@ -117,6 +120,18 @@ describe("calendar native search state", () => {
     expect(nativeSearch(html, "").params.has("past")).toBe(false);
     expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({
       view: "list", month: "2030-02", past: false,
+    });
+  });
+
+  it("normalizes invalid state to the current month when there are no upcoming rows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
+    vi.mocked(listUpcoming).mockResolvedValue([]);
+    vi.mocked(listCalendarPast).mockResolvedValue([]);
+    const html = await page("/events?view=bad&month=bad&past=0");
+    expect(calendarState(html)).toEqual({ view: "list", month: "2026-10", past: false });
+    expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({
+      view: "list", month: "2026-10", past: false,
     });
   });
 
