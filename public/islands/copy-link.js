@@ -4,6 +4,8 @@
   const toast = document.querySelector("[data-copy-toast]");
   if (!link || !toast) return;
   let timer;
+  // Monotonic attempt token: only the newest click may touch the toast or timer.
+  let latest = 0;
 
   function fallback(text) {
     const active = document.activeElement;
@@ -35,6 +37,10 @@
   }
 
   async function copy() {
+    const mine = ++latest;
+    // Drop the previous owner's feedback even if this attempt remains pending.
+    clearTimeout(timer);
+    toast.textContent = "";
     const text = link.getAttribute("data-copy-link");
     let copied = false;
     try {
@@ -45,6 +51,8 @@
           await navigator.clipboard.writeText(text);
           copied = true;
         } catch {
+          // A newer click already owns feedback; do not run the legacy fallback for a stale attempt.
+          if (mine !== latest) return;
           copied = fallback(text);
         }
       } else {
@@ -53,14 +61,19 @@
     } catch {
       copied = false;
     }
-    clearTimeout(timer);
-    toast.textContent = copied ? "Event link copied." : "That link didn't copy — copy it from the address bar.";
-    timer = setTimeout(() => { toast.textContent = ""; }, 4000);
+    if (mine !== latest) return;
+    toast.textContent = copied
+      ? "Event link copied."
+      : "That link didn't copy — copy it from the address bar.";
+    timer = setTimeout(() => {
+      if (mine === latest) toast.textContent = "";
+    }, 4000);
   }
 
   link.setAttribute("role", "button");
   link.addEventListener("click", (event) => {
-    if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+      return;
     event.preventDefault();
     void copy();
   });
