@@ -1,4 +1,5 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
+import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
 import type { BotClient, EventStore, UniqueLock } from "./types";
 
@@ -87,7 +88,7 @@ export async function handleSyncEvent(
       : await deps.bot.upsertEvent(attempt.payload, msg.idempotencyKey);
     if (!answer.ok) {
       if (!answer.retryable) return { definitive: true,
-        failed: `The bot refused ${attempt.action} for ${msg.eventKey} with \`${answer.code}\`: ${answer.message}` };
+        failed: botRefusalReason(`${attempt.action} for ${sanitizeQueueScope(msg.eventKey)}`, answer.code) };
       return await retry(answer.retryAfterSeconds ?? backoff());
     }
     await deps.events.completeSync(attempt, answer.discordEventId);
@@ -103,7 +104,7 @@ export async function handleSyncEvent(
       }
       throw e;
     }
-    if (e instanceof BotTerminalError) return { failed: e.message, definitive: true };
+    if (e instanceof BotTerminalError) return { failed: terminalFailureReason(), definitive: true };
     // Transport loss and local completion failure are both ambiguous. Never
     // replace their identity even at the carrier/request cap.
     if (e instanceof BotTransportError) return retry(backoff());
