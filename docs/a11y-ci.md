@@ -47,6 +47,9 @@ screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
   callers share one shutdown promise; a signal-exited Wrangler is not awaited
   a second time. Every disposer is attempted even if another fails, and
   cancellation exits nonzero only after cleanup and report generation.
+  Playwright's own SIGINT/SIGTERM handlers are disabled so they cannot exit the
+  process ahead of the runner. The a11y job runs real Chromium signal regressions
+  with a delayed disposer, verifying cleanup and evidence survive cancellation.
   No shared-table truncate or production/staging database access is involved.
 - Audit DB URLs normalize an omitted port to 5432; all audit client options also
   pin port/password so runner `PGPORT`/`PGPASSWORD` cannot change the approved

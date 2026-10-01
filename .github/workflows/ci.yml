@@ -39,6 +39,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - name: Chromium cancellation regressions
+        run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
       - name: WCAG 2.2 AA (local fixtures, no external services)
         run: npm run a11y
       - name: Accessibility evidence

@@ -9,7 +9,7 @@ import { build } from "esbuild";
 import { chromium, request as apiRequest } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { assertNoViolations, auditCases, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
-import { createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
+import { AUDIT_BROWSER_OPTIONS, createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 
 const output = resolve("artifacts/a11y");
 const lifecycle = createAuditLifecycle();
@@ -84,7 +84,9 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   assert(ready, "Local wrangler failed to become ready (see wrangler.log)");
-  browser = await lifecycle.acquire(() => chromium.launch(), (resource) => resource.close());
+  // The runner owns SIGINT/SIGTERM; Playwright's default SIGINT handler exits
+  // the process independently, before fixture cleanup and evidence can finish.
+  browser = await lifecycle.acquire(() => chromium.launch(AUDIT_BROWSER_OPTIONS), (resource) => resource.close());
   for (const viewport of [{ width: 360, height: 780 }, { width: 1280, height: 900 }]) {
     for (const scenario of scenarios) {
       lifecycle.assertRunning();

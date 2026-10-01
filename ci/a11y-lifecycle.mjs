@@ -1,5 +1,8 @@
 import { once } from "node:events";
 
+// Only the runner may exit on signals, after fixture cleanup and evidence.
+export const AUDIT_BROWSER_OPTIONS = Object.freeze({ handleSIGINT: false, handleSIGTERM: false });
+
 export async function stopChildProcess(child) {
   // A signal-exited child has exitCode=null, but will never emit another exit.
   if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
