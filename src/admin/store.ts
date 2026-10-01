@@ -6,15 +6,18 @@
 // - spatie LogsActivity dirty-only audit on both resources (M7).
 // - AccessRecorder one-row-per-request access log (M5).
 //
-// Pause/reopen holds the same event row lock as member RSVP writes. Moderator
-// routes dispatch the returned write-back only after the transaction commits.
+// Pause/reopen and capacity edits share the RSVP service's event-row FOR UPDATE
+// lock. Validation, edits and FIFO promotions commit together; routes dispatch
+// write-back only after commit, with promoted answers' mirror stamps reset.
 
-import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
 import type { Db } from "../db/index";
-import { activityLog, events, featuredContents, memberDataAccessLogs } from "../db/admin-schema";
+import { activityLog, events, featuredContents, memberDataAccessLogs, rsvps } from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
 import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
+import { CAPACITY_BELOW_GOING, goingCount, lockWaitlist, promoteWaitlist } from "../events/waitlist";
 
 export type Actor = { id: string; username: string };
 
@@ -193,10 +196,13 @@ export async function updateEvent(
   input: EventFormInput,
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   return db.transaction(async (tx) => {
-    // FOR UPDATE serialises concurrent parent edits so the child shift below
-    // always sees the committed old times (no double-shift).
+    // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
+    // child shift below always sees the committed old times (no double-shift).
     const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
+    if (input.capacity !== null && input.capacity < await goingCount(tx, locked.id)) {
+      throw new ValidationError({ capacity: CAPACITY_BELOW_GOING });
+    }
     const [row] = await tx
       .update(events)
       .set({
@@ -213,6 +219,7 @@ export async function updateEvent(
       .where(eq(events.eventKey, eventKey))
       .returning();
     if (!row) throw new Error("event update returned no row");
+    await promoteWaitlist(tx, row);
     const changes = dirty(locked as Record<string, unknown>, row as unknown as Record<string, unknown>);
     if (Object.keys(changes).length > 0) {
       await tx.insert(activityLog).values({
@@ -331,6 +338,9 @@ export async function setRsvpOpen(
     // so a wait that crosses the end cannot reopen an expired event.
     const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
+    // A mirror-stamp writer can hold a waiter row past expiry. Finish that
+    // promotion-row wait too before judging whether reopening is allowed.
+    if (open && !locked.rsvpOpen && locked.status === "published") await lockWaitlist(tx, locked.id);
     const now = clock();
     if (locked.status !== "published" || locked.endsAt <= now) {
       throw new ValidationError({ rsvp_open: "Only published events that have not ended can pause or reopen RSVPs." });
@@ -339,6 +349,9 @@ export async function setRsvpOpen(
     const [row] = await tx.update(events).set({ rsvpOpen: open, updatedAt: now })
       .where(eq(events.eventKey, eventKey)).returning();
     if (!row) throw new Error("event RSVP toggle returned no row");
+    // Withdrawals/capacity edits leave the line frozen while paused. Reopening
+    // settles those vacancies in FIFO order before the same event sync is queued.
+    if (open) await promoteWaitlist(tx, row, clock);
     await tx.insert(activityLog).values({
       logName: "default",
       description: `${open ? "reopened" : "paused"} RSVPs for event ${row.title}`,
@@ -357,18 +370,30 @@ export class NotFoundError extends Error {
   }
 }
 
-export async function listEvents(
-  db: Db,
-  opts: { q?: string; status?: string; rsvpOpen?: boolean; order?: "asc" | "desc" },
-): Promise<EventRow[]> {
+/** Fetch one extra row so pagination needs no separate count query. */
+export async function listEvents(db: Db, params: EventListParams): Promise<EventRow[]> {
+  const opts = parseEventListQuery(params);
   const conds = [];
   if (opts.q) conds.push(ilike(events.title, `%${opts.q}%`));
   if (opts.status) conds.push(eq(events.status, opts.status));
-  if (opts.rsvpOpen !== undefined) conds.push(eq(events.rsvpOpen, opts.rsvpOpen));
-  const where = conds.length === 1 ? conds[0] : conds.length > 1 ? and(...conds) : undefined;
-  const order = opts.order === "asc" ? asc(events.startsAt) : desc(events.startsAt);
-  if (where) return db.select().from(events).where(where).orderBy(order);
-  return db.select().from(events).orderBy(order);
+  if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
+  if (opts.series === "parent") conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
+  if (opts.series === "child") conds.push(isNotNull(events.parentEventId));
+  if (opts.series === "standalone") conds.push(and(isNull(events.parentEventId), isNull(events.recurrenceFrequency)));
+  if (opts.fill === "unlimited") conds.push(isNull(events.capacity));
+  if (opts.fill === "full" || opts.fill === "has_seats") {
+    // Only Going occupies a seat: Maybe and Waitlist never make an event full.
+    const going = db.select({ count: sql<number>`count(*)` }).from(rsvps)
+      .where(and(eq(rsvps.eventId, events.id), eq(rsvps.status, "going")));
+    conds.push(isNotNull(events.capacity));
+    conds.push(opts.fill === "full" ? sql`(${going}) >= ${events.capacity}` : sql`(${going}) < ${events.capacity}`);
+  }
+  // Pick real column objects, never an identifier interpolated from the URL.
+  const column = opts.sort === "title" ? events.title : opts.sort === "status" ? events.status : events.startsAt;
+  const order = opts.order === "asc" ? asc(column) : desc(column);
+  return db.select().from(events).where(and(...conds))
+    .orderBy(order, asc(events.id))
+    .limit(EVENT_PAGE_SIZE + 1).offset((opts.page - 1) * EVENT_PAGE_SIZE);
 }
 
 export async function getEvent(db: Db, eventKey: string): Promise<EventRow | null> {

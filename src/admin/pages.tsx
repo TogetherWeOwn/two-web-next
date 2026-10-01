@@ -7,6 +7,7 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Actor } from "./guard";
 import { SkipLink } from "../pages";
 import type { EventRow, FeaturedRow } from "./store";
+import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 
 const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
@@ -217,20 +218,34 @@ export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
   </Shell>
 );
 
-export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string; rsvpOpen: string }> = ({ rows, q, status, rsvpOpen }) => (
+const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({ label, sort, query }) => {
+  const active = query.sort === sort;
+  const order = active && query.order === "asc" ? "desc" : "asc";
+  return (
+    <th scope="col" aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}>
+      <a href={eventListUrl(query, { sort, order, page: 1 })} aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}>
+        {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+      </a>
+    </th>
+  );
+};
+
+export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
       <form method="get" action="/admin/events" class="filters">
+        <input type="hidden" name="sort" value={query.sort} />
+        <input type="hidden" name="order" value={query.order} />
         <div class="field">
           <label for="q">Search</label>
-          <input id="q" name="q" type="search" value={q} />
+          <input id="q" name="q" type="search" value={query.q} />
         </div>
         <div class="field">
           <label for="status">Status</label>
           <select id="status" name="status">
             {["", "draft", "published", "cancelled", "past"].map((s) => (
-              <option value={s} selected={s === status}>
+              <option value={s} selected={s === query.status}>
                 {s === "" ? "All" : s}
               </option>
             ))}
@@ -239,9 +254,25 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string; rsvpO
         <div class="field">
           <label for="rsvp_open">RSVPs</label>
           <select id="rsvp_open" name="rsvp_open">
-            <option value="" selected={rsvpOpen === ""}>All</option>
-            <option value="1" selected={rsvpOpen === "1"}>Open</option>
-            <option value="0" selected={rsvpOpen === "0"}>Paused</option>
+            <option value="" selected={query.rsvp_open === ""}>All</option>
+            <option value="1" selected={query.rsvp_open === "1"}>Open</option>
+            <option value="0" selected={query.rsvp_open === "0"}>Paused</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="series">Series</label>
+          <select id="series" name="series">
+            {[["", "All"], ["parent", "Parent"], ["child", "Child"], ["standalone", "Standalone"]].map(([value, label]) => (
+              <option value={value} selected={value === query.series}>{label}</option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="fill">Fill</label>
+          <select id="fill" name="fill">
+            {[["", "All"], ["full", "Full"], ["has_seats", "Has seats"], ["unlimited", "Unlimited"]].map(([value, label]) => (
+              <option value={value} selected={value === query.fill}>{label}</option>
+            ))}
           </select>
         </div>
         <div class="field">
@@ -254,10 +285,10 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string; rsvpO
       <table class="admin-table" data-testid="events-table">
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Status</th>
-            <th>Starts</th>
-            <th>Actions</th>
+            <EventSortHeader label="Title" sort="title" query={query} />
+            <EventSortHeader label="Status" sort="status" query={query} />
+            <EventSortHeader label="Starts" sort="starts_at" query={query} />
+            <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -293,6 +324,11 @@ export const EventsPage: FC<{ rows: EventRow[]; q: string; status: string; rsvpO
           )}
         </tbody>
       </table>
+      <nav aria-label="Event pages" class="actions">
+        {query.page > 1 ? <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a> : null}
+        <span>Page {query.page}</span>
+        {hasNext ? <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>Next</a> : null}
+      </nav>
     </section>
   </Shell>
 );

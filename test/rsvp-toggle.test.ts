@@ -108,10 +108,10 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP pause/reopen (isolated agent-te
   });
 
   it("counts only this event's going answers, including zero, on changed and no-op responses", async () => {
-    const row = await seed();
+    const row = await seed({ capacity: 2 });
     const other = await seed();
     await fixture.db.insert(rsvps).values([
-      ...["maybe", "not_going", "waitlisted"].map((status) => ({ eventId: row.id, userId: status, status })),
+      ...["maybe", "not_going"].map((status) => ({ eventId: row.id, userId: status, status })),
       { eventId: other.id, userId: "other-going", status: "going" },
     ]);
     for (const action of ["rsvp-pause", "rsvp-pause", "rsvp-reopen", "rsvp-reopen"]) {
@@ -122,12 +122,39 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP pause/reopen (isolated agent-te
     await fixture.db.insert(rsvps).values([
       { eventId: row.id, userId: "going-1", status: "going" },
       { eventId: row.id, userId: "going-2", status: "going" },
+      { eventId: row.id, userId: "waiting", status: "waitlisted" },
     ]);
     for (const action of ["rsvp-pause", "rsvp-pause", "rsvp-reopen", "rsvp-reopen"]) {
       const res = await request(`/events/${row.eventKey}/${action}`);
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({ data: { going_count: 2 } });
     }
+  });
+
+  it.each(["/events", "/admin/events"])("%s reopens the frozen FIFO line and syncs promoted answers once", async (prefix) => {
+    const row = await seed({ capacity: 1 });
+    const stamp = new Date("2026-01-01T00:00:00Z");
+    await fixture.db.insert(rsvps).values([
+      { eventId: row.id, userId: "toggle-member", status: "going" },
+      { eventId: row.id, userId: "first", status: "waitlisted", createdAt: stamp, syncedToDiscordAt: stamp },
+      { eventId: row.id, userId: "second", status: "waitlisted", createdAt: new Date(stamp.getTime() + 1000), syncedToDiscordAt: stamp },
+    ]);
+    expect((await request(`${prefix}/${row.eventKey}/rsvp-pause`)).status).toBe(prefix === "/events" ? 200 : 303);
+    expect((await request(`/events/${row.eventKey}/rsvp`, "DELETE", false)).status).toBe(204);
+    expect((await fixture.db.select().from(rsvps)).every((r) => r.status === "waitlisted")).toBe(true);
+    sent.length = 0;
+    const reopen = await request(`${prefix}/${row.eventKey}/rsvp-reopen`);
+    expect(reopen.status).toBe(prefix === "/events" ? 200 : 303);
+    if (prefix === "/events") expect(await reopen.json()).toMatchObject({ data: { going_count: 1, rsvp_open: true } });
+    const answers = await fixture.db.select().from(rsvps);
+    expect(answers.find((r) => r.userId === "first")).toMatchObject({ status: "going", syncedToDiscordAt: null });
+    expect(answers.find((r) => r.userId === "second")).toMatchObject({ status: "waitlisted", syncedToDiscordAt: stamp });
+    const repeat = await request(`${prefix}/${row.eventKey}/rsvp-reopen`);
+    expect(repeat.status).toBe(prefix === "/events" ? 200 : 303);
+    expect(await fixture.db.select().from(rsvps)).toEqual(answers);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ eventKey: row.eventKey, action: "event.upsert" });
+    expect(await audits()).toHaveLength(2);
   });
 
   it("refuses draft, cancelled, past and clock-ended events, including already-satisfied targets", async () => {
@@ -148,6 +175,47 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP pause/reopen (isolated agent-te
     expect(await audits()).toHaveLength(0);
     expect(sent).toHaveLength(0);
     for (const path of paths) expect((await request(path)).status).toBe(404);
+  });
+
+  it("refuses reopening when a promotion-row lock wait crosses the event end", async () => {
+    const row = await seed({ rsvpOpen: false, capacity: 1 });
+    await fixture.db.insert(rsvps).values({ eventId: row.id, userId: "waiting", status: "waitlisted" });
+    let release!: () => void;
+    let ready!: (pid: number) => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const acquired = new Promise<number>((resolve) => { ready = resolve; });
+    const holder = fixture.client.begin(async (tx) => {
+      await tx`select id from rsvps where event_id = ${row.id} for update`;
+      const [backend] = await tx`select pg_backend_pid() as pid`;
+      ready(Number(backend!.pid));
+      await gate;
+    });
+    let expired = false;
+    let pending: Promise<unknown> | undefined;
+    try {
+      const pid = await acquired;
+      pending = setRsvpOpen(fixture.db, actor, row.eventKey, true, () => expired ? row.endsAt : new Date())
+        .catch((error: unknown) => error);
+      const deadline = Date.now() + 5000;
+      let blocked = false;
+      do {
+        const waiting = await fixture.client`select pid from pg_stat_activity where datname = current_database()
+          and wait_event_type = 'Lock' and ${pid} = any(pg_blocking_pids(pid))`;
+        if (waiting.length) { blocked = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      } while (Date.now() < deadline);
+      expect(blocked).toBe(true);
+      expired = true;
+    } finally {
+      release();
+      await holder;
+      await pending;
+    }
+    expect(await pending).toBeInstanceOf(ValidationError);
+    expect((await fixture.db.select().from(events))[0]!.rsvpOpen).toBe(false);
+    expect((await fixture.db.select().from(rsvps))[0]!.status).toBe("waitlisted");
+    expect(await audits()).toHaveLength(0);
+    expect(sent).toHaveLength(0);
   });
 
   it("serializes concurrent identical toggles into one audit and one dispatch", async () => {
