@@ -127,8 +127,12 @@ export async function importAudit({ legacy, target, legacySchema = 'public', tar
   // still advance sequences or invoke triggers).
   await legacy.begin('isolation level repeatable read read only', async (source) => {
     await source`SET LOCAL TIME ZONE 'UTC'`;
+    // Timestamp text must use the same unambiguous format at both boundaries,
+    // including when callers supply clients with hostile session defaults.
+    await source`SET LOCAL DateStyle TO 'ISO, YMD'`;
     await target.begin(dryRun ? 'isolation level repeatable read read only' : '', async (dest) => {
       await dest`SET LOCAL TIME ZONE 'UTC'`;
+      await dest`SET LOCAL DateStyle TO 'ISO, YMD'`;
       if (legacySchema === targetSchema) await assertSeparateDatabase(source, dest);
       const ownershipTable = tableName(legacySchema, 'events');
       const [ownership] = enableGrants ? await source`
