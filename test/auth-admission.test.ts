@@ -139,7 +139,12 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
       const fetch = mockDiscord();
       const headers = { cookie: `${original.cookie}; ${prior.cookie}` };
       const path = `${callbackPath(flow)}?error=access_denied&code=fixture-code&state=${original.state}`;
-      for (let n = 0; n < 2; n++) expect(sessionCookie(await app.request(path, { headers }, f.env))).toBeUndefined();
+      for (let n = 0; n < 2; n++) {
+        const denied = await app.request(path, { headers }, f.env);
+        expect(sessionCookie(denied)).toBeUndefined();
+        if (flow === "auth") expect(denied.headers.get("location")).toBe("/?n=signin_denied");
+        else expect(await denied.text()).toContain("Join cancelled");
+      }
       expect(await f.store.get(prior.hash)).toMatchObject({ username: "Prior Member", moderator: true });
       expect(fetch).not.toHaveBeenCalled();
       expect(f.create).not.toHaveBeenCalled();
