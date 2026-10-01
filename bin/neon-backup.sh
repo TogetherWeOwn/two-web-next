@@ -9,10 +9,10 @@
 # the dump restores into a scratch database by comparing every table's row
 # count before and after.
 #
-# Backup target naming: neon-<branch>/neon-<UTC>.dump inside R2
+# Backup target naming: neon/<branch>-<branch>-<UTC>.dump inside R2
 # `two-web-next-backups` (EU-jurisdiction-pinned; jurisdiction immutable after
 # creation). Weeklies are `promote-weekly` copies named
-# neon-<UTC>-weekly-<UTC>.dump. Retention (rotate): newest 7 dailies + newest
+# <daily-without-.dump>-weekly-<UTC>.dump. Retention (rotate): newest 7 dailies + newest
 # 4 weeklies — the same policy as two-web bin/pg-backup.sh.
 #
 # CISO condition (TOG-9837): member-data dumps land ONLY in the EU-pinned
@@ -22,7 +22,7 @@
 #
 # Deletion hygiene: wrangler has no `r2 object list`, so `rotate` and `check`
 # resolve the key set by downloading the checked-in-nearby remote manifest
-# (`neon-<branch>/MANIFEST.txt`, written by every backup) with
+# (`neon/<branch>-<branch>/MANIFEST.txt`, written by every backup) with
 # `wrangler r2 object get`. No secret or token is ever passed on argv or
 # printed: pg_dump reads the password from the PGPASSWORD env var only.
 #
@@ -150,8 +150,13 @@ wr() {
 # Rewrite the remote manifest from the local list of keys (one per line,
 # sorted). The manifest is the rotation/check source of truth because wrangler
 # has no `r2 object list`.
+admit_manifest() {
+  python3 "$ROOT/bin/backup/manifest-helper" "$1" "$(prefix)" "$2" "${@:3}"
+}
+
 write_manifest() {
   local keys_file="$1" tmp
+  admit_manifest validate "$keys_file"
   tmp="$(mktemp)"
   sort "$keys_file" > "$tmp"
   wr r2 object put "$BACKUP_BUCKET/$(manifest_key)" --file "$tmp" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
@@ -159,8 +164,17 @@ write_manifest() {
 }
 
 fetch_manifest() {
-  local out="$1"
-  wr r2 object get "$BACKUP_BUCKET/$(manifest_key)" --file "$out" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
+  local out="$1" allow_missing="${2:-0}"
+  if wr r2 object get "$BACKUP_BUCKET/$(manifest_key)" --file "$out" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>"$out.stderr"; then
+    admit_manifest validate "$out"
+  elif [ "$allow_missing" = 1 ] && python3 "$ROOT/bin/backup/manifest-helper" missing "$out.stderr"; then
+    # Only an explicit missing-object diagnostic initializes first use. A failed
+    # GET may create partial output; discard it instead of admitting its bytes.
+    : > "$out"
+  else
+    echo "neon-backup: manifest read failed; refusing remote mutation" >&2
+    exit 1
+  fi
 }
 
 remote_tmp() { mktemp -d; }
@@ -169,22 +183,16 @@ do_backup() {
   require_database_url
   local ts tmp key dir
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
-  tmp="$(mktemp)"
-  trap 'rm -f "$tmp"' EXIT
-  dump_to_file "$tmp"
-  [ -s "$tmp" ] || { echo "neon-backup: refusing to upload an empty dump" >&2; exit 1; }
   key="$(prefix)-${ts}.dump"
-  wr r2 object put "$BACKUP_BUCKET/$key" --file "$tmp" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
-  rm -f "$tmp"
-  trap - EXIT
-  # Manifest update + upload proof: re-download the manifest we just wrote.
   dir="$(remote_tmp)"
   trap 'rm -rf "$dir"' EXIT
-  if wr r2 object get "$BACKUP_BUCKET/$(manifest_key)" --file "$dir/MANIFEST.txt" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
-    printf '%s\n' "$key" >> "$dir/MANIFEST.txt"
-  else
-    printf '%s\n' "$key" > "$dir/MANIFEST.txt"
-  fi
+  fetch_manifest "$dir/MANIFEST.txt" 1
+  admit_manifest append "$dir/MANIFEST.txt" "$key"
+  tmp="$dir/dump"
+  dump_to_file "$tmp"
+  [ -s "$tmp" ] || { echo "neon-backup: refusing to upload an empty dump" >&2; exit 1; }
+  wr r2 object put "$BACKUP_BUCKET/$key" --file "$tmp" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
+  # Manifest update + upload proof: re-download the manifest we just wrote.
   write_manifest "$dir/MANIFEST.txt"
   fetch_manifest "$dir/PROOF.txt"
   grep -qxF "$key" "$dir/PROOF.txt" || { echo "neon-backup: upload proof failed: $key missing from re-downloaded manifest" >&2; exit 1; }
@@ -207,9 +215,9 @@ do_promote_weekly() {
   [ -n "$src" ] || { echo "neon-backup: no daily to promote under branch '$BRANCH'" >&2; exit 1; }
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   weekly="${src%.dump}-weekly-${ts}.dump"
+  admit_manifest append "$dir/MANIFEST.txt" "$weekly"
   wr r2 object get "$BACKUP_BUCKET/$src" --file "$dir/dl.dump" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
   wr r2 object put "$BACKUP_BUCKET/$weekly" --file "$dir/dl.dump" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
-  printf '%s\n' "$weekly" >> "$dir/MANIFEST.txt"
   write_manifest "$dir/MANIFEST.txt"
   rm -rf "$dir"
   trap - EXIT
@@ -263,7 +271,7 @@ do_check() {
   dir="$(remote_tmp)"
   trap 'rm -rf "$dir"' EXIT
   fetch_manifest "$dir/MANIFEST.txt"
-  while IFS= read -r key; do
+  while IFS= read -r key || [ -n "$key" ]; do
     [ -n "$key" ] || continue
     if wr r2 object get "$BACKUP_BUCKET/$key" --pipe --remote --jurisdiction "$BACKUP_JURISDICTION" > /dev/null 2>&1; then
       echo "ok: $key"
