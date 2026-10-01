@@ -2,8 +2,9 @@
 // (one critical line per distinct `class@route` fingerprint, muted by
 // ErrorAlertRateLimit for 5 minutes, dont-report list silent) and
 // AppServiceProvider::Queue::failing (one critical line per failed job).
-// There are no webhooks or mail: the platform log tail is the only channel
-// (see docs/runbook-alerts.md). Every alert is ONE single-line JSON object on
+// The app emits logs only; tail/worker.ts delivers allowlisted summaries to
+// the optional ops Discord webhook (see docs/runbook-alerts.md). Every alert is
+// ONE single-line JSON object on
 // console.error with `event` set to "error.alert" or "queue.failing".
 //
 // Alert lines carry the exception CLASS, never its message: a database error

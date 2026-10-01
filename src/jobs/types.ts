@@ -89,7 +89,8 @@ export interface UniqueLock {
 export type QueueMessage =
   | { kind: "sync-event"; eventKey: string; idempotencyKey: string; jobId?: string }
   | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
-  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string };
+  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
+  | { kind: "alert-probe"; jobId?: never };
 
 /**
  * N3 (TOG-9895): the countable side of the queue. Cloudflare Queues carries the

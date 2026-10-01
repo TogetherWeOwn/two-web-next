@@ -1,4 +1,5 @@
 import { alertQueueFailing } from "../alerts";
+import { AlertProbeError } from "../alert-probe-error";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
@@ -15,6 +16,7 @@ type Msg = { body: unknown; attempts: number; ack(): void; retry(o?: { delaySeco
 
 // Legacy identity of each job, for the queue.failing alert line (ports Queue::failing fields).
 const JOBS = {
+  "alert-probe": { queue: "two-internal-action", job: "AlertProbe", tries: 1 },
   "sync-event": { queue: "two-sync-event", job: "SyncEventToDiscord", tries: SYNC_EVENT.tries },
   announcement: { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
   "role-assign": { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
@@ -28,7 +30,7 @@ function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: s
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
 export async function consume(
   batch: { messages: readonly Msg[] },
-  deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger },
+  deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger; probeEnabled?: boolean },
 ): Promise<void> {
   for (const m of batch.messages) {
     const body = m.body as QueueMessage;
@@ -72,10 +74,16 @@ export async function consume(
 
     let outcome: Outcome;
     try {
-      outcome =
-        body.kind === "sync-event"
+      if (body.kind === "alert-probe") {
+        // Poison only the synthetic job, only when the runtime's QA gate is on.
+        // No ledger fixture, bot request, event mutation or uniqueness lock.
+        if (deps.probeEnabled) throw new AlertProbeError();
+        outcome = { done: true }; // A delayed staging probe cannot page in production.
+      } else {
+        outcome = body.kind === "sync-event"
           ? await handleSyncEvent(body, m.attempts, deps)
           : await handleCallInternalAction(body, m.attempts, deps.bot);
+      }
     } catch (e) {
       // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
       // redeliverable throw goes back on the queue with the same message (same

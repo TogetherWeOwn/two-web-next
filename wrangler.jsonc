@@ -6,6 +6,8 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
+  "tail_consumers": [{ "service": "two-web-next-alerts" }],
   "workers_dev": false,
   // Staging host. The Discord application must list ${APP_URL}/auth/discord/callback as a redirect URI.
   "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],

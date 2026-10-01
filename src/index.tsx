@@ -4,6 +4,7 @@ import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
 import { agentEventsRoute } from "./agent-events/route";
+import { registerAlertProbe } from "./alert-probe";
 import { readCounts } from "./counts";
 import { cspReportsRoute } from "./csp-reports";
 import {
@@ -517,5 +518,7 @@ app.post("/auth/qa/:identity", throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), a
   });
   return c.body(null, 204);
 });
+
+registerAlertProbe(app);
 
 export default app;
