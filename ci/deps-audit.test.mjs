@@ -4,7 +4,8 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync, deflateSync, deflateRawSync, brotliCompressSync } from 'node:zlib';
+import registry from './deps-audit-registry.cjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -178,8 +179,26 @@ test('severity counters must reconcile with total and individual package records
   assert.throws(() => evaluate(unexpected), /counter/);
 });
 
+test('raw bulk schema accepts clean data but rejects missing/defaultable policy fields', () => {
+  const advisory = { id: 100001, severity: 'high', vulnerable_versions: '<4.17.21' };
+  assert.ok(registry.validBulk({}));
+  assert.ok(registry.validBulk({ lodash: [] }));
+  for (const severity of ['info', 'low', 'moderate', 'high', 'critical']) {
+    assert.ok(registry.validBulk({ lodash: [{ ...advisory, severity }] }));
+  }
+  for (const value of [null, [], false, 'clean', { lodash: null }, { lodash: {} }, { lodash: [null] }]) {
+    assert.equal(registry.validBulk(value), false);
+  }
+  for (const [key, value] of [['id', undefined], ['id', '100001'], ['id', 0], ['id', 1.5],
+    ['id', Number.MAX_SAFE_INTEGER + 1], ['severity', undefined], ['severity', null], ['severity', ''],
+    ['severity', 'unrated'], ['vulnerable_versions', undefined], ['vulnerable_versions', ' '],
+    ['vulnerable_versions', []], ['name', 'wrong-package']]) {
+    assert.equal(registry.validBulk({ lodash: [{ ...advisory, [key]: value }] }), false);
+  }
+});
+
 async function withRegistry(run) {
-  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), 'deps-audit-online-'));
+  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), 'deps-audit-online space-'));
   const bulkBodies = [];
   const advisory = { severity: 'high' };
   const server = createServer(async (request, response) => {
@@ -187,11 +206,28 @@ async function withRegistry(run) {
     if (request.url === '/-/npm/v1/security/advisories/bulk') {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
-      const body = Buffer.concat(chunks);
-      bulkBodies.push(JSON.parse(request.headers['content-encoding'] === 'gzip' ? gunzipSync(body) : body));
-      response.end(JSON.stringify({ lodash: [{ id: 100001, title: 'Fixture advisory',
+      const requestBody = Buffer.concat(chunks);
+      bulkBodies.push(JSON.parse(request.headers['content-encoding'] === 'gzip' ? gunzipSync(requestBody) : requestBody));
+      const payload = Object.hasOwn(advisory, 'response') ? advisory.response : { lodash: [{ id: 100001, title: 'Fixture advisory',
         url: 'https://example.invalid/advisory/100001', severity: advisory.severity, vulnerable_versions: '<4.17.21',
-        cwe: [], cvss: { score: 7.5, vectorString: null } }] }));
+        cwe: [], cvss: { score: 7.5, vectorString: null } }] };
+      let body = Buffer.from(advisory.raw ?? JSON.stringify(payload));
+      if (advisory.encoding) {
+        const compressors = { gzip: gzipSync, 'x-gzip': gzipSync, deflate: deflateSync,
+          'x-deflate': deflateRawSync, br: brotliCompressSync };
+        body = compressors[advisory.encoding](body);
+        response.setHeader('Content-Encoding', advisory.encoding);
+      }
+      response.statusCode = advisory.status ?? 200;
+      if (advisory.status === 302) response.setHeader('Location', '/redirected-advisories');
+      if (advisory.truncated) {
+        response.setHeader('Content-Length', body.length + 1);
+        response.setHeader('Connection', 'close');
+      }
+      response.write(body.subarray(0, Math.ceil(body.length / 2)));
+      response.end(body.subarray(Math.ceil(body.length / 2)));
+    } else if (request.url === '/redirected-advisories') {
+      response.end('{}');
     } else if (request.url === '/lodash') {
       response.end(JSON.stringify({ name: 'lodash', 'dist-tags': { latest: '4.17.21' },
         versions: { '4.17.20': { name: 'lodash', version: '4.17.20' }, '4.17.21': { name: 'lodash', version: '4.17.21' } } }));
@@ -206,6 +242,7 @@ async function withRegistry(run) {
     const registry = `http://127.0.0.1:${server.address().port}`;
     mkdirSync(join(dir, 'ci'));
     copyFileSync(new URL('./deps-audit.mjs', import.meta.url), join(dir, 'ci/deps-audit.mjs'));
+    copyFileSync(new URL('./deps-audit-registry.cjs', import.meta.url), join(dir, 'ci/deps-audit-registry.cjs'));
     writeFileSync(join(dir, 'ci/deps-audit-allowlist.json'), JSON.stringify(empty));
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'audit-regression', version: '1.0.0', dependencies: { lodash: '4.17.20' } }));
     writeFileSync(join(dir, 'package-lock.json'), JSON.stringify({ name: 'audit-regression', version: '1.0.0', lockfileVersion: 3,
@@ -226,6 +263,7 @@ async function withRegistry(run) {
       return { status, stdout, stderr };
     };
     await run({ advisory, bulkBodies,
+      setAllowlist: (allowlist) => writeFileSync(join(dir, 'ci/deps-audit-allowlist.json'), JSON.stringify(allowlist)),
       gate: (overrides) => execute(process.execPath, [join(dir, 'ci/deps-audit.mjs')], overrides),
       audit: () => execute('npm', ['audit', '--offline=false', '--package-lock-only', '--json']),
     });
@@ -272,6 +310,72 @@ test('real npm gate bypasses a warmed installation cache after same-ID/range sev
   });
 });
 
+test('real npm registry schema failures cannot normalize into clean or exempted findings', { timeout: 30_000 }, async () => {
+  await withRegistry(async ({ advisory, bulkBodies, gate }) => {
+    const high = await gate();
+    assert.equal(high.status, 1);
+    assert.equal(JSON.parse(high.stdout).blocked[0].severity, 'high');
+    advisory.response = {};
+    const clean = await gate();
+    assert.equal(clean.status, 0, clean.stderr);
+    assert.deepEqual(JSON.parse(clean.stdout), { blocked: [], allowed: [], nonBlocking: [] });
+    const statuses = [];
+    for (const response of [null, []]) {
+      advisory.response = response;
+      const before = bulkBodies.length;
+      const result = await gate();
+      assert.ok(bulkBodies.length > before);
+      assert.match(result.stderr, /Registry advisory response was not schema-validated/);
+      statuses.push(result.status);
+    }
+    assert.deepEqual(statuses, [1, 1], 'registry null and [] must fail closed');
+  });
+});
+
+test('real npm missing advisory severity cannot inherit an exact high exception', { timeout: 30_000 }, async () => {
+  await withRegistry(async ({ advisory, gate, setAllowlist }) => {
+    const reviewed = new Date().toISOString().slice(0, 10);
+    const expires = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+    setAllowlist({ version: 1, exceptions: [{ package: 'lodash', range: '4.17.20', severity: 'high',
+      advisoryIds: [100001], reviewed, expires, reason: 'Local fixture only' }] });
+    const valid = await gate();
+    assert.equal(valid.status, 0, valid.stderr);
+    assert.equal(JSON.parse(valid.stdout).allowed[0].severity, 'high');
+    for (const severity of [undefined, null, '', 'unrated']) {
+      advisory.severity = severity;
+      const result = await gate();
+      assert.equal(result.status, 1, `invalid registry severity must not be exempted: ${result.stdout}`);
+      assert.match(result.stderr, /Registry advisory response was not schema-validated/);
+    }
+  });
+});
+
+test('real npm validates chunked/compressed registry data and rejects unchecked responses', { timeout: 30_000 }, async () => {
+  await withRegistry(async ({ advisory, gate }) => {
+    for (const encoding of ['gzip', 'x-gzip', 'deflate', 'x-deflate', 'br']) {
+      advisory.encoding = encoding;
+      advisory.response = {};
+      const clean = await gate();
+      assert.equal(clean.status, 0, `${encoding}: ${clean.stderr}`);
+      advisory.response = [];
+      const malformed = await gate();
+      assert.equal(malformed.status, 1, `${encoding}: ${malformed.stdout}`);
+    }
+    advisory.encoding = 'gzip';
+    advisory.raw = ' '.repeat(16 * 1024 * 1024) + '{}';
+    assert.equal((await gate()).status, 1, 'decoded response size is bounded');
+    delete advisory.encoding;
+    delete advisory.raw;
+    advisory.response = {};
+    for (const options of [{ status: 503 }, { status: 302 }, { truncated: true }, { raw: 'not JSON' }]) {
+      Object.assign(advisory, options);
+      const result = await gate({ npm_config_fetch_retries: '0' });
+      assert.equal(result.status, 1, `${JSON.stringify(options)}: ${result.stdout}`);
+      for (const key of Object.keys(options)) delete advisory[key];
+    }
+  });
+});
+
 test('CLI exit status: npm 0/1, findings, bad JSON, registry failure, and execution failure', () => {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), 'deps-audit-'));
   try {
@@ -286,6 +390,7 @@ printf '%s' 'owned fixture marker' > "$cache/marker"
 shift 3
 [ "$*" = "--package-lock-only --json --include=prod --include=dev --include=optional --include=peer" ] || exit 9
 printf '%s' "$AUDIT_FIXTURE"
+printf '%s' "$AUDIT_BOUNDARY" >&3
 exit "$AUDIT_STATUS"
 `);
     chmodSync(npm, 0o700);
@@ -297,7 +402,8 @@ exit "$AUDIT_STATUS"
     moderate.metadata.vulnerabilities.moderate = 1;
     const malformedCounters = fixture('clean');
     malformedCounters.metadata.vulnerabilities.critical = 1;
-    for (const [report, npmStatus, expected] of [
+    const validated = JSON.stringify({ version: 1, valid: true, responses: 1, pending: 0 });
+    for (const [report, npmStatus, expected, boundary = validated] of [
       [JSON.stringify(fixture('clean')), 0, 0],
       [JSON.stringify(moderate), 1, 0],
       [JSON.stringify(fixture('high')), 1, 1],
@@ -306,10 +412,16 @@ exit "$AUDIT_STATUS"
       ['not json', 0, 1],
       [JSON.stringify({ error: { code: 'E401' } }), 1, 1],
       [JSON.stringify(fixture('clean')), 2, 1],
+      ...['', 'not JSON', 'null', '[]', ...[
+        { version: 2, valid: true, responses: 1, pending: 0 },
+        { version: 1, valid: false, responses: 1, pending: 0 },
+        { version: 1, valid: true, responses: 0, pending: 0 },
+        { version: 1, valid: true, responses: 1, pending: 1 },
+      ].map((value) => JSON.stringify(value))].map((boundary) => [JSON.stringify(fixture('clean')), 0, 1, boundary]),
     ]) {
       const run = spawnSync(process.execPath, [script], {
         env: { ...process.env, PATH: dir, PAPERCLIP_RUN_SCRATCH_DIR: dir,
-          AUDIT_CACHE_TRACE: trace, AUDIT_FIXTURE: report, AUDIT_STATUS: String(npmStatus) }, encoding: 'utf8',
+          AUDIT_CACHE_TRACE: trace, AUDIT_FIXTURE: report, AUDIT_STATUS: String(npmStatus), AUDIT_BOUNDARY: boundary }, encoding: 'utf8',
       });
       assert.equal(run.status, expected, run.stderr);
       const caches = readFileSync(trace, 'utf8').trim().split('\n');

@@ -126,11 +126,21 @@ export function runAudit() {
   // Override inherited config with a fresh, owned cache for every invocation.
   const cache = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), 'deps-audit-cache-'));
   try {
+    const guard = fileURLToPath(new URL('./deps-audit-registry.cjs', import.meta.url));
     const audit = spawnSync('npm', ['audit', '--offline=false', `--cache=${cache}`, '--package-lock-only', '--json', '--include=prod', '--include=dev', '--include=optional', '--include=peer'], {
       cwd: root, encoding: 'utf8', timeout: 120_000, maxBuffer: 16 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+      env: { ...process.env, DEPS_AUDIT_REGISTRY_GUARD: '1',
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --require ${JSON.stringify(guard)}` },
     });
     if (audit.error || ![0, 1].includes(audit.status)) {
       throw new Error('npm audit did not complete successfully');
+    }
+    // fd 3 contains only validation state, never registry data or credentials.
+    const boundary = JSON.parse(audit.output[3] || 'null');
+    if (!isObject(boundary) || boundary.version !== 1 || boundary.valid !== true
+      || !Number.isSafeInteger(boundary.responses) || boundary.responses < 1 || boundary.pending !== 0) {
+      throw new Error('Registry advisory response was not schema-validated');
     }
     const report = JSON.parse(audit.stdout);
     const allowlist = JSON.parse(readFileSync(new URL('./deps-audit-allowlist.json', import.meta.url), 'utf8'));

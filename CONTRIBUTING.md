@@ -19,10 +19,19 @@ development/optional/peer dependencies, and blocks high, critical or unknown
 severity. It forces online auditing even when npm's environment or `.npmrc`
 enables offline mode, using a fresh per-invocation cache rather than the restored
 installation cache (which can retain stale advisory severity). The owned audit
-cache is removed on success or failure. Cyclic `via` references are traversed
-once per reachable package, retaining every advisory ID and blocking severity.
-Invalid JSON, malformed/inconsistent severity counters, missing references,
-registry/process failures and invalid/expired exceptions also fail closed.
+cache is removed on success or failure. A child-only Node preload also validates
+the exact raw bulk advisory response before npm can normalize it. A clean `{}`
+is valid; `null`, arrays and missing/unknown advisory severities are not. The
+preload observes bounded HTTP/HTTPS bodies (including compressed responses),
+without changing registry selection, authentication or response bytes. Its
+separate validation pipe contains only counters/booleans, not registry data.
+Missing/incomplete validation, unsupported audit redirects/legacy quick fallback,
+and a future npm transport that escapes observation fail closed. The gate requires
+an observed valid bulk response, even for a lockfile with no audit candidates.
+Cyclic `via` references are traversed once per reachable package, retaining every
+advisory ID and blocking severity. Invalid JSON, malformed/inconsistent severity
+counters, missing references, registry/process failures and invalid/expired
+exceptions also fail closed.
 Info/low/moderate findings do not block. Dependabot owns dependency upgrades;
 the gate never runs `npm audit fix`.
 
