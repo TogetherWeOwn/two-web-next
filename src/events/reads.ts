@@ -154,10 +154,12 @@ export async function listRelatedEvents(
   now = new Date(),
 ): Promise<EventLink[]> {
   const sameGame = event.game === null ? [] : [sql`case when ${events.game} = ${event.game} then 0 else 1 end`];
-  return db.select(eventLinkColumns).from(events)
+  const rows = await db.select(eventLinkColumns).from(events)
     .where(and(eq(events.status, "published"), ne(events.id, event.id), gte(events.endsAt, now)))
     .orderBy(...sameGame, asc(events.startsAt), asc(events.id))
     .limit(3);
+  // PostgreSQL infinity timestamps decode to invalid Dates, as in 404 suggestions.
+  return rows.filter((event) => Number.isFinite(event.startsAt.getTime()));
 }
 
 export type EventAttendee = { id: string; name: string };

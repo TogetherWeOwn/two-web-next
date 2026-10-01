@@ -270,6 +270,35 @@ describe.skipIf(!process.env.DATABASE_URL)("event navigation eligibility (isolat
     expect(await getEventNeighbors(fixture.db, current.find((e) => e.id === 2)!)).toMatchObject({ previous: { id: 3 }, next: { id: 1 } });
   });
 
+  it.each(["infinity", "-infinity"])("omits a %s related start without breaking a valid event page", async (timestamp) => {
+    const [current] = await seed([row(1), row(3)]);
+    const env = { ...pageFixture().env, ADMIN_DB: fixture.db };
+    expect((await app.request(`/e/${key(1)}`, undefined, env)).status).toBe(200);
+    await seed([row(2)]);
+    await fixture.client`update events set starts_at = ${timestamp}::timestamptz where id = 2`;
+    const [invalid] = await fixture.client`select starts_at from events where id = 2`;
+    expect(Number.isFinite(new Date(invalid!.starts_at).getTime())).toBe(false);
+    const response = await app.request(`/e/${key(1)}`, undefined, env);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(ids(await listRelatedEvents(fixture.db, current!, NOW))).toEqual([3]);
+    expect(relatedKeys(html)).toEqual([key(3)]);
+    expect(html).toContain(`<time datetime="${NOW.toISOString()}">`);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBe("Cookie");
+  });
+
+  it.each(["infinity", "-infinity"])("hides the related block when its only sibling starts at %s", async (timestamp) => {
+    const [current] = await seed([row(1), row(2)]);
+    await fixture.client`update events set starts_at = ${timestamp}::timestamptz where id = 2`;
+    const response = await app.request(`/e/${key(1)}`, undefined, { ...pageFixture().env, ADMIN_DB: fixture.db });
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(await listRelatedEvents(fixture.db, current!, NOW)).toEqual([]);
+    expect(html).not.toContain('data-testid="event-related"');
+    expect(html).not.toContain('data-testid="event-related-join"');
+  });
+
   it("prioritizes three same-game events over nearer other games, with stable chronological ordering", async () => {
     const [current] = await seed([row(1), row(2, { game: "Go" }),
       row(6, { startsAt: new Date("2030-01-12"), endsAt: new Date("2030-01-13") }),
