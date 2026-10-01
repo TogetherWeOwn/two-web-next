@@ -72,6 +72,13 @@ describe("member profile base theme", () => {
     expect(render({ isOwner: false })).not.toContain('data-testid="profile-form"');
   });
 
+  it("preserves join confirmation and its reinvite action inside the themed shell", () => {
+    const html = render({ joinResult: "already_member" });
+    expect(html).toContain('class="notice" role="status" data-testid="join-result"');
+    expect(html).toContain('href="/discord" data-testid="reinvite-link"');
+    expect(html.indexOf('data-testid="join-result"')).toBeLessThan(html.indexOf('class="profile-player"'));
+  });
+
   it("keeps accessible server errors and submitted values", () => {
     const html = render({ errors: { timezone: "Choose a valid timezone" }, values: { bio: "New <bio>", games_text: "Chess\nGo", timezone: "Invalid/Zone" } });
     expect(html).toContain('<div role="alert" tabindex="-1" data-testid="profile-error"><ul>');

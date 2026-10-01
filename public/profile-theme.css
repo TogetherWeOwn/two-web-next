@@ -8,6 +8,7 @@
 .profile-theme h2 { font-size: 1.8rem; margin: 0 0 1rem; }
 .profile-theme h3 { font-size: 1.4rem; margin: 1.75rem 0 .75rem; }
 .profile-theme p { color: var(--muted); }
+.profile-theme .notice { background: var(--surface); color: var(--ink); margin: 1rem 0; }
 .profile-theme .profile-header-bar { max-width: 90rem; margin: auto; min-height: 80px; border: 0; padding: .5rem 2rem; }
 .profile-theme .profile-header-bar .btn { min-height: 44px; padding: .5rem 1rem; }
 .profile-theme .brand { font-family: Display, 'Arial Narrow', sans-serif; }
