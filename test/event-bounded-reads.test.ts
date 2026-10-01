@@ -1,4 +1,4 @@
-// route-inventory: GET / (home events + featured)
+// route-inventory: GET /
 // route-inventory: GET /events.json
 // route-inventory: GET /e/:key
 // A7 (docs/w15-events-acceptance-ledger.md): portable EventQueryCountTest proof.
