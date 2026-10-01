@@ -15,7 +15,7 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { addGuildMember, authorizeUrl, exchangeCode, fetchUser } from "./discord";
+import { addGuildMember, authorizeUrl, exchangeCode, failureMeta, fetchUser, isProviderOutage } from "./discord";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -184,7 +184,8 @@ async function issueSession(
       member: row.member,
     });
   } catch (err) {
-    console.warn("roster upsert failed", { user: row.userId, error: String(err) });
+    // Driver messages can carry DSN fragments; the class name is the whole story here.
+    console.warn("roster upsert failed", { user: row.userId, exception: (err as Error)?.constructor?.name ?? "unknown" });
   }
   const token = newSessionToken();
   await store.create({
@@ -238,7 +239,18 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
   return { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator };
 }
 
-const NOTICES = new Set(["joined", "already_member", "join_failed", "signin_failed"]);
+// One banner sentence per ordinary-login failure meaning (TOG-10355): denied
+// (they cancelled) is distinct from unavailable (Discord did not answer) and
+// from the generic/expired "didn't complete". Discord's error_description is
+// never echoed anywhere — the banner is our copy.
+const NOTICES = new Set([
+  "joined",
+  "already_member",
+  "join_failed",
+  "signin_failed",
+  "signin_denied",
+  "signin_unavailable",
+]);
 
 app.get("/", async (c) => {
   // A DB outage must not break the funnel, including session setup. Fail closed to guest.
@@ -443,6 +455,15 @@ app.get("/auth/discord/callback", async (c) => {
   deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
   const code = c.req.query("code");
   const state = c.req.query("state");
+  // A consent-screen refusal arrives as an `error` param before any code
+  // exists. Denied gets its own sentence (the member chose this); any other
+  // OAuth error keeps the generic one. Legacy DiscordLoginTest: the
+  // error_description is never echoed — we render only our own copy.
+  const oauthError = c.req.query("error");
+  if (oauthError) {
+    return c.redirect(oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed", 302);
+  }
+
   if (!code || !state || !expected || state !== expected) return c.redirect("/?n=signin_failed", 302);
 
   let accessToken: string;
@@ -451,8 +472,11 @@ app.get("/auth/discord/callback", async (c) => {
     accessToken = await exchangeCode(code, c.env.DISCORD_CLIENT_ID, c.env.DISCORD_CLIENT_SECRET, redirectUri(c.env));
     user = await fetchUser(accessToken);
   } catch (err) {
-    console.warn("discord sign-in failed", { error: String(err) });
-    return c.redirect("/?n=signin_failed", 302);
+    // Bounded like the join route: exception class + kind + status, never the
+    // message (the token-exchange error body can quote the client secret).
+    const meta = failureMeta(err);
+    console.warn("discord sign-in failed", { exception: meta.exception, kind: meta.kind, status: meta.status });
+    return c.redirect(isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed", 302);
   }
 
   // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and
