@@ -198,7 +198,7 @@ describe("login_next (legacy ReturnToPageTest)", () => {
     const { env } = isolated();
     const start = await startLogin(env, "?next=%2Fe%2Fx");
     const cb = await finishLogin(env, start.state, start.jar, "error=access_denied");
-    expect(cb.headers.get("location")).toBe("/?n=signin_failed");
+    expect(cb.headers.get("location")).toBe("/?n=signin_denied");
     const cleared = setCookies(cb);
     expect(cleared).toContain(`${LOGIN_NEXT_COOKIE}=; Max-Age=0`);
     expect(cleared).toContain(`${LOGIN_INTENDED_COOKIE}=; Max-Age=0`);
@@ -370,7 +370,7 @@ describe("join_result flash (legacy AlreadyMemberReinviteTest)", () => {
     expect(await res.text()).not.toContain('data-testid="join-result"');
   });
 
-  it.each(["signin_failed", "join_failed"] as const)(
+  it.each(["signin_failed", "signin_denied", "signin_unavailable", "join_failed"] as const)(
     "a failure landing (?n=%s) drops a stale success flash and shows the recovery notice",
     async (notice) => {
       // Review CHANGES (45bc0ea): Home preferred the flashed success over the

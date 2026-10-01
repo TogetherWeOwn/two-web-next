@@ -10,11 +10,16 @@
 // Failure posture mirrors legacy: anything recoverable (denied consent,
 // expired code, bot unreachable, bot refusal) renders the recovery page with
 // the retry URL and the invite fallback, never a bare redirect — after a round
-// trip to Discord and back a banner is easy to miss.
+// trip to Discord and back a banner is easy to miss. An expired approval
+// (400 + invalid_grant, or a lost/replayed state) gets the immediate-retry
+// sentence with status 200; a provider outage gets the discord-down sentence
+// with 503 (legacy JoinCallbackFailureTest: status governs — a 5xx body can
+// never reclassify as expired). Logs carry the exception class, the failure
+// kind and the outcome — never a message, never a body.
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import postgres from "postgres";
-import { authorizeUrl, exchangeCode, fetchUser } from "../discord";
+import { authorizeUrl, exchangeCode, failureMeta, fetchUser } from "../discord";
 import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
@@ -196,6 +201,14 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     }
 
     if (!code || !state || !expected || state !== expected) {
+      // Lost/replayed state is legacy InvalidStateException: expired, retryable
+      // now. The warning is the bounded correlation line (class only, never a
+      // message) and doubles as the replay signal for this route.
+      console.warn("discord token exchange failed on the join journey", {
+        exception: "InvalidState",
+        source,
+        outcome: "expired",
+      });
       await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
       return recover("Join link expired", "That join link expired. Approvals last ten minutes — try again below.");
     }
@@ -209,13 +222,27 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
         code, c.env.DISCORD_CLIENT_ID, c.env.DISCORD_CLIENT_SECRET, joinRedirectUri(c.env),
       );
       user = await fetchUser(accessToken);
-    } catch {
+    } catch (err) {
+      // Legacy log contract: exception class + sanitized source + outcome, one
+      // line, never the exception message (which can quote the secret). An
+      // expired grant recovers immediately; anything else is an outage (503).
+      const meta = failureMeta(err);
+      const outcome = meta.kind === "expired_grant" ? "expired" : "error";
+      console.warn("discord token exchange failed on the join journey", {
+        exception: meta.exception,
+        kind: meta.kind,
+        status: meta.status,
+        source,
+        outcome,
+      });
       await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
-      return recover(
-        "Discord is unreachable",
-        "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below.",
-        503,
-      );
+      return outcome === "expired"
+        ? recover("Join approval expired", "That Discord approval expired. Try again or use the invite below.")
+        : recover(
+          "Discord is unreachable",
+          "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below.",
+          503,
+        );
     }
 
     const deps = (c.env as EnvWithJoin).JOIN_DEPS;

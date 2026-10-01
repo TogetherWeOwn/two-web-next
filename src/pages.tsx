@@ -67,13 +67,27 @@ export const SiteFooter: FC = () => (
   </footer>
 );
 
-export type Notice = "joined" | "already_member" | "join_failed" | "signin_failed" | null;
+export type Notice =
+  | "joined"
+  | "already_member"
+  | "join_failed"
+  | "signin_failed"
+  | "signin_denied"
+  | "signin_unavailable"
+  | null;
 
+// One actionable sentence per failure meaning (legacy auth-discord.php, matched
+// by meaning, not translation key): denied says "you cancelled", unavailable
+// says "this is on Discord, not you — try again in a minute", the generic
+// sentence covers an expired or otherwise incomplete attempt. Nobody's browser
+// ever shows Discord's error_description.
 const NOTICES: Record<Exclude<Notice, null>, string> = {
   joined: "You're in. Welcome to the TWO Discord.",
   already_member: "Signed in. You're already in the TWO Discord.",
   join_failed: "Signed in, but we couldn't add you to the Discord automatically. Use the invite link below.",
   signin_failed: "Discord sign-in didn't complete. Please try again.",
+  signin_denied: "You cancelled the Discord sign-in, so we didn't sign you in. Nothing changed — try again whenever you like.",
+  signin_unavailable: "Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute.",
 };
 
 const JOIN_HREF = "/join";
