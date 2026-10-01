@@ -22,7 +22,9 @@ export const HTML_READS = [
 // Redirects, feeds and machine endpoints have no HTML success page. Their branded
 // error responses are covered separately; new GET routes must be classified here.
 export const NON_HTML_READS = [
-  "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback",
+  "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect",
+  "/admin/events/create", "/admin/events/:key/edit", "/admin/featured-contents",
+  "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
   "/sitemap_index.xml", "/robots.txt", "/up",
   "/events.json", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
