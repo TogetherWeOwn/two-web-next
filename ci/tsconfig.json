@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "allowJs": true },
+  "include": ["a11y-worker.ts", "a11y-fixtures.ts"]
+}

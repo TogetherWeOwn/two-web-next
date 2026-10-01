@@ -25,11 +25,11 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`) | `/auth/discord*` live; `/join` path alias pending | W6 🔶 |
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list (island enhancement pending) | W8 ✅ + W10 slice 3 ⛔ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page | W8 ✅ + W10 slice 4 ⛔ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links implemented in this slice (pending merge); RsvpButton/prev-next/related pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) + [TOG-10823](/TOG/issues/TOG-10823) |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links; prev/next + related implemented (review pending); RsvpButton pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) + [TOG-10823](/TOG/issues/TOG-10823) + [TOG-10821](/TOG/issues/TOG-10821) |
 | `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
 | `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
 | `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
-| `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | ✅ same-app flow (`identify`+`guilds.join`, auto-join, role recompute) | W5 ✅ |
+| `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`) | Same-app flow (`identify`+`guilds.join`, auto-join, role recompute); legacy start alias implemented: 302 to `/auth/discord`, only validated `next` forwarded, other queries dropped (`test/legacy-redirects.test.ts`); ordinary-login callback return-to remains a separate gap | W5 ✅ + [TOG-11156](/TOG/issues/TOG-11156) (alias, pending merge) |
 | `GET /auth/qa/{identity}` (staging-only, header token) | ✅ as `POST /auth/qa/:identity` — **deliberate divergence**: GET login is CSRF-able; POST + byte-identical 404s | W5 ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; throttle pending | W5 ✅ + N5 (new card, throttle) |
 | `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block reads bot-owned `web_v1` views, hides on no row/missing views/DB failure, covered by the same profile access-log subject | W7 ✅ |
@@ -39,6 +39,15 @@ shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 to
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ (write-back enqueued via `EVENT_SYNC_QUEUE`; binding pending queue creation) | W8 ✅ + W11 🔶 |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | ✅ `POST /events/:key/rsvp-pause`, `POST /events/:key/rsvp-reopen`, `POST /admin/events/:key/rsvp-pause`, `POST /admin/events/:key/rsvp-reopen`: moderator-only, published/non-ended, row-locked idempotent toggles; each flip uses the Discord sync queue (`test/rsvp-toggle.test.ts`) | [TOG-10817](/TOG/issues/TOG-10817) |
 | `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, full-event waitlisting + FIFO promotion under FOR UPDATE (test/rsvp.test.ts, test/rsvp-waitlist.test.ts) | W9 ✅ + W10 slice 2 ⛔ (unblocked) |
+
+Event-page navigation uses `starts_at, id` order, omitting absent neighbors.
+Related links prefer the same non-null game, then fill to three by `starts_at, id`,
+including ongoing events (`ends_at >= now`) and excluding the current event.
+Links are **published-only for every viewer**, per [TOG-10821](/TOG/issues/TOG-10821):
+this deliberately narrows legacy's moderator-draft and `past`-status eligibility.
+Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
+private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
+per-event RSVP reads.
 
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
@@ -101,10 +110,12 @@ no public version/clock endpoint or redirect alias remains.
 |---|---|---|
 | Panel gate: Discord-role → 403 (no login form), dark brand, CSP stack, `RecordMemberDataAccess` on panel | pending (custom React rebuild, no Filament off PHP) | W11 🔶 (M1) |
 | Events resource: table (search/sort/status/series/fill filters, publish/cancel/pause/reopen actions, no delete/bulk) + create-as-draft + edit (UTC↔wall DST carriers) + recurrence fields | Table search/status/series/fill + allowlisted title/starts_at/status sort and 25-row pagination ✅ ([TOG-10825](/TOG/issues/TOG-10825)); pause/reopen row + edit actions and `rsvp_open` ternary filter ✅ ([TOG-10817](/TOG/issues/TOG-10817)); remaining resource parity pending | W11 🔶 (M2/M3) |
+| `GET /admin/events/create`, `GET /admin/events/:key/edit` (Filament bookmarks) | Implemented 301 map to `/admin/events/new`, `/admin/events/:key`; same moderator guard, no resource reads, all queries dropped (`test/legacy-redirects.test.ts`) | [TOG-11156](/TOG/issues/TOG-11156) (pending merge) |
+| `GET /admin/featured-contents`, `GET /admin/featured-contents/create`, `GET /admin/featured-contents/:id/edit` (Filament bookmarks) | Implemented 301 map to `/admin/featured`, `/admin/featured/new`, `/admin/featured/{nativeId}`; edit resolves imported `legacy_id` after the guard (404 if missing/invalid, 503 if unavailable), never falls back to a same-number native row; all queries dropped (`test/legacy-redirects.test.ts`) | [TOG-11156](/TOG/issues/TOG-11156) (pending merge) |
 | RsvpsRelationManager (read-only roster, `canViewForRecord` 403) | pending | W12 📋 (M6) |
 | FeaturedContent resource (CRUD + publish window + live preview + safe delete) | pending | W11 🔶 (M4; verify: homepage render path) |
 | JoinAttempt resource (read-only viewer: outcome/source/request/discord-id) | pending | W12 📋 (M8) |
-| JoinFunnelStats widget (per-outcome counts, 60 s cache, no member data) | pending | W12 📋 (M8 funnel-stats) |
+| JoinFunnelStats widget (per-outcome counts, 60 s cache, no member data) | ✅ [TOG-11226](/TOG/issues/TOG-11226) (60 s per-connection cache; injected ADMIN_DB takes precedence; both optional analytics reads run in parallel with a 500 ms budget after DB resolution, excluding authorization/access logging) | W12 📋 (M8 funnel-stats) |
 | TopZeroResultSearches widget (normalized queries only) | ✅ TOG-10105 (dashboard section, moderator gate) | W12 📋 (verify scope at build) |
 | Moderator admin guide + member-data docs | ops docs follow the rebuild | W11 🔶 / W12 📋 |
 

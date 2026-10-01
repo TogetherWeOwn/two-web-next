@@ -94,7 +94,7 @@ function eventRow(over: Partial<typeof events.$inferSelect> = {}): typeof events
   const start = over.startsAt ?? new Date(Date.UTC(2030, 0, 10 + n, 20));
   const end = over.endsAt ?? new Date(start.getTime() + 7200_000);
   return {
-    id: n, eventKey: `ev-${n}`, title: `Game night ${n}`, game: null, description: null,
+    id: n, icsSequence: 1n, eventKey: `ev-${n}`, title: `Game night ${n}`, game: null, description: null,
     startsAt: start, endsAt: end, timezone: "Europe/London", location: null, capacity: null,
     status: "published", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: null, rsvpOpen: true,
@@ -298,6 +298,13 @@ describe("EventsCalendar review regressions", () => {
     expect(grid).toContain('href="/events?past=1#event-grid-link" data-cal-jump');
     const list = await (await src.request("/events?past=1")).text();
     expect(list).toContain('id="event-grid-link"');
+  });
+
+  it.each(["list", "calendar"])("marks the active %s navigation link with valid link ARIA", async (view) => {
+    const html = await (await calendar([eventRow()], [], okSource()).request(`/events?view=${view}`)).text();
+    expect(html).not.toContain("aria-pressed");
+    expect(html).toContain(`aria-current="page" data-testid="events-view-${view}"`);
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
   });
 
   it("suppresses both the visible and live search miss when the read fails", async () => {

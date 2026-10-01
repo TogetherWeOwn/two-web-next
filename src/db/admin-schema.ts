@@ -1,3 +1,4 @@
+import { isNull, sql } from "drizzle-orm";
 import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
@@ -54,11 +55,15 @@ export const events = pgTable(
     recurrenceIndex: integer("recurrence_index"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    // Read-only from the app: the events_ics_sequence trigger owns every revision.
+    icsSequence: bigint("ics_sequence", { mode: "bigint" }).notNull().default(sql`0`),
   },
   (t) => [
     // The calendar always asks the same question: published events, soonest first.
     index("events_status_starts_at_idx").on(t.status, t.startsAt),
     index("events_parent_event_id_idx").on(t.parentEventId),
+    index("events_ends_at_index").on(t.endsAt),
+    index("events_starts_at_id_index").on(t.startsAt, t.id),
   ],
 );
 
@@ -66,6 +71,8 @@ export const featuredContents = pgTable(
   "featured_contents",
   {
     id: serial("id").primaryKey(),
+    // Source PK as a decimal string: import identity, independent of native IDs.
+    legacyId: text("legacy_id").unique(),
     title: text("title").notNull(),
     body: text("body"),
     url: text("url"),
@@ -175,7 +182,12 @@ export const rsvps = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [unique("rsvps_event_user_unique").on(t.eventId, t.userId), index("rsvps_user_id_idx").on(t.userId)],
+  (t) => [
+    unique("rsvps_event_user_unique").on(t.eventId, t.userId),
+    index("rsvps_user_id_idx").on(t.userId),
+    index("rsvps_event_id_status_index").on(t.eventId, t.status),
+    index("rsvps_unsynced_event_id_index").on(t.eventId).where(isNull(t.syncedToDiscordAt)),
+  ],
 );
 
 // One rendered /events?q= search: normalized query + visible result count only.
@@ -185,6 +197,8 @@ export const eventSearchLogs = pgTable(
   "event_search_logs",
   {
     id: serial("id").primaryKey(),
+    // Repeated renders are distinct; the source PK is the only import key.
+    legacyId: text("legacy_id").unique(),
     normalizedQuery: text("normalized_query").notNull(),
     resultCount: integer("result_count").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
@@ -193,7 +207,7 @@ export const eventSearchLogs = pgTable(
 );
 
 export type Event = typeof events.$inferSelect;
-export type NewEvent = typeof events.$inferInsert;
+export type NewEvent = Omit<typeof events.$inferInsert, "icsSequence">;
 export type FeaturedContent = typeof featuredContents.$inferSelect;
 export type NewFeaturedContent = typeof featuredContents.$inferInsert;
 export type MemberDataAccessLog = typeof memberDataAccessLogs.$inferSelect;

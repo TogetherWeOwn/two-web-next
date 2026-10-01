@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["test/**/*.test.ts"],
+    include: ["test/**/*.test.ts", "test/**/*.test.mjs"],
     // Live suites truncate shared tables in one database, so files run serially.
     fileParallelism: false,
     coverage: {

@@ -34,7 +34,7 @@ INSERT INTO users (id, discord_id, username, display_name, avatar, discord_synce
    '2026-09-29 12:00:00', 'synthetic-remember-must-not-copy-a', '2026-08-01 10:00:00', '2026-09-29 12:00:00', true, '2026-07-01 12:00:00'),
   (22, '900000000000000022', 'synthetic-member', NULL, NULL,
    '2026-09-28 13:00:00', 'synthetic-remember-must-not-copy-b', '2026-08-02 11:00:00', '2026-09-28 13:00:00', false, NULL),
-  (33, '900000000000000033', 'synthetic-no-profile', NULL, NULL,
+  (33, '900000000000000033', 'synthetic-no-profile', '', NULL,
    NULL, NULL, '2026-08-03 12:00:00', NULL, false, '2026-08-03 12:00:00');
 INSERT INTO profiles (user_id, bio, games, timezone, created_at, updated_at) VALUES
   (11, 'Synthetic bio with unicode: café 🎮', '["Synthetic Game", "Another Game"]', 'Europe/London',

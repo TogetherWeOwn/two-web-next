@@ -26,13 +26,18 @@ export const joinAttempts = pgTable(
   "join_attempts",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
+    // Source PK as a decimal string: no loss of legacy bigint precision.
+    legacyId: text("legacy_id").unique(),
     outcome: varchar("outcome", { length: 16 }).notNull(),
     source: varchar("source", { length: 64 }),
     requestId: text("request_id"),
     discordId: text("discord_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("join_attempts_created_at_idx").on(t.createdAt)],
+  (t) => [
+    index("join_attempts_created_at_idx").on(t.createdAt),
+    index("join_attempts_outcome_index").on(t.outcome),
+  ],
 );
 
 export type JoinAttempt = typeof joinAttempts.$inferSelect;
