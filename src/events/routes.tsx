@@ -2,11 +2,12 @@
 // routes and EventPolicy: drafts 403 for non-moderators, cancelled 410 + noindex,
 // /events.json needs a session, writes are moderator-only and enqueue the Discord
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import { dbFor } from "../admin/db";
+import { requestBodyLimit } from "../body-limit";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
 import { memberAccessLog } from "../access-log";
-import { ValidationError, parseEventForm } from "../admin/validation";
+import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
@@ -84,14 +85,14 @@ async function sha256Etag(body: string): Promise<string> {
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }
 
-/** Strong validator over the bytes; 304 on a matching If-None-Match. Sessionless: sets no cookie. */
+/** Strong validator over the bytes; preserve queued headers, but never read or issue a session here. */
 async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
   const etag = await sha256Etag(body);
   const inm = c.req.header("if-none-match");
   if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))) {
-    return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
+    return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }
-  return new Response(body, { status: 200, headers: { ...headers, etag } });
+  return c.body(body, 200, { ...headers, etag });
 }
 
 async function calendarFeedResponse(c: Ctx, build: () => string, headers: Record<string, string>): Promise<Response> {
@@ -214,7 +215,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
+    const eventKey = c.req.query("event_key");
+    if (eventKey !== undefined && !KEY_RE.test(eventKey)) return c.json({ error: "invalid_event_key" }, 422);
+    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator, eventKey });
     const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
     const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
     const body = JSON.stringify({ data, page, limit });
@@ -310,7 +313,15 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  async function body(c: Ctx): Promise<Record<string, unknown>> {
+  const moderatorGate: MiddlewareHandler<{ Bindings: Env; Variables: { eventModerator: Session } }> = async (c, next) => {
+    // The session reader uses only bindings/cookies, not this gate's variables.
+    const who = await moderator(c as unknown as Ctx);
+    if (who instanceof Response) return who;
+    c.set("eventModerator", who);
+    await next();
+  };
+
+  async function body(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
     // Media types are case-insensitive (RFC 2045 §5.1): normalize before the
     // JSON check so `Application/Json` cannot smuggle a body past the trap.
     // Forms parse with all values preserved: duplicate keys arrive as arrays
@@ -323,15 +334,25 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
   }
 
-  const invalid = (c: Ctx, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
+  async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
+    // Event edits must not turn malformed/non-object JSON into an empty PATCH.
+    // Keep the RSVP trap's permissive body parsing independent of this admission.
+    if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json")) return body(c);
+    const input: unknown = await c.req.json().catch(() => null);
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new ValidationError({ body: "Send a JSON object." });
+    }
+    return input as Record<string, unknown>;
+  }
 
-  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-    const who = await moderator(c);
-    if (who instanceof Response) return who;
+  const invalid = (c: Pick<Ctx, "json">, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
+
+  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
+    const who = c.get("eventModerator");
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     try {
-      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await body(c)));
+      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await eventBody(c)));
       return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
     } catch (err) {
       if (err instanceof ValidationError) return invalid(c, err);
@@ -339,30 +360,31 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
   });
 
-  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-    const who = await moderator(c);
-    if (who instanceof Response) return who;
+  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
+    const who = c.get("eventModerator");
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     const key = c.req.param("key");
     const existing = await getEvent(db, key);
     if (!existing) return c.json({ error: "not_found" }, 404);
-    // PATCH: unspecified fields keep their stored value.
-    const patch = await body(c);
-    const merged = {
-      title: existing.title,
-      game: existing.game,
-      description: existing.description,
-      timezone: existing.timezone,
-      location: existing.location,
-      capacity: existing.capacity,
-      ...patch,
-    } as Record<string, unknown>;
-    const tz = String(merged.timezone);
-    const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
-    merged.starts_at ??= wall(existing.startsAt);
-    merged.ends_at ??= wall(existing.endsAt);
     try {
+      // PATCH: unspecified fields keep their stored value.
+      const patch = await eventBody(c);
+      const merged = {
+        title: existing.title,
+        game: existing.game,
+        description: existing.description,
+        timezone: existing.timezone,
+        location: existing.location,
+        capacity: existing.capacity,
+        ...patch,
+      } as Record<string, unknown>;
+      // Match parseEventForm's zone default before deriving omitted wall times.
+      const tz = typeof merged.timezone === "string" ? merged.timezone.trim() || "Europe/London" : "Europe/London";
+      if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
+      const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
+      merged.starts_at ??= wall(existing.startsAt);
+      merged.ends_at ??= wall(existing.endsAt);
       const input = parseEventForm(merged, {
         startsAtUtc: existing.startsAt.toISOString(),
         endsAtUtc: existing.endsAt.toISOString(),
@@ -380,9 +402,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   });
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
-      const who = await moderator(c);
-      if (who instanceof Response) return who;
+    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("action"), async (c) => {
+      const who = c.get("eventModerator");
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       try {
@@ -419,7 +440,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  app.put("/events/:key/rsvp", async (c) => {
+  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
     c.header("cache-control", "private, no-store");
     const input = await body(c);
     // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
@@ -451,7 +472,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
   });
 
-  app.delete("/events/:key/rsvp", async (c) => {
+  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
     c.header("cache-control", "private, no-store");
     // Both sources are evaluated independently, with ALL values preserved:
     // `query()` is first-wins, so duplicates use `queries()` — an empty query

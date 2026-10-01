@@ -112,7 +112,8 @@ describe("budgets on the legacy paths", () => {
   it("logout: 30 then 429; qa login: 10 then 429", async () => {
     const { sql } = fakeStore();
     const e = {
-      APP_URL: "https://next.example.test",
+      // Enable the QA environment gate in-process; no staging HTTP/DB.
+      APP_URL: "https://next.togetherweown.com", QA_AUTH_TOKEN: "test-only-qa-token",
       SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
       THROTTLE_STORE: async () => sql,
     } as unknown as EnvWithThrottle;
