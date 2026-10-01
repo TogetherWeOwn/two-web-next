@@ -21,7 +21,7 @@ const row = {
   id: 1, eventKey: KEY, title: "Synthetic calendar event", game: null,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-  parentEventId: null, recurrenceIndex: null,
+  parentEventId: null, recurrenceIndex: null, icsSequence: 0n,
   description: "Bring stims.", startsAt: new Date("2026-07-15T18:00:00Z"),
   endsAt: new Date("2026-07-15T20:00:00Z"), timezone: "UTC", location: null,
   capacity: null, status: "published", rsvpOpen: true, createdBy: null,
