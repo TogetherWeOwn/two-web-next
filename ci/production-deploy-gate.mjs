@@ -10,7 +10,15 @@ export function assertProductionRequest(env) {
   }
 }
 
+export function assertProductionCredentials(env) {
+  if (!env.CLOUDFLARE_API_TOKEN?.trim() || !env.CLOUDFLARE_ACCOUNT_ID?.trim()) {
+    throw new Error('Production-only Cloudflare credentials must be configured in the production Environment');
+  }
+}
+
 export function assertProductionProtection(environment) {
+  // Owner exception: admin bypass remains enabled. Reviewer and self-review
+  // checks still apply; this gate does not claim to prevent an admin bypass.
   const review = environment.protection_rules?.find((rule) => rule.type === 'required_reviewers');
   if (environment.name !== 'production' || !review?.reviewers?.length || review.prevent_self_review !== true) {
     throw new Error('production Environment must have required reviewers and prevent self-review');
@@ -48,9 +56,14 @@ export async function checkProductionGate(env, fetchEnvironment = fetch) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    await checkProductionGate(process.env);
-    assertProductionTarget(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
-    console.log('Production dispatch, enable flag, review protection and target checks passed');
+    if (process.argv[2] === '--credentials') {
+      assertProductionCredentials(process.env);
+      console.log('Production-only Cloudflare credentials are present');
+    } else {
+      await checkProductionGate(process.env);
+      assertProductionTarget(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
+      console.log('Production dispatch, enable flag, review protection and target checks passed');
+    }
   } catch (error) {
     // Do not print request/response bodies or credentials on a failed API call.
     console.error(`::error::${error.message}`);

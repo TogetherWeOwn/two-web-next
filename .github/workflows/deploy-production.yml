@@ -14,7 +14,7 @@ concurrency:
 jobs:
   preflight:
     name: production-preflight
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,7 +33,7 @@ jobs:
   deploy-production:
     name: deploy-production
     needs: preflight
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
     # Required reviewers + prevent-self-review are live repo settings. Preflight
     # refuses a missing/unprotected Environment before GitHub can auto-create it.
@@ -60,11 +60,16 @@ jobs:
       # rehearsal are separate operator work. CI uses disposable SQL services.
       - name: Build production target without deploying
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
+      - name: Require production-only Cloudflare credentials
+        run: node ci/production-deploy-gate.mjs --credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy reviewed production target
         run: npx wrangler deploy --env production
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Smoke production /health
         run: |
           for attempt in 1 2 3 4 5 6; do

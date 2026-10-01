@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { assertProductionProtection, assertProductionTarget, checkProductionGate } from './production-deploy-gate.mjs';
+import { assertProductionCredentials, assertProductionProtection, assertProductionTarget, checkProductionGate } from './production-deploy-gate.mjs';
 
 const enabled = {
   PRODUCTION_DEPLOY_ENABLED: 'true',
@@ -77,11 +77,12 @@ test('allows only an enabled main dispatch with verified protection', async () =
   assert.equal(requests, 1);
 });
 
-test('placeholder Hyperdrive refuses live deployment but config retains isolated bindings', () => {
-  const text = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
-  assert.throws(() => assertProductionTarget(text), /still a placeholder/);
+test('placeholder Hyperdrive refuses live deployment with fixture-only IDs', () => {
+  assert.throws(() => assertProductionTarget('"id": "00000000000000000000000000000000"'), /still a placeholder/);
   assert.doesNotThrow(() => assertProductionTarget('"id": "11111111111111111111111111111111"'));
-  const config = JSON.parse(text.replace(/^\s*\/\/.*$/gm, ''));
+});
+
+function assertIsolatedBindings(config) {
   const production = config.env.production;
   assert.notEqual(production.name, config.name);
   assert.equal(production.workers_dev, false);
@@ -96,4 +97,63 @@ test('placeholder Hyperdrive refuses live deployment but config retains isolated
     assert.ok(!stagingQueues.includes(producer.queue));
     assert.ok(production.queues.consumers.some((consumer) => consumer.queue === producer.queue));
   }
+}
+
+test('actual production config retains isolated bindings before and after sentinel replacement', () => {
+  const text = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+  const config = JSON.parse(text.replace(/^\s*\/\/.*$/gm, ''));
+  assertIsolatedBindings(config);
+  const provisioned = structuredClone(config);
+  provisioned.env.production.hyperdrive[0].id = '11111111111111111111111111111111';
+  assertIsolatedBindings(provisioned);
+  assert.doesNotThrow(() => assertProductionTarget(JSON.stringify(provisioned)));
+});
+
+test('preserves the owner exception for admin bypass without relaxing self-review protection', () => {
+  for (const can_admins_bypass of [true, false]) {
+    const environment = { ...protectedEnvironment, can_admins_bypass };
+    assert.doesNotThrow(() => assertProductionProtection(environment));
+    assert.throws(() => assertProductionProtection({
+      ...environment,
+      protection_rules: [{ ...environment.protection_rules[0], prevent_self_review: false }],
+    }), /required reviewers/);
+  }
+});
+
+const credentials = { CLOUDFLARE_API_TOKEN: 'fixture-only', CLOUDFLARE_ACCOUNT_ID: 'fixture-account' };
+for (const key of Object.keys(credentials)) {
+  for (const value of [undefined, '', '   ']) {
+    test(`refuses missing/empty production credential ${key}=${JSON.stringify(value)}`, () => {
+      assert.throws(() => assertProductionCredentials({ ...credentials, [key]: value }), /Production-only Cloudflare credentials/);
+    });
+  }
+}
+
+test('credential CLI fails closed without printing credentials or accessing the API', () => {
+  const missing = spawnSync(process.execPath, ['ci/production-deploy-gate.mjs', '--credentials'], {
+    env: { CLOUDFLARE_API_TOKEN: credentials.CLOUDFLARE_API_TOKEN }, encoding: 'utf8',
+  });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /Production-only Cloudflare credentials/);
+  assert.ok(!missing.stderr.includes(credentials.CLOUDFLARE_API_TOKEN));
+  const present = spawnSync(process.execPath, ['ci/production-deploy-gate.mjs', '--credentials'], {
+    env: credentials, encoding: 'utf8',
+  });
+  assert.equal(present.status, 0);
+  assert.ok(!present.stdout.includes(credentials.CLOUDFLARE_API_TOKEN));
+  assert.ok(!present.stdout.includes(credentials.CLOUDFLARE_ACCOUNT_ID));
+});
+
+test('manual production workflow uses private-repo runners and production-only secrets', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/deploy-production.yml', import.meta.url), 'utf8');
+  assert.equal((workflow.match(/runs-on: \[self-hosted, two-selfhosted\]/g) ?? []).length, 2);
+  assert.ok(!workflow.includes('ubuntu-latest'));
+  assert.ok(!workflow.includes('secrets.CLOUDFLARE_API_TOKEN'));
+  assert.ok(!workflow.includes('secrets.CLOUDFLARE_ACCOUNT_ID'));
+  for (const key of Object.keys(credentials)) {
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, 'g')) ?? []).length, 2);
+  }
+  const credentialCheck = workflow.indexOf('run: node ci/production-deploy-gate.mjs --credentials');
+  const deploy = workflow.indexOf('run: npx wrangler deploy --env production');
+  assert.ok(credentialCheck > 0 && credentialCheck < deploy);
 });

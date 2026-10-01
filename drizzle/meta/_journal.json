@@ -78,6 +78,34 @@
       "when": 1790791865799,
       "tag": "1008_agent-event-idempotency-prune-idx",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790798302320,
+      "tag": "1009_event-sync-failure",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790801235552,
+      "tag": "1010_rsvp-legacy-order",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790817994959,
+      "tag": "1011_legacy-audit-evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790824783231,
+      "tag": "1012_content-funnel-import-keys",
+      "breakpoints": true
     }
   ]
 }
