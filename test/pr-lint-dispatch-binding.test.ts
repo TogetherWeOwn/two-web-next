@@ -39,6 +39,7 @@ type Fixture = {
   eventName: string;
   workflowSha: string;
   checkedSha: string;
+  checkoutSha?: string;
   parents: string[];
   dispatchNumber: string;
   event: { repository: { full_name: string }; inputs?: { pr_number: string }; number?: number; pull_request?: Pr };
@@ -111,6 +112,7 @@ else:
       GITHUB_EVENT_PATH: join(dir, "event.json"),
       GITHUB_REPOSITORY: repository,
       GITHUB_SHA: fixture.workflowSha,
+      ...(fixture.checkoutSha ? { PR_LINT_CHECKOUT_SHA: fixture.checkoutSha } : {}),
       GITHUB_OUTPUT: join(dir, "output"),
       RUNNER_TEMP: dir,
       PR_NUMBER: fixture.dispatchNumber,
@@ -230,6 +232,35 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     expect(result.stdout).toContain("PR conventions OK");
   });
 
+  it.each([false, true])("pins metadata lint to the event head despite a regenerated merge base (fork: %s)", (fork) => {
+    const fixture = pullRequest(fork);
+    fixture.live.base.sha = "d".repeat(40);
+    fixture.checkoutSha = headSha;
+    fixture.checkedSha = headSha;
+    fixture.parents = [baseSha];
+    const result = runWorkflow(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("PR conventions OK");
+    expect(workflow).toContain("PR_LINT_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}");
+    expect(workflow).toContain("ref: ${{ env.PR_LINT_CHECKOUT_SHA }}");
+  });
+
+  it.each([
+    ["unrelated pinned revision", (f: Fixture) => { f.checkoutSha = f.checkedSha = "d".repeat(40); }],
+    ["checkout differs from pin", (f: Fixture) => { f.checkedSha = "d".repeat(40); }],
+    ["live head moved", (f: Fixture) => { f.live.head.sha = "d".repeat(40); }],
+    ["event head differs", (f: Fixture) => { f.event.pull_request!.head.sha = "d".repeat(40); }],
+    ["closed PR", (f: Fixture) => { f.live.state = "closed"; }],
+    ["foreign source", (f: Fixture) => { f.live.head.repo.full_name = "other/repo"; }],
+    ["malformed pin", (f: Fixture) => { f.checkoutSha = "not-a-sha"; }],
+  ] as const)("rejects head-pinned PR %s without publishing metadata", (_name, modify) => {
+    const fixture = pullRequest(true);
+    fixture.checkoutSha = fixture.checkedSha = headSha;
+    fixture.parents = [baseSha];
+    modify(fixture);
+    expectRejected(fixture);
+  });
+
   it("accepts a supported PR head checkout and case-insensitive GitHub repo identities", () => {
     const fixture = pullRequest(true);
     fixture.workflowSha = headSha;
@@ -255,6 +286,14 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
   ] as const)("rejects normal PR %s", (_name, modify) => {
     const fixture = pullRequest(true);
     modify(fixture);
+    expectRejected(fixture);
+  });
+
+  it("keeps dispatch bound to GITHUB_SHA even when a checkout pin is supplied", () => {
+    const fixture = dispatch();
+    fixture.checkoutSha = headSha;
+    expect(runWorkflow(fixture).status).toBe(0);
+    fixture.workflowSha = "d".repeat(40);
     expectRejected(fixture);
   });
 

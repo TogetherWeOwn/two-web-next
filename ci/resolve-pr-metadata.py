@@ -117,7 +117,15 @@ def main():
         # One REST snapshot includes identity, current state/head and metadata;
         # separate gh title/body/author requests could mix different revisions.
         pull_request = json.loads(command(["gh", "api", f"repos/{repository}/pulls/{number}"]))
-        metadata = resolve_metadata(event_name, repository, os.environ["GITHUB_SHA"],
+        # The metadata-only job pins PR checkout to the immutable event head.
+        # Binding below still checks that pin against the event and live API head;
+        # push/dispatch and older merge-ref callers retain GITHUB_SHA binding.
+        checkout_sha = os.environ.get("PR_LINT_CHECKOUT_SHA", os.environ["GITHUB_SHA"])
+        if "PR_LINT_CHECKOUT_SHA" in os.environ:
+            expected = (event.get("pull_request", {}).get("head", {}).get("sha")
+                        if event_name == "pull_request" else os.environ["GITHUB_SHA"])
+            require(checkout_sha == expected, "Checkout pin differs from the event revision")
+        metadata = resolve_metadata(event_name, repository, checkout_sha,
                                     checked_sha, parents, event, pull_request, dispatch_number)
     print(json.dumps(metadata))
 
