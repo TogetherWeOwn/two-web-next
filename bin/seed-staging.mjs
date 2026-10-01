@@ -68,11 +68,11 @@ export function buildSeed(now = new Date()) {
     return {
       event_key: `seed-calendar-${String(n).padStart(2, "0")}`,
       title: `Seed ${String(n).padStart(2, "0")}: ${series ? "Weekly community night" : GAMES[i % GAMES.length]}`,
-      game: GAMES[i % GAMES.length],
+      game: series ? "Tabletop" : GAMES[i % GAMES.length],
       description: `${SEED_OWNER}: synthetic calendar fixture; no imported member data.`,
       starts_at: start,
       ends_at: new Date(start.getTime() + 2 * 3_600_000),
-      timezone: ZONES[i % ZONES.length],
+      timezone: series ? "Asia/Tokyo" : ZONES[i % ZONES.length],
       location: "Seed staging lounge",
       capacity: n <= 4 ? 2 : 12,
       status,

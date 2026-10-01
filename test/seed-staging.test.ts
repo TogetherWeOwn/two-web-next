@@ -119,6 +119,8 @@ describe("staging seed fixture contract", () => {
     expect(seed.users.every((u: { username: string }) => u.username.startsWith("seed-"))).toBe(true);
     expect(seed.events[4]).toMatchObject({ recurrence_frequency: "weekly", recurrence_count: 4, recurrence_index: 1, parent_key: null });
     expect(seed.events.slice(5, 8).map((e: { parent_key: string }) => e.parent_key)).toEqual(Array(3).fill("seed-calendar-05"));
+    expect(seed.events.slice(4, 8).map((e: { timezone: string; game: string }) => [e.timezone, e.game])).toEqual(Array(4).fill(["Asia/Tokyo", "Tabletop"]));
+    for (let i = 5; i < 8; i++) expect(seed.events[i].starts_at.getTime() - seed.events[i - 1].starts_at.getTime()).toBe(7 * 86_400_000);
     for (const featured of seed.featured) expect(new URL(featured.url).pathname).toMatch(/^\/e\/seed-calendar-/);
     const tomorrow = buildSeed(new Date(day.getTime() + 86_400_000));
     seed.events.forEach((e: { starts_at: Date; event_key: string }, i: number) => {
