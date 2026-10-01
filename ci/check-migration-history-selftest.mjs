@@ -15,7 +15,7 @@ const initial = {
 };
 
 function git(root, ...args) {
-  return execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], { cwd: root, stdio: ["ignore", "pipe", "pipe"] }).toString("utf8").trim();
+  return execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], { cwd: root, stdio: ["ignore", "pipe", "pipe"] }).toString("utf8").trim();
 }
 
 function put(root, path, content) {
@@ -27,7 +27,7 @@ function lock(root) {
   put(root, "migrations.lock", formatLock(filesystemInventory(root)));
 }
 
-function fixture(t, { bootstrap = false, defaultBranch } = {}) {
+function fixture(t, { bootstrap = false, defaultBranch, signing = false } = {}) {
   const root = mkdtempSync(join(process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "migration-guard-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const [path, sql] of Object.entries(initial)) put(root, path, sql);
@@ -39,6 +39,11 @@ function fixture(t, { bootstrap = false, defaultBranch } = {}) {
   }
   const initConfig = defaultBranch ? ["-c", `init.defaultBranch=${defaultBranch}`] : [];
   git(root, ...initConfig, "init", "-q", "--initial-branch=fixture");
+  if (signing) {
+    git(root, "config", "--local", "commit.gpgSign", "true");
+    git(root, "config", "--local", "gpg.format", "openpgp");
+    git(root, "config", "--local", "gpg.program", join(root, "unavailable-fixture-signer"));
+  }
   git(root, "add", ".");
   git(root, "commit", "-qm", "fixture baseline");
   const base = git(root, "rev-parse", "HEAD");
@@ -248,6 +253,13 @@ test("a corrupt base lock cannot be replaced by a valid candidate lock", (t) => 
   git(f.root, "commit", "-qm", "synthetic corrupt baseline");
   lock(f.root);
   assert.throws(() => checkMigrations(f.root, "HEAD"), /Git baseline lock: lock does not match/);
+});
+
+test("fixture commits ignore inherited signing with an unavailable signer", (t) => {
+  const f = fixture(t, { signing: true });
+  assert.equal(git(f.root, "config", "--local", "--get", "commit.gpgSign"), "true");
+  assert.deepEqual(f.check(), { total: 4, historical: 4 });
+  assert.equal(git(f.root, "cat-file", "commit", f.base).includes("\ngpgsig "), false);
 });
 
 for (const defaultBranch of ["main", "master"]) {
