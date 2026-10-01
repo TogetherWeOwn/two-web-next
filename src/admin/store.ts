@@ -400,7 +400,7 @@ export class NotFoundError extends Error {
 export async function listEvents(db: Db, params: EventListParams): Promise<EventRow[]> {
   const opts = parseEventListQuery(params);
   const conds = [];
-  if (opts.q) conds.push(ilike(events.title, `%${opts.q}%`));
+  if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
   if (opts.status) conds.push(eq(events.status, opts.status));
   if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
   if (opts.series === "parent") conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
