@@ -15,7 +15,7 @@ still uses `clock_timestamp()` rather than transaction-start time.
 
 ## Migration and in-flight compatibility
 
-- Apply `1014_job-lock-ownership.sql` before deploying the fencing Worker. It
+- Apply `1016_job-lock-ownership.sql` before deploying the fencing Worker. It
   adds one nullable UUID column, no default, backfill, expiry extension or data
   deletion. Existing lock/ledger rows and queue messages remain intact.
 - Existing live lock rows have null ownership and still prevent acquisition

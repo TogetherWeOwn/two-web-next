@@ -244,7 +244,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Postgres atomic lease ownership", ()
   });
 
   it("additive migration preserves existing leases and expiry upgrades null ownership", async () => {
-    const migration = readFileSync(fileURLToPath(new URL("../drizzle/1014_job-lock-ownership.sql", import.meta.url).href), "utf8");
+    const migration = readFileSync(fileURLToPath(new URL("../drizzle/1016_job-lock-ownership.sql", import.meta.url).href), "utf8");
     await fixture!.client.begin(async (tx) => {
       await tx`create temporary table job_unique_locks (key text primary key, expires_at timestamptz not null) on commit drop`;
       const expires = new Date(Date.now() + 300_000);
