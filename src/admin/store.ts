@@ -465,7 +465,11 @@ export async function updateFeatured(
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id));
+    const [locked] = await tx
+      .select(featuredEditSelection)
+      .from(featuredContents)
+      .where(eq(featuredContents.id, id))
+      .for("update");
     if (!locked) throw new NotFoundError("featured content");
     const [row] = await tx
       .update(featuredContents)
@@ -502,7 +506,7 @@ export async function updateFeatured(
 /** Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited. */
 export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<void> {
   await db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(featuredContents).where(eq(featuredContents.id, id));
+    const [locked] = await tx.select().from(featuredContents).where(eq(featuredContents.id, id)).for("update");
     if (!locked) throw new NotFoundError("featured content");
     await tx.delete(featuredContents).where(eq(featuredContents.id, id));
     await tx.insert(activityLog).values({
