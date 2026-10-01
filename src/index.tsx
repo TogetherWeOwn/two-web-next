@@ -51,6 +51,8 @@ const app = new Hono<{ Bindings: Env }>();
 // the CSP report-to directive selects the modern Reporting-Endpoints group.
 // Omit the deprecated Report-To header: unlike Reporting-Endpoints, it
 // requires absolute HTTPS URLs, not this same-origin relative destination.
+import { discordWidgetUrl } from "./discord-widget";
+
 const CSP_REPORT_ENDPOINT = "/csp-reports";
 
 // The four static headers (fonts byte-identical to SECURITY_HEADERS in
@@ -77,6 +79,8 @@ const staticSecurityHeaders = secureHeaders({
     imgSrc: ["'self'", "https://cdn.discordapp.com"],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
+    fontSrc: ["'self'"],
+    frameSrc: ["https://discord.com/widget"],
     frameAncestors: ["'none'"],
     formAction: ["'self'"],
     reportUri: CSP_REPORT_ENDPOINT,
@@ -256,7 +260,8 @@ app.get("/", async (c) => {
   c.header("cache-control", "private, no-store");
   return c.html(
     <Home session={session} notice={notice} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
-      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured} />,
+      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
+      widgetUrl={discordWidgetUrl(c.env.DISCORD_GUILD_ID)} />,
   );
 });
 
