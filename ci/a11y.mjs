@@ -45,12 +45,6 @@ try {
   await mkdir(output, { recursive: true });
   scratch = await lifecycle.acquire(() => mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "two-a11y-")), (path) => rm(path, { recursive: true, force: true }));
   await lifecycle.run(() => symlink(resolve("node_modules"), join(scratch, "node_modules"), "dir"));
-  const fixtureBundle = join(scratch, "fixtures.mjs");
-  await lifecycle.run(() => build({ entryPoints: ["ci/a11y-fixtures.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: fixtureBundle,
-    define: { "import.meta.url": JSON.stringify(pathToFileURL(resolve("test/helpers/member-data-db.ts")).href) } }));
-  const { fixtures } = await lifecycle.run(() => import(pathToFileURL(fixtureBundle).href));
-  const database = process.env.DATABASE_URL || "postgres://agent_test@agent-testdb:5432/two_web_next";
-  fixture = await lifecycle.acquire(() => fixtures(database), (resource) => resource.dispose());
   // Route discovery and Wrangler use one bundle with isolated bot read models.
   const bundled = join(scratch, "routes.mjs");
   await lifecycle.run(() => buildAuditWorker(bundled));
@@ -58,6 +52,13 @@ try {
   const scenarios = auditCases(routes, coverage);
   assert(scenarios.length > 0, "Empty accessibility coverage");
   report.coverage = { registered: [...new Set(routes.filter((r) => r.method === "GET").map((r) => r.path))], exclusions: Object.entries(coverage).filter(([, entry]) => entry.skip).map(([route, entry]) => ({ route, reason: entry.reason })) };
+
+  const fixtureBundle = join(scratch, "fixtures.mjs");
+  await lifecycle.run(() => build({ entryPoints: ["ci/a11y-fixtures.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: fixtureBundle,
+    define: { "import.meta.url": JSON.stringify(pathToFileURL(resolve("test/helpers/member-data-db.ts")).href) } }));
+  const { fixtures } = await lifecycle.run(() => import(pathToFileURL(fixtureBundle).href));
+  const database = process.env.DATABASE_URL || "postgres://agent_test@agent-testdb:5432/two_web_next";
+  fixture = await lifecycle.acquire(() => fixtures(database), (resource) => resource.dispose());
 
   const port = await lifecycle.run(freePort);
   const origin = `https://127.0.0.1:${port}`;

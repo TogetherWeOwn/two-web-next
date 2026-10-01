@@ -50,6 +50,7 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
   ...["/sitemap_index.xml", "/robots.txt", "/up"].map((route) => ({ method: "GET", route, status: 200 })),
   { method: "GET", route: "/auth/discord", status: 302, location: "https://discord.com/oauth2/authorize" },
+  { method: "GET", route: "/auth/discord/redirect", status: 302, location: "/auth/discord" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
@@ -74,6 +75,13 @@ const MATRIX: Case[] = [
   { method: "PATCH", route: "/members/:user", status: 503, actor: "member", format: "json", body: '{"bio":"Fixture","games":[]}' },
   { method: "POST", route: "/members/:user", status: 503, actor: "member", format: "html", body: "_method=PATCH&bio=Fixture&games_text=", contentType: "application/x-www-form-urlencoded" },
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
+  // Static aliases need a valid moderator session, but no resource lookup.
+  { method: "GET", route: "/admin/events/create", status: 301, actor: "moderator", location: "/admin/events/new" },
+  { method: "GET", route: "/admin/events/:key/edit", status: 301, actor: "moderator", location: `/admin/events/${EVENT_KEY}` },
+  { method: "GET", route: "/admin/featured-contents", status: 301, actor: "moderator", location: "/admin/featured" },
+  { method: "GET", route: "/admin/featured-contents/create", status: 301, actor: "moderator", location: "/admin/featured/new" },
+  // Imported featured IDs must be resolved in Postgres; never guess a target.
+  { method: "GET", route: "/admin/featured-contents/:id/edit", status: 503, actor: "moderator", format: "html" },
   // Empty create forms expose no member subjects and need no data read.
   ...["/admin/events/new", "/admin/featured/new"].map((route) => ({ method: "GET", route, status: 200, actor: "moderator" as const, format: "html" as const })),
   ...["/admin/join-attempts", "/admin/join-attempts/:id", "/admin/events", "/admin/events/:key", "/admin/featured", "/admin/featured/:id"].map((route) => ({
@@ -134,6 +142,7 @@ async function assertResponse(res: Response, row: Case): Promise<void> {
   for (const secret of [env.SESSION_SECRET, env.DISCORD_CLIENT_SECRET, env.DISCORD_BOT_TOKEN]) {
     expect.soft(body).not.toContain(secret);
   }
+  if (row.status >= 400) expect.soft(res.headers.get("location")).toBeNull();
   if (row.format) expect.soft(res.headers.get("content-type")).toContain(row.format === "json" ? "application/json" : "text/html");
   if (row.format === "html" && row.status >= 400) {
     expect.soft(body).toContain("Together We Own");
@@ -178,7 +187,7 @@ describe("configured Postgres outage: route matrix", () => {
 describe("configured Postgres outage: production session store", () => {
   it.each(MATRIX.filter((row) => row.actor))(
     "$method $route fails closed before member data when sessions are down", async (row) => {
-      const expected = { ...row, status: 503 };
+      const expected = { ...row, status: 503, location: undefined, format: row.format ?? "html" as const };
       await assertResponse(await request(row, true), expected);
     },
   );
