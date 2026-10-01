@@ -167,9 +167,11 @@ DB ping + ledger share a **3-second response deadline**, running in parallel wit
 the existing 3-second queue deadline. Each ping, ledger and queue read runs in a
 short read-only transaction with transaction-local **1-second statement** and
 **750-ms lock** limits. After connection acquisition, these limits shrink to the
-remaining response budget (with a 250-ms margin); an expired budget starts no
-read. Server limits abort active work even when disconnect alone would leave a
-lock-waiting backend. Request-owned clients close without waiting to drain;
+remaining response budget (with a 250-ms margin). After timeout setup succeeds,
+the installed statement limit must still fit the remaining budget, otherwise
+no read starts. This also covers a delayed setup reply, without an unbounded
+retry/reset loop. Server limits abort active work even when disconnect alone
+would leave a lock-waiting backend. Request-owned clients close without waiting to drain;
 injected clients retain their own lifecycle. No session/global settings or
 migrations are changed. Exception messages, SQL and credentials are never
 returned/logged by this health path.
@@ -221,7 +223,10 @@ recovery, zero backlog or a drain gate. There is no last-known-good measurement.
 
 Measurements from [src/jobs/postgres.ts](../src/jobs/postgres.ts):
 
-- `pending`: `available_at <= now()` and no reservation.
+- `pending`: `available_at <= statement_timestamp()` and no reservation. All
+  availability/age expressions share the aggregate's statement-start clock,
+  not the earlier timeout-setup transaction's `BEGIN` time. See
+  [PostgreSQL current-time functions](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT).
 - `delayed`: future `available_at`; `reserved`: non-null `reserved_at`.
   These can overlap, so their sum need not equal `total`.
 - `total`: live ledger rows; `failed`: cumulative failed-history rows, not a

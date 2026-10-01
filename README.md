@@ -120,9 +120,12 @@ npm run dev -- --config wrangler.local.jsonc --local
 Keep `.dev.vars` on the passwordless test URL above. The checked-in local config
 uses `APP_URL=http://localhost:8787`, local Queue names and no remote bindings;
 set public Discord IDs only for an authorized test application/guild. Do not
-use real guild sign-in as a test fixture. `/up` is the liveness signal (always
-200, queue health folded in, no auth); use the SQL suites for database
-verification. This exercises direct Postgres, not Hyperdrive pooling. Miniflare requires a nonempty password for a Hyperdrive
+use real guild sign-in as a test fixture. `/robots.txt` is the DB-free local
+startup signal. `/up` is readiness (no auth): it requires a reachable web DB and
+all bundled web migrations applied, otherwise it returns 503. Queue-only
+`degraded` or `unknown` remains HTTP 200 when DB/schema is ready. Use the SQL
+suites for full database verification. This exercises direct Postgres, not
+Hyperdrive pooling. Miniflare requires a nonempty password for a Hyperdrive
 local connection string, so the passwordless authorized URL cannot be used as
 that override. **Do not invent a password or substitute credentials.** Never
 deploy the local config.
@@ -151,9 +154,11 @@ Do not use `npm run deploy` as a test or build command.
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
 `CLOUDFLARE_ACCOUNT_ID`, followed by a `/up` smoke test against
-https://next.togetherweown.com. The smoke checks HTTP 200 and the expected health
-envelope for liveness, not database readiness: degraded or unknown queue health
-does not fail deployment. There is deliberately no production job:
+https://next.togetherweown.com. The smoke requires readiness: **HTTP 200 +
+`db:ok` + `pending_migrations:0`** and the existing queue envelope. DB/schema
+failure (HTTP 503) fails deployment; queue-only `degraded` or `unknown` does not.
+The workflow migrates only disposable CI Postgres, not the staging schema.
+There is deliberately no production job:
 production (togetherweown.com) is only switched at cutover (plan TOG-9671, W16).
 Full procedures live in [docs/runbook.md](docs/runbook.md).
 

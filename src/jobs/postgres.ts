@@ -146,14 +146,17 @@ export type QueueDepth = {
  * caller maps that to `queue.status: unknown`, never a 500.
  */
 export async function pgQueueDepth(sql: Sql | postgres.TransactionSql): Promise<QueueDepth> {
+  // Health setup precedes this statement inside a transaction. now() would
+  // freeze availability at BEGIN; use one measurement-time clock instead.
+  // https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT
   const [row] = await sql`
     select
-      count(*) filter (where available_at <= now() and reserved_at is null)::int as pending,
-      count(*) filter (where available_at > now())::int as delayed,
+      count(*) filter (where available_at <= statement_timestamp() and reserved_at is null)::int as pending,
+      count(*) filter (where available_at > statement_timestamp())::int as delayed,
       count(*) filter (where reserved_at is not null)::int as reserved,
       count(*)::int as total,
       (select count(*)::int from queue_failed_jobs) as failed,
-      extract(epoch from now() - (min(created_at) filter (where available_at <= now() and reserved_at is null)))::int
+      extract(epoch from statement_timestamp() - (min(created_at) filter (where available_at <= statement_timestamp() and reserved_at is null)))::int
         as oldest_pending_age_seconds
     from queue_jobs`;
   if (!row) throw new Error("queue depth query returned no row");

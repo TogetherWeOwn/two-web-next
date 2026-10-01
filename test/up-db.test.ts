@@ -3,20 +3,24 @@ import postgres, { type Sql } from "postgres";
 import { describe, expect, it } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
-import { databaseReadiness, WEB_MIGRATIONS } from "../src/up";
+import { databaseReadiness, upBody, WEB_MIGRATIONS, withHealthReadTimeout } from "../src/up";
+import { pgQueueDepth } from "../src/jobs/postgres";
 import { testDatabaseUrl } from "./helpers/member-data-db";
+import { healthSql } from "./helpers/up";
 
 const raw = process.env.DATABASE_URL;
 
-function scopedHealthSql(reader: Sql, schema: string, slow?: "ping" | "queue"): Sql {
-  const wrap = (sql: Pick<Sql, "unsafe">): Sql => ((strings: TemplateStringsArray, ...values: unknown[]) => {
+function scopedHealthSql(reader: Sql, schema: string, slow?: "ping" | "queue", afterSetup?: () => Promise<void>): Sql {
+  const wrap = (sql: Pick<Sql, "unsafe">): Sql => (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.reduce((text, part, i) => text + (i ? `$${i}` : "") + part, "");
-    return sql.unsafe(
+    const result = await sql.unsafe(
       (slow === "queue" && query.includes("queue_jobs")) || (slow === "ping" && query.startsWith("SELECT clock_timestamp"))
         ? "SELECT pg_sleep(10)"
         : query.replaceAll("drizzle.__drizzle_migrations", `"${schema}".__drizzle_migrations`),
       values as Parameters<Sql["unsafe"]>[1], { prepare: true },
     );
+    if (query.includes("set_config")) await afterSetup?.();
+    return result;
   }) as unknown as Sql;
   return Object.assign(wrap(reader), {
     begin: (options: string, fn: (sql: Sql) => Promise<unknown>) => reader.begin(options, (tx) => fn(wrap(tx))),
@@ -105,6 +109,74 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
     } finally {
       await reader.end({ timeout: 0 });
       await admin.end({ timeout: 0 });
+    }
+  }, 10000);
+
+  it("starts no slow ping after a delayed successful timeout setup and leaves no active backend", async () => {
+    const url = testDatabaseUrl(raw!);
+    const name = `up_${randomUUID().replaceAll("-", "")}`;
+    const options = { max: 1, connect_timeout: 3, password: () => url.password, onnotice: () => {} };
+    const admin = postgres(url.href, options);
+    const reader = postgres(url.href, { ...options, connection: {
+      application_name: name, default_transaction_read_only: true, statement_timeout: 8000,
+    } });
+    try {
+      await reader`SELECT 1`;
+      const client = scopedHealthSql(reader, name, "ping", async () => {
+        // Delay processing a REAL set_config reply, not the server's execution.
+        await new Promise((resolve) => setTimeout(resolve, 2600));
+      });
+      const started = Date.now();
+      expect(await databaseReadiness(client)).toEqual({ db: "error", pending_migrations: null });
+      expect(Date.now() - started).toBeLessThan(3500);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const [activity] = await admin<{ active: number }[]>`
+        SELECT count(*)::int AS active FROM pg_stat_activity WHERE application_name = ${name} AND state = 'active'
+      `;
+      expect(activity?.active).toBe(0); // No end(): an issued slow ping would still be active here.
+      const [settings] = await reader`SELECT current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock`;
+      expect(settings).toMatchObject({ statement: "8s", lock: "0" });
+    } finally {
+      await reader.end({ timeout: 0 });
+      await admin.end({ timeout: 0 });
+    }
+  }, 10000);
+
+  it("counts jobs due during setup and their age at statement time, not BEGIN", async () => {
+    const url = testDatabaseUrl(raw!);
+    const schema = `up_${randomUUID().replaceAll("-", "")}`;
+    const options = { max: 1, connect_timeout: 3, password: () => url.password, onnotice: () => {} };
+    const admin = postgres(url.href, options);
+    const reader = postgres(url.href, { ...options, connection: {
+      search_path: schema, application_name: schema, default_transaction_read_only: true, statement_timeout: 8000,
+    } });
+    let created = false;
+    try {
+      await admin.unsafe(`CREATE SCHEMA "${schema}"`);
+      created = true;
+      await admin.unsafe(`CREATE TABLE "${schema}".queue_jobs (id integer, available_at timestamptz, reserved_at timestamptz, created_at timestamptz)`);
+      await admin.unsafe(`CREATE TABLE "${schema}".queue_failed_jobs (id integer)`);
+      await admin`INSERT INTO ${admin(schema)}.queue_jobs
+        SELECT id, clock_timestamp() - interval '1 second', NULL, clock_timestamp() - interval '1 second'
+        FROM generate_series(1,20) AS id`;
+      const client = scopedHealthSql(reader, schema, undefined, async () => {
+        // BEGIN has already frozen now(); the aggregate has not started yet.
+        // All writes target only this owned schema through a separate client.
+        await admin`UPDATE ${admin(schema)}.queue_jobs SET created_at = clock_timestamp() - interval '1 second'`;
+        await admin`UPDATE ${admin(schema)}.queue_jobs SET available_at = clock_timestamp() + interval '200 milliseconds' WHERE id = 20`;
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+      });
+      const depth = await withHealthReadTimeout(client, pgQueueDepth);
+      expect(depth).toMatchObject({ pending: 20, delayed: 0, reserved: 0, total: 20, failed: 0 });
+      expect(depth.oldestPendingAgeSeconds).toBeGreaterThanOrEqual(2);
+      // Real queue measurement through the unchanged envelope, with offline DB readiness.
+      expect(await upBody(async () => depth, healthSql())).toMatchObject({
+        status: "degraded", db: "ok", pending_migrations: 0, queue: { status: "degraded", pending: 20 },
+      });
+    } finally {
+      await reader.end({ timeout: 0 });
+      try { if (created) await admin.unsafe(`DROP SCHEMA "${schema}" CASCADE`); }
+      finally { await admin.end({ timeout: 0 }); }
     }
   }, 10000);
 

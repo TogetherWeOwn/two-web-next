@@ -168,6 +168,40 @@ describe("/up transaction-local server budgets", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it.each([[1500, true], [1750, true], [1751, false], [2600, false], [2800, false]])(
+    "validates the installed limit after a %i ms successful setup delay", async (delay, fits) => {
+      vi.useFakeTimers();
+      const query = vi.fn(async () => { vi.setSystemTime(Date.now() + Number(delay)); return []; });
+      const begin = async (_options: string, fn: (tx: TransactionSql) => Promise<unknown>) => fn(query as unknown as TransactionSql);
+      const read = vi.fn(async () => "measured");
+      try {
+        const result = withHealthReadTimeout({ begin } as unknown as Sql, read);
+        if (fits) {
+          expect(await result).toBe("measured");
+          expect(read).toHaveBeenCalledOnce();
+        } else {
+          await expect(result).rejects.toThrow("Health read deadline elapsed");
+          expect(read).not.toHaveBeenCalled();
+        }
+        const [, ...values] = query.mock.calls[0] as unknown as [TemplateStringsArray, ...unknown[]];
+        expect(values).toEqual(["1000ms", "750ms"]);
+      } finally { vi.useRealTimers(); }
+    },
+  );
+
+  it("refuses a previously shrunk limit when setup consumes more of the remaining budget", async () => {
+    vi.useFakeTimers();
+    const query = vi.fn(async () => { vi.setSystemTime(Date.now() + 1); return []; });
+    const begin = async (_options: string, fn: (tx: TransactionSql) => Promise<unknown>) => fn(query as unknown as TransactionSql);
+    const read = vi.fn(async () => []);
+    try {
+      await expect(withHealthReadTimeout({ begin } as unknown as Sql, read, Date.now() + 450)).rejects.toThrow("Health read deadline elapsed");
+      const [, ...values] = query.mock.calls[0] as unknown as [TemplateStringsArray, ...unknown[]];
+      expect(values).toEqual(["200ms", "199ms"]);
+      expect(read).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("fails closed rather than issuing an unbounded read if timeout setup fails", async () => {
     const query = vi.fn(async () => { throw new Error("setting refused"); });
     const begin = async (_options: string, read: (tx: TransactionSql) => Promise<unknown>) => read(query as unknown as TransactionSql);

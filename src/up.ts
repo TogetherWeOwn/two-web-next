@@ -55,7 +55,9 @@ export async function withHealthReadTimeout<T>(
     const lock = Math.min(HEALTH_LOCK_TIMEOUT_MS, statement - 1);
     await tx`SELECT set_config('statement_timeout', ${`${statement}ms`}, true),
       set_config('lock_timeout', ${`${lock}ms`}, true)`;
-    if (Date.now() >= deadline - HEALTH_RESPONSE_MARGIN_MS) throw new Error("Health read deadline elapsed");
+    // The successful setup reply can consume budget too. Refuse the read if
+    // its installed server limit no longer fits; do not start another SET loop.
+    if (statement > deadline - Date.now() - HEALTH_RESPONSE_MARGIN_MS) throw new Error("Health read deadline elapsed");
     return read(tx);
   }) as T;
 }
