@@ -40,6 +40,7 @@ export const coverage = {
   "/admin/featured/:id": { cases: [{ path: "/admin/featured/1", identity: "moderator" }, { path: "/admin/featured/999", identity: "moderator", status: 404 }] },
   "/admin/events": { cases: [{ path: "/admin/events", identity: "moderator" }, { path: "/admin/events?q=zz-no-matches", identity: "moderator" }] },
   "/admin/join-attempts": { cases: [{ path: "/admin/join-attempts", identity: "moderator" }, { path: "/admin/join-attempts?q=zz-no-matches", identity: "moderator" }] },
+  "/admin/join-attempts/:id": { cases: [{ path: "/admin/join-attempts/1", identity: "moderator" }, { path: "/admin/join-attempts/999999", identity: "moderator", status: 404 }] },
   "/__a11y/404": { cases: [{ path: "/__a11y/404", status: 404 }] },
   "/__a11y/429": { cases: [{ path: "/__a11y/429", status: 429 }] },
   "/__a11y/500": { cases: [{ path: "/__a11y/500", status: 500 }] },

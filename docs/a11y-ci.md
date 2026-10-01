@@ -24,7 +24,8 @@ screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
 - Public pages, homepage notices, event list/calendar/search/no-results/past
   states, published/draft/cancelled event details, owner profile + validation
   alert, another member's profile, moderator admin pages and missing records are
-  scanned at 360×780 and 1280×900. The initial matrix has 46 cases / 92 scans.
+  scanned at 360×780 and 1280×900. The matrix has 48 cases / 96 scans,
+  including seeded and missing moderator join-attempt details.
 - Branded 404/429/500/503 handlers are exposed by **test-only** routes in
   `ci/a11y-worker.ts`. Production configuration still points at `src/worker.ts`.
 - Canonical migrations and synthetic users/events/RSVPs/featured/join-attempt
@@ -72,7 +73,7 @@ marks incomplete still need human/manual assessment; that is outside this slice.
 
 ## Acceptance / reproduction
 
-- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 92
+- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 96
   document scans pass with zero WCAG A/AA violations and a rejected sentinel.
 - **Given** a new static HTML GET, **when** the audit runs, **then** that route is
   scanned without editing a page list.
