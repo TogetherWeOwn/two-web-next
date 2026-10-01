@@ -18,7 +18,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home";
+    theme?: "home" | "event";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -47,15 +47,46 @@ export const Layout: FC<
       ) : null}
       <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Events`} href="/events.rss" />
       <link rel="stylesheet" href="/styles.css" />
-      {theme === "home" ? (
+      {theme ? (
         <>
           <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
           <link rel="stylesheet" href="/theme.css" />
+          {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
         </>
       ) : null}
     </head>
-    <body class={theme === "home" ? "homepage-theme" : undefined}><SkipLink />{children}</body>
+    <body class={theme === "event" ? "homepage-theme event-theme" : theme === "home" ? "homepage-theme" : undefined}><SkipLink />{children}</body>
   </html>
+);
+
+export const ThemeHeader: FC<{ session?: Session | null; current: "home" | "events"; account?: boolean }> = ({
+  session, current, account = true,
+}) => (
+  <header class="bar site-header">
+    <nav class="main-nav" aria-label="Primary">
+      <a href="/" aria-current={current === "home" ? "page" : undefined}>Home</a>
+      <a href="/events" aria-current={current === "events" ? "location" : undefined}>Events</a>
+    </nav>
+    <a class="brand" href="/" aria-label="Together We Own homepage">
+      <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+    </a>
+    {account ? (
+      <nav class="header-account" aria-label="Account">
+        {session ? (
+          <form method="post" action="/logout">
+            <span class="account-caption">Signed in</span>
+            <span class="who">{session.username}</span>
+            <button type="submit" class="link">Sign out</button>
+          </form>
+        ) : (
+          <div>
+            <span class="account-caption">Welcome, guest</span>
+            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+          </div>
+        )}
+      </nav>
+    ) : null}
+  </header>
 );
 
 // The site footer carries the static-leaf links on the funnel + leaf + error
@@ -201,29 +232,7 @@ export const Home: FC<{
     shareDescription="We spent most of our life private. Now you can just turn up."
     theme="home"
   >
-    <header class="bar site-header">
-      <nav class="main-nav" aria-label="Primary">
-        <a href="/" aria-current="page">Home</a>
-        <a href="/events">Events</a>
-      </nav>
-      <a class="brand" href="/" aria-label="Together We Own homepage">
-        <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
-      </a>
-      <nav class="header-account" aria-label="Account">
-        {session ? (
-          <form method="post" action="/logout">
-            <span class="account-caption">Signed in</span>
-            <span class="who">{session.username}</span>
-            <button type="submit" class="link">Sign out</button>
-          </form>
-        ) : (
-          <div>
-            <span class="account-caption">Welcome, guest</span>
-            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
-          </div>
-        )}
-      </nav>
-    </header>
+    <ThemeHeader session={session} current="home" />
     <main id="main" tabindex={-1}>
       {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
       <section class="hero" aria-labelledby="home-heading">

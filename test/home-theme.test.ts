@@ -24,7 +24,7 @@ beforeEach(() => vi.stubGlobal("fetch", vi.fn(() => { throw new Error("theme tes
 afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
 
 describe("homepage theme", () => {
-  it("opts only the homepage into the theme and self-hosted font preload", () => {
+  it("opts the homepage into the theme and leaves a plain layout unthemed", () => {
     const html = render();
     expect(html).toContain('<body class="homepage-theme"><a class="skip-link"');
     expect(html).toContain('href="/theme.css"');

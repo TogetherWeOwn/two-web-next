@@ -11,6 +11,13 @@ export function contentExpectations(scenario) {
       ...["prospect", "member", "soldier", "veteran", "legend"].map((rank, i) => ({ selector: `[data-rank="${rank}"] dd`, text: values[i] })),
     ];
   }
+  if (scenario.route === "/e/:key" && scenario.status === 200) {
+    return [
+      { selector: ".event-hero h1", attributes: { "data-waitlist-position": scenario.state === "waitlisted" ? "1" : "" } },
+      { selector: '[data-testid="event-attendees"]', count: scenario.identity === "guest" || scenario.identity === "moderator" ? 0 : 1 },
+      { selector: '[data-testid="event-join-pitch"]', count: scenario.identity === "guest" ? 1 : 0 },
+    ];
+  }
   if (!["/profile", "/members/:user"].includes(scenario.route) || scenario.status !== 200) return [];
   const stats = '[data-testid="profile-stats"]';
   if (unavailable) return [{ selector: stats, count: 0 }];

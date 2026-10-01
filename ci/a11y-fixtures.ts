@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
 import { createMemberDataFixture } from "../test/helpers/member-data-db";
 import { cookieFor, env, MODERATOR, seed, SUBJECT } from "../test/helpers/member-data";
-import { events, featuredContents } from "../src/db/admin-schema";
+import { events, featuredContents, rsvps } from "../src/db/admin-schema";
 import { createPostgresSessionStore, migrate, type Sql } from "../src/sessions";
 
 export async function fixtures(raw: string) {
@@ -20,6 +20,15 @@ export async function fixtures(raw: string) {
       { eventKey: "01J00000000000000000000016", title: "Cancelled games", status: "cancelled", startsAt: new Date("2099-11-05T20:00:00Z"), endsAt: new Date("2099-11-05T22:00:00Z") },
       { eventKey: "01J00000000000000000000017", title: "Draft games", status: "draft", startsAt: new Date("2099-11-06T20:00:00Z"), endsAt: new Date("2099-11-06T22:00:00Z") },
       { eventKey: "01J00000000000000000000018", title: "Past games", status: "published", startsAt: new Date("2020-11-06T20:00:00Z"), endsAt: new Date("2020-11-06T22:00:00Z") },
+    ]);
+    const [waitlisted] = await fixture.db.insert(events).values({
+      eventKey: "01J00000000000000000000019", title: "Full co-op night", game: "Co-op", description: "Bring your favourite loadout.",
+      location: "Voice lobby", capacity: 1, status: "published",
+      startsAt: new Date("2099-11-07T20:00:00Z"), endsAt: new Date("2099-11-07T22:00:00Z"),
+    }).returning();
+    await fixture.db.insert(rsvps).values([
+      { eventId: waitlisted!.id, userId: MODERATOR.userId, status: "going" },
+      { eventId: waitlisted!.id, userId: SUBJECT.userId, status: "waitlisted" },
     ]);
     await fixture.db.insert(featuredContents).values({ title: "Community games", body: "Everyone is welcome — مرحباً", isPublished: true, url: "/events" });
     await migrate(sessionClient as unknown as Sql);

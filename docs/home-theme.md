@@ -2,7 +2,7 @@
 
 The purchased HTML landing page is the visual foundation for the homepage. Its centered landing composition, condensed uppercase typography, dark surfaces, lime palette (#a3ff12), square buttons, mirrored angular side details and compact account treatment are adapted to Hono SSR in `src/pages.tsx` and `public/theme.css`. The account reference contributes styling only: Discord OAuth, sessions, guild joins and logout remain the existing flows. There is no password/registration form.
 
-Only the homepage opts into the stylesheet. Other routes retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
+The homepage and event detail/cancelled pages opt into the base stylesheet. Event pages also load `public/event-theme.css`; calendar, past-event listing and other routes retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
 
 ## Assets
 

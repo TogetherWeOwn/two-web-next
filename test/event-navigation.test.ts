@@ -148,7 +148,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(relatedKeys(html)).toEqual([key(3)]);
     expect(html).toContain('href="#main"');
     expect(html).toContain('<main id="main" tabindex="-1">');
-    expect(html).toContain('<nav aria-label="Primary">');
+    expect(html).toMatch(/<nav\b[^>]*aria-label="Primary"[^>]*>/);
     expect(html.match(/<h1\b/g)).toHaveLength(1);
     expect(html).toContain('data-testid="event-venue">Voice');
     expect(html).toContain(`rel="canonical" href="https://next.example.test/e/${key(2)}"`);
