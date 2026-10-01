@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { API } from "typescript/unstable/sync";
 import { SyntaxKind } from "typescript/unstable/ast";
+import { readWranglerConfig } from "./wrangler-config.mjs";
+
+export { readWranglerConfig } from "./wrangler-config.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const start = "<!-- config-docs:start -->";
@@ -40,16 +43,6 @@ export function readEnvKeys(envFile, configFile) {
   } finally {
     api.close();
   }
-}
-
-export function readWranglerConfig(text) {
-  // Keep quoted strings intact (including URLs and commas) while removing JSONC
-  // comments and trailing commas. JSON.parse still rejects malformed input.
-  const stringsOrComments = /"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
-  const stringsOrTrailingCommas = /"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g;
-  const json = text.replace(stringsOrComments, (match) => match.startsWith('"') ? match : " ")
-    .replace(stringsOrTrailingCommas, (match) => match === "," ? "" : match);
-  return JSON.parse(json);
 }
 
 export function readWranglerKeys(text) {

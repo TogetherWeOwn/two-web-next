@@ -534,7 +534,7 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie()).toEqual([]);
     const body = await res.text();
-    expect(body).toContain('<a class="brand" href="/">TWO</a>');
+    expect(body).toContain('<a class="brand" href="/"');
     expect(body).not.toMatch(/ECONNREFUSED|postgres:\/\/|db\.internal/);
     expect(body).not.toContain(SECRET);
     const gateLine = logs.filter((l) => JSON.stringify(l.args).includes("could not resolve the session"));

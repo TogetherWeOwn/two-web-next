@@ -214,7 +214,7 @@ describe("legacy featured edit identity (local SQL fixtures)", () => {
       expect(body).not.toMatch(/private|ECONNREFUSED/);
       if (method === "HEAD") expect(body).toBe("");
       else if (accept === "application/json") expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
-      else expect(body).toContain('<a class="brand" href="/">TWO</a>');
+      else expect(body).toContain('<a class="brand" href="/"');
     }
   });
 

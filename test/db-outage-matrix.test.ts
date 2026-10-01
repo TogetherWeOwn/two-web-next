@@ -95,7 +95,9 @@ const MATRIX: Case[] = [
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
 // endpoint. Pin known middleware multiplicity instead of filtering wildcards.
-const MIDDLEWARE = ["ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*"];
+// Profile paths carry three registrations each: the session gate, the
+// join-result consumer, and the mandatory access log.
+const MIDDLEWARE = ["ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*", "ALL /members/*"];
 function assertInventory(router: { routes: { method: string; path: string }[] }): void {
   const endpoints = router.routes.filter((r) => r.method !== "ALL").map((r) => `${r.method} ${r.path}`);
   const expected = MATRIX.filter((r) => r.method !== "ALL").map((r) => `${r.method} ${r.route}`);
@@ -146,7 +148,9 @@ async function assertResponse(res: Response, row: Case): Promise<void> {
   if (row.format) expect.soft(res.headers.get("content-type")).toContain(row.format === "json" ? "application/json" : "text/html");
   if (row.format === "html" && row.status >= 400) {
     expect.soft(body).toContain("Together We Own");
-    expect.soft(body).toContain('<a class="brand" href="/">TWO</a>');
+    // The home-theme header renders the brand as a logo image, not bare
+    // text; pin the branded anchor, not its contents.
+    expect.soft(body).toContain('<a class="brand" href="/"');
   }
   if (row.location) {
     const location = res.headers.get("location");

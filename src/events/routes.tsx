@@ -10,8 +10,10 @@ import { memberAccessLog } from "../access-log";
 import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
+import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
 import { rateLimitExceeded } from "../errors";
+import { takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
@@ -177,10 +179,29 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       }
     }
 
+    // One-shot join confirmation (legacy join_result flash): /events is a
+    // join-CTA landing (`/join?next=/events`), so it consumes and renders the
+    // banner exactly once like /, /join, /profile and /e/:key (TOG-10356
+    // review). Island fragment swaps must not consume it: the banner renders
+    // outside the swapped zones, so a fragment would eat the flash without
+    // ever displaying it — the pending value survives for the next full load.
+    const island = c.req.header("x-two-island") === "events-calendar";
+    const joinResult = island ? null : await takeJoinResult(c);
     // Search analytics must run per request, not only on shared-cache misses.
-    c.header("cache-control", session || searching ? "private, no-store" : "public, max-age=60");
+    c.header("cache-control", session || searching || joinResult ? "private, no-store" : "public, max-age=60");
     if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
+    // Guest sign-in links carry this page as ?next= so the OAuth round trip
+    // lands back here (TOG-10356). Rooted pathname + search only — the
+    // journey guard re-validates before any redirect, so a hostile query can
+    // at worst fall back to the default landing, never off-app.
+    let loginReturnTo: string | null = null;
+    try {
+      const u = new URL(c.req.url);
+      loginReturnTo = u.pathname + u.search;
+    } catch {
+      loginReturnTo = "/events";
+    }
     return c.html(
       <EventsCalendarPage
         state={state}
@@ -191,8 +212,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         emptyState={emptyState}
         discordFailed={discordFailed}
         member={session?.member ?? false}
-        inviteUrl={c.env.DISCORD_INVITE_URL}
+        inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
         appUrl={c.env.APP_URL}
+        loginReturnTo={loginReturnTo}
+        joinResult={joinResult}
       />,
     );
   });
@@ -279,11 +302,23 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return c.text("Events temporarily unavailable", 503);
     const e = await getPublicEvent(db, key);
     if (!e) return c.notFound();
+    // The live page personalizes on the session (member/guest join pitch)
+    // and on the one-shot join confirmation, so it is never share-cached
+    // (main W16) and always varies on the cookie (TOG-10356 finding 5). The
+    // cancelled page is viewer-independent: it renders before any session
+    // read, so a store outage or a rotated cookie can never turn the static
+    // cancellation into a 500 (TOG-10356 review). Its no-store posture stays
+    // even without a session exit: nothing viewer-specific here may be
+    // cached. The draft gate below still reads the session first — a
+    // signed-in rotation there makes its 403 viewer-specific too.
     if (e.status === "cancelled") {
       c.header("x-robots-tag", "noindex, nofollow");
+      c.header("cache-control", "private, no-store");
+      c.header("vary", "Cookie");
       return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
     }
-    // The guest join pitch and waitlist position depend on the viewer; never share-cache this HTML.
+    // Never share-cache this HTML: the guest join pitch, the waitlist
+    // position and the one-shot join banner all depend on the viewer/cookies.
     c.header("cache-control", "private, no-store");
     c.header("vary", "Cookie");
     // The injected reader uses only bindings/cookies; this route additionally
@@ -291,6 +326,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const session = await readSession(c as unknown as Ctx);
     if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
     if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
+    // One-shot join confirmation (legacy join_result flash): the event page
+    // is a join-CTA landing (`/join?next=/e/<key>`), so it consumes and
+    // renders the banner exactly once like /, /join and /profile.
+    const joinResult = await takeJoinResult(c);
     const [neighbors, related, attendees, position] = await Promise.all([
       getEventNeighbors(db, e),
       listRelatedEvents(db, e),
@@ -301,7 +340,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       c.set("viewerId", session.id);
       c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
     }
-    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
+    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------

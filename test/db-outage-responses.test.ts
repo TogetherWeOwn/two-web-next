@@ -82,7 +82,7 @@ describe("narrow database outage classification", () => {
     expect(res.headers.get("vary")).toContain("Accept");
     const body = await res.text();
     expect(body).not.toMatch(/private|ECONNREFUSED/);
-    if (format === "text/html") expect(body).toContain('<a class="brand" href="/">TWO</a>');
+    if (format === "text/html") expect(body).toContain('<a class="brand" href="/"');
     else expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
   });
   it.each(["/events", "/events.json"])("preserves the %s endpoint format for query outages without Accept", async (path) => {
@@ -178,7 +178,7 @@ describe("profile failures after a successful session and data read", () => {
       expect(res.headers.get("vary")).toContain("Accept");
       const body = await res.text();
       expect(body).not.toContain("private profile fixture");
-      expect(body).toContain('<a class="brand" href="/">TWO</a>');
+      expect(body).toContain('<a class="brand" href="/"');
     },
   );
   it.each(["text/html", "application/json"])("classifies a save outage after a successful lookup for %s", async (accept) => {

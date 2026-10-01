@@ -28,6 +28,11 @@ targetRules = ["generic-api-key"]
 regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FAV''', '''01ARZ3NDEKTSV4RRFFQ69G5FAW''']
 
 [[allowlists]]
+description = "Synthetic ULID event key in the W15 login-return DB fixture, not a credential"
+targetRules = ["generic-api-key"]
+regexes = ['''01J0AABBCCDDEEFFGGHHMMNNPP''']
+
+[[allowlists]]
 description = "Synthetic sequential guild id in offline homepage widget fixtures, not an OAuth credential"
 targetRules = ["discord-client-id"]
 condition = "AND"
