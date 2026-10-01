@@ -145,6 +145,9 @@ test('retired diagnostics reject soft-404s and redirects in both phases', async 
 test('freeze mapping rejects newly documented paths instead of silently skipping them', () => {
   assert.deepEqual(uncoveredFrozenPaths(freeze), []);
   assert.deepEqual(uncoveredFrozenPaths(freeze + '\n| `/new-frozen-route` | owner |\n'), ['/new-frozen-route']);
+  const inventory = '\n| `ALL /*` | middleware |\n| `GET /admin/new-inventory-route` | moderator |\n| `POST /events` | moderator |\n';
+  assert.deepEqual(uncoveredFrozenPaths(freeze + inventory), []);
+  assert.deepEqual(uncoveredFrozenPaths(freeze + inventory + '\n| `/new-frozen-route` | owner |\n'), ['/new-frozen-route']);
 });
 
 test('sitemap XML entities are decoded exactly once', () => {

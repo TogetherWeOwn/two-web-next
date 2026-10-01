@@ -82,7 +82,9 @@ cutover procedure; no live checks were run as part of this card's tests.
 
 `URL_CASES` in `ci/cutover-check.mjs` explicitly maps every code-formatted
 path/pattern in the URL-freeze tables. Adding an unmapped row fails the checker
-and selftest. Concrete checks include guest `/events.json` 401, guest
+and selftest. Method-prefixed registrations in the separate mounted inventory
+(e.g. `ALL /*`, `GET /admin/events/:key`, `POST /events`) belong to
+`test/route-inventory.test.ts`, not this guest-GET gate; no write probes are added. Concrete checks include guest `/events.json` 401, guest
 profile/member/admin 302 to `/auth/discord`, `/join/callback` 200 recovery
 without a code, login callback 302 to `/?n=signin_failed`, and 404s for retired
 WordPress/PHP/Livewire surfaces and removed Next diagnostics (`/health`,
@@ -115,7 +117,7 @@ or connect to any database. Vitest also feeds actual Hono-rendered static-leaf
 HTML into the canonical/indexing gates and actual retired diagnostic responses
 into the URL-status gates in both phases (`test/cutover-routes.test.mjs`).
 Diagnostic fixtures pin 404 independently of `URL_CASES` and reject 200s/redirects;
-the actual-route tests throw on any database-binding read. These are in-process
+the actual-route tests supply no database bindings. These are in-process
 requests with no database connections or live sockets. The rest of the suite uses local fixtures when
 `DATABASE_URL` is unset, or approved agent-testdb/CI service containers only.
 

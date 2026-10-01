@@ -1,5 +1,11 @@
+// route-inventory: GET /discord
+// route-inventory: GET /about
+// route-inventory: GET /faq
+// route-inventory: GET /rules
+// route-inventory: GET /robots.txt
+// route-inventory: GET /sitemap_index.xml
 import { describe, expect, it } from "vitest";
-import app, { FALLBACK_INVITE } from "../src/index";
+import app, { FALLBACK_INVITE } from "./app";
 import { readCounts } from "../src/counts";
 import type { Env } from "../src/env";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "../src/seo";
@@ -89,7 +95,7 @@ describe("funnel leaves (DB-free floor)", () => {
 
 describe("homepage degraded fallback", () => {
   it("renders 200 with no member count when the bot DB is down", async () => {
-    expect(await readCounts(env)).toEqual({ memberCount: null, onlineCount: null });
+    expect(await readCounts(env)).toEqual({ memberCount: null, onlineCount: null, ranks: [] });
     const res = await app.request("/", {}, env);
     expect(res.status).toBe(200);
     const html = await res.text();

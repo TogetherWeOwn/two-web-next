@@ -48,7 +48,10 @@ export const URL_CASES = [
 
 export function uncoveredFrozenPaths(markdown) {
   const paths = [...markdown.matchAll(/^\|\s*([^|]+)\|/gm)]
-    .flatMap(match => [...match[1].matchAll(/`([^`]+)`/g)].map(token => token[1]));
+    .flatMap(match => [...match[1].matchAll(/`([^`]+)`/g)].map(token => token[1]))
+    // Mounted method/middleware inventory is checked by route-inventory.test.ts,
+    // not a frozen guest-GET contract (and must never trigger write probes).
+    .filter(path => !/^(?:ALL|GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE)\s+\//.test(path));
   return [...new Set(paths)].filter(path => !URL_CASES.some(row => row.frozen === path));
 }
 

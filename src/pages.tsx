@@ -1,6 +1,10 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
-import type { Counts } from "./counts";
+import type { Counts, Rank } from "./counts";
+import type { VisibleFeatured } from "./featured";
+import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
+import type { HomeEvent } from "./events/reads";
+import { cardTimeLabel, isValidZone } from "./islands/contracts";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
@@ -155,13 +159,20 @@ export const Recovery: FC<{
   </Layout>
 );
 
+const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map((label) => ({
+  key: label.toLowerCase(), label, memberCount: null,
+}));
+
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
-}> = ({ session, notice, inviteUrl, appUrl, counts }) => (
+  upcomingEvents: HomeEvent[];
+  eventsUnavailable: boolean;
+  featured: VisibleFeatured[];
+}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -196,7 +207,7 @@ export const Home: FC<{
         {counts.memberCount != null && (
           <p class="counts" data-testid="member-count">
             <strong>{counts.memberCount}</strong> members
-            {counts.onlineCount != null && (
+            {counts.onlineCount != null && counts.onlineCount > 0 && (
               <>
                 {" · "}<strong>{counts.onlineCount}</strong> online
               </>
@@ -204,6 +215,34 @@ export const Home: FC<{
           </p>
         )}
       </section>
+      {featured.length > 0 ? (
+        <section aria-labelledby="featured-heading" data-testid="featured-content">
+          <h2 id="featured-heading">From the community team</h2>
+          <div class="facts">
+            {featured.map((item) => (
+              <article class="card" data-testid="featured-item" key={item.id}>
+                <h3>{item.url ? <a href={item.url}>{item.title}</a> : item.title}</h3>
+                {item.body ? <p>{item.body}</p> : null}
+                {(() => {
+                  const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl) : null;
+                  return src ? (
+                  <img
+                    class="featured-image"
+                    src={src}
+                    alt={item.imageAlt?.trim() || item.title}
+                    width="640"
+                    height="360"
+                    loading="lazy"
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                  />
+                  ) : null;
+                })()}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <section>
         <h2>No application. No interview.</h2>
         <p>Show up a few times. Play. Become a Member. The ladder records trust and time, not grind.</p>
@@ -214,7 +253,46 @@ export const Home: FC<{
       </section>
       <section aria-label="Community ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
-        <p>Ranks stack — a Veteran still holds everything below. Legend is still unclaimed.</p>
+        <p>Ranks stack — a Veteran still holds everything below.</p>
+        <dl class="facts rank-stack" data-testid="rank-stack">
+          {(counts.ranks.length ? counts.ranks : FALLBACK_RANKS).map((rank) => (
+            <div class="card" key={rank.key} data-rank={rank.key}>
+              <dt>{rank.label}</dt>
+              <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+      <section aria-labelledby="home-events-heading">
+        <p class="strap">Next up</p>
+        <h2 id="home-events-heading">Game nights, when they land.</h2>
+        {upcomingEvents.length > 0 ? (
+          <>
+            <ul class="facts home-events" data-testid="home-events-list">
+              {upcomingEvents.map((event) => (
+                <li class="card">
+                  <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
+                    <p><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time></p>
+                    <h3>{event.title}</h3>
+                    {event.location ? <p>{event.location}</p> : null}
+                    <p>{event.goingCount} going</p>
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p><a href="/events">See all events <span aria-hidden="true">→</span></a></p>
+          </>
+        ) : (
+          <div class="card" data-testid="home-events-empty" data-state={eventsUnavailable ? "unavailable" : "empty"}>
+            <h3>{eventsUnavailable ? "Game nights are unavailable right now." : "Nothing scheduled yet."}</h3>
+            <p>{eventsUnavailable
+              ? "We couldn’t load the schedule. The Discord is still open — check there for the next game night."
+              : "Game nights get posted here. Join the Discord and you’ll hear about the next one."}</p>
+          </div>
+        )}
+        {!session ? (
+          <p><a class="btn" href="/join" data-testid="home-events-join">Join the Discord <span aria-hidden="true">→</span></a></p>
+        ) : null}
       </section>
     </main>
     <SiteFooter />
