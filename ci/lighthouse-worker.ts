@@ -36,6 +36,7 @@ function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknown> {
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "rsvps"')) return { rows: [[1, 3]] };
     if (sql.includes('from "events"')) {
+      if (sql.includes('"events"."id" <>')) return { rows: [] }; // The fixture has no neighboring or related events.
       if (sql.includes('"event_key" =')) return { rows: params.includes(fixtureKey) ? [encoded] : [] };
       if (sql.includes('"ends_at" <')) return { rows: [] };
       if (sql.includes('"ends_at" >=')) return { rows: [encoded] };

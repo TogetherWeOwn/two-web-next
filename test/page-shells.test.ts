@@ -13,7 +13,7 @@ function assertShell(html: string) {
   expect(html.match(/<a\b[^>]*href="#main"[^>]*>/g)).toHaveLength(1);
   // First child of body is stronger than first anchor: no button/input/positive
   // tabindex can silently get ahead of the bypass link.
-  expect(html).toMatch(/<body>\s*<a class="skip-link[^"]*" href="#main">Skip to content<\/a>/);
+  expect(html).toMatch(/<body>\s*<a class="sl[^"]*" href="#main">Skip to content<\/a>/);
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   expect(html).toContain('rel="stylesheet" href="/styles.css"');
 }
@@ -95,8 +95,8 @@ it.each([429, 500, 503])("branded %i pages preserve the same bypass and landmark
 
 it("keeps bypass visibility and keyboard focus styling in external CSS", () => {
   const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf8");
-  expect(css).toMatch(/\.skip-link\s*\{[^}]*transform:\s*translateY\(calc\(-100%/);
-  expect(css).toMatch(/\.skip-link:focus\s*\{[^}]*transform:\s*none/);
+  expect(css).toMatch(/\.sl\s*\{[^}]*transform:\s*translateY\(calc\(-100%/);
+  expect(css).toMatch(/\.sl:focus\s*\{[^}]*transform:\s*none/);
   expect(css).toMatch(/:focus-visible\s*\{[^}]*outline:\s*3px solid/);
   expect(css).toMatch(/:focus-visible\s*\{[^}]*outline-offset:\s*3px/);
 });

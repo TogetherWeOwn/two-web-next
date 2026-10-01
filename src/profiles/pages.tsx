@@ -80,9 +80,9 @@ export const ProfilePage: FC<{
       </header>
       <main id="main" tabindex={-1}>
         <section aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
-          <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="avatar">
-            {img ? <img src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
-            <span data-avatar-initial="" class="avatar-initial" hidden={!!img}>
+          <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="av bk">
+            {img ? <img class="bk" src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
+            <span data-avatar-initial="" class="ai rw ct bd" hidden={!!img}>
               {[...member.username][0]?.toUpperCase() ?? "?"}
             </span>
           </span>

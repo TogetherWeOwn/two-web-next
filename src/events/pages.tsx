@@ -608,7 +608,7 @@ export const EventPage: FC<{
           {!session ? (
             <>
               <p>These fill up fast for members. Join the Discord and you&apos;ll hear about the next one before it lands here.</p>
-              <a class="btn" href={`/join?next=${encodeURIComponent(path)}`} data-testid="event-related-join">
+              <a class="bt ct bd cp pl" href={`/join?next=${encodeURIComponent(path)}`} data-testid="event-related-join">
                 Join the Discord
               </a>
             </>
