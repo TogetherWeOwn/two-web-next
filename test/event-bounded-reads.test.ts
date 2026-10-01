@@ -56,9 +56,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     created = true;
     const migrations = readMigrationFiles({ migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url).href) });
     for (const migration of migrations) {
-      for (const statement of migration.sql) {
-        if (statement.trim()) await client.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
-      }
+      // Drizzle applies each migration in one transaction; some (LOCK TABLE) require it.
+      await client.begin(async (tx) => {
+        for (const statement of migration.sql) {
+          if (statement.trim()) await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+        }
+      });
     }
   });
 
