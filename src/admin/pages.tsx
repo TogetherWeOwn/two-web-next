@@ -1,5 +1,5 @@
 // Admin pages (W11 pt1). Plain server-rendered tables + forms in this repo's
-// JSX idiom — no client JS, no component framework. Moderators get labelled
+// JSX idiom, with a small event-editor navigation guard. Moderators get labelled
 // fields and field errors; every form posts back to its own route.
 
 import type { ZeroResultSearch } from "../events/search-log";
@@ -398,7 +398,7 @@ export const EventFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action}>
+        <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
             {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
           </Field>
@@ -479,6 +479,7 @@ export const EventFormPage: FC<{
         {mode === "edit" && roster ? (
           <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
             <h2>RSVPs ({roster.length})</h2>
+            <p class="hint">Save event changes before searching or sorting the roster.</p>
             <form method="get" action={`${action}#rsvp-roster`} class="filters">
               <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
               <input type="hidden" name="roster_order" value={rosterQuery.order} />
@@ -500,13 +501,13 @@ export const EventFormPage: FC<{
                 {roster.length === 0 ? (
                   <tr>
                     <td colspan={3} data-testid="roster-empty">
-                      No RSVPs yet.
+                      {rosterQuery.q ? "No RSVPs match this member search." : "No RSVPs yet."}
                     </td>
                   </tr>
                 ) : (
                   roster.map((r) => (
                     <tr key={r.userId}>
-                      <td>{r.username ?? "Unknown member"}</td>
+                      <td>{r.username?.trim() || "Unknown member"}</td>
                       <td>{r.status}</td>
                       <td>{r.answeredAt.toISOString()}</td>
                     </tr>
@@ -517,6 +518,7 @@ export const EventFormPage: FC<{
           </section>
         ) : null}
       </section>
+      {mode === "edit" ? <script src="/islands/admin-event-editor.js" defer /> : null}
     </Shell>
   );
 };
@@ -559,7 +561,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery }>
           {rows.length === 0 ? (
             <tr>
               <td colspan={5} data-testid="featured-empty">
-                No featured content yet.
+                {query.q || query.published ? "No featured content matches these filters." : "No featured content yet."}
               </td>
             </tr>
           ) : (

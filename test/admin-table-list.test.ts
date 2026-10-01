@@ -207,6 +207,41 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
     expect(html).toContain('name="roster_sort" value="status"');
     expect(html).toContain('name="roster_order" value="asc"');
     expect(html).toContain('id="roster-q" name="roster_q" type="search" value="alice"');
+    expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
+    expect(html).toContain('<form method="post" action="/admin/events/roster" data-event-editor="">');
+    expect(html).toContain('<form method="get" action="/admin/events/roster#rsvp-roster" class="filters">');
+    expect(html.match(/data-event-editor/g)).toHaveLength(1); // Only Save bypasses the dirty guard.
+  });
+
+  it("roster uses a readable fallback for absent, empty and whitespace names without exposing member ids", async () => {
+    const [event] = await fixture.db.insert(events).values({
+      eventKey: "missing-names", title: "Missing names", startsAt: new Date("2099-10-01T20:00Z"), endsAt: new Date("2099-10-01T22:00Z"),
+    }).returning();
+    await fixture.db.insert(users).values([
+      { id: "empty-member-id", username: "" }, { id: "blank-member-id", username: " \t\n " },
+      { id: "named-member-id", username: " Alice " },
+    ]);
+    const ids = ["absent-member-id", "empty-member-id", "blank-member-id", "named-member-id"];
+    await fixture.db.insert(rsvps).values(ids.map((userId) => ({ eventId: event!.id, userId, status: "going" as const })));
+    const html = await request("/events/missing-names");
+    expect(html.match(/<td>Unknown member<\/td>/g)).toHaveLength(3);
+    expect(html).toContain("<td>Alice</td>");
+    expect(html).not.toContain("<td></td>");
+    for (const id of ids) expect(html).not.toContain(id);
+    expect((await logs()).at(-1)!.subjectUserIds).toEqual([...ids].sort());
+  });
+
+  it("distinguishes unmatched roster/featured filters from a genuinely empty table", async () => {
+    await seedRoster();
+    await seedFeatured();
+    expect(await request("/events/roster?roster_q=absent")).toContain("No RSVPs match this member search.");
+    expect(await request("/events/other?roster_q=absent")).not.toContain("No RSVPs yet.");
+    expect(await request("/featured?q=absent")).toContain("No featured content matches these filters.");
+    await fixture.db.delete(featuredContents);
+    expect(await request("/featured?published=0")).toContain("No featured content matches these filters.");
+    expect(await request("/featured")).toContain("No featured content yet.");
+    await fixture.db.delete(rsvps);
+    expect(await request("/events/roster")).toContain("No RSVPs yet.");
   });
 
   it("join pages retain filters, reach older attempts, omit lookahead subjects, and keep stable id ordering", async () => {
