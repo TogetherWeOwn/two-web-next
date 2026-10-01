@@ -850,6 +850,21 @@ export const PROFILE_SAVED_TESTID = "profile-saved";
 export const PROFILE_ERROR_TESTID = "profile-error";
 export const PROFILE_SAVE_FAILED_TESTID = "profile-save-failed";
 export const PROFILE_SESSION_EXPIRED_TESTID = "profile-session-expired";
+export const PROFILE_UNCERTAIN_TESTID = "profile-uncertain";
+
+/**
+ * Owned client deadline for a profile save, covering fetch plus
+ * response-body completion (TOG-11625). Finite and wall-clock: when it passes
+ * before the single in-flight PATCH settles, the binder aborts the owned
+ * fetch where AbortController exists, shows the uncertain notice with the
+ * draft intact, and releases the controls. Timeout ownership ends there — a
+ * late completion can never replace newer feedback or mutate the accepted
+ * baseline, cancel disposes the timer/abort, and the timeout is never
+ * represented as a server rollback (no automatic resend, no second PATCH
+ * while the earlier write remains unsettled). The unsettled-write admission
+ * gate itself is owned elsewhere; this deadline only bounds the feedback.
+ */
+export const PROFILE_SAVE_DEADLINE_MS = 10_000;
 
 export const PROFILE_LIMITS = { bio: 1000, gamesMax: 20, gameChars: 80 } as const;
 
@@ -857,6 +872,8 @@ export const PROFILE_COPY = {
   saved: "Profile saved.",
   saveFailed: "Could not save your profile. Your changes are still here — try again.",
   sessionExpired: "Your session expired. Your changes are still here.",
+  uncertain:
+    "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.",
   logIn: "Log in with Discord",
   edit: "Edit profile",
   save: "Save",
@@ -922,7 +939,7 @@ export function profileClientErrors(input: {
   return errors;
 }
 
-export type ProfileOutcome = "saved" | "invalid" | "failed" | "session-expired" | "cancelled";
+export type ProfileOutcome = "saved" | "invalid" | "failed" | "session-expired" | "uncertain" | "cancelled";
 
 /** Focus after each outcome: heading, alert, or saved confirmation (TOG-6957). */
 export function profileFocusTarget(outcome: ProfileOutcome): string | null {
@@ -935,6 +952,8 @@ export function profileFocusTarget(outcome: ProfileOutcome): string | null {
       return PROFILE_SAVE_FAILED_TESTID;
     case "session-expired":
       return PROFILE_SESSION_EXPIRED_TESTID;
+    case "uncertain":
+      return PROFILE_UNCERTAIN_TESTID;
     case "cancelled":
       return PROFILE_NAME_TESTID;
   }
