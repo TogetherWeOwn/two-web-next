@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "migrations": {
+    "drizzle/0000_init-users.sql": "acbd3f4490ad2bef81ad4f8313ee90026108cca3e53742f49ee28259a5434bac",
+    "drizzle/0001_agent-events.sql": "1a5cfa32665caf5c31813701b049d0f6aa74f6e3b1ed2c7c63adc6292cf6256e",
+    "drizzle/1000_join-attempts-throttle.sql": "a090ad581382596b19e3b9c01dc9aaef662c8c6b31bc0e4961aac85d8c0021af",
+    "drizzle/1001_admin-slice.sql": "6cacb3c1f66528dfe28eb62d603cfe2a2498f85c7cc8064d76f61cbff2ac516f",
+    "drizzle/1002_rsvps.sql": "07a93195a37e2b77189174556b25dc832f6a3f3ab4ce928f5fc34ed373ebc532",
+    "drizzle/1003_profiles.sql": "6d7760dec4d848a54d923f0dceb8caf134e2198fc198c9c8d739731a570c8666",
+    "drizzle/1004_job-unique-locks.sql": "8c63a4161c988bfb7c83abc237f618fe499511b82e54943ba365d1ea510ffeab",
+    "drizzle/1005_event-search-logs.sql": "2ce86b88a8ef48dcbbd7791d54c7943926e05a79a88b456bde9b0154e545935e",
+    "drizzle/1006_rsvp-synced-at.sql": "668b1dfffb0111c290a5c70f57162b2e5e7ec407445841cbb39c503fbb7a467e",
+    "drizzle/1007_queue-ledger.sql": "59c18c89ada69e2500dff18996b98376f4adff99cfddfef233df7f629676fe32",
+    "drizzle/1008_agent-event-idempotency-prune-idx.sql": "7724544d699737757de17210b521f5428ec38e2a8b9a59db1cb4e7894522a930",
+    "drizzle/1009_event-sync-failure.sql": "afc7c481c60cb0dc838c5921472114be1a5daecc177a0ff03f92477edd6b1bdb",
+    "drizzle/1010_rsvp-legacy-order.sql": "ee57e436cbc33ce100dcd7ea77fe9e659b1c62555c76515d1d544a92405fef7b",
+    "drizzle/1011_legacy-audit-evidence.sql": "42129a578cf810fa1d79e8def327b45fcbde6cb16c28ec3289b592687fcb9fe6",
+    "drizzle/1012_content-funnel-import-keys.sql": "7613a399374c469ea6ea99222f474c4952ef634b771b1e4b8919bd82b2580333",
+    "drizzle/1013_hot-path-indexes.sql": "59dce971f700f4632f68281a2736e3095a1447a3c8baf5da14b69135c109ed0f"
+  }
+}

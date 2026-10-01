@@ -46,6 +46,12 @@ Rules:
   `test/agent-events.test.ts`): `drizzle/0000_init-users.sql` (W3) and
   `drizzle/0001_agent-events.sql` (W14). They stay; everything new is
   `1000+`. Enforced by `ci/check-migration-numbers.sh` in CI.
+- `migrations.lock` records every existing SQL path and SHA-256 byte hash,
+  including both grandfathered files. It is a source-history reservation, **not
+  evidence that a migration has been applied to any database**. Do not edit,
+  remove or rename historical migrations, move them between directories, or
+  reuse their numbers. New migrations append above the highest reserved web
+  number (currently `1013`) within `1000–1999`; gaps are not reusable slots.
 - Web migrations must keep the C1 zero-replatform constraints: `jsonb`
   operators, the GIN index on `member_data_access_logs`, and
   `SELECT … FOR UPDATE` row locks stay working through Hyperdrive
@@ -53,6 +59,41 @@ Rules:
 - The frozen contracts move with the data: `web_v1` read-only views and
   the HMAC `POST /internal/actions` signer (byte-for-byte; existing hex
   vectors pin it).
+
+### Adding a migration and running the offline gate
+
+1. Fetch current main (`git fetch origin`). Pick an unused number above its
+   highest web number, reconcile any pending migration PRs, and add the SQL
+   directly to `drizzle/`, `db/migrations/` or `migrations/`. Nested SQL and
+   symlinked files/directories are rejected; Drizzle `meta/` JSON is not SQL.
+2. Run `node ci/check-migration-history.mjs --write-lock`. This deterministically
+   regenerates the **candidate** lock from local bytes; it does not authorize a
+   historical change. Review the diff: only the new path/hash should be added.
+3. Run `bash ci/check-migration-numbers.sh`. The existing CI invocation checks
+   numbering, current lock completeness, historical names/bytes, and runs the
+   hermetic selftests. It requires Node and Git, no database, secrets or SQL
+   execution. Local validation uses fetched `origin/main` as the base.
+
+CI obtains its base from GitHub's event: `pull_request.base.sha` for PRs, `before`
+for main pushes, or freshly fetched main for `workflow_dispatch`. A shallow
+checkout fetches the missing base SHA from origin. Failure to read that commit,
+its adopted lock, or the candidate lock fails closed. On initial adoption only,
+a base without the guard/lock is allowed, but **all base SQL is still protected**.
+See [GitHub event payloads](https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request)
+and [Git fetch](https://git-scm.com/docs/git-fetch).
+
+The candidate lock and base lock must match their respective SQL inventories.
+Independently, the guard reads historical SQL directly from Git objects, so
+rewriting a lock alongside an edit, deletion or same-number rename/reuse cannot
+bless it. Main's reserved paths/hashes must remain intact when new migrations
+land; an appended migration is not a claim of deployment.
+
+**Exception policy:** there is no in-band override, exception flag or automatic
+historical repair. Revert/correct with a new web-range migration. Any genuinely
+necessary change to this policy or the guard itself must be a separate explicit
+policy-change PR with a rationale and independent Code Reviewer approval under
+the same exact-head green-CI merge gate; lock regeneration alone is never an
+exception. Normal migration PRs review the append-only SQL and lock diff together.
 
 ## Backups
 
