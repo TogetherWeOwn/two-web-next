@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { readWranglerConfig } from './wrangler-config.mjs';
 import { assertProductionCredentials, assertProductionProtection, assertProductionTarget, checkProductionGate } from './production-deploy-gate.mjs';
 
 const enabled = {
@@ -77,10 +78,67 @@ test('allows only an enabled main dispatch with verified protection', async () =
   assert.equal(requests, 1);
 });
 
+const sentinel = '00000000000000000000000000000000';
+const provisionedId = '11111111111111111111111111111111';
+const targetConfig = (hyperdrive) => JSON.stringify({ env: { production: { hyperdrive } } });
+
 test('placeholder Hyperdrive refuses live deployment with fixture-only IDs', () => {
-  assert.throws(() => assertProductionTarget('"id": "00000000000000000000000000000000"'), /still a placeholder/);
-  assert.doesNotThrow(() => assertProductionTarget('"id": "11111111111111111111111111111111"'));
+  assert.throws(() => assertProductionTarget(targetConfig([{ binding: 'DB', id: sentinel }])), /still a placeholder/);
+  assert.doesNotThrow(() => assertProductionTarget(targetConfig([{ binding: 'DB', id: provisionedId }])));
 });
+
+for (const comment of ['/* inline comment */', '// line comment\n']) {
+  test(`JSONC comments cannot hide the production placeholder (${JSON.stringify(comment)})`, () => {
+    const config = `{"env":{"production":{"hyperdrive":[{"binding":"DB","id":${comment}"${sentinel}",},],},},}`;
+    assert.throws(() => assertProductionTarget(config), /still a placeholder/);
+  });
+}
+
+test('provisioned production DB ignores historical comments, unrelated zero IDs and quoted strings', () => {
+  const config = `{
+    // Historical placeholder: "id": "${sentinel}"
+    /* "id": "${sentinel}" */
+    "hyperdrive": [{"binding":"DB","id":"${sentinel}"}],
+    "vars": {"APP_URL":"https://fixture.example/path//kept", "NOTE":${JSON.stringify(`historical "id": "${sentinel}" /* kept */ ,}`)}},
+    "env": {"production": {"hyperdrive": [
+      {"binding":"OTHER","id":"${sentinel}"},
+      {"binding":"DB","id":/* reviewed replacement */"${provisionedId}",},
+    ],},},
+  }`;
+  const parsed = readWranglerConfig(config);
+  assert.equal(parsed.vars.APP_URL, 'https://fixture.example/path//kept');
+  assert.equal(parsed.vars.NOTE, `historical "id": "${sentinel}" /* kept */ ,}`);
+  assert.doesNotThrow(() => assertProductionTarget(config));
+});
+
+for (const hyperdrive of [
+  undefined, null, {}, [], [{ binding: 'OTHER', id: provisionedId }],
+  [{ binding: 'DB' }], [{ binding: 'DB', id: null }],
+  [{ binding: 'DB', id: [provisionedId] }],
+  [{ binding: 'DB', id: 'not-an-id' }],
+  [{ binding: 'DB', id: `${provisionedId}0` }],
+  [{ binding: 'DB', id: ` ${provisionedId}` }],
+  [{ binding: 'DB', id: provisionedId }, { binding: 'DB', id: provisionedId }],
+]) {
+  test(`refuses missing, invalid or duplicate production DB bindings (${JSON.stringify(hyperdrive)})`, () => {
+    assert.throws(() => assertProductionTarget(targetConfig(hyperdrive)), /one valid id/);
+  });
+}
+
+for (const config of [
+  '{}', '{"hyperdrive":[{"binding":"DB","id":"11111111111111111111111111111111"}]}',
+  '{"env":{"staging":{"hyperdrive":[{"binding":"DB","id":"11111111111111111111111111111111"}]}}}',
+]) {
+  test(`refuses configs without an explicit production DB (${config})`, () => {
+    assert.throws(() => assertProductionTarget(config), /one valid id/);
+  });
+}
+
+for (const config of ['{"env":', '/* unterminated', `${targetConfig([{ binding: 'DB', id: provisionedId }])} trailing`]) {
+  test(`malformed JSONC fails closed (${config})`, () => {
+    assert.throws(() => assertProductionTarget(config), SyntaxError);
+  });
+}
 
 function assertIsolatedBindings(config) {
   const production = config.env.production;
@@ -101,7 +159,7 @@ function assertIsolatedBindings(config) {
 
 test('actual production config retains isolated bindings before and after sentinel replacement', () => {
   const text = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
-  const config = JSON.parse(text.replace(/^\s*\/\/.*$/gm, ''));
+  const config = readWranglerConfig(text);
   assertIsolatedBindings(config);
   const provisioned = structuredClone(config);
   provisioned.env.production.hyperdrive[0].id = '11111111111111111111111111111111';
@@ -142,6 +200,15 @@ test('credential CLI fails closed without printing credentials or accessing the 
   assert.equal(present.status, 0);
   assert.ok(!present.stdout.includes(credentials.CLOUDFLARE_API_TOKEN));
   assert.ok(!present.stdout.includes(credentials.CLOUDFLARE_ACCOUNT_ID));
+});
+
+test('both Environment gate jobs inherit contents and Actions read permissions', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/deploy-production.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
+  assert.ok(!/^ {4,}permissions:/m.test(workflow), 'job overrides must not drop inherited Actions read');
+  assert.match(workflow, /^  preflight:/m);
+  assert.match(workflow, /^  deploy-production:/m);
+  assert.equal((workflow.match(/run: node ci\/production-deploy-gate\.mjs\n/g) ?? []).length, 2);
 });
 
 test('manual production workflow uses private-repo runners and production-only secrets', () => {

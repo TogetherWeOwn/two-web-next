@@ -1,10 +1,11 @@
 // Exercise runtime factories (no injected stores) against an owned test schema.
 // The driver wrapper only pins search_path; all SQL goes to test containers.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type postgres from "postgres";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
+import type { DiscordEventsSource } from "../src/events/discord-transients";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -29,13 +30,14 @@ vi.mock("postgres", async (importOriginal) => {
   } };
 });
 
-const baseEnv: Env = {
+const baseEnv: Env & { DISCORD_EVENTS: DiscordEventsSource } = {
   APP_URL: STAGING_APP_URL,
   DISCORD_CLIENT_ID: "test-client",
   DISCORD_GUILD_ID: "test-guild",
   DISCORD_INVITE_URL: "https://discord.gg/test",
   DISCORD_CLIENT_SECRET: "test-client-secret",
   DISCORD_BOT_TOKEN: "test-bot-token",
+  DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
   QA_AUTH_TOKEN: "test-only-qa-token",
 };
@@ -45,6 +47,7 @@ const memberId = QA_IDENTITIES["qa-member"]!.discordId;
 describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", () => {
   let fixture: MemberDataFixture;
   let env: Env;
+  let remoteFetch: MockInstance<typeof fetch>;
   const upcomingKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
   // Keep real per-request connections without allowing a late request's
@@ -64,6 +67,17 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
       { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAW", title: "Binding past night", status: "published",
         startsAt: new Date("2000-01-01T12:00:00Z"), endsAt: new Date("2000-01-01T14:00:00Z") },
     ]);
+  });
+
+  beforeEach(() => {
+    remoteFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected external fetch"));
+  });
+  afterEach(() => {
+    try {
+      expect(remoteFetch).not.toHaveBeenCalled();
+    } finally {
+      remoteFetch?.mockRestore();
+    }
   });
 
   afterAll(async () => {

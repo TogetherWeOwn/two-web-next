@@ -174,11 +174,17 @@ prevented, and rejects the placeholder Hyperdrive id. Admin bypass explicitly
 remains enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
 Missing protection, failed
-API access, unset/false flag or any other ref fails closed. The deploy job uses
-that Environment, checks the gate again after approval, and deploys the dispatch
-SHA with `wrangler deploy --env production`. It does not create resources or run
-migrations/tests on production. Its `/health` smoke is DB-free liveness only,
-not a database-readiness or cutover proof.
+API access, unset/false flag or any other ref fails closed. Both gate jobs inherit
+`contents: read` and `actions: read`; the latter is required to
+[read an Environment in this private repository](https://docs.github.com/en/rest/deployments/environments#get-an-environment--fine-grained-access-tokens).
+The deploy job uses that Environment, checks the gate again after approval, and
+deploys the dispatch SHA with `wrangler deploy --env production`. It does not
+create resources or run migrations/tests on production. Its `/up` smoke requires
+HTTP 200 and the supported health envelope, accepting degraded/unknown queue
+states like staging. `/up` may read queue metrics from the configured database;
+it is DB-tolerant liveness, not DB-free, database readiness or cutover proof.
+The smoke runs only after a separately authorized production deployment; no
+production probe is performed by delivering or testing this template.
 
 `env.production` is a **cutover template**, not a live deployment:
 

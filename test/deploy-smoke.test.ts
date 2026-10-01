@@ -7,8 +7,8 @@ import { upBody } from "../src/up";
 
 // Execute the deployed workflow's actual shell block, not a copied predicate.
 // curl/sleep are local fakes: no staging requests, DB connections or retry waits.
-function smoke(body: string, code = "200", curlExit = "0") {
-  const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+function smoke(workflowPath: string, url: string, body: string, code = "200", curlExit = "0") {
+  const workflow = readFileSync(workflowPath, "utf8");
   const block = workflow.match(/      - name: Smoke test \/up\n[\s\S]*?        run: \|\n((?:          .*\n)+)/)?.[1];
   expect(block).toBeDefined();
   const scratch = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "up-smoke-"));
@@ -16,14 +16,16 @@ function smoke(body: string, code = "200", curlExit = "0") {
     writeFileSync(join(scratch, "curl"), `#!/bin/sh
 printf x >> "$RUNNER_TEMP/attempts"
 output=
+seen=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) output="$2"; shift 2 ;;
-    https://next.togetherweown.com/up) shift ;;
+    "$SMOKE_URL") seen=1; shift ;;
     https://*) exit 2 ;;
     *) shift ;;
   esac
 done
+[ "$seen" = 1 ] || exit 2
 printf '%s' "$SMOKE_BODY" > "$output"
 printf '%s' "$SMOKE_CODE"
 exit "$SMOKE_CURL_EXIT"
@@ -40,6 +42,7 @@ exit "$SMOKE_CURL_EXIT"
         ...process.env,
         PATH: scratch,
         RUNNER_TEMP: scratch,
+        SMOKE_URL: url,
         SMOKE_BODY: body,
         SMOKE_CODE: code,
         SMOKE_CURL_EXIT: curlExit,
@@ -54,13 +57,16 @@ exit "$SMOKE_CURL_EXIT"
 
 const depth = (pending: number) => ({ pending, delayed: 0, reserved: 0, total: pending, failed: 0, oldestPendingAgeSeconds: null });
 
-describe("deploy smoke /up (offline)", () => {
+describe.each([
+  ["staging", ".github/workflows/deploy.yml", "https://next.togetherweown.com/up"],
+  ["production", ".github/workflows/deploy-production.yml", "https://togetherweown.com/up"],
+])("%s deploy smoke /up (offline)", (deployment, workflowPath, url) => {
   it.each(["healthy", "degraded", "unknown", "unconfigured"])("accepts the existing %s response", async (state) => {
     const body = await upBody(state === "unconfigured" ? null : async () => {
       if (state === "unknown") throw new Error("fixture outage");
       return depth(state === "degraded" ? 20 : 0);
     });
-    const result = smoke(JSON.stringify(body));
+    const result = smoke(workflowPath, url, JSON.stringify(body));
     expect(result.status, result.output).toBe(0);
     expect(result.attempts).toBe(1);
   });
@@ -77,9 +83,9 @@ describe("deploy smoke /up (offline)", () => {
     ['{"status":"healthy","queue":{"status":"unknown"}}', "503", "0"],
     ['{"status":"healthy","queue":{"status":"unknown"}}', "200", "28"],
   ])("fails closed on an invalid envelope, HTTP error or curl failure (%s / %s / %s)", (body, code, curlExit) => {
-    const result = smoke(body, code, curlExit);
+    const result = smoke(workflowPath, url, body, code, curlExit);
     expect(result.status, result.output).toBe(1);
     expect(result.attempts).toBe(6);
-    expect(result.output).toContain("::error::staging /up");
+    expect(result.output).toContain(`::error::${deployment} /up`);
   });
 });

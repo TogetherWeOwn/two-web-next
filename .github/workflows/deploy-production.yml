@@ -4,8 +4,10 @@ name: deploy-production
 on:
   workflow_dispatch:
 
+# Both gate jobs need Actions read to GET the private repository's Environment.
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: deploy-production
@@ -70,17 +72,22 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
-      - name: Smoke production /health
+      - name: Smoke test /up
+        # /up is always 200: degraded/unknown queue health must not fail a deploy.
         run: |
-          for attempt in 1 2 3 4 5 6; do
-            if curl --fail --silent --show-error --max-time 15 \
-              https://togetherweown.com/health -o "$RUNNER_TEMP/production-health.json" && \
-              node -e 'const fs = require("node:fs"); const health = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (health.ok !== true) process.exit(1)' \
-                "$RUNNER_TEMP/production-health.json"; then
-              echo "production /health ok (attempt $attempt)"
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -sS --max-time 10 -o "$RUNNER_TEMP/up.json" -w "%{http_code}" https://togetherweown.com/up) || code="000"
+            if [ "$code" = "200" ] && node -e '
+              try {
+                const body = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+                process.exit(["healthy", "degraded"].includes(body?.status) && ["healthy", "degraded", "unknown"].includes(body?.queue?.status) ? 0 : 1);
+              } catch { process.exit(1); }
+            ' "$RUNNER_TEMP/up.json"; then
+              echo "production smoke ok (attempt $i)"
               exit 0
             fi
+            echo "attempt $i: HTTP $code, retrying in 10s..."
             sleep 10
           done
-          echo '::error::production /health did not return successful JSON with ok=true after deployment'
+          echo "::error::production /up did not return 200 with the expected health envelope after deploy"
           exit 1

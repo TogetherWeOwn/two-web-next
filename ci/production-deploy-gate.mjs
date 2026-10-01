@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { readWranglerConfig } from './wrangler-config.mjs';
 
 export function assertProductionRequest(env) {
   if (env.PRODUCTION_DEPLOY_ENABLED !== 'true') {
@@ -26,7 +27,12 @@ export function assertProductionProtection(environment) {
 }
 
 export function assertProductionTarget(configText) {
-  if (/"id"\s*:\s*"0{32}"/.test(configText)) {
+  const bindings = readWranglerConfig(configText).env?.production?.hyperdrive;
+  const database = Array.isArray(bindings) ? bindings.filter((entry) => entry?.binding === 'DB') : [];
+  if (database.length !== 1 || typeof database[0].id !== 'string' || !/^[a-fA-F0-9]{32}$/.test(database[0].id)) {
+    throw new Error('Production Hyperdrive DB binding must have one valid id');
+  }
+  if (database[0].id === '00000000000000000000000000000000') {
     throw new Error('Production Hyperdrive is still a placeholder; provision and review the cutover configuration first');
   }
 }
