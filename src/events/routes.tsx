@@ -33,7 +33,7 @@ import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswe
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
+import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, normalizePastPage, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -88,7 +88,7 @@ async function sha256Etag(body: string): Promise<string> {
 async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
   const etag = await sha256Etag(body);
   const inm = c.req.header("if-none-match");
-  if (inm && inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag)) {
+  if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))) {
     return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
   }
   return new Response(body, { status: 200, headers: { ...headers, etag } });
@@ -199,7 +199,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   app.get("/events/past", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
+    const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
     const { rows, hasMore, totalPages } = await listPast(db, page);
     c.header("cache-control", "public, max-age=300");
     return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} totalPages={totalPages} appUrl={c.env.APP_URL} />);

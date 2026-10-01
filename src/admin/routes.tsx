@@ -29,6 +29,7 @@ import type { Context } from "hono";
 import type { Env } from "../env";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import { JOIN_ATTEMPT_PAGE_SIZE, parseFeaturedListQuery, parseJoinAttemptsQuery, parseRosterQuery } from "./table-list";
 import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./guard";
 import type { SessionStore } from "../sessions";
 import {
@@ -156,16 +157,16 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.get("/join-attempts", async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
-    const outcome = c.req.query("outcome") ?? "";
-    const q = (c.req.query("q") ?? "").trim();
-    const rows = await listJoinAttempts(db, { outcome: outcome || undefined, q: q || undefined });
+    const query = parseJoinAttemptsQuery(c.req.query());
+    const fetched = await listJoinAttempts(db, query);
+    const rows = fetched.slice(0, JOIN_ATTEMPT_PAGE_SIZE);
     declareAccess(c, {
       resource: "join_attempts",
       action: "list",
       route: "admin.join-attempts.index",
       subjects: rows.flatMap((r) => (r.discordId ? [r.discordId] : [])),
     });
-    return c.html(<JoinAttemptsPage rows={rows} outcome={outcome} q={q} outcomes={JOIN_OUTCOMES} />);
+    return c.html(<JoinAttemptsPage rows={rows} query={query} hasNext={fetched.length > JOIN_ATTEMPT_PAGE_SIZE} outcomes={JOIN_OUTCOMES} />);
   });
 
   admin.get("/join-attempts/:id", async (c) => {
@@ -246,7 +247,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const row = await getEvent(db, c.req.param("key"));
     if (!row) return errorPage(c, 404, "Event not found");
-    const roster = await listRoster(db, row.eventKey);
+    const rosterQuery = parseRosterQuery(c.req.query());
+    const roster = await listRoster(db, row.eventKey, rosterQuery);
     // The roster is member data: the viewed members are the access-log subjects.
     declareAccess(c, {
       resource: "events",
@@ -261,6 +263,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         values={eventValues(row)}
         errors={{}}
         roster={roster}
+        rosterQuery={rosterQuery}
       />,
     );
   });
@@ -335,14 +338,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.get("/featured", async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
-    const rows = await listFeatured(db, {});
+    const query = parseFeaturedListQuery(c.req.query());
+    const rows = await listFeatured(db, { ...query, published: query.published ? query.published === "1" : undefined });
     declareAccess(c, {
       resource: "featured_contents",
       action: "list",
       route: "admin.featured.index",
       subjects: rows.map((r) => String(r.id)),
     });
-    return c.html(<FeaturedPage rows={rows} />);
+    return c.html(<FeaturedPage rows={rows} query={query} />);
   });
 
   admin.get("/featured/new", (c) => {
