@@ -175,9 +175,11 @@ describe("retry count and backoff ladder", () => {
     await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot, events: s.events }))
       .resolves.toMatchObject({ failed: expect.stringContaining("action_not_allowed") });
 
+    // Class-only (#233): a terminal throw fails with its class, never the
+    // message (which can carry secrets) — so this pins "BotTerminalError".
     const terminal = { upsertEvent: async () => { throw new BotTerminalError("missing secret"); } } as unknown as BotClient;
     await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot: terminal, events: s.events }))
-      .resolves.toEqual({ failed: "missing secret" });
+      .resolves.toEqual({ failed: "BotTerminalError" });
     expect(s.stamped).toHaveLength(0);
   });
 });
