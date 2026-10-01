@@ -23,6 +23,25 @@ for (const route of rawApp.routes.filter((r) => MUTATING.has(r.method))) {
 const CSP_ROUTE = "POST /csp-reports";
 
 describe("every registered write route is body-limited", () => {
+  it("recognizes the actual limiter through nested Hono error-handler mounts", async () => {
+    const child = new Hono<{ Bindings: Env }>();
+    child.onError((_error, c) => c.text("Child failure", 500));
+    child.post("/x", requestBodyLimit("action"), (c) => c.body(null, 204));
+    const middle = new Hono<{ Bindings: Env }>();
+    middle.onError((_error, c) => c.text("Middle failure", 500));
+    middle.route("/child", child);
+    const parent = new Hono<{ Bindings: Env }>();
+    parent.route("/mount", middle);
+    expect(parent.routes.map((route) => bodyLimitClass(route.handler))).toEqual(["action", undefined]);
+    const response = await parent.request("/mount/child/x", { method: "POST", body: "x".repeat(BODY_LIMIT_BYTES.action + 1) });
+    expect(response.status).toBe(413);
+    expect(await response.text()).toContain("That request is too large");
+    const cyclic = () => {};
+    Reflect.set(cyclic, "__COMPOSED_HANDLER", cyclic);
+    expect(bodyLimitClass(cyclic)).toBeUndefined();
+    expect(bodyLimitClass(null)).toBeUndefined();
+  });
+
   it("has a route limiter everywhere except the already-capped CSP sink", () => {
     expect(writeRoutes.size).toBeGreaterThan(10);
     expect([...writeRoutes].filter(([key, kind]) => !kind && key !== CSP_ROUTE)).toEqual([]);
