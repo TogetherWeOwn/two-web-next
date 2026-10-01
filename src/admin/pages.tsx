@@ -367,7 +367,7 @@ const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
       {children(id)}
       {hint ? <p class="hint">{hint}</p> : null}
       {err ? (
-        <p class="error" role="alert" data-testid={`error-${name}`}>
+        <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>
           {err}
         </p>
       ) : null}
@@ -401,19 +401,23 @@ export const EventFormPage: FC<{
         <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}
           data-event-draft={mode === "edit" && Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required
+              aria-invalid={errors.title ? "true" : undefined} aria-describedby={errors.title ? `${id}-error` : undefined} />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} maxlength={100} />}
+            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100}
+              aria-invalid={errors.game ? "true" : undefined} aria-describedby={errors.game ? `${id}-error` : undefined} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
             {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
           </Field>
           <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />}
+            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required
+              aria-invalid={errors.starts_at ? "true" : undefined} aria-describedby={errors.starts_at ? `${id}-error` : undefined} />}
           </Field>
           <Field name="ends_at" label="Ends (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required />}
+            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required
+              aria-invalid={errors.ends_at ? "true" : undefined} aria-describedby={errors.ends_at ? `${id}-error` : undefined} />}
           </Field>
           <Field
             name="timezone"
@@ -421,10 +425,12 @@ export const EventFormPage: FC<{
             errors={errors}
             hint="The IANA zone the wall time above is typed in. Storage is UTC."
           >
-            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
+            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"}
+              aria-invalid={errors.timezone ? "true" : undefined} aria-describedby={errors.timezone ? `${id}-error` : undefined} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} maxlength={255} />}
+            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255}
+              aria-invalid={errors.location ? "true" : undefined} aria-describedby={errors.location ? `${id}-error` : undefined} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
@@ -519,6 +525,7 @@ export const EventFormPage: FC<{
           </section>
         ) : null}
       </section>
+      <script type="module" src="/islands/admin-event-text-limits.js" />
       {mode === "edit" ? <script src="/islands/admin-event-editor.js" defer /> : null}
     </Shell>
   );
@@ -633,10 +640,10 @@ export const FeaturedFormPage: FC<{
               <input id={id} name="position" type="text" inputmode="numeric" value={val(values, "position") || "0"} />
             )}
           </Field>
-          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
+          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} />}
           </Field>
-          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
+          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
           </Field>
           <div class="actions">
