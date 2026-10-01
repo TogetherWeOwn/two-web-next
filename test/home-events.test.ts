@@ -28,7 +28,7 @@ const baseEnv: Env = {
 function event(id: number, overrides: Partial<typeof events.$inferSelect> = {}): typeof events.$inferSelect {
   const startsAt = new Date(NOW.getTime() + id * 3600_000);
   return {
-    id, eventKey: `event-${id}`, title: `Game night ${id}`, game: null, description: "Private host notes",
+    id, icsSequence: 1n, eventKey: `event-${id}`, title: `Game night ${id}`, game: null, description: "Private host notes",
     startsAt, endsAt: new Date(startsAt.getTime() + 7200_000), timezone: "Europe/London",
     location: "Voice lobby", capacity: null, status: "published", discordEventId: "discord-event-id",
     discordSyncFailedAt: null, discordSyncFailureCode: null, syncRevision: 1, syncedRevision: 0,

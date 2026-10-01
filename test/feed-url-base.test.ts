@@ -25,6 +25,7 @@ const row = (o: Partial<typeof events.$inferSelect> = {}) =>
     status: "published",
     rsvpOpen: true,
     updatedAt: new Date("2026-07-01T12:00:00Z"),
+    icsSequence: 1782907200n,
     ...o,
   }) as typeof events.$inferSelect;
 

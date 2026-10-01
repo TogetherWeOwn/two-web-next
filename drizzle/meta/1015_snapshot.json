@@ -1,6 +1,6 @@
 {
-  "id": "2c244e22-9b9c-4ec1-8772-fa849a6aa970",
-  "prevId": "11a2342b-78e6-4c85-aeb1-2185e6d39ac0",
+  "id": "cf9ebd60-f27a-400c-91b4-e9cb1aef1702",
+  "prevId": "2c244e22-9b9c-4ec1-8772-fa849a6aa970",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1109,6 +1109,107 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.event_sync_attempts": {
+      "name": "event_sync_attempts",
+      "schema": "",
+      "columns": {
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mirrored_at": {
+          "name": "mirrored_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "request_attempts": {
+          "name": "request_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "event_sync_attempts_pending_idx": {
+          "name": "event_sync_attempts_pending_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"event_sync_attempts\".\"state\" = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "event_sync_attempts_event_id_events_id_fk": {
+          "name": "event_sync_attempts_event_id_events_id_fk",
+          "tableFrom": "event_sync_attempts",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.events": {
       "name": "events",
       "schema": "",
@@ -1186,6 +1287,20 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "sync_revision": {
+          "name": "sync_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "synced_revision": {
+          "name": "synced_revision",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "discord_sync_failed_at": {
           "name": "discord_sync_failed_at",
