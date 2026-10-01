@@ -71,6 +71,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
       expect(q.sql).toContain('"events"."status" =');
       expect(q.params).toContain("published");
       expect(q.sql).not.toContain("rsvps");
+      expect(q.sql).toContain('isfinite("events"."starts_at")');
     }
     expect(f.queries[0]!.sql).toMatch(/"starts_at" < .*"starts_at" = .*"id" </);
     expect(f.queries[0]!.sql).toContain('order by "events"."starts_at" desc, "events"."id" desc');
@@ -298,6 +299,45 @@ describe.skipIf(!process.env.DATABASE_URL)("event navigation eligibility (isolat
     expect(await listRelatedEvents(fixture.db, current!, NOW)).toEqual([]);
     expect(html).not.toContain('data-testid="event-related"');
     expect(html).not.toContain('data-testid="event-related-join"');
+  });
+
+  it.each(["infinity", "-infinity"])("omits a %s neighbor and preserves finite destinations", async (timestamp) => {
+    const [current] = await seed([row(2), row(4)]);
+    await fixture.client`update events set starts_at = ${timestamp}::timestamptz where id = 4`;
+    const env = { ...pageFixture().env, ADMIN_DB: fixture.db };
+    const source = await app.request(`/e/${key(2)}`, undefined, env);
+    const html = await source.text();
+    expect(source.status).toBe(200);
+    expect(await getEventNeighbors(fixture.db, current!)).toEqual({ previous: null, next: null });
+    expect(html).not.toContain('data-testid="event-pagination"');
+    expect(html).not.toContain(`href="/e/${key(4)}"`);
+
+    await seed([row(1), row(3)]);
+    expect(await getEventNeighbors(fixture.db, current!)).toMatchObject({ previous: { id: 1 }, next: { id: 3 } });
+    const populated = await app.request(`/e/${key(2)}`, undefined, env);
+    const populatedHtml = await populated.text();
+    expect(populated.status).toBe(200);
+    expect(populatedHtml).toContain(`href="/e/${key(1)}" rel="prev" data-testid="event-previous"`);
+    expect(populatedHtml).toContain(`href="/e/${key(3)}" rel="next" data-testid="event-next"`);
+    expect(populatedHtml).not.toContain(`href="/e/${key(4)}"`);
+    for (const id of [1, 3]) expect((await app.request(`/e/${key(id)}`, undefined, env)).status).toBe(200);
+  });
+
+  it.each(["infinity", "-infinity"])("fills all three related slots when same-game starts are %s", async (timestamp) => {
+    const [current] = await seed([row(1), row(2), row(3), row(4),
+      row(5, { game: "Go" }), row(6, { game: "Go" }), row(7, { game: "Go" }),
+    ]);
+    await fixture.client`update events set starts_at = ${timestamp}::timestamptz where id in (2, 3, 4)`;
+    const env = { ...pageFixture().env, ADMIN_DB: fixture.db };
+    const response = await app.request(`/e/${key(1)}`, undefined, env);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(ids(await listRelatedEvents(fixture.db, current!, NOW))).toEqual([5, 6, 7]);
+    expect(relatedKeys(html)).toEqual([key(5), key(6), key(7)]);
+    expect(html).toContain('data-testid="event-related-join"');
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    for (const id of [5, 6, 7]) expect((await app.request(`/e/${key(id)}`, undefined, env)).status).toBe(200);
   });
 
   it("prioritizes three same-game events over nearer other games, with stable chronological ordering", async () => {
