@@ -20,7 +20,10 @@
     "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:check": "drizzle-kit check"
+    "db:check": "drizzle-kit check",
+    "check:moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs",
+    "check:worker-moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=wrangler.jsonc --require-configured",
+    "smoke:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-smoke.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",
@@ -42,6 +45,6 @@
     "wrangler": "^4.143.1"
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.18.0 || >=24"
   }
 }

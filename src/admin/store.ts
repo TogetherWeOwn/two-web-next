@@ -226,8 +226,11 @@ export async function updateEvent(
     // child shift below always sees the committed old times (no double-shift).
     const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
-    if (input.capacity !== null && input.capacity < await goingCount(tx, locked.id)) {
-      throw new ValidationError({ capacity: CAPACITY_BELOW_GOING });
+    if (input.capacity !== null) {
+      const occupied = await goingCount(tx, locked.id);
+      if (input.capacity < occupied) {
+        throw new ValidationError({ capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.` });
+      }
     }
     const [row] = await tx
       .update(events)
@@ -328,10 +331,15 @@ export async function transitionEvent(
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
+    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
     const from = toEventStatus(locked.status);
     const target = nextStatus(from, to);
+    // Judge persisted dates only after the lock wait. Equality is still legal
+    // for publication (legacy's strict isPast boundary); cancellation is exempt.
+    if (to === "published" && locked.endsAt.getTime() < Date.now()) {
+      throw new ValidationError({ ends_at: "An event that has already ended cannot be published. Update its dates first." });
+    }
     if (from === target) return { row: locked, writeBack: null };
     const [row] = await tx
       .update(events)
@@ -465,7 +473,11 @@ export async function updateFeatured(
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id));
+    const [locked] = await tx
+      .select(featuredEditSelection)
+      .from(featuredContents)
+      .where(eq(featuredContents.id, id))
+      .for("update");
     if (!locked) throw new NotFoundError("featured content");
     const [row] = await tx
       .update(featuredContents)
@@ -502,7 +514,7 @@ export async function updateFeatured(
 /** Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited. */
 export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<void> {
   await db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(featuredContents).where(eq(featuredContents.id, id));
+    const [locked] = await tx.select().from(featuredContents).where(eq(featuredContents.id, id)).for("update");
     if (!locked) throw new NotFoundError("featured content");
     await tx.delete(featuredContents).where(eq(featuredContents.id, id));
     await tx.insert(activityLog).values({
