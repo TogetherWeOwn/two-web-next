@@ -187,16 +187,22 @@ export function profilesApp(deps: ProfileDeps = {}) {
     if (!member) return c.notFound();
 
     let input: Record<string, unknown>;
+    let isJson = false;
     try {
       if (forced) input = forced;
-      else if ((c.req.header("content-type") ?? "").includes("application/json")) input = (await c.req.json()) as Record<string, unknown>;
+      else if ((c.req.header("content-type") ?? "").includes("application/json")) {
+        isJson = true;
+        input = (await c.req.json()) as Record<string, unknown>;
+      }
       else input = { ...(await c.req.parseBody({ all: true })) };
     } catch {
       return c.text("Bad request", 400);
     }
     if (typeof input !== "object" || input === null || Array.isArray(input)) return c.text("Bad request", 400);
-    // `games` must be present (legacy `present|array`); a form without it is a blank list.
-    if (input.games === undefined && input.games_text === undefined) input.games = [];
+    // `games` must be present (legacy `present|array`). Only a plain form
+    // submission treats absence as a blank list; JSON must say so with `games: []`,
+    // otherwise an omitted key would silently wipe the stored list.
+    if (!isJson && input.games === undefined && input.games_text === undefined) input.games = [];
 
     const result = validateProfile(input);
     if (!result.ok) {
@@ -211,7 +217,13 @@ export function profilesApp(deps: ProfileDeps = {}) {
           errors={result.errors}
           values={{
             bio: typeof input.bio === "string" ? input.bio : "",
-            games_text: typeof input.games_text === "string" ? input.games_text : "",
+            // Round-trip whichever representation was sent; games_text wins.
+            games_text:
+              typeof input.games_text === "string"
+                ? input.games_text
+                : Array.isArray(input.games)
+                  ? input.games.filter((g): g is string => typeof g === "string").join("\n")
+                  : "",
             timezone: typeof input.timezone === "string" ? input.timezone : "",
           }}
         />,
