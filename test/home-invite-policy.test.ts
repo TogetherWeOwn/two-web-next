@@ -63,7 +63,7 @@ it.each([
 ])("preserves $name CTA visibility and recovery notice", async ({ session, join }) => {
   const html = await render(FALLBACK_INVITE, session, "join_failed");
   expect(html.includes('data-testid="join"')).toBe(join);
-  expect(html.includes("Open Discord")).toBe(!join);
+  expect(html.includes(`href="${FALLBACK_INVITE}">Open Discord`)).toBe(!join);
   expect(html.includes('data-testid="signin"')).toBe(session === null);
   expect(html.includes('data-testid="home-events-join"')).toBe(session === null);
   expect(html).toContain("Signed in, but we couldn&#39;t add you to the Discord automatically. Use the invite link below.");
