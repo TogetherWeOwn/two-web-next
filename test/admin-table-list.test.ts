@@ -8,6 +8,7 @@ import { joinAttempts, users } from "../src/db/schema";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { eventEditorBrowser } from "./helpers/admin-event-editor";
 
 const injection = "%' OR 1=1; DROP TABLE users;--";
 function link(html: string, rel: "next" | "prev") {
@@ -211,6 +212,44 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
     expect(html).toContain('<form method="post" action="/admin/events/roster" data-event-editor="">');
     expect(html).toContain('<form method="get" action="/admin/events/roster#rsvp-roster" class="filters">');
     expect(html.match(/data-event-editor/g)).toHaveLength(1); // Only Save bypasses the dirty guard.
+  });
+
+  it.each(["invalid", "1"])("keeps the returned draft dirty when Save rejects capacity=%s before or during update", async (capacity) => {
+    await seedRoster();
+    const clean = await request("/events/roster");
+    expect(clean).not.toContain("data-event-draft");
+    const fields = {
+      title: "Rejected draft", starts_at: "2099-10-01 20:00", ends_at: "2099-10-01 22:00",
+      timezone: "UTC", capacity,
+    };
+    const response = await adminApp({ sessionStore: store, db: fixture.db }).request("/events/roster", {
+      method: "POST", headers: { cookie, origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(fields),
+    }, { ...env, ADMIN_DB: fixture.db });
+    expect(response.status).toBe(422);
+    const html = await response.text();
+    expect(html).toContain('name="title" type="text" value="Rejected draft"');
+    expect(html).toContain('data-event-editor="" data-event-draft=""');
+    expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
+    const persisted = (await fixture.db.select().from(events)).find((r) => r.eventKey === "roster")!;
+    expect(persisted.title).toBe("roster");
+    expect(persisted.capacity).toBeNull();
+    // Run the actual island with the error page's dirty marker and returned fields.
+    const b = eventEditorBrowser({ draft: html.includes('data-event-draft=""'), initial: fields });
+    const departure = b.navigate("sort");
+    expect(departure.preventDefault).toHaveBeenCalledOnce();
+    expect(departure.returnValue).toBe("");
+    expect(b.values.get("title")).toBe("Rejected draft");
+    expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
+    const retry = await adminApp({ sessionStore: store, db: fixture.db }).request("/events/roster", {
+      method: "POST", headers: { cookie, origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...fields, capacity: "2" }),
+    }, { ...env, ADMIN_DB: fixture.db });
+    expect(retry.status).toBe(303);
+    const saved = await request("/events/roster");
+    expect(saved).toContain('name="title" type="text" value="Rejected draft"');
+    expect(saved).not.toContain("data-event-draft");
+    expect(eventEditorBrowser({ initial: { ...fields, capacity: "2" } }).navigate("sort").preventDefault).not.toHaveBeenCalled();
   });
 
   it("roster uses a readable fallback for absent, empty and whitespace names without exposing member ids", async () => {

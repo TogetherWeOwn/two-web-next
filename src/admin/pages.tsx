@@ -398,7 +398,8 @@ export const EventFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}>
+        <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}
+          data-event-draft={mode === "edit" && Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
             {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
           </Field>

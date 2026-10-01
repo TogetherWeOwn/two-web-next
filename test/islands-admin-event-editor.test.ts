@@ -1,40 +1,5 @@
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
-import { URL as NodeURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-
-const binder = readFileSync(new NodeURL("../public/islands/admin-event-editor.js", import.meta.url), "utf8");
-
-function browser(missing = false) {
-  const values = new Map([
-    ["title", "Game night"], ["game", "Game"], ["description", "Bring friends"],
-    ["starts_at", "2099-10-01 20:00"], ["ends_at", "2099-10-01 22:00"],
-    ["timezone", "Europe/London"], ["location", "Discord"], ["capacity", ""],
-  ]);
-  const listeners = new Map<string, () => void>();
-  const editor = { addEventListener: (kind: string, fn: () => void) => listeners.set(kind, fn) };
-  const search = { q: "", listeners: new Map<string, () => void>() };
-  const windowListeners = new Map<string, (event: { preventDefault: () => void; returnValue?: string }) => void>();
-  runInNewContext(binder, {
-    document: { querySelector: (selector: string) => !missing && selector === "[data-event-editor]" ? editor : null },
-    window: { addEventListener: (kind: string, fn: (event: { preventDefault: () => void; returnValue?: string }) => void) => windowListeners.set(kind, fn) },
-    FormData: class {
-      constructor(form: unknown) { expect(form).toBe(editor); }
-      [Symbol.iterator]() { return values[Symbol.iterator](); }
-    },
-    URLSearchParams,
-  });
-  return {
-    values, search, windowListeners,
-    navigate(kind: "search" | "sort" | "save") {
-      if (kind === "save") listeners.get("submit")?.();
-      if (kind === "search") search.listeners.get("submit")?.();
-      const event = { preventDefault: vi.fn(), returnValue: undefined as string | undefined };
-      windowListeners.get("beforeunload")?.(event);
-      return event;
-    },
-  };
-}
+import { eventEditorBrowser as browser } from "./helpers/admin-event-editor";
 
 describe("Admin event editor navigation guard", () => {
   it.each(["search", "sort"] as const)("allows clean roster %s navigation", (kind) => {
@@ -84,8 +49,35 @@ describe("Admin event editor navigation guard", () => {
     expect(b.navigate("sort").preventDefault).toHaveBeenCalledOnce();
   });
 
+  it.each(["search", "sort"] as const)("protects an untouched failed-Save draft on %s departure", (kind) => {
+    const b = browser({ draft: true, initial: { title: "Rejected draft" } });
+    expect(b.navigate(kind).preventDefault).toHaveBeenCalledOnce();
+    expect(b.values.get("title")).toBe("Rejected draft");
+    expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
+    expect(b.navigate(kind).preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("consumes the Save exemption when this document survives interrupted navigation", () => {
+    const b = browser();
+    b.values.set("title", "Unsaved draft");
+    expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
+    // Loading stops after beforeunload; no replacement document or pageshow.
+    expect(b.navigate("sort").preventDefault).toHaveBeenCalledOnce();
+    expect(b.navigate("search").preventDefault).toHaveBeenCalledOnce();
+    expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
+    expect(b.navigate("sort").preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("re-arms on edits if Save navigation never reaches beforeunload", () => {
+    const b = browser();
+    b.listeners.get("submit")!();
+    b.values.set("title", "Another unsaved title");
+    b.listeners.get("input")!();
+    expect(b.navigate("sort").preventDefault).toHaveBeenCalledOnce();
+  });
+
   it("does nothing without an event editor", () => {
-    const b = browser(true);
+    const b = browser({ missing: true });
     expect(b.windowListeners.size).toBe(0);
     expect(b.navigate("sort").preventDefault).not.toHaveBeenCalled();
   });
