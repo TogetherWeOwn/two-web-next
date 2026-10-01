@@ -1,7 +1,13 @@
 import { CALL_INTERNAL_ACTION as C, backoffFor } from "./constants";
+import { withInternalActionDeadline } from "./internal-action-deadline";
 import { BotTerminalError, BotTransportError } from "./types";
-import type { Announcement, BotClient, QueueMessage, RoleAssignment } from "./types";
+import type { Announcement, BotClient, BotFailure, BotSuccess, QueueMessage, RoleAssignment } from "./types";
 import type { Outcome } from "./sync-event";
+
+type InternalActionAnswer =
+  | BotSuccess<{ messageId: string; replayed: boolean }>
+  | BotSuccess<{ outcome: string }>
+  | BotFailure;
 
 /** Producer. Announcements mint a key at dispatch (two dispatches = two announcements, by design); role.assign sends none. */
 export async function dispatchAnnouncement(queue: { send(b: unknown): Promise<unknown> }, action: Announcement) {
@@ -19,12 +25,17 @@ export async function handleCallInternalAction(
   attempts: number,
   bot: BotClient,
 ): Promise<Outcome> {
-  let answer;
+  let answer: InternalActionAnswer;
   try {
-    answer =
+    // Bounded: a never-settling bot round-trip must not stall the serial
+    // batch behind it. The deadline fails as a transport wait (same
+    // disposition as "bot down"); it never implies the remote call rolled
+    // back, and the carrier (idempotency key) is untouched for redelivery.
+    answer = await withInternalActionDeadline<InternalActionAnswer>(
       msg.kind === "announcement"
-        ? await bot.postAnnouncement(msg.action, msg.idempotencyKey)
-        : await bot.assignRole(msg.action);
+        ? bot.postAnnouncement(msg.action, msg.idempotencyKey)
+        : bot.assignRole(msg.action),
+    );
   } catch (e) {
     // Transport: a wait. Laravel release()s here with no tries check of its own; the worker's
     // max-attempts rule then fails it, which is the same cap.
