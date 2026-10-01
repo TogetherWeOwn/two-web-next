@@ -20,6 +20,7 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { authorizeUrl, exchangeCode, failureMeta, fetchUser } from "../discord";
+import { discordWidgetUrl } from "../discord-widget";
 import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
@@ -124,11 +125,7 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
   // `/join` — the journey page. Database-free leaf like /about: it must stay
   // 200 when everything behind it is down (a 500 here loses the member).
   app.get("/join", (c) => {
-    const guildId = c.env.DISCORD_GUILD_ID;
-    const widgetUrl =
-      typeof guildId === "string" && /^\d{10,25}$/.test(guildId)
-        ? `https://discord.com/widget?id=${guildId}&theme=dark`
-        : null;
+    const widgetUrl = discordWidgetUrl(c.env.DISCORD_GUILD_ID);
     // A safe `?next=` survives onto the one-click link; a hostile one leaves
     // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
     const next = safeNext(c.req.query("next"));
