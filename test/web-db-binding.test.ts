@@ -8,11 +8,10 @@ import type { Env } from "../src/env";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
 
-const state = vi.hoisted(() => ({
-  schema: "",
-  urls: [] as string[],
-  clients: [] as { end: () => Promise<void> }[],
-}));
+const state = await vi.hoisted(async () => {
+  const { RequestClients } = await import("./helpers/request-clients");
+  return { schema: "", urls: [] as string[], clients: new RequestClients() };
+});
 vi.mock("postgres", async (importOriginal) => {
   const { default: original } = await importOriginal<{ default: typeof postgres }>();
   return { default: (url: string, options: Record<string, unknown> = {}) => {
@@ -24,7 +23,7 @@ vi.mock("postgres", async (importOriginal) => {
     });
     if (state.schema) {
       state.urls.push(url);
-      state.clients.push(client);
+      state.clients.track(client);
     }
     return client;
   } };
@@ -48,15 +47,10 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
   let env: Env;
   const upcomingKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
-  const request = async (path: string, init: RequestInit = {}, bindings = env) => {
-    try {
-      return await app.request(path, init, bindings);
-    } finally {
-      // Request-scoped clients must not exhaust CI's 100-connection service
-      // while exercising 30 rapid writes. Persistence must survive closure.
-      await Promise.all(state.clients.splice(0).map((client) => client.end()));
-    }
-  };
+  // Keep real per-request connections without allowing a late request's
+  // cleanup to close the next test's clients after a Vitest timeout.
+  const request = (path: string, init: RequestInit = {}, bindings = env) =>
+    state.clients.run(async () => app.request(path, init, bindings));
 
   beforeAll(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!).href;
@@ -73,7 +67,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
   });
 
   afterAll(async () => {
-    await Promise.all(state.clients.map((client) => client.end()));
+    await state.clients.drain();
     state.schema = "";
     await fixture?.dispose();
   });
@@ -120,7 +114,9 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     expect((await request("/admin", { headers: { cookie: moderator } }, env)).status).toBe(200);
   });
 
-  it("enforces profile writes at 30/min through the binding", async () => {
+  // 31 serial HTTP writes each create and close real factory-owned clients.
+  // Allow coverage on the shared runner without changing any other timeout.
+  it("enforces profile writes at 30/min through the binding", async ({ signal, onTestFinished }) => {
     const cookie = await login();
     // Isolate this budget from other requests and the wall-clock minute boundary.
     await fixture.client`DELETE FROM web_throttle_hits`;
@@ -129,11 +125,16 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
       body: JSON.stringify({ bio: "Binding bio", games: ["Chess"], timezone: "UTC" }),
     }, env);
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    onTestFinished(() => { clock.mockRestore(); });
     try {
-      for (let i = 0; i < 30; i++) expect((await write()).status).toBe(303);
+      for (let i = 0; i < 30; i++) {
+        signal.throwIfAborted();
+        expect((await write()).status).toBe(303);
+      }
+      signal.throwIfAborted();
       expect((await write()).status).toBe(429);
     } finally { clock.mockRestore(); }
-  });
+  }, 15_000);
 
   it("enforces join starts at 10/min through the binding", async () => {
     await fixture.client`DELETE FROM web_throttle_hits`;
