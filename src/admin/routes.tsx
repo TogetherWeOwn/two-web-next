@@ -19,15 +19,17 @@
 // - POST /admin/featured/:id         update
 // - POST /admin/featured/:id/delete  delete (safe: nothing refers to it)
 //
-// Read routes declare their member-data subjects via c.set("access") so the
-// guard flushes the access log (M5). Writes leave the audit trail in the
-// store (M7) and dispatch the write-back seam where one is due (M3).
+// Read routes declare stable metadata; keyed retrieval owns the subjects and
+// the guard flushes before releasing buffered HTML (M5). Writes leave the
+// audit trail in the store (M7) and dispatch write-back where due (M3).
 
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
+import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Env } from "../env";
 import { dbFor, type EnvWithAdminDb } from "./db";
+import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import { JOIN_ATTEMPT_PAGE_SIZE, parseFeaturedListQuery, parseJoinAttemptsQuery, parseRosterQuery } from "./table-list";
 import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./guard";
@@ -78,6 +80,12 @@ function declareAccess(c: Context<Vars>, decl: AccessDecl): void {
   c.set("access", decl);
 }
 
+function legacyRedirect(c: Context<Vars>, location: string, resource: string, route: string) {
+  declareAccess(c, { resource, action: "view", route });
+  c.header("location", location);
+  return bufferedMemberText(c, "", 301);
+}
+
 async function dbOr503(c: Context<Vars>) {
   const db = await dbFor(c);
   if (!db) return null;
@@ -92,7 +100,7 @@ function errorPage(
   detail?: string,
 ) {
   c.status(status);
-  return c.html(<ErrorPage heading={heading} detail={detail} />);
+  return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
 }
 
 /** Validation errors re-render the form (422). */
@@ -119,26 +127,27 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   // Legacy Filament bookmarks: guard first, no query forwarding.
   // Only the featured edit alias needs a resource read to resolve the imported ID.
   // Keep the literal create alias ahead of /events/:key.
-  admin.get("/events/create", (c) => c.redirect("/admin/events/new", 301));
-  admin.get("/events/:key/edit", (c) => c.redirect(`/admin/events/${encodeURIComponent(c.req.param("key"))}`, 301));
-  admin.get("/featured-contents", (c) => c.redirect("/admin/featured", 301));
-  admin.get("/featured-contents/create", (c) => c.redirect("/admin/featured/new", 301));
+  admin.get("/events/create", (c) => legacyRedirect(c, "/admin/events/new", "events", "admin.events.legacy-create"));
+  admin.get("/events/:key/edit", (c) => legacyRedirect(c, `/admin/events/${encodeURIComponent(c.req.param("key"))}`, "events", "admin.events.legacy-edit"));
+  admin.get("/featured-contents", (c) => legacyRedirect(c, "/admin/featured", "featured_contents", "admin.featured.legacy-index"));
+  admin.get("/featured-contents/create", (c) => legacyRedirect(c, "/admin/featured/new", "featured_contents", "admin.featured.legacy-create"));
   admin.get("/featured-contents/:id/edit", async (c) => {
+    declareAccess(c, { resource: "featured_contents", action: "view", route: "admin.featured.legacy-edit" });
     const legacyId = c.req.param("id");
     if (!/^[1-9]\d*$/.test(legacyId)) return errorPage(c, 404, "Featured content not found");
     try {
       const db = await dbOr503(c);
-      if (!db) return c.text("Admin temporarily unavailable", 503);
+      if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
       const id = await getFeaturedIdByLegacyId(db, legacyId);
       if (id === null) return errorPage(c, 404, "Featured content not found");
-      return c.redirect(`/admin/featured/${id}`, 301);
+      return legacyRedirect(c, `/admin/featured/${id}`, "featured_contents", "admin.featured.legacy-edit");
     } catch {
-      return c.text("Admin temporarily unavailable", 503);
+      return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     }
   });
 
   admin.get("/", async (c) => {
-    declareAccess(c, { resource: "dashboard", action: "view", route: "admin.dashboard", subjects: [] });
+    declareAccess(c, { resource: "dashboard", action: "view", route: "admin.dashboard" });
     // Funnel counts are outcomes only (no member data): no access-log subjects.
     // No DB (bare-guard tests / unconfigured): the widget is omitted, not fatal.
     const db = await dbFor(c);
@@ -151,65 +160,50 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       dashboardJoinFunnel(db, identity),
       topZeroResultSearches(db, 10, FUNNEL_READ_DEADLINE_MS),
     ]) : [undefined, undefined];
-    return c.html(<AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />);
+    return bufferedMemberHtml(c, <AdminDashboard actor={c.get("adminActor")} funnel={funnel} zeroSearches={zeroSearches} />);
   });
 
   admin.get("/join-attempts", async (c) => {
+    declareAccess(c, { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" });
     const db = await dbOr503(c);
-    if (!db) return c.text("Admin temporarily unavailable", 503);
+    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const query = parseJoinAttemptsQuery(c.req.query());
     const fetched = await listJoinAttempts(db, query);
     const rows = fetched.slice(0, JOIN_ATTEMPT_PAGE_SIZE);
-    declareAccess(c, {
-      resource: "join_attempts",
-      action: "list",
-      route: "admin.join-attempts.index",
-      subjects: rows.flatMap((r) => (r.discordId ? [r.discordId] : [])),
-    });
-    return c.html(<JoinAttemptsPage rows={rows} query={query} hasNext={fetched.length > JOIN_ATTEMPT_PAGE_SIZE} outcomes={JOIN_OUTCOMES} />);
+    return bufferedMemberHtml(c, <JoinAttemptsPage rows={rows} query={query} hasNext={fetched.length > JOIN_ATTEMPT_PAGE_SIZE} outcomes={JOIN_OUTCOMES} />);
   });
 
   admin.get("/join-attempts/:id", async (c) => {
+    declareAccess(c, { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" });
     const rawId = c.req.param("id");
     const id = Number(rawId);
     if (!/^[1-9]\d*$/.test(rawId) || !Number.isSafeInteger(id)) {
       return errorPage(c, 404, "Join attempt not found");
     }
     const db = await dbOr503(c);
-    if (!db) return c.text("Admin temporarily unavailable", 503);
+    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const result = await getJoinAttempt(db, id);
     if (!result) return errorPage(c, 404, "Join attempt not found");
-    declareAccess(c, {
-      resource: "join_attempts",
-      action: "view",
-      route: "admin.join-attempts.show",
-      subjects: result.memberId ? [result.memberId] : [],
-    });
-    return c.html(<JoinAttemptPage row={result.attempt} />);
+    return bufferedMemberHtml(c, <JoinAttemptPage row={result.attempt} />);
   });
 
   admin.get("/events", async (c) => {
+    declareAccess(c, { resource: "events", action: "list", route: "admin.events.index" });
     const db = await dbOr503(c);
-    if (!db) return c.text("Admin temporarily unavailable", 503);
+    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const params = c.req.query();
     const query = parseEventListQuery(params);
     const fetched = await listEvents(db, params);
     const rows = fetched.slice(0, EVENT_PAGE_SIZE);
-    declareAccess(c, {
-      resource: "events",
-      action: "list",
-      route: "admin.events.index",
-      subjects: rows.map((r) => r.eventKey),
-    });
-    return c.html(<EventsPage rows={rows} query={query} hasNext={fetched.length > EVENT_PAGE_SIZE} />);
+    return bufferedMemberHtml(c, <EventsPage rows={rows} query={query} hasNext={fetched.length > EVENT_PAGE_SIZE} />);
   });
 
   admin.get("/events/new", (c) => {
-    declareAccess(c, { resource: "events", action: "view", route: "admin.events.create", subjects: [] });
-    return c.html(<EventFormPage mode="new" values={{}} errors={{}} />);
+    declareAccess(c, { resource: "events", action: "view", route: "admin.events.create" });
+    return bufferedMemberHtml(c, <EventFormPage mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/events", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("form"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -243,20 +237,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   });
 
   admin.get("/events/:key", async (c) => {
+    declareAccess(c, { resource: "events", action: "view", route: "admin.events.edit" });
     const db = await dbOr503(c);
-    if (!db) return c.text("Admin temporarily unavailable", 503);
+    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const row = await getEvent(db, c.req.param("key"));
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
     const roster = await listRoster(db, row.eventKey, rosterQuery);
-    // The roster is member data: the viewed members are the access-log subjects.
-    declareAccess(c, {
-      resource: "events",
-      action: "view",
-      route: "admin.events.edit",
-      subjects: roster.map((r) => r.userId),
-    });
-    return c.html(
+    return bufferedMemberHtml(c,
       <EventFormPage
         mode="edit"
         row={row}
@@ -268,7 +256,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     );
   });
 
-  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/events/:key", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("form"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const key = c.req.param("key");
@@ -314,7 +302,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   });
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+    admin.post(`/events/:key/${action}`, throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
       try {
@@ -328,7 +316,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
         if (err instanceof ValidationError) {
-          return errorPage(c, 422, "That transition is not allowed", err.fields.status ?? err.fields.rsvp_open);
+          return errorPage(c, 422, "That transition is not allowed", err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open);
         }
         throw err;
       }
@@ -336,25 +324,20 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   }
 
   admin.get("/featured", async (c) => {
+    declareAccess(c, { resource: "featured_contents", action: "list", route: "admin.featured.index" });
     const db = await dbOr503(c);
-    if (!db) return c.text("Admin temporarily unavailable", 503);
+    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const query = parseFeaturedListQuery(c.req.query());
     const rows = await listFeatured(db, { ...query, published: query.published ? query.published === "1" : undefined });
-    declareAccess(c, {
-      resource: "featured_contents",
-      action: "list",
-      route: "admin.featured.index",
-      subjects: rows.map((r) => String(r.id)),
-    });
-    return c.html(<FeaturedPage rows={rows} query={query} />);
+    return bufferedMemberHtml(c, <FeaturedPage rows={rows} query={query} />);
   });
 
   admin.get("/featured/new", (c) => {
-    declareAccess(c, { resource: "featured_contents", action: "view", route: "admin.featured.create", subjects: [] });
-    return c.html(<FeaturedFormPage mode="new" values={{}} errors={{}} />);
+    declareAccess(c, { resource: "featured_contents", action: "view", route: "admin.featured.create" });
+    return bufferedMemberHtml(c, <FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="new" values={{}} errors={{}} />);
   });
 
-  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const values = formData(await c.req.parseBody());
@@ -366,7 +349,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return formError(
           c,
           err,
-          (errors, v) => c.html(<FeaturedFormPage mode="new" values={v} errors={errors} />),
+          (errors, v) => c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="new" values={v} errors={errors} />),
           values,
         );
       }
@@ -377,22 +360,17 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   });
 
   admin.get("/featured/:id", async (c) => {
+    declareAccess(c, { resource: "featured_contents", action: "view", route: "admin.featured.edit" });
     const db = await dbOr503(c);
-    if (!db) return c.text("Admin temporarily unavailable", 503);
+    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return errorPage(c, 404, "Featured content not found");
     const row = await getFeatured(db, id);
     if (!row) return errorPage(c, 404, "Featured content not found");
-    declareAccess(c, {
-      resource: "featured_contents",
-      action: "view",
-      route: "admin.featured.edit",
-      subjects: [String(row.id)],
-    });
-    return c.html(<FeaturedFormPage mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
+    return bufferedMemberHtml(c, <FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="edit" row={row} values={featuredValues(row)} errors={{}} />);
   });
 
-  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured/:id", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("featured"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));
@@ -408,7 +386,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return formError(
           c,
           err,
-          (errors, v) => c.html(<FeaturedFormPage mode="edit" row={existing} values={v} errors={errors} />),
+          (errors, v) => c.html(<FeaturedFormPage appUrl={c.env.APP_URL} imageHosts={c.env.FEATURED_IMAGE_HOSTS} mode="edit" row={existing} values={v} errors={errors} />),
           values,
         );
       }
@@ -423,7 +401,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
   });
 
-  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), async (c) => {
+  admin.post("/featured/:id/delete", throttle("admin-write", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
     const db = await dbOr503(c);
     if (!db) return c.text("Admin temporarily unavailable", 503);
     const id = Number(c.req.param("id"));

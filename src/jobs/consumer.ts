@@ -2,6 +2,7 @@ import { alertQueueFailing } from "../alerts";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { isQueueMessage } from "./envelope";
+import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
@@ -45,8 +46,10 @@ export async function consume(
     // Ledger transitions are best-effort: a stale ledger row is a visible backlog
     // on /up, but stalling job processing on the same Postgres outage that already
     // turned the probe `unknown` buys nothing. Never let them block ack/retry.
+    // Class-only: ledger failures (SQL, transport errors) can carry bound
+    // values or secrets in their messages.
     const ledgerWarn = (what: string) => (e: unknown) =>
-      console.warn(`queue ledger ${what} failed`, e instanceof Error ? e.message : e);
+      console.warn(`queue ledger ${what} failed`, { exception: queueExceptionClass(e) });
     // Bounded too: a hung ledger must not stall the batch either.
     const bounded = (what: string, op: Promise<unknown>) => {
       let t: ReturnType<typeof setTimeout>;
@@ -63,16 +66,21 @@ export async function consume(
     // of the batch still runs. A stuck lock row self-heals via its TTL
     // (pgUniqueLock expires rows); the message must not be held hostage.
     const releaseLock = (key: string) => {
+      // In-flight legacy messages have no ownership proof. Never infer it from
+      // the event/job/idempotency key; let their original row expire instead.
+      if (body.kind !== "sync-event" || !body.leaseToken) return Promise.resolve();
       let t: ReturnType<typeof setTimeout>;
       const timeout = new Promise<void>((r) => {
         t = setTimeout(() => {
-          console.warn("queue lock release timed out", key);
+          // Single-line sanitized scope: a hostile event key cannot split the log line.
+          console.warn("queue lock release timed out", sanitizeQueueScope(key));
           r();
         }, LOCK_TIMEOUT_MS);
       });
       return Promise.race([
-        deps.lock.release(key).catch((e: unknown) =>
-          console.warn("queue lock release failed", key, e instanceof Error ? e.message : e)),
+        // Class-only: lock errors can carry SQL or connection secrets.
+        deps.lock.release(key, body.leaseToken).catch((e: unknown) =>
+          console.warn("queue lock release failed", sanitizeQueueScope(key), { exception: queueExceptionClass(e) })),
         timeout,
       ]).finally(() => clearTimeout(t));
     };
@@ -88,17 +96,18 @@ export async function consume(
       // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
       // redeliverable throw goes back on the queue with the same message (same
       // idempotency key); an exhausted throw is terminal, like a failed outcome.
-      console.error("job threw", body.kind, e instanceof Error ? e.message : e);
+      // Class-only: thrown messages can carry tokens, SQL or personal data.
+      console.error("job threw", body.kind, { exception: queueExceptionClass(e) });
       // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
       if (m.attempts >= JOBS[body.kind].tries) {
-        alertFailing(body.kind, m.attempts, e instanceof Error ? e.constructor.name : typeof e);
+        alertFailing(body.kind, m.attempts, queueExceptionClass(e));
         // Out of tries: a terminal failure, not a phantom pending row — and not
         // a retry either. The job already spent its tries (the transport's
         // max_retries is only a backstop above this cap), so ack it and free
         // the sync lock instead of requeueing a message the ledger just buried
         // (which would run again with no live depth accounting and stack up
         // duplicate failure rows).
-        if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, e instanceof Error ? e.constructor.name : "threw"));
+        if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, queueExceptionClass(e)));
         if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
         m.ack();
       } else {

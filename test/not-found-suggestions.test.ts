@@ -115,7 +115,7 @@ describe("404 optional event lookup", () => {
     expect(queries[0]!.sql).toContain("set_config('lock_timeout', $1, true)");
     expect(queries[0]!.sql).toContain("set_config('statement_timeout', $2, true)");
     expect(queries[0]!.params).toEqual(["400ms", "400ms"]);
-    expect(queries[1]!.sql).toContain('"events" where ("events"."status" = $1 and "events"."ends_at" >= $2)');
+    expect(queries[1]!.sql).toContain('"events" where ("events"."status" = $1 and "events"."ends_at" >= $2 and isfinite("events"."starts_at"))');
     expect(queries[1]!.sql).toContain('order by "events"."starts_at" asc, "events"."id" asc limit $3');
     expect(queries[1]!.params).toEqual(["published", "2026-10-01T12:00:00.000Z", 3]);
     expect(vi.getTimerCount()).toBe(0);

@@ -1,4 +1,9 @@
 import { sql } from "drizzle-orm";
+import { PgDialect, type PgSession } from "drizzle-orm/pg-core";
+import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { Hono } from "hono";
+import { bufferedMemberText, keyedMemberRead, memberReadBoundary } from "../src/member-reads";
+import { memberReadDb } from "../src/db/member-reads";
 import { describe, expect, it, vi } from "vitest";
 import { auditFixtureState, auditReadDatabase, readCounts } from "../ci/a11y-read-models";
 import type { Db } from "../src/db/index";
@@ -8,9 +13,11 @@ import { readMemberStats } from "../src/profiles/stats";
 const subject = "100000000000000101";
 const other = "100000000000000102";
 function fixture() {
-  const execute = vi.fn(() => { throw new Error("Shared DB must never receive stats queries"); });
-  const db = { execute } as unknown as Db;
-  return { db, execute };
+  const execute = vi.fn(async (_query: unknown): Promise<Record<string, unknown>[]> => { throw new Error("Shared DB must never receive stats queries"); });
+  const prepareQuery = vi.fn((query: unknown) => ({ execute: () => execute(query) }));
+  const session = { prepareQuery } as unknown as PgSession;
+  const db = new PostgresJsDatabase(new PgDialect(), session, undefined) as Db;
+  return { db, execute, prepareQuery };
 }
 
 describe("isolated accessibility bot read models", () => {
@@ -56,14 +63,52 @@ describe("isolated accessibility bot read models", () => {
   });
 
   it("delegates non-bot work unchanged, retaining the real owned-schema database", async () => {
-    const execute = vi.fn().mockResolvedValue([{ owned: true }]);
-    const select = vi.fn();
-    const db = { execute, select } as unknown as Db;
+    const { db, execute, prepareQuery } = fixture();
+    execute.mockResolvedValue([{ owned: true }]);
     const isolated = auditReadDatabase(db, "populated");
-    const query = sql`select 1`;
-    expect(await isolated.execute(query)).toEqual([{ owned: true }]);
-    expect(execute).toHaveBeenCalledExactlyOnceWith(query);
-    expect(isolated.select).toBe(select);
+    expect(await isolated.execute(sql`select 1`)).toEqual([{ owned: true }]);
+    expect(prepareQuery).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sql: "select 1", params: [] }));
+  });
+
+  it("retains both synthetic owner projections inside the actual read boundary", async () => {
+    const { db, execute, prepareQuery } = fixture();
+    const sink = vi.fn().mockResolvedValue(true);
+    const app = new Hono();
+    app.get("/", async (c) => {
+      await memberReadBoundary(c, { viewer: other, resource: "profile", action: "view", route: "profiles.show" }, sink, async () => {
+        const stats = await readMemberStats(auditReadDatabase(db, "populated"), subject);
+        expect(stats?.milestones).toHaveLength(2);
+        bufferedMemberText(c, JSON.stringify(stats));
+      });
+      return c.res;
+    });
+    const response = await app.request("/");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Synthetic chess night");
+    expect(sink).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ subjectUserIds: [subject], viewerDiscordId: other, route: "profiles.show" }));
+    expect(prepareQuery).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown bot-view query inside the boundary before borrowing any adapter", async () => {
+    const { db, execute, prepareQuery } = fixture();
+    const isolated = memberReadDb(auditReadDatabase(db, "populated"));
+    const app = new Hono();
+    const sink = vi.fn().mockResolvedValue(true);
+    app.get("/", async (c) => {
+      await memberReadBoundary(c, { viewer: other, resource: "profile", action: "view", route: "profiles.show" }, sink, async () => {
+        await keyedMemberRead(() => isolated.execute(sql`select * from web_v1.live_counts`));
+        bufferedMemberText(c, "private-bot-content");
+      });
+      return c.res;
+    });
+    const response = await app.request("/");
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain("private-bot-content");
+    expect(prepareQuery).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(sink).not.toHaveBeenCalled();
   });
 
   it("rejects unknown fixture states rather than silently losing populated coverage", () => {

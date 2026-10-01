@@ -87,8 +87,8 @@ describe("private fixed-probe entrypoint", () => {
     if (kind === "receipt") env.PREFLIGHT = "not JSON";
     if (kind === "direct") env.DB = { ...env.DB, host: REMOTE_TARGET.host };
     if (kind === "missing") env.DB = undefined as unknown as Hyperdrive;
-    if (kind === "role") env.DB = { ...env.DB, user: "production" };
-    if (kind === "database") env.DB = { ...env.DB, database: "production" };
+    if (kind === "role") env.DB = { ...env.DB, user: "" };
+    if (kind === "database") env.DB = { ...env.DB, database: "" };
     if (kind === "password") env.DB = { ...env.DB, password: "" };
     if (kind === "port") env.DB = { ...env.DB, port: 0 };
     expect((await createRemoteProbe().fetch(request(), env)).status).toBe(412);
@@ -101,5 +101,29 @@ describe("private fixed-probe entrypoint", () => {
     expect(result).toMatchObject({ ok: false, error: "remote_staging_probe_failed", created: false, cleanup: true });
     expect(await two.json()).toEqual(result); expect(driver).toHaveBeenCalledOnce();
     expect(JSON.stringify(result)).not.toContain("do-not-serialize");
+  });
+});
+
+describe("preflight refusal diagnosis", () => {
+  it("names failed predicates without leaking values", async () => {
+    const { refusalReasons } = await import("../spike/hyperdrive-semantics/remote-worker");
+    const env = environment();
+    expect(refusalReasons(env)).toEqual([]);
+    expect(refusalReasons(env, Date.now() + 301_000)).toEqual(["receipt_stale_or_unparseable_time"]);
+    const bad = { ...env, DB: { ...env.DB, user: "", password: "" } } as unknown as ReturnType<typeof environment>;
+    expect(refusalReasons(bad)).toEqual(["binding_user_mismatch", "binding_password_missing"]);
+    expect(refusalReasons({ ...env, PREFLIGHT: "{" })).toContain("receipt_unparseable");
+  });
+  it.each(["null", "false", "0", '""', "[]"])("refuses non-object receipt %s without throwing", async (raw) => {
+    const { refusalReasons } = await import("../spike/hyperdrive-semantics/remote-worker");
+    expect(refusalReasons({ ...environment(), PREFLIGHT: raw })).toContain("receipt_not_object");
+  });
+  it("returns structured refusal for malformed timestamp and non-string host", async () => {
+    const { refusalReasons } = await import("../spike/hyperdrive-semantics/remote-worker");
+    const env = environment();
+    const r = { ...receipt(), observedAt: 5 as unknown as string };
+    expect(refusalReasons({ ...env, PREFLIGHT: JSON.stringify(r) })).toEqual(["receipt_stale_or_unparseable_time"]);
+    const db = { ...env.DB, host: 5 } as unknown as Hyperdrive;
+    expect(refusalReasons({ ...env, DB: db })).toEqual(["binding_host_missing"]);
   });
 });
