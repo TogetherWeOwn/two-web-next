@@ -3,6 +3,7 @@ import type { Counts, Rank } from "./counts";
 import type { VisibleFeatured } from "./featured";
 import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
+import type { JoinResult } from "./return-journey";
 import type { HomeEvent } from "./events/reads";
 import { cardTimeLabel, isValidZone } from "./islands/contracts";
 import { canonicalUrl } from "./seo";
@@ -151,19 +152,41 @@ const NOTICES: Record<Exclude<Notice, null>, string> = {
 
 const JOIN_HREF = "/join";
 
+// One-shot join confirmation (legacy join_result flash → data-testid="join-result",
+// JoinResultCopyTest/AlreadyMemberReinviteTest). A member who was already in the
+// guild gets the reinvite action — /discord resolves to the live invite — never
+// the bare homepage "Open Discord".
+export const JoinResultBanner: FC<{ result: JoinResult }> = ({ result }) => (
+  <p class="notice" role="status" data-testid="join-result">
+    {result === "added" ? (
+      <>You are in. Finish Discord's rules screening before you can post.</>
+    ) : (
+      <>
+        You are already in the server.{" "}
+        <a href="/discord" data-testid="reinvite-link">
+          Rejoin with the Discord invite
+        </a>
+      </>
+    )}
+  </p>
+);
+
 // Join carries the same share tags as home (TOG-5624): the funnel lives on
 // shared links. The intro doubles as the share description, same as legacy.
 export const JOIN_INTRO = "Approve once with Discord and we will add you to the server.";
 
-export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string }> = ({
+export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string; joinResult?: JoinResult | null }> = ({
   inviteUrl,
   widgetUrl,
   next,
   appUrl,
+  joinResult,
+
 }) => (
   <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO} theme="join">
     <SiteHeader />
     <main id="main" tabindex={-1}>
+      {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <section class="join-layout" aria-labelledby="join-heading">
         <div class="join-panel">
           <h1 id="join-heading">Join Together We Own</h1>
@@ -239,6 +262,7 @@ const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Leg
 export const Home: FC<{
   session: Session | null;
   notice: Notice;
+  joinResult?: JoinResult | null;
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
@@ -246,7 +270,7 @@ export const Home: FC<{
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
   imageHosts?: string;
-}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
+}> = ({ session, notice, joinResult, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -255,7 +279,17 @@ export const Home: FC<{
   >
     <SiteHeader session={session} home />
     <main id="main" tabindex={-1}>
-      {notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>}
+      {/*
+        The flashed join confirmation takes the notice slot: both carry the same
+        event, and the banner is the richer of the two (reinvite action, exact
+        confirmation copy). A bare ?n= still renders its notice when no flash is
+        pending.
+      */}
+      {joinResult ? (
+        <JoinResultBanner result={joinResult} />
+      ) : (
+        notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>
+      )}
       <section class="hero" aria-labelledby="home-heading">
         <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
