@@ -339,7 +339,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       { eventId: event!.id, userId: "maybe", status: "maybe" },
       { eventId: event!.id, userId: "not-going", status: "not_going" },
       { eventId: event!.id, userId: "first", status: "waitlisted", createdAt: new Date("2026-01-01") },
-      { eventId: event!.id, userId: "w8-member", status: "waitlisted", createdAt: new Date("2026-01-02") },
+      { eventId: event!.id, userId: "100000000000000112", status: "waitlisted", createdAt: new Date("2026-01-02") },
     ]);
     const path = `/events/${event!.eventKey}`;
     const res = await req(path, await as(MEMBER));
@@ -384,7 +384,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     await db.insert(rsvps).values({ eventId: seeded[0]!.id, userId: "going", status: "going" });
     expect((await req(path, await as(MEMBER, { "if-none-match": current }))).status).toBe(200);
     const counted = (await req(path, await as(MEMBER))).headers.get("etag")!;
-    await db.insert(rsvps).values({ eventId: seeded[0]!.id, userId: "w8-member", status: "waitlisted" });
+    await db.insert(rsvps).values({ eventId: seeded[0]!.id, userId: "100000000000000112", status: "waitlisted" });
     expect((await req(path, await as(MEMBER, { "if-none-match": counted }))).status).toBe(200);
   });
 
