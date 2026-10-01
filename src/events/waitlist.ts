@@ -1,10 +1,9 @@
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
-
-type SeatWriter = Pick<PgDatabase<PgQueryResultHKT>, "select" | "update">;
 import { rsvps, type Event } from "../db/admin-schema";
 
+type SeatWriter = Pick<PgDatabase<PgQueryResultHKT>, "select" | "update">;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 export const CAPACITY_BELOW_GOING = "Capacity cannot be lower than the number of members already going.";

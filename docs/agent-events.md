@@ -56,7 +56,7 @@ Source: [legacy service](https://github.com/TogetherWeOwn/two-web/blob/1a9a23555
 
 ## Migration / rollout
 
-`1012_shared-agent-events.sql` copies **every** temporary `agent_events` row into `events`, preserving
+`1013_shared-agent-events.sql` copies **every** temporary `agent_events` row into `events`, preserving
 keys, ownership, markers, versions, status and timestamps, then drops the temporary table. Audit/replay
 rows and their keys are untouched. Wall strings convert using each row's zone, not the session zone;
 historical fold/gap values follow PostgreSQL's standard-time interpretation (the old table stored no
