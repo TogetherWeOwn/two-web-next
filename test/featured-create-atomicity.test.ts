@@ -17,6 +17,12 @@ const input: FeaturedFormInput = {
   endsAtUtc: new Date("2026-10-09T18:00:00.000Z"),
 };
 
+// createFeatured also returns the exact-text timestamp projections used by the edit form.
+function stored(row: Awaited<ReturnType<typeof createFeatured>>) {
+  const { startsAtText: _s, endsAtText: _e, ...rest } = row as typeof row & { startsAtText?: unknown; endsAtText?: unknown };
+  return rest;
+}
+
 describe.skipIf(!process.env.DATABASE_URL)("featured creation atomicity (isolated test Postgres)", () => {
   let fixture: MemberDataFixture | undefined;
   beforeEach(async () => {
@@ -56,7 +62,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured creation atomicity (isolate
 
     await client.unsafe(`DROP TRIGGER reject_featured_create_audit ON "${schemaName}".activity_log`);
     const row = await createFeatured(db, actor, input);
-    expect(await db.select().from(featuredContents)).toEqual([row]);
+    expect(await db.select().from(featuredContents)).toEqual([stored(row)]);
     const audits = await db.select().from(activityLog);
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({
@@ -96,7 +102,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured creation atomicity (isolate
       createdAt: expect.any(Date),
       updatedAt: expect.any(Date),
     });
-    expect(await db.select().from(featuredContents)).toEqual([row]);
+    expect(await db.select().from(featuredContents)).toEqual([stored(row)]);
     const audits = await db.select().from(activityLog);
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({
@@ -120,8 +126,8 @@ describe.skipIf(!process.env.DATABASE_URL)("featured creation atomicity (isolate
         url: { before: null, after: values.url },
         imageUrl: { before: null, after: values.imageUrl },
         imageAlt: { before: null, after: values.imageAlt },
-        startsAt: { before: null, after: values.startsAtUtc!.toISOString() },
-        endsAt: { before: null, after: values.endsAtUtc!.toISOString() },
+        startsAt: { before: null, after: "2026-10-08 18:00:00.000000" },
+        endsAt: { before: null, after: "2026-10-09 18:00:00.000000" },
       } : {}),
     });
   });
