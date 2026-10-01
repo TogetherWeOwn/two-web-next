@@ -131,7 +131,8 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
   });
   beforeEach(async () => {
     await admin.unsafe(`TRUNCATE "${sourceSchema}".samples, "${destination.schemaName}".samples,
-      "${sourceSchema}".retention_samples, "${destination.schemaName}".retention_samples`);
+      "${sourceSchema}".retention_samples, "${destination.schemaName}".retention_samples,
+      "${sourceSchema}".users, "${destination.schemaName}".users CASCADE`);
     await admin.unsafe(`INSERT INTO "${sourceSchema}".samples VALUES
       (1, 'a', 'MEMBER-FIELD-SENTINEL', '{"b":2,"a":1}', '2026-01-01 02:03:04.123456'),
       (1, 'bc', NULL, 'null', NULL), (2, 'c', 'UNCHANGED', '{"nested":{"z":0,"a":1}}', NULL),
@@ -274,6 +275,29 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     expect(report.ok).toBe(false);
     expect(report.tables.every((t) => t.legacyCount === 0 && t.nextCount === 0 && t.mismatchCount === 0)).toBe(true);
     expect(renderMarkdown(report)).toContain("Incomplete mapping");
+  });
+  it.each([null, "", "PRIVATE-DISPLAY-NAME", " "])("baseline username follows the importer for display_name=%s without certifying membership", async (displayName) => {
+    const username = "PRIVATE-RAW-USERNAME";
+    const expected = displayName === null || displayName === "" ? username : displayName;
+    await admin.unsafe(`INSERT INTO "${sourceSchema}".users
+      (id, discord_id, username, display_name, created_at, updated_at)
+      VALUES (1,'42',$1,$2,'2026-09-01','2026-09-01')`, [username, displayName]);
+    await admin.unsafe(`INSERT INTO "${destination.schemaName}".users
+      (id, username, created_at, updated_at)
+      VALUES ('42',$1,'2026-09-01+00','2026-09-01+00')`, [expected]);
+    const baseline = defaultTableMap({ legacySchema: sourceSchema, nextSchema: destination.schemaName, cutoff });
+    const usersMap = baseline.filter((t) => t.name === "users");
+    const matched = await verify({ legacy, next, map: usersMap, batchSize: 1 });
+    expect(matched.tables[0]).toMatchObject({ legacyCount: 1, nextCount: 1, missingCount: 0, extraCount: 0, mismatchCount: 0 });
+    expect(matched.tables[0]!.mappingGaps.join()).toContain("member");
+    expect(matched.ok).toBe(false); // Name parity must not resolve the membership-policy gap.
+    const wrong = expected === username ? "PRIVATE-WRONG-USERNAME" : username;
+    await admin.unsafe(`UPDATE "${destination.schemaName}".users SET username=$1 WHERE id='42'`, [wrong]);
+    const changed = await verify({ legacy, next, map: usersMap, batchSize: 1 });
+    expect(changed.tables[0]!.mismatchKeys).toEqual([["42"]]);
+    for (const output of [JSON.stringify(matched), renderMarkdown(matched), JSON.stringify(changed), renderMarkdown(changed)]) {
+      expect(output).not.toContain("PRIVATE-");
+    }
   });
   it("baseline natural keys remap users, event parents, RSVPs and audit subjects without losing instants", async () => {
     const l = `"${sourceSchema}"`;

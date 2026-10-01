@@ -27,7 +27,7 @@ export function defaultTableMap({ legacySchema = 'public', nextSchema = 'public'
   });
   return [
     table('users', [field('discord_id', 'l.discord_id', 'n.id')],
-      [field('username'), field('avatar'), ...times()], {
+      [field('username', "COALESCE(NULLIF(l.display_name, ''), l.username)"), field('avatar'), ...times()], {
         mappingGaps: ['member: legacy has no member flag; importer must define the guild-membership evidence transform.'],
       }),
     table('profiles', [field('discord_id', userId('user_id', 'u'), 'n.user_id')],

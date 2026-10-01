@@ -3,7 +3,8 @@
 -- The caller owns a disposable schema and pins search_path before loading.
 CREATE TABLE users (id bigint PRIMARY KEY, discord_id varchar(255) UNIQUE NOT NULL,
   username varchar(255) NOT NULL, avatar varchar(255), discord_joined_at timestamp,
-  is_moderator boolean NOT NULL DEFAULT false, created_at timestamp, updated_at timestamp);
+  is_moderator boolean NOT NULL DEFAULT false, created_at timestamp, updated_at timestamp,
+  display_name varchar(255));
 CREATE TABLE profiles (id bigint PRIMARY KEY, user_id bigint UNIQUE NOT NULL REFERENCES users(id),
   bio text, games jsonb NOT NULL DEFAULT '[]', timezone varchar(255), created_at timestamp, updated_at timestamp);
 CREATE TABLE events (id bigint PRIMARY KEY, event_key varchar(26) UNIQUE NOT NULL,

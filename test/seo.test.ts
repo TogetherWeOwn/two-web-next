@@ -176,10 +176,11 @@ describe("share meta parity (TOG-5624)", () => {
     expect(html).not.toContain("og:image");
   });
 
-  it("leaves without a canonical get no share tags, but keep feed autodiscovery", async () => {
+  it("the about leaf carries its self-canonical and keeps feed autodiscovery", async () => {
     const html = await (await app.request("/about", {}, env)).text();
-    expect(html).not.toContain("og:");
-    expect(html).not.toContain("twitter:");
+    expect(html).toContain('<link rel="canonical" href="https://next.example.test/about"');
+    expect(html).toContain('<meta property="og:url" content="https://next.example.test/about"');
+    expect(html).toContain('<meta name="twitter:card" content="summary"');
     expect(html).toContain('type="application/rss+xml"');
     expect(html).toContain('href="/events.rss"');
   });

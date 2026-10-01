@@ -20,7 +20,7 @@ import cards is included:
 
 | Import slice | Legacy → Next table | Comparison key | Compared fields / transforms |
 | --- | --- | --- | --- |
-| [TOG-10831](/TOG/issues/TOG-10831), users/profiles | `users` → `users` | `discord_id` → `id` | username, avatar, created/updated timestamps; member mapping remains a gap |
+| [TOG-10831](/TOG/issues/TOG-10831), users/profiles | `users` → `users` | `discord_id` → `id` | `COALESCE(NULLIF(display_name, ''), username)` → username (matches `users-profiles.mjs`), avatar, created/updated timestamps; member mapping remains a gap |
 | users/profiles | `profiles` → `profiles` | legacy user lookup → Discord `user_id` | bio, games JSONB, timezone, created/updated timestamps; profile surrogate ID deliberately not compared |
 | [TOG-10832](/TOG/issues/TOG-10832), events/RSVPs | `events` → `events` | `event_key` | title, game, description, UTC start/end instants, timezone, location, capacity, status, Discord mirror ID, creator Discord ID, rsvp_open, recurrence frequency/count/end/index, parent event_key, created/updated timestamps |
 | events/RSVPs | `rsvps` → `rsvps` | event_key + user Discord ID | status, synced-to-Discord and created/updated timestamps; numeric event/user IDs resolved through joins |
@@ -212,6 +212,7 @@ exit 0, missing/extra/changed rows exit 1, simultaneous diffs at equal row count
 batch boundaries, sample truncation, opaque bigint/composite/unicode keys,
 microseconds, SQL NULL versus JSON null, nested numeric-scale canonicalization,
 unknown-age retention rows, required/optional channel-binding DSNs, duplicate/NULL
-keys, read-only enforcement, redacted errors and baseline-map query compatibility.
+keys, read-only enforcement, redacted errors, display-name precedence with NULL/empty
+fallbacks (without resolving the membership gap), and baseline-map query compatibility.
 CI runs this same test on
 its service container; no real member records are present.
