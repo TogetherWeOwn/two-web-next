@@ -99,7 +99,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
   });
 
   const home = async () => {
-    const res = await app.request("/", {}, env);
+    const res = await app.request(new URL("/", env.APP_URL).href, {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.getSetCookie()).toHaveLength(0);

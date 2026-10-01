@@ -38,6 +38,7 @@ import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
 import { sameOrigin } from "./same-origin";
+import { trustHosts } from "./trust-hosts";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -96,6 +97,11 @@ app.use("*", async (c, next) => {
   await staticSecurityHeaders(c, next);
   await robotsTag(c, async () => {});
 });
+
+// TrustHosts re-expression (W16: TOG-10110): refuse foreign Host values
+// before routing. Mounted after secureHeaders (refusals leave hardened) and
+// before every route; absolute URLs never derive from Host (all from APP_URL).
+app.use("*", trustHosts());
 
 // Before throttles, session rotation, body parsing, or any mounted handler.
 app.use("*", sameOrigin);

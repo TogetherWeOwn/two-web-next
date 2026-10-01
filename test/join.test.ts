@@ -4,7 +4,7 @@
 // route-inventory: GET /join/callback
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import {
   JOIN_THROTTLE_BUCKET,
