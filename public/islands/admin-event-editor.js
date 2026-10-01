@@ -11,6 +11,7 @@
   var initial = snapshot();
   var saving = false;
   editor.addEventListener("submit", function () { saving = true; });
+  window.addEventListener("pageshow", function () { saving = false; });
   window.addEventListener("beforeunload", function (event) {
     if (saving || snapshot() === initial) return;
     event.preventDefault();

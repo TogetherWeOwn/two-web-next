@@ -75,6 +75,15 @@ describe("Admin event editor navigation guard", () => {
     expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
   });
 
+  it("restores the guard when Back returns to a saved document from the browser cache", () => {
+    const b = browser();
+    b.values.set("title", "Saved game night");
+    expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
+    b.windowListeners.get("pageshow")!({ preventDefault: vi.fn() });
+    b.values.set("title", "Another unsaved title");
+    expect(b.navigate("sort").preventDefault).toHaveBeenCalledOnce();
+  });
+
   it("does nothing without an event editor", () => {
     const b = browser(true);
     expect(b.windowListeners.size).toBe(0);
