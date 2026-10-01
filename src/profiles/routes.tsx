@@ -24,8 +24,9 @@ import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
-import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
-import { rateLimitExceeded } from "../errors";
+import { type AccessDecl, type AccessSink } from "../access-log";
+import { bufferedMemberHtml, bufferedMemberText, declareMemberResult, memberReadBoundary } from "../member-reads";
+import { NotFoundPage, rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
@@ -60,6 +61,10 @@ const migratedThrottle = new Set<string>();
 
 export function profilesApp(deps: ProfileDeps = {}) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+  app.onError((error, c) => {
+    console.error("Profile request failed; refusing contents.", { exception: error.constructor.name });
+    return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
+  });
 
   const storeFor = async (c: { env: Env }): Promise<ProfileStore | null> => {
     if (deps.store) return deps.store;
@@ -96,6 +101,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
 
   // Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed).
   const gate = async (c: Ctx, next: Next) => {
+    c.header("cache-control", "private, no-store");
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: record where they were headed (legacy url.intended), then into
     // the site OAuth flow — the callback returns them here after sign-in.
@@ -113,7 +119,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
       // Bounded like every other session-failure log: class name only — driver
       // messages can carry DSN fragments (TOG-10355).
       console.error("profiles could not resolve the session; refusing.", {
-        exception: (err as Error)?.constructor?.name ?? "unknown",
+        exception: err instanceof Error ? err.constructor.name : "unknown",
       });
       return c.text("Profiles temporarily unavailable", 503);
     }
@@ -132,33 +138,36 @@ export function profilesApp(deps: ProfileDeps = {}) {
   for (const path of ["/profile", "/members/*"]) {
     app.use(path, gate);
     app.use(path, async (c, next) => {
-      await next();
-      // The audit middleware may replace rendered HTML with a fail-closed 503.
-      // Only consume after it allows the visible GET response to leave.
+      if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
+      await memberReadBoundary(c, {
+        viewer: c.get("viewer").id, resource: "profile", action: "view",
+        route: path === "/profile" ? "profile" : "profiles.show",
+      }, async (entry) => {
+        const sink = await sinkFor(c);
+        if (!sink) throw new Error("no access-log sink");
+        return sink(entry);
+      }, next);
+      // Refused contents must leave the one-shot confirmation pending.
       if (c.res.status === 200) await takeJoinResult(c);
     });
-    app.use(path, memberAccessLog(sinkFor));
   }
 
-  const render = async (c: Ctx, id: string, routeName: string) => {
-    if (!SNOWFLAKE.test(id)) return c.notFound();
+  const render = async (c: Ctx, id: string) => {
+    if (!SNOWFLAKE.test(id)) return bufferedMemberHtml(c, <NotFoundPage />, 404);
     const store = await storeFor(c);
-    if (!store) return c.text("Profiles temporarily unavailable", 503);
+    if (!store) return bufferedMemberText(c, "Profiles temporarily unavailable", 503);
     const member = await store.find(id);
-    if (!member) return c.notFound();
+    // Borrowed non-SQL stores declare retrieved keys, never the requested id.
+    declareMemberResult(member ? [member.id] : []);
+    if (!member) return bufferedMemberHtml(c, <NotFoundPage />, 404);
     const viewer = c.get("viewer");
-    // Stats and milestones belong to this same member: the existing declaration
-    // covers all three reads, without duplicating subjects or audit rows.
-    c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
-    // One-shot join confirmation: a member who just completed the join sees the
-    // added/already-member banner (and the reinvite action) on their landing.
     const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
-    return c.html(<ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} joinResult={joinResult} />);
+    return bufferedMemberHtml(c, <ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} joinResult={joinResult} />);
   };
 
-  app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));
-  app.get("/members/:user", (c) => render(c, c.req.param("user"), "profiles.show"));
+  app.get("/profile", (c) => render(c, c.get("viewer").id));
+  app.get("/members/:user", (c) => render(c, c.req.param("user")));
 
   const admitWrite = async (c: Ctx, next: Next) => {
     const viewer = c.get("viewer");
@@ -178,16 +187,22 @@ export function profilesApp(deps: ProfileDeps = {}) {
     if (!member) return c.notFound();
 
     let input: Record<string, unknown>;
+    let isJson = false;
     try {
       if (forced) input = forced;
-      else if ((c.req.header("content-type") ?? "").includes("application/json")) input = (await c.req.json()) as Record<string, unknown>;
+      else if ((c.req.header("content-type") ?? "").includes("application/json")) {
+        isJson = true;
+        input = (await c.req.json()) as Record<string, unknown>;
+      }
       else input = { ...(await c.req.parseBody({ all: true })) };
     } catch {
       return c.text("Bad request", 400);
     }
     if (typeof input !== "object" || input === null || Array.isArray(input)) return c.text("Bad request", 400);
-    // `games` must be present (legacy `present|array`); a form without it is a blank list.
-    if (input.games === undefined && input.games_text === undefined) input.games = [];
+    // `games` must be present (legacy `present|array`). Only a plain form
+    // submission treats absence as a blank list; JSON must say so with `games: []`,
+    // otherwise an omitted key would silently wipe the stored list.
+    if (!isJson && input.games === undefined && input.games_text === undefined) input.games = [];
 
     const result = validateProfile(input);
     if (!result.ok) {
@@ -202,7 +217,13 @@ export function profilesApp(deps: ProfileDeps = {}) {
           errors={result.errors}
           values={{
             bio: typeof input.bio === "string" ? input.bio : "",
-            games_text: typeof input.games_text === "string" ? input.games_text : "",
+            // Round-trip whichever representation was sent; games_text wins.
+            games_text:
+              typeof input.games_text === "string"
+                ? input.games_text
+                : Array.isArray(input.games)
+                  ? input.games.filter((g): g is string => typeof g === "string").join("\n")
+                  : "",
             timezone: typeof input.timezone === "string" ? input.timezone : "",
           }}
         />,

@@ -10,11 +10,12 @@
 // lock. Validation, edits and FIFO promotions commit together; routes dispatch
 // write-back only after commit, with promoted answers' mirror stamps reset.
 
-import { and, asc, desc, eq, getTableColumns, gt, ilike, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, ilike, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
 import { parseFeaturedListQuery } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
+import { nonSensitiveRead } from "../member-reads";
 import { activityLog, events, featuredContents, memberDataAccessLogs, rsvps } from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
@@ -95,6 +96,9 @@ export async function createEvent(
   // never mirrored, so the write-back is a no-op by construction. A series is
   // one transaction (no half-series): the parent (index 1) and every
   // occurrence its rule names, all drafts.
+  // The key is minted here, never taken from input: EventFormInput carries
+  // no key field and parseEventForm refuses forged event_key/eventKey
+  // (legacy EventKeyTest immutability).
   const row = await db.transaction(async (tx) => {
     const [parent] = await tx
       .insert(events)
@@ -232,6 +236,8 @@ export async function updateEvent(
         throw new ValidationError({ capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.` });
       }
     }
+    // Closed field list: the key is addressed by, never written through,
+    // this update (EventFormInput carries no key; forged keys never parse).
     const [row] = await tx
       .update(events)
       .set({
@@ -407,7 +413,7 @@ export class NotFoundError extends Error {
 /** Fetch one extra row so pagination needs no separate count query. */
 export async function listEvents(db: Db, params: EventListParams): Promise<EventRow[]> {
   const opts = parseEventListQuery(params);
-  const conds = [];
+  const conds: (SQL | undefined)[] = [];
   if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
   if (opts.status) conds.push(eq(events.status, opts.status));
   if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
@@ -425,13 +431,13 @@ export async function listEvents(db: Db, params: EventListParams): Promise<Event
   // Pick real column objects, never an identifier interpolated from the URL.
   const column = opts.sort === "title" ? events.title : opts.sort === "status" ? events.status : events.startsAt;
   const order = opts.order === "asc" ? asc(column) : desc(column);
-  return db.select().from(events).where(and(...conds))
+  return nonSensitiveRead("events", () => db.select().from(events).where(and(...conds))
     .orderBy(order, asc(events.id))
-    .limit(EVENT_PAGE_SIZE + 1).offset((opts.page - 1) * EVENT_PAGE_SIZE);
+    .limit(EVENT_PAGE_SIZE + 1).offset((opts.page - 1) * EVENT_PAGE_SIZE));
 }
 
 export async function getEvent(db: Db, eventKey: string): Promise<EventRow | null> {
-  const [row] = await db.select().from(events).where(eq(events.eventKey, eventKey));
+  const [row] = await nonSensitiveRead("events", () => db.select().from(events).where(eq(events.eventKey, eventKey)));
   return row ?? null;
 }
 
@@ -535,22 +541,22 @@ export async function listFeatured(
   opts: { published?: boolean; q?: string; sort?: string; order?: string },
 ): Promise<FeaturedRow[]> {
   const query = parseFeaturedListQuery({ q: opts.q, sort: opts.sort, order: opts.order });
-  const conds = [];
+  const conds: SQL[] = [];
   if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
   if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
   const column = query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
   const order = query.order === "desc" ? desc(column) : asc(column);
-  return db.select().from(featuredContents).where(and(...conds)).orderBy(order, asc(featuredContents.id));
+  return nonSensitiveRead("featured", () => db.select().from(featuredContents).where(and(...conds)).orderBy(order, asc(featuredContents.id)));
 }
 
 /** Imported source IDs are independent of native IDs; never fall back to a native match. */
 export async function getFeaturedIdByLegacyId(db: Db, legacyId: string): Promise<number | null> {
-  const [row] = await db.select({ id: featuredContents.id }).from(featuredContents).where(eq(featuredContents.legacyId, legacyId));
+  const [row] = await nonSensitiveRead("featured", () => db.select({ id: featuredContents.id }).from(featuredContents).where(eq(featuredContents.legacyId, legacyId)));
   return row?.id ?? null;
 }
 
 export async function getFeatured(db: Db, id: number): Promise<FeaturedEditRow | null> {
-  const [row] = await db.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id));
+  const [row] = await nonSensitiveRead("featured", () => db.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id)));
   return row ?? null;
 }
 
