@@ -18,7 +18,7 @@ vi.mock("../src/events/reads", async (importOriginal) => ({
 const KEY = "01J0000000000000000000ABCD";
 const EVENT_PATH = `/events/${KEY}.ics`;
 const row = {
-  id: 1, eventKey: KEY, title: "Synthetic calendar event", game: null,
+  id: 1, icsSequence: 0n, eventKey: KEY, title: "Synthetic calendar event", game: null,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
   parentEventId: null, recurrenceIndex: null,
