@@ -184,7 +184,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     expect(sent).toHaveLength(1);
   });
 
-  it("a spring-forward gap still returns the wall-time error without writes", async () => {
+  it("a spring-forward gap returns the start-input wall-time error without writes", async () => {
     const before = await snapshot();
     const res = await patch({ starts_at: "2027-03-28 01:30", ends_at: "2027-03-28 03:30" });
     expect(res.status).toBe(422);

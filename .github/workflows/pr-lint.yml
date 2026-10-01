@@ -43,8 +43,14 @@ jobs:
     name: pr-lint
     runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 5
+    env:
+      # Metadata lint needs the immutable PR head, not a regenerated merge ref
+      # whose base can differ from the event snapshot. Push/dispatch keep their SHA.
+      PR_LINT_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_LINT_CHECKOUT_SHA }}
 
       - name: Resolve PR title/body
         id: pr
