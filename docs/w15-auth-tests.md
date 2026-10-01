@@ -126,7 +126,10 @@ is used, including for verification.
 runtime session-store DDL. Only SHA-256 state hashes, `auth`/`join` flow,
 server expiry and consumption time persist; no code, access token or raw state.
 A journey expires ten minutes after server issuance regardless of browser cookie
-retention. An atomic conditional UPDATE admits one callback across isolates.
+retention. A row lock followed by a conditional UPDATE admits one callback across
+isolates; expiry is checked against `clock_timestamp()` after the lock, not the
+stale statement-start `now()`. The isolated Postgres test observes a real lock
+wait and expires the record before releasing it.
 Consumption precedes exchange, terminal-attempt writes and session issuance,
 including valid denial and incomplete-code callbacks. Tombstones remain through
 expiry. Both starts sweep expired rows opportunistically; idle expired rows can
@@ -138,10 +141,47 @@ the supplied signed prior token. Denial/exchange failure does not touch the prio
 session. Failed one-click join issues no session; failed ordinary auto-join retains
 the recorded Next divergence of an identified non-member session, always with
 `member=false, moderator=false`, replacing the prior token. The 30-day rotating
-TTL and POST-only QA contract are unchanged. Tests are request/Worker and isolated
-Postgres evidence; browser proof, exact-head CI and independent auth/security
-review remain required before this implementation is called delivered. Other
-mapping gaps and production/cutover holds remain unchanged.
+TTL and POST-only QA contract are unchanged. Request/Worker and isolated Postgres
+evidence is supplemented by the local Chromium fixture below. Exact-head green
+CI and independent Code Reviewer/auth-security acceptance remain required before
+this implementation is called delivered. Other mapping gaps and
+production/cutover holds remain unchanged.
+
+## Local browser fixture
+
+`ci/auth-browser.mjs` owns a loopback HTTPS Miniflare runtime and Chromium, with
+cleanup on normal exit/SIGINT/SIGTERM. It bundles the production Worker entry
+through the existing Memory-store fixture. Browser OAuth authorization is replaced
+with synthetic consent **before** following a redirect off loopback; every Worker
+Discord request is intercepted, with no fallback to real HTTP. Unmatched browser
+requests are refused. Only synthetic bindings are passed; no `.dev.vars`, DB,
+remote binding, staging journey or deployment credential is loaded.
+
+Proof covers the real sign-in CTA, successful auth/join re-entry, actual prior
+browser-cookie rejection, replay using the ORIGINAL signed state cookies with no
+exchange or join, and consent-denial recovery. It emits six assertion outcomes
+and four screenshots. This is auth behavior evidence, not visual/accessibility
+sign-off: the fixture has no static asset binding and screenshots show unstyled
+SSR. Durable concurrency and attempt-row evidence comes from isolated Postgres
+request tests, not from the browser's Memory store. Return-routing/reinvite
+behavior remains separate work ([TOG-10356](/TOG/issues/TOG-10356), PR #46).
+
+With declared Playwright dependencies and Chromium/system libraries provisioned:
+
+```sh
+AUTH_BROWSER_OUTPUT_DIR="$PAPERCLIP_RUN_SCRATCH_DIR/browser-evidence" \
+  WRANGLER_SEND_METRICS=false timeout --signal=TERM --kill-after=15s 120s \
+  node ci/auth-browser.mjs
+```
+
+When dependencies are outside the synced tree, `AUTH_BROWSER_TOOLS_DIR` may name
+the directory containing their `package.json`. The agent runtime used the existing
+Chromium cache at `/paperclip/.cache/ms-playwright` and user-space libraries from
+`/paperclip/.cache/chrome-deps/usr/lib/x86_64-linux-gnu` via
+`PLAYWRIGHT_BROWSERS_PATH` / `LD_LIBRARY_PATH`; no host package installation was
+needed. The initial missing-library launch and redirect-interception failures are
+not counted as passing evidence; the final contained run passed all assertions
+with zero unexpected requests.
 
 ## Reproduce
 

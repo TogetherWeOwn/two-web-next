@@ -133,6 +133,38 @@ describe.skipIf(!url)("isolated Postgres persistence", () => {
     expect(JSON.stringify(rows)).not.toContain(state);
   });
 
+  it("expiry is checked after a contending row lock, not against the callback's stale statement clock", async () => {
+    const name = `oauth_expiry_${crypto.randomUUID()}`;
+    const locker = postgres(url!, { max: 1 });
+    const consumer = postgres(url!, { max: 1, connection: { application_name: name } });
+    const hash = await hashToken(crypto.randomUUID());
+    const store = createPostgresOAuthJourneyStore(consumer as unknown as Sql);
+    await store.issue(hash, "auth");
+    let attempt!: Promise<boolean>;
+    try {
+      await locker.begin(async (tx) => {
+        await tx`select state_hash from web_oauth_journeys where state_hash = ${hash} for update`;
+        attempt = store.consume(hash, "auth");
+        // Observe the actual database wait; do not assume a sleep made the
+        // callback start. Then expire the record while it is waiting.
+        const deadline = Date.now() + 3000;
+        for (;;) {
+          const rows = await sql<{ n: number }[]>`select count(*)::int as n from pg_stat_activity
+            where application_name = ${name} and wait_event_type = 'Lock'`;
+          if (rows[0]!.n === 1) break;
+          if (Date.now() >= deadline) throw new Error("fixture consumer never reached the row lock");
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        await tx`update web_oauth_journeys set expires_at = clock_timestamp() where state_hash = ${hash}`;
+      });
+      expect(await attempt).toBe(false);
+    } finally {
+      await attempt?.catch(() => {});
+      await locker.end();
+      await consumer.end();
+    }
+  });
+
   it("server-side expiry rejects an original cookie's state before and after GC", async () => {
     const store = createPostgresOAuthJourneyStore(sql);
     const hash = await hashToken(crypto.randomUUID());

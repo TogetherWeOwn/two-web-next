@@ -150,6 +150,39 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
       expect(fetch).not.toHaveBeenCalled();
     });
 
+    it.each(flows)("%s an incomplete callback spends the journey without elevating or permitting a later exchange", async (flow) => {
+      const f = fixture(make(), sql);
+      const prior = await priorSession(f.store);
+      const original = await start(f.env, flow);
+      const fetch = mockDiscord();
+      const headers = { cookie: `${original.cookie}; ${prior.cookie}` };
+      const incomplete = await app.request(`${callbackPath(flow)}?state=${original.state}`, { headers }, f.env);
+      expect(sessionCookie(incomplete)).toBeUndefined();
+      const retry = await app.request(`${callbackPath(flow)}?state=${original.state}&code=fixture-code`, { headers }, f.env);
+      expect(sessionCookie(retry)).toBeUndefined();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(await f.store.get(prior.hash)).toMatchObject({ moderator: true, username: "Prior Member" });
+      expect(f.create).not.toHaveBeenCalled();
+      expect(f.replace).not.toHaveBeenCalled();
+      expect(await f.attemptCount()).toBe(flow === "join" ? 1 : 0);
+    });
+
+    it.each(flows)("%s an unavailable admission store permits no upstream call, attempt or session change", async (flow) => {
+      const f = fixture(make(), sql);
+      const prior = await priorSession(f.store);
+      const original = await start(f.env, flow);
+      const fetch = mockDiscord();
+      vi.spyOn(f.store.journeys, "consume").mockRejectedValue(new Error("fixture store unavailable"));
+      const result = await app.request(`${callbackPath(flow)}?state=${original.state}&code=fixture-code`,
+        { headers: { cookie: `${original.cookie}; ${prior.cookie}` } }, f.env);
+      expect(sessionCookie(result)).toBeUndefined();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(await f.store.get(prior.hash)).toMatchObject({ moderator: true, username: "Prior Member" });
+      expect(f.create).not.toHaveBeenCalled();
+      expect(f.replace).not.toHaveBeenCalled();
+      expect(await f.attemptCount()).toBe(0);
+    });
+
     it.each(flows)("%s exchange failure preserves the prior session and cannot be retried with original cookies", async (flow) => {
       const f = fixture(make(), sql);
       const prior = await priorSession(f.store);

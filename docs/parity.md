@@ -62,7 +62,10 @@ no exchange or member session. Denial/exchange failure preserves prior authority
 failed ordinary auto-join may only issue a non-member/non-moderator session,
 while failed one-click join issues none. Ten-minute server expiry and tombstone
 cleanup are documented in [W15 coverage](w15-auth-tests.md#admission-state-retention-and-failure-contract).
-Exact-head independent review/CI and local browser proof remain delivery gates.
+Local Chromium fixture proof (`ci/auth-browser.mjs`) covers the real sign-in CTA,
+auth/join re-entry, supplied prior-cookie rejection, ORIGINAL-cookie replay and
+consent-denial recovery without external traffic. Exact-head independent
+review/security acceptance and green CI remain delivery gates.
 This narrows three W15 gaps; it does not claim full parity, cutover readiness,
 production testing, or change the recorded rotating TTL/POST-QA divergences.
 
