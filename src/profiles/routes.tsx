@@ -58,6 +58,10 @@ const migratedThrottle = new Set<string>();
 
 export function profilesApp(deps: ProfileDeps = {}) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+  app.onError((error, c) => {
+    console.error("Profile request failed; refusing contents.", { exception: error.constructor.name });
+    return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
+  });
 
   const storeFor = async (c: { env: Env }): Promise<ProfileStore | null> => {
     if (deps.store) return deps.store;

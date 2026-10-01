@@ -181,6 +181,16 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     expect(log[0]).toMatchObject({ subjectUserIds: [MEMBER], viewerUserId: VIEWER, route: "profiles.show" });
   });
 
+  it.each([undefined, "invalid-owner", "123"])("a missing/invalid milestone owner %s cannot hide behind the optional-stats fallback", async (owner) => {
+    const { db } = fixture([fullMember], [{ ...milestones[0], member_id: owner }]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { app, log, cookieFor, bindings } = await harness(db);
+    const res = await app.request(`/members/${MEMBER}`, { headers: { cookie: await cookieFor() } }, bindings);
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain("Profile still here");
+    expect(log).toHaveLength(0);
+  });
+
   it.each([
     { rank: null, joined: null },
     { rank: "community_regular", joined: null },

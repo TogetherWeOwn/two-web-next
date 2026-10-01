@@ -93,6 +93,7 @@ export async function memberReadBoundary(
   const capture: Capture = { subjects: new Set(), failed: !/^\d{10,25}$/.test(declaration.viewer), pending: 0 };
   await captures.run(capture, async () => {
     try { await next(); } catch { capture.failed = true; }
+    if (c.error) capture.failed = true;
     // Classification is tied to this exact response. A later stream (declared
     // or not) cannot borrow an earlier buffered response's approval.
     if (capture.failed || capture.pending !== 0 || capture.response !== c.res) {
