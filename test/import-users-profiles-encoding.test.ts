@@ -133,4 +133,57 @@ describe.skipIf(!url)("users/profiles encoding on synthetic disposable Postgres"
       expect(await legacy`select *, xmin::text as version from profiles order by id`).toEqual(sourceProfiles);
     } finally { await restore(); }
   });
+
+  it.each(["users", "profiles"].flatMap((table) =>
+    ["created_at", "updated_at"].flatMap((column) =>
+      ["infinity", "-infinity", "294276-01-01 00:00:00"].map((timestamp) => [table, column, timestamp]))))(
+    "refuses unsupported %s.%s = %s in preview and apply without changing existing rows",
+    async (table, column, timestamp) => {
+      const { legacy, next } = fixture;
+      await importUsersProfiles(legacy, next, { dryRun: false });
+      const users = await next`select *, xmin::text as version from users order by id`;
+      const profiles = await next`select *, xmin::text as version from profiles order by user_id`;
+      // A late invalid row must not allow an earlier valid mapping correction
+      // through. These rows also exercise null updated_at falling back to creation.
+      await legacy`update users set display_name = 'Synthetic pending correction' where id = 11`;
+      await legacy`update ${legacy(table)} set ${legacy(column)} = ${timestamp}::text::timestamp
+        where ${legacy(table === "users" ? "id" : "user_id")} = ${table === "users" ? 33 : 22}`;
+      const sourceUsers = await legacy`select id, display_name, created_at::text, updated_at::text, xmin::text as version from users order by id`;
+      const sourceProfiles = await legacy`select user_id, created_at::text, updated_at::text, xmin::text as version from profiles order by user_id`;
+      for (const dryRun of [true, false]) {
+        await expect(importUsersProfiles(legacy, next, { dryRun })).rejects.toThrow("Invalid legacy identity or timestamps");
+        expect(await next`select *, xmin::text as version from users order by id`).toEqual(users);
+        expect(await next`select *, xmin::text as version from profiles order by user_id`).toEqual(profiles);
+        expect(await legacy`select id, display_name, created_at::text, updated_at::text, xmin::text as version from users order by id`).toEqual(sourceUsers);
+        expect(await legacy`select user_id, created_at::text, updated_at::text, xmin::text as version from profiles order by user_id`).toEqual(sourceProfiles);
+      }
+      // A rejected infinite update must not poison retention of later finite data.
+      await legacy`update ${legacy(table)} set ${legacy(column)} = '2026-10-01 12:00:00'
+        where ${legacy(table === "users" ? "id" : "user_id")} = ${table === "users" ? 33 : 22}`;
+      await importUsersProfiles(legacy, next, { dryRun: false });
+      expect((await next`select username from users where id = '900000000000000011'`)[0]!.username).toBe("Synthetic pending correction");
+      const replay = await importUsersProfiles(legacy, next, { dryRun: false });
+      expect(replay.users.written + replay.profiles.written).toBe(0);
+    });
+
+  it("redacts non-finite timestamp failures in CLI preview/apply and leaves the empty target unchanged", async () => {
+    const { legacy, next } = fixture;
+    await legacy`update profiles set updated_at = '-infinity' where user_id = 22`;
+    const env = Object.fromEntries(Object.entries(fixture.env).map(([key, value]) => {
+      const scoped = new URL(value);
+      scoped.searchParams.delete("timezone");
+      return [key, scoped.href];
+    }));
+    for (const args of [[], ["--apply"]]) {
+      const result = spawnSync(process.execPath, [script, ...args], { env, encoding: "utf8", timeout: 20_000 });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("import failed");
+      expect(result.stderr).not.toContain("infinity");
+      expect(result.stderr).not.toContain(baseUrl);
+      expect(await next`select * from users`).toHaveLength(0);
+      expect(await next`select * from profiles`).toHaveLength(0);
+    }
+    expect((await legacy`select updated_at::text from profiles where user_id = 22`)[0]!.updated_at).toBe("-infinity");
+  });
 });

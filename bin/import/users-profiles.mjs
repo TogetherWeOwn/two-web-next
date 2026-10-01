@@ -62,7 +62,10 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
       from profiles p left join users u on u.id = p.user_id order by p.id`;
 
     for (const row of [...users, ...profiles]) {
-      if (typeof row.discord_id !== "string" || !/^\d{1,20}$/.test(row.discord_id) || !row.created_at || !row.updated_at) {
+      // Keep the Date serializer's finite-date boundary for Next's readers,
+      // but retain the original timestamp text for microsecond-exact binding.
+      if (typeof row.discord_id !== "string" || !/^\d{1,20}$/.test(row.discord_id)
+        || !Number.isFinite(Date.parse(row.created_at)) || !Number.isFinite(Date.parse(row.updated_at))) {
         throw new Error("Invalid legacy identity or timestamps");
       }
     }
