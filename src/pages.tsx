@@ -6,6 +6,7 @@ import type { Session } from "./env";
 import type { JoinResult } from "./return-journey";
 import type { HomeEvent } from "./events/reads";
 import { cardTimeLabel, isValidZone } from "./islands/contracts";
+import { inviteDestination } from "./invite";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
@@ -286,7 +287,9 @@ export const Home: FC<{
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
   imageHosts?: string;
-}> = ({ session, notice, joinResult, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
+}> = ({ session, notice, joinResult, inviteUrl: configuredInviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => {
+  const inviteUrl = inviteDestination(configuredInviteUrl);
+  return (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -398,7 +401,8 @@ export const Home: FC<{
     </main>
     <SiteFooter />
   </Layout>
-);
+  );
+};
 
 const Leaf: FC<PropsWithChildren<{ title: string; canonical: string; headingId: string; heading: string }>> = ({
   title,
