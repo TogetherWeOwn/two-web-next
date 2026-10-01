@@ -14,6 +14,7 @@
 (function () {
   var MOUNT = '[data-island="going-count"]';
   var EVENT = "going-count-updated";
+  var REFRESHED = "going-count-refreshed";
   var URL = "/events.json";
   var latest = new Map();
 
@@ -36,6 +37,21 @@
       : going + " going";
   }
 
+  function capacityFor(row, node) {
+    var capacity;
+    if (Object.prototype.hasOwnProperty.call(row, "capacity")) {
+      // Explicit null is authoritative: the event is now unbounded.
+      capacity = row.capacity;
+    } else {
+      // Legacy aggregate fixtures omit capacity; only a known SSR value
+      // can fill that gap. Missing/malformed attributes are not unbounded.
+      var raw = node.getAttribute("data-capacity");
+      if (raw === null || (raw !== "" && !/^\d+$/.test(raw))) return;
+      capacity = raw === "" ? null : Number(raw);
+    }
+    if (capacity === null || (Number.isSafeInteger(capacity) && capacity > 0)) return capacity;
+  }
+
   function refresh(nodes, key, state) {
     // A new broadcast owns both the read and its announcement, even if it
     // fails. An older completion must never replace the last good state.
@@ -48,21 +64,31 @@
       })
       .then(function (rows) {
         if (latest.get(key) !== request) return;
-        var list = Array.isArray(rows) ? rows : rows.data || [];
+        var list = Array.isArray(rows) ? rows : rows && rows.data;
+        if (!Array.isArray(list)) return;
         var row = list.filter(function (r) {
-          return r.event_key === key;
+          return r && r.event_key === key;
         })[0];
-        if (!row) return;
-        nodes.forEach(function (node) {
-          var capacity = node.getAttribute("data-capacity");
+        if (!row || !Number.isSafeInteger(row.going_count) || row.going_count < 0) return;
+        var capacities = nodes.map(function (node) { return capacityFor(row, node); });
+        nodes.forEach(function (node, index) {
+          var capacity = capacities[index];
+          if (capacity === undefined) return;
           var count = node.querySelector("[data-count]");
-          if (count) count.textContent = countText(row.going_count, capacity === "" ? null : Number(capacity));
+          if (count) count.textContent = countText(row.going_count, capacity);
           var ann = node.querySelector("[data-announcement]");
           if (ann && state) {
             var t = announcementText(state);
             ann.textContent = t ? t + " " : "";
           }
         });
+        // One accepted snapshot per read, not per badge. Conflicting or
+        // unknown legacy fallback caps cannot truthfully describe this key.
+        var capacity = capacities[0];
+        if (capacity === undefined || !capacities.every(function (value) { return value === capacity; })) return;
+        document.dispatchEvent(new CustomEvent(REFRESHED, {
+          detail: { eventKey: key, goingCount: row.going_count, capacity: capacity }
+        }));
       })
       .catch(function () {
         // Keep the last known-good badge; the button island already

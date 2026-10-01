@@ -607,6 +607,8 @@ export const RSVP_SYNC_FAILED_TESTID = "rsvp-sync-failed";
 export const RSVP_SYNCED_TESTID = "rsvp-synced";
 export const RSVP_RATE_LIMITED_TESTID = "rsvp-rate-limited";
 export const RSVP_FAILED_TESTID = "rsvp-failed";
+export const RSVP_UNKNOWN_TESTID = "rsvp-unknown";
+export const RSVP_REFRESH_TESTID = "rsvp-refresh";
 export const RSVP_SESSION_EXPIRED_TESTID = "rsvp-session-expired";
 
 /** Full legacy RsvpStatus enum: the PUT body accepts every value. */
@@ -697,6 +699,8 @@ export const RSVP_COPY = {
   synced: "Synced to Discord.",
   failedTitle: "That RSVP didn't save.",
   failedAction: "Try once more.",
+  unknown: "We couldn't confirm your RSVP. Check the event before trying again.",
+  refresh: "Refresh the event",
   paused: "RSVPs are paused for this event — check back soon.",
   sessionExpired: "Your session expired.",
   guestCta: "Log in with Discord",

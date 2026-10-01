@@ -37,7 +37,10 @@ Legacy: `GoingCount.php` + `going-count.blade.php` + `GoingCountTest.php` (TOG-7
   stays quiet; never `role="alert"`.
 - Refresh: `going-count-updated` DOM CustomEvent `{eventKey, viewerState}` → exactly
   one `GET /events.json` per answered event; non-matching island keys fire nothing;
-  missing row keeps last known-good. Executable: `test/islands-going-count.test.ts` (18 tests).
+  missing row keeps last known-good. A newer write owns its refresh even when an
+  older fetch/body finishes later. The accepted aggregate emits
+  `going-count-refreshed {eventKey, goingCount, capacity}` for capacity reconciliation,
+  without another request. Executable: `test/islands-going-count*.test.ts`.
 
 ## 2. RsvpButton (slice 2, on the frozen W8/W9 routes)
 
@@ -52,6 +55,10 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
   until the write and response body settle; repeated activations fire nothing.
   Writes are never aborted/replaced: aborting a fetch cannot cancel a transaction.
   This supersedes the unsafe abort-then-resend wording after the slice-2 review.
+  A readable, valid stored answer is required to confirm going/waitlisted. An
+  unreadable/missing/unexpected successful answer announces an unknown outcome and
+  offers an event refresh; mutations stay disabled until SSR recovers the answer,
+  rather than asserting a failed write or blindly replaying it.
 - States rendered: guest login link (never a dead button); closed (Cancelled /
   Not published yet / been-and-gone, `role="status"`); full + waitlist join; in-line
   position + claim-seat (locked path); You're-in + withdraw; optimistic saving in
@@ -68,6 +75,9 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
   link; RSVP enhancement does not pretend to keep identities live.
 - Broadcasts `going-count-updated {eventKey, viewerState}` on every successful write
   (going / waitlisted / none) and re-reads nothing itself — the badge owns its aggregate.
+  Withdrawal does not imply a vacancy: FIFO promotion may keep the event full.
+  Keep last-known capacity until the badge's latest valid aggregate reconciles the
+  join/waitlist/claim controls; a failed refresh cannot invent an open seat.
 - Honeypot `website` field: a filled decoy answers the byte-identical success shape
   without touching limiter/auth/DB; nothing attacker-shaped logged. Per the executable
   contract (`rsvpTrapTripped`), a bare RSVP click has no form-open timestamp or

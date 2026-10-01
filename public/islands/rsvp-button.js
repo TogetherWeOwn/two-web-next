@@ -44,6 +44,8 @@
     synced: "Synced to Discord.",
     failedTitle: "That RSVP didn't save.",
     failedAction: "Try once more.",
+    unknown: "We couldn't confirm your RSVP. Check the event before trying again.",
+    refresh: "Refresh the event",
     paused: "RSVPs are paused for this event — check back soon.",
     sessionExpired: "Your session expired.",
     guestCta: "Log in with Discord",
@@ -69,6 +71,8 @@
     synced: "rsvp-synced",
     rateLimited: "rsvp-rate-limited",
     failed: "rsvp-failed",
+    unknown: "rsvp-unknown",
+    refresh: "rsvp-refresh",
     sessionExpired: "rsvp-session-expired"
   };
 
@@ -344,8 +348,67 @@
     focusTestid([TESTID.waitlistPosition]);
   }
 
+  function unknownOutcome(button) {
+    setBusy(false, button);
+    root.setAttribute("data-outcome-unknown", "true");
+    root.querySelectorAll("[data-action]").forEach(function (control) { control.disabled = true; });
+    var el = notice(TESTID.unknown, "alert", COPY.unknown, false, true);
+    el.appendChild(document.createTextNode(" "));
+    var link = document.createElement("a");
+    link.setAttribute("data-testid", TESTID.refresh);
+    link.href = "/e/" + encodeURIComponent(eventKey);
+    link.textContent = COPY.refresh;
+    el.appendChild(link);
+  }
+
+  function reconcileCapacity(detail) {
+    if (detail.eventKey !== eventKey || root.getAttribute("aria-busy") === "true" ||
+        root.getAttribute("data-outcome-unknown") === "true") return;
+    if (!Number.isSafeInteger(detail.goingCount) || detail.goingCount < 0 ||
+        (detail.capacity !== null && (!Number.isSafeInteger(detail.capacity) || detail.capacity < 1))) return;
+    var full = detail.capacity !== null && detail.goingCount >= detail.capacity;
+    root.setAttribute("data-full", full ? "true" : "false");
+    if (detail.capacity === null) root.removeAttribute("data-capacity");
+    else root.setAttribute("data-capacity", detail.capacity);
+    if (root.getAttribute("data-paused") === "true") return;
+    var join = root.querySelector('[data-testid="' + TESTID.going + '"],[data-testid="' + TESTID.waitlistJoin + '"]');
+    var position = root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
+    if (join) {
+      join.setAttribute("data-testid", full ? TESTID.waitlistJoin : TESTID.going);
+      join.setAttribute("data-action", full ? "waitlisted" : "going");
+      join.setAttribute("value", full ? "waitlisted" : "going");
+      join.textContent = full ? COPY.waitlistJoin : COPY.cta;
+    }
+    var claim = root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]');
+    if (full && claim) claim.remove();
+    if (!full && position && !claim) {
+      claim = document.createElement("button");
+      claim.setAttribute("type", "submit");
+      claim.setAttribute("name", "status");
+      claim.setAttribute("value", "going");
+      claim.setAttribute("data-testid", TESTID.waitlistClaim);
+      claim.setAttribute("data-action", "going");
+      claim.textContent = COPY.waitlistClaim;
+      controls.appendChild(claim);
+      claim.addEventListener("click", function (ev) { onAction("going", claim, ev); });
+    }
+    var message = root.querySelector('[data-testid="' + TESTID.full + '"]');
+    if (full && (join || position)) {
+      if (!message) {
+        message = document.createElement("p");
+        message.setAttribute("role", "status");
+        message.setAttribute("data-testid", TESTID.full);
+        controls.appendChild(message);
+      }
+      message.textContent = COPY.full + " " + fullCapCopy(detail.capacity);
+    } else if (message) message.remove();
+  }
+
+  document.addEventListener("going-count-refreshed", function (ev) {
+    reconcileCapacity((ev && ev.detail) || {});
+  });
+
   function paintWithdrawn() {
-    var wasGoing = !!root.querySelector('[data-testid="' + TESTID.confirmed + '"]');
     var conf = root.querySelector(
       '[data-testid="' + TESTID.confirmed + '"],[data-testid="' + TESTID.waitlistPosition + '"]'
     );
@@ -353,9 +416,9 @@
       var n = root.querySelector('[data-testid="' + t + '"]');
       if (n && n.parentNode) n.parentNode.removeChild(n);
     });
-    // A going withdrawal frees a seat; leaving the line does not. Neither
-    // may reopen a paused event. The server remains the capacity authority.
-    if (wasGoing) root.setAttribute("data-full", "false");
+    // FIFO promotion can keep a withdrawn seat occupied. Preserve the last
+    // known capacity until the badge's owned aggregate refresh settles.
+    // Neither a withdrawal nor a refresh may reopen a paused event.
     if (root.getAttribute("data-paused") === "true") {
       if (conf && conf.parentNode) conf.parentNode.removeChild(conf);
       return;
@@ -371,7 +434,7 @@
     join.textContent = full ? COPY.waitlistJoin : COPY.cta;
     if (conf && conf.parentNode) conf.parentNode.replaceChild(join, conf);
     else controls.appendChild(join);
-    join.addEventListener("click", function (ev) { onAction(action, join, ev); });
+    join.addEventListener("click", function (ev) { onAction(join.getAttribute("data-action"), join, ev); });
     focusTestid([TESTID.going, TESTID.waitlistJoin]);
   }
 
@@ -406,7 +469,7 @@
 
   function onAction(action, button, ev) {
     if (ev && ev.preventDefault) ev.preventDefault();
-    if (inflight) return;
+    if (inflight || root.getAttribute("data-outcome-unknown") === "true") return;
     // SSR only renders going/waitlisted/withdraw controls; any other
     // data-action (e.g. maybe/not_going) never fires — the server stays
     // authoritative and the member sees the failure alert, never a 422
@@ -437,40 +500,39 @@
         if (controller && inflight !== controller) return;
         if (res.ok) {
           if (isWithdraw) {
+            if (res.status !== 204) return unknownOutcome(button);
             setBusy(false, button);
             paintWithdrawn();
             broadcast(viewerState("withdraw"));
             return;
           }
-          var done = function (syncedAt, syncFailed, status, position) {
-            if (inflight !== controller) return;
-            setBusy(false, button);
-            // The FIFO service may settle a going request as waitlisted.
-            // Render and broadcast the stored answer, not the requested one.
-            var settled = status || action;
-            if (settled === "waitlisted") {
-              root.setAttribute("data-full", "true");
-              paintWaitlisted(position);
-            } else {
-              paintConfirmed();
-            }
-            broadcast(viewerState(settled));
-            syncNote(syncedAt, syncFailed);
-          };
-          if (res.status === 204) return done(null, false);
-          return res
-            .json()
-            .then(
+          // A committed write with no readable answer is not a failed write
+          // or a confirmed seat. Recover through SSR, never guess or resend.
+          if ((res.status !== 200 && res.status !== 201) || typeof res.json !== "function") {
+            return unknownOutcome(button);
+          }
+          try {
+            return res.json().then(
               function (j) {
-                var d = j && j.data ? j.data : null;
-                done(d ? d.synced_to_discord_at || null : null, d ? !!d.sync_failed : !!((j || {}).sync_failed),
-                  d ? d.status : null, d ? d.waitlist_position : null);
+                if (inflight !== controller) return;
+                var d = j && j.data;
+                if (!d || (d.status !== "going" && d.status !== "waitlisted")) return unknownOutcome(button);
+                setBusy(false, button);
+                // The FIFO service may settle a going request as waitlisted.
+                if (d.status === "waitlisted") {
+                  root.setAttribute("data-full", "true");
+                  paintWaitlisted(d.waitlist_position);
+                } else {
+                  paintConfirmed();
+                }
+                broadcast(viewerState(d.status));
+                syncNote(d.synced_to_discord_at || null, !!d.sync_failed);
               },
-              function () {
-                done(null, false);
-              }
+              function () { if (inflight === controller) unknownOutcome(button); }
             );
-          return;
+          } catch (e) {
+            return unknownOutcome(button);
+          }
         }
         if (sessionExpiredResponse(res)) {
           setBusy(false, button);

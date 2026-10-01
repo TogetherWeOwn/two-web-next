@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { RsvpButton } from "../src/events/rsvp-button";
 import { EventPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
+import { RSVP_COPY, RSVP_UNKNOWN_TESTID, RSVP_REFRESH_TESTID } from "../src/islands/contracts";
 
 const binder = readFileSync(new NodeURL("../public/islands/rsvp-button.js", import.meta.url), "utf8");
 class Node {
@@ -61,9 +62,9 @@ const event: PublicEvent = {
   recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
   createdAt: new Date(), updatedAt: new Date(), icsSequence: 0n,
 };
-function browser(state: "open" | "going" | "waitlisted" | "closed" | "full" = "open", loginUrl = "/join/discord?next=%2Fe%2Fraid%2Fone", integrated = false) {
-  const e = { ...event, status: state === "closed" ? "cancelled" : "published", goingCount: state === "full" ? 4 : 1 };
-  const props = { e, member: true, answer: state === "going" || state === "waitlisted" ? { status: state, syncedToDiscordAt: null } : null,
+function browser(state: "open" | "going" | "going-full" | "waitlisted" | "closed" | "full" = "open", loginUrl = "/join/discord?next=%2Fe%2Fraid%2Fone", integrated = false, overrides: Partial<PublicEvent> = {}) {
+  const e = { ...event, status: state === "closed" ? "cancelled" : "published", goingCount: state === "full" || state === "going-full" ? 4 : 1, ...overrides };
+  const props = { e, member: true, answer: state === "going" || state === "going-full" || state === "waitlisted" ? { status: state === "going-full" ? "going" : state, syncedToDiscordAt: null } : null,
     returnTo: "/e/raid/one", now: new Date("2029-01-01") };
   const html = integrated ? String(EventPage({ ...props, neighbors: { previous: null, next: null }, related: [],
     attendees: [{ id: "member-one", name: "One" }], appUrl: "https://next.example.test", jsonLd: "{}" })) : String(RsvpButton(props));
@@ -90,10 +91,11 @@ function browser(state: "open" | "going" | "waitlisted" | "closed" | "full" = "o
   if (integrated) runInNewContext(readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8"), context);
   runInNewContext(binder, context);
   const get = (id: string) => root.querySelector(`[data-testid="${id}"]`);
-  const finish = (i: number, status: number, body: unknown = { data: { synced_to_discord_at: null } }, headers?: HeadersInit) =>
+  const finish = (i: number, status: number, body: unknown = { data: { status: "going", synced_to_discord_at: null } }, headers?: HeadersInit) =>
     requests[i]!.resolve(new Response(status === 204 ? null : JSON.stringify(body), { status, headers }));
   const settle = () => new Promise((resolve) => setImmediate(resolve));
-  return { root, page, html, get, requests, broadcasts, finish, settle, reloads: () => reloads };
+  const emit = (type: string, detail: unknown) => context.document.dispatchEvent({ type, detail });
+  return { root, page, html, get, requests, broadcasts, finish, settle, emit, reloads: () => reloads };
 }
 
 describe("RsvpButton shipped binder", () => {
@@ -242,7 +244,7 @@ describe("RsvpButton shipped binder", () => {
   });
 
   it("keeps full copy and does not offer a seat claim after joining a full waitlist", async () => {
-    const b = browser("full"); b.get("waitlist-join")!.click(); b.finish(0, 201); await b.settle();
+    const b = browser("full"); b.get("waitlist-join")!.click(); b.finish(0, 201, { data: { status: "waitlisted", waitlist_position: 1 } }); await b.settle();
     expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
     expect(b.get("waitlist-claim")).toBeNull(); expect(b.get("waitlist-leave")).not.toBeNull();
   });
@@ -281,6 +283,125 @@ describe("RsvpButton shipped binder", () => {
     expect(badge.querySelector("[data-count]")?.textContent).toBe("2 of 4 going");
     expect(badge.querySelector("[data-announcement]")?.textContent).toBe("You're going. ");
     expect(b.requests).toHaveLength(2);
+  });
+
+  it.each([
+    ["unreadable JSON", "not json"],
+    ["missing data", "{}"],
+    ["missing status", '{"data":{"synced_to_discord_at":null}}'],
+    ["null status", '{"data":{"status":null}}'],
+    ["invalid status", '{"data":{"status":"bogus"}}'],
+    ["unexpected non-seat answer", '{"data":{"status":"maybe"}}'],
+  ])("offers honest recovery instead of claiming a seat for %s success", async (_, body) => {
+    const b = browser(); const button = b.get("rsvp-going")!; button.click();
+    b.requests[0]!.resolve(new Response(body, { status: 201 })); await b.settle();
+    expect(b.get("rsvp-confirmed")).toBeNull(); expect(b.get("rsvp-syncing")).toBeNull();
+    expect(b.get(RSVP_UNKNOWN_TESTID)?.getAttribute("role")).toBe("alert");
+    expect(b.get(RSVP_UNKNOWN_TESTID)?.textContent).toBe(`${RSVP_COPY.unknown} ${RSVP_COPY.refresh}`);
+    expect(b.get(RSVP_REFRESH_TESTID)?.href).toBe("/e/raid%2Fone");
+    expect(b.root.getAttribute("aria-busy")).toBeNull(); expect(button.disabled).toBe(true);
+    expect(b.broadcasts).toHaveLength(0); button.click();
+    b.root.querySelector("[data-rsvp-form]")!.listeners.get("submit")!({ preventDefault() {} });
+    expect(b.requests).toHaveLength(1);
+  });
+
+  it.each([202, 204])("does not infer a PUT answer from unexpected success status %i", async (status) => {
+    const b = browser(); b.get("rsvp-going")!.click(); b.finish(0, status); await b.settle();
+    expect(b.get("rsvp-confirmed")).toBeNull(); expect(b.get("rsvp-unknown")).not.toBeNull();
+    expect(b.broadcasts).toHaveLength(0); expect(b.requests).toHaveLength(1);
+  });
+
+  it("does not infer withdrawal from a non-contract success response", async () => {
+    const b = browser("going"); b.get("rsvp-withdraw")!.click(); b.finish(0, 200); await b.settle();
+    expect(b.get("rsvp-confirmed")).not.toBeNull(); expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("rsvp-unknown")).not.toBeNull(); expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it("keeps the newest aggregate when withdrawal GET B finishes before join GET A", async () => {
+    const b = browser("open", undefined, true); b.get("rsvp-going")!.click(); b.finish(0, 201); await b.settle();
+    expect(b.requests[1]!.url).toBe("/events.json");
+    b.get("rsvp-withdraw")!.click(); b.finish(2, 204); await b.settle();
+    expect(b.requests[3]!.url).toBe("/events.json");
+    b.finish(3, 200, [{ event_key: "raid/one", going_count: 1, capacity: 4 }]); await b.settle();
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 2, capacity: 4 }]); await b.settle();
+    const badge = b.page.querySelector('[data-island="going-count"]')!;
+    expect(badge.querySelector("[data-count]")?.textContent).toBe("1 of 4 going");
+    expect(badge.querySelector("[data-announcement]")?.textContent).toBe("RSVP removed. ");
+    expect(b.broadcasts.filter((e) => e.type === "going-count-refreshed").map((e) => e.detail)).toEqual([
+      { eventKey: "raid/one", goingCount: 1, capacity: 4 },
+    ]);
+    expect(b.requests).toHaveLength(4);
+  });
+
+  it("does not invent a vacancy when withdrawing promotes a FIFO waiter into the full event", async () => {
+    const b = browser("going-full", undefined, true); b.get("rsvp-withdraw")!.click(); b.finish(0, 204); await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("waitlist-join")).not.toBeNull(); expect(b.requests[1]!.url).toBe("/events.json");
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 4, capacity: 4 }]); await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("rsvp-going")).toBeNull(); expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.page.querySelector("[data-count]")?.textContent).toBe("4 of 4 going");
+    b.get("waitlist-join")!.click(); expect(b.requests[2]!.init.body).toBe('{"status":"waitlisted"}');
+    expect(b.requests).toHaveLength(3);
+  });
+
+  it.each([4, null])("offers going only after a fresh allocation shows room (capacity %s)", async (capacity) => {
+    const b = browser("going-full", undefined, true); b.get("rsvp-withdraw")!.click(); b.finish(0, 204); await b.settle();
+    expect(b.get("rsvp-going")).toBeNull();
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 3, capacity }]); await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("false"); expect(b.get("event-full")).toBeNull();
+    expect(b.get("waitlist-join")).toBeNull(); b.get("rsvp-going")!.click();
+    expect(b.requests[2]!.init.body).toBe('{"status":"going"}'); expect(b.requests).toHaveLength(3);
+  });
+
+  it("keeps the last capacity when the post-withdrawal aggregate fails", async () => {
+    const b = browser("going-full", undefined, true); b.get("rsvp-withdraw")!.click(); b.finish(0, 204); await b.settle();
+    b.finish(1, 500); await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("waitlist-join")).not.toBeNull(); expect(b.requests).toHaveLength(2);
+  });
+
+  it("reconciles claim availability without guessing the viewer's FIFO position", async () => {
+    const b = browser("full", undefined, true); b.get("waitlist-join")!.click();
+    b.finish(0, 201, { data: { status: "waitlisted", waitlist_position: 3 } }); await b.settle();
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 3, capacity: 4 }]); await b.settle();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #3 in line");
+    expect(b.get("waitlist-claim")).not.toBeNull(); expect(b.get("event-full")).toBeNull();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 });
+    expect(b.get("waitlist-claim")).toBeNull(); expect(b.get("waitlist-leave")).not.toBeNull();
+    expect(b.requests).toHaveLength(2);
+  });
+
+  it("does not reopen actual paused SSR after withdrawal and a fresh allocation", async () => {
+    const b = browser("waitlisted", undefined, true, { rsvpOpen: false });
+    expect(b.get("waitlist-claim")).toBeNull(); b.get("waitlist-leave")!.click(); b.finish(0, 204); await b.settle();
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 1, capacity: 4 }]); await b.settle();
+    expect(b.root.querySelectorAll("[data-action]")).toHaveLength(0);
+    expect(b.get("rsvp-paused")).not.toBeNull(); expect(b.requests).toHaveLength(2);
+  });
+
+  it("ignores nonmatching/malformed allocations and snapshots during a write or unknown outcome", async () => {
+    const b = browser("full");
+    for (const detail of [
+      { eventKey: "other", goingCount: 0, capacity: 4 },
+      { eventKey: "raid/one", goingCount: -1, capacity: 4 },
+      { eventKey: "raid/one", goingCount: 0, capacity: "4" },
+    ]) b.emit("going-count-refreshed", detail);
+    expect(b.get("rsvp-going")).toBeNull(); expect(b.get("waitlist-join")).not.toBeNull();
+    b.get("waitlist-join")!.click();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("waitlist-join")?.disabled).toBe(true);
+    b.requests[0]!.resolve({ ok: true, status: 201, json() { throw new Error("unreadable"); } } as unknown as Response);
+    await b.settle();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("rsvp-unknown")).not.toBeNull();
+    expect(b.get("waitlist-join")?.disabled).toBe(true); expect(b.requests).toHaveLength(1);
+  });
+
+  it("does not create member controls in closed SSR after a capacity snapshot", () => {
+    const b = browser("closed"); b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+    expect(b.root.querySelectorAll("[data-action]")).toHaveLength(0); expect(b.get("rsvp-closed")).not.toBeNull();
+    expect(b.requests).toHaveLength(0);
   });
 
   it("closed SSR has no click action or load-time request", () => {
