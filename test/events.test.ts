@@ -113,7 +113,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
   // request mints a fresh cookie.
   const MOD = "mod" as const;
   const MEMBER = "member" as const;
-  const fresh = (who: typeof MOD | typeof MEMBER) => cookieFor(store, { userId: `w8-${who}`, moderator: who === MOD });
+  const fresh = (who: typeof MOD | typeof MEMBER) => cookieFor(store, { userId: who === MOD ? "100000000000000111" : "100000000000000112", moderator: who === MOD });
 
   const req = (path: string, init: RequestInit = {}) => app.request(path, init, env);
   const as = async (who: typeof MOD | typeof MEMBER, extra: Record<string, string> = {}) => ({ headers: { cookie: await fresh(who), ...extra } });

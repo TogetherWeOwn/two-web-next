@@ -32,6 +32,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { adminApp } from "../src/admin/routes";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { activityLog, events, featuredContents, memberDataAccessLogs } from "../src/db/admin-schema";
+import type { Db } from "../src/db/index";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
@@ -76,7 +77,7 @@ async function cookieFor(
   return serialized.split(";")[0]!;
 }
 
-const MOD = { userId: "111", username: "mod", moderator: true };
+const MOD = { userId: "100000000000000111", username: "mod", moderator: true };
 const PLEB = { userId: "222", username: "pleb", moderator: false };
 
 describe("admin guard pins (memory store, no DB)", () => {
@@ -153,18 +154,14 @@ describe("admin guard pins (memory store, no DB)", () => {
 
 describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", () => {
   let fixture: MemberDataFixture;
-  let db: MemberDataFixture["db"];
-  beforeAll(async () => {
-    // Replay every canonical migration into a guarded, owned schema (never public).
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-    db = fixture.db;
-  });
-  afterAll(async () => { await fixture?.dispose(); });
+  let db: Db;
   const store = createMemorySessionStore(() => Date.now());
-  const modId = `admintest-mod-${Date.now()}`;
+  const modId = "100000000000000111";
   let cookie = "";
-  // Sessions resolve through the memory store; admin tables through ADMIN_DB.
-  const liveEnv = { ...env, get ADMIN_DB() { return db; } } as Env;
+  // Sessions resolve through the memory store; admin tables through an isolated schema.
+  const liveEnv = () => ({ ...env, ADMIN_DB: db }) as Env;
+  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
+  afterAll(() => fixture?.dispose());
 
   const form = (fields: Record<string, string>) => ({
     method: "POST" as const,
@@ -205,7 +202,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         location: "Voice",
         capacity: "8",
       }),
-      liveEnv,
+      liveEnv(),
     );
     expect(create.status).toBe(303);
     const key = new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop()!;
@@ -221,14 +218,14 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         ends_at: "2026-11-04 23:00",
         timezone: "Europe/London",
       }),
-      liveEnv,
+      liveEnv(),
     );
     expect(edit.status).toBe(303);
 
     const publish = await app().request(
       `/events/${key}/publish`,
       { method: "POST", headers: { cookie, origin: APP_URL } },
-      liveEnv,
+      liveEnv(),
     );
     expect(publish.status).toBe(303);
     expect(dispatchWriteBack).toHaveBeenCalledWith(expect.anything(), { eventKey: key, status: "published" });
@@ -236,7 +233,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const cancel = await app().request(
       `/events/${key}/cancel`,
       { method: "POST", headers: { cookie, origin: APP_URL } },
-      liveEnv,
+      liveEnv(),
     );
     expect(cancel.status).toBe(303);
     expect(dispatchWriteBack).toHaveBeenCalledWith(expect.anything(), { eventKey: key, status: "cancelled" });
@@ -253,27 +250,27 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const republish = await app().request(
       `/events/${key}/publish`,
       { method: "POST", headers: { cookie, origin: APP_URL } },
-      liveEnv,
+      liveEnv(),
     );
     expect(republish.status).toBe(422);
   });
 
   it("invalid event input re-renders the form with field errors (422)", async () => {
-    const res = await app().request("/events", form({ title: "", starts_at: "nope", ends_at: "nope" }), liveEnv);
+    const res = await app().request("/events", form({ title: "", starts_at: "nope", ends_at: "nope" }), liveEnv());
     expect(res.status).toBe(422);
     const html = await res.text();
     expect(html).toContain("Give the event a title.");
   });
 
   it("featured CRUD: create → publish toggle → reorder → delete, audited", async () => {
-    const create = await app().request("/featured", form({ title: "Slot one", body: "Hello", position: "2" }), liveEnv);
+    const create = await app().request("/featured", form({ title: "Slot one", body: "Hello", position: "2" }), liveEnv());
     expect(create.status).toBe(303);
     const id = Number(new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop());
 
     const update = await app().request(
       `/featured/${id}`,
       form({ title: "Slot one", body: "Hello", is_published: "on", position: "0" }),
-      liveEnv,
+      liveEnv(),
     );
     expect(update.status).toBe(303);
     const [row] = await db.select().from(featuredContents).where(eq(featuredContents.id, id));
@@ -283,7 +280,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const del = await app().request(
       `/featured/${id}/delete`,
       { method: "POST", headers: { cookie, origin: APP_URL } },
-      liveEnv,
+      liveEnv(),
     );
     expect(del.status).toBe(303);
     expect(await db.select().from(featuredContents).where(eq(featuredContents.id, id))).toHaveLength(0);
@@ -307,7 +304,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       starts_at: "2026-11-04 09:05",
       ends_at: "2026-11-04 11:15",
     };
-    const create = await app().request("/featured", form(fields), liveEnv);
+    const create = await app().request("/featured", form(fields), liveEnv());
     expect(create.status).toBe(303);
     const id = Number(new URL(create.headers.get("location")!, APP_URL).pathname.split("/").pop());
     expect(create.headers.get("location")).toBe(`/admin/featured/${id}`);
@@ -327,7 +324,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const auditsBeforeReads = await db.select().from(activityLog);
     expect(auditsBeforeReads).toHaveLength(1);
 
-    const list = await app().request("/featured", { headers: { cookie } }, liveEnv);
+    const list = await app().request("/featured", { headers: { cookie } }, liveEnv());
     expect(list.status).toBe(200);
     const listHtml = await list.text();
     expect(listHtml).toContain(`href="/admin/featured/${id}">${fields.title}</a>`);
@@ -336,7 +333,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(listHtml).toContain("2026-11-04T09:05:00.000Z");
     expect(listHtml).toContain("2026-11-04T11:15:00.000Z");
 
-    const edit = await app().request(`/featured/${id}`, { headers: { cookie } }, liveEnv);
+    const edit = await app().request(`/featured/${id}`, { headers: { cookie } }, liveEnv());
     expect(edit.status).toBe(200);
     const editHtml = await edit.text();
     expect(editHtml).toContain('data-status="scheduled">scheduled</span>');
@@ -357,7 +354,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(dispatchWriteBack).not.toHaveBeenCalled();
   });
 
-  it("admin reads emit access-log rows; non-moderator reads stay 403", async () => {
+  it("event metadata reads have no member subjects; non-moderator reads stay 403", async () => {
     await app().request(
       "/events",
       form({
@@ -366,23 +363,19 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         ends_at: "2026-11-04 22:00",
         timezone: "Europe/London",
       }),
-      liveEnv,
+      liveEnv(),
     );
 
-    const list = await app().request("/events", { headers: { cookie } }, liveEnv);
+    const list = await app().request("/events", { headers: { cookie } }, liveEnv());
     expect(list.status).toBe(200);
     const logs = await db.select().from(memberDataAccessLogs);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]?.resource).toBe("events");
-    expect(logs[0]?.action).toBe("list");
-    expect(logs[0]?.route).toBe("admin.events.index");
-    expect(logs[0]?.subjectCount).toBe(1);
-    expect(logs[0]?.viewerDiscordId).toBe(modId);
+    // Event metadata is explicitly non-sensitive; event IDs are not member keys.
+    expect(logs).toHaveLength(0);
 
     // The same read as a non-moderator 403s and logs nothing new.
     const plebCookie = await cookieFor(store, { userId: "pleb-live", username: "pleb", moderator: false });
-    const denied = await app().request("/events", { headers: { cookie: plebCookie } }, liveEnv);
+    const denied = await app().request("/events", { headers: { cookie: plebCookie } }, liveEnv());
     expect(denied.status).toBe(403);
-    expect(await db.select().from(memberDataAccessLogs)).toHaveLength(1);
+    expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
   });
 });

@@ -56,7 +56,7 @@ export function pageShellFixture(status = "published") {
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "users"')) {
       return { rows: params.includes(MEMBER_ID)
-        ? [[MEMBER_ID, "Fixture member", null, "A local bio.", ["Chess"], "UTC", now.toISOString()]] : [] };
+        ? [[MEMBER_ID, MEMBER_ID, "Fixture member", null, "A local bio.", ["Chess"], "UTC", now.toISOString()]] : [] };
     }
     if (sql.includes('from "events"')) {
       if (sql.includes('"events"."id" <>')) return { rows: [] }; // No neighboring/related fixture rows.
