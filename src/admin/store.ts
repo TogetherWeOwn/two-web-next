@@ -95,6 +95,9 @@ export async function createEvent(
   // never mirrored, so the write-back is a no-op by construction. A series is
   // one transaction (no half-series): the parent (index 1) and every
   // occurrence its rule names, all drafts.
+  // The key is minted here, never taken from input: EventFormInput carries
+  // no key field and parseEventForm refuses forged event_key/eventKey
+  // (legacy EventKeyTest immutability).
   const row = await db.transaction(async (tx) => {
     const [parent] = await tx
       .insert(events)
@@ -226,9 +229,14 @@ export async function updateEvent(
     // child shift below always sees the committed old times (no double-shift).
     const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
-    if (input.capacity !== null && input.capacity < await goingCount(tx, locked.id)) {
-      throw new ValidationError({ capacity: CAPACITY_BELOW_GOING });
+    if (input.capacity !== null) {
+      const occupied = await goingCount(tx, locked.id);
+      if (input.capacity < occupied) {
+        throw new ValidationError({ capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.` });
+      }
     }
+    // Closed field list: the key is addressed by, never written through,
+    // this update (EventFormInput carries no key; forged keys never parse).
     const [row] = await tx
       .update(events)
       .set({
@@ -328,10 +336,15 @@ export async function transitionEvent(
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
+    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     if (!locked) throw new NotFoundError("event");
     const from = toEventStatus(locked.status);
     const target = nextStatus(from, to);
+    // Judge persisted dates only after the lock wait. Equality is still legal
+    // for publication (legacy's strict isPast boundary); cancellation is exempt.
+    if (to === "published" && locked.endsAt.getTime() < Date.now()) {
+      throw new ValidationError({ ends_at: "An event that has already ended cannot be published. Update its dates first." });
+    }
     if (from === target) return { row: locked, writeBack: null };
     const [row] = await tx
       .update(events)
@@ -432,30 +445,32 @@ export async function getEvent(db: Db, eventKey: string): Promise<EventRow | nul
 // EventsTable: "no delete anywhere on this resource").
 
 export async function createFeatured(db: Db, actor: Actor, input: FeaturedFormInput): Promise<FeaturedRow> {
-  const [row] = await db
-    .insert(featuredContents)
-    .values({
-      title: input.title,
-      body: input.body,
-      url: input.url,
-      imageUrl: input.imageUrl,
-      imageAlt: input.imageAlt,
-      isPublished: input.isPublished,
-      position: input.position,
-      startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
-      endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
-      createdBy: actor.id,
-    })
-    .returning(featuredEditSelection);
-  if (!row) throw new Error("featured insert returned no row");
-  await audit(db, {
-    subjectType: "FeaturedContent",
-    subjectId: String(row.id),
-    causerId: actor.id,
-    description: `created featured content ${row.title}`,
-    properties: dirty({} as Record<string, unknown>, featuredAuditValues(row)),
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(featuredContents)
+      .values({
+        title: input.title,
+        body: input.body,
+        url: input.url,
+        imageUrl: input.imageUrl,
+        imageAlt: input.imageAlt,
+        isPublished: input.isPublished,
+        position: input.position,
+        startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
+        endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
+        createdBy: actor.id,
+      })
+      .returning(featuredEditSelection);
+    if (!row) throw new Error("featured insert returned no row");
+    await audit(tx, {
+      subjectType: "FeaturedContent",
+      subjectId: String(row.id),
+      causerId: actor.id,
+      description: `created featured content ${row.title}`,
+      properties: dirty({} as Record<string, unknown>, featuredAuditValues(row)),
+    });
+    return row;
   });
-  return row;
 }
 
 export async function updateFeatured(
