@@ -100,6 +100,8 @@ describe("queue.failing", () => {
 
   it("logs connection/queue/job/attempts/exception on a terminal failure", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Class-only (TOG-11627): the terminal message can carry secrets, so the
+    // alert carries the error class, never its text.
     const bot = { postAnnouncement: async () => { throw new BotTerminalError("missing secret"); } } as unknown as BotClient;
     await consume({ messages: [msg(ann, 2)] }, { bot, events, lock, ledger });
     expect(failingLines(spy)).toEqual([
@@ -110,7 +112,7 @@ describe("queue.failing", () => {
         queue: "two-internal-action",
         job: "CallInternalAction",
         attempts: 2,
-        exception: "missing secret",
+        exception: "BotTerminalError",
       },
     ]);
   });
