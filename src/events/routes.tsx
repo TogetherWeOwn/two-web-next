@@ -84,14 +84,14 @@ async function sha256Etag(body: string): Promise<string> {
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }
 
-/** Strong validator over the bytes; 304 on a matching If-None-Match. Sessionless: sets no cookie. */
+/** Strong validator over the bytes; preserve queued headers, but never read or issue a session here. */
 async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
   const etag = await sha256Etag(body);
   const inm = c.req.header("if-none-match");
   if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))) {
-    return new Response(null, { status: 304, headers: { etag, "cache-control": headers["cache-control"]! } });
+    return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }
-  return new Response(body, { status: 200, headers: { ...headers, etag } });
+  return c.body(body, 200, { ...headers, etag });
 }
 
 async function calendarFeedResponse(c: Ctx, build: () => string, headers: Record<string, string>): Promise<Response> {
@@ -214,7 +214,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
+    const eventKey = c.req.query("event_key");
+    if (eventKey !== undefined && !KEY_RE.test(eventKey)) return c.json({ error: "invalid_event_key" }, 422);
+    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator, eventKey });
     const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
     const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
     const body = JSON.stringify({ data, page, limit });
