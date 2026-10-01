@@ -20,10 +20,12 @@ class TextTarget {
 
 class Badge {
   count: TextTarget;
+  spots: TextTarget | null;
   announcement = new TextTarget("You're going. ");
 
   constructor(readonly key: string, readonly capacity: string) {
     this.count = new TextTarget(capacity ? `2 of ${capacity} going` : "2 going");
+    this.spots = capacity ? new TextTarget(`${Number(capacity) - 2} of ${capacity} spots left`) : null;
   }
 
   getAttribute(name: string) {
@@ -33,6 +35,7 @@ class Badge {
   }
   querySelector(selector: string) {
     if (selector === "[data-count]") return this.count;
+    if (selector === "[data-spots]") return this.spots;
     if (selector === "[data-announcement]") return this.announcement;
     return null;
   }
@@ -62,7 +65,7 @@ function browser() {
       },
     },
     fetch(url: string, init: { headers: Record<string, string> }) {
-      expect(url).toBe("/events.json");
+      expect(url).toBe("/events.json?event_key=a");
       expect(init.headers).toEqual({ accept: "application/json" });
       return new Promise<ReadResponse>((resolve) => requests.push({ resolve }));
     },
@@ -84,6 +87,10 @@ function expectUntouched(b: ReturnType<typeof browser>) {
   expect(b.badges.map((badge) => badge.count.textContent)).toEqual(["2 of 4 going", "2 of 8 going", "2 going"]);
   for (const badge of [...b.badges, b.other]) {
     expect(badge.count.writes).toEqual([]);
+    if (badge.spots) {
+      expect(badge.spots.textContent).toBe(`${Number(badge.capacity) - 2} of ${badge.capacity} spots left`);
+      expect(badge.spots.writes).toEqual([]);
+    }
     expect(badge.announcement.textContent).toBe("You're going. ");
     expect(badge.announcement.writes).toEqual([]);
   }
@@ -138,6 +145,10 @@ describe.each(envelopes)("GoingCount %s envelope admission", (_name, envelope) =
     expect(b.badges.map((badge) => badge.count.textContent)).toEqual([`${count} of 4 going`, `${count} of 8 going`, `${count} going`]);
     for (const badge of b.badges) {
       expect(badge.count.writes).toHaveLength(1);
+      if (badge.spots) {
+        const capacity = Number(badge.capacity);
+        expect(badge.spots.writes).toEqual([count >= capacity ? "Full" : `${capacity - count} of ${capacity} spots left`]);
+      }
       expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
     }
     expect(b.other.count.writes).toEqual([]);
