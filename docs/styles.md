@@ -37,6 +37,11 @@ properties (excluding the intentionally inlined custom properties) and element
 bounds at 360px and 1280px, including keyboard focus, hover and broken-avatar
 fallback. An intentional font-size change proves the comparison detects loss.
 Scripts, embeds and external resource loads are disabled in this comparison.
+String arguments to Playwright's evaluator are executable expressions, not bare
+arrow functions. The proof rejects empty/non-array snapshots and explicitly
+checks focus, blur, hover and avatar visibility so a no-op evaluation cannot
+masquerade as a successful comparison. A local evaluator regression checks the
+snapshot's shape without claiming to replace the Chromium comparison.
 
 Run:
 

@@ -53,7 +53,7 @@ async function cases() {
 }
 
 async function snapshot(page: Page) {
-  return page.evaluate(`() => Array.from(document.querySelectorAll("body, body *"), (element) => {
+  const result = await page.evaluate(`Array.from(document.querySelectorAll("body, body *"), (element) => {
     const style = getComputedStyle(element);
     const bounds = element.getBoundingClientRect();
     return {
@@ -63,9 +63,24 @@ async function snapshot(page: Page) {
       bounds: [bounds.x, bounds.y, bounds.width, bounds.height],
     };
   })`);
+  if (!Array.isArray(result)) throw new Error("computed-style snapshot must be an array");
+  expect(result.length, "computed-style snapshot must contain rendered elements").toBeGreaterThan(1);
+  return result;
 }
 
 describe("factored stylesheet", () => {
+  it("returns nonempty computed-style snapshots and rejects unusable evaluation results", async () => {
+    const bounds = { x: 0, y: 0, width: 360, height: 100 };
+    const elements = ["BODY", "MAIN"].map((tagName) => ({ tagName, getBoundingClientRect: () => bounds }));
+    const style = Object.assign(["color", "--ink"], { getPropertyValue: () => "rgb(22, 19, 15)" });
+    const page = { evaluate: async (expression: string) => new Function("document", "getComputedStyle",
+      `return (${expression});`)({ querySelectorAll: () => elements }, () => style) } as unknown as Page;
+    expect(await snapshot(page)).toEqual(elements.map((element) => ({ tag: element.tagName,
+      style: { color: "rgb(22, 19, 15)" }, bounds: [0, 0, 360, 100] })));
+    await expect(snapshot({ evaluate: async () => undefined } as unknown as Page)).rejects.toThrow();
+    await expect(snapshot({ evaluate: async () => [] } as unknown as Page)).rejects.toThrow();
+  });
+
   it("renders all route shells without leftover canonical classes", async () => {
     const rows = await cases();
     for (const row of rows) {
@@ -91,21 +106,29 @@ describe("factored stylesheet", () => {
           await oldPage.setContent(canonicalMarkup(row.html).replace("</head>", `<style>${baseline}</style></head>`));
           await newPage.setContent(row.html.replace("</head>", `<style>${current}</style></head>`));
           expect(await snapshot(newPage), `${width} ${row.name} default`).toEqual(await snapshot(oldPage));
-          for (const page of [oldPage, newPage]) await page.keyboard.press("Tab");
+          for (const page of [oldPage, newPage]) {
+            await page.keyboard.press("Tab");
+            expect(await page.evaluate(`document.querySelector('a[href="#main"]').matches(':focus')`)).toBe(true);
+          }
           expect(await snapshot(newPage), `${width} ${row.name} keyboard focus`).toEqual(await snapshot(oldPage));
           for (const page of [oldPage, newPage]) {
             // The focused skip link overlays the brand; compare hover as a separate state.
-            await page.evaluate("() => document.activeElement.blur()");
+            await page.evaluate("document.activeElement.blur()");
+            expect(await page.evaluate(`document.querySelector('a[href="#main"]').matches(':focus')`)).toBe(false);
             const link = page.locator('a[href]:not([href="#main"])').first();
             await link.hover();
-            expect(await link.evaluate("element => element.matches(':hover')")).toBe(true);
+            expect(await page.evaluate(`document.querySelector('a[href]:not([href="#main"])').matches(':hover')`)).toBe(true);
           }
           expect(await snapshot(newPage), `${width} ${row.name} hover`).toEqual(await snapshot(oldPage));
           if (row.name === "avatar-abc") {
-            for (const page of [oldPage, newPage]) await page.evaluate(`() => {
-              document.querySelector("[data-avatar] img").hidden = true;
-              document.querySelector("[data-avatar-initial]").hidden = false;
-            }`);
+            for (const page of [oldPage, newPage]) {
+              await page.evaluate(`(() => {
+                document.querySelector("[data-avatar] img").hidden = true;
+                document.querySelector("[data-avatar-initial]").hidden = false;
+              })()`);
+              expect(await page.evaluate(`getComputedStyle(document.querySelector("[data-avatar] img")).display`)).toBe("none");
+              expect(await page.evaluate(`getComputedStyle(document.querySelector("[data-avatar-initial]")).display`)).toBe("flex");
+            }
             expect(await snapshot(newPage), `${width} broken avatar`).toEqual(await snapshot(oldPage));
           }
         }
