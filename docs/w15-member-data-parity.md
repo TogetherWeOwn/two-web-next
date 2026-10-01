@@ -170,8 +170,12 @@ UPDATE regression also verifies the stored username remains unchanged). Only the
 sink exits capture, and its failed INSERT still refuses contents.
 
 Explicit non-sensitive classifications permit mapped event/featured records and
-fixed funnel, going-count, search-widget and timeout SQL shapes. They are not
-blanket SQL exemptions. Anonymous event reads permit only subject-free public
+fixed funnel, going-count, search-widget and timeout SQL shapes. The dashboard's
+connection-scoped 60-second funnel cache and parallel bounded analytics reads
+remain intact; a cold funnel fill classifies both transaction-local timeout setup
+and the aggregate. Its route fixtures use real Drizzle builders/session observation
+with synthetic execution rows, alongside the mounted real-Postgres checks.
+Classifications are not blanket SQL exemptions. Anonymous event reads permit only subject-free public
 results; invalid/missing viewer keys cannot release member contents. Captured
 subjects are deduplicated, sorted, self-excluded and written once, before releasing
 the exact classified buffer, using stable route names and private/no-store.
