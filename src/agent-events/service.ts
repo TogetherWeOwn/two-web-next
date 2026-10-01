@@ -65,6 +65,11 @@ export function ulid(now = Date.now()): string {
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
+// Keep explicit keys safe for PostgreSQL text/varchar(26), including denied
+// audits and lock names. Never truncate or repair a key into another identity.
+const storedEventKey = (key: unknown): string | null =>
+  typeof key === "string" && key !== "" && key.length <= 26 && !/[\u0000\uD800-\uDFFF]/u.test(key) ? key : null;
+
 // Nesting bound for the payload digest: comfortably above every real agent
 // event body (3 levels), far below stack exhaustion (~10k frames in a Worker).
 export const MAX_DIGEST_DEPTH = 100;
@@ -141,6 +146,7 @@ export function validateFields(raw: unknown): { ok: true; fields: Fields } | { o
   let capacity: number | null = null;
   if (raw.capacity !== undefined && raw.capacity !== null) {
     if (typeof raw.capacity !== "number" || !Number.isInteger(raw.capacity) || raw.capacity < 1) bad("capacity", "The capacity field must be an integer of at least 1.");
+    else if (raw.capacity > 2147483647) bad("capacity", "The capacity field must not be greater than 2147483647.");
     else capacity = raw.capacity;
   }
   if (Object.keys(e).length) return { ok: false, errors: e };
@@ -164,8 +170,18 @@ export async function handleAgentEvent(
   credential: string | null,
   clientIp: string | null = null,
 ): Promise<Answer> {
+  const admitted = await admitAgentEvent(sql, cfg, credential, clientIp);
+  return "handle" in admitted ? admitted.handle(body) : admitted;
+}
+
+/** Admission binds the body handler to this hit; HTTP callers run it before buffering. */
+export async function admitAgentEvent(
+  sql: Sql,
+  cfg: IngressConfig,
+  credential: string | null,
+  clientIp: string | null = null,
+): Promise<Answer | { handle: (body: unknown) => Promise<Answer> }> {
   const requestId = ulid();
-  const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
 
   // The outer shield (two-web TOG-8402): every hit per credential per minute,
   // counted before auth, the grant lookup and the audit write — ahead of the
@@ -177,6 +193,11 @@ export async function handleAgentEvent(
   const shieldKey = credential ? await sha256Hex(credential) : `ip:${clientIp ?? "unknown"}`;
   const shielded = await shield(sql, cfg, shieldKey, requestId);
   if (shielded) return shielded;
+  return { handle: (body) => processAgentEvent(sql, cfg, body, credential, requestId) };
+}
+
+async function processAgentEvent(sql: Sql, cfg: IngressConfig, body: unknown, credential: string | null, requestId: string): Promise<Answer> {
+  const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
   let dig: string;
   try {
     dig = await digest(isPlainObject(body) ? body : {});
@@ -238,15 +259,22 @@ export async function handleAgentEvent(
     return limited;
   }
 
-  const eventKeyIn = typeof doc.event_key === "string" ? doc.event_key : null;
+  const eventKeyIn = storedEventKey(doc.event_key);
   try {
     const lockName = op === "create" || op === "read" ? `agent-event-grant:${grant.id}` : `agent-event:${eventKeyIn ?? `owned:${grant.id}`}`;
     return await sql.begin(async (tx) => {
       await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`;
+      // Admission can change while the operation lock waits. Do not replay a success
+      // for a grant that has since expired or been disabled.
+      const refused = await checkGrant(tx, grant, op, idem, dig, requestId, eventKeyIn);
+      if (refused) return refused;
       // Re-check under the lock: a concurrent identical call may have stored while we waited.
       const raced = await lookupReplay(tx, grant.id, idem);
-      if (raced) return replayAnswer(tx, grant, op, raced, dig, requestId, idem);
+      if (raced) {
+        const refused = await checkGrant(tx, grant, op, idem, dig, requestId, eventKeyIn, true);
+        return refused ?? replayAnswer(tx, grant, op, raced, dig, requestId, idem);
+      }
 
       const out = await execute(tx, grant, op as Op, doc, idem, dig, requestId);
       if (out.stored) {
@@ -269,6 +297,23 @@ export async function handleAgentEvent(
 async function findGrant(sql: Tx, credential: string): Promise<Grant | null> {
   const [row] = await sql<Grant[]>`SELECT id, agent_id, guild_id, expires_at, disabled_at FROM agent_event_grants WHERE verifier_hash = ${await sha256Hex(credential)}`;
   return row ?? null;
+}
+
+// The final admission lock follows the operation/event locks, never precedes an
+// event-row wait. It holds off provisioning updates until effects commit. Time is
+// sampled after all waits, not with transaction-start now(); epoch milliseconds
+// match initial Date admission without depending on the client's timestamp decoder.
+async function checkGrant(tx: Tx, grant: Grant, op: string, key: string, dig: string, requestId: string, eventKey: string | null, lock = false): Promise<Answer | null> {
+  if (lock) await tx`SELECT id FROM agent_event_grants WHERE id = ${grant.id} FOR SHARE`;
+  const [current] = await tx`SELECT floor(extract(epoch FROM expires_at) * 1000)::double precision AS expires_at_ms,
+                            disabled_at IS NOT NULL AS disabled FROM agent_event_grants WHERE id = ${grant.id}`;
+  const expired = current?.expires_at_ms != null && current.expires_at_ms <= Date.now();
+  if (current && !expired && !current.disabled) return null;
+  const reason = expired ? "grant_expired" : "grant_disabled";
+  await audit(tx, current ? grant : null, op, eventKey, key, dig, requestId, "denied", reason);
+  return { status: 403, body: { reason, message: expired
+    ? "The grant has expired. Expiry rejects ingress and dispatch alike."
+    : "The grant has been disabled by its provisioning owner.", request_id: requestId } };
 }
 
 async function lookupReplay(sql: Tx, grantId: string, key: string): Promise<Row | null> {
@@ -348,7 +393,7 @@ async function rateLimit(sql: Sql, cfg: IngressConfig, grant: Grant, op: Op): Pr
 
 async function audit(sql: Tx, grant: Grant | null, operation: string, eventKey: string | null, key: string | null, dig: string | null, requestId: string, result: string, reason: string | null): Promise<void> {
   await sql`INSERT INTO agent_event_audits (grant_id, operation, event_key, idempotency_key, payload_digest, request_id, result, reason_code)
-            VALUES (${grant?.id ?? null}, ${operation.slice(0, 32)}, ${eventKey}, ${key}, ${dig}, ${requestId}, ${result}, ${reason})`;
+            VALUES (${grant?.id ?? null}, ${operation.slice(0, 32)}, ${storedEventKey(eventKey)}, ${key}, ${dig}, ${requestId}, ${result}, ${reason})`;
 }
 
 const rid = (requestId: string) => ({ request_id: requestId });
@@ -364,6 +409,8 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
   };
 
   if (op === "create") {
+    const refused = await checkGrant(tx, grant, op, key, dig, requestId, null, true);
+    if (refused) return refused;
     const [existing] = await tx`SELECT event_key FROM agent_events WHERE agent_grant_id = ${grant.id}`;
     if (existing) return denyOutcome(409, "quota_exceeded", "This grant already owns its one proof event. Updates reuse it.", { event_key: existing.event_key });
     const v = validateFields(doc.fields);
@@ -378,6 +425,8 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
 
   const keyIn = doc.event_key;
   const event = await ownedEvent(tx, grant, keyIn);
+  const refused = await checkGrant(tx, grant, op, key, dig, requestId, typeof event === "string" ? storedEventKey(keyIn) : event.event_key, true);
+  if (refused) return refused;
   if (typeof event === "string") {
     return denyOutcome(event === "foreign_event" ? 403 : 404, event, event === "foreign_event" ? "That event is not owned by this grant." : "This grant owns no such event.", {}, typeof keyIn === "string" ? keyIn : null);
   }
@@ -429,8 +478,9 @@ async function ownedEvent(tx: Tx, grant: Grant, key: unknown): Promise<Row | "ev
     const [owned] = await tx`SELECT * FROM agent_events WHERE agent_grant_id = ${grant.id} FOR UPDATE`;
     return owned ?? "event_not_found";
   }
-  if (typeof key !== "string" || key === "") return "event_not_found";
-  const [event] = await tx`SELECT * FROM agent_events WHERE event_key = ${key} FOR UPDATE`;
+  const keyIn = storedEventKey(key);
+  if (keyIn === null) return "event_not_found";
+  const [event] = await tx`SELECT * FROM agent_events WHERE event_key = ${keyIn} FOR UPDATE`;
   if (!event) return "event_not_found";
   return event.agent_grant_id === grant.id ? event : "foreign_event";
 }

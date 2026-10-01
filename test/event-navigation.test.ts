@@ -9,6 +9,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { getEventNeighbors, listRelatedEvents, type EventLink } from "../src/events/reads";
 import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import { JOIN_RESULT_COOKIE } from "../src/return-journey";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const NOW = new Date("2030-01-10T20:00:00Z");
@@ -16,7 +17,7 @@ const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const key = (id: number) => String(id).padStart(26, "0");
 type EventRow = typeof events.$inferSelect;
 const row = (id: number, over: Partial<EventRow> = {}): EventRow => ({
-  id, eventKey: key(id), title: `Game night ${id}`, game: "Chess", description: null,
+  id, icsSequence: 1894305600n, eventKey: key(id), title: `Game night ${id}`, game: "Chess", description: null,
   startsAt: NOW, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "Europe/London",
   location: "Voice", capacity: null, status: "published", discordEventId: null,
   discordSyncFailedAt: null, discordSyncFailureCode: null,
@@ -115,6 +116,34 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("vary")).toBe("Cookie");
     expect(f.queries).toHaveLength(5); // Event + going aggregate + 3 navigation reads.
+  });
+
+  it.each(["added", "already_member"])("preserves navigation alongside a one-shot %s join confirmation", async (result) => {
+    const f = pageFixture();
+    const session = await cookie(f.env);
+    const flash = (await serializeSigned(JOIN_RESULT_COOKIE, result, SESSION_SECRET, {
+      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+    })).split(";")[0]!;
+    const first = await f.request({ headers: { cookie: `${session}; ${flash}` } });
+    const html = await first.text();
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    expect(first.headers.get("vary")).toBe("Cookie");
+    expect(html).toContain('data-testid="join-result"');
+    expect(html.includes('data-testid="reinvite-link"')).toBe(result === "already_member");
+    expect(html).toContain(`href="/e/${key(1)}" rel="prev" data-testid="event-previous"`);
+    expect(html).toContain(`href="/e/${key(3)}" rel="next" data-testid="event-next"`);
+    expect(relatedKeys(html)).toEqual([key(3)]);
+    expect(html).not.toContain('data-testid="event-join-pitch"');
+    expect(html).not.toContain('data-testid="event-related-join"');
+    expect(first.headers.getSetCookie().join("\n")).toContain(`${JOIN_RESULT_COOKIE}=; Max-Age=0`);
+
+    const rotated = first.headers.getSetCookie().find((value) => value.startsWith("__Host-two_session="))!.split(";")[0]!;
+    const second = await f.request({ headers: { cookie: rotated } });
+    const again = await second.text();
+    expect(again).not.toContain('data-testid="join-result"');
+    expect(again).not.toContain('data-testid="event-join-pitch"');
+    expect(relatedKeys(again)).toEqual([key(3)]);
   });
 
   it.each([

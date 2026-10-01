@@ -113,6 +113,20 @@
       "when": 1790832986716,
       "tag": "1013_hot-path-indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790856000000,
+      "tag": "1014_event-ics-sequence",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790856000001,
+      "tag": "1016_job-lock-ownership",
+      "breakpoints": true
     }
   ]
 }

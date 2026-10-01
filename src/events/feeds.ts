@@ -2,6 +2,7 @@
 // EventIcs / EventRss / EventSubscribe / EventGoogleCalendar. No query, no auth, no HTTP.
 import type { events } from "../db/admin-schema";
 import { stripTrailingSlash } from "../seo";
+import { rssXml as xml } from "./rss-xml";
 
 type EventRow = typeof events.$inferSelect;
 
@@ -55,10 +56,24 @@ const feedBase = (appUrl: string) => stripTrailingSlash(appUrl);
 
 const pageUrl = (e: EventRow, appUrl: string) => `${feedBase(appUrl)}/e/${e.eventKey}`;
 
+export class IcsSequenceRangeError extends RangeError {
+  constructor() {
+    super("Calendar revision is outside the RFC 5545 SEQUENCE range");
+  }
+}
+
+/** SEQUENCE is a nonnegative signed 32-bit INTEGER (§3.3.8, §3.8.7.4). */
+function icsSequence(sequence: bigint): string {
+  // Preserve the stored/imported bigint; never clamp, wrap or reset its ordering.
+  // Exhausted revisions fail the export until an explicit identity migration.
+  if (sequence < 0n || sequence > 2147483647n) throw new IcsSequenceRangeError();
+  return sequence.toString();
+}
+
 function vevent(e: EventRow, appUrl: string): string[] {
   const host = new URL(appUrl).host || "localhost";
   const stamp = icsInstant(e.updatedAt);
-  const seq = Math.floor(e.updatedAt.getTime() / 1000);
+  const seq = icsSequence(e.icsSequence);
   const lines = [
     "BEGIN:VEVENT",
     `UID:${e.eventKey}@${host}`,
@@ -93,9 +108,6 @@ export const eventIcs = (e: EventRow, appUrl: string): string => calendar(vevent
 
 export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
   calendar(rows.flatMap((e) => vevent(e, appUrl)));
-
-/** htmlspecialchars(ENT_QUOTES | ENT_XML1). */
-const xml = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 
 export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
   const base = feedBase(appUrl);

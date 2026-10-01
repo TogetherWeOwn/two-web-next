@@ -68,6 +68,80 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
     targetSchema: fixture.schemaName, now, ...opts,
   });
 
+  const sourceState = async () => {
+    const rows: Record<string, unknown> = {};
+    const sequences: Record<string, unknown> = {};
+    for (const name of names) {
+      // Server-side text preserves JSON shape and timestamp microseconds.
+      rows[name] = [...await legacy.unsafe(`SELECT row_to_json(evidence)::text AS row
+        FROM "${sourceSchema}"."${name}" AS evidence ORDER BY id`)];
+      if (name !== 'agent_event_grants') {
+        sequences[name] = [...await legacy.unsafe(`SELECT last_value::text, is_called
+          FROM "${sourceSchema}"."${name}_id_seq"`)];
+      }
+    }
+    return { rows, sequences };
+  };
+
+  const seedSourceSequences = async () => {
+    let index = 0;
+    for (const name of names) {
+      if (name === 'agent_event_grants') continue;
+      // Exercise both is_called states, with last_value below historical IDs:
+      // an aliased apply used to change all four sequences despite skipping IDs.
+      await legacy`SELECT setval(${`"${sourceSchema}"."${name}_id_seq"`}::regclass,
+        ${index + 1}, ${index % 2 === 1})`;
+      index++;
+    }
+  };
+
+  it.each([true, false])('refuses a same-schema alias before changing any source row or sequence (dryRun=%s)', async (dryRun) => {
+    await seedSourceSequences();
+    const before = await sourceState();
+    let refused = false;
+    try { await run({ targetSchema: sourceSchema, dryRun, enableGrants: true }); }
+    catch { refused = true; }
+    expect(await sourceState()).toEqual(before);
+    expect(refused).toBe(true);
+    for (const client of [legacy, ingress]) {
+      const [locks] = await client`SELECT count(*)::int AS n FROM pg_locks
+        WHERE locktype = 'advisory' AND pid = pg_backend_pid()`;
+      expect(locks!.n).toBe(0);
+    }
+  });
+
+  it.each([true, false])('actual CLI refuses different URL strings for the same schema with static output (dryRun=%s)', async (dryRun) => {
+    const url = testDatabaseUrl(raw!);
+    const alias = new URL(url.href);
+    alias.protocol = url.protocol === 'postgres:' ? 'postgresql:' : 'postgres:';
+    // Both spellings are validated authorized synthetic targets; no DNS or
+    // credential alias is resolved and no inherited environment is passed on.
+    testDatabaseUrl(alias.href);
+    expect(alias.href).not.toBe(url.href);
+    await seedSourceSequences();
+    const before = await sourceState();
+    const result = await new Promise<{ code: number | string | undefined; stdout: string; stderr: string }>((resolve) => {
+      execFile(process.execPath,
+        [fileURLToPath(new URL('../bin/import/audit.mjs', import.meta.url)), ...(dryRun ? [] : ['--apply'])], {
+          timeout: 20000,
+          env: { LEGACY_DATABASE_URL: url.href, DATABASE_URL: alias.href,
+            LEGACY_DATABASE_SCHEMA: sourceSchema, DATABASE_SCHEMA: sourceSchema },
+        }, (error, stdout, stderr) => resolve({ code: error?.code, stdout, stderr }));
+    });
+    expect(await sourceState()).toEqual(before);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('Audit import failed; no row data or connection details logged.\n');
+  });
+
+  it.each([true, false])('supports separate schemas without changing source rows or sequences (dryRun=%s)', async (dryRun) => {
+    await seedSourceSequences();
+    const before = await sourceState();
+    const result = await run({ dryRun });
+    expect(result.mode).toBe(dryRun ? 'dry-run' : 'apply');
+    expect(await sourceState()).toEqual(before);
+  });
+
   const expectPreservedEvidence = async () => {
     const [access] = await ingress`SELECT subject_user_ids, jsonb_typeof(subject_user_ids) AS type
       FROM member_data_access_logs WHERE id = 92001`;
