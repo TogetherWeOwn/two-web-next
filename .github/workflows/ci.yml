@@ -101,6 +101,10 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Dependency audit selftest (local fixtures)
+        run: npm run deps:audit:selftest
+      - name: Dependency audit (lockfile, including dev dependencies)
+        run: npm run deps:audit
       - run: npm ci
       - name: Seeded admin properties (10s budget, local fixtures)
         # Keep npm's CLI/lifecycle startup out of this small wall-clock budget.

@@ -20,7 +20,7 @@ const EVENT_PATH = `/events/${KEY}.ics`;
 const row = {
   id: 1, eventKey: KEY, title: "Synthetic calendar event", game: null,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-  icsSequence: 0n, syncRevision: 1, syncedRevision: 0,
+  icsSequence: 1782907200n, syncRevision: 1, syncedRevision: 0,
   recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
   parentEventId: null, recurrenceIndex: null,
   description: "Bring stims.", startsAt: new Date("2026-07-15T18:00:00Z"),
