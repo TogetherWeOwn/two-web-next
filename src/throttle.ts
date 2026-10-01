@@ -6,6 +6,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import postgres from "postgres";
 import { rateLimitExceeded } from "./errors";
 import type { Env } from "./env";
+import { databaseOptions, databaseUrl } from "./db/connection";
 import { checkJoinThrottle, migrateJoin } from "./join/service";
 import type { Sql } from "./sessions";
 
@@ -20,13 +21,13 @@ export type EnvWithThrottle = Env & { THROTTLE_STORE?: ThrottleStore };
 const THROTTLED = Symbol.for("two-web-next.throttled");
 const migrated = new Set<string>();
 
-/** Test seam first, then DATABASE_URL; absent store degrades to allow (funnel stays up). */
+/** Test seam first, then local URL or Hyperdrive; absent store degrades to allow. */
 export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
   const injected = (c.env as EnvWithThrottle).THROTTLE_STORE;
   if (injected) return injected();
-  const url = c.env.DATABASE_URL;
+  const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 }) as unknown as Sql;
+  const sql = postgres(url, databaseOptions) as unknown as Sql;
   if (!migrated.has(url)) {
     await migrateJoin(sql);
     migrated.add(url);
