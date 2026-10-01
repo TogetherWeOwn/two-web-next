@@ -179,10 +179,11 @@ Measurements from [src/jobs/postgres.ts](../src/jobs/postgres.ts):
 
 Do not remove the binding or inject an alternate credential to mask a configured
 outage: **missing configuration is not the same as an unreachable database**.
-Normal web stores prefer `DATABASE_URL`, otherwise `DB.connectionString`
-([src/db/connection.ts](../src/db/connection.ts)); failure does not try the
-other connection. `/up` prefers `DB`; jobs prefer `HYPERDRIVE`, then `DB`, then
-`DATABASE_URL`. `/db-ping` uses only `DB` and actively queries the database:
+Web stores, `/up` queue measurements and jobs prefer nonempty `DATABASE_URL`,
+otherwise `DB.connectionString` ([src/db/connection.ts](../src/db/connection.ts)).
+Jobs retain `HYPERDRIVE` only as a legacy fallback when both are absent. A selected
+connection's construction/read failure never tries another backend or credential.
+`/db-ping` uses only `DB` and actively queries the database:
 **do not use it against staging/production for tests or probes**.
 
 The table describes the path that reaches the relevant operation; validation,
@@ -368,15 +369,25 @@ subsequent mutation is eligible. Retrying an unchanged refused revision likewise
 requires an explicit reviewed operator action, not deleting history.
 
 Best-effort successor checks/dispatch time out after two seconds. These timers
-do not cancel SQL: ledger and lock/successor traffic use pools separate from the
-handler, so a blocked cleanup cannot starve the next message's snapshot/claim.
+do not cancel SQL: ledger and lock traffic use pools separate from the handler,
+so a blocked cleanup cannot starve the next message's snapshot/claim. Successor
+SQL uses lazy per-operation pools (2-second connect, 5-second statement timeout,
+1-second close), not the three pools closed when the consumer returns. The
+production queue entry passes `ExecutionContext`; `waitUntil` preserves successor
+settlement for at most 30 seconds without delaying ACK/handler return. Rejected
+sends and late/failed ledger inserts compensate by their exact `jobId` with a
+fresh usable pool, even after handler shutdown; no send starts after cancellation.
+An already-started send accepted late retains its tracked row. A send unresolved
+past that bounded lifetime, or a failed compensation, remains visible: do not
+infer successful cleanup or delete rows by age. Reconcile transport evidence
+before any reviewed operator correction; dirty revisions alone cannot remove
+an orphan row.
+
 Reconciliation holds its advisory single-flight lock throughout the pass, but
 commits close/materialization in a shorter write transaction before queue I/O;
-unrelated slow sends cannot retain recurring-parent row locks. A late ledger insert
-is compensated without sending after timeout. An already-started send may be
-accepted late and retains its tracked row; dirty revision reconciliation remains
-the recovery backstop. Ledger/locks alone still do not prove exactly-once remote
-effects. See [consumer error paths](../src/jobs/consumer.ts).
+unrelated slow sends cannot retain recurring-parent row locks. Dirty revision
+reconciliation remains the delivery backstop. Ledger/locks alone still do not
+prove exactly-once remote effects. See [consumer error paths](../src/jobs/consumer.ts).
 
 ## Backups and restore drill
 

@@ -400,9 +400,9 @@ app.get("/up", async (c) => {
   // Fixed app identity for the cutover probe, including unknown/degraded reads.
   c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
-  // The queue ledger lives in the same Postgres as the rest of the W13 backend:
-  // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
-  const url = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
+  // Match queue producers/consumers: explicit configuration wins, with DB used
+  // only when absent, never as a retry after a failed connection.
+  const url = databaseUrl(c.env);
   let sql: EnvWithDepth["QUEUE_DEPTH_STORE"] | null = injected ?? null;
   try {
     c.header("cache-control", "no-store");
