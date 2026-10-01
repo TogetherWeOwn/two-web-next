@@ -3,6 +3,8 @@ import type { Counts, Rank } from "./counts";
 import type { VisibleFeatured } from "./featured";
 import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
+import type { HomeEvent } from "./events/reads";
+import { cardTimeLabel, isValidZone } from "./islands/contracts";
 import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
@@ -167,8 +169,10 @@ export const Home: FC<{
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
+  upcomingEvents: HomeEvent[];
+  eventsUnavailable: boolean;
   featured: VisibleFeatured[];
-}> = ({ session, notice, inviteUrl, appUrl, counts, featured }) => (
+}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -258,6 +262,37 @@ export const Home: FC<{
             </div>
           ))}
         </dl>
+      </section>
+      <section aria-labelledby="home-events-heading">
+        <p class="strap">Next up</p>
+        <h2 id="home-events-heading">Game nights, when they land.</h2>
+        {upcomingEvents.length > 0 ? (
+          <>
+            <ul class="facts home-events" data-testid="home-events-list">
+              {upcomingEvents.map((event) => (
+                <li class="card">
+                  <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
+                    <p><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time></p>
+                    <h3>{event.title}</h3>
+                    {event.location ? <p>{event.location}</p> : null}
+                    <p>{event.goingCount} going</p>
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p><a href="/events">See all events <span aria-hidden="true">→</span></a></p>
+          </>
+        ) : (
+          <div class="card" data-testid="home-events-empty" data-state={eventsUnavailable ? "unavailable" : "empty"}>
+            <h3>{eventsUnavailable ? "Game nights are unavailable right now." : "Nothing scheduled yet."}</h3>
+            <p>{eventsUnavailable
+              ? "We couldn’t load the schedule. The Discord is still open — check there for the next game night."
+              : "Game nights get posted here. Join the Discord and you’ll hear about the next one."}</p>
+          </div>
+        )}
+        {!session ? (
+          <p><a class="btn" href="/join" data-testid="home-events-join">Join the Discord <span aria-hidden="true">→</span></a></p>
+        ) : null}
       </section>
     </main>
     <SiteFooter />

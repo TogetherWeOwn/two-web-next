@@ -2,6 +2,10 @@
 // driver wrapper only lends that reserved connection to request-scoped reads.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type postgres from "postgres";
+import { getTableColumns } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { events } from "../src/db/admin-schema";
+import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore } from "../src/sessions";
 import { testDatabaseUrl } from "./helpers/member-data-db";
@@ -61,8 +65,29 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
       ('prospect', 'Prospect', 24, 1), ('veteran', 'Veteran', NULL, 4), ('member', 'Member', 40, 2)
     `;
     state.fixture = fixture;
+    // Keep event/featured reads local and separate from the bot-view socket.
+    // A counts failure must not take either of these homepage sections down.
+    const event: typeof events.$inferSelect = {
+      id: 1, eventKey: "counts-game-night", title: "Counts fixture game night", game: null, description: null,
+      startsAt: new Date(NOW + 3600_000), endsAt: new Date(NOW + 7200_000), timezone: "UTC", location: "Lobby",
+      capacity: null, status: "published", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+      createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
+      recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: new Date(NOW), updatedAt: new Date(NOW),
+    };
+    const columns = Object.keys(getTableColumns(events)) as (keyof typeof event)[];
+    const db = drizzle(async (query) => {
+      if (query.includes("set_config")) return { rows: [] };
+      if (query.includes('from "events"')) return { rows: [columns.map((key) => {
+        const value = event[key];
+        return value instanceof Date ? value.toISOString() : value;
+      })] };
+      if (query.includes('from "rsvps"')) return { rows: [[1, 3]] };
+      if (query.includes('from "featured_contents"')) return { rows: [[1, "Counts fixture news", "Featured fixture", null, null, null]] };
+      throw new Error("Unexpected public homepage fixture query");
+    }) as unknown as Db;
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
     env = { ...baseEnv, DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
-      SESSION_STORE: createMemorySessionStore() } as Env;
+      ADMIN_DB: db, SESSION_STORE: createMemorySessionStore() } as Env;
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     app = (await import("../src/index")).default;
@@ -78,7 +103,14 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.getSetCookie()).toHaveLength(0);
-    return res.text();
+    const html = await res.text();
+    expect(html).toContain('data-testid="home-events-list"');
+    expect(html).toContain('href="/e/counts-game-night"');
+    expect(html).toContain("Counts fixture game night");
+    expect(html).toContain("3 going");
+    expect(html).toContain('data-testid="featured-content"');
+    expect(html).toContain("Counts fixture news");
+    return html;
   };
   const emptyCounts = (html: string) => {
     expect(html).not.toContain('data-testid="member-count"');

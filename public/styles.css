@@ -23,6 +23,12 @@ dl.facts > div { display: block; }
 .counts { color: var(--muted); font-size: .95rem; }
 .rank-stack { grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); }
 .rank-stack dd { font-variant-numeric: tabular-nums; }
+.home-events { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.home-event-link { display: block; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.home-event-link h3 { margin: .5rem 0; }
+.home-event-link:hover h3 { color: var(--brand); text-decoration: underline; }
+.home-event-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
+@media (max-width: 40rem) { .home-events { grid-template-columns: 1fr; } }
 .featured-image { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; margin-top: 1rem; border: 1px solid #d8cfc0; }
 
 /* The first Tab reveals the bypass link; native fragment navigation focuses main. */
