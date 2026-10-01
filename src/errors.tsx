@@ -139,7 +139,9 @@ export async function notFoundHandler(c: Context): Promise<Response> {
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
   console.error("unhandled error:", err);
   alertRequestError(err, { method: c.req.method, route: c.req.routePath || c.req.path });
-  if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
+  // The calendar API stays JSON-only even when its session lookup fails before
+  // the endpoint can respond, including requests with absent or wildcard Accept.
+  if (isDatabaseUnavailable(err)) return databaseUnavailable(c, c.req.path === "/events.json");
   c.header("cache-control", "no-store, private");
   c.status(500);
   return c.html(<InternalErrorPage />);

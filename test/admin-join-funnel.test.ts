@@ -95,6 +95,14 @@ describe("dashboardJoinFunnel cache", () => {
     expect(fill).toHaveBeenCalledTimes(2);
   });
 
+  it("propagates a classified DB outage for the shared 503 handler without caching it", async () => {
+    const outage = Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
+    const fill = vi.fn().mockRejectedValueOnce(outage).mockResolvedValueOnce({ added: 3 });
+    await expect(dashboardJoinFunnel(stubDb, "conn-outage", 500, fill)).rejects.toBe(outage);
+    expect(await dashboardJoinFunnel(stubDb, "conn-outage", 500, fill)).toEqual({ added: 3 });
+    expect(fill).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds an indefinitely pending read to the deadline", async () => {
     const hanging = vi.fn(() => new Promise<Record<string, number>>(() => {}));
     const pending = dashboardJoinFunnel(stubDb, "conn-hang", 250, hanging);
@@ -103,23 +111,25 @@ describe("dashboardJoinFunnel cache", () => {
     expect(hanging).toHaveBeenCalledTimes(1);
   });
 
-  it("swallows a rejection that lands after the deadline (no unhandled rejection)", async () => {
-    let reject!: (err: Error) => void;
-    const late = vi.fn(
-      () =>
-        new Promise<Record<string, number>>((_, r) => {
-          reject = r;
-        }),
-    );
-    const pending = dashboardJoinFunnel(stubDb, "conn-late", 100, late);
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(pending).resolves.toBeUndefined();
-    // The underlying read rejects after the caller already resolved undefined;
-    // vitest fails the run on an unhandled rejection, so unwinding cleanly is
-    // the assertion.
-    reject(new Error("late boom"));
-    await vi.advanceTimersByTimeAsync(0);
-  });
+  it.each([new Error("late boom"), Object.assign(new Error("late outage"), { code: "ECONNREFUSED" })])(
+    "consumes a rejection that lands after the deadline (no unhandled rejection): %s", async (error) => {
+      let reject!: (err: Error) => void;
+      const late = vi.fn(
+        () =>
+          new Promise<Record<string, number>>((_, r) => {
+            reject = r;
+          }),
+      );
+      const pending = dashboardJoinFunnel(stubDb, "conn-late", 100, late);
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(pending).resolves.toBeUndefined();
+      // The underlying read rejects after the caller already resolved undefined;
+      // vitest fails the run on an unhandled rejection, so unwinding cleanly is
+      // the assertion.
+      reject(error);
+      await vi.advanceTimersByTimeAsync(0);
+    },
+  );
 });
 
 function aggregateDb(n: number) {

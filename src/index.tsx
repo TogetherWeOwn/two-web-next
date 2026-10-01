@@ -509,13 +509,13 @@ app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), async (c) => 
   // The route-scoped same-origin guard runs before throttling or session storage.
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (token) {
-    // Revocation remains best-effort during an outage, including first-use
-    // migration failure. Clearing this browser's cookie is not DB revocation.
+    // Revocation is best-effort, including first-use migration and permission
+    // failures. Clearing this browser's cookie is not DB revocation.
     try {
       const store = await storeFor(c);
       await store.revoke(await hashToken(token));
-    } catch (err) {
-      if (!isDatabaseUnavailable(err)) throw err;
+    } catch {
+      console.warn("logout session revocation failed");
     }
   }
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });

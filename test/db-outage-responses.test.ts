@@ -26,7 +26,7 @@ describe("narrow database outage classification", () => {
   it.each(["08006", "57P01", "57P03", "53300"])("recognizes Postgres unavailable code %s", (code) => {
     expect(isDatabaseUnavailable(pgError(code))).toBe(true);
   });
-  it.each([new TypeError("programming bug"), new Error("ECONNREFUSED in message only"), pgError("42601"), pgError("23505")])(
+  it.each([new TypeError("programming bug"), new Error("ECONNREFUSED in message only"), pgError("42601"), pgError("23505"), pgError("42501")])(
     "does not disguise unrelated errors as maintenance: %s", (error) => {
       expect(isDatabaseUnavailable(error)).toBe(false);
     },
@@ -49,6 +49,21 @@ describe("narrow database outage classification", () => {
     expect(body).not.toMatch(/private|ECONNREFUSED|Failed query/);
     if (accept === "text/html") expect(body).toContain("Together We Own");
     else expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
+  });
+  it.each(["/events", "/events.json"])("preserves the %s endpoint format for query outages without Accept", async (path) => {
+    const scratch = new Hono();
+    scratch.onError(internalErrorHandler);
+    scratch.get(path, () => { throw new Error("query", { cause: refused() }); });
+    const res = await scratch.request(path, {}, env);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    if (path === "/events.json") {
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toMatchObject({ error: "db_unavailable" });
+    } else {
+      expect(res.headers.get("content-type")).toContain("text/html");
+      expect(await res.text()).toContain("Together We Own");
+    }
   });
   it("keeps programming and SQL syntax failures at 500", async () => {
     for (const error of [new TypeError("private bug"), pgError("42601")]) {
@@ -131,16 +146,36 @@ describe("public session failure boundaries", () => {
     vi.spyOn(store, "get").mockRejectedValue(new TypeError("private bug"));
     expect((await app.request("/", { headers: { cookie } }, bindings)).status).toBe(500);
   });
-  it("clears the browser cookie on failed DB revocation without claiming the row was revoked", async () => {
-    const { store, cookie, bindings } = await fixture();
-    vi.spyOn(store, "revoke").mockRejectedValue(refused());
-    const res = await app.request("/logout", { method: "POST", headers: { cookie, origin: env.APP_URL } }, bindings);
-    expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/");
-    expect(store.revoke).toHaveBeenCalledOnce();
-    const cleared = res.headers.getSetCookie().join(";");
-    for (const flag of ["__Host-two_session=;", "Max-Age=0", "Path=/", "Secure"]) expect(cleared).toContain(flag);
-  });
+  it.each([refused(), pgError("42501"), new TypeError("private revocation bug")])(
+    "clears the browser cookie on failed revocation without claiming the row was revoked: %s", async (error) => {
+      const { store, cookie, bindings } = await fixture();
+      vi.spyOn(store, "revoke").mockRejectedValue(error);
+      const res = await app.request("/logout", { method: "POST", headers: { cookie, origin: env.APP_URL } }, bindings);
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe("/");
+      expect(store.revoke).toHaveBeenCalledOnce();
+      expect(console.warn).toHaveBeenCalledWith("logout session revocation failed");
+      const cleared = res.headers.getSetCookie().join(";");
+      for (const flag of ["__Host-two_session=;", "Max-Age=0", "Path=/", "Secure"]) expect(cleared).toContain(flag);
+    },
+  );
+  it.each([undefined, "*/*", "text/html", "application/json"])(
+    "keeps events.json session outages JSON-only with Accept %s", async (accept) => {
+      const { store, cookie, bindings } = await fixture();
+      vi.spyOn(store, "get").mockRejectedValue(refused());
+      const rotate = vi.spyOn(store, "rotate");
+      const res = await app.request("/events.json", { headers: { cookie, ...(accept ? { accept } : {}) } }, bindings);
+      expect(store.get).toHaveBeenCalledOnce();
+      expect(rotate).not.toHaveBeenCalled();
+      expect(res.status).toBe(503);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(res.headers.get("cache-control")).toContain("no-store");
+      expect(res.headers.getSetCookie()).toEqual([]);
+      const body = await res.text();
+      expect(body).not.toMatch(/private|ECONNREFUSED/);
+      expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
+    },
+  );
   it("refuses cross-origin logout before revocation or cookie changes", async () => {
     const { store, cookie, bindings } = await fixture();
     const revoke = vi.spyOn(store, "revoke");
