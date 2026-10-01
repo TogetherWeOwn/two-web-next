@@ -3,6 +3,7 @@ import { and, asc, count, desc, eq, gt, gte, ilike, inArray, lt, ne, or, sql, ty
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
+import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
 import { EVENTS_PAST_DRAWER_LIMIT, escapeLikeTerm, PAST_EVENTS_PAGE_SIZE } from "../islands/contracts";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
@@ -15,11 +16,11 @@ export const JSON_MAX_LIMIT = 100;
 
 async function withGoing(db: Pick<Db, "select">, rows: (typeof events.$inferSelect)[]): Promise<PublicEvent[]> {
   if (rows.length === 0) return [];
-  const counts = await db
+  const counts = await nonSensitiveRead("going-counts", () => db
     .select({ eventId: rsvps.eventId, n: count() })
     .from(rsvps)
     .where(and(inArray(rsvps.eventId, rows.map((r) => r.id)), eq(rsvps.status, "going")))
-    .groupBy(rsvps.eventId);
+    .groupBy(rsvps.eventId));
   const by = new Map(counts.map((c) => [c.eventId, Number(c.n)]));
   return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
 }
@@ -153,7 +154,7 @@ export async function withGoingCount(db: Db, row: typeof events.$inferSelect): P
 }
 
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {
-  const [row] = await db.select().from(events).where(eq(events.eventKey, key));
+  const [row] = await nonSensitiveRead("events", () => db.select().from(events).where(eq(events.eventKey, key)));
   if (!row) return null;
   return withGoingCount(db, row);
 }
@@ -181,18 +182,18 @@ export async function getEventNeighbors(db: Db, event: Pick<PublicEvent, "id">):
   // Compare the stored timestamp: a JS Date loses PostgreSQL's microseconds.
   const anchorStartsAt = db.select({ startsAt: events.startsAt }).from(events).where(eq(events.id, event.id));
   const [previous, next] = await Promise.all([
-    db.select(eventLinkColumns).from(events)
+    nonSensitiveRead("events", () => db.select(eventLinkColumns).from(events)
       .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, or(
         lt(events.startsAt, anchorStartsAt),
         and(eq(events.startsAt, anchorStartsAt), lt(events.id, event.id)),
       )))
-      .orderBy(desc(events.startsAt), desc(events.id)).limit(1),
-    db.select(eventLinkColumns).from(events)
+      .orderBy(desc(events.startsAt), desc(events.id)).limit(1)),
+    nonSensitiveRead("events", () => db.select(eventLinkColumns).from(events)
       .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, or(
         gt(events.startsAt, anchorStartsAt),
         and(eq(events.startsAt, anchorStartsAt), gt(events.id, event.id)),
       )))
-      .orderBy(asc(events.startsAt), asc(events.id)).limit(1),
+      .orderBy(asc(events.startsAt), asc(events.id)).limit(1)),
   ]);
   return { previous: previous[0] ?? null, next: next[0] ?? null };
 }
@@ -204,10 +205,10 @@ export async function listRelatedEvents(
   now = new Date(),
 ): Promise<EventLink[]> {
   const sameGame = event.game === null ? [] : [sql`case when ${events.game} = ${event.game} then 0 else 1 end`];
-  const rows = await db.select(eventLinkColumns).from(events)
+  const rows = await nonSensitiveRead("events", () => db.select(eventLinkColumns).from(events)
     .where(and(eq(events.status, "published"), ne(events.id, event.id), finiteEventStart, gte(events.endsAt, now)))
     .orderBy(...sameGame, asc(events.startsAt), asc(events.id))
-    .limit(3);
+    .limit(3));
   // PostgreSQL infinity timestamps decode to invalid Dates, as in 404 suggestions.
   return rows.filter((event) => Number.isFinite(event.startsAt.getTime()));
 }
@@ -218,13 +219,13 @@ export type EventAttendee = { id: string; name: string };
 export async function listGoingAttendees(db: Db, eventId: number): Promise<EventAttendee[]> {
   // Legacy answer-time order, not the admin roster's most-recent-update order.
   // Partial select/join/orderBy: https://orm.drizzle.team/docs/select
-  const rows = await db
+  // Exclude nameless rows in SQL: every retrieved identity is attributable.
+  return keyedMemberRead(() => db
     .select({ id: users.id, name: users.username })
     .from(rsvps)
     .innerJoin(users, eq(rsvps.userId, users.id))
-    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "going")))
-    .orderBy(asc(rsvps.createdAt), asc(rsvps.id));
-  return rows.filter((row) => Boolean(row.name));
+    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "going"), ne(users.username, "")))
+    .orderBy(asc(rsvps.createdAt), asc(rsvps.id)));
 }
 
 /** Collection for /events.json: offset paging, statuses visible to the viewer only. */

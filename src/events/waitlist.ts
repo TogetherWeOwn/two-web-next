@@ -1,5 +1,6 @@
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
+import { keyedMemberRead } from "../member-reads";
 import { rsvps, type Event } from "../db/admin-schema";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -17,11 +18,11 @@ export async function goingCount(tx: Tx, eventId: number): Promise<number> {
  * Batch the collection read rather than adding a query for each of its 100 rows. */
 export async function waitlistPositions(db: Pick<Db, "execute">, eventIds: number[], userId: string): Promise<Map<number, number>> {
   if (eventIds.length === 0) return new Map();
-  const rows = await db.execute(sql`
-    select event_id, position from (
+  const rows = await keyedMemberRead(() => db.execute(sql`
+    select event_id, user_id, position from (
       select event_id, user_id, row_number() over (partition by event_id order by created_at, coalesce(legacy_id, id), id)::int as position
       from rsvps where event_id in (${sql.join(eventIds.map((id) => sql`${id}`), sql`, `)}) and status = 'waitlisted'
-    ) line where user_id = ${userId}`) as unknown as { event_id: number; position: number }[];
+    ) line where user_id = ${userId}`)) as unknown as { event_id: number; user_id: string; position: number }[];
   return new Map(rows.map((row) => [row.event_id, row.position]));
 }
 

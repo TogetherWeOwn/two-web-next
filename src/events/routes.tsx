@@ -5,12 +5,13 @@
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
-import { memberAccessLog } from "../access-log";
+import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
+import { notFoundSuggestions } from "./suggestions";
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { matchQuery, recordSearch } from "./search-log";
-import { rateLimitExceeded } from "../errors";
+import { NotFoundPage, rateLimitExceeded } from "../errors";
 import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
@@ -257,39 +258,46 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     });
   });
 
-  app.get("/e/:key", memberAccessLog(async (c) => {
-    const db = await dbFor(c);
-    return db ? (entry) => recordAccess(db, entry) : null;
-  }), async (c) => {
-    const key = c.req.param("key") ?? "";
-    if (!KEY_RE.test(key)) return c.notFound();
-    const db = await dbFor(c);
-    if (!db) return c.text("Events temporarily unavailable", 503);
-    const e = await getPublicEvent(db, key);
-    if (!e) return c.notFound();
-    if (e.status === "cancelled") {
-      c.header("x-robots-tag", "noindex, nofollow");
-      return c.html(<EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
-    }
-    // The guest join pitch and waitlist position depend on the viewer; never share-cache this HTML.
-    c.header("cache-control", "private, no-store");
+  app.get("/e/:key", async (c) => {
+    let viewer: string | null = null;
+    // Observe the entire existing handler, not only the attendee helper. An
+    // anonymous viewer can release classified public records, never member keys.
     c.header("vary", "Cookie");
-    // The injected reader uses only bindings/cookies; this route additionally
-    // carries the access middleware's request-local variables.
-    const session = await readSession(c as unknown as Ctx);
-    if (e.status === "draft" && !session?.moderator) return c.text("Forbidden", 403);
-    if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
-    const [neighbors, related, attendees, position] = await Promise.all([
-      getEventNeighbors(db, e),
-      listRelatedEvents(db, e),
-      session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
-      session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
-    ]);
-    if (attendees.length > 0 && session) {
-      c.set("viewerId", session.id);
-      c.set("access", { resource: "member", action: "list", route: "events.page", subjects: attendees.map((attendee) => attendee.id) });
-    }
-    return c.html(<EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
+    await memberReadBoundary(c, () => ({ viewer, resource: "member", action: "list", route: "events.page" }), async (entry) => {
+      const db = await dbFor(c);
+      if (!db) throw new Error("Event audit database unavailable");
+      return recordAccess(db, entry);
+    }, async () => {
+      const notFound = async () => {
+        c.header("x-robots-tag", "noindex, nofollow");
+        return bufferedMemberHtml(c, <NotFoundPage suggestions={await notFoundSuggestions(c.env)} />, 404);
+      };
+      const render = async () => {
+        const key = c.req.param("key") ?? "";
+        if (!KEY_RE.test(key)) return notFound();
+        const db = await dbFor(c);
+        if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
+        const e = await getPublicEvent(db, key);
+        if (!e) return notFound();
+        if (e.status === "cancelled") {
+          c.header("x-robots-tag", "noindex, nofollow");
+          return bufferedMemberHtml(c, <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
+        }
+        const session = await readSession(c);
+        viewer = session?.id ?? null;
+        if (e.status === "draft" && !session?.moderator) return bufferedMemberText(c, "Forbidden", 403);
+        if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
+        const [neighbors, related, attendees, position] = await Promise.all([
+          getEventNeighbors(db, e),
+          listRelatedEvents(db, e),
+          session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+          session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+        ]);
+        return bufferedMemberHtml(c, <EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} waitlistPosition={position} />);
+      };
+      await render();
+    });
+    return c.res;
   });
 
   // ---- moderator writes (JSON) ------------------------------------------------

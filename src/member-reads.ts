@@ -94,7 +94,7 @@ export function bufferedMemberText(c: Context, body: string, status: ContentfulS
   return c.res;
 }
 
-type ReadDeclaration = Omit<AccessDecl, "subjects"> & { viewer: string };
+type ReadDeclaration = Omit<AccessDecl, "subjects"> & { viewer: string | null };
 
 export async function memberReadBoundary(
   c: Context,
@@ -107,7 +107,9 @@ export async function memberReadBoundary(
     try { await next(); } catch { capture.failed = true; }
     if (c.error) capture.failed = true;
     const declared = typeof declaration === "function" ? declaration() : declaration;
-    if (!declared || !/^\d{10,25}$/.test(declared.viewer)) capture.failed = true;
+    // Anonymous event pages may return explicitly classified public data only.
+    // null is deliberate; missing/invalid viewers never authorize member data.
+    if (!declared || (declared.viewer === null ? capture.subjects.size > 0 : !/^\d{10,25}$/.test(declared.viewer))) capture.failed = true;
     // Classification is tied to this exact response. A later stream (declared
     // or not) cannot borrow an earlier buffered response's approval.
     if (capture.failed || capture.pending !== 0 || capture.response !== c.res) {
@@ -121,7 +123,7 @@ export async function memberReadBoundary(
     if (subjects.length === 0) return;
     try {
       const recorded = await write({
-        viewerDiscordId: declared!.viewer, viewerUserId: declared!.viewer,
+        viewerDiscordId: declared!.viewer!, viewerUserId: declared!.viewer!,
         resource: declared!.resource, action: declared!.action,
         route: declared!.route, subjectUserIds: subjects,
       });
