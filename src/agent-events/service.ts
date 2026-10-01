@@ -264,12 +264,15 @@ async function processAgentEvent(sql: Sql, cfg: IngressConfig, body: unknown, cr
     const lockName = op === "create" || op === "read" ? `agent-event-grant:${grant.id}` : `agent-event:${eventKeyIn ?? `owned:${grant.id}`}`;
     return await sql.begin(async (tx) => {
       await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
+      // Replay identity spans operations and explicit/implicit event addresses.
+      // Acquire its lock before the operation lock and transactional replay check.
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-idempotency:${grant.id}:${idem}`}, 0))`;
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`;
       // Admission can change while the operation lock waits. Do not replay a success
       // for a grant that has since expired or been disabled.
       const refused = await checkGrant(tx, grant, op, idem, dig, requestId, eventKeyIn);
       if (refused) return refused;
-      // Re-check under the lock: a concurrent identical call may have stored while we waited.
+      // Re-check under the locks: a concurrent call may have stored while we waited.
       const raced = await lookupReplay(tx, grant.id, idem);
       if (raced) {
         const refused = await checkGrant(tx, grant, op, idem, dig, requestId, eventKeyIn, true);
