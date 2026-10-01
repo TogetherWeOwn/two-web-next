@@ -403,7 +403,10 @@ age-delete old rows or clear unique locks as an outage workaround.
 `queue_failed_jobs` ([drizzle/1007_queue-ledger.sql](../drizzle/1007_queue-ledger.sql))
 has `id`, `job_id`, `kind`, `key`, `reason`, `failed_at` only. It has **no payload
 and no original bot idempotency key**, and there is no repo replay script,
-`queue:retry` command or Wrangler message-send subcommand. Terminal jobs are
+`queue:retry` command or Wrangler message-send subcommand. The operator
+inspect-list-redrive loop over these rows lives in
+[queue-redrive-runbook.md](queue-redrive-runbook.md) (proved in
+`test/queue-redrive.test.ts`). Terminal jobs are
 acknowledged, not sent to a configured dead-letter queue (none is configured).
 Failed-row deletion is diagnostic cleanup, not a replay or a drain.
 
