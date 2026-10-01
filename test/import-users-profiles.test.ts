@@ -12,9 +12,12 @@ function run(args: string[] = [], env: Record<string, string> = {}) {
 function counts(output: string) {
   return output.trim().split("\n").map((line) => JSON.parse(line));
 }
-function withDateStyle(url: string, style: string) {
+const { importUsersProfiles } = await import(pathToFileURL(script).href);
+function withoutSessionOverrides(url: string) {
   const scoped = new URL(url);
-  scoped.searchParams.set("datestyle", style);
+  // The shared fixture deliberately adds a hostile timezone. The CLI now
+  // refuses session overrides; direct-client tests below exercise those defaults.
+  scoped.searchParams.delete("timezone");
   return scoped.toString();
 }
 
@@ -76,7 +79,8 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
 
   beforeAll(async () => {
     fixture = await createUsersProfilesFixture(url!);
-    ({ legacy, next, env } = fixture);
+    ({ legacy, next } = fixture);
+    env = Object.fromEntries(Object.entries(fixture.env).map(([key, value]) => [key, withoutSessionOverrides(value)]));
   });
   beforeEach(async () => { await fixture.reset(); });
   afterAll(async () => { await fixture?.dispose(); });
@@ -193,12 +197,16 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
     // Keep every date ambiguous so SQL/DMY -> MDY would silently swap month/day, not just throw.
     await legacy`update users set updated_at = '2026-08-02 11:00:00' where id in (11, 22)`;
     await legacy`update profiles set updated_at = '2026-08-05 15:00:00' where user_id = 11`;
-    const styledEnv = {
-      LEGACY_DATABASE_URL: withDateStyle(env.LEGACY_DATABASE_URL!, sourceStyle),
-      DATABASE_URL: withDateStyle(env.DATABASE_URL!, targetStyle),
-    };
-    const applied = run(["--apply"], styledEnv);
-    expect(applied.status, applied.stderr).toBe(0);
+    await legacy`select set_config('datestyle', ${sourceStyle}, false)`;
+    await next`select set_config('datestyle', ${targetStyle}, false)`;
+    await legacy`set time zone 'Pacific/Honolulu'`;
+    await next`set time zone 'Pacific/Honolulu'`;
+    const applied = await importUsersProfiles(legacy, next, { dryRun: false });
+    expect(applied.users.written).toBe(3);
+    expect(applied.profiles.written).toBe(2);
+    // SET LOCAL restores hostile defaults after commit; read assertions under ISO.
+    await next`set datestyle = 'ISO, YMD'`;
+    await next`set time zone 'UTC'`;
     const users = await next`select created_at, updated_at, xmin::text as version from users order by id`;
     const profiles = await next`select created_at, updated_at, xmin::text as version from profiles order by user_id`;
     expect(users.map((row) => [row.created_at.toISOString(), row.updated_at.toISOString()])).toEqual([
@@ -210,11 +218,16 @@ describe.skipIf(!url)("users/profiles import against disposable Postgres", () =>
       ["2026-08-04T14:00:00.000Z", "2026-08-05T15:00:00.000Z"],
       ["2026-08-05T16:00:00.000Z", "2026-08-05T16:00:00.000Z"],
     ]);
-    for (const args of [[], ["--apply"]]) {
-      const repeat = run(args, styledEnv);
-      expect(repeat.status, repeat.stderr).toBe(0);
-      expect(counts(repeat.stdout).map((row) => [row.changed, row.written])).toEqual([[0, 0], [0, 0]]);
+    for (const dryRun of [true, false]) {
+      await next`select set_config('datestyle', ${targetStyle}, false)`;
+      await next`set time zone 'Pacific/Honolulu'`;
+      const repeat = await importUsersProfiles(legacy, next, { dryRun });
+      expect([repeat.users, repeat.profiles].map((row) => [row.changed, row.written])).toEqual([[0, 0], [0, 0]]);
     }
+    await legacy`set datestyle = 'ISO, YMD'`;
+    await next`set datestyle = 'ISO, YMD'`;
+    await legacy`set time zone 'UTC'`;
+    await next`set time zone 'UTC'`;
     expect(await next`select created_at, updated_at, xmin::text as version from users order by id`).toEqual(users);
     expect(await next`select created_at, updated_at, xmin::text as version from profiles order by user_id`).toEqual(profiles);
   });

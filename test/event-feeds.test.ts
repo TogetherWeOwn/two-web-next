@@ -9,13 +9,14 @@ import app from "./app";
 import { events } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
-import { eventIcs, eventsIcsCollection, eventsRss, googleCalendarUrl, webcalUrl } from "../src/events/feeds";
+import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss, googleCalendarUrl, webcalUrl } from "../src/events/feeds";
 
 const APP_URL = "https://next.example.test";
 const KEY = "01J0000000000000000000ABCD";
 const row = (o: Partial<typeof events.$inferSelect> = {}) =>
   ({
     id: 1,
+    icsSequence: 1782907200n,
     eventKey: KEY,
     title: "Friday night Helldivers",
     game: null,
@@ -62,6 +63,21 @@ describe("feed builders (byte fixtures)", () => {
         "",
       ].join("\r\n"),
     );
+  });
+
+  it.each([0n, 2147483647n])("emits valid persisted SEQUENCE %s independently of updatedAt", (icsSequence) => {
+    const event = row({ icsSequence });
+    for (const body of [eventIcs(event, APP_URL), eventsIcsCollection([event], APP_URL)]) {
+      expect(body).toContain(`SEQUENCE:${icsSequence}\r\n`);
+      expect(body).toContain("DTSTAMP:20260701T120000Z\r\n");
+    }
+  });
+
+  it.each([-1n, 2147483648n, 9007199254740993n])("rejects invalid SEQUENCE %s without clamping or partial collections", (icsSequence) => {
+    const event = row({ icsSequence });
+    expect(() => eventIcs(event, APP_URL)).toThrow(IcsSequenceRangeError);
+    expect(() => eventsIcsCollection([row(), event], APP_URL)).toThrow(IcsSequenceRangeError);
+    expect(event.icsSequence).toBe(icsSequence);
   });
 
   it("escapes, folds at 75 octets on a character boundary, and maps CANCELLED", () => {
