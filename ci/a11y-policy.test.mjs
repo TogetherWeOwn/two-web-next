@@ -37,7 +37,8 @@ test("legacy aliases are non-documents while canonical admin destinations remain
     "/admin/featured-contents", "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
   ];
   const destinations = ["/admin/events/new", "/admin/events/:key", "/admin/featured", "/admin/featured/new", "/admin/featured/:id"];
-  const registered = [...new Set([...Object.keys(appCoverage), ...destinations])].map((path) => ({ method: "GET", path }));
+  // Match the real admin router: static forms precede parameterized edit routes.
+  const registered = [...new Set([...destinations, ...Object.keys(appCoverage)])].map((path) => ({ method: "GET", path }));
   const cases = auditCases(registered, appCoverage);
   for (const alias of aliases) {
     assert.equal(appCoverage[alias]?.skip, true, alias);
