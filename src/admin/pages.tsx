@@ -164,14 +164,16 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQ
           <button type="submit" class="btn">Filter</button>
         </div>
       </form>
+      <p id="join-attempts-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="admin-table-scroll" role="region" aria-label="Join attempts list" aria-describedby="join-attempts-scroll-hint" tabindex={0} data-testid="join-attempts-table-scroll">
       <table class="admin-table" data-testid="join-attempts-table">
         <thead>
           <tr>
-            <th>Outcome</th>
-            <th>Source</th>
-            <th>Discord id</th>
-            <th>Request id</th>
-            <th>Attempted</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Source</th>
+            <th scope="col">Discord id</th>
+            <th scope="col">Request id</th>
+            <th scope="col">Attempted</th>
           </tr>
         </thead>
         <tbody>
@@ -194,6 +196,7 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQ
           )}
         </tbody>
       </table>
+      </div>
       <nav aria-label="Join attempt pages" class="actions">
         {query.page > 1 ? <a rel="prev" href={joinAttemptsUrl(query, query.page - 1)}>Previous</a> : null}
         <span>Page {query.page}</span>
@@ -300,6 +303,8 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
       </p>
+      <p id="events-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="admin-table-scroll" role="region" aria-label="Events list" aria-describedby="events-scroll-hint" tabindex={0} data-testid="events-table-scroll">
       <table class="admin-table" data-testid="events-table">
         <thead>
           <tr>
@@ -342,6 +347,7 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
           )}
         </tbody>
       </table>
+      </div>
       <nav aria-label="Event pages" class="actions">
         {query.page > 1 ? <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a> : null}
         <span>Page {query.page}</span>
@@ -497,7 +503,9 @@ export const EventFormPage: FC<{
               </div>
               <div class="field"><button type="submit" class="btn">Search</button></div>
             </form>
-            <table class="admin-table">
+            <p id="roster-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+            <div class="admin-table-scroll" role="region" aria-label="RSVP roster list" aria-describedby="roster-scroll-hint" tabindex={0} data-testid="roster-table-scroll">
+            <table class="admin-table" data-testid="roster-table">
               <thead>
                 <tr>
                   <th scope="col">Member</th>
@@ -523,6 +531,7 @@ export const EventFormPage: FC<{
                 )}
               </tbody>
             </table>
+            </div>
           </section>
         ) : null}
       </section>
