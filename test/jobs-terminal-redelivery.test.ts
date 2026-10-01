@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consume } from "../src/jobs/consumer";
 import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
+import { BotTerminalError, type BotClient, type EventStore, type UniqueLock } from "../src/jobs/types";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 type Sql = Parameters<typeof pgQueueLedger>[0];
@@ -17,21 +19,26 @@ function recordingSql(insertError?: Error) {
     return [];
   });
   const pool = vi.fn(() => { throw new Error("terminal queries must use the transaction"); });
-  const begin = vi.fn(async (fn: (client: typeof tx) => Promise<void>) => fn(tx));
+  const begin = vi.fn(async (_options: string, fn: (client: typeof tx) => Promise<void>) => fn(tx));
   return { sql: Object.assign(pool, { begin }) as unknown as Sql, queries, begin, pool };
 }
 
 describe("terminal failure SQL contract", () => {
-  it("inserts with a jobId conflict target then deletes on the same transaction", async () => {
+  it("locks one dispatch, conditionally inserts, then deletes in a READ COMMITTED transaction", async () => {
     const { sql, queries, begin, pool } = recordingSql();
     const id = randomUUID();
     await pgQueueLedger(sql).failed(id, "sync-event", "sync-event:e1", "x".repeat(2100));
     expect(begin).toHaveBeenCalledOnce();
+    expect(begin).toHaveBeenCalledWith("isolation level read committed", expect.any(Function));
     expect(pool).not.toHaveBeenCalled();
     expect(queries).toEqual([
       {
-        statement: "insert into queue_failed_jobs (job_id, kind, key, reason) values (?::uuid, ?, ?, ?) on conflict (job_id) do nothing",
-        values: [id, "sync-event", "sync-event:e1", "x".repeat(2000)],
+        statement: "select pg_advisory_xact_lock(hashtextextended('queue-failed:' || ?::uuid::text, 0))",
+        values: [id],
+      },
+      {
+        statement: "insert into queue_failed_jobs (job_id, kind, key, reason) select ?::uuid, ?, ?, ? where not exists (select 1 from queue_failed_jobs where job_id = ?::uuid)",
+        values: [id, "sync-event", "sync-event:e1", "x".repeat(2000), id],
       },
       { statement: "delete from queue_jobs where job_id = ?::uuid", values: [id] },
     ]);
@@ -41,19 +48,24 @@ describe("terminal failure SQL contract", () => {
     const error = new Error("insert failed");
     const { sql, queries } = recordingSql(error);
     await expect(pgQueueLedger(sql).failed(randomUUID(), "announcement", null, "failed")).rejects.toBe(error);
-    expect(queries).toHaveLength(1);
-    expect(queries[0]!.statement).toMatch(/^insert/);
+    expect(queries).toHaveLength(2);
+    expect(queries[0]!.statement).toMatch(/^select pg_advisory_xact_lock/);
+    expect(queries[1]!.statement).toMatch(/^insert/);
   });
 });
 
 // The fixture refuses non-test targets before connecting and applies canonical
 // migrations in a disposable schema. Multiple connections exercise real races.
-describe.skipIf(!process.env.DATABASE_URL)("terminal redelivery on PostgreSQL", () => {
+describe.skipIf(!process.env.DATABASE_URL).each([
+  { schema: "before the unique migration", migrated: false },
+  { schema: "after the unique migration", migrated: true },
+])("terminal redelivery on PostgreSQL $schema", ({ migrated }) => {
   let fixture: JobsFixture | undefined;
   let sql: Sql;
   beforeAll(async () => {
     fixture = await createJobsFixture(process.env.DATABASE_URL!, { max: 6 });
     sql = fixture.client;
+    if (!migrated) await sql`alter table queue_failed_jobs drop constraint queue_failed_jobs_job_id_unique`;
   });
   beforeEach(async () => {
     await sql`truncate queue_jobs, queue_failed_jobs restart identity`;
@@ -88,7 +100,7 @@ describe.skipIf(!process.env.DATABASE_URL)("terminal redelivery on PostgreSQL", 
     const ledger = await enqueue(id);
     await ledger.reserved(id);
     const reasons = Array.from({ length: 12 }, (_, i) => `terminal delivery ${i}`);
-    await Promise.all(reasons.map((reason) => ledger.failed(id, "sync-event", "sync-event:e1", reason)));
+    await Promise.all(reasons.map((reason, i) => ledger.failed(i % 2 ? id.toUpperCase() : id, "sync-event", "sync-event:e1", reason)));
     const rows = await failures();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ job_id: id, kind: "sync-event", key: "sync-event:e1" });
@@ -155,10 +167,42 @@ describe.skipIf(!process.env.DATABASE_URL)("terminal redelivery on PostgreSQL", 
     expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
   });
 
+  it("acknowledges a terminal consumer delivery with one durable failure across redelivery", async () => {
+    const id = randomUUID();
+    const ledger = pgQueueLedger(sql);
+    await ledger.enqueued({ jobId: id, kind: "announcement", key: null, availableAt: new Date(Date.now() - 1000) });
+    const bot = { postAnnouncement: async () => { throw new BotTerminalError("synthetic terminal failure"); } } as unknown as BotClient;
+    const deps = { bot, events: {} as EventStore, lock: {} as UniqueLock, ledger };
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      let original;
+      for (let delivery = 0; delivery < 2; delivery++) {
+        const message = {
+          body: { kind: "announcement", idempotencyKey: "fixture", jobId: id, action: { channelKey: "fixture", body: "synthetic" } },
+          attempts: 1, ack: vi.fn(), retry: vi.fn(),
+        };
+        await consume({ messages: [message] }, deps);
+        expect(message.ack).toHaveBeenCalledOnce();
+        expect(message.retry).not.toHaveBeenCalled();
+        const rows = await failures();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ job_id: id, kind: "announcement", key: null });
+        if (delivery === 0) original = rows;
+        else expect(rows).toEqual(original);
+        expect(await pgQueueDepth(sql)).toEqual({ ...emptyLiveDepth, failed: 1 });
+      }
+      expect(warnings).not.toHaveBeenCalled();
+    } finally {
+      warnings.mockRestore();
+      errors.mockRestore();
+    }
+  });
+
   it("upgrades historical duplicates, preserving the first row and same-key dispatches", async () => {
     // Only our disposable schema is modified. Run the actual migration SQL,
     // including its table lock, on a pre-constraint fixture with duplicate history.
-    await sql`alter table queue_failed_jobs drop constraint queue_failed_jobs_job_id_unique`;
+    await sql`alter table queue_failed_jobs drop constraint if exists queue_failed_jobs_job_id_unique`;
     const first = randomUUID(), second = randomUUID();
     await sql`insert into queue_failed_jobs (job_id, kind, key, reason) values
       (${first}::uuid, 'sync-event', 'sync-event:e1', 'first outcome'),

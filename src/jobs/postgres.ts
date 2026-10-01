@@ -119,14 +119,19 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
       await sql`delete from queue_jobs where job_id = ${jobId}::uuid`;
     },
     async failed(jobId, kind, key, reason) {
-      await sql.begin(async (tx) => {
+      await sql.begin("isolation level read committed", async (tx) => {
+        // Fence one dispatch even before the additive unique constraint lands.
+        // Keep the insert separate: after waiting for the lock, READ COMMITTED
+        // takes a fresh snapshot and sees the preceding delivery's commit.
+        // https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS
+        // https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED
+        await tx`select pg_advisory_xact_lock(hashtextextended('queue-failed:' || ${jobId}::uuid::text, 0))`;
         await tx`
           insert into queue_failed_jobs (job_id, kind, key, reason)
-          values (${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)})
-          on conflict (job_id) do nothing`;
-        // A terminal redelivery keeps the first failure, but must still retire
-        // any live row. Other insert errors abort this transaction before delete.
-        // https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT
+          select ${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)}
+          where not exists (select 1 from queue_failed_jobs where job_id = ${jobId}::uuid)`;
+        // A redelivery keeps the first failure, but still retires any live row.
+        // Insert errors abort this transaction before delete; none are swallowed.
         await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
       });
     },
