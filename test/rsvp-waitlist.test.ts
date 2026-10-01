@@ -15,6 +15,7 @@ import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
+const PAGE_MEMBER_KEYS = ["100000000000000101", "100000000000000102", "100000000000000103"];
 type JsonRow = { event_key: string; status: string; going_count: number; waitlist_position: number | null };
 const answer = async (res: Response) => (await res.json() as { data: JsonRow }).data;
 const collection = async (res: Response) => (await res.json() as { data: JsonRow[] }).data;
@@ -79,10 +80,10 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     }).returning();
     return ev!;
   }
-  async function fullWithLine(count = 2) {
+  async function fullWithLine(count = 2, memberKeys: string[] = []) {
     const ev = await seed();
-    await put(ev.eventKey, "holder");
-    for (let i = 1; i <= count; i++) await put(ev.eventKey, `waiter-${i}`);
+    await put(ev.eventKey, memberKeys[0] ?? "holder");
+    for (let i = 1; i <= count; i++) await put(ev.eventKey, memberKeys[i] ?? `waiter-${i}`);
     // Pin same-instant FIFO so ID, not wall time, breaks the tie.
     await client`update rsvps set created_at = '2020-01-01T00:00:00Z', synced_to_discord_at = now() where event_id = ${ev.id}`;
     sent.length = 0;
@@ -311,21 +312,21 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
   });
 
   it("exposes only the viewer's position beside Going attendees, with private caching and position-sensitive ETags", async () => {
-    const ev = await fullWithLine();
-    await client`insert into users (id, username) values ('holder', 'Current holder'), ('waiter-1', 'First waiter'), ('waiter-2', 'Second waiter')`;
-    const first = await request("/events.json", "waiter-1");
+    const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
+    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter'), (${PAGE_MEMBER_KEYS[2]!}, 'Second waiter')`;
+    const first = await request("/events.json", PAGE_MEMBER_KEYS[1]!);
     const data = await collection(first);
     expect(data.find((e) => e.event_key === ev.eventKey)!.waitlist_position).toBe(1);
     const etag = first.headers.get("etag")!;
-    const second = await request("/events.json", "waiter-2", "GET", undefined, false, { "if-none-match": etag });
+    const second = await request("/events.json", PAGE_MEMBER_KEYS[2]!, "GET", undefined, false, { "if-none-match": etag });
     expect(second.status).toBe(200);
     expect((await collection(second))[0]!.waitlist_position).toBe(2);
-    const page = await request(`/e/${ev.eventKey}`, "waiter-2");
+    const page = await request(`/e/${ev.eventKey}`, PAGE_MEMBER_KEYS[2]!);
     expect(page.headers.get("cache-control")).toBe("private, no-store");
     expect(page.headers.get("vary")).toBe("Cookie");
     const memberHtml = await page.text();
     expect(memberHtml).toContain('data-waitlist-position="2"');
-    expect(memberHtml).toContain('href="/members/holder">Current holder</a>');
+    expect(memberHtml).toContain(`href="/members/${PAGE_MEMBER_KEYS[0]}">Current holder</a>`);
     expect(memberHtml).not.toContain("First waiter");
     expect(memberHtml).not.toContain("Second waiter");
     expect(memberHtml).not.toContain('data-testid="event-join-pitch"');
@@ -337,28 +338,28 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(guestHtml).toContain('data-testid="event-join-pitch"');
     expect(guestHtml).not.toContain("Current holder");
     expect(guestHtml).not.toContain('data-testid="event-attendees"');
-    await withdraw(ev.eventKey, "holder");
-    const refresh = await request("/events.json", "waiter-2", "GET", undefined, false, { "if-none-match": second.headers.get("etag")! });
+    await withdraw(ev.eventKey, PAGE_MEMBER_KEYS[0]!);
+    const refresh = await request("/events.json", PAGE_MEMBER_KEYS[2]!, "GET", undefined, false, { "if-none-match": second.headers.get("etag")! });
     expect(refresh.status).toBe(200);
     expect((await collection(refresh))[0]!.waitlist_position).toBe(1);
-    const promotedHtml = await (await request(`/e/${ev.eventKey}`, "waiter-2")).text();
+    const promotedHtml = await (await request(`/e/${ev.eventKey}`, PAGE_MEMBER_KEYS[2]!)).text();
     expect(promotedHtml).toContain('data-waitlist-position="1"');
-    expect(promotedHtml).toContain('href="/members/waiter-1">First waiter</a>');
+    expect(promotedHtml).toContain(`href="/members/${PAGE_MEMBER_KEYS[1]}">First waiter</a>`);
     expect(promotedHtml).not.toContain("Current holder");
   });
 
   it("composes private waitlist positions and promoted attendees with navigation and offset-labelled related events", async () => {
-    const ev = await fullWithLine();
-    await client`insert into users (id, username) values ('holder', 'Current holder'), ('waiter-1', 'First waiter')`;
+    const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
+    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter')`;
     const previous = await seed({ startsAt: new Date("2098-12-31T20:00:00Z"), endsAt: new Date("2098-12-31T22:00:00Z") });
     const next = await seed({ startsAt: new Date("2099-01-02T01:00:00Z"), endsAt: new Date("2099-01-02T03:00:00Z"), timezone: "America/New_York" });
-    const page = await request(`/e/${ev.eventKey}`, "waiter-2");
+    const page = await request(`/e/${ev.eventKey}`, PAGE_MEMBER_KEYS[2]!);
     expect(page.status).toBe(200);
     expect(page.headers.get("cache-control")).toBe("private, no-store");
     expect(page.headers.get("vary")).toBe("Cookie");
     const html = await page.text();
     expect(html).toContain('data-waitlist-position="2"');
-    expect(html).toContain('href="/members/holder">Current holder</a>');
+    expect(html).toContain(`href="/members/${PAGE_MEMBER_KEYS[0]}">Current holder</a>`);
     expect(html).toContain(`href="/e/${previous.eventKey}" rel="prev"`);
     expect(html).toContain(`href="/e/${next.eventKey}" rel="next"`);
     expect(html).toContain('datetime="2099-01-02T01:00:00.000Z">Thursday, 1 January 2099 at 20:00 GMT-05:00');
@@ -367,10 +368,10 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(guest).toContain('data-waitlist-position=""');
     expect(guest).toContain(`href="/join?next=%2Fe%2F${ev.eventKey}" data-testid="event-related-join"`);
     expect(guest).not.toContain("Current holder");
-    await withdraw(ev.eventKey, "holder");
-    const promoted = await (await request(`/e/${ev.eventKey}`, "waiter-2")).text();
+    await withdraw(ev.eventKey, PAGE_MEMBER_KEYS[0]!);
+    const promoted = await (await request(`/e/${ev.eventKey}`, PAGE_MEMBER_KEYS[2]!)).text();
     expect(promoted).toContain('data-waitlist-position="1"');
-    expect(promoted).toContain('href="/members/waiter-1">First waiter</a>');
+    expect(promoted).toContain(`href="/members/${PAGE_MEMBER_KEYS[1]}">First waiter</a>`);
     expect(promoted).not.toContain("Current holder");
     expect(promoted).toContain(`href="/e/${next.eventKey}" rel="next"`);
   });
@@ -467,7 +468,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     const sessions = createMemorySessionStore(() => now);
     const token = newSessionToken();
     const tokenHash = await hashToken(token);
-    await sessions.create({ tokenHash, userId: "moderator", username: "moderator", avatar: null,
+    await sessions.create({ tokenHash, userId: "100000000000000111", username: "moderator", avatar: null,
       member: true, moderator: true, expiresAt: new Date(now + 1000) });
     const cookie = (await serializeSigned("__Host-two_session", token, SESSION_SECRET,
       { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
