@@ -19,20 +19,30 @@ concurrency:
 jobs:
   a11y:
     name: a11y
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
+    # Self-hosted runners share one Docker host, so a published 5432 (and
+    # wrangler's dev ports) collide across concurrent jobs. A job container has
+    # its own network namespace; localhost:5432 is forwarded to the service.
+    container:
+      image: node:24-bookworm
     services:
       postgres:
         image: postgres:17
         env:
           POSTGRES_PASSWORD: ci
-        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Job-private localhost:5432 forward to the Postgres service
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
+          for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
+          exit 1
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -58,15 +68,19 @@ jobs:
     needs: a11y
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 10
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
+    # Self-hosted runners share one Docker host, so a published 5432 (and
+    # wrangler's dev ports) collide across concurrent jobs. A job container has
+    # its own network namespace; localhost:5432 is forwarded to the service.
+    container:
+      image: node:24-bookworm
     services:
       postgres:
         image: postgres:17
         env:
           POSTGRES_PASSWORD: ci
-        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
@@ -75,6 +89,12 @@ jobs:
           A11Y_RESULT: ${{ needs.a11y.result }}
         run: test "$A11Y_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Job-private localhost:5432 forward to the Postgres service
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
+          for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
+          exit 1
       - uses: actions/setup-node@v7
         with:
           node-version: 24
