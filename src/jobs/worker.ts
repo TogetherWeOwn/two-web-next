@@ -45,22 +45,24 @@ export async function enqueueSyncEvent(env: Env, message: Extract<QueueMessage, 
 
 export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): Promise<void> {
   const sql = sqlFor(env);
-  // Best-effort ledger I/O gets its own connection. A ledger statement wedged
-  // on a row/table lock holds only this client, so the consumer's bounded (2s)
-  // ledger timers can expire while lock/handler traffic proceeds on `sql` and
-  // every message still reaches ack/retry. Sharing one max:1 pool stalled ack
-  // behind an un-cancellable ledger UPDATE (TOG-9895 review).
+  // Promise.race bounds waiting, not SQL execution. Isolate all best-effort
+  // ledger/lock/successor traffic from the max:1 handler pool: a timed-out
+  // statement can remain blocked without starving the next message's snapshot.
   const ledgerSql = sqlFor(env);
+  const cleanupSql = sqlFor(env);
   try {
-    const lock = pgUniqueLock(sql);
+    const lock = pgUniqueLock(cleanupSql);
     await consume(batch, { bot, events: pgEventStore(sql), lock, ledger: pgQueueLedger(ledgerSql),
+      needsSync: pgEventStore(cleanupSql).needsSync,
       dispatchPending: (eventKey, signal) => dispatchSyncEvent(
         trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(ledgerSql), undefined, signal), lock, eventKey, undefined, signal),
     });
   } finally {
-    // A wedged ledger statement must not hold the invocation open: force-close
-    // past the timeout; the main client closes normally.
-    await ledgerSql.end({ timeout: 1 }).catch(() => {});
+    // Force-close timed-out best-effort SQL without holding the invocation open.
+    await Promise.all([
+      ledgerSql.end({ timeout: 1 }).catch(() => {}),
+      cleanupSql.end({ timeout: 1 }).catch(() => {}),
+    ]);
     await sql.end({ timeout: 1 });
   }
 }
@@ -79,10 +81,12 @@ export async function handleScheduled(controller: ScheduledController, env: Jobs
     // advisory-lock transaction.
     await migrateSessions(sql as unknown as SessionSql);
     await runScheduled(controller.cron, pgSingleFlight(sql), {
-      // Prune queries use the reserved client (outer max:1 pool would deadlock).
-      // Reconcile's dispatch side effects use an independent autocommit pool.
-      reconcile: (db) => reconcileEvents({
-        events: pgEventStore(db),
+      // The reserved flight holds only the scheduler advisory lock during
+      // dispatch. Event writes have a shorter transaction on the other pool,
+      // so parent row locks are released before unrelated external sends.
+      reconcile: () => reconcileEvents({
+        events: pgEventStore(dispatchSql),
+        writeTransaction: (work) => dispatchSql.begin(async (tx) => work(pgEventStore(tx))),
         queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
         lock: pgUniqueLock(dispatchSql),
       }),

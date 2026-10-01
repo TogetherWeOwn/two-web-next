@@ -84,12 +84,24 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
         from mirrored where rsvps.event_id = mirrored.id and rsvps.updated_at <= mirrored.mirrored_at`;
     },
     async claimSync(attempt, now) {
-      const [row] = await sql`update event_sync_attempts
-        set request_attempts = request_attempts + 1,
-          next_attempt_at = ${new Date(now.getTime() + SYNC_EVENT.uniqueForSeconds * 1000)}
-        where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
-          and request_attempts < ${SYNC_EVENT.tries} and next_attempt_at <= ${now}
-        returning *`;
+      // Lock the current event with the attempt so close/edit and a first claim
+      // serialize. An unattempted obsolete snapshot has no ambiguous remote
+      // effects: retire it and free the pending slot, leaving the revision dirty.
+      // Once attempted, replay always keeps the immutable payload/key, even past.
+      const [row] = await sql`with candidate as (
+        select a.idempotency_key, a.request_attempts = 0 and
+          (e.status not in ('published', 'cancelled') or e.sync_revision <> a.revision) as obsolete
+        from event_sync_attempts a join events e on e.id = a.event_id
+        where a.idempotency_key = ${attempt.idempotencyKey}::uuid and a.state = 'pending'
+          and a.request_attempts < ${SYNC_EVENT.tries} and a.next_attempt_at <= ${now}
+        for update of a, e
+      ) update event_sync_attempts a
+        set state = case when candidate.obsolete then 'obsolete' else a.state end,
+          request_attempts = a.request_attempts + case when candidate.obsolete then 0 else 1 end,
+          next_attempt_at = case when candidate.obsolete then null
+            else ${new Date(now.getTime() + SYNC_EVENT.uniqueForSeconds * 1000)} end
+        from candidate where a.idempotency_key = candidate.idempotency_key
+        returning a.*`;
       return row ? attemptFrom(row) : null;
     },
     async deferSync(attempt, nextAttemptAt) {

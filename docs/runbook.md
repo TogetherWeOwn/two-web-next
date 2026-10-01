@@ -321,8 +321,12 @@ W8 web/RSVP writes and cron use the same tracked W13 sync carrier. The first
 attempt snapshots current status/action/payload/revision in `event_sync_attempts`;
 retries and recovery keep that request's key and payload immutable. Later
 mutations stay dirty until the pending request resolves, then use a new key.
-Drafts do not start requests. The bot HTTP adapter remains unwired; this is not
-proof of live Discord delivery.
+Drafts/past rows do not start requests. Preparation alone is not a request:
+first claims atomically recheck the current status/revision and retire a stale
+never-attempted snapshot as `obsolete`, without a bot call or marking the event
+synced. The pending slot is then free for a newer eligible revision. Attempted
+requests instead retain their immutable identity even if the event becomes past.
+The bot HTTP adapter remains unwired; this is not proof of live Discord delivery.
 
 Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
@@ -341,14 +345,19 @@ request attempts. At that cap, automatic reconciliation pauses that request
 explicit operator-recovery condition. Preserve the snapshot and failed ledger
 history. A bounded, reviewed recovery must reconcile remote effects and renew
 only the original request's budget/eligibility, **never** its key, action,
-payload or revision. This runbook does not authorize a live reset or provide a
+payload or revision. Preserve a positive `request_attempts` count: zero means
+never attempted, not renewed budget. This runbook does not authorize a live reset or provide a
 blind replay command. A `failed` snapshot instead means a definitive refusal:
 automatic dispatch of that unchanged revision is suppressed; a meaningful
 subsequent mutation is eligible. Retrying an unchanged refused revision likewise
 requires an explicit reviewed operator action, not deleting history.
 
-Best-effort successor checks/dispatch time out after two seconds so a wedged
-ledger cannot hold terminal ACK or later batch messages. A late ledger insert
+Best-effort successor checks/dispatch time out after two seconds. These timers
+do not cancel SQL: ledger and lock/successor traffic use pools separate from the
+handler, so a blocked cleanup cannot starve the next message's snapshot/claim.
+Reconciliation holds its advisory single-flight lock throughout the pass, but
+commits close/materialization in a shorter write transaction before queue I/O;
+unrelated slow sends cannot retain recurring-parent row locks. A late ledger insert
 is compensated without sending after timeout. An already-started send may be
 accepted late and retains its tracked row; dirty revision reconciliation remains
 the recovery backstop. Ledger/locks alone still do not prove exactly-once remote

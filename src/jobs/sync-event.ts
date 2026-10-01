@@ -54,6 +54,9 @@ export async function handleSyncEvent(
   // A durable claim fences concurrent carriers and leases an in-flight request.
   const attempt = await deps.events.claimSync(prepared, now());
   if (!attempt) return waiting();
+  // A never-attempted snapshot may have become obsolete since preparation.
+  // Its atomic first claim retires it without remote I/O or revision acknowledgement.
+  if (attempt.state !== "pending") return { done: true };
   const retry = async (seconds: number): Promise<Outcome> => {
     const exhausted = attempt.requestAttempts >= SYNC_EVENT.tries;
     await deps.events.deferSync(attempt, exhausted ? null : new Date(now().getTime() + seconds * 1000));

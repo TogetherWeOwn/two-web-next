@@ -42,8 +42,8 @@ export type SyncAttempt = {
   eventKey: string;
   revision: number;
   mirroredAt: Date;
-  /** `failed` is a definitive refusal, never an ambiguous/exhausted carrier. */
-  state: "pending" | "succeeded" | "failed";
+  /** `failed` is definitive refusal; `obsolete` was retired before any request. */
+  state: "pending" | "succeeded" | "failed" | "obsolete";
   requestAttempts: number;
   /** Null after the automatic request budget is exhausted; identity stays pending. */
   nextAttemptAt: Date | null;
@@ -54,7 +54,7 @@ export interface EventStore {
   prepareSync(eventKey: string, idempotencyKey: string, mirroredAt: Date): Promise<SyncAttempt | { waiting: true } | null>;
   /** Atomically settle the attempt and acknowledge only its revision/RSVP cutoff. */
   completeSync(attempt: SyncAttempt, discordEventId: string): Promise<void>;
-  /** Atomically claim a due request, increment its durable budget and lease it. */
+  /** Claim/lease a due request, or retire an obsolete never-attempted snapshot. */
   claimSync(attempt: SyncAttempt, now: Date): Promise<SyncAttempt | null>;
   deferSync(attempt: SyncAttempt, nextAttemptAt: Date | null): Promise<void>;
   /** Settle only a definitive refusal. */

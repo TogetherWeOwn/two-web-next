@@ -318,6 +318,114 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
   });
 
+  it("retires a prepared but never-attempted snapshot when reconciliation closes the event", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
+    const events = pgEventStore(sql);
+    expect(await events.prepareSync(eventKey, original.idempotencyKey, new Date()))
+      .toMatchObject({ state: "pending", requestAttempts: 0, action: "event.upsert" });
+    expect(await events.closeFinished(new Date("2100-01-01T00:00:00Z"))).toBe(1);
+    const bot = botDouble();
+    const m = delivery(original);
+    await consume({ messages: [m] }, deps(bot));
+    expect(m.ack).toHaveBeenCalledOnce();
+    expect(m.retry).not.toHaveBeenCalled();
+    expect(bot.upsertEvent).not.toHaveBeenCalled();
+    expect(bot.cancelEvent).not.toHaveBeenCalled();
+    expect(await events.pendingSync(eventKey)).toBeNull();
+    expect(await sql`select state, request_attempts, next_attempt_at from event_sync_attempts`)
+      .toEqual([{ state: "obsolete", request_attempts: 0, next_attempt_at: null }]);
+    expect(await sql`select synced_revision, discord_event_id from events`)
+      .toEqual([{ synced_revision: "0", discord_event_id: null }]);
+    expect(await sql`select job_id from queue_jobs`).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    await consume({ messages: [delivery(original, 2)] }, deps(bot));
+    expect(bot.upsertEvent).not.toHaveBeenCalled();
+  });
+
+  it("replays an attempted immutable request after the event becomes past", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
+    const bot = botDouble();
+    bot.upsertEvent.mockImplementationOnce(async () => { throw new BotTransportError("applied, response lost"); });
+    await consume({ messages: [delivery(original)] }, deps(bot));
+    const pending = await pgEventStore(sql).pendingSync(eventKey);
+    expect(pending).toMatchObject({ state: "pending", requestAttempts: 1 });
+    expect(await pgEventStore(sql).closeFinished(new Date("2100-01-01T00:00:00Z"))).toBe(1);
+    await makeDue();
+    const m = delivery(original, 2);
+    await consume({ messages: [m] }, deps(bot));
+    expect(m.ack).toHaveBeenCalledOnce();
+    expect(bot.upsertEvent).toHaveBeenCalledTimes(2);
+    expect(bot.upsertEvent.mock.calls[1]).toEqual([pending!.payload, original.idempotencyKey]);
+    expect(await sql`select state, request_attempts from event_sync_attempts`)
+      .toEqual([{ state: "succeeded", request_attempts: 2 }]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("retires a never-attempted older revision and dispatches current cancellation with a new key", async () => {
+    await seed();
+    await enqueueEventSync(env, eventKey, "published");
+    const original = sent[0]!.body;
+    const events = pgEventStore(sql);
+    await events.prepareSync(eventKey, original.idempotencyKey, new Date());
+    expect((await request("POST", `/events/${eventKey}/cancel`)).status).toBe(200);
+    expect(sent).toHaveLength(1);
+    const bot = botDouble();
+    await consume({ messages: [delivery(original)] }, deps(bot));
+    expect(bot.upsertEvent).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.body.idempotencyKey).not.toBe(original.idempotencyKey);
+    expect(await events.needsSync(eventKey)).toBe(true);
+    await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
+    expect(bot.cancelEvent).toHaveBeenCalledExactlyOnceWith({ eventKey }, sent[1]!.body.idempotencyKey);
+    expect(await events.needsSync(eventKey)).toBe(false);
+    expect(await sql`select state, request_attempts from event_sync_attempts order by revision`)
+      .toEqual([{ state: "obsolete", request_attempts: 0 }, { state: "succeeded", request_attempts: 1 }]);
+  });
+
+  it("a first claim waiting on an event update rechecks its committed eligibility", async () => {
+    const id = await seed();
+    const original = buildSyncMessage(eventKey, "published")!;
+    const events = pgEventStore(sql);
+    const prepared = await events.prepareSync(eventKey, original.idempotencyKey, new Date());
+    if (!prepared || "waiting" in prepared) throw new Error("snapshot missing");
+    const url = testDatabaseUrl(process.env.DATABASE_URL!);
+    const options = { max: 1, port: 5432, connect_timeout: 5, password: () => url.password,
+      connection: { search_path: fixture!.schemaName }, onnotice: () => {} };
+    const editor = realPostgres(url.href, options);
+    const observer = realPostgres(url.href, options);
+    const handlerPid = (await sql`select pg_backend_pid() as pid`)[0]!.pid as number;
+    let holdingPid = 0;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let edit: Promise<unknown> | undefined;
+    let claim: ReturnType<typeof events.claimSync> | undefined;
+    try {
+      edit = editor.begin(async (tx) => {
+        await tx`update events set status = 'past' where id = ${id}`;
+        holdingPid = (await tx`select pg_backend_pid() as pid`)[0]!.pid;
+        await held;
+      });
+      await vi.waitFor(() => expect(holdingPid).toBeGreaterThan(0));
+      claim = events.claimSync(prepared, new Date());
+      await vi.waitFor(async () => {
+        const [row] = await observer`select pg_blocking_pids(${handlerPid}) as blockers`;
+        expect(row!.blockers).toContain(holdingPid);
+      }, { interval: 10, timeout: 2000 });
+      release();
+      await edit;
+      expect(await claim).toMatchObject({ state: "obsolete", requestAttempts: 0, idempotencyKey: original.idempotencyKey });
+      expect(await events.pendingSync(eventKey)).toBeNull();
+    } finally {
+      release();
+      await Promise.allSettled([edit, claim]);
+      await Promise.all([editor.end({ timeout: 1 }), observer.end({ timeout: 1 })]);
+    }
+  });
+
   it("reconciliation recovers a stranded pending snapshot with its original key", async () => {
     await seed();
     await enqueueEventSync(env, eventKey, "published");
@@ -372,8 +480,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       expect(other.ack).toHaveBeenCalledOnce();
       expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
       // Explicit operator recovery renews only the budget/eligibility, never
-      // action/payload/key. No automatic edit/reconcile performs this reset.
-      await sql`update event_sync_attempts set request_attempts = 0, next_attempt_at = now() - interval '1 second'
+      // action/payload/key or the fact that this request was already attempted.
+      // No automatic edit/reconcile performs this renewal.
+      await sql`update event_sync_attempts set request_attempts = 1, next_attempt_at = now() - interval '1 second'
         where idempotency_key = ${original.idempotencyKey}::uuid`;
       bot.upsertEvent.mockResolvedValue({ ok: true, requestId: null, discordEventId: "discord-1" });
       await reconcileEvents({ events: pgEventStore(sql),

@@ -29,6 +29,7 @@ function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: s
 export async function consume(
   batch: { messages: readonly Msg[] },
   deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger;
+    needsSync?: EventStore["needsSync"];
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown> },
 ): Promise<void> {
   for (const m of batch.messages) {
@@ -145,7 +146,7 @@ export async function consume(
           }, LEDGER_TIMEOUT_MS);
         });
         const successor = (async () => {
-          if (await deps.events.needsSync(body.eventKey)) {
+          if (await (deps.needsSync ?? deps.events.needsSync)(body.eventKey)) {
             controller.signal.throwIfAborted();
             await deps.dispatchPending!(body.eventKey, controller.signal);
           }

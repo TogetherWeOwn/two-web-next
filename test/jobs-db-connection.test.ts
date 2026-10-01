@@ -37,7 +37,7 @@ for (const operation of ["producer", "consumer", "scheduled"] as const) {
         else if (operation === "consumer") await handleQueue({ messages: [] } as unknown as MessageBatch<unknown>, env);
         else await handleScheduled({ cron: RECONCILE_CRON } as ScheduledController, env);
         const calls = vi.mocked(postgres).mock.calls;
-        expect(calls).toHaveLength(operation === "producer" ? 1 : 2);
+        expect(calls).toHaveLength(operation === "producer" ? 1 : operation === "consumer" ? 3 : 2);
         for (const call of calls) expect(call).toEqual([expected, databaseOptions]);
         if (databaseUrl(env)) expect(expected).toBe(databaseUrl(env));
       });
