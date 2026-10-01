@@ -2,7 +2,8 @@
 //
 // Progressive enhancement over the SSR mount in `src/events/pages.tsx`
 // (EventPage): one PUT per join/claim click, one DELETE per withdraw/leave
-// click, abort-then-resend when a second click lands while one is in flight.
+// click. All controls stay disabled until the write and body settle: aborting
+// a fetch cannot cancel a server transaction, so conflicting writes never overlap.
 // Optimistic saving in flight (`aria-busy` on the mount, clicked control
 // disabled with the saving/removing copy); on success the nodes are patched
 // in place and focus moves to the new state (TOG-6956), then a
@@ -101,7 +102,7 @@
   var eventKey = root.getAttribute("data-event-key");
   if (!eventKey) return;
   // DOM text is never assigned to href unvalidated. The SSR contract only
-  // ever emits "/auth/discord" or "/auth/discord?next=<pct-encoded return>",
+  // ever emits "/join/discord" or "/join/discord?next=<pct-encoded return>",
   // so accept exactly that shape, normalize the return path through
   // decode/encode, and fall back to the location-derived link otherwise.
   function safeLoginUrl(raw, fallback) {
@@ -109,24 +110,24 @@
     var marker = "?next=";
     var at = raw.indexOf(marker);
     var base = at === -1 ? raw : raw.slice(0, at);
-    if (base !== "/auth/discord") return fallback;
-    if (at === -1) return "/auth/discord";
+    if (base !== "/join/discord") return fallback;
+    if (at === -1) return "/join/discord";
     var next;
     try {
       next = decodeURIComponent(raw.slice(at + marker.length));
     } catch (e) {
       return fallback;
     }
-    return "/auth/discord?next=" + encodeURIComponent(next);
+    return "/join/discord?next=" + encodeURIComponent(next);
   }
   var loginUrl = safeLoginUrl(
     root.getAttribute("data-login-url"),
-    "/auth/discord?next=" + encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/")
+    "/join/discord?next=" + encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/")
   );
   var url = "/events/" + encodeURIComponent(eventKey) + "/rsvp";
 
+  var controls = root.querySelector("[data-rsvp-form]") || root;
   var inflight = null;
-  var inflightButton = null;
 
   function clearOutcome() {
     [TESTID.rateLimited, TESTID.failed, TESTID.sessionExpired, TESTID.closed, TESTID.syncing, TESTID.synced, TESTID.syncFailed].forEach(function (t) {
@@ -155,7 +156,7 @@
       a.textContent = COPY.guestCta;
       el.appendChild(a);
     }
-    root.appendChild(el);
+    controls.appendChild(el);
     // Focus is opt-in (TOG-6956): failure/throttle keep focus put (null
     // target) — the alert announces without stealing focus. Only the
     // session-expired notice moves focus to the login path.
@@ -166,6 +167,9 @@
   function setBusy(on, button, busyText) {
     if (on) root.setAttribute("aria-busy", "true");
     else root.removeAttribute("aria-busy");
+    root.querySelectorAll("[data-action]").forEach(function (control) {
+      control.disabled = !!on;
+    });
     if (button) {
       button.disabled = !!on;
       if (on && busyText) {
@@ -213,7 +217,7 @@
       el.setAttribute("role", "status");
       el.textContent = COPY.syncing;
     }
-    root.appendChild(el);
+    controls.appendChild(el);
   }
 
   function paintConfirmed() {
@@ -275,11 +279,13 @@
     }
     if (!root.querySelector('[data-testid="' + TESTID.withdraw + '"]')) {
       var b = document.createElement("button");
-      b.setAttribute("type", "button");
+      b.setAttribute("type", "submit");
+      b.setAttribute("name", "status");
+      b.setAttribute("value", "withdraw");
       b.setAttribute("data-testid", TESTID.withdraw);
       b.setAttribute("data-action", "withdraw");
       b.textContent = COPY.withdraw;
-      root.appendChild(b);
+      controls.appendChild(b);
       b.addEventListener("click", function (ev) {
         onAction("withdraw", b, ev);
       });
@@ -302,27 +308,31 @@
       pos.setAttribute("role", "status");
       pos.setAttribute("data-testid", TESTID.waitlistPosition);
       pos.setAttribute("tabindex", "-1");
-      root.appendChild(pos);
+      controls.appendChild(pos);
     }
     pos.textContent = waitlistPositionCopy(position === undefined ? null : position);
     if (root.getAttribute("data-full") !== "true" && root.getAttribute("data-paused") !== "true" && !root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]')) {
       var claim = document.createElement("button");
-      claim.setAttribute("type", "button");
+      claim.setAttribute("type", "submit");
+      claim.setAttribute("name", "status");
+      claim.setAttribute("value", "going");
       claim.setAttribute("data-testid", TESTID.waitlistClaim);
       claim.setAttribute("data-action", "going");
       claim.textContent = COPY.waitlistClaim;
-      root.appendChild(claim);
+      controls.appendChild(claim);
       claim.addEventListener("click", function (ev) {
         onAction("going", claim, ev);
       });
     }
     if (!root.querySelector('[data-testid="' + TESTID.waitlistLeave + '"]')) {
       var leave = document.createElement("button");
-      leave.setAttribute("type", "button");
+      leave.setAttribute("type", "submit");
+      leave.setAttribute("name", "status");
+      leave.setAttribute("value", "withdraw");
       leave.setAttribute("data-testid", TESTID.waitlistLeave);
       leave.setAttribute("data-action", "withdraw");
       leave.textContent = COPY.waitlistLeave;
-      root.appendChild(leave);
+      controls.appendChild(leave);
       leave.addEventListener("click", function (ev) {
         onAction("withdraw", leave, ev);
       });
@@ -349,12 +359,14 @@
     var full = root.getAttribute("data-full") === "true";
     var action = full ? "waitlisted" : "going";
     var join = document.createElement("button");
-    join.setAttribute("type", "button");
+    join.setAttribute("type", "submit");
+    join.setAttribute("name", "status");
+    join.setAttribute("value", action);
     join.setAttribute("data-testid", full ? TESTID.waitlistJoin : TESTID.going);
     join.setAttribute("data-action", action);
     join.textContent = full ? COPY.waitlistJoin : COPY.cta;
     if (conf && conf.parentNode) conf.parentNode.replaceChild(join, conf);
-    else root.appendChild(join);
+    else controls.appendChild(join);
     join.addEventListener("click", function (ev) { onAction(action, join, ev); });
     focusTestid([TESTID.going, TESTID.waitlistJoin]);
   }
@@ -390,6 +402,7 @@
 
   function onAction(action, button, ev) {
     if (ev && ev.preventDefault) ev.preventDefault();
+    if (inflight) return;
     // SSR only renders going/waitlisted/withdraw controls; any other
     // data-action (e.g. maybe/not_going) never fires — the server stays
     // authoritative and the member sees the failure alert, never a 422
@@ -400,14 +413,11 @@
       notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
       return;
     }
+    // Native disabled controls suppress activation; also guard programmatic
+    // clicks and form submits. Never abort a write that may still commit.
     clearOutcome();
-    if (inflight) {
-      inflight.abort();
-      setBusy(false, inflightButton);
-    }
-    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var controller = {};
     inflight = controller;
-    inflightButton = button;
     var isWithdraw = action === "withdraw";
     var method = isWithdraw ? "DELETE" : "PUT";
     setBusy(true, button, isWithdraw ? COPY.removing : COPY.saving);
@@ -417,7 +427,6 @@
       credentials: "same-origin",
       redirect: "manual"
     };
-    if (controller && controller.signal) init.signal = controller.signal;
     if (!isWithdraw) init.body = JSON.stringify({ status: action });
     fetch(url, init).then(
       function (res) {
@@ -429,22 +438,19 @@
             broadcast(viewerState("withdraw"));
             return;
           }
-          var done = function (syncedAt, syncFailed) {
-            if (controller && inflight !== controller) return;
+          var done = function (syncedAt, syncFailed, status, position) {
+            if (inflight !== controller) return;
             setBusy(false, button);
-            if (action === "waitlisted") {
-              paintWaitlisted(null);
-              broadcast(viewerState("waitlisted"));
-            } else if (action === "going") {
-              // Fresh confirmation and waitlist claim paint the same
-              // confirmed state; paintConfirmed swaps whichever source node
-              // rendered (join control or position line).
-              paintConfirmed();
-              broadcast(viewerState("going"));
+            // The FIFO service may settle a going request as waitlisted.
+            // Render and broadcast the stored answer, not the requested one.
+            var settled = status || action;
+            if (settled === "waitlisted") {
+              root.setAttribute("data-full", "true");
+              paintWaitlisted(position);
             } else {
               paintConfirmed();
-              broadcast(viewerState(action));
             }
+            broadcast(viewerState(settled));
             syncNote(syncedAt, syncFailed);
           };
           if (res.status === 204) return done(null, false);
@@ -453,7 +459,8 @@
             .then(
               function (j) {
                 var d = j && j.data ? j.data : null;
-                done(d ? d.synced_to_discord_at || null : null, d ? !!d.sync_failed : !!((j || {}).sync_failed));
+                done(d ? d.synced_to_discord_at || null : null, d ? !!d.sync_failed : !!((j || {}).sync_failed),
+                  d ? d.status : null, d ? d.waitlist_position : null);
               },
               function () {
                 done(null, false);
@@ -515,9 +522,19 @@
               old.setAttribute("role", "status");
               old.setAttribute("data-testid", TESTID.full);
               old.setAttribute("tabindex", "-1");
-              root.appendChild(old);
+              controls.appendChild(old);
             }
             old.textContent = msg;
+            root.setAttribute("data-full", "true");
+            var claim = root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]');
+            if (claim) claim.remove();
+            var going = root.querySelector('[data-testid="' + TESTID.going + '"]');
+            if (going) {
+              going.setAttribute("data-testid", TESTID.waitlistJoin);
+              going.setAttribute("data-action", "waitlisted");
+              going.setAttribute("value", "waitlisted");
+              going.textContent = COPY.waitlistJoin;
+            }
             if (old.focus) old.focus();
           };
           var domRaw = root.getAttribute("data-capacity");
@@ -553,17 +570,19 @@
       // Keep ownership through body parsing; header arrival is not completion.
       if (inflight === controller) {
         inflight = null;
-        inflightButton = null;
       }
     });
   }
 
+  if (controls !== root) controls.addEventListener("submit", function (ev) {
+    var button = ev.submitter || root.querySelector("[data-action]");
+    onAction(button ? button.getAttribute("data-action") : null, button, ev);
+  });
   var buttons = root.querySelectorAll("[data-action]");
   for (var i = 0; i < buttons.length; i++) {
     (function (b) {
-      var action = b.getAttribute("data-action");
       b.addEventListener("click", function (ev) {
-        onAction(action, b, ev);
+        onAction(b.getAttribute("data-action"), b, ev);
       });
     })(buttons[i]);
   }

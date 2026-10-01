@@ -14,8 +14,9 @@ export const RsvpButton: FC<{
   member: boolean;
   answer: ViewerRsvp | null;
   returnTo: string;
+  waitlistPosition?: number | null;
   now?: Date;
-}> = ({ e, member, answer, returnTo, now = new Date() }) => {
+}> = ({ e, member, answer, returnTo, waitlistPosition = null, now = new Date() }) => {
   const closed = e.status === "cancelled" ? "cancelled" : e.status === "draft" ? "draft"
     : e.status !== "published" || e.endsAt <= now ? "past" : null;
   const full = e.capacity !== null && e.goingCount >= e.capacity;
@@ -23,7 +24,7 @@ export const RsvpButton: FC<{
   const waitlisted = answer?.status === "waitlisted";
   const signIn = loginUrl(returnTo);
   const button = (id: string, action: string, copy: string) =>
-    <button type="button" data-testid={id} data-action={action}>{copy}</button>;
+    <button type="submit" name="status" value={action} data-testid={id} data-action={action}>{copy}</button>;
   return (
     <section data-island={RSVP_BUTTON_ISLAND} data-event-key={e.eventKey}
       data-login-url={signIn} data-capacity={e.capacity ?? undefined}
@@ -34,7 +35,7 @@ export const RsvpButton: FC<{
       ) : !member ? (
         <a href={signIn}>{RSVP_COPY.guestCta}</a>
       ) : (
-        <>
+        <form method="post" action={`/e/${encodeURIComponent(e.eventKey)}/rsvp`} data-rsvp-form>
           {!e.rsvpOpen ? <p role="status" data-testid={RSVP_PAUSED_TESTID}>{RSVP_COPY.paused}</p> : null}
           {going ? (
             <>
@@ -46,7 +47,7 @@ export const RsvpButton: FC<{
           ) : waitlisted ? (
             <>
               {full ? <p role="status" data-testid={EVENT_FULL_TESTID}>{RSVP_COPY.full} {rsvpFullCapCopy(e.capacity!)}</p> : null}
-              <p role="status" tabindex={-1} data-testid={WAITLIST_POSITION_TESTID}>{waitlistPositionCopy(null)}</p>
+              <p role="status" tabindex={-1} data-testid={WAITLIST_POSITION_TESTID}>{waitlistPositionCopy(waitlistPosition)}</p>
               {e.rsvpOpen && !full ? button(WAITLIST_CLAIM_TESTID, "going", RSVP_COPY.waitlistClaim) : null}
               {button(WAITLIST_LEAVE_TESTID, "withdraw", RSVP_COPY.waitlistLeave)}
             </>
@@ -60,7 +61,7 @@ export const RsvpButton: FC<{
             answer?.syncedToDiscordAt ? <p data-testid={RSVP_SYNCED_TESTID}>{RSVP_COPY.synced}</p>
               : <p role="status" data-testid={RSVP_SYNCING_TESTID}>{RSVP_COPY.syncing}</p>
           ) : null}
-        </>
+        </form>
       )}
     </section>
   );

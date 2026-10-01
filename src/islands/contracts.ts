@@ -769,7 +769,7 @@ export function rsvpFocusTargets(
  * Discord sends the member back to the page. Null for a bare link.
  */
 export function loginUrl(returnTo: string | null): string {
-  return returnTo ? `/auth/discord?next=${encodeURIComponent(returnTo)}` : "/auth/discord";
+  return returnTo ? `/join/discord?next=${encodeURIComponent(returnTo)}` : "/join/discord";
 }
 
 /** Shared write budget, both verbs, per member (legacy RsvpRateLimit). */

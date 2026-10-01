@@ -43,6 +43,16 @@ Note: legacy `/join*` is the one-click OAuth journey; this repo's equivalent
 scopes. The `/join` paths landed with W6 alongside it (same scopes, same
 synchronous bot add); both stay until the strangler cutover retires one.
 
+## RSVP progressive enhancement (W10)
+
+`POST /e/:key/rsvp` is the additive HTML form adapter for member join,
+waitlist and withdrawal controls. It shares the frozen JSON resource's session,
+caller-only write, decoy, lock and 12/minute bucket; successful submissions return
+303 to `/e/{key}`. Failures retain their status and an HTML recovery link.
+`PUT /events/:key/rsvp` and `DELETE /events/:key/rsvp` are unchanged;
+POST to that JSON resource still returns 405. The global same-origin guard
+applies to the HTML adapter as to all cookie-authenticated mutations.
+
 ## Discord redirect-URI discipline (W6)
 
 Discord answers `redirect_uri` values that are not registered on the

@@ -23,7 +23,8 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
       auth = method === "PATCH" || method === "POST" ? "member-owner" : "member";
     } else if (path === "/events.json") auth = "session";
     else if (path === "/e/:key" || path === "/events/:file{.+\\.ics}") auth = "public-draft-moderator";
-    else if (path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE")) auth = "member-decoy";
+    else if ((path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE")) ||
+      (path === "/e/:key/rsvp" && method === "POST")) auth = "member-decoy";
     else if ((path === "/events" && method === "POST") || (path === "/events/:key" && method === "PATCH") ||
       (method === "POST" && (path === "/events/:key/publish" || path === "/events/:key/cancel" ||
         path === "/events/:key/rsvp-pause" || path === "/events/:key/rsvp-reopen"))) auth = "moderator";

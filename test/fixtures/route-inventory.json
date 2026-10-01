@@ -51,6 +51,7 @@
   { "method": "POST", "path": "/api/agent-events", "auth": "machine-bearer" },
   { "method": "POST", "path": "/auth/qa/:identity", "auth": "staging-token" },
   { "method": "POST", "path": "/csp-reports", "auth": "public" },
+  { "method": "POST", "path": "/e/:key/rsvp", "auth": "member-decoy" },
   { "method": "POST", "path": "/events", "auth": "moderator" },
   { "method": "POST", "path": "/events/:key/cancel", "auth": "moderator" },
   { "method": "POST", "path": "/events/:key/publish", "auth": "moderator" },

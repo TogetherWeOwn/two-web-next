@@ -3,6 +3,7 @@
 // /events.json needs a session, writes are moderator-only and enqueue the Discord
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
 import type { Context, Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { dbFor } from "../admin/db";
 import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
 import { memberAccessLog } from "../access-log";
@@ -16,6 +17,9 @@ import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
   RSVP_HONEY_FIELD,
+  RSVP_COPY,
+  loginUrl,
+  throttleWaitCopy,
   rsvpHoneyFilled,
   rsvpTrapTripped,
   calendarEmptyState,
@@ -416,9 +420,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  app.put("/events/:key/rsvp", async (c) => {
+  const putRsvp = async (c: Ctx, input: Record<string, unknown>): Promise<Response> => {
     c.header("cache-control", "private, no-store");
-    const input = await body(c);
     // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
     // without touching limiter, auth or DB, and logs nothing. Present non-string
     // values count as filled (fail-closed); absent/empty inputs are genuine.
@@ -430,7 +433,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!isRsvpStatus(input.status)) return c.json({ error: "invalid", fields: { status: ["status is invalid"] } }, 422);
     // Accepted, then refused: answering for the caller instead would look like it worked.
     if (input.user_id !== undefined && String(input.user_id) !== who.id) return c.json({ error: "forbidden" }, 403);
-    const key = c.req.param("key");
+    const key = c.req.param("key") ?? "";
     if (!KEY_RE.test(key)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
@@ -446,16 +449,17 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     }
     await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
-  });
+  };
+  app.put("/events/:key/rsvp", async (c) => putRsvp(c, await body(c)));
 
-  app.delete("/events/:key/rsvp", async (c) => {
+  const deleteRsvp = async (c: Ctx, input: Record<string, unknown>): Promise<Response> => {
     c.header("cache-control", "private, no-store");
     // Both sources are evaluated independently, with ALL values preserved:
     // `query()` is first-wins, so duplicates use `queries()` — an empty query
     // value must not mask a filled sibling or a filled body decoy, and a
     // non-string body value trips like a filled string.
     const queryHoney = c.req.queries(RSVP_HONEY_FIELD);
-    const bodyHoney = (await body(c).catch(() => ({} as Record<string, unknown>)))[RSVP_HONEY_FIELD];
+    const bodyHoney = input[RSVP_HONEY_FIELD];
     if (rsvpHoneyFilled(queryHoney) || rsvpHoneyFilled(bodyHoney)) return c.body(null, 204);
     const who = await member(c);
     if (who instanceof Response) return who;
@@ -463,11 +467,33 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     // Only the caller's own row is reachable: the delete is keyed on the session user.
     // The budget is charged inside withdrawRsvp, atomically with the delete.
-    const key = c.req.param("key");
+    const key = c.req.param("key") ?? "";
     const r = await withdrawRsvp(db, KEY_RE.test(key) ? key : "", who.id);
     if (r.limited) return rateLimitExceeded(c, r.retryAfter);
     await dispatchRsvpSync(c.env, key, r.status);
     return c.body(null, 204);
+  };
+  app.delete("/events/:key/rsvp", async (c) => deleteRsvp(c, await body(c).catch(() => ({}))));
+
+  // HTML adapter only: reuse the exact session, decoy, shared budget and
+  // locked service paths above. The frozen JSON resource still refuses POST.
+  app.post("/e/:key/rsvp", async (c) => {
+    const input = await body(c);
+    const response = await (input.status === "withdraw" ? deleteRsvp(c, input) : putRsvp(c, input));
+    const path = `/e/${encodeURIComponent(c.req.param("key"))}`;
+    if (response.ok) return c.redirect(path, 303);
+    if (response.status === 401) return c.redirect(loginUrl(path), 303);
+    const retryAfter = response.headers.get("Retry-After");
+    if (retryAfter) c.header("Retry-After", retryAfter);
+    return c.html(
+      <html lang="en"><head><title>RSVP not saved</title></head><body>
+        <h1>{RSVP_COPY.failedTitle}</h1>
+        <p role="alert">{response.status === 429 ? throttleWaitCopy(retryAfter ? Number(retryAfter) : null)
+          : "Nothing changed. Return to the event to check availability and try again."}</p>
+        <a href={path}>Return to the event</a>
+      </body></html>,
+      response.status as ContentfulStatusCode,
+    );
   });
 
   app.all("/events/:key/rsvp", (c) => c.body(null, 405, { Allow: "PUT, DELETE" }));

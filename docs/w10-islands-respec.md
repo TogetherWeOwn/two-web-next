@@ -48,13 +48,24 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
 - Writes: `PUT /events/{key}/rsvp {status}` (201 first write / 200 re-answer),
   `DELETE /events/{key}/rsvp` → 204. PUT accepts `going` / `maybe` / `not_going` /
   `waitlisted`; the island exposes going, waitlist and withdrawal controls.
-  Request budget: one request per click; abort-then-resend on double-click.
+  Request budget: one request per accepted activation. All controls are disabled
+  until the write and response body settle; repeated activations fire nothing.
+  Writes are never aborted/replaced: aborting a fetch cannot cancel a transaction.
+  This supersedes the unsafe abort-then-resend wording after the slice-2 review.
 - States rendered: guest login link (never a dead button); closed (Cancelled /
   Not published yet / been-and-gone, `role="status"`); full + waitlist join; in-line
   position + claim-seat (locked path); You're-in + withdraw; optimistic saving in
   flight (`aria-busy`); throttle wait (CM copy verbatim, `role="status"`, button stays
   enabled); failure alert beside an enabled control; session-expired → login link with
-  `?next=` return path captured at SSR (never the update endpoint).
+  `?next=` return path captured at SSR (never the update endpoint), through the
+  existing `/join/discord` signed-return flow, not the home-only auth alias.
+- Member controls are POST form submits to `/e/{key}/rsvp` without JavaScript;
+  the adapter reuses the JSON handlers' auth, caller identity, traps and shared
+  budget, then returns 303 to the event. The binder prevents native submission
+  and enhances the same controls to PUT/DELETE. No inert member buttons.
+- EventPage mounts the GoingCount listener and stable count/announcement targets.
+  Its member-only attendee list is explicitly a page-load snapshot with a refresh
+  link; RSVP enhancement does not pretend to keep identities live.
 - Broadcasts `going-count-updated {eventKey, viewerState}` on every successful write
   (going / waitlisted / none) and re-reads nothing itself — the badge owns its aggregate.
 - Honeypot `website` field: a filled decoy answers the byte-identical success shape

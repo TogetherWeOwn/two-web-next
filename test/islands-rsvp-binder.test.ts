@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { RsvpButton } from "../src/events/rsvp-button";
+import { EventPage } from "../src/events/pages";
+import type { PublicEvent } from "../src/events/reads";
 
 const binder = readFileSync(new NodeURL("../public/islands/rsvp-button.js", import.meta.url), "utf8");
 class Node {
@@ -25,7 +28,7 @@ class Node {
   remove() { this.parentNode?.removeChild(this); }
   focus() { this.focused = true; }
   addEventListener(type: string, fn: (e: { preventDefault: () => void }) => void) { this.listeners.set(type, fn); }
-  click() { this.listeners.get("click")?.({ preventDefault() {} }); }
+  click() { if (!this.disabled) this.listeners.get("click")?.({ preventDefault() {} }); }
   querySelectorAll(selector: string): Node[] {
     const matches = (n: Node) => selector.split(",").some((s) => {
       const m = /^\[([^=\]]+)(?:="([^"]*)")?\]$/.exec(s);
@@ -35,52 +38,62 @@ class Node {
   }
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
 }
-function node(testid: string, text: string, action?: string) {
-  const n = new Node(); n.setAttribute("data-testid", testid); n.textContent = text;
-  if (action) n.setAttribute("data-action", action);
-  return n;
+// Small parser for trusted JSX fixture markup, not a second hand-written action set.
+function parse(html: string) {
+  const page = new Node(); const stack = [page];
+  const decode = (s: string) => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  for (const token of html.match(/<[^>]*>|[^<]+/g) ?? []) {
+    if (token.startsWith("</")) { stack.pop(); continue; }
+    if (token.startsWith("<!")) continue;
+    const n = new Node(); stack[stack.length - 1]!.appendChild(n);
+    if (!token.startsWith("<")) { n.textContent = decode(token); continue; }
+    for (const [, key, value] of token.matchAll(/\s([\w-]+)(?:="([^"]*)")?/g)) n.setAttribute(key!, decode(value ?? ""));
+    if (!/^<(?:meta|link|input|br)\b/.test(token)) stack.push(n);
+  }
+  return page;
 }
-function browser(state: "open" | "going" | "waitlisted" | "closed" | "full" = "open", loginUrl = "/auth/discord?next=%2Fe%2Fraid%2Fone") {
-  const root = new Node();
-  root.setAttribute("data-event-key", "raid/one");
+const event: PublicEvent = {
+  id: 42, eventKey: "raid/one", title: "Squad night", game: null, description: null,
+  startsAt: new Date("2030-01-01T20:00:00Z"), endsAt: new Date("2030-01-01T22:00:00Z"),
+  timezone: "Europe/London", location: null, capacity: 4, goingCount: 1, status: "published",
+  discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+  createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
+  recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
+  createdAt: new Date(), updatedAt: new Date(),
+};
+function browser(state: "open" | "going" | "waitlisted" | "closed" | "full" = "open", loginUrl = "/join/discord?next=%2Fe%2Fraid%2Fone", integrated = false) {
+  const e = { ...event, status: state === "closed" ? "cancelled" : "published", goingCount: state === "full" ? 4 : 1 };
+  const props = { e, member: true, answer: state === "going" || state === "waitlisted" ? { status: state, syncedToDiscordAt: null } : null,
+    returnTo: "/e/raid/one", now: new Date("2029-01-01") };
+  const html = integrated ? String(EventPage({ ...props, neighbors: { previous: null, next: null }, related: [],
+    attendees: [{ id: "member-one", name: "One" }], appUrl: "https://next.example.test", jsonLd: "{}" })) : String(RsvpButton(props));
+  const page = parse(html);
+  const root = page.querySelector('[data-island="rsvp-button"]')!;
   root.setAttribute("data-login-url", loginUrl);
-  root.setAttribute("data-capacity", "4");
-  root.setAttribute("data-full", state === "full" ? "true" : "false");
-  root.setAttribute("data-paused", "false");
-  if (state === "full") {
-    root.appendChild(node("event-full", "This one's full. Cap is 4."));
-    root.appendChild(node("waitlist-join", "Join the waitlist", "waitlisted"));
-  } else if (state === "open") {
-    root.appendChild(node("rsvp-going", "I'm in", "going"));
-    root.appendChild(node("waitlist-join", "Join the waitlist", "waitlisted"));
-  } else if (state === "going") {
-    root.appendChild(node("rsvp-confirmed", "You're in"));
-    root.appendChild(node("rsvp-withdraw", "Can't make it", "withdraw"));
-  } else if (state === "waitlisted") {
-    root.appendChild(node("waitlist-position", "You're on the waitlist"));
-    root.appendChild(node("waitlist-claim", "A seat opened up — I'm in", "going"));
-    root.appendChild(node("waitlist-leave", "Leave the waitlist", "withdraw"));
-  } else root.appendChild(node("rsvp-closed", "Cancelled"));
   const requests: { url: string; init: RequestInit; resolve: (r: Response) => void; reject: (e: Error) => void }[] = [];
   const broadcasts: { type: string; detail: unknown }[] = [];
   let reloads = 0;
-  runInNewContext(binder, {
-    AbortController,
+  const listeners = new Map<string, (event: { type: string; detail: unknown }) => void>();
+  const context = {
     document: {
-      querySelector: () => root,
+      querySelector: (selector: string) => page.querySelector(selector),
+      querySelectorAll: (selector: string) => page.querySelectorAll(selector),
       createElement: () => new Node(),
       createTextNode: (text: string) => { const n = new Node(); n.textContent = text; return n; },
-      dispatchEvent: (event: { type: string; detail: unknown }) => broadcasts.push(event),
+      addEventListener: (type: string, fn: (event: { type: string; detail: unknown }) => void) => listeners.set(type, fn),
+      dispatchEvent: (event: { type: string; detail: unknown }) => { broadcasts.push(event); listeners.get(event.type)?.(event); },
     },
     CustomEvent: class { constructor(public type: string, public options: { detail: unknown }) {} get detail() { return this.options.detail; } },
     location: { pathname: "/e/raid/one", reload: () => { reloads++; } },
-    fetch: (url: string, init: RequestInit) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
-  });
+    fetch: (url: string, init: RequestInit) => new Promise<Response>((resolve, reject) => requests.push({ url, init, resolve, reject })),
+  };
+  if (integrated) runInNewContext(readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8"), context);
+  runInNewContext(binder, context);
   const get = (id: string) => root.querySelector(`[data-testid="${id}"]`);
   const finish = (i: number, status: number, body: unknown = { data: { synced_to_discord_at: null } }, headers?: HeadersInit) =>
     requests[i]!.resolve(new Response(status === 204 ? null : JSON.stringify(body), { status, headers }));
   const settle = () => new Promise((resolve) => setImmediate(resolve));
-  return { root, get, requests, broadcasts, finish, settle, reloads: () => reloads };
+  return { root, page, html, get, requests, broadcasts, finish, settle, reloads: () => reloads };
 }
 
 describe("RsvpButton shipped binder", () => {
@@ -91,7 +104,7 @@ describe("RsvpButton shipped binder", () => {
     if (status === 403) expect(b.reloads()).toBe(1);
     else expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 7.");
     expect(b.root.getAttribute("aria-busy")).toBeNull();
-    expect(b.get("rsvp-going")!.disabled).toBe(false);
+    expect(b.root.querySelectorAll("[data-action]").every((n) => !n.disabled)).toBe(true);
   });
 
   it("does not reload a forbidden response", async () => {
@@ -116,12 +129,29 @@ describe("RsvpButton shipped binder", () => {
     expect(b.requests).toHaveLength(1);
   });
 
-  it("aborts and resends, ignoring a superseded response", async () => {
+  it("suppresses a disabled double-click instead of aborting a server write", async () => {
     const b = browser(); const button = b.get("rsvp-going")!;
     button.click(); button.click();
-    expect(b.requests).toHaveLength(2); expect(b.requests[0]!.init.signal!.aborted).toBe(true);
-    b.finish(1, 200); await b.settle(); b.finish(0, 500); await b.settle();
+    expect(b.requests).toHaveLength(1); expect(b.requests[0]!.init.signal).toBeUndefined();
+    b.finish(0, 201); await b.settle();
     expect(b.get("rsvp-failed")).toBeNull(); expect(b.broadcasts).toHaveLength(1);
+  });
+
+  it("prevents reversed server commits by blocking conflicting intent until settlement", async () => {
+    const b = browser("waitlisted"); const leave = b.get("waitlist-leave")!;
+    let stored = "waitlisted";
+    b.get("waitlist-claim")!.click(); leave.click();
+    // The earlier PUT can still commit even if a transport were cancelled.
+    // There is no later DELETE to run ahead of it, and no abort signal.
+    expect(leave.disabled).toBe(true); expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.init.signal).toBeUndefined();
+    stored = "going"; b.finish(0, 200, { data: { status: stored, synced_to_discord_at: null } }); await b.settle();
+    expect(b.get("rsvp-confirmed")).not.toBeNull();
+    b.get("rsvp-withdraw")!.click(); stored = "none"; b.finish(1, 204); await b.settle();
+    expect(stored).toBe("none"); expect(b.get("rsvp-going")).not.toBeNull();
+    expect(b.broadcasts.map((e) => e.detail)).toEqual([
+      { eventKey: "raid/one", viewerState: "going" }, { eventKey: "raid/one", viewerState: "none" },
+    ]);
   });
 
   it("DELETE clears the answer and emits none without a follow-up request", async () => {
@@ -134,17 +164,30 @@ describe("RsvpButton shipped binder", () => {
     expect(b.requests).toHaveLength(1);
   });
 
-  it("joins then claims the waitlist without stale controls", async () => {
-    const b = browser(); b.get("waitlist-join")!.click(); b.finish(0, 201); await b.settle();
-    expect(b.requests[0]!.init.body).toBe('{"status":"waitlisted"}');
-    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist");
-    expect(b.get("waitlist-position")?.focused).toBe(true);
-    b.get("waitlist-claim")!.click(); b.finish(1, 200); await b.settle();
+  it("claims the waitlist without stale controls", async () => {
+    const b = browser("waitlisted"); b.get("waitlist-claim")!.click(); b.finish(0, 200); await b.settle();
+    expect(b.requests[0]!.init.body).toBe('{"status":"going"}');
     expect(b.get("waitlist-position")).toBeNull(); expect(b.get("waitlist-leave")).toBeNull();
     expect(b.get("rsvp-confirmed")).not.toBeNull();
-    expect(b.broadcasts.map((e) => e.detail)).toEqual([
-      { eventKey: "raid/one", viewerState: "waitlisted" }, { eventKey: "raid/one", viewerState: "going" },
-    ]);
+    expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "going" });
+  });
+
+  it("transitions actual open SSR to a usable waitlist action after a capacity conflict", async () => {
+    const b = browser(); expect(b.get("waitlist-join")).toBeNull();
+    b.get("rsvp-going")!.click(); b.finish(0, 409, { capacity: 4 }); await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true"); expect(b.get("rsvp-going")).toBeNull();
+    b.get("waitlist-join")!.click(); b.finish(1, 201, { data: { status: "waitlisted", waitlist_position: 3 } }); await b.settle();
+    expect(b.requests[1]!.init.body).toBe('{"status":"waitlisted"}');
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #3 in line");
+    expect(b.get("waitlist-claim")).toBeNull();
+  });
+
+  it("honors the current FIFO server's waitlisted answer to a going request", async () => {
+    const b = browser(); b.get("rsvp-going")!.click();
+    b.finish(0, 201, { data: { status: "waitlisted", waitlist_position: 2 } }); await b.settle();
+    expect(b.get("rsvp-confirmed")).toBeNull();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #2 in line");
+    expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "waitlisted" });
   });
 
   it.each([[1, "1 second"], [5, "5 seconds"], [null, null]])("uses CM throttle copy for Retry-After %s and permits retry", async (seconds, text) => {
@@ -162,16 +205,16 @@ describe("RsvpButton shipped binder", () => {
     const b = browser(); b.get("rsvp-going")!.click(); b.finish(0, status); await b.settle();
     const notice = b.get("rsvp-session-expired")!;
     expect(notice.getAttribute("role")).toBe("alert"); expect(notice.focused).toBe(true);
-    expect(notice.children[1]!.href).toBe("/auth/discord?next=%2Fe%2Fraid%2Fone");
+    expect(notice.children[1]!.href).toBe("/join/discord?next=%2Fe%2Fraid%2Fone");
     expect(b.get("rsvp-going")!.disabled).toBe(false); expect(b.broadcasts).toHaveLength(0);
   });
 
   it.each([
-    ["javascript:alert(1)", "/auth/discord?next=%2Fe%2Fraid%2Fone"],
-    ["https://evil.example.test/phish", "/auth/discord?next=%2Fe%2Fraid%2Fone"],
-    ["", "/auth/discord?next=%2Fe%2Fraid%2Fone"],
-    ["/auth/discord?next=%2Fe%2Fother", "/auth/discord?next=%2Fe%2Fother"],
-    ["/auth/discord", "/auth/discord"],
+    ["javascript:alert(1)", "/join/discord?next=%2Fe%2Fraid%2Fone"],
+    ["https://evil.example.test/phish", "/join/discord?next=%2Fe%2Fraid%2Fone"],
+    ["", "/join/discord?next=%2Fe%2Fraid%2Fone"],
+    ["/join/discord?next=%2Fe%2Fother", "/join/discord?next=%2Fe%2Fother"],
+    ["/join/discord", "/join/discord"],
   ])("never assigns hostile mount text %s to the login href (falls back or keeps contract shape)", async (raw, expected) => {
     const b = browser("open", raw); b.get("rsvp-going")!.click(); b.finish(0, 401); await b.settle();
     expect(b.get("rsvp-session-expired")!.children[1]!.href).toBe(expected);
@@ -199,25 +242,33 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("waitlist-position")).toBeNull();
   });
 
-  it("superseding with a different action restores the first control even if abort is ignored", async () => {
-    const b = browser(); const going = b.get("rsvp-going")!;
-    going.click(); b.get("waitlist-join")!.click();
-    expect(going.disabled).toBe(false); expect(going.textContent).toBe("I'm in");
-    b.finish(1, 500); await b.settle(); b.finish(0, 201); await b.settle();
-    expect(going.disabled).toBe(false); expect(b.broadcasts).toHaveLength(0);
+  it("keeps every conflicting control disabled through response-body parsing", async () => {
+    const b = browser("waitlisted"); let resolveBody!: (body: unknown) => void;
+    b.get("waitlist-claim")!.click();
+    b.requests[0]!.resolve({ ok: true, status: 200,
+      json: () => new Promise<unknown>((resolve) => { resolveBody = resolve; }),
+    } as Response); await b.settle();
+    const leave = b.get("waitlist-leave")!;
+    expect(leave.disabled).toBe(true); leave.click();
+    // Programmatic submit cannot bypass the lock either.
+    b.root.querySelector("[data-rsvp-form]")!.listeners.get("submit")!({ preventDefault() {} });
+    expect(b.requests).toHaveLength(1);
+    resolveBody({ data: { status: "going", synced_to_discord_at: null } }); await b.settle();
+    expect(b.get("rsvp-confirmed")).not.toBeNull(); expect(b.broadcasts).toHaveLength(1);
   });
 
-  it("ignores a stale success body that resolves after a newer response", async () => {
-    const b = browser(); let resolveBody!: (body: unknown) => void;
-    b.get("rsvp-going")!.click();
-    const response = { ok: true, status: 201,
-      json: () => new Promise<unknown>((resolve) => { resolveBody = resolve; }),
-    } as unknown as Response;
-    b.requests[0]!.resolve(response); await b.settle();
-    b.get("waitlist-join")!.click(); b.finish(1, 200); await b.settle();
-    resolveBody({ data: { status: "going", synced_to_discord_at: null } }); await b.settle();
-    expect(b.get("rsvp-confirmed")).toBeNull(); expect(b.get("waitlist-position")).not.toBeNull();
-    expect(b.broadcasts).toHaveLength(1);
+  it("integrates EventPage SSR and both binders: one aggregate GET, count and announcement update", async () => {
+    const b = browser("open", undefined, true);
+    expect(b.html).toContain('src="/islands/going-count.js"');
+    expect(b.html).toContain('data-testid="event-attendees-refresh"');
+    expect(b.requests).toHaveLength(0);
+    b.get("rsvp-going")!.click(); b.finish(0, 201); await b.settle();
+    expect(b.requests).toHaveLength(2); expect(b.requests[1]!.url).toBe("/events.json");
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 2 }]); await b.settle();
+    const badge = b.page.querySelector('[data-island="going-count"]')!;
+    expect(badge.querySelector("[data-count]")?.textContent).toBe("2 of 4 going");
+    expect(badge.querySelector("[data-announcement]")?.textContent).toBe("You're going. ");
+    expect(b.requests).toHaveLength(2);
   });
 
   it("closed SSR has no click action or load-time request", () => {

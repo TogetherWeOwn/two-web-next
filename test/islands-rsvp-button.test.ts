@@ -5,7 +5,9 @@ import { Hono } from "hono";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env, Session } from "../src/env";
+// route-inventory: POST /e/:key/rsvp
 import { registerEventRoutes } from "../src/events/routes";
+import { sameOrigin } from "../src/same-origin";
 import type { ViewerRsvp } from "../src/events/reads";
 import * as rsvpService from "../src/events/rsvp";
 import {
@@ -228,18 +230,19 @@ describe("rsvp-button clock-ended + pause + focus + return path", () => {
   it("returns the member to the page after login, never to the update endpoint", () => {
     expect(loginUrl("/events")).toContain("next=%2Fevents");
     expect(loginUrl("/events")).not.toContain("rsvp");
-    expect(loginUrl(null)).toBe("/auth/discord");
+    expect(loginUrl(null)).toBe("/join/discord");
   });
 });
 
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const viewer: Session = { id: "member-one", username: "one", avatar: null, member: true, moderator: false };
-function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<string, ViewerRsvp> = {}) {
+function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<string, ViewerRsvp> = {}, protectWrites = false) {
   const startsAt = new Date("2030-01-01T20:00:00Z");
   const event: typeof events.$inferSelect = {
     id: 42, eventKey: KEY, title: "Squad night", game: null, description: null,
     startsAt, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "Europe/London",
     location: null, capacity: 4, status: "published", discordEventId: null,
+    discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
     createdAt: startsAt, updatedAt: startsAt, ...over,
@@ -248,6 +251,7 @@ function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<st
   const cols = Object.keys(getTableColumns(events)) as (keyof typeof event)[];
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
+    if (sql.includes("isfinite(") || sql.includes("row_number()")) return { rows: [] };
     if (sql.includes('from "events"')) return { rows: [cols.map((k) => event[k] instanceof Date ? event[k].toISOString() : event[k])] };
     if (sql.includes('group by')) return { rows: [[event.id, 4]] };
     const answer = answers[String(params[1])];
@@ -257,6 +261,7 @@ function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<st
   let authReads = 0;
   const auth = async () => { authReads++; return who; };
   const app = new Hono<{ Bindings: Env }>();
+  if (protectWrites) app.use("*", sameOrigin);
   registerEventRoutes(app, auth, auth);
   const env = { APP_URL: "https://next.example.test", ADMIN_DB: db as unknown as Db } as unknown as Env;
   return {
@@ -354,10 +359,64 @@ describe("rsvp-button SSR/server drift", () => {
     expect(attendeeReads.map((q) => q.params)).toEqual([[42, "going"], [42, "going"]]);
   });
 
+  it.each(["going", "waitlisted", "withdraw"] as const)("no-JS %s submits a real form, shares the JSON service and returns to the event", async (status) => {
+    const p = page(status === "going" ? { capacity: null } : {}, status === "withdraw" ? { [viewer.id]: { status: "going", syncedToDiscordAt: null } } : {}, true);
+    p.as(viewer);
+    const html = mount(await (await p.request()).text());
+    const action = /<form method="post" action="([^"]+)"/.exec(html)?.[1];
+    expect(action).toBe(`/e/${KEY}/rsvp`);
+    expect(html).toContain(`type="submit" name="status" value="${status}"`);
+    const write = vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({ ok: true, created: true,
+      answer: { status: status === "withdraw" ? "going" : status, syncedToDiscordAt: null, waitlistPosition: null }, mirrored: null, eventKey: KEY });
+    const remove = vi.spyOn(rsvpService, "withdrawRsvp").mockResolvedValue({ limited: false, deleted: true, status: null });
+    const res = await p.request(action!, { method: "POST", headers: { origin: "https://next.example.test" }, body: new URLSearchParams({ status }) });
+    expect(res.status).toBe(303); expect(res.headers.get("location")).toBe(`/e/${KEY}`);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    if (status === "withdraw") { expect(remove).toHaveBeenCalledWith(p.db, KEY, viewer.id); expect(write).not.toHaveBeenCalled(); }
+    else { expect(write).toHaveBeenCalledWith(p.db, KEY, viewer.id, status); expect(remove).not.toHaveBeenCalled(); }
+  });
+
+  it("no-JS failures preserve status, throttle copy and an actionable recovery link", async () => {
+    const p = page({}, {}, true); p.as(viewer);
+    vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({ ok: false, reason: "limited", retryAfter: 5 });
+    const res = await p.request(`/e/${KEY}/rsvp`, { method: "POST", headers: { origin: "https://next.example.test" }, body: new URLSearchParams({ status: "going" }) });
+    expect(res.status).toBe(429); expect(res.headers.get("Retry-After")).toBe("5");
+    const html = await res.text(); expect(html).toContain('role="alert"');
+    expect(html).toContain(throttleWaitCopy(5)); expect(html).toContain(`href="/e/${KEY}"`);
+  });
+
+  it("no-JS refuses missing/foreign origins, non-members and cross-user writes; expired sessions get the return-aware link", async () => {
+    const p = page({}, {}, true); p.as(viewer);
+    const write = vi.spyOn(rsvpService, "writeRsvp");
+    const init = (origin?: string, extra: Record<string, string> = {}): RequestInit => ({ method: "POST",
+      headers: origin ? { origin } : {}, body: new URLSearchParams({ status: "going", ...extra }) });
+    const path = `/e/${KEY}/rsvp`;
+    for (const origin of [undefined, "https://evil.test"]) expect((await p.request(path, init(origin))).status).toBe(403);
+    expect((await p.request(path, init("https://next.example.test", { user_id: "other-member" }))).status).toBe(403);
+    p.as({ ...viewer, member: false }); expect((await p.request(path, init("https://next.example.test"))).status).toBe(403);
+    p.as(null); const expired = await p.request(path, init("https://next.example.test"));
+    expect(expired.status).toBe(303); expect(expired.headers.get("location")).toBe(loginUrl(`/e/${KEY}`));
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("no-JS filled decoys touch no auth/DB/service and the JSON resource still refuses POST", async () => {
+    const p = page({}, {}, true);
+    const write = vi.spyOn(rsvpService, "writeRsvp"); const remove = vi.spyOn(rsvpService, "withdrawRsvp");
+    for (const status of ["going", "withdraw"]) {
+      const res = await p.request(`/e/${KEY}/rsvp`, { method: "POST", headers: { origin: "https://next.example.test" },
+        body: new URLSearchParams({ status, website: "filled" }) });
+      expect(res.status).toBe(303); expect(res.headers.get("location")).toBe(`/e/${KEY}`);
+    }
+    expect(p.authReads()).toBe(0); expect(p.queries).toHaveLength(0);
+    expect(write).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
+    const offVerb = await p.request(`/events/${KEY}/rsvp`, { method: "POST", headers: { origin: "https://next.example.test" } });
+    expect(offVerb.status).toBe(405); expect(offVerb.headers.get("Allow")).toBe("PUT, DELETE");
+  });
+
   it("filled decoy is byte-identical to first-write success without auth, DB, limiter or write service", async () => {
     const p = page({ capacity: null }); p.as(viewer);
     const write = vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({ ok: true, created: true,
-      answer: { status: "going", syncedToDiscordAt: null }, mirrored: null, eventKey: KEY });
+      answer: { status: "going", syncedToDiscordAt: null, waitlistPosition: null }, mirrored: null, eventKey: KEY });
     const init = (input: unknown): RequestInit => ({ method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
     const real = await p.request(`/events/${KEY}/rsvp`, init({ status: "going" }));
     expect(real.status).toBe(201); expect(write).toHaveBeenCalledTimes(1);
