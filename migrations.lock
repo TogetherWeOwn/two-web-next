@@ -68,6 +68,10 @@
     {
       "path": "drizzle/1014_event-ics-sequence.sql",
       "sha256": "f2eb79671d76facb7eca4265e4ec6cf18fe4748bfe335a55cf5eda937095afd2"
+    },
+    {
+      "path": "drizzle/1016_job-lock-ownership.sql",
+      "sha256": "49f191d69fc38303b59fa6d649f741d426a9c0457bf950771a2f2512a4792b58"
     }
   ]
 }
