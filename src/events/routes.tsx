@@ -257,7 +257,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published"]);
     const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
-    return feedResponse(c, eventsRss(rows, c.env.APP_URL, rows.length ? built : new Date()), {
+    return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
     });
