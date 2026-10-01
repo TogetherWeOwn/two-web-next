@@ -36,7 +36,7 @@ import { registerJoinRoutes } from "./join/route";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
-import { QA_HEADER, QA_IDENTITIES, qaEnabled, qaTokenMatches } from "./qa";
+import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody } from "./up";
@@ -526,7 +526,7 @@ app.post("/auth/qa/:identity", async (c, next) => {
 }, throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const presented = c.req.header(QA_HEADER) ?? "";
   const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
-  const fixture = QA_IDENTITIES[c.req.param("identity") ?? ""];
+  const fixture = qaIdentity(c.req.param("identity") ?? "");
   if (!ok || !fixture) return c.notFound();
   const store = await storeFor(c);
   await issueSession(c, store, {
