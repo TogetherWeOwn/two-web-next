@@ -229,7 +229,7 @@ it("valid login callback fails closed at session persistence, not OAuth validati
   const state = "local-outage-oauth-state";
   const cookie = (await serializeSigned("__Host-two_oauth_state", state, env.SESSION_SECRET, { path: "/", secure: true })).split(";")[0]!;
   vi.mocked(fetch).mockResolvedValueOnce(Response.json({ access_token: "local-fixture-token" }))
-    .mockResolvedValueOnce(Response.json({ id: MEMBER.userId, username: MEMBER.username, avatar: null }))
+    .mockResolvedValueOnce(Response.json({ id: MEMBER.userId, username: MEMBER.username, global_name: null, avatar: null }))
     .mockResolvedValueOnce(new Response(null, { status: 201 }));
   const res = await testApp.request(`/auth/discord/callback?code=local-code&state=${state}`, { headers: { cookie } }, outageEnv());
   expect(fetch).toHaveBeenCalledTimes(3);
