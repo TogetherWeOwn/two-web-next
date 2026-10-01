@@ -125,9 +125,9 @@ export function parseRecurrenceForm(data: Record<string, unknown>): RecurrenceIn
   const countRaw = str(data.recurrence_count);
   if (countRaw !== null) {
     const n = Number(countRaw);
-    if (!Number.isFinite(n) || Math.trunc(n) < 1 || Math.trunc(n) > MAX_OCCURRENCES) {
+    if (!Number.isInteger(n) || n < 1 || n > MAX_OCCURRENCES) {
       fields.recurrence_count = `Occurrences must be between 1 and ${MAX_OCCURRENCES}.`;
-    } else count = Math.trunc(n);
+    } else count = n;
   }
 
   let endsOn: Date | null = null;
