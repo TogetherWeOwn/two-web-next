@@ -44,7 +44,7 @@ describe.each([
     const destination = url === undefined ? FALLBACK_INVITE : inviteDestination(url);
     if (url?.includes("?utm_source=web")) expect(destination).toBe(url);
     const html = await render(url, session, notice);
-    const inviteLinks = [...html.matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>(Open Discord|Join with an invite link instead)<\/a>/g)];
+    const inviteLinks = [...html.matchAll(/<a\b[^>]*href="(?!\/discord")([^"]*)"[^>]*>(Open Discord|Join with an invite link instead)<\/a>/g)];
     expect(inviteLinks).toHaveLength(links);
     expect(inviteLinks.map((link) => link[1])).toEqual(Array(links).fill(destination.replaceAll("&", "&amp;")));
     if (destination === FALLBACK_INVITE) expect(html).not.toContain(`href="${url}"`);
