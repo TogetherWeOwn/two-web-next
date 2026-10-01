@@ -1,4 +1,5 @@
 // Minimal Discord OAuth2 + guild auto-join. No SDK: three HTTP calls, all typed here.
+import { discordFetch } from "./discord-http";
 const API = "https://discord.com/api/v10";
 
 // identify: who they are. guilds.join: lets our bot add them to the TWO server in one click.
@@ -23,7 +24,7 @@ export async function exchangeCode(
   clientSecret: string,
   redirectUri: string,
 ): Promise<string> {
-  const res = await fetch(`${API}/oauth2/token`, {
+  const res = await discordFetch(`${API}/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -41,7 +42,7 @@ export async function exchangeCode(
 }
 
 export async function fetchUser(accessToken: string): Promise<DiscordUser> {
-  const res = await fetch(`${API}/users/@me`, { headers: { authorization: `Bearer ${accessToken}` } });
+  const res = await discordFetch(`${API}/users/@me`, { headers: { authorization: `Bearer ${accessToken}` } });
   if (!res.ok) throw new DiscordError("fetch_user", res.status);
   return (await res.json()) as DiscordUser;
 }
@@ -57,7 +58,7 @@ export async function addGuildMember(
   accessToken: string,
   botToken: string,
 ): Promise<JoinResult> {
-  const res = await fetch(`${API}/guilds/${guildId}/members/${userId}`, {
+  const res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
     method: "PUT",
     headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
     body: JSON.stringify({ access_token: accessToken }),
