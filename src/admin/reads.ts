@@ -24,7 +24,14 @@ export async function listRoster(db: Db, eventKey: string): Promise<RosterEntry[
   return rows;
 }
 
-export type JoinAttemptRow = typeof joinAttempts.$inferSelect;
+// Viewer shape excludes the import-only legacy_id key: fresh staging
+// databases bootstrapped by migrateJoin() (drizzle/1000 shape) have no such
+// column, and SELECT * would fail there with 42703. Explicit columns keep the
+// viewer readable on both the bootstrap and migrated (drizzle/1012) shapes.
+export type JoinAttemptRow = Pick<
+  typeof joinAttempts.$inferSelect,
+  "id" | "outcome" | "source" | "requestId" | "discordId" | "createdAt"
+>;
 
 const PAGE = 100;
 
@@ -42,7 +49,14 @@ export async function listJoinAttempts(
   if (opts.outcome) conds.push(eq(joinAttempts.outcome, opts.outcome));
   if (opts.q) conds.push(or(eq(joinAttempts.discordId, opts.q), eq(joinAttempts.requestId, opts.q))!);
   return db
-    .select()
+    .select({
+      id: joinAttempts.id,
+      outcome: joinAttempts.outcome,
+      source: joinAttempts.source,
+      requestId: joinAttempts.requestId,
+      discordId: joinAttempts.discordId,
+      createdAt: joinAttempts.createdAt,
+    })
     .from(joinAttempts)
     .where(and(...conds))
     .orderBy(desc(joinAttempts.createdAt), desc(joinAttempts.id))
@@ -51,8 +65,21 @@ export async function listJoinAttempts(
 
 /** Direct lookup uses the list's retention window; mapped identities remain audit subjects after leaving. */
 export async function getJoinAttempt(db: Db, id: number, now?: Date) {
+  // Same explicit projection as the list: a bare `attempt: joinAttempts`
+  // expands to SELECT * including legacy_id and 42703s on migrateJoin()
+  // bootstraps (drizzle/1000 shape). The joined member id stays.
   const [row] = await db
-    .select({ attempt: joinAttempts, memberId: users.id })
+    .select({
+      attempt: {
+        id: joinAttempts.id,
+        outcome: joinAttempts.outcome,
+        source: joinAttempts.source,
+        requestId: joinAttempts.requestId,
+        discordId: joinAttempts.discordId,
+        createdAt: joinAttempts.createdAt,
+      },
+      memberId: users.id,
+    })
     .from(joinAttempts)
     .leftJoin(users, eq(users.id, joinAttempts.discordId))
     .where(and(eq(joinAttempts.id, id), gte(joinAttempts.createdAt, windowStart(now))))

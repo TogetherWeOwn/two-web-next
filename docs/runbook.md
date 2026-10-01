@@ -142,7 +142,8 @@ and [rollback limits](https://developers.cloudflare.com/workers/versions-and-dep
 
 ## Read `/up` without mistaking liveness for readiness
 
-`GET /health` and `/healthz` return `200 {"ok":true}` without database work.
+`GET /robots.txt` is DB-free and can check local Worker startup; it does not
+prove deployment readiness. `/health` and `/healthz` are removed (404).
 `GET /up` is **readiness**: a read-only DB ping and web migration-ledger read,
 plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
@@ -218,8 +219,9 @@ outage: **missing configuration is not the same as an unreachable database**.
 Normal web stores prefer `DATABASE_URL`, otherwise `DB.connectionString`
 ([src/db/connection.ts](../src/db/connection.ts)); failure does not try the
 other connection. `/up` prefers `DB`; jobs prefer `HYPERDRIVE`, then `DB`, then
-`DATABASE_URL`. `/db-ping` uses only `DB` and actively queries the database:
-**never use it against production for tests; staging E2E needs verified staging bindings**.
+`DATABASE_URL`. The removed `/db-ping`, `/health` and `/healthz` routes are
+ordinary unknown paths (404), not diagnostics. Never test production; staging
+E2E needs verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
@@ -229,12 +231,12 @@ below, not its older `/up` row, define these outcomes.
 
 | Route(s) | Configured database outage behavior |
 | --- | --- |
-| `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join`, `/health`, `/healthz` (GET) | Stay **200**, DB-free. |
+| `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join` (GET) | Stay **200**, DB-free. |
 | `/up` (GET) | **503** `db:error`, `pending_migrations:null`; queue becomes `unknown`. A reachable DB with unreadable/pending web migrations is also 503 (`db:ok`). |
 | `/sitemap_index.xml` (GET) | Stays **200** with static entries; event lookup failure is caught. |
 | `/discord`, `/auth/discord` (GET) | Stay **302** to invite / OAuth start, DB-free. |
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |
-| `/db-ping` (GET) | **503** `db_unavailable`; also 503 without `DB`. |
+| `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
 | `/` (GET) | **Not guaranteed 200**: session-store migration/read failures can become **500**. Missing DB gives guest shell; a migration-cached guest may stay 200. Rotation failure alone falls back to guest. |
 | `/auth/discord/callback` (GET) | Session create/store failure **500**; roster-write-only failure is caught. Invalid state/Discord exchange failure redirects **302** before persistence. |
 | `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |

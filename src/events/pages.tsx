@@ -84,11 +84,22 @@ import {
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
 import { googleCalendarUrl } from "./feeds";
-import type { EventAttendee, PublicEvent } from "./reads";
+import type { EventAttendee, EventLink, EventNeighbors, PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
   try {
     return new Intl.DateTimeFormat("en-GB", { dateStyle: "full", timeStyle: "short", timeZone: tz }).format(d);
+  } catch {
+    return d.toISOString();
+  }
+};
+
+const fmtWithOffset = (d: Date, tz: string): string => {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric",
+      hour: "2-digit", minute: "2-digit", timeZone: tz, timeZoneName: "longOffset",
+    }).format(d);
   } catch {
     return d.toISOString();
   }
@@ -378,14 +389,14 @@ export const EventsCalendarPage: FC<{
           <div role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
             <a
               href={calendarUrl({ ...state, view: "list" })}
-              aria-pressed={state.view === "list"}
+              aria-current={state.view === "list" ? "page" : undefined}
               data-testid={EVENTS_VIEW_LIST_TESTID}
             >
               List
             </a>{" "}
             <a
               href={calendarUrl({ ...state, view: "calendar" })}
-              aria-pressed={state.view === "calendar"}
+              aria-current={state.view === "calendar" ? "page" : undefined}
               data-testid={EVENTS_VIEW_CALENDAR_TESTID}
             >
               Calendar
@@ -514,7 +525,16 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl: string; jsonLd: string; session?: Session | null; waitlistPosition?: number | null }> = ({ e, attendees = [], appUrl, jsonLd, session, waitlistPosition }) => {
+export const EventPage: FC<{
+  e: PublicEvent;
+  neighbors: EventNeighbors;
+  related: EventLink[];
+  attendees?: EventAttendee[];
+  appUrl: string;
+  jsonLd: string;
+  session?: Session | null;
+  waitlistPosition?: number | null;
+}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, waitlistPosition }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -557,6 +577,44 @@ export const EventPage: FC<{ e: PublicEvent; attendees?: EventAttendee[]; appUrl
       ) : null}
       <script src="/islands/copy-link.js" defer />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+      {neighbors.previous || neighbors.next ? (
+        <nav aria-label="More events" data-testid="event-pagination">
+          {neighbors.previous ? (
+            <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
+              ← Previous event: {neighbors.previous.title}
+            </a>
+          ) : null}{" "}
+          {neighbors.next ? (
+            <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
+              Next event: {neighbors.next.title} →
+            </a>
+          ) : null}
+        </nav>
+      ) : null}
+      {related.length > 0 ? (
+        <section aria-label="Related events" data-testid="event-related">
+          <h2>More events you might like</h2>
+          <ul>
+            {related.map((event) => (
+              <li>
+                <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
+                  {event.title}{" · "}
+                  <time datetime={event.startsAt.toISOString()}>{fmtWithOffset(event.startsAt, event.timezone)}</time>
+                  {event.location ? ` · ${event.location}` : ""}
+                </a>
+              </li>
+            ))}
+          </ul>
+          {!session ? (
+            <>
+              <p>These fill up fast for members. Join the Discord and you&apos;ll hear about the next one before it lands here.</p>
+              <a class="btn" href={`/join?next=${encodeURIComponent(path)}`} data-testid="event-related-join">
+                Join the Discord
+              </a>
+            </>
+          ) : null}
+        </section>
+      ) : null}
     </Shell>
   );
 };
