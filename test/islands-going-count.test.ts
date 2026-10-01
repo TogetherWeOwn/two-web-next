@@ -120,7 +120,7 @@ describe("going-count refresh discipline: requests fired", () => {
   it("fires exactly one GET against the frozen collection per answered event", () => {
     const req = goingRefreshRequest("ulid-1");
     expect(req.method).toBe("GET");
-    expect(req.url).toBe(EVENTS_JSON_URL);
+    expect(req.url).toBe(`${EVENTS_JSON_URL}?event_key=ulid-1`);
     expect(req.eventKey).toBe("ulid-1");
   });
 
