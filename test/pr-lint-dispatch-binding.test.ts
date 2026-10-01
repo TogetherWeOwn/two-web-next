@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -132,7 +132,9 @@ else:
     };
     const outputCommands = optionalFile("output");
     if (resolved.status !== 0 || !fileTransport) {
-      return { ...resolved, output: outputCommands, calls: optionalFile("gh-calls.jsonl") };
+      return { ...resolved, output: outputCommands, calls: optionalFile("gh-calls.jsonl"),
+        metadataFiles: readdirSync(dir).filter((name) => /^pr-lint-.*\.json$/.test(name)),
+      };
     }
     // Execute the real check step with the file path published by the resolver.
     // Binding failures must never publish even this one output command.
@@ -144,7 +146,7 @@ else:
     const checked = spawnSync("bash", ["-e", "-c", checkerShell], {
       env: { ...env, PR_METADATA_PATH: metadataPath }, encoding: "utf8", timeout: 5000,
     });
-    return { ...checked, output: metadata, calls: optionalFile("gh-calls.jsonl") };
+    return { ...checked, output: metadata, calls: optionalFile("gh-calls.jsonl"), metadataFiles: [] };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -155,7 +157,15 @@ function expectRejected(fixture: Fixture) {
   expect(result.error).toBeUndefined();
   expect(result.status, result.stdout + result.stderr).not.toBe(0);
   expect(result.output).toBe("");
+  expect(result.metadataFiles).toEqual([]);
   expect(result.stdout).not.toContain("PR conventions OK");
+}
+
+function diagnostic(result: ReturnType<typeof runWorkflow>) {
+  const lines = result.stderr.split("\n").filter((line) => line.startsWith('{"diagnostic":"pr.binding_failed",'));
+  expect(lines).toHaveLength(1);
+  expect(Buffer.byteLength(lines[0]!)).toBeLessThanOrEqual(2048);
+  return JSON.parse(lines[0]!) as Record<string, unknown>;
 }
 
 describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
@@ -256,6 +266,122 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     const fixture = pullRequest(true);
     modify(fixture);
     expectRejected(fixture);
+  });
+
+  it.each([false, true])("rejects stale event base with unchanged head, regardless of REST base (new REST base: %s)", (newRestBase) => {
+    const fixture = pullRequest();
+    const newerBase = "d".repeat(40);
+    fixture.parents[0] = newerBase;
+    if (newRestBase) fixture.live.base.sha = newerBase;
+    const result = runWorkflow(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.output).toBe("");
+    expect(result.metadataFiles).toEqual([]);
+    expect(result.stderr).toContain("Checked revision is not the event's head or base/head merge");
+    expect(diagnostic(result)).toEqual({
+      diagnostic: "pr.binding_failed", event: "pull_request", requested_pr_number: 28,
+      event_pr_number: 28, event_snapshot_pr_number: 28, api_pr_number: 28,
+      workflow_repository: repository.toLowerCase(), event_repository: repository.toLowerCase(),
+      event_base_repository: repository.toLowerCase(), event_head_repository: repository.toLowerCase(),
+      api_base_repository: repository.toLowerCase(), api_head_repository: repository.toLowerCase(),
+      workflow_sha: mergeSha, checked_sha: mergeSha,
+      event_head_sha: headSha, api_head_sha: headSha,
+      event_base_sha: baseSha, api_base_sha: newRestBase ? newerBase : baseSha,
+      parent_count: 2, first_parent_sha: newerBase, second_parent_sha: headSha,
+    });
+  });
+
+  it.each([false, true])("preserves success with stale REST base and bound event/head checkout (head checkout: %s)", (headCheckout) => {
+    const fixture = pullRequest();
+    const newerBase = "d".repeat(40);
+    fixture.parents[0] = newerBase;
+    if (headCheckout) {
+      fixture.workflowSha = headSha;
+      fixture.checkedSha = headSha;
+      fixture.parents = [newerBase];
+    } else fixture.event.pull_request!.base.sha = newerBase;
+    const result = runWorkflow(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("PR conventions OK");
+    expect(result.stderr).not.toContain("pr.binding_failed");
+  });
+
+  it.each([
+    ["event repo command", (f: Fixture, value: string) => { f.event.repository.full_name = value; }, "event_repository"],
+    ["oversized repo", (f: Fixture, value: string) => { f.event.repository.full_name = `owner/${"x".repeat(1000)}${value}`; }, "event_repository"],
+    ["event head SHA", (f: Fixture, value: string) => { f.event.pull_request!.head.sha = value; }, "event_head_sha"],
+    ["event base SHA", (f: Fixture, value: string) => { f.event.pull_request!.base.sha = value; }, "event_base_sha"],
+    ["API head SHA", (f: Fixture, value: string) => { f.live.head.sha = value; }, "api_head_sha"],
+    ["API repo", (f: Fixture, value: string) => { f.live.base.repo.full_name = value; }, "api_base_repository"],
+    ["workflow SHA", (f: Fixture, value: string) => { f.workflowSha = value; }, "workflow_sha"],
+    ["checked SHA", (f: Fixture, value: string) => { f.checkedSha = value; }, "checked_sha"],
+    ["parent SHA", (f: Fixture, value: string) => { f.parents[0] = value; }, "first_parent_sha"],
+    ["event number", (f: Fixture, value: string) => { Object.assign(f.event.pull_request!, { number: value }); }, "event_snapshot_pr_number"],
+    ["API number", (f: Fixture, value: string) => { Object.assign(f.live, { number: value }); }, "api_pr_number"],
+  ] as const)("redacts hostile %s without publishing metadata", (_name, modify, field) => {
+    const fixture = pullRequest();
+    const secret = "PRIVATE_SENTINEL_DO_NOT_LOG";
+    const hostile = `\r\n::error::${secret}\nmetadata=${secret}\r\n`;
+    fixture.live.title = hostile;
+    fixture.live.body = hostile;
+    fixture.live.user.login = hostile;
+    modify(fixture, hostile);
+    const result = runWorkflow(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.output).toBe("");
+    expect(result.metadataFiles).toEqual([]);
+    expect(result.stderr).not.toContain(secret);
+    expect(result.stderr.split("\n").some((line) => line.startsWith("::"))).toBe(false);
+    expect(diagnostic(result)[field]).toBe("[invalid]");
+  });
+
+  it("normalizes malformed nested API records and logs only the first two parents", () => {
+    const fixture = pullRequest();
+    const secret = "PRIVATE_SENTINEL_DO_NOT_LOG";
+    fixture.apiRaw = JSON.stringify({ number: true, head: [secret], base: null, body: secret });
+    fixture.parents.push(`::error::${secret}`);
+    const result = runWorkflow(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toBe("");
+    expect(result.metadataFiles).toEqual([]);
+    expect(result.stderr).not.toContain(secret);
+    expect(diagnostic(result)).toMatchObject({
+      api_pr_number: "[invalid]", api_head_sha: "[missing]", api_base_repository: "[missing]",
+      parent_count: 3, first_parent_sha: baseSha, second_parent_sha: headSha,
+    });
+  });
+
+  it.each([false, true])("bounds and normalizes the entire diagnostic record (hostile: %s)", (hostile) => {
+    const secret = "PRIVATE_SENTINEL_DO_NOT_LOG";
+    const maxRepository = `${"x".repeat(39)}/${"y".repeat(100)}`;
+    const value = hostile ? `::error::${secret}\r\n` : maxRepository;
+    const sha = hostile ? headSha.toUpperCase() : headSha;
+    const number = hostile ? Number.MAX_VALUE : Number.MAX_SAFE_INTEGER;
+    const pr = { number, head: { sha, repo: { full_name: value } }, base: { sha, repo: { full_name: value } },
+      title: secret, body: secret, user: { login: secret }, headers: { authorization: secret },
+    };
+    const event = { number: hostile ? true : number, repository: { full_name: value }, pull_request: pr };
+    const result = spawnSync("python3", ["-B", "-c", `
+import json, runpy, sys
+runpy.run_path('ci/resolve-pr-metadata.py')['binding_diagnostic'](*json.load(sys.stdin))
+`], {
+      env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 5000,
+      input: JSON.stringify([hostile ? secret : "pull_request", value, sha, sha, [sha, sha], event, pr, number]),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim().split("\n")).toHaveLength(1);
+    expect(Buffer.byteLength(result.stderr.trim())).toBeLessThanOrEqual(2048);
+    expect(result.stderr).not.toContain(secret);
+    const record = JSON.parse(result.stderr);
+    expect(Object.keys(record)).toHaveLength(21);
+    expect(record).toMatchObject({
+      event: hostile ? "[invalid]" : "pull_request", event_pr_number: hostile ? "[invalid]" : number,
+      requested_pr_number: hostile ? "[invalid]" : number, workflow_repository: hostile ? "[invalid]" : value,
+      workflow_sha: hostile ? "[invalid]" : sha, parent_count: 2,
+    });
   });
 
   it("preserves push convention checking without an API read", () => {
