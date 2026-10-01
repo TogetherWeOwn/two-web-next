@@ -60,6 +60,45 @@ class PrConventionsTests(unittest.TestCase):
                 self.assertIn("::error title=Card reference::", output)
                 self.assertNotIn("::error title=PR body::", output)
 
+    def test_inline_code_comment_delimiters_leave_reference_visible(self):
+        for ticks in ("`", "``"):
+            with self.subTest(ticks=ticks):
+                body = BODY + f"\n\n{ticks}<!--{ticks}\n\nRefs: TOG-1234\n\n{ticks}-->{ticks}"
+                self.run_checker(BODY=body)
+
+    def test_unterminated_comments_hide_references_through_eof(self):
+        for event in ("pull_request", "workflow_dispatch"):
+            with self.subTest(event=event):
+                body = BODY + "\n\n<!--\nRefs: TOG-1234\n"
+                output = self.run_checker(1, EVENT=event, BODY=body)
+                self.assertIn("::error title=Card reference::", output)
+                self.assertNotIn("::error title=PR body::", output)
+                self.run_checker(EVENT=event, BODY=body, REQUIRE_CARD_REF="false")
+        self.run_checker(BODY=BODY + "\nRefs: TOG-1234\n<!-- unfinished")
+
+    def test_fenced_code_comment_delimiters_are_literal(self):
+        for fence in ("```", "~~~~"):
+            with self.subTest(fence=fence):
+                body = BODY + f"\n\n{fence}text\n<!-- ` ```\n{fence}\n\nRefs: TOG-1234\n\n{fence}\n-->\n{fence}"
+                self.run_checker(BODY=body)
+        self.run_checker(BODY=BODY + "\n\n```text\n<!--\nRefs: TOG-1234")
+
+    def test_escaped_comment_delimiters_are_literal(self):
+        body = BODY + "\n\n" + r"\<!--" + "\n\nRefs: TOG-1234\n\n" + r"\-->"
+        self.run_checker(BODY=body)
+
+    def test_real_comments_win_over_code_like_content(self):
+        for comment in (
+            "<!-- `\nRefs: TOG-1234\n` -->",
+            "<!--\n```\nRefs: TOG-1234\n```",
+            "` unmatched\n\n<!--\nRefs: TOG-1234",
+            "` unmatched\n<!--\nRefs: TOG-1234",
+            "\\\\\\\\<!--\nRefs: TOG-1234",
+        ):
+            with self.subTest(comment=comment):
+                output = self.run_checker(1, BODY=BODY + "\n\n" + comment)
+                self.assertIn("::error title=Card reference::", output)
+
     def test_incidental_and_malformed_references_fail(self):
         for ref in (
             "Related to TOG-1234.",
