@@ -89,9 +89,13 @@ async function cookieFor(store: SessionStore, row: { userId: string; moderator: 
 }
 
 describe.each(["/events.json", "/events/01ARZ3NDEKTSV4RRFFQ69G5FAV"])("guest event JSON access: %s", (path) => {
-  it("redirects a browser before reading the DB, with a guarded request-path next", async () => {
+  it.each([
+    "text/html", "TEXT/HTML", "text/html;q=1", "text/html;q=0.001",
+    "text/html;q=0.5, */*;q=1", "text/html;charset=utf-8; q=0.8", "text/html;q = 0.8",
+    "text/html, application/jsonfoo",
+  ])("redirects a %s browser before reading the DB, with a guarded request-path next", async (accept) => {
     const target = `${path}?page=2&next=https%3A%2F%2Fevil.test`;
-    const res = await app.request(target, { headers: { accept: "text/html" } }, baseEnv);
+    const res = await app.request(target, { headers: { accept } }, baseEnv);
     expect(res.status).toBe(302);
     const location = new URL(res.headers.get("location")!, APP_URL);
     expect(location.pathname).toBe("/auth/discord");
@@ -99,8 +103,23 @@ describe.each(["/events.json", "/events/01ARZ3NDEKTSV4RRFFQ69G5FAV"])("guest eve
     expect(res.headers.get("cache-control")).toBe("private, no-store");
   });
 
-  it.each(["application/json", "*/*", "application/json, text/html"])("keeps a %s guest at 401 JSON", async (accept) => {
+  it.each([
+    "", "application/json", "*/*", "application/json, text/html",
+    "text/html;q=0, */*;q=1", "text/html;q=0.000", "text/htmlfoo", "text/htmlfoo;q=1",
+    "text/html;q=bad", "text/html;q=1.1", "text/html;q=-1", "text/html;q=0.0001",
+    "text/html;q=0;q=1", "text/html;q=1=0",
+    "text/html;q=0.8, application/json;q=0.9", "text/html, application/json;q=0",
+  ])("keeps a %s guest at 401 JSON", async (accept) => {
     const res = await app.request(path, { headers: { accept } }, baseEnv);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthenticated" });
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("vary")).toContain("Accept");
+  });
+
+  it("keeps a guest without Accept at 401 JSON before reading the DB", async () => {
+    const res = await app.request(path, {}, baseEnv);
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "unauthenticated" });
   });
@@ -256,6 +275,26 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect((await collection("?per_page=0&page=-2")).meta).toMatchObject({ per_page: 1, current_page: 1 });
     expect((await collection("?per_page=-3")).limit).toBe(1);
     expect((await collection("?per_page=bad&limit=3")).limit).toBe(20);
+  });
+
+  it.each(["per_page", "limit"])("defaults malformed %s sizes to 20 without accepting a numeric prefix", async (parameter) => {
+    await db.insert(events).values(Array.from({ length: 25 }, (_, i) => eventRow(i + 1)));
+    for (const value of ["3garbage", "1e3", "3.5", "0x10", "Infinity", "NaN", "", "3 4", "3\n"]) {
+      const query = `?${parameter}=${encodeURIComponent(value)}${parameter === "per_page" ? "&limit=3" : ""}`;
+      const result = await collection(query);
+      expect(result.limit, value).toBe(20);
+      expect(result.data, value).toHaveLength(20);
+      expect(result.meta, value).toEqual({ current_page: 1, per_page: 20, total: 25, last_page: 2 });
+    }
+  });
+
+  it.each(["per_page", "limit"])("clamps complete signed integer %s sizes at both boundaries", async (parameter) => {
+    for (const [value, expected] of [["+3", 3], ["003", 3], ["-0", 1], ["1", 1], ["100", 100],
+      ["101", 100], ["-1", 1], ["9".repeat(400), 100], [`-${"9".repeat(400)}`, 1]] as const) {
+      const result = await collection(`?${parameter}=${encodeURIComponent(value)}`);
+      expect(result.limit, value).toBe(expected);
+      expect(result.meta.per_page, value).toBe(expected);
+    }
   });
 
   it("returns an empty paginator with last_page one", async () => {

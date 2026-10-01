@@ -213,8 +213,16 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // Non-rotating: JSON polling must not consume the browser's session cookie.
     const session = await readFragmentSession(c);
     if (session) return session;
-    const accept = (c.req.header("accept") ?? "").toLowerCase();
-    if (accept.includes("text/html") && !accept.includes("application/json")) {
+    const ranges = (c.req.header("accept") ?? "").toLowerCase().split(",").map((range) => {
+      const [type, ...parameters] = range.split(";").map((part) => part.trim());
+      const weights = parameters.filter((parameter) => /^q\s*=/.test(parameter));
+      const quality = weights[0]?.replace(/^q\s*=\s*/, "") ?? "1";
+      const accepted = weights.length <= 1 && /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(quality) && Number(quality) > 0;
+      return { type, accepted };
+    });
+    // Any explicit JSON range keeps mixed clients on the JSON refusal path.
+    if (ranges.some((range) => range.type === "text/html" && range.accepted)
+      && !ranges.some((range) => range.type === "application/json")) {
       const url = new URL(c.req.url);
       return c.redirect(loginUrl(safeNext(url.pathname + url.search)), 302);
     }
@@ -235,8 +243,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (session instanceof Response) return session;
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
-    const limitRaw = Number.parseInt(c.req.query("per_page") ?? c.req.query("limit") ?? "", 10);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(limitRaw, JSON_MAX_LIMIT)) : JSON_DEFAULT_LIMIT;
+    const limitRaw = c.req.query("per_page") ?? c.req.query("limit") ?? "";
+    const limit = /^[+-]?\d+$/.test(limitRaw) ? Math.max(1, Math.min(Number(limitRaw), JSON_MAX_LIMIT)) : JSON_DEFAULT_LIMIT;
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
     const { rows, total } = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator });
     const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
