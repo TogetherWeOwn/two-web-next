@@ -45,7 +45,6 @@ import {
   EVENTS_SEARCH_STATUS_TESTID,
   EVENTS_SEARCH_TESTID,
   EVENTS_SUBSCRIBE_TESTID,
-  EVENTS_SUBSCRIBE_URL,
   EVENTS_VIEW_CALENDAR_TESTID,
   EVENTS_VIEW_GROUP_LABEL,
   EVENTS_VIEW_LIST_TESTID,
@@ -83,7 +82,7 @@ import {
 } from "../islands/contracts";
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
 import type { Session } from "../env";
-import { googleCalendarUrl } from "./feeds";
+import { feedUrl, googleCalendarUrl, webcalUrl } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
@@ -406,9 +405,10 @@ export const EventsCalendarPage: FC<{
             <a href="/events/past" data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>
               {EVENTS_EMPTY_COPY.pastArchive}
             </a>{" "}
-            <a href={EVENTS_SUBSCRIBE_URL} data-testid={EVENTS_SUBSCRIBE_TESTID}>
+            <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
               {EVENTS_EMPTY_COPY.subscribe}
-            </a>
+            </a>{" "}
+            <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
           </p>
         </div>
 
