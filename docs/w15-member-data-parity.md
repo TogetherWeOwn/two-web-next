@@ -209,8 +209,18 @@ the exact classified buffer, using stable route names and private/no-store.
 
 Roster search/sort retains both RSVP and joined-user owner projections. Featured
 filter/sort and legacy-ID resolution remain classified non-sensitive reads;
-featured/event resource IDs never become member subjects. Authorized legacy admin
-redirects use empty classified text buffers and fixed metadata, not a response
+featured/event resource IDs never become member subjects. The featured edit form's
+PostgreSQL microsecond/era/nonfinite timestamp text uses one exact bound-ID query
+classification, not a general computed-SQL exemption. Mounted tests refuse added
+literal and member SQL projections in that existing handler; the real PostgreSQL
+precision suite retains its full timestamp and audit-diff assertions with a valid
+moderator snowflake fixture.
+
+Write-route request-body limits are independent of member **response** streaming.
+The mounted limiter inventory follows Hono's composed-handler link when a local
+error handler wraps middleware; nested mounts are tested with actual cap+1 refusal.
+Neither those upload streams nor the 413 renderer add supported member streaming.
+Authorized legacy admin redirects use empty classified text buffers and fixed metadata, not a response
 classification bypass. Join pagination renders 100 rows but retrieves a 101st
 sensitive lookahead: its actual owner is also audited. Unlike main's former
 route-declared subjects, slicing the HTML rows cannot erase a retrieved owner.

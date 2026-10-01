@@ -10,7 +10,7 @@
 // lock. Validation, edits and FIFO promotions commit together; routes dispatch
 // write-back only after commit, with promoted answers' mirror stamps reset.
 
-import { and, asc, desc, eq, gt, ilike, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, ilike, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
 import { parseFeaturedListQuery } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
@@ -26,6 +26,30 @@ export type Actor = { id: string; username: string };
 
 export type EventRow = typeof events.$inferSelect;
 export type FeaturedRow = typeof featuredContents.$inferSelect;
+export type FeaturedEditRow = FeaturedRow & { startsAtText: string | null; endsAtText: string | null };
+
+// Date decoding loses imported microseconds and cannot represent infinity.
+// Pin formatting to UTC independently of the connection's TimeZone/DateStyle.
+// Keep BC visible so validation cannot mistake an unsupported era for AD.
+const featuredEditSelection = {
+  ...getTableColumns(featuredContents),
+  startsAtText: sql<string | null>`CASE WHEN isfinite(${featuredContents.startsAt})
+    THEN to_char(${featuredContents.startsAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')
+      || CASE WHEN EXTRACT(YEAR FROM ${featuredContents.startsAt} AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END
+    ELSE ${featuredContents.startsAt}::text END`,
+  endsAtText: sql<string | null>`CASE WHEN isfinite(${featuredContents.endsAt})
+    THEN to_char(${featuredContents.endsAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')
+      || CASE WHEN EXTRACT(YEAR FROM ${featuredContents.endsAt} AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END
+    ELSE ${featuredContents.endsAt}::text END`,
+};
+
+function featuredTimestamp(date: Date | null, text: string | null | undefined) {
+  return text === undefined ? date : text === null ? null : sql`${text}::timestamptz`;
+}
+
+function featuredAuditValues({ startsAtText, endsAtText, ...row }: FeaturedEditRow) {
+  return { ...row, startsAt: startsAtText, endsAt: endsAtText };
+}
 
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
@@ -377,7 +401,7 @@ export class NotFoundError extends Error {
 export async function listEvents(db: Db, params: EventListParams): Promise<EventRow[]> {
   const opts = parseEventListQuery(params);
   const conds: (SQL | undefined)[] = [];
-  if (opts.q) conds.push(ilike(events.title, `%${opts.q}%`));
+  if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
   if (opts.status) conds.push(eq(events.status, opts.status));
   if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
   if (opts.series === "parent") conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
@@ -419,18 +443,18 @@ export async function createFeatured(db: Db, actor: Actor, input: FeaturedFormIn
       imageAlt: input.imageAlt,
       isPublished: input.isPublished,
       position: input.position,
-      startsAt: input.startsAtUtc,
-      endsAt: input.endsAtUtc,
+      startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
+      endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
       createdBy: actor.id,
     })
-    .returning();
+    .returning(featuredEditSelection);
   if (!row) throw new Error("featured insert returned no row");
   await audit(db, {
     subjectType: "FeaturedContent",
     subjectId: String(row.id),
     causerId: actor.id,
     description: `created featured content ${row.title}`,
-    properties: dirty({} as Record<string, unknown>, row as unknown as Record<string, unknown>),
+    properties: dirty({} as Record<string, unknown>, featuredAuditValues(row)),
   });
   return row;
 }
@@ -442,7 +466,7 @@ export async function updateFeatured(
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(featuredContents).where(eq(featuredContents.id, id));
+    const [locked] = await tx.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id));
     if (!locked) throw new NotFoundError("featured content");
     const [row] = await tx
       .update(featuredContents)
@@ -454,14 +478,14 @@ export async function updateFeatured(
         imageAlt: input.imageAlt,
         isPublished: input.isPublished,
         position: input.position,
-        startsAt: input.startsAtUtc,
-        endsAt: input.endsAtUtc,
+        startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
+        endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
         updatedAt: new Date(),
       })
       .where(eq(featuredContents.id, id))
-      .returning();
+      .returning(featuredEditSelection);
     if (!row) throw new Error("featured update returned no row");
-    const changes = dirty(locked as Record<string, unknown>, row as unknown as Record<string, unknown>);
+    const changes = dirty(featuredAuditValues(locked), featuredAuditValues(row));
     if (Object.keys(changes).length > 0) {
       await tx.insert(activityLog).values({
         logName: "default",
@@ -512,8 +536,8 @@ export async function getFeaturedIdByLegacyId(db: Db, legacyId: string): Promise
   return row?.id ?? null;
 }
 
-export async function getFeatured(db: Db, id: number): Promise<FeaturedRow | null> {
-  const [row] = await nonSensitiveRead("featured", () => db.select().from(featuredContents).where(eq(featuredContents.id, id)));
+export async function getFeatured(db: Db, id: number): Promise<FeaturedEditRow | null> {
+  const [row] = await nonSensitiveRead("featured", () => db.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id)));
   return row ?? null;
 }
 

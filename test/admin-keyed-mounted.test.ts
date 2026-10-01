@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import * as reads from "../src/admin/reads";
+import * as store from "../src/admin/store";
 import { featuredContents, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { joinAttempts, users } from "../src/db/schema";
@@ -108,6 +109,22 @@ describe.skipIf(!process.env.DATABASE_URL)("mounted keyed admin reads (isolated 
       expect(response.headers.get("cache-control")).toBe("private, no-store");
     }
     expect(await logs()).toHaveLength(0);
+  });
+
+  it.each(["literal", "member"])("precision classification cannot authorize an added %s SQL projection in the existing featured handler", async (mode) => {
+    const [featured] = await fixture.db.insert(featuredContents).values({ title: "Public editorial card" }).returning();
+    const original = store.getFeatured;
+    vi.spyOn(store, "getFeatured").mockImplementationOnce(async (db, id) => {
+      const row = await original(db, id);
+      try {
+        await memberReads.nonSensitiveRead("featured", () => db.select({
+          id: featuredContents.id,
+          text: mode === "member" ? sql<string>`(select username from users limit 1)` : sql<string>`'unreviewed expression'`,
+        }).from(featuredContents).where(eq(featuredContents.id, id)));
+      } catch {}
+      return row;
+    });
+    await denial(await request(`/featured/${featured!.id}`));
   });
 
   it.each(["self", "empty"])("explicit %s roster has no subject row", async (mode) => {

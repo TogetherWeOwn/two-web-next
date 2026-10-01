@@ -12,7 +12,7 @@
 // - Live (agent-testdb, skipped without DATABASE_URL): real users/profiles/
 //   member_data_access_logs rows through the drizzle store.
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AccessEntry } from "../src/access-log";
@@ -309,6 +309,29 @@ describe("PATCH /members/:user (memory doubles)", () => {
       expect(html).toContain('<div role="alert" tabindex="-1" data-testid="profile-error"><ul>');
       expect(html).not.toContain('<ul role="alert"');
     }
+    expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
+  });
+
+  it.each([false, true])("upload read failures return 400 without saving (partial: %s)", async (partial) => {
+    const { app, sessions, store } = harness();
+    const escaped = vi.fn((_err: Error, c: Context) => c.text("Internal Server Error", 500));
+    app.onError(escaped);
+    const save = vi.spyOn(store, "save");
+    let reads = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (partial && reads++ === 0) controller.enqueue(new TextEncoder().encode('{"bio":'));
+        else controller.error(new Error("fixture upload failure, do not expose"));
+      },
+    }, { highWaterMark: 0 });
+    const response = await app.request(new Request(`http://localhost/members/${ALICE.userId}`, {
+      method: "PATCH", body, duplex: "half",
+      headers: { cookie: await cookieFor(sessions, ALICE), "content-type": "application/json" },
+    } as RequestInit), undefined, env);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Bad request");
+    expect(escaped).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
     expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
   });
 
