@@ -172,7 +172,8 @@ export const Home: FC<{
   upcomingEvents: HomeEvent[];
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
-}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured }) => (
+  imageHosts?: string;
+}> = ({ session, notice, inviteUrl, appUrl, counts, upcomingEvents, eventsUnavailable, featured, imageHosts }) => (
   <Layout
     title="Together We Own — the lobby is open"
     canonical={canonicalUrl(appUrl, "/")}
@@ -224,7 +225,7 @@ export const Home: FC<{
                 <h3>{item.url ? <a href={item.url}>{item.title}</a> : item.title}</h3>
                 {item.body ? <p class="mt">{item.body}</p> : null}
                 {(() => {
-                  const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl) : null;
+                  const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl, imageHosts) : null;
                   return src ? (
                   <img
                     class="fimg bk"

@@ -103,7 +103,7 @@ export const ProfilePage: FC<{
           <section aria-labelledby="edit-heading" data-testid={PROFILE_EDIT_TESTID} {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }} data-member-id={member.id}>
             <h2 id="edit-heading" tabindex="-1">Edit your profile</h2>
             {errors && Object.keys(errors).length > 0 ? (
-              <ul role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}>{Object.values(errors).map((e) => <li>{e}</li>)}</ul>
+              <div role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}><ul>{Object.values(errors).map((e) => <li>{e}</li>)}</ul></div>
             ) : null}
             <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
               <input type="hidden" name="_method" value="PATCH" />

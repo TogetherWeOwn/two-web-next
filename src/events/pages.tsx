@@ -378,14 +378,14 @@ export const EventsCalendarPage: FC<{
           <div role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
             <a
               href={calendarUrl({ ...state, view: "list" })}
-              aria-pressed={state.view === "list"}
+              aria-current={state.view === "list" ? "page" : undefined}
               data-testid={EVENTS_VIEW_LIST_TESTID}
             >
               List
             </a>{" "}
             <a
               href={calendarUrl({ ...state, view: "calendar" })}
-              aria-pressed={state.view === "calendar"}
+              aria-current={state.view === "calendar" ? "page" : undefined}
               data-testid={EVENTS_VIEW_CALENDAR_TESTID}
             >
               Calendar

@@ -6,4 +6,5 @@ dist/
 .env*
 *.log
 coverage/
+artifacts/
 .lighthouseci/
