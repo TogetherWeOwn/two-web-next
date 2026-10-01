@@ -1,17 +1,22 @@
+// route-inventory: GET /events.ics
+// route-inventory: GET /events.rss
+// route-inventory: GET /events/:file{.+\.ics}
 // W9 calendar feeds: byte-level fixtures pinned to two-web's EventIcs/EventRss/EventGoogleCalendar
 // output, plus route tests (agent-testdb; skipped without DATABASE_URL).
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import { eq } from "drizzle-orm";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
-import { eventIcs, eventsIcsCollection, eventsRss, googleCalendarUrl, webcalUrl } from "../src/events/feeds";
+import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss, googleCalendarUrl, webcalUrl } from "../src/events/feeds";
 
 const APP_URL = "https://next.example.test";
 const KEY = "01J0000000000000000000ABCD";
 const row = (o: Partial<typeof events.$inferSelect> = {}) =>
   ({
     id: 1,
+    icsSequence: 1782907200n,
     eventKey: KEY,
     title: "Friday night Helldivers",
     game: null,
@@ -58,6 +63,21 @@ describe("feed builders (byte fixtures)", () => {
         "",
       ].join("\r\n"),
     );
+  });
+
+  it.each([0n, 2147483647n])("emits valid persisted SEQUENCE %s independently of updatedAt", (icsSequence) => {
+    const event = row({ icsSequence });
+    for (const body of [eventIcs(event, APP_URL), eventsIcsCollection([event], APP_URL)]) {
+      expect(body).toContain(`SEQUENCE:${icsSequence}\r\n`);
+      expect(body).toContain("DTSTAMP:20260701T120000Z\r\n");
+    }
+  });
+
+  it.each([-1n, 2147483648n, 9007199254740993n])("rejects invalid SEQUENCE %s without clamping or partial collections", (icsSequence) => {
+    const event = row({ icsSequence });
+    expect(() => eventIcs(event, APP_URL)).toThrow(IcsSequenceRangeError);
+    expect(() => eventsIcsCollection([row(), event], APP_URL)).toThrow(IcsSequenceRangeError);
+    expect(event.icsSequence).toBe(icsSequence);
   });
 
   it("escapes, folds at 75 octets on a character boundary, and maps CANCELLED", () => {
@@ -179,43 +199,55 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
     expect((await req("/events/nope.ics")).status).toBe(404);
   });
 
-  it("drops an expired event from feeds and rotates the ETag with no write when the clock passes ends_at", async () => {
-    // Legacy FeedExpiryValidatorTest: a subscriber's cached feed must go stale
-    // purely because the event ended — expiry is a read-time property, not a
-    // write-triggered one. listFeed compares ends_at against now at request time.
-    await ins("01J0000000000000000000EXP1", "published", "2026-07-15T20:00:00Z");
+  it.each([
+    ["/events.rss", "<item>"],
+    ["/events.ics", "BEGIN:VEVENT"],
+  ])("%s drops an expired event and rotates its ETag with no write after ends_at", async (path, itemMarker) => {
+    // Legacy FeedExpiryValidatorTest: equality is still upcoming; advancing
+    // the clock one second invalidates the original validator without a write.
+    const key = "01J0000000000000000000EXP1";
+    const title = "Clock-only expiry sentinel";
+    await db.insert(events).values({
+      eventKey: key, title, startsAt: new Date("2026-07-15T18:00:00Z"),
+      endsAt: new Date("2026-07-15T20:00:00Z"), timezone: "UTC", status: "published",
+    });
+    const original = await db.select().from(events).where(eq(events.eventKey, key));
+    expect(original).toHaveLength(1);
     // Fake only the clock: the driver needs its real socket timers.
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
-      vi.setSystemTime(new Date("2026-07-15T19:59:00Z"));
+      vi.setSystemTime(new Date("2026-07-15T20:00:00Z"));
 
-      const fresh = await req("/events.rss");
+      const fresh = await req(path);
       expect(fresh.status).toBe(200);
       expect(fresh.headers.get("cache-control")).toBe("max-age=300, public");
       const freshBody = await fresh.text();
-      expect(freshBody).toContain("EXP1");
-      const etag = fresh.headers.get("etag")!;
-      expect((await req("/events.rss", { headers: { "if-none-match": etag } })).status).toBe(304);
-      const icsFresh = await req("/events.ics");
-      expect(await icsFresh.text()).toContain("EXP1");
+      expect(freshBody).toContain(itemMarker);
+      expect(freshBody).toContain(title);
+      const etag = fresh.headers.get("etag");
+      expect(etag).toBeTruthy();
+      const unchanged = await req(path, { headers: { "if-none-match": etag! } });
+      expect(unchanged.status).toBe(304);
+      expect(unchanged.headers.get("etag")).toBe(etag);
+      expect(await unchanged.text()).toBe("");
 
-      // One minute later the event has ended; no row changed, yet both feeds
-      // must drop it and the validators minted before the boundary must miss.
-      vi.setSystemTime(new Date("2026-07-15T20:01:00Z"));
+      vi.setSystemTime(new Date("2026-07-15T20:00:01Z"));
 
-      const stale = await req("/events.rss", { headers: { "if-none-match": etag } });
+      const stale = await req(path, { headers: { "if-none-match": etag! } });
       expect(stale.status).toBe(200);
       const staleBody = await stale.text();
-      expect(staleBody).not.toContain("EXP1");
-      const etag2 = stale.headers.get("etag")!;
+      expect(staleBody).not.toBe(freshBody);
+      expect(staleBody).not.toContain(itemMarker);
+      expect(staleBody).not.toContain(title);
+      const etag2 = stale.headers.get("etag");
+      expect(etag2).toBeTruthy();
       expect(etag2).not.toBe(etag);
-      expect((await req("/events.rss", { headers: { "if-none-match": etag2 } })).status).toBe(304);
-
-      const icsStale = await req("/events.ics");
-      expect(await icsStale.text()).not.toContain("EXP1");
-      const icsEtag2 = icsStale.headers.get("etag")!;
-      expect((await req("/events.ics", { headers: { "if-none-match": icsEtag2 } })).status).toBe(304);
-      expect((await req("/events/01J0000000000000000000EXP1.ics")).status).toBe(200); // per-event download still serves
+      const refreshed = await req(path, { headers: { "if-none-match": etag2! } });
+      expect(refreshed.status).toBe(304);
+      expect(refreshed.headers.get("etag")).toBe(etag2);
+      expect(await refreshed.text()).toBe("");
+      expect((await req(`/events/${key}.ics`)).status).toBe(200); // per-event download still serves
+      expect(await db.select().from(events).where(eq(events.eventKey, key))).toEqual(original);
     } finally {
       vi.useRealTimers();
     }

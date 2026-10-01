@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { migrateRoster, upsertRosterUser } from "../src/db/roster";
 import {
@@ -201,7 +201,7 @@ describe("staging QA seam writes the roster", () => {
       APP_URL: "https://next.togetherweown.com",
       QA_AUTH_TOKEN: "qa-secret",
     });
-    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { [QA_HEADER]: "qa-secret" } }, e);
+    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } }, e);
     expect(res.status).toBe(204);
     expect(roster.rows.get("900000000000001396")).toEqual({
       id: "900000000000001396",

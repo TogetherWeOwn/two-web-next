@@ -1,0 +1,125 @@
+name: featured-offline-proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/featured-offline-proof.yml'
+      - 'ci/featured-proof/**'
+      - 'src/admin/pages.tsx'
+      - 'src/admin/routes.tsx'
+      - 'src/featured-status.tsx'
+      - 'src/pages.tsx'
+      - 'public/styles.css'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: featured-offline-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    if: github.event_name == 'workflow_dispatch'
+    name: featured-offline-proof
+    runs-on: [self-hosted, two-selfhosted]
+    timeout-minutes: 8
+    # Browser + system libraries are already present; only the matching JS
+    # module is installed, inside this CI container. No app/DB service or secrets.
+    # https://playwright.dev/docs/docker#pull-the-image
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+      options: --init --ipc=host
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PROOF_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+      PROOF_WORKFLOW_HEAD: ${{ github.sha }}
+      PROOF_CHECKOUT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      PROOF_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Credential-free guard selftests (no browser)
+        run: node --test ci/featured-proof/run-capture.test.cjs
+      - name: Capture unchanged fixtures with pinned container dependency
+        env:
+          PROOF_OUTPUT: ${{ runner.temp }}/featured-output
+        run: |
+          # Trust only this run's authorized CI checkout for the SHA read below.
+          # Invocation-scoped (-c flags, this command only): the documented
+          # workspace path plus the step's actual directory, whichever form
+          # git resolves inside the container. No wildcard trust, no
+          # persistent config change, no credential use.
+          CHECKOUT_HEAD="$(git -c "safe.directory=$GITHUB_WORKSPACE" -c "safe.directory=$PWD" rev-parse HEAD 2>/dev/null)" || CHECKOUT_HEAD=""
+          if [ -z "$CHECKOUT_HEAD" ]; then
+            export PROOF_SETUP_FAILURE='Could not read the checkout revision; capture not executed'
+          elif [ "$CHECKOUT_HEAD" != "$PROOF_CHECKOUT_HEAD" ]; then
+            export PROOF_SETUP_FAILURE='Checkout revision does not match the expected proof head'
+          fi
+          if ! npm install --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2; then
+            export PROOF_SETUP_FAILURE='Pinned Playwright module setup failed; capture not executed'
+          fi
+          export NODE_PATH="$RUNNER_TEMP/featured-runtime/node_modules"
+          node ci/featured-proof/run-capture.cjs ci/featured-proof/fixtures "$PROOF_OUTPUT"
+      - name: Preserve setup failures without claiming browser proof
+        if: always()
+        env:
+          PROOF_OUTPUT: ${{ runner.temp }}/featured-output
+        run: |
+          if [ ! -f "$PROOF_OUTPUT/report.json" ]; then
+            mkdir -p "$PROOF_OUTPUT"
+            printf '%s\n' '{"results":[],"errors":[{"error":"Job stopped before a browser report was available"}],"visualInspection":"NOT PERFORMED"}' > "$PROOF_OUTPUT/report.json"
+          fi
+      - name: Retain all available captures and reports, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: featured-offline-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/featured-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  current-source:
+    if: github.event_name == 'pull_request'
+    name: featured-current-source-proof
+    runs-on: [self-hosted, two-selfhosted]
+    timeout-minutes: 8
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+      options: --init --ipc=host
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PROOF_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+      PROOF_CHECKOUT_HEAD: ${{ github.event.pull_request.head.sha }}
+      PROOF_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Credential-free guard selftests (no browser)
+        run: node --test ci/featured-proof/run-capture.test.cjs
+      - name: Generate fictional SSR from the exact PR source
+        run: |
+          test "$(git -c "safe.directory=$GITHUB_WORKSPACE" -c "safe.directory=$PWD" rev-parse HEAD)" = "$PROOF_CHECKOUT_HEAD"
+          npm ci --ignore-scripts --include=dev --no-audit --no-fund
+          ./node_modules/.bin/esbuild ci/featured-proof/current-fixtures.ts --bundle --platform=node --format=cjs --outfile="$RUNNER_TEMP/featured-fixtures.cjs"
+          node "$RUNNER_TEMP/featured-fixtures.cjs" "$RUNNER_TEMP/featured-current-fixtures"
+      - name: Capture twelve current-source views with no app, database or network
+        run: |
+          npm install --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2
+          export NODE_PATH="$RUNNER_TEMP/featured-runtime/node_modules"
+          # Resolve only the pinned runtime module, not the app's newer Playwright.
+          cp ci/featured-proof/capture-current.cjs "$RUNNER_TEMP/featured-current-capture.cjs"
+          node "$RUNNER_TEMP/featured-current-capture.cjs" "$RUNNER_TEMP/featured-current-fixtures" "$RUNNER_TEMP/featured-current-output"
+      - name: Retain screenshots, manifest and report for independent QA
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: featured-current-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/featured-current-output/
+          if-no-files-found: error
+          retention-days: 14

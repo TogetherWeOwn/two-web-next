@@ -3,7 +3,7 @@
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { adminApp } from "../src/admin/routes";
 import { getEvent, updateEvent } from "../src/admin/store";
 import { type EventFormInput, newEventKey, parseEventForm, ValidationError } from "../src/admin/validation";
@@ -17,7 +17,7 @@ const NOW = new Date("2026-09-30T12:00:00Z");
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const ENDED = "An event that has already ended cannot be published. Update its dates first.";
-const FLOOR = "Capacity cannot be lower than the number of members already going (5).";
+const FLOOR = "Capacity cannot be lower than the number of members already going. Occupied seats: 5.";
 const ACTOR = { id: "moderator", username: "mod" };
 
 describe("event mutation test containment", () => {
@@ -192,7 +192,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
         : await browser(`/events/${row.eventKey}`, form(capacity === null ? "" : String(capacity)));
       expect(response.status).toBe(path === "json" ? 200 : 303);
       expect(await getEvent(fixture.db, row.eventKey)).toMatchObject({ title: "Edited title", capacity });
-      expect((await state(row.eventKey)).answers).toEqual(answers);
+      // Main settles the waitlist after accepted edits; only free seats promote.
+      expect((await state(row.eventKey)).answers).toEqual(answers.map((answer) =>
+        answer.status === "waitlisted" && capacity !== 5
+          ? { ...answer, status: "going", syncedToDiscordAt: null, updatedAt: NOW }
+          : answer,
+      ));
       expect(await fixture.db.select().from(activityLog)).toHaveLength(1);
       expect(sent.at(-1)).toMatchObject({ eventKey: row.eventKey, action: "event.upsert" });
     }
@@ -210,8 +215,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     expect((await json("PUT", `/events/${row.eventKey}/rsvp`, { status: "going" }, "late-member")).status).toBe(201);
     sent.length = 0;
     const before = await state(row.eventKey);
+    // The join also settles the waiting head: five original seats plus two new Going.
+    expect(before.answers.filter((answer) => answer.status === "going")).toHaveLength(7);
     await expect(updateEvent(fixture.db, ACTOR, row.eventKey, staleInput)).rejects.toMatchObject({
-      fields: { capacity: "Capacity cannot be lower than the number of members already going (6)." },
+      fields: { capacity: "Capacity cannot be lower than the number of members already going. Occupied seats: 7." },
     });
     expect(await state(row.eventKey)).toEqual(before);
     expect(sent).toEqual([]);
@@ -301,7 +308,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     try { await waitForEventLock(); } finally { release(); await holder; }
     const result = await pending;
     expect(result).toBeInstanceOf(ValidationError);
-    expect(result).toMatchObject({ fields: { capacity: "Capacity cannot be lower than the number of members already going (6)." } });
+    expect(result).toMatchObject({ fields: { capacity: "Capacity cannot be lower than the number of members already going. Occupied seats: 6." } });
     expect(await getEvent(fixture.db, row.eventKey)).toEqual(row);
     expect(await fixture.db.select().from(rsvps).where(eq(rsvps.eventId, row.id))).toHaveLength(9);
     expect(await fixture.db.select().from(activityLog)).toEqual([]);

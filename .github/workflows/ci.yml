@@ -17,36 +17,125 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # name pinned equal to the id: `check` is a required check on main.
-  check:
-    name: check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
+  a11y:
+    name: a11y
+    runs-on: [self-hosted, two-selfhosted]
+    timeout-minutes: 15
+    # Self-hosted runners share one Docker host, so a published 5432 (and
+    # wrangler's dev ports) collide across concurrent jobs. A job container has
+    # its own network namespace; localhost:5432 is forwarded to the service.
+    container:
+      image: node:24-bookworm
     services:
       postgres:
         image: postgres:17
         env:
           POSTGRES_PASSWORD: ci
-        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Job-private localhost:5432 forward to the Postgres service
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
+          for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
+          exit 1
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Chromium cancellation regressions
+        run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
+      - name: Profile native and island Unicode regressions (memory fixtures)
+        run: A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts
+      - name: WCAG 2.2 AA (local fixtures, no external services)
+        run: npm run a11y
+      - name: Accessibility evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: a11y-evidence
+          path: artifacts/a11y/
+          if-no-files-found: error
+          retention-days: 14
+  # name pinned equal to the id: `check` is a required check on main.
+  # A failing audit must also prevent the existing required check from passing.
+  check:
+    name: check
+    needs: a11y
+    # A skipped required check is mergeable; explicitly fail when the audit is not green.
+    if: always()
+    runs-on: [self-hosted, two-selfhosted]
+    timeout-minutes: 10
+    # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
+    # Self-hosted runners share one Docker host, so a published 5432 (and
+    # wrangler's dev ports) collide across concurrent jobs. A job container has
+    # its own network namespace; localhost:5432 is forwarded to the service.
+    container:
+      image: node:24-bookworm
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Require successful accessibility audit
+        env:
+          A11Y_RESULT: ${{ needs.a11y.result }}
+        run: test "$A11Y_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Job-private localhost:5432 forward to the Postgres service
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
+          for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
+          exit 1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Dependency audit selftest (local fixtures)
+        run: npm run deps:audit:selftest
+      - name: Dependency audit (lockfile, including dev dependencies)
+        run: npm run deps:audit
+      - run: npm ci
+      - name: Seeded admin properties (10s budget, local fixtures)
+        # Skip npm's extra process startup; keep the same suite and hard budget.
+        run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
+      - name: Public-route smoke selftest (loopback fixtures)
+        run: npm run test:smoke
       - name: Apply migrations
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Exercise the exact pre-deploy invocation on the same migrated service.
-      - name: Check
-        run: npm run check
+      - name: Configuration drift check + selftest
+        run: npm run config:check
+      - name: Check (typecheck + coverage gate)
+        run: npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
+        run: npm run test:cutover
+      - name: Coverage job summary
+        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report
+        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
       - name: Neon backup selftest (stubbed, no secrets)
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check

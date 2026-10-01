@@ -1,0 +1,53 @@
+# Fixture-only featured browser proof
+
+This is the bounded offline CI lane authorized by [TOG-11003](/TOG/issues/TOG-11003), following [TOG-10986](/TOG/issues/TOG-10986). The installed GitHub company-bot connection `73e50cff-255d-4fc3-9ec1-8553a8984cfd` successfully listed this repository's workflows; the documented project-scoped git credential helper successfully read `main` before implementation. Neither the stopped `gh` shim nor runtime-tools transport is used. No connection, credential, paid runner or capacity provisioning is involved.
+
+The private repository uses `[self-hosted, two-selfhosted]` runners. Both capture jobs retain their digest-pinned browser job container, isolating browser execution from the shared Docker host. No GitHub-hosted runner or additional capacity is requested.
+
+## Current-source PR proof
+
+[TOG-10827](/TOG/issues/TOG-10827) adds a separate `current-source` PR job in the same pinned browser container. It generates fictional saved edit/list/scheduled pages plus a long-content edit from the exact checked-out PR head with `current-fixtures.ts`, then `capture-current.cjs` captures all four at 1280×900 and 390×844. The list stays inside a named keyboard-focusable scroll region rather than squeezing five columns into the mobile viewport. Browser regressions require intact title words, single-line headers and complete UTC timestamps, keyboard scrolling, and reachable Window/Last changed columns. Four supplemental `list-window-*` / `list-last-changed-*` screenshots expose those columns at both viewport sizes; all twelve PNGs require independent inspection. The long-content fixture has a 255-character unbroken headline and `https://example.test/` followed by 400 `a`s in the saved body. Checks require the complete text to remain present, wrap to multiple lines and stay inside the card. The generated manifest pins source SHA, clock and HTML hashes; `report.json` records browser version, CI run, image pin, state checks, element bounds and document overflow. Any horizontal overflow, failed state, missing stylesheet or attempted network request fails the job. QA still independently inspects all twelve PNGs on [TOG-10954](/TOG/issues/TOG-10954).
+
+The fixtures embed the current external stylesheet as a data URL, only for offline capture; deployed markup/CSP are unchanged. They contain no images, real user data, database access, server, auth or form submission. Separate fixture route tests verify that saved image sources emitted by the preview are allowed by the actual response CSP. This is current-source SSR/layout evidence, **not staging deployment or save-interaction proof**.
+
+PR source changes run this new job automatically. Manual `workflow_dispatch` retains the frozen-input `capture` job below; its files, hashes and original source attribution are unchanged and must never be relabelled as new-head evidence. The current-source artifacts are named `featured-current-source-<run-id>-<attempt>` and include twelve PNGs, manifest and report.
+
+## Frozen-input invocation and containment
+
+- Service/repository: GitHub Actions, `TogetherWeOwn/two-web-next`.
+- Entry point: `.github/workflows/featured-offline-proof.yml`, job `capture` on `[self-hosted, two-selfhosted]` in the pinned browser job container.
+- Runs on an explicitly authorized `workflow_dispatch`; PR changes use the separate current-source job above. No automatic main/deployment job is added.
+- Browser image: `mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d`. The public MCR manifest resolved this digest on 2026-09-30; amd64 manifest is `sha256:65cefd09a5e943921ecd3a6e5414c603db2eb161e9eb48f2e2ccc63486dc7dc0`.
+- Matching `playwright@1.58.2` npm module is installed **only inside the CI container**, under `RUNNER_TEMP`, with scripts/browser downloads disabled. No root app dependency changes, host installs or browser installs.
+- The guard executes the unchanged driver as `node capture-featured-proof.cjs <fixture-directory> <new-output-directory>`. The workflow invokes the guard with `node ci/featured-proof/run-capture.cjs ci/featured-proof/fixtures "$PROOF_OUTPUT"`.
+- Driver uses direct `setContent`, offline contexts, JavaScript disabled, service workers blocked and all routed requests aborted. It never starts an app/server, uses a DB/deployed endpoint, clicks a link or submits a form.
+- Guard independently fails on changed driver/fixtures, incomplete reports/PNGs, failed states or any recorded attempted request. It keeps driver reports/partial captures on failure and adds a failure report if the driver could not create one. Artifact upload runs even on failure.
+
+Container/API references: https://playwright.dev/docs/docker and https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/run-jobs-in-a-container. Playwright documents that the image includes browsers/system dependencies but not the npm module, and that module and image versions must match.
+
+## Frozen provenance (not regenerated SSR)
+
+These fictional fixtures were supplied and attributed to **product head** `582d5f93eb2a63194b9cbd4ebc4ce1abbdf9d348`, frozen at `2026-09-30T20:00:00.000Z`. They were not regenerated by this workflow. A workflow/checkout SHA is a separate identity and must never replace that product attribution.
+
+- Execution kit attachment: `/api/attachments/04cae001-9194-497f-8f49-21fbf98a30c6/content?download=1`; ZIP SHA-256 `6bd37513d78f8a040efaa141bd24279d38328a6d32a358ae4a84377b18d72938`.
+- Original fixture attachment: `/api/attachments/07d3c4f5-843e-497b-9533-1d3cf072c631/content?download=1`; ZIP SHA-256 `285d6a7dff6d33c4947427e12ca55d18ab6b9d4430a7796c4ff040dc8c0026b9`.
+- Driver SHA-256: `9501a53d50e52993f6ac91a8b02a84d71cacfe5b93ba910cd21fc4660659713b`.
+- `edit.html`: `aba57e42f9efda9a36281a765a701c3a31d3825cf6b54673fbfaf50e24969ef0`.
+- `list.html`: `3c8eeef8a59b6f4d76347ad5bb5dbe2eb1c6639d991adb79f1d554ba107fd496`.
+- `scheduled.html`: `1cb19d7b580e12b9c6ecb51557865f1ebc130b932456a028bea7aa36ec0f72f0`.
+
+## Evidence and acceptance
+
+Artifact `featured-offline-proof-<run-id>-<attempt>` contains six full-page PNGs: edit/list/scheduled at 1280×900 and 390×844, plus `report.json` and `execution.json`. The browser report records actual browser version, states, containment settings, layout metrics and attempted requests. Execution metadata records the run URL, workflow SHA, checkout SHA, frozen fixture source attribution, input hashes and image/module pin.
+
+The author uploads actual captures as attachment-backed work products on [TOG-11003](/TOG/issues/TOG-11003). QA independently opens **all six** against the matrix on [TOG-10954](/TOG/issues/TOG-10954): clipping, overlap, wrapping, form usability, table overflow and label readability. Automated success is **not** a visual PASS. No browser outputs or visual verdict existed at implementation time.
+
+Only supplied saved static SSR states are covered. Not auth, save interactions, unsaved reactive preview, regenerated/source-to-SSR proof, staging or deployment. Product PR #82 and the fleet incident [TOG-7148](/TOG/issues/TOG-7148) retain their separate gates. This CI-only PR needs one exact-head Code Reviewer pass with green CI; the approving reviewer squash-merges it, not the author.
+
+Credential-free local guard regression command (no browser/module/server/DB):
+
+```sh
+node --test ci/featured-proof/run-capture.test.cjs
+```
+
+Tests require an existing run-owned `PAPERCLIP_RUN_SCRATCH_DIR` / `PAPERCLIP_SCRATCH_DIR` or CI `RUNNER_TEMP`. Test reports and signature-only test bytes are synthetic inputs, never browser evidence.

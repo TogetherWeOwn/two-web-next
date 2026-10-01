@@ -1,3 +1,4 @@
+// route-inventory: GET /admin/join-attempts
 // Admin pt2 tests (W12): M6 roster, M8 join viewer + funnel stats, remaining
 // M9 net (403 pins on the new routes, read-only guarantees, publish/cancel
 // parity with the W8 status machine).
@@ -125,10 +126,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
     const html = await res.text();
     expect(html).toContain("RSVPs (2)");
     expect(html).toContain("alice");
-    expect(html).toContain("901"); // no users row: falls back to the id
+    expect(html).toContain("Unknown member"); // no users row: do not expose an opaque id
+    expect(html).not.toContain("901");
     expect(html).toContain("2026-10-03T10:00:00.000Z");
     // Newest answer first.
-    expect(html.indexOf("901")).toBeLessThan(html.indexOf("alice"));
+    expect(html.indexOf("Unknown member")).toBeLessThan(html.indexOf("alice"));
 
     const logs = await db.select().from(memberDataAccessLogs);
     expect(logs).toHaveLength(1);

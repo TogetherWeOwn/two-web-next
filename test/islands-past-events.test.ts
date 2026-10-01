@@ -4,11 +4,11 @@ import { URL as NodeURL } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { JSON_DEFAULT_LIMIT, PAGE_SIZE } from "../src/events/reads";
+import { JSON_DEFAULT_LIMIT, listPast, PAGE_SIZE } from "../src/events/reads";
 import {
   PAST_EVENTS_COPY,
   PAST_EVENTS_EMPTY_TESTID,
@@ -26,9 +26,10 @@ const binder = readFileSync(new NodeURL("../public/islands/past-events.js", impo
 function eventRow(n: number): typeof events.$inferSelect {
   const date = new Date(Date.UTC(2020, 0, n + 1));
   return {
-    id: n, eventKey: `archive-${n}`, title: `Past game ${n}`, game: "Chess", description: null,
+    id: n, icsSequence: 1n, eventKey: `archive-${n}`, title: `Past game ${n}`, game: "Chess", description: null,
     startsAt: date, endsAt: date, timezone: "UTC", location: null, capacity: 10, status: "past",
-    discordEventId: null, createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
+    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
     recurrenceCount: null, recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
     createdAt: date, updatedAt: date,
   };
@@ -44,6 +45,7 @@ function archive(total: number) {
     if (sql.includes('from "rsvps"')) return { rows: [] };
     const hasOffset = sql.includes(" offset ");
     const offset = hasOffset ? Number(params.at(-1)) : 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid archive SQL offset");
     const limit = Number(params.at(hasOffset ? -2 : -1));
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
     return { rows: rows.slice(offset, offset + limit).map((row) => columns.map((k) => {
@@ -52,7 +54,7 @@ function archive(total: number) {
     })) };
   });
   const env = { APP_URL, ADMIN_DB: db as unknown as Db } as unknown as Env;
-  return { queries, request: (path: string) => app.request(path, {}, env) };
+  return { db: db as unknown as Db, queries, request: (path: string) => app.request(path, {}, env) };
 }
 
 const keys = (html: string) => [...html.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);
@@ -100,7 +102,47 @@ describe("PastEvents contract and SSR drift", () => {
     expect(html).toContain(`<a href="/join">${PAST_EVENTS_COPY.join}</a>`);
     expect(html).toContain('href="/events">Back to upcoming events');
     expect(html).not.toContain(`data-testid="${PAST_EVENTS_OUT_OF_RANGE_TESTID}"`);
-    expect(source.queries).toHaveLength(2); // no aggregate read for an empty page
+    expect(source.queries).toHaveLength(1); // count only: no row or aggregate read
+  });
+
+  it.each(["9", String(Math.floor(Number.MAX_SAFE_INTEGER / PAGE_SIZE) + 1)])("recovers out-of-range page %s without a row or offset query", async (page) => {
+    const source = archive(25);
+    const response = await source.request(`/events/past?page=${page}`);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain(pastEventsOutOfRangeCopy(Number(page), 2));
+    expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past?page=${page}"`);
+    expect(keys(html)).toEqual([]);
+    expect(source.queries).toHaveLength(1);
+    expect(source.queries[0]!.sql).toMatch(/^select count\(\*\)/);
+  });
+
+  it.each(["9".repeat(400), String(Number.MAX_SAFE_INTEGER + 1), String(Number.MAX_SAFE_INTEGER),
+    String(Math.floor(Number.MAX_SAFE_INTEGER / PAGE_SIZE) + 2), "0", "-1", "invalid", "",
+  ])("falls back to page one for invalid page/offset input %s", async (page) => {
+    const source = archive(25);
+    const response = await source.request(`/events/past?page=${page}`);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(keys(html)).toEqual(Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`));
+    expect(html).toContain('data-page="1"');
+    expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
+    expect(source.queries).toHaveLength(3);
+    expect(source.queries[1]!.sql).not.toContain(" offset "); // Drizzle elides zero
+  });
+
+  it.each([NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER, 0, -1, 1.5])("guards direct archive reads for invalid numeric page %s", async (page) => {
+    const source = archive(25);
+    const result = await listPast(source.db, page);
+    expect(result.rows.map((row) => row.eventKey)).toEqual(Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`));
+    expect(result).toMatchObject({ hasMore: true, totalPages: 2 });
+    expect(source.queries[1]!.sql).not.toContain(" offset ");
+  });
+
+  it.each(["02", "2.5", "2suffix"])("retains parseInt page-two behavior for %s", async (page) => {
+    const html = await (await archive(25).request(`/events/past?page=${page}`)).text();
+    expect(keys(html)).toEqual(["archive-5", "archive-4", "archive-3", "archive-2", "archive-1"]);
+    expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past?page=2"`);
   });
 
   it("names the page count on an out-of-range status and links back to the archive", async () => {

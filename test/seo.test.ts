@@ -1,5 +1,11 @@
+// route-inventory: GET /discord
+// route-inventory: GET /about
+// route-inventory: GET /faq
+// route-inventory: GET /rules
+// route-inventory: GET /robots.txt
+// route-inventory: GET /sitemap_index.xml
 import { describe, expect, it } from "vitest";
-import app, { FALLBACK_INVITE } from "../src/index";
+import app, { FALLBACK_INVITE } from "./app";
 import { readCounts } from "../src/counts";
 import type { Env } from "../src/env";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "../src/seo";
@@ -89,7 +95,7 @@ describe("funnel leaves (DB-free floor)", () => {
 
 describe("homepage degraded fallback", () => {
   it("renders 200 with no member count when the bot DB is down", async () => {
-    expect(await readCounts(env)).toEqual({ memberCount: null, onlineCount: null });
+    expect(await readCounts(env)).toEqual({ memberCount: null, onlineCount: null, ranks: [] });
     const res = await app.request("/", {}, env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -170,10 +176,11 @@ describe("share meta parity (TOG-5624)", () => {
     expect(html).not.toContain("og:image");
   });
 
-  it("leaves without a canonical get no share tags, but keep feed autodiscovery", async () => {
+  it("the about leaf carries its self-canonical and keeps feed autodiscovery", async () => {
     const html = await (await app.request("/about", {}, env)).text();
-    expect(html).not.toContain("og:");
-    expect(html).not.toContain("twitter:");
+    expect(html).toContain('<link rel="canonical" href="https://next.example.test/about"');
+    expect(html).toContain('<meta property="og:url" content="https://next.example.test/about"');
+    expect(html).toContain('<meta name="twitter:card" content="summary"');
     expect(html).toContain('type="application/rss+xml"');
     expect(html).toContain('href="/events.rss"');
   });

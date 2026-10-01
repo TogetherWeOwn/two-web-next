@@ -1,8 +1,13 @@
+// route-inventory: ALL /*
+// route-inventory: ALL /admin/*
+// route-inventory: ALL /profile
+// route-inventory: ALL /members/*
 // W15 Pest port: assert exposure on the mounted worker, not only isolated routers.
 // Legacy assertion mapping and intentional port differences: docs/w15-member-data-parity.md.
 import { Hono } from "hono";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import app from "../src/index";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import rawApp from "../src/index";
+import app from "./app";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { profiles } from "../src/db/schema";
@@ -13,10 +18,11 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 // Nonempty, exhaustive inventories: a newly registered read needs an exposure
 // case. This cannot quietly become [] == [] when a namespace is renamed.
 const PROFILE_READS = ["/profile", "/members/:user"];
-const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured", "/featured/new", "/featured/:id", "/join-attempts"];
+const ADMIN_REDIRECTS = ["/events/create", "/events/:key/edit", "/featured-contents", "/featured-contents/create", "/featured-contents/:id/edit"];
+const ADMIN_READS = ["/", "/events", "/events/new", "/events/:key", "/featured", "/featured/new", "/featured/:id", "/join-attempts", "/join-attempts/:id", ...ADMIN_REDIRECTS];
 const OTHER_READS = [
   "/", "/discord", "/about", "/faq", "/rules", "/privacy", "/join", "/join/discord", "/join/callback",
-  "/sitemap_index.xml", "/robots.txt", "/health", "/healthz", "/db-ping", "/up", "/auth/discord", "/auth/discord/callback",
+  "/sitemap_index.xml", "/robots.txt", "/up", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect",
   "/events", "/events/past", "/events.json", "/e/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) => router.routes
@@ -29,13 +35,18 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
     ...ADMIN_READS.map((path) => `GET /admin${path === "/" ? "" : path}`),
     // ALL includes middleware as well as handlers. Pin their multiplicity;
     // filtering wildcards or deduplicating would hide added ALL endpoints.
+    // The three global ALL /* registrations are the composed security/robots
+    // headers, strict per-environment trustHosts guard and same-origin guard.
     // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
-    "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*",
+    // Profile paths each register the gate, post-audit flash consumption and logger.
+    // The event-page access logger is a second GET handler on the same route.
+    "GET /e/:key",
+    "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /events/:key/rsvp", "ALL /profile", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*", "ALL /members/*",
   ].sort());
 }
 
 it("keeps every mounted GET-capable profile/admin route in the non-vacuous exposure inventory", () => {
-  assertReadInventory(app);
+  assertReadInventory(rawApp);
 });
 
 it.each([
@@ -46,7 +57,7 @@ it.each([
 ])("detects a directly mounted %s %s outside the reviewed exposure inventory", (method, path) => {
   // Copy the actual mounted app, not a fresh child router; don't mutate the
   // singleton used by the role matrix or the other test files.
-  const mounted = new Hono().route("/", app);
+  const mounted = new Hono().route("/", rawApp);
   assertReadInventory(mounted);
   mounted.on(method, path, (c) => c.text("unlogged member export"));
   expect(() => assertReadInventory(mounted)).toThrow();
@@ -56,13 +67,27 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
   let fixture: MemberDataFixture;
   let db: Db;
   let sessions = createMemorySessionStore();
-  const bindings = () => ({ ...env, ADMIN_DB: db, SESSION_STORE: sessions });
+  let remoteFetch: MockInstance<typeof fetch>;
+  const bindings = () => ({
+    ...env, ADMIN_DB: db, SESSION_STORE: sessions,
+    DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+  });
   const request = (path: string, init: RequestInit = {}) => app.request(path, init, bindings());
   const headers = async (actor: typeof MEMBER) => ({ cookie: await cookieFor(sessions, actor) });
 
   beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
-  beforeEach(async () => { await fixture.reset(); await seed(db); sessions = createMemorySessionStore(); });
-  afterEach(() => fixture?.reset());
+  beforeEach(async () => {
+    remoteFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected external fetch"));
+    await fixture.reset(); await seed(db); sessions = createMemorySessionStore();
+  });
+  afterEach(async () => {
+    try {
+      await fixture?.reset();
+      expect(remoteFetch).not.toHaveBeenCalled();
+    } finally {
+      remoteFetch?.mockRestore();
+    }
+  });
   afterAll(() => fixture?.dispose());
 
   it.each(["text/html", "application/json"])("guest %s: no profile/member data or writes", async (accept) => {
@@ -86,7 +111,9 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
     for (const pattern of ADMIN_READS) {
       const path = `/admin${pattern === "/" ? "" : pattern.replace(":key", EVENT_KEY).replace(":id", "999999999")}`;
       const res = await request(path, { headers: role === "guest" ? {} : await headers(actor) });
-      const expected = role === "guest" ? 302 : role !== "moderator" ? 403 : pattern === "/featured/:id" ? 404 : 200;
+      const expected = role === "guest" ? 302 : role !== "moderator" ? 403
+        : ["/featured/:id", "/featured-contents/:id/edit", "/join-attempts/:id"].includes(pattern) ? 404
+        : ADMIN_REDIRECTS.includes(pattern) ? 301 : 200;
       expect(res.status, path).toBe(expected);
       const body = await res.text();
       if (role !== "moderator") {
