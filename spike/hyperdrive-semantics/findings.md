@@ -256,3 +256,21 @@ is the staging-acceptance/test-policy conflict. A CTO-directed confirmation
 [TOG-9680](/TOG/issues/TOG-9680). No downstream W8/W9/W13 gate is approved by
 these local controls. Any required integration failure finding must be routed
 before those gates proceed; missing integration evidence is not a passing test.
+
+## Live Hyperdrive → Neon staging result (2026-10-01)
+
+Executed `remote-checks.sh` once at revision `5b82b59af58149734316695e14238042ca4c22f8`
+(Wrangler 4.143.1, ephemeral remote preview, not a deployed Worker) through staging Hyperdrive
+`1d48a54abd3444009b7067c03c63ff9f` (`two-web-next-staging`) to the pooled Neon origin, database `two`
+(operator-mapped project `two-web-next` / branch `staging`; not an independent Neon API branch-ID read).
+Server: PostgreSQL 17.11. Earlier attempts were refused pre-SQL by the preflight (the binding
+database/user were compared with origin values; a Hyperdrive binding exposes proxy-issued ones, fixed in #234).
+
+| Check | Result | Detail |
+| --- | --- | --- |
+| (a) SELECT … FOR UPDATE contention | PASS | blocked_55P03=true second_seat_refused=true going=1 |
+| (b) `pg_advisory_xact_lock` single-flight | PASS | concurrent_refused=true reacquired=true |
+| (c) jsonb + GIN | PASS | uses_gin=true rows=2001 hits=1 |
+
+3/3 passed; cleanup true, `teardownFailures: []` (synthetic schema `w1_staging_75546283…` dropped).
+No production target. This clears the W1 integration-leg blocker for W8/W9/W13.
