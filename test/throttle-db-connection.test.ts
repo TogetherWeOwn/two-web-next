@@ -2,7 +2,7 @@
 import type { Context } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { throttleStore, type EnvWithThrottle } from "../src/throttle";
