@@ -5,8 +5,8 @@
 // Optional URL settings: sslmode=disable|require|verify-ca|verify-full and
 // sslrootcert=system. Refuse other/duplicate parameters and all CLI arguments.
 // Output: one stable JSON code, no driver details or rows. Exit 0 on success,
-// 2 on configuration refusal, 1 on driver/deadline/cleanup failure. Connection
-// plus query: 5s; cleanup: at most 1s more. No HTTP diagnostic is exposed.
+// 2 on configuration refusal, 1 on driver/deadline/cleanup failure. Driver console output is
+// discarded. Connection plus query: 5s; cleanup: at most 1s more. No HTTP diagnostic is exposed.
 import { parseDatabaseUrl, runDbPing } from "./db-ping-core.mjs";
 
 async function main() {
@@ -19,6 +19,9 @@ async function main() {
   // This standalone process owns its environment. Discard ambient libpq
   // settings before driver construction, including PGAPPNAME/PGSSLMODE.
   for (const key of Object.keys(process.env)) if (key.startsWith("PG")) delete process.env[key];
+  // The driver prints some protocol errors (e.g. "Unknown Auth") straight to
+  // the console; the only permitted output is the one JSON result below.
+  for (const method of ["log", "info", "warn", "error", "debug", "trace"]) console[method] = () => {};
   try {
     const { default: postgres } = await import("postgres");
     return await runDbPing({ databaseUrl: process.env.DATABASE_URL, createClient: postgres });

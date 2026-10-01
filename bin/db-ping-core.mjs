@@ -68,7 +68,7 @@ export async function runDbPing({ databaseUrl, createClient,
     await bounded(async () => {
       sql = createClient({ ...endpoint, max: 1, fetch_types: false, prepare: false,
         connect_timeout: timeoutMs / 1000, idle_timeout: 1,
-        connection: { application_name: "db-ping", statement_timeout: timeoutMs },
+        connection: { application_name: "db-ping" },
         onnotice: () => {}, debug: false });
       await sql.unsafe("SELECT 1 AS ok");
     }, timeoutMs);

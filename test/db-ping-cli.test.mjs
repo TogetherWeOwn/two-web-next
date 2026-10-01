@@ -24,8 +24,11 @@ function cli(scenario, extraEnv = {}, args = []) {
         if (process.env.SCENARIO === 'construct') throw new Error(process.env.DATABASE_URL);
         // A live handle proves the CLI exits even if the driver never settles.
         const handle = setInterval(() => {}, 1000);
+        const noisy = process.env.SCENARIO === 'driver-output';
         return {
-          unsafe: () => process.env.SCENARIO === 'hang' ? new Promise(() => {})
+          unsafe: () => noisy ? (console.error('Postgres.js : Unknown Auth:', '${sentinel}'), console.log('${sentinel}'),
+              Promise.reject(new Error('${sentinel}')))
+            : process.env.SCENARIO === 'hang' ? new Promise(() => {})
             : process.env.SCENARIO === 'success' ? Promise.resolve([{ version: '${sentinel}', now: '${sentinel}' }])
             : Promise.reject(new Error(process.env.DATABASE_URL + ' ${sentinel}')),
           end: () => {
@@ -111,6 +114,14 @@ it("discards all ambient libpq settings in the standalone process", () => {
   expect(output.closed).toBe(true);
 });
 
+it("discards driver console output so only the stable JSON is printed", () => {
+  const result = cli("driver-output");
+  expect(result.status).toBe(1);
+  expect(result.stderr.trim()).toBe('{"ok":false,"code":"DB_PING_FAILED"}');
+  expect(result.stdout).toBe("");
+  expect(result.closed).toBe(true);
+});
+
 it("emits only stable success metadata, not driver rows", () => {
   const result = cli("success");
   expect(result.status).toBe(0);
@@ -182,7 +193,8 @@ for (const phase of ["connect", "query"]) {
     const output = await runDbPing({ databaseUrl: syntheticUrl, timeoutMs: 30, cleanupTimeoutMs: 20,
       createClient: options => {
         expect(options.connect_timeout).toBe(0.03);
-        expect(options.connection.statement_timeout).toBe(30);
+        // PgBouncer rejects unknown startup parameters; the deadline is client-side.
+        expect(options.connection).toEqual({ application_name: "db-ping" });
         return {
           unsafe: async statement => {
             expect(statement).toBe("SELECT 1 AS ok");
