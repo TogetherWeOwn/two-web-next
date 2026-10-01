@@ -8,7 +8,7 @@ const eventColumns = [
   "location", "capacity", "status", "rsvp_open", "discord_event_id",
   "discord_sync_failed_at", "discord_sync_failure_code", "created_by",
   "recurrence_frequency", "recurrence_count", "recurrence_ends_on",
-  "parent_event_id", "recurrence_index", "created_at", "updated_at",
+  "parent_event_id", "recurrence_index", "created_at", "updated_at", "ics_sequence",
 ];
 const rsvpColumns = ["event_id", "user_id", "legacy_id", "status", "synced_to_discord_at", "created_at", "updated_at"];
 const timestampColumns = new Set([
@@ -255,8 +255,19 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
       await source`set local timezone = 'UTC'`;
       await sql`set local timezone = 'UTC'`;
       await assertSeparateTargets(source, sql);
+      const [revisionColumn] = await source`
+        select exists (
+          select 1 from pg_attribute
+          where attrelid = 'events'::regclass and attname = 'ics_sequence' and not attisdropped
+        ) as present
+      `;
+      const timestampSequence = source`GREATEST(0,
+        FLOOR(EXTRACT(EPOCH FROM COALESCE(updated_at, created_at, TIMESTAMP '1970-01-01')))::bigint)`;
+      const revision = revisionColumn.present
+        ? source`GREATEST(ics_sequence, ${timestampSequence})::text`
+        : source`${timestampSequence}::text`;
       const events = await source`
-        select id::text, event_key, title, game, description,
+        select id::text, event_key, title, game, description, ${revision} as ics_sequence,
           to_char(starts_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as starts_at,
           to_char(ends_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ends_at,
           timezone, location, capacity, status, rsvp_open, discord_event_id,
@@ -283,6 +294,20 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
       const creators = await source`select id::text, discord_id from users where id in (select created_by from events)`;
       const ordered = parentFirst(events);
       for (const event of ordered) validateEvent(event);
+      // Only the table-owner cutover principal may restore legacy revisions.
+      // The lock excludes other writers until COMMIT; DDL rolls back on failure.
+      // Never disable constraints, audit triggers, or the session's replication role.
+      let revisionTriggerMode;
+      if (!dryRun) {
+        await sql`lock table events in access exclusive mode`;
+        const [trigger] = await sql`select tgenabled from pg_trigger
+          where tgrelid = 'events'::regclass and tgname = 'events_ics_sequence' and not tgisinternal`;
+        revisionTriggerMode = trigger?.tgenabled;
+        if (revisionTriggerMode !== "O" && revisionTriggerMode !== "A") {
+          throw new Error("Calendar revision trigger must be enabled for origin or always; no destination writes.");
+        }
+        await sql`alter table events disable trigger events_ics_sequence`;
+      }
       const report = {
         dryRun, events: counts(), rsvps: counts(),
         unresolved: { creators: 0, rsvpEvents: 0, rsvpUsers: 0 },
@@ -298,7 +323,14 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
           parent_event_id: event.parent_event_id === null ? null : savedEvents.get(event.parent_event_id),
         };
         const [existing] = await sql`select id, ${comparableColumns(sql, eventColumns)} from events where event_key = ${event.event_key}`;
+        if (existing && BigInt(existing.ics_sequence) > BigInt(row.ics_sequence)) {
+          row.ics_sequence = String(existing.ics_sequence);
+        }
         const operation = !existing ? "inserted" : equalRows(existing, row, eventColumns) ? "unchanged" : "updated";
+        // A changed imported row must also advance beyond the destination's revision.
+        if (existing && operation === "updated" && BigInt(row.ics_sequence) <= BigInt(existing.ics_sequence)) {
+          row.ics_sequence = String(BigInt(existing.ics_sequence) + 1n);
+        }
         report.events.read++;
         report.events[operation]++;
         // Dry-run uses placeholders for new IDs without touching sequences.
@@ -326,6 +358,10 @@ export async function importEventsRsvps(legacy, target, { dryRun = true } = {}) 
         const operation = !existing ? "inserted" : equalRows(existing, row, rsvpColumns) ? "unchanged" : "updated";
         report.rsvps[operation]++;
         if (!dryRun && operation !== "unchanged") await upsert(sql, "rsvps", rsvpColumns, ["event_id", "user_id"], row);
+      }
+      if (!dryRun) {
+        if (revisionTriggerMode === "A") await sql`alter table events enable always trigger events_ics_sequence`;
+        else await sql`alter table events enable trigger events_ics_sequence`;
       }
       return report;
     });

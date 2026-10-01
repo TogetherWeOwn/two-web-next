@@ -42,7 +42,12 @@ function stubClient(rows = identities(), acquired: unknown = true, failure?: "id
       if (failure === "probe") throw new Error("synthetic probe denied password=do-not-print row-content");
       return acquired === "missing" ? [{}] : [{ acquired }];
     }
-    if (/^(insert|update|delete|lock)\b|nextval|setval/i.test(text)) throw new Error("Unexpected mutation");
+    if (text.includes("from pg_attribute")) return [{ present: false }];
+    if (text.includes("from pg_trigger")) return [{ tgenabled: "O" }];
+    if (text === "lock table events in access exclusive mode"
+      || text === "alter table events disable trigger events_ics_sequence"
+      || text === "alter table events enable trigger events_ics_sequence") return [];
+    if (/^(insert|update|delete|lock|alter)\b|nextval|setval/i.test(text)) throw new Error("Unexpected mutation");
     return [];
   }, {
     begin: vi.fn(async (_mode: string, callback: (transaction: unknown) => Promise<unknown>) => callback(sql)),
@@ -96,7 +101,7 @@ describe("events import static and effective target separation", () => {
     );
     for (const client of [source, target]) {
       expect(client.queries).toHaveLength(3); // timezone, catalog identity, lock-domain probe only
-      expect(client.queries.some(({ text }) => /from events|from rsvps|from users|insert|nextval|setval|lock table/.test(text))).toBe(false);
+      expect(client.queries.some(({ text }) => /from events|from rsvps|from users|insert|nextval|setval|lock table|alter table/.test(text))).toBe(false);
     }
     expect(source.queries[2]!.values).toEqual(target.queries[2]!.values);
   });
@@ -110,8 +115,16 @@ describe("events import static and effective target separation", () => {
   it("allows separate resolved tables within one database, including shared read-only users", async () => {
     const targetRows = identities(200);
     targetRows[2]!.relation_id = "102";
-    await expect(importEventsRsvps(stubClient().sql, stubClient(targetRows, false).sql, { dryRun: false }))
+    const source = stubClient();
+    const target = stubClient(targetRows, false);
+    await expect(importEventsRsvps(source.sql, target.sql, { dryRun: false }))
       .resolves.toMatchObject({ dryRun: false, events: { read: 0 }, rsvps: { read: 0 } });
+    const texts = target.queries.map(({ text }) => text);
+    expect(texts.indexOf("lock table events in access exclusive mode"))
+      .toBeGreaterThan(texts.findIndex((text) => text.includes("pg_get_serial_sequence")));
+    expect(texts.indexOf("alter table events disable trigger events_ics_sequence"))
+      .toBeGreaterThan(texts.indexOf("lock table events in access exclusive mode"));
+    expect(texts.at(-1)).toBe("alter table events enable trigger events_ics_sequence");
   });
 
   it("allows shared users in the destination schema without protecting unrelated destination sequences", async () => {
@@ -286,6 +299,8 @@ describe.skipIf(!url)("events import separation on disposable test schemas", () 
       users: await sql`select * from users order by id`,
       eventsSequence: await sql`select last_value, is_called from events_id_seq`,
       rsvpsSequence: await sql`select last_value, is_called from rsvps_id_seq`,
+      revisionTrigger: await sql`select tgenabled from pg_catalog.pg_trigger
+        where tgrelid = 'events'::regclass and tgname = 'events_ics_sequence' and not tgisinternal`,
     };
   }
 
