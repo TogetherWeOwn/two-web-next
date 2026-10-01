@@ -28,6 +28,15 @@ npm run budget
 CHROME_PATH=/path/to/chrome WRANGLER_SEND_METRICS=false npm run lighthouse
 ```
 
+The lockfile keeps `@lhci/cli` at **0.15.1** and Lighthouse at **12.6.1**.
+Overrides scoped to LHCI use `tmp` **0.2.7** and `@puppeteer/browsers` **3.2.3**
+to remove high-severity temporary-file and ZIP-extraction advisories; there are
+no new audit exceptions. The browser helper is ESM-only and requires Node
+**22.12.0 or later**; CI remains on Node **24**. The performance regression suite
+checks LHCI's temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
+These import checks do not replace actual Chromium collection: the Lighthouse
+job must still collect all fifteen samples and pass the unchanged assertions.
+
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
 Hyperdrive, database, queue, cron, remote service or deployment route. The fixture

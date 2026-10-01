@@ -313,6 +313,34 @@ describe("performance CI", () => {
     }
   });
 
+  it("loads the pinned Lighthouse toolchain with patched transitive dependencies", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(pkg.devDependencies["@lhci/cli"]).toBe("0.15.1");
+    expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
+    expect(pkg.engines.node).toBe(">=22.12.0");
+    // Exercise both module entry points used by LHCI and Lighthouse, without Chrome/network.
+    const loaded = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import assert from "node:assert/strict";
+      import { createRequire } from "node:module";
+      import { existsSync, writeFileSync } from "node:fs";
+      const require = createRequire(import.meta.url);
+      const lhciRequire = createRequire(require.resolve("@lhci/cli/package.json"));
+      const tmp = lhciRequire("tmp");
+      assert.equal(lhciRequire("tmp/package.json").version, "0.2.7");
+      const file = tmp.fileSync({ postfix: ".html" });
+      try {
+        assert.ok(file.name.endsWith(".html"));
+        writeFileSync(file.name, "local fixture");
+        assert.ok(existsSync(file.name));
+      } finally { file.removeCallback(); }
+      assert.equal(existsSync(file.name), false);
+      assert.equal(typeof require("puppeteer-core").connect, "function");
+      assert.equal(typeof (await import("puppeteer-core")).connect, "function");
+      assert.equal(typeof (await import("lighthouse")).default, "function");
+    `], { encoding: "utf8", timeout: 20000 });
+    expect(loaded.status, loaded.stdout + loaded.stderr).toBe(0);
+  });
+
   it("wires both performance results into the always-running required check", () => {
     const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
     const check = workflow.split("\n  check:\n")[1]!.split("\n  bundle-budget:\n")[0]!;
@@ -320,6 +348,8 @@ describe("performance CI", () => {
     expect(check).toContain("needs: [a11y, lighthouse, bundle-budget]");
     expect(check).toContain("if: always()");
     expect(check).toContain('node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"');
+    expect(check).toContain("run: npm run deps:audit:selftest");
+    expect(check).toContain("run: npm run deps:audit");
   });
 
   it("uses a standalone local-only Wrangler config", () => {

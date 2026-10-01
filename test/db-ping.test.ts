@@ -124,7 +124,8 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])("
       for (const path of ["/not-a-route", ...removed]) {
         const response = await app.request(`${host}${path}`, { method: "POST", headers }, bindings);
         expect(response.status, path).toBe(403);
-        expect(await response.json()).toEqual({ error: "cross_origin" });
+        expect(await response.json(), path).toEqual({ error: "cross_origin" });
+        expect(response.headers.get("cache-control"), path).toBe("no-store, private");
       }
     }
     expect(dbRead).not.toHaveBeenCalled();

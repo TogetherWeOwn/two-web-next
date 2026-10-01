@@ -19,6 +19,8 @@
     "budget:selftest": "node ci/check-bundle-budget.mjs --selftest",
     "dev:lighthouse": "wrangler dev --config ci/wrangler.lighthouse.jsonc --local --ip 127.0.0.1 --port 8787",
     "lighthouse": "lhci autorun --config=ci/lighthouserc.cjs",
+    "deps:audit": "node ci/deps-audit.mjs",
+    "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:check": "drizzle-kit check"
@@ -43,7 +45,13 @@
     "vitest": "^5.0.2",
     "wrangler": "^4.143.1"
   },
+  "overrides": {
+    "@lhci/cli": {
+      "tmp": "0.2.7",
+      "@puppeteer/browsers": "3.2.3"
+    }
+  },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   }
 }
