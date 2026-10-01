@@ -510,14 +510,15 @@ app.get("/auth/discord/callback", async (c) => {
 
   // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and
   // never stored.
-  const join = c.env.DISCORD_BOT_TOKEN.trim() === "" ? "failed" : await addGuildMember(
+  const botBlank = c.env.DISCORD_BOT_TOKEN.trim() === "";
+  const join = botBlank ? "failed" : await addGuildMember(
     c.env.DISCORD_GUILD_ID, user.id, accessToken, c.env.DISCORD_BOT_TOKEN,
   ).catch(() => "failed" as const);
   if (join === "failed") console.warn("guild auto-join failed", { user: user.id });
 
   // Moderator recompute: roles re-read with the bot token against snowflake IDs
   // (never names). A failed lookup fails closed on the flag, never on sign-in.
-  const moderator = join === "failed" ? false : await recomputeModerator({
+  const moderator = botBlank ? false : await recomputeModerator({
     guildId: c.env.DISCORD_GUILD_ID,
     userId: user.id,
     botToken: c.env.DISCORD_BOT_TOKEN,

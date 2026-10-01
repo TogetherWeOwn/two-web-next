@@ -202,7 +202,7 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         throw new Error("Session replacement must use a fresh token");
       }
       rows.delete(oldHash);
-      rows.set(replacement.tokenHash, { ...replacement, expiresAt: replacement.expiresAt.getTime() });
+      rows.set(replacement.tokenHash, { ...replacement, expiresAt: replacement.expiresAt.getTime(), statusHash: replacement.tokenHash });
     },
     async create(s) {
       rows.set(s.tokenHash, { ...s, expiresAt: s.expiresAt.getTime(), statusHash: s.tokenHash });
