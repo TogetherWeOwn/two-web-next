@@ -21,7 +21,8 @@ def main():
     parser.add_argument("--jurisdiction", choices=["eu"], required=True)
     args = parser.parse_args()
     if not re.fullmatch(
-        r"synthetic-proof/proof/synthetic-synthetic(?:/MANIFEST\.txt|-\d{8}T\d{6}Z\.dump)",
+        r"synthetic-proof/proof/synthetic-synthetic"
+        r"(?:/MANIFEST\.txt|-\d{8}T\d{6}Z\.dump(?:\.digest\.json)?)",
         args.key,
     ):
         return 2

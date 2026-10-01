@@ -111,8 +111,14 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(downloaded.read_bytes(), source.read_bytes())
             self.assertEqual(result.stdout, b"")
             self.assertNotEqual(invoke("get", key.replace("20250101", "20250102"), downloaded).returncode, 0)
+            # The pipeline publishes the archive with its digest receipt pair.
+            receipt_key = key + ".digest.json"
+            self.assertEqual(invoke("put", receipt_key, source).returncode, 0)
+            self.assertEqual(invoke("get", receipt_key, downloaded).returncode, 0)
             for unsafe in ("live-bucket/backup.dump", "synthetic-proof/../../escape",
-                           "synthetic-proof/proof/staging-staging/MANIFEST.txt"):
+                           "synthetic-proof/proof/staging-staging/MANIFEST.txt",
+                           key + ".digest", "synthetic-proof/proof/synthetic-synthetic/"
+                                            "20250101T000000Z.dump.digest.json"):
                 self.assertNotEqual(invoke("put", unsafe, source).returncode, 0)
             self.assertEqual(len(list((tmp / "objects").rglob("*.dump"))), 1)
 

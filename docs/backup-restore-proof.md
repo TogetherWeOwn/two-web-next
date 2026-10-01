@@ -73,11 +73,14 @@ the allowlist or substituting credentials.
    an empty table. Assert the entire source inventory and expected table counts.
 2. Invoke the **unchanged backup CLI**, using real `pg_dump -Fc`. Its Wrangler
    override is a filesystem-only fake R2 adapter. The adapter accepts only the
-   synthetic bucket/prefix, put/get and the expected dump/manifest key shapes;
-   `--remote` exercises the existing CLI contract but never accesses remote R2.
-3. Download the manifest and then the referenced archive through that adapter;
-   restore the downloaded bytes with `pg_restore --exit-on-error --no-owner
-   --no-privileges` into a second disposable database.
+   synthetic bucket/prefix, put/get and the expected dump/receipt/manifest key
+   shapes; `--remote` exercises the existing CLI contract but never accesses
+   remote R2.
+3. Download the manifest and then the referenced archive and digest receipt
+   through that adapter; verify the downloaded archive against the transported
+   receipt with the repository's `bin/backup/integrity-helper`, then restore the
+   downloaded bytes with `pg_restore --exit-on-error --no-owner --no-privileges`
+   into a second disposable database.
 4. Compare all user table names (including empty and non-public-schema tables),
    per-table counts and SHA-256 of deterministically sorted JSONB row contents.
    Order-independent contents retain duplicate multiplicity. Hashes/rows are
@@ -100,7 +103,7 @@ allowlist, comparison failures, diagnostic withholding, ownership-marker/OID
 replacement, failed creation and unowned restore/query guards, without a DB.
 The real harness separately exercises PostgreSQL and the complete archive path.
 
-Expected real-harness output is eight concise synthetic result lines ending in:
+Expected real-harness output is nine concise synthetic result lines ending in:
 
 ```text
 PASS cleanup: created=7 removed=7

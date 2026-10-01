@@ -206,14 +206,24 @@ def run(args):
                      "--file", str(manifest), "--remote", "--jurisdiction", "eu"],
                     fake_env, "manifest download")
             keys = manifest.read_text().splitlines()
-            if len(keys) != 1 or not re.fullmatch(
+            if len(keys) != 2 or not re.fullmatch(
                 r"proof/synthetic-synthetic-\d{8}T\d{6}Z\.dump", keys[0]
-            ):
+            ) or keys[1] != keys[0] + ".digest.json":
                 raise ProofError("synthetic manifest unexpected")
             archive = scratch / "downloaded.dump"
             command([str(fake), "r2", "object", "get", "synthetic-proof/" + keys[0],
                      "--file", str(archive), "--remote", "--jurisdiction", "eu"],
                     fake_env, "archive download")
+            # The pipeline publishes an archive plus its digest receipt; prove the
+            # transported pair is mutually consistent before restoring it.
+            receipt = scratch / "downloaded.digest.json"
+            command([str(fake), "r2", "object", "get", "synthetic-proof/" + keys[1],
+                     "--file", str(receipt), "--remote", "--jurisdiction", "eu"],
+                    fake_env, "receipt download")
+            command([tools["python3"], str(ROOT / "bin/backup/integrity-helper"),
+                     "verify", str(archive), keys[0], str(receipt)],
+                    fake_env, "receipt verification")
+            print("PASS transport: archive and digest receipt verified as published pair")
             good = db.create("valid")
             db.restore(good, archive)
             compare(expected, db.snapshot(good))
