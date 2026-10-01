@@ -33,7 +33,7 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, newerEvents = 0
     startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC",
     location: "The lobby & voice channel", capacity: 10, status: "published", rsvpOpen: true,
     discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
+    createdBy: null, icsSequence: 0n, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
     ...over,
   };
@@ -164,8 +164,9 @@ function mountFromSsr(html: string) {
   return { mount, count, announcement, spots };
 }
 
-function browser(html: string) {
-  const { mount, count, announcement, spots } = mountFromSsr(html);
+function browser(html: string, ...additionalHtml: string[]) {
+  const badges = [mountFromSsr(html), ...additionalHtml.map(mountFromSsr)];
+  const { mount, count, announcement, spots } = badges[0]!;
   const listeners: ((event: { detail: { eventKey?: string; viewerState?: string } }) => void)[] = [];
   const requests: PendingRequest[] = [];
   const documentEl = new Node();
@@ -174,7 +175,7 @@ function browser(html: string) {
     addEventListener: (type: string, listener: (event: { detail: { eventKey?: string; viewerState?: string } }) => void) => {
       if (type === "going-count-updated") listeners.push(listener);
     },
-    querySelectorAll: (selector: string) => (selector === '[data-island="going-count"]' ? [mount] : []),
+    querySelectorAll: (selector: string) => (selector === '[data-island="going-count"]' ? badges.map((badge) => badge.mount) : []),
   };
   const evalBinder = () =>
     runInNewContext(binder, {
@@ -193,7 +194,7 @@ function browser(html: string) {
     ok: true,
     json: async () => rows,
   });
-  return { mount, count, announcement, spots, listeners, requests, broadcast, settle, evalBinder, okJson, documentEl };
+  return { mount, count, announcement, spots, badges, listeners, requests, broadcast, settle, evalBinder, okJson, documentEl };
 }
 
 describe("GoingCount shipped binder over real SSR markup", () => {
@@ -227,6 +228,33 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     expect(b.count.textContent).toBe("10 of 10 going");
     expect(b.spots?.textContent).toBe("Full");
     expect(b.announcement.textContent).toContain("waitlist");
+  });
+
+  it("shares one keyed read and ignores stale updates across same-key SSR badges", async () => {
+    const html = await (await fixture().request()).text();
+    const smaller = await (await fixture({ capacity: 4 }).request()).text();
+    const b = browser(html, smaller);
+    b.broadcast(KEY, "going");
+    b.broadcast(KEY, "none");
+    expect(b.requests).toHaveLength(2);
+    expect(b.requests.map((request) => request.url)).toEqual([
+      `/events.json?event_key=${KEY}`, `/events.json?event_key=${KEY}`,
+    ]);
+    b.requests[1]!.resolve(b.okJson([{ event_key: KEY, going_count: 2 }]));
+    await b.settle();
+    const values = () => b.badges.map((badge) => ({
+      count: badge.count.textContent,
+      spots: badge.spots?.textContent,
+      announcement: badge.announcement.textContent,
+    }));
+    const newest = [
+      { count: "2 of 10 going", spots: "8 of 10 spots left", announcement: "RSVP removed. " },
+      { count: "2 of 4 going", spots: "2 of 4 spots left", announcement: "RSVP removed. " },
+    ];
+    expect(values()).toEqual(newest);
+    b.requests[0]!.resolve(b.okJson([{ event_key: KEY, going_count: 10 }]));
+    await b.settle();
+    expect(values()).toEqual(newest);
   });
 
   it("refreshes an event beyond page one with one GET through the real JSON route", async () => {

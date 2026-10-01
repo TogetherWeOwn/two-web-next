@@ -15,6 +15,7 @@
   var MOUNT = '[data-island="going-count"]';
   var EVENT = "going-count-updated";
   var URL = "/events.json";
+  var latest = new Map();
 
   // A second evaluation of this script must not stack a second document
   // listener: the guard lives on the shared DOM, not in this closure.
@@ -48,33 +49,37 @@
     return left <= 0 ? "Full" : left + " of " + capacity + " spots left";
   }
 
-  function refresh(node) {
-    var key = node.getAttribute("data-event-key");
-    var capacity = node.getAttribute("data-capacity");
+  function refresh(nodes, key, state) {
+    // A new broadcast owns both the read and its announcement, even if it
+    // fails. An older completion must never replace the last good state.
+    var request = {};
+    latest.set(key, request);
     fetch(URL + "?event_key=" + encodeURIComponent(key), { headers: { accept: "application/json" } })
       .then(function (res) {
         if (!res.ok) throw new Error("events " + res.status);
         return res.json();
       })
       .then(function (rows) {
+        if (latest.get(key) !== request) return;
         var list = Array.isArray(rows) ? rows : rows.data || [];
         var row = list.filter(function (r) {
           return r.event_key === key;
         })[0];
         if (!row) return;
-        var count = node.querySelector("[data-count]");
-        if (count) count.textContent = countText(row.going_count, capacity === "" ? null : Number(capacity));
-        var spots = node.querySelector("[data-spots]");
-        if (spots && capacity !== "" && capacity !== null) {
-          spots.textContent = spotsLeftText(row.going_count, Number(capacity));
-        }
-        var ann = node.querySelector("[data-announcement]");
-        var state = node.getAttribute("data-pending-announcement");
-        if (ann && state) {
-          var t = announcementText(state);
-          ann.textContent = t ? t + " " : "";
-          node.removeAttribute("data-pending-announcement");
-        }
+        nodes.forEach(function (node) {
+          var capacity = node.getAttribute("data-capacity");
+          var count = node.querySelector("[data-count]");
+          if (count) count.textContent = countText(row.going_count, capacity === "" ? null : Number(capacity));
+          var spots = node.querySelector("[data-spots]");
+          if (spots && capacity !== "" && capacity !== null) {
+            spots.textContent = spotsLeftText(row.going_count, Number(capacity));
+          }
+          var ann = node.querySelector("[data-announcement]");
+          if (ann && state) {
+            var t = announcementText(state);
+            ann.textContent = t ? t + " " : "";
+          }
+        });
       })
       .catch(function () {
         // Keep the last known-good badge; the button island already
@@ -84,10 +89,12 @@
 
   document.addEventListener(EVENT, function (ev) {
     var detail = (ev && ev.detail) || {};
+    var nodes = [];
     document.querySelectorAll(MOUNT).forEach(function (node) {
-      if (node.getAttribute("data-event-key") !== detail.eventKey) return;
-      if (detail.viewerState) node.setAttribute("data-pending-announcement", detail.viewerState);
-      refresh(node);
+      if (node.getAttribute("data-event-key") === detail.eventKey) nodes.push(node);
     });
+    // Same-key badges share one response so they cannot disagree on counts
+    // or announce different operations because their reads finished apart.
+    if (nodes.length) refresh(nodes, detail.eventKey, detail.viewerState);
   });
 })();
