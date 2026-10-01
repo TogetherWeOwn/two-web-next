@@ -49,9 +49,12 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
     // Run canonical migrations, including FKs, inside our schema. No public
     // fallback in search_path and no migration journal or writes in public.
     const migrations = readMigrationFiles({ migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url).href) });
-    for (const migration of migrations) for (const statement of migration.sql) {
-      if (statement.trim()) await client.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
-    }
+    for (const migration of migrations) await client.begin(async (tx) => {
+      // Match Drizzle's transactional execution, including migration table locks.
+      for (const statement of migration.sql) {
+        if (statement.trim()) await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+      }
+    });
   } catch (error) {
     await dispose();
     throw error;
