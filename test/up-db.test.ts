@@ -14,11 +14,13 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
     const schema = `up_${randomUUID().replaceAll("-", "")}`;
     const options = { max: 1, connect_timeout: 3, password: () => url.password, onnotice: () => {} };
     const admin = postgres(url.href, options);
-    const reader = postgres(url.href, { ...options, connection: { search_path: schema, default_transaction_read_only: true } });
+    const reader = postgres(url.href, { ...options, max: 2, connection: { search_path: schema, default_transaction_read_only: true } });
+    let hangQueue = false;
     // Redirect only the explicitly-qualified ledger to our owned scratch schema.
     // Real SQL/driver, no public search_path fallback, no global ledger mutation.
     const client = ((strings: TemplateStringsArray) => reader.unsafe(
-      strings.join("").replaceAll("drizzle.__drizzle_migrations", `"${schema}".__drizzle_migrations`), [], { prepare: true },
+      hangQueue && strings.join("").includes("queue_jobs") ? "SELECT pg_sleep(10)"
+        : strings.join("").replaceAll("drizzle.__drizzle_migrations", `"${schema}".__drizzle_migrations`), [], { prepare: true },
     )) as unknown as Sql;
     const env = {
       APP_URL: "https://next.example.test", DISCORD_CLIENT_ID: "test", DISCORD_GUILD_ID: "test",
@@ -43,6 +45,14 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       const current = await app.request("/up", {}, env);
       expect(current.status).toBe(200);
       expect(await current.json()).toMatchObject({ db: "ok", pending_migrations: 0, queue: { status: "unknown" } });
+      // A real blocked query consumes one connection, not the readiness slot.
+      hangQueue = true;
+      const started = Date.now();
+      const blockedQueue = await app.request("/up", {}, env);
+      expect(Date.now() - started).toBeLessThan(4000);
+      expect(blockedQueue.status).toBe(200);
+      expect(await blockedQueue.json()).toMatchObject({ db: "ok", pending_migrations: 0, queue: { status: "unknown" } });
+      hangQueue = false;
       await admin.unsafe(`TRUNCATE "${schema}".__drizzle_migrations`);
       expect(await databaseReadiness(client)).toEqual({ db: "ok", pending_migrations: WEB_MIGRATIONS.length });
       await admin.unsafe(`DROP TABLE "${schema}".__drizzle_migrations`);
@@ -52,5 +62,5 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       try { if (created) await admin.unsafe(`DROP SCHEMA "${schema}" CASCADE`); }
       finally { await admin.end({ timeout: 0 }); }
     }
-  });
+  }, 10000);
 });
