@@ -118,7 +118,7 @@ function fixture(failAt?: string, closeFailure = false, gin = true, lockCode = "
     };
     const sql = Object.assign((parts: TemplateStringsArray) => execute(parts.join("?")), {
       unsafe: vi.fn((statement: string, _params: unknown, options: unknown) => {
-        expect(options).toEqual({ prepare: true }); return execute(statement);
+        expect(options).toEqual({ prepare: true, simple: false }); return execute(statement);
       }),
       reserve: vi.fn(async () => sql), release: vi.fn(),
       end: vi.fn(async () => { if (closeFailure && clients.indexOf(sql) === 0) throw new Error("close_failure"); }),
@@ -152,19 +152,19 @@ describe("fixed staging check cleanup (offline fixtures)", () => {
   });
   it("does not drop a schema when creation failed", async () => {
     const f = fixture("CREATE SCHEMA");
-    await expect(runFixedStagingChecks(f.open)).rejects.toThrow("fixture_failure");
+    await expect(runFixedStagingChecks(f.open)).rejects.toThrow("staging_probe_failed");
     expect(f.statements.some((s) => s.includes("DROP SCHEMA"))).toBe(false);
     expect(f.clients[0]!.end).toHaveBeenCalledOnce();
   });
   it("does not turn an unrelated lock failure into contention success", async () => {
     const f = fixture(undefined, false, true, "08006");
-    await expect(runFixedStagingChecks(f.open)).rejects.toThrow("contention");
+    await expect(runFixedStagingChecks(f.open)).rejects.toThrow("staging_probe_failed");
     expect(f.statements.some((s) => s.includes("DROP SCHEMA"))).toBe(true);
     for (const client of f.clients) expect(client.end).toHaveBeenCalledOnce();
   });
   it("attempts every close and fails closed on termination failure", async () => {
     const f = fixture(undefined, true);
-    await expect(runFixedStagingChecks(f.open)).rejects.toThrow("staging_cleanup_failed");
+    await expect(runFixedStagingChecks(f.open)).rejects.toThrow("staging_probe_failed");
     for (const client of f.clients) expect(client.end).toHaveBeenCalledOnce();
   });
   it("uses a different owned schema on each invocation", async () => {

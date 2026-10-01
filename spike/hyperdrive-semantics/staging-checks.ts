@@ -2,18 +2,42 @@
 // Kept separate from the local-only Worker: Hyperdrive requires prepared queries.
 import postgres from "postgres";
 type Sql = ReturnType<typeof postgres>;
-type Check = { name: string; pass: boolean; detail: string };
-const query = (client: Pick<Sql, "unsafe">, statement: string, parameters: (number | string)[] = []) =>
-  client.unsafe(statement, parameters, { prepare: true });
+type Stage = "connect" | "create_schema" | "setup" | "a" | "b" | "c" | "cleanup" | "close";
+type Check = { name: string; pass: boolean; detail: string; status: "passed" | "failed" | "not_attempted" };
+export type SchemaState = { schema: string; created: boolean | "not_verified"; cleanup: boolean | "not_verified" };
+export class StagingCheckFailure extends Error {
+  constructor(readonly result: StagingResult) { super("staging_probe_failed"); }
+}
+export type StagingResult = SchemaState & { ok: boolean; version?: string; passed: number; total: number;
+  checks: Check[]; failedStage?: Stage; teardownFailures: Stage[] };
+// The driver implements simple, but 3.4.9's UnsafeQueryOptions omits its type.
+const preparedQueryOptions = { prepare: true, simple: false };
+export const query = (client: Pick<Sql, "unsafe">, statement: string, parameters: (number | string)[] = []) =>
+  client.unsafe(statement, parameters, preparedQueryOptions);
 
 export async function runFixedStagingChecks(open: () => Sql,
-  report?: (state: { schema: string; created: boolean; cleanup: boolean }) => void) {
+  report?: (state: SchemaState) => void) {
   const schema = "w1_staging_" + crypto.randomUUID().replaceAll("-", "");
-  const checks: Check[] = [];
+  const checks: Check[] = ["(a) FOR UPDATE", "(b) advisory xact lock", "(c) jsonb+GIN"]
+    .map((name) => ({ name, pass: false, status: "not_attempted", detail: "not_attempted" }));
+  let stage: Stage = "connect";
+  let failedStage: Stage | undefined;
+  const teardownFailures: Stage[] = [];
+  const recordFailure = () => {
+    failedStage ??= stage;
+    if (stage === "cleanup" || stage === "close") teardownFailures.push(stage);
+    const index = ["a", "b", "c"].indexOf(stage);
+    if (index >= 0 && checks[index]!.status === "not_attempted") {
+      checks[index] = { ...checks[index]!, status: "failed", detail: "stage_exception" };
+    }
+  };
+  const complete = (index: number, check: Omit<Check, "status">) => {
+    checks[index] = { ...check, status: check.pass ? "passed" : "failed" };
+  };
   const clients: Sql[] = [];
   const connect = () => { const client = open(); clients.push(client); return client; };
-  let created = false;
-  let cleaned = false;
+  let created: SchemaState["created"] = false;
+  let cleaned: SchemaState["cleanup"] = true;
   let serverVersion: string | undefined;
   try {
     const admin = connect();
@@ -21,10 +45,26 @@ export async function runFixedStagingChecks(open: () => Sql,
       const [server] = await admin`SELECT version() AS version`;
       if (!server) throw new Error("missing_server_version");
       serverVersion = String(server.version);
-      // Never drop a pre-existing schema. Cleanup owns only this invocation's UUID.
-      await query(admin, `CREATE SCHEMA ${schema}`);
+      // Persist identity before CREATE: a lost acknowledgement is not proof of refusal.
+      stage = "create_schema";
+      created = "not_verified";
+      cleaned = "not_verified";
+      report?.({ schema, created, cleanup: cleaned });
+      try {
+        await query(admin, `CREATE SCHEMA ${schema}`);
+      } catch (err) {
+        // Only explicit server refusals establish that this invocation created nothing.
+        if (["42P06", "42501"].includes((err as { code?: string }).code ?? "")) {
+          created = false;
+          cleaned = true;
+          report?.({ schema, created, cleanup: cleaned });
+        }
+        throw err;
+      }
       created = true;
-      report?.({ schema, created, cleanup: false });
+      cleaned = "not_verified";
+      report?.({ schema, created, cleanup: cleaned });
+      stage = "setup";
       await query(admin, `CREATE TABLE ${schema}.spike_events (
         id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         event_key text NOT NULL UNIQUE, status text NOT NULL, capacity integer NULL,
@@ -47,6 +87,7 @@ export async function runFixedStagingChecks(open: () => Sql,
         VALUES ('evt-cap1', 'published', 1, now(), now() + interval '1 hour')`);
 
       // (a) Establish holder first; a bounded SQL timeout proves actual contention.
+      stage = "a";
       const a = connect();
       const b = connect();
       // postgres.js 3.4.9 can leave a fresh reserve() pending with fetch_types:false.
@@ -87,10 +128,11 @@ export async function runFixedStagingChecks(open: () => Sql,
           if (!refused) await query(rb, `INSERT INTO ${schema}.spike_rsvps (event_id, user_id, status)
             VALUES ($1, 22, 'going')`, [event.id]);
           await rb`COMMIT`;
-          checks.push({ name: "(a) FOR UPDATE", pass: blocked && refused && count.n === 1,
+          complete(0, { name: "(a) FOR UPDATE", pass: blocked && refused && count.n === 1,
             detail: `blocked_55P03=${blocked} second_seat_refused=${refused} going=${count.n}` });
 
           // (b) Transaction-scoped single-flight. No session-lock pooler claim.
+          stage = "b";
           await ra`BEGIN`;
           const [key] = await ra`SELECT pg_backend_pid() AS id, random()`;
           if (!key) throw new Error("missing_lock_key");
@@ -101,7 +143,7 @@ export async function runFixedStagingChecks(open: () => Sql,
           const [free] = await rb`SELECT pg_try_advisory_xact_lock(${key.id}) AS ok`;
           await rb`COMMIT`;
           if (!held || !free) throw new Error("missing_advisory_result");
-          checks.push({ name: "(b) advisory xact lock", pass: held.ok === false && free.ok === true,
+          complete(1, { name: "(b) advisory xact lock", pass: held.ok === false && free.ok === true,
             detail: `concurrent_refused=${held.ok === false} reacquired=${free.ok === true}` });
         } finally {
           try { await rb`ROLLBACK`; } finally { rb.release(); }
@@ -111,6 +153,7 @@ export async function runFixedStagingChecks(open: () => Sql,
       }
 
       // (c) Native containment and planner index use, not a forced index plan.
+      stage = "c";
       await query(admin, `INSERT INTO ${schema}.spike_access_logs
         (viewer_discord_id, resource, action, subject_user_ids, subject_count, route, occurred_at)
         SELECT 'snowflake-' || (g % 50), 'member', 'view',
@@ -126,10 +169,15 @@ export async function runFixedStagingChecks(open: () => Sql,
         WHERE subject_user_ids @> '[424242]'::jsonb`);
       if (!count) throw new Error("missing_containment_count");
       const usesGin = plan.some((row) => String(row["QUERY PLAN"]).includes("spike_access_logs_subject_user_ids_gin"));
-      checks.push({ name: "(c) jsonb+GIN", pass: usesGin && count.n === 1,
+      complete(2, { name: "(c) jsonb+GIN", pass: usesGin && count.n === 1,
         detail: `uses_gin=${usesGin} rows=2001 hits=${count.n}` });
+    } catch {
+      recordFailure();
     } finally {
-      if (created) {
+      // An unacknowledged CREATE does not establish ownership: retain its exact name
+      // for recovery, but never DROP an uncertain or explicitly pre-existing schema.
+      if (created === true) {
+        stage = "cleanup";
         await query(admin, `DROP SCHEMA ${schema} CASCADE`);
         const [remaining] = await admin`SELECT count(*)::int AS n, random() FROM pg_namespace WHERE nspname = ${schema}`;
         if (remaining?.n !== 0) throw new Error("schema_cleanup_not_verified");
@@ -137,12 +185,19 @@ export async function runFixedStagingChecks(open: () => Sql,
         report?.({ schema, created, cleanup: true });
       }
     }
+  } catch {
+    recordFailure();
   } finally {
     // Attempt every close even when one connection refuses to terminate.
-    const closed = await Promise.allSettled(clients.map((client) => client.end({ timeout: 2 })));
-    if (closed.some((result) => result.status === "rejected")) throw new Error("staging_cleanup_failed");
+    const closed = await Promise.allSettled(clients.map(async (client) => client.end({ timeout: 2 })));
+    if (closed.some((result) => result.status === "rejected")) {
+      stage = "close";
+      recordFailure();
+    }
   }
   const passed = checks.filter((check) => check.pass).length;
-  return { ok: passed === 3 && cleaned, schema,
-    version: serverVersion, passed, total: 3, checks, cleanup: cleaned };
+  const result: StagingResult = { ok: !failedStage && passed === 3 && cleaned === true, schema, created,
+    version: serverVersion, passed, total: 3, checks, cleanup: cleaned, failedStage, teardownFailures };
+  if (failedStage) throw new StagingCheckFailure(result);
+  return result;
 }

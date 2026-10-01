@@ -1,5 +1,5 @@
 // Ephemeral wrangler dev --remote preview only. Never mount in the application.
-import { runFixedStagingChecks } from "./staging-checks";
+import { runFixedStagingChecks, StagingCheckFailure, type SchemaState } from "./staging-checks";
 import { openHyperdriveClient } from "./staging-probe";
 import { REMOTE_TARGET, requireRemoteReceipt, type RemoteReceipt } from "./remote-target";
 
@@ -35,7 +35,7 @@ async function execute(env: Env): Promise<Response> {
   } catch {
     return Response.json({ ok: false, error: "remote_staging_preflight_refused", cleanup: true }, { status: 412 });
   }
-  let state: { schema?: string; created: boolean; cleanup: boolean } = { created: false, cleanup: true };
+  let state: Partial<SchemaState> = { created: false, cleanup: true };
   try {
     const result = await runFixedStagingChecks(() => openHyperdriveClient(env.DB!), (next) => {
       state = next;
@@ -43,8 +43,9 @@ async function execute(env: Env): Promise<Response> {
       console.info("W1_SCHEMA " + JSON.stringify(state));
     });
     return Response.json({ ...result, path: "wrangler-remote-hyperdrive-neon-staging", preflight: receipt });
-  } catch {
-    return Response.json({ ok: false, error: "remote_staging_probe_failed", ...state, preflight: receipt }, { status: 500 });
+  } catch (err) {
+    const evidence = err instanceof StagingCheckFailure ? err.result : state;
+    return Response.json({ ...evidence, ok: false, error: "remote_staging_probe_failed", preflight: receipt }, { status: 500 });
   }
 }
 

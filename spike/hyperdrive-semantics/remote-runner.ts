@@ -1,6 +1,6 @@
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { open, writeFile, readFile, mkdir } from "node:fs/promises";
+import { open, writeFile, readFile, mkdir, mkdtemp } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -66,31 +66,58 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+export async function createPreviewWorkspace(runDir: string): Promise<string> {
+  const dir = await mkdtemp(path.join(runDir, "preview-"));
+  await mkdir(path.join(dir, "home"), { mode: 0o700 });
+  await writeFile(path.join(dir, "empty.env"), "", { mode: 0o600, flag: "wx" });
+  return dir;
+}
+
+export function buildPreviewLaunch(wrangler: string, dir: string, config: string, port: number,
+  env: NodeJS.ProcessEnv = process.env) {
+  return {
+    command: wrangler,
+    args: ["dev", "--remote", "--config", config, "--env-file", path.join(dir, "empty.env"),
+      "--ip", "127.0.0.1", "--port", String(port), "--inspector-ip", "127.0.0.1", "--inspector-port", "0",
+      "--show-interactive-dev-session=false"],
+    options: {
+      cwd: dir,
+      // The outer subreaper owns this group, even after SIGKILL of this runner.
+      detached: false,
+      // Wrangler 4.143.1's CLI-wide dotenv loader is independent of dev-vars.
+      // Isolate cwd AND pass an explicit empty file; do not rely on this flag alone.
+      // Source: workers-sdk packages/wrangler/src/{index.ts,config/dot-env.ts}.
+      env: { PATH: env.PATH, HOME: path.join(dir, "home"), TMPDIR: dir,
+        CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID: REMOTE_TARGET.accountId,
+        WRANGLER_SEND_METRICS: "false", CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false", WRANGLER_LOG_PATH: dir },
+    },
+  };
+}
+
 export async function main() {
-  const scratch = process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR;
-  if (!scratch) throw new Error("paperclip_run_scratch_required");
+  // Only remote-checks.sh supplies a run-owned snapshot/manifest. Refuse direct
+  // execution from a mutable working tree, before reading provider metadata.
+  const dir = process.env.W1_REMOTE_RUN_DIR;
+  if (!dir) throw new Error("remote_supervised_snapshot_required");
   const root = process.cwd();
+  const revision = (await readFile(path.join(root, ".w1-source-revision"), "utf8")).trim();
+  if (!/^[a-f0-9]{40,64}$/.test(revision) || revision !== process.env.W1_SOURCE_REVISION) {
+    throw new Error("remote_source_revision_invalid");
+  }
   const wrangler = path.join(root, "node_modules/.bin/wrangler");
+  // Read metadata, not `wrangler --version` (another ambient-dotenv CLI entry).
+  const wranglerVersion: string = JSON.parse(await readFile(path.join(root, "node_modules/wrangler/package.json"), "utf8")).version;
+  const previewDir = await createPreviewWorkspace(dir);
   const receipt = await collectRemoteReceipt(process.env.CLOUDFLARE_API_TOKEN ?? "", process.env.PAPERCLIP_AGENT_ID ?? "");
-  const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const wranglerVersion = execFileSync(wrangler, ["--version"], { encoding: "utf8" }).trim();
-  const dir = path.join(scratch, "w1-remote");
-  await mkdir(dir, { recursive: true, mode: 0o700 });
   const runKey = Array.from(randomBytes(32), (byte) => byte.toString(16).padStart(2, "0")).join(""); // Ephemeral nonce, not an account grant.
-  const config = path.join(dir, "wrangler.json");
+  const config = path.join(previewDir, "wrangler.json");
   const logPath = path.join(dir, "private-wrangler.log");
   await writeFile(config, JSON.stringify(buildPreviewConfig(receipt, root, runKey)), { mode: 0o600 });
   await writeFile(path.join(dir, "preflight.json"), JSON.stringify({ revision, wranglerVersion, ...receipt }, null, 2), { mode: 0o600 });
   const port = await freePort();
   const log = await open(logPath, "w", 0o600);
-  const child = spawn(wrangler, ["dev", "--remote", "--config", config, "--ip", "127.0.0.1", "--port", String(port),
-    "--inspector-ip", "127.0.0.1", "--inspector-port", "0", "--show-interactive-dev-session=false"], {
-    detached: true, stdio: ["ignore", log.fd, log.fd],
-    // No ambient PG/Neon URL, QA token, alternate CF credential or dev.vars.
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: dir,
-      CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID: REMOTE_TARGET.accountId,
-      WRANGLER_SEND_METRICS: "false", CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false", WRANGLER_LOG_PATH: dir },
-  });
+  const launch = buildPreviewLaunch(wrangler, previewDir, config, port);
+  const child = spawn(launch.command, launch.args, { ...launch.options, stdio: ["ignore", log.fd, log.fd] });
   let exited = false;
   const exit = new Promise<void>((resolve) => { child.once("exit", () => { exited = true; resolve(); }); child.once("error", () => { exited = true; resolve(); }); });
   const abort = new AbortController();
@@ -123,12 +150,13 @@ export async function main() {
     result.error = /^(remote_[a-z_]+|cloudflare_read_denied_http_\d+_code_[\w]+)$/.test(message) ? message : "remote_preview_failed";
   } finally {
     clearTimeout(timer); process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
-    if (child.pid) {
-      try { process.kill(-child.pid, "SIGTERM"); } catch { /* Already exited. */ }
+    if (!exited) {
+      child.kill("SIGTERM");
       await Promise.race([exit, delay(10_000)]);
-      // Also kill descendants when the main Wrangler process has already exited.
-      try { process.kill(-child.pid, "SIGKILL"); } catch { /* Process group is gone. */ }
+      if (!exited) child.kill("SIGKILL");
     }
+    // The independent supervisor always kills/reaps the entire inherited group
+    // after this runner exits, including when SIGKILL prevents this finally block.
     await log.close();
     if (result.cleanup === "not_verified") {
       const logText = await readFile(logPath, "utf8");
@@ -151,7 +179,7 @@ export async function main() {
 if (process.argv[2] === "--run") {
   main().then((code) => { process.exitCode = code; }).catch((err) => {
     const message = err instanceof Error ? err.message : "";
-    const safe = /^(cloudflare_read_denied_http_\d+_code_[\w]+|remote_staging_target_not_verified|deployed_staging_worker_binding_mismatch|single_staging_source_version_required|assigned_cloudflare_token_and_agent_required|paperclip_run_scratch_required)$/.test(message);
+    const safe = /^(cloudflare_read_denied_http_\d+_code_[\w]+|remote_staging_target_not_verified|deployed_staging_worker_binding_mismatch|single_staging_source_version_required|assigned_cloudflare_token_and_agent_required|remote_supervised_snapshot_required|remote_source_revision_invalid)$/.test(message);
     console.error(safe ? message : "remote_staging_runner_failed; no success or cleanup claimed");
     process.exitCode = 1;
   });
