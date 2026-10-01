@@ -155,7 +155,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // this month. An unparseable month is a page, never a 500.
     const month =
       parseCalendarMonth(c.req.query("month")) ??
-      (upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
+      parseCalendarMonth(upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
       currentCalendarMonth(now);
 
     const state = { view, month, q, past };
@@ -285,7 +285,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published"]);
     const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
-    return feedResponse(c, eventsRss(rows, c.env.APP_URL, rows.length ? built : new Date()), {
+    return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
     });

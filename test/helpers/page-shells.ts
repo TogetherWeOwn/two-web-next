@@ -13,7 +13,7 @@ export const MEMBER_ID = "100000000000000001";
 export const EVENT_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 export const HTML_READS = [
-  "/", "/about", "/faq", "/rules", "/privacy", "/join", "/join/callback",
+  "/", "/about", "/faq", "/rules", "/privacy", "/join", "/join/callback", "/auth/recover",
   "/events", "/events/past", "/e/:key", "/profile", "/members/:user",
   "/admin", "/admin/events", "/admin/events/new", "/admin/events/:key",
   "/admin/featured", "/admin/featured/new", "/admin/featured/:id", "/admin/join-attempts", "/admin/join-attempts/:id",
@@ -25,7 +25,7 @@ export const NON_HTML_READS = [
   "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect",
   "/admin/events/create", "/admin/events/:key/edit", "/admin/featured-contents",
   "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
-  "/sitemap_index.xml", "/robots.txt", "/up",
+  "/sitemap_index.xml", "/robots.txt", "/up", "/auth/status", // Bool-only JSON, never an HTML document.
   "/events.json", "/events/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 
