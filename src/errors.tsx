@@ -139,9 +139,7 @@ export async function notFoundHandler(c: Context): Promise<Response> {
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
   console.error("unhandled error:", err);
   alertRequestError(err, { method: c.req.method, route: c.req.routePath || c.req.path });
-  // The calendar API stays JSON-only even when its session lookup fails before
-  // the endpoint can respond, including requests with absent or wildcard Accept.
-  if (isDatabaseUnavailable(err)) return databaseUnavailable(c, c.req.path === "/events.json");
+  if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
   c.header("cache-control", "no-store, private");
   c.status(500);
   return c.html(<InternalErrorPage />);
@@ -169,13 +167,26 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   return c.html(<RateLimitedPage />);
 }
 
+// Match the JSON-only event contracts before a handler can run (e.g. session
+// lookup failure). GET /events and admin/profile browser forms still negotiate.
+function jsonOnlyEventRequest(c: Context): boolean {
+  const { method, path } = c.req;
+  if (method === "GET" || method === "HEAD") return path === "/events.json";
+  if (method === "POST") {
+    return path === "/events" || /^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(path);
+  }
+  if (method === "PATCH") return /^\/events\/[^/]+$/.test(path);
+  if (method === "PUT" || method === "DELETE") return /^\/events\/[^/]+\/rsvp$/.test(path);
+  return false;
+}
+
 // Shared outage envelope: no session/data reads, no driver details. Explicit
 // JSON endpoints (e.g. ingress) may opt in even without an Accept header.
 export function databaseUnavailable(c: Context, jsonOnly = false): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   c.header("Vary", "Accept");
   c.status(503);
-  if (jsonOnly || c.req.header("accept")?.includes("application/json")) {
+  if (jsonOnly || jsonOnlyEventRequest(c) || c.req.header("accept")?.includes("application/json")) {
     return c.json({ error: "db_unavailable", message: "The service is temporarily unavailable. Try again shortly." });
   }
   return c.html(<MaintenancePage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);

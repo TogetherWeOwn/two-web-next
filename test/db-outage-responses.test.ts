@@ -6,7 +6,15 @@ import app from "./app";
 import { createMemorySessionStore } from "../src/sessions";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
-import { cookieFor, env, MEMBER } from "./helpers/member-data";
+import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR } from "./helpers/member-data";
+
+const EVENT_WRITES = [
+  { method: "POST", path: "/events" },
+  { method: "PATCH", path: `/events/${EVENT_KEY}` },
+  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => ({ method: "POST", path: `/events/${EVENT_KEY}/${action}` })),
+  { method: "PUT", path: `/events/${EVENT_KEY}/rsvp` },
+  { method: "DELETE", path: `/events/${EVENT_KEY}/rsvp` },
+];
 
 const refused = () => Object.assign(new Error("private connection details"), { code: "ECONNREFUSED" });
 const pgError = (code: string) => Object.assign(new Error("private query details"), { name: "PostgresError", code });
@@ -63,6 +71,38 @@ describe("narrow database outage classification", () => {
     } else {
       expect(res.headers.get("content-type")).toContain("text/html");
       expect(await res.text()).toContain("Together We Own");
+    }
+  });
+  it.each([
+    { method: "GET", path: "/events" },
+    { method: "POST", path: "/admin/events" },
+    { method: "POST", path: `/admin/events/${EVENT_KEY}/publish` },
+    { method: "POST", path: `/members/${MEMBER.userId}` },
+    { method: "GET", path: `/events/${EVENT_KEY}` },
+    { method: "GET", path: `/events/${EVENT_KEY}/rsvp` },
+    { method: "POST", path: `/events/${EVENT_KEY}` },
+    { method: "POST", path: `/events/${EVENT_KEY}/rsvp` },
+    { method: "PUT", path: "/events" },
+    { method: "POST", path: `/events/${EVENT_KEY}/publish/extra` },
+    { method: "POST", path: `/events/${EVENT_KEY}/unknown` },
+    { method: "POST", path: "/events.json" },
+  ])("does not force JSON for browser routes or unmatched method/path contracts: $method $path", async ({ method, path }) => {
+    const scratch = new Hono();
+    scratch.onError(internalErrorHandler);
+    scratch.on(method, path, () => { throw refused(); });
+    const res = await scratch.request(path, { method, headers: { accept: "*/*" } }, env);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(await res.text()).toContain("Together We Own");
+  });
+  it.each(EVENT_WRITES)("does not reclassify unrelated event-write errors: $method $path", async ({ method, path }) => {
+    for (const error of [new TypeError("private bug"), pgError("42601")]) {
+      const scratch = new Hono();
+      scratch.onError(internalErrorHandler);
+      scratch.on(method, path, () => { throw error; });
+      const res = await scratch.request(path, { method }, env);
+      expect(res.status).toBe(500);
+      expect(await res.text()).not.toContain("private");
     }
   });
   it("keeps programming and SQL syntax failures at 500", async () => {
@@ -176,6 +216,29 @@ describe("public session failure boundaries", () => {
       expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
     },
   );
+  describe.each(EVENT_WRITES)("JSON-only $method $path", ({ method, path }) => {
+    it.each([undefined, "*/*", "text/html", "application/json"])("keeps pre-handler session outages JSON-only with Accept %s", async (accept) => {
+      const store = createMemorySessionStore();
+      const cookie = await cookieFor(store, MODERATOR);
+      vi.spyOn(store, "get").mockRejectedValue(refused());
+      const rotate = vi.spyOn(store, "rotate");
+      const res = await app.request(path, {
+        method,
+        headers: { cookie, origin: env.APP_URL, "content-type": "application/json", ...(accept ? { accept } : {}) },
+        body: JSON.stringify({ status: "going" }),
+      }, { ...env, SESSION_STORE: store });
+      expect(store.get).toHaveBeenCalledOnce();
+      expect(rotate).not.toHaveBeenCalled();
+      expect(res.status).toBe(503);
+      expect(res.headers.get("cache-control")).toContain("no-store");
+      expect(res.headers.get("vary")).toContain("Accept");
+      expect(res.headers.getSetCookie()).toEqual([]);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const body = await res.text();
+      expect(body).not.toMatch(/private|ECONNREFUSED/);
+      expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
+    });
+  });
   it("refuses cross-origin logout before revocation or cookie changes", async () => {
     const { store, cookie, bindings } = await fixture();
     const revoke = vi.spyOn(store, "revoke");
