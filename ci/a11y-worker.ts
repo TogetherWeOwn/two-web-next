@@ -4,12 +4,13 @@ import postgres from "postgres";
 import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
 import { auditFixtureState, auditReadDatabase } from "./a11y-read-models";
 import app from "../src/index";
-import { maintenanceHandler, notFoundHandler, rateLimitExceeded } from "../src/errors";
+import { maintenanceHandler, notFoundHandler, notFoundResponse, rateLimitExceeded } from "../src/errors";
 import { adminSchema, schema } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createPostgresSessionStore, type Sql } from "../src/sessions";
 
 app.get("/__a11y/404", notFoundHandler);
+app.get("/__a11y/404-empty", (c) => notFoundResponse(c));
 app.get("/__a11y/429", (c) => rateLimitExceeded(c));
 app.get("/__a11y/500", () => { throw new Error("Synthetic audit error"); });
 app.get("/__a11y/503", maintenanceHandler("/discord"));
