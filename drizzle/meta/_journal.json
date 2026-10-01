@@ -99,6 +99,13 @@
       "when": 1790817994959,
       "tag": "1011_legacy-audit-evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790827200000,
+      "tag": "1012_shared-agent-events",
+      "breakpoints": true
     }
   ]
 }

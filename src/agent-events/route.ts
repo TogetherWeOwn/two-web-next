@@ -2,6 +2,12 @@ import type { Context } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
 import { DEFAULT_CONFIG, type IngressConfig, handleAgentEvent } from "./service";
+import { databaseOptions, databaseUrl } from "../db/connection";
+import { dispatchWriteBack } from "../admin/writeback";
+import { signedEventReader } from "../bot/event-read";
+
+// In-process fixture seam only; deployed ingress uses the same DB as public events.
+export type EnvWithAgentStore = Env & { AGENT_EVENT_SQL?: postgres.Sql };
 
 export function ingressConfig(env: Env): IngressConfig {
   const routePerMinute = Number(env.AGENT_EVENTS_ROUTE_PER_MINUTE);
@@ -27,8 +33,9 @@ export async function agentEventsRoute(c: Context<{ Bindings: Env }>): Promise<R
   if (!cfg.enabled) {
     return c.json({ reason: "ingress_disabled", message: "The agent event ingress is not enabled in this environment." }, 404);
   }
-  const url = c.env.AGENT_DB?.connectionString;
-  if (!url) return c.json({ reason: "ingress_unavailable", message: "The agent event store is not configured." }, 503);
+  const injected = (c.env as EnvWithAgentStore).AGENT_EVENT_SQL;
+  const url = databaseUrl(c.env);
+  if (!injected && !url) return c.json({ reason: "ingress_unavailable", message: "The agent event store is not configured." }, 503);
 
   let body: unknown = null;
   try {
@@ -36,17 +43,20 @@ export async function agentEventsRoute(c: Context<{ Bindings: Env }>): Promise<R
   } catch {
     // A non-JSON body is answered by the service's audited 422.
   }
-  const sql = postgres(url, { max: 1, fetch_types: false, prepare: false });
+  const sql = injected ?? postgres(url!, databaseOptions);
   try {
     // Anonymous shield bucket: Cloudflare's client address header. A machine
     // caller always presents a credential, so this only keys floods without one.
     const ip = c.req.header("cf-connecting-ip") ?? null;
-    const a = await handleAgentEvent(sql, cfg, body, bearer(c.req.header("authorization")), ip);
+    const a = await handleAgentEvent(sql, cfg, body, bearer(c.req.header("authorization")), ip, {
+      writeBack: (wb) => dispatchWriteBack(c.env, wb),
+      readEvent: signedEventReader({ baseUrl: c.env.BOT_ENDPOINT_URL, keyId: c.env.BOT_KEY_ID, secret: c.env.BOT_SHARED_SECRET }),
+    });
     return c.json(a.body, a.status as 200, a.headers);
   } catch (err) {
     console.error("agent-events failed", (err as Error).name);
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   } finally {
-    c.executionCtx.waitUntil(sql.end({ timeout: 2 }));
+    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }));
   }
 }

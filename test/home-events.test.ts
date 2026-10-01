@@ -32,6 +32,7 @@ function event(id: number, overrides: Partial<typeof events.$inferSelect> = {}):
     startsAt, endsAt: new Date(startsAt.getTime() + 7200_000), timezone: "Europe/London",
     location: "Voice lobby", capacity: null, status: "published", discordEventId: "discord-event-id",
     discordSyncFailedAt: null, discordSyncFailureCode: null,
+    agentGrantId: null, proofMarker: null, agentVersion: 1,
     createdBy: "private-creator-id", rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: NOW, updatedAt: NOW,
     ...overrides,

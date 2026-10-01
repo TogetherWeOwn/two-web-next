@@ -71,6 +71,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
       id: 1, eventKey: "counts-game-night", title: "Counts fixture game night", game: null, description: null,
       startsAt: new Date(NOW + 3600_000), endsAt: new Date(NOW + 7200_000), timezone: "UTC", location: "Lobby",
       capacity: null, status: "published", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+      agentGrantId: null, proofMarker: null, agentVersion: 1,
       createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
       recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: new Date(NOW), updatedAt: new Date(NOW),
     };

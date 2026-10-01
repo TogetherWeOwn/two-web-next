@@ -5,8 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import app from "./app";
 import { DEFAULT_CONFIG, type IngressConfig, digest, handleAgentEvent, validateFields } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
-import users from "../drizzle/0000_init-users.sql?raw";
-import agentEvents from "../drizzle/0001_agent-events.sql?raw";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const CALLER = "agent-under-test";
 const STAGING = DEFAULT_CONFIG.stagingGuildId;
@@ -48,7 +47,7 @@ describe("worker route without a store", () => {
 describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)", () => {
   const schemaName = `w14_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let sql: postgres.Sql;
-  let admin: postgres.Sql;
+  let fixture: MemberDataFixture;
   const tokens = { good: "tok-good-" + schemaName, other: "tok-other-" + schemaName, prod: "tok-prod-" + schemaName, expired: "tok-exp-" + schemaName, disabled: "tok-dis-" + schemaName };
 
   const call = (body: unknown, token: string | null = tokens.good, c = cfg) => handleAgentEvent(sql, c, body, token);
@@ -60,13 +59,8 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
   }
 
   beforeAll(async () => {
-    admin = postgres(process.env.DATABASE_URL!, { max: 1 });
-    await admin.unsafe(`CREATE SCHEMA ${schemaName}`);
-    sql = postgres(process.env.DATABASE_URL!, { max: 8, connection: { search_path: schemaName }, onnotice: () => {} });
-    // drizzle qualifies FK targets with "public"; strip it so the throwaway schema owns them.
-    for (const stmt of `${users}\n--> statement-breakpoint\n${agentEvents}`.replaceAll('"public".', "").split("--> statement-breakpoint")) {
-      if (stmt.trim()) await sql.unsafe(stmt);
-    }
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 8 });
+    sql = fixture.client;
     await grant(tokens.good, CALLER, STAGING);
     await grant(tokens.other, "someone-else", STAGING);
     await grant(tokens.prod, CALLER, DEFAULT_CONFIG.productionGuildId);
@@ -74,9 +68,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
     await grant(tokens.disabled, CALLER, STAGING, "disabled_at=now()");
   });
   afterAll(async () => {
-    await sql?.end();
-    await admin?.unsafe(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
-    await admin?.end();
+    await fixture?.dispose();
   });
 
   const audits = async (reason: string) => (await sql`SELECT count(*)::int AS n FROM agent_event_audits WHERE reason_code = ${reason}`)[0]!.n as number;
@@ -96,7 +88,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
     expect(await audits("unauthenticated")).toBeGreaterThanOrEqual(2);
     const dump = JSON.stringify(await sql`SELECT * FROM agent_event_audits`);
     for (const t of Object.values(tokens)) expect(dump).not.toContain(t);
-    expect((await sql`SELECT count(*)::int AS n FROM agent_events`)[0]!.n).toBe(0);
+    expect((await sql`SELECT count(*)::int AS n FROM events`)[0]!.n).toBe(0);
   });
 
   it("creates once, replays the original response for a duplicate delivery, and conflicts on a changed payload", async () => {
@@ -111,7 +103,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
     expect(dup.status).toBe(201);
     expect(dup.body).toMatchObject({ event_key: first.body.event_key, proof_marker: first.body.proof_marker, replayed: true });
     expect(dup.body.request_id).not.toBe(first.body.request_id);
-    expect((await sql`SELECT count(*)::int AS n FROM agent_events`)[0]!.n).toBe(1);
+    expect((await sql`SELECT count(*)::int AS n FROM events`)[0]!.n).toBe(1);
 
     const conflict = await call({ ...req, fields: { ...FIELDS, title: "Different" } });
     expect(conflict.status).toBe(409);
@@ -124,7 +116,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
 
   it("does not store denials, so a fixed payload under the same key executes", async () => {
     const k = key();
-    const [{ event_key }] = (await sql`SELECT event_key FROM agent_events`) as [{ event_key: string }];
+    const [{ event_key }] = (await sql`SELECT event_key FROM events`) as [{ event_key: string }];
     const bad = await call({ op: "update", idempotency_key: k, event_key, fields: FIELDS });
     expect(bad.status).toBe(422);
     const fixed = await call({ op: "update", idempotency_key: k, event_key, version: 1, fields: { ...FIELDS, title: "v2" } });
@@ -200,7 +192,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
     expect(new Set(results.map((r) => r.body.event_key)).size).toBe(1);
     expect(results.filter((r) => r.body.replayed !== true)).toHaveLength(1);
     const [g] = await sql`SELECT id FROM agent_event_grants WHERE verifier_hash = ${await sha256Hex(t)}`;
-    expect((await sql`SELECT count(*)::int AS n FROM agent_events WHERE agent_grant_id = ${g!.id}`)[0]!.n).toBe(1);
+    expect((await sql`SELECT count(*)::int AS n FROM events WHERE agent_grant_id = ${g!.id}`)[0]!.n).toBe(1);
   });
 
   it("rate-limits mutating calls per grant, but replays are free", async () => {
@@ -221,7 +213,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
   });
 
   it("does not leak another grant's event", async () => {
-    const [{ event_key }] = (await sql`SELECT e.event_key FROM agent_events e JOIN agent_event_grants g ON g.id = e.agent_grant_id WHERE g.verifier_hash = ${await sha256Hex(tokens.good)}`) as [{ event_key: string }];
+    const [{ event_key }] = (await sql`SELECT e.event_key FROM events e JOIN agent_event_grants g ON g.id = e.agent_grant_id WHERE g.verifier_hash = ${await sha256Hex(tokens.good)}`) as [{ event_key: string }];
     const t = "tok-foreign-" + schemaName;
     await grant(t, CALLER, STAGING);
     const r = await handleAgentEvent(sql, cfg, { op: "cancel", idempotency_key: "fx", event_key }, t);

@@ -1,5 +1,8 @@
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
+
+type SeatWriter = Pick<PgDatabase<PgQueryResultHKT>, "select" | "update">;
 import { rsvps, type Event } from "../db/admin-schema";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -7,7 +10,7 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 export const CAPACITY_BELOW_GOING = "Capacity cannot be lower than the number of members already going.";
 
 /** Call behind the event's FOR UPDATE lock, like every seat-changing write. */
-export async function goingCount(tx: Tx, eventId: number): Promise<number> {
+export async function goingCount(tx: Pick<SeatWriter, "select">, eventId: number): Promise<number> {
   const [tally] = await tx.select({ n: count() }).from(rsvps)
     .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "going")));
   return Number(tally?.n ?? 0);
@@ -41,7 +44,7 @@ export async function lockWaitlist(tx: Tx, eventId: number): Promise<void> {
 /** Settle FIFO heads inside the caller's transaction and event-row lock, never after commit.
  * A paused/closed event freezes the line. Reset mirror stamps; the caller queues the event
  * write-back after commit, covering both its own write and every promoted answer. */
-export async function promoteWaitlist(tx: Tx, ev: Event, clock: () => Date = () => new Date()): Promise<void> {
+export async function promoteWaitlist(tx: SeatWriter, ev: Event, clock: () => Date = () => new Date()): Promise<void> {
   if (ev.status !== "published" || !ev.rsvpOpen || ev.endsAt <= clock()) return;
   const free = ev.capacity === null ? null : ev.capacity - await goingCount(tx, ev.id);
   if (free !== null && free <= 0) return;

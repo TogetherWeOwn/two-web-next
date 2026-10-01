@@ -21,6 +21,7 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC",
     location: "The lobby & voice channel", capacity: 10, status: "published", rsvpOpen: true,
     discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    agentGrantId: null, proofMarker: null, agentVersion: 1,
     createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
     recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
     ...over,

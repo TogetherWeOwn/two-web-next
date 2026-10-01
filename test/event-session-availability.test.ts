@@ -18,6 +18,7 @@ const event: PublicEvent = {
   startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
   timezone: "UTC", location: null, capacity: null, status: "published", discordEventId: null,
   discordSyncFailedAt: null, discordSyncFailureCode: null,
+  agentGrantId: null, proofMarker: null, agentVersion: 1,
   createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
   recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
   createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-01"), goingCount: 1,

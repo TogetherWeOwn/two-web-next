@@ -1,4 +1,5 @@
 import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { agentEventGrants } from "./schema";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -38,6 +39,11 @@ export const events = pgTable(
     discordEventId: text("discord_event_id").unique(),
     discordSyncFailedAt: timestamp("discord_sync_failed_at", { withTimezone: true }),
     discordSyncFailureCode: text("discord_sync_failure_code"),
+    // Machine ownership shares the public/admin event row. Null for human events;
+    // a grant can own only one proof event. Deleting a grant preserves the event.
+    agentGrantId: uuid("agent_grant_id").unique().references(() => agentEventGrants.id, { onDelete: "set null" }),
+    proofMarker: text("proof_marker").unique(),
+    agentVersion: integer("agent_version").notNull().default(1),
     createdBy: text("created_by"),
     // Pause flag (TOG-8725): a published event stays visible while taking no
     // new answers. Default true so every row written by a caller that does

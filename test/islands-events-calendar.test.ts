@@ -97,6 +97,7 @@ function eventRow(over: Partial<typeof events.$inferSelect> = {}): typeof events
     id: n, eventKey: `ev-${n}`, title: `Game night ${n}`, game: null, description: null,
     startsAt: start, endsAt: end, timezone: "Europe/London", location: null, capacity: null,
     status: "published", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+    agentGrantId: null, proofMarker: null, agentVersion: 1,
     createdBy: null, rsvpOpen: true,
     recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
     parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,

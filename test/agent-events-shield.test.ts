@@ -8,8 +8,7 @@ import {
   type IngressConfig,
 } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
-import agentEvents from "../drizzle/0001_agent-events.sql?raw";
-import { testDatabaseUrl } from "./helpers/member-data-db";
+import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
 
 // W15: the outer route shield (two-web TOG-8402, `agent-events.route_per_minute`).
 // Every hit per credential per minute, counted in Postgres BEFORE auth, the
@@ -57,7 +56,7 @@ describe("throttle envelope (pure, two-web TOG-6788)", () => {
 describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-testdb)", () => {
   const schemaName = `w15_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let sql: postgres.Sql;
-  let admin: postgres.Sql;
+  let fixture: MemberDataFixture;
   let n = 0;
   const key = () => `shield-key-${++n}`;
 
@@ -75,22 +74,11 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     (await sql`SELECT count(*)::int AS n FROM agent_event_audits WHERE reason_code = ${reason}`)[0]!.n as number;
 
   beforeAll(async () => {
-    const url = testDatabaseUrl(process.env.DATABASE_URL!); // Must run before postgres() or any DDL.
-    // postgres.js treats password: "" as absent and falls back to PGPASSWORD.
-    // A callback pins the authorized empty test password without that fallback.
-    const validated = { port: 5432, password: () => url.password, onnotice: (() => {}) as () => void };
-    admin = postgres(url.href, { ...validated, max: 1 });
-    await admin.unsafe(`CREATE SCHEMA ${schemaName}`);
-    sql = postgres(url.href, { ...validated, max: 8, connection: { search_path: schemaName } });
-    // drizzle qualifies FK targets with "public"; strip it so the throwaway schema owns them.
-    for (const stmt of agentEvents.replaceAll('"public".', "").split("--> statement-breakpoint")) {
-      if (stmt.trim()) await sql.unsafe(stmt);
-    }
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 8 });
+    sql = fixture.client;
   });
   afterAll(async () => {
-    await sql?.end();
-    await admin?.unsafe(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
-    await admin?.end();
+    await fixture?.dispose();
   });
 
   it("answers the bot's normal burst and refuses the ninth hit with the shared envelope", async () => {
@@ -269,7 +257,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
       max: 1,
       port: 5432,
       password: () => url.password,
-      connection: { search_path: schemaName },
+      connection: { search_path: fixture.schemaName },
       onnotice: () => {},
     });
     try {
@@ -305,7 +293,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
       max: 1,
       port: 5432,
       password: () => url.password,
-      connection: { search_path: schemaName },
+      connection: { search_path: fixture.schemaName },
       onnotice: () => {},
     });
     try {

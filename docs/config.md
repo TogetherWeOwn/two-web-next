@@ -51,7 +51,9 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `QA_AUTH_TOKEN` | Optional secret | staging only; leave unset in dev/prod | Unset; QA route disabled | QA route requires exact `APP_URL=https://next.togetherweown.com` plus the matching nonempty token. Missing/bad token or unknown identity returns 404. Throttle executes before the gate. |
 | `MEMBER_ACCESS_LOG_ENFORCE` | Optional boolean-like var | dev/staging/prod | On | Trimmed, case-insensitive `false`, `0`, `no` disable enforcement; all other values enable it. Failed access-log writes refuse member/admin reads with 503 by default; disabled enforcement logs and serves instead. |
 | `CSP_REPORT_SAMPLE_RATE` | Optional numeric var | dev/staging/prod | `1.0` | Absent/nonfinite values fall back to 1; parsed values clamp to 0–1 (`parseFloat` accepts numeric prefixes). Changes logging only; report sink remains 204. |
-| `AGENT_DB` | Optional independent connection-string binding | dev: test injection; staging: provision when enabled; prod: ingress not authorized by this reference | Unbound in Wrangler; no fallback to `DB` or `DATABASE_URL` | Enabled ingress without this binding returns 503 `ingress_unavailable`; DB execution failures return 500. |
+| `BOT_ENDPOINT_URL` | Optional signed bot base URL | dev: stub only; staging: provision separately; prod: no new access implied | None | Missing/non-HTTPS URL fails read observation closed to `bot_unreachable`; redirects are refused. |
+| `BOT_KEY_ID` | Optional bot signing key identifier | dev/staging/prod | None | Missing ID fails observation closed; no implicit production key selection. |
+| `BOT_SHARED_SECRET` | Optional signing secret | dev: fixture value; staging/prod: separately authorized secret binding | None | Missing/invalid secret fails observation closed. Never logged or substituted; one attempt, 2.5 s deadline. |
 | `AGENT_EVENTS_ENABLED` | Optional flag var | dev/staging: opt-in; prod: keep disabled pending separate authorization | Off | Only exact `true` or `1` enables ingress; otherwise 404 `ingress_disabled`. |
 | `AGENT_EVENTS_CALLER_AGENT_ID` | Optional caller allowlist var | dev/staging: admitted caller; prod: no production grant implied | Empty; nobody admitted | Unset/wrong caller denies grants with 403 `wrong_caller`. |
 | `AGENT_EVENTS_GUILD_ID` | Optional admitted guild var | dev/staging: staging guild; prod: no production grant implied | Code: staging guild `1545644954272137297` when absent/empty | A grant for another guild is denied with 403. Independent of web `DISCORD_GUILD_ID`. |
@@ -72,7 +74,7 @@ Do not assume setting `DATABASE_URL` overrides every binding:
 | Queue/scheduled jobs | `HYPERDRIVE`, then `DB`, then `DATABASE_URL` (nullish selection) | [`src/jobs/worker.ts`](../src/jobs/worker.ts) |
 | `/up` queue-depth read | `DB.connectionString`, then `DATABASE_URL` | [`src/index.tsx`](../src/index.tsx) |
 | Generic human-route throttle | `DATABASE_URL` only; fail-open on missing/erroring store | [`src/throttle.ts`](../src/throttle.ts) |
-| Agent-event ingress | `AGENT_DB` only | [`src/agent-events/route.ts`](../src/agent-events/route.ts) |
+| Agent-event ingress | Nonempty `DATABASE_URL`, then `DB.connectionString` (same as public events; no `AGENT_DB`) | [`src/agent-events/route.ts`](../src/agent-events/route.ts) |
 
 Local development must keep **all** supplied bindings test-only, not just the
 explicit URL. Tests must never use production/staging connections. No database
@@ -121,7 +123,7 @@ These names are deliberately **not** extra rows in the marked inventory:
   is local-only, must not be remotely developed/deployed, and is **not** proof
   of real Hyperdrive pooling. It is not part of the main Worker configuration.
 - **Injected test seams:** `SESSION_STORE`, `ROSTER_STORE`, `QUEUE_DEPTH_STORE`,
-  `ADMIN_DB`, `THROTTLE_STORE`, `JOIN_DEPS`, `DISCORD_EVENTS` are in-process
+  `ADMIN_DB`, `AGENT_EVENT_SQL`, `THROTTLE_STORE`, `JOIN_DEPS`, `DISCORD_EVENTS` are in-process
   dependency/store objects, not Wrangler string vars or secrets. They are
   absent from normal deployment configuration; tests inject local fixtures.
 - **Alerts:** [`src/alerts.ts`](../src/alerts.ts) uses a fixed five-minute

@@ -10,9 +10,8 @@ export type Env = AgentEventsEnv & {
   // Optional: surfaces the "Last updated" stamp on /rules (YYYY-MM-DD). Empty or unparseable
   // hides the stamp instead of 500ing (ports two-web TOG-7323).
   RULES_LAST_UPDATED?: string;
-  // Hyperdrive → shared Postgres for web DB reads, sessions, roster writes,
-  // and /up. DATABASE_URL overrides it for local/dev use. Same shape as
-  // AGENT_DB below; the ingress binding remains independent.
+  // Hyperdrive → shared Postgres for web reads, agent events, sessions,
+  // roster writes and /up. DATABASE_URL overrides it for local/dev use.
   DB?: { connectionString: string };
   // Secrets (wrangler secret put). The bot token must belong to the same Discord application as
   // DISCORD_CLIENT_ID: Discord only lets an application's own bot add a member with that
@@ -56,7 +55,10 @@ export type Session = {
 // W14: agent-events ingress. Postgres comes through a Hyperdrive binding in the worker; tests
 // and `wrangler dev` inject a connection string via the same shape (agent-testdb only).
 export type AgentEventsEnv = {
-  AGENT_DB?: { connectionString: string };
+  // Optional signed bot observation configuration; missing values fail closed.
+  BOT_ENDPOINT_URL?: string;
+  BOT_KEY_ID?: string;
+  BOT_SHARED_SECRET?: string;
   // Kill switch, default off: an unconfigured environment answers 404 ingress_disabled.
   AGENT_EVENTS_ENABLED?: string;
   // The one admitted caller. Env-only, no default: unset denies every grant (wrong_caller).

@@ -53,8 +53,8 @@ export const webThrottleHits = pgTable(
 );
 
 // W14: scoped machine ingress for agent-originated events (ports two-web TOG-5510 Gate 2).
-// Tables mirror two-web's agent_event_* migration; `agent_events` is the minimal proof-event
-// table these five operations act on until the events slice lands.
+// Grants, audits and replay keys support the shared events table (admin-schema.ts).
+// The temporary agent_events table was migrated and retired by 1012_shared-agent-events.
 export const agentEventGrants = pgTable(
   "agent_event_grants",
   {
@@ -126,33 +126,6 @@ export const agentEventHits = pgTable(
     at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("agent_event_hits_bucket_at_idx").on(t.bucket, t.at)],
-);
-
-export const agentEvents = pgTable(
-  "agent_events",
-  {
-    eventKey: varchar("event_key", { length: 26 }).primaryKey(),
-    // One proof event per grant, enforced by the database (the quota backstop under concurrency).
-    agentGrantId: uuid("agent_grant_id")
-      .notNull()
-      .unique()
-      .references(() => agentEventGrants.id, { onDelete: "cascade" }),
-    proofMarker: text("proof_marker").notNull().unique(),
-    // Optimistic-concurrency counter, bumped only by agent writes.
-    agentVersion: integer("agent_version").notNull().default(1),
-    status: varchar("status", { length: 16 }).notNull().default("draft"),
-    title: varchar("title", { length: 100 }).notNull(),
-    game: varchar("game", { length: 100 }),
-    description: varchar("description", { length: 1000 }),
-    // Naive local wall times ("YYYY-MM-DD HH:MM") interpreted in `timezone`.
-    startsAt: varchar("starts_at", { length: 16 }).notNull(),
-    endsAt: varchar("ends_at", { length: 16 }).notNull(),
-    timezone: varchar("timezone", { length: 64 }).notNull(),
-    location: varchar("location", { length: 255 }).notNull(),
-    capacity: integer("capacity"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
 );
 
 // W7: member-authored profile (ports two-web `profiles`). Split from `users` on

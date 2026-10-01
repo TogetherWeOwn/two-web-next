@@ -12,6 +12,18 @@
 // coordination point, so behaviour is identical across Worker isolates.
 import type { Sql, TransactionSql } from "postgres";
 import { sha256Hex } from "../bot/signer";
+import { eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/pg-proxy";
+import { events } from "../db/admin-schema";
+import { CAPACITY_BELOW_GOING, goingCount, promoteWaitlist } from "../events/waitlist";
+import { utcToWall, wallToUtc, type EventStatus } from "../admin/validation";
+import type { WriteBack } from "../admin/store";
+import { observeDiscordEvent, type ObservationEvent, type EventReader } from "../bot/event-read";
+
+export type IngressEffects = {
+  readEvent?: EventReader;
+  writeBack?: (writeBack: NonNullable<WriteBack>) => Promise<void>;
+};
 
 export type Answer = { status: number; body: Record<string, unknown>; headers?: Record<string, string> };
 
@@ -52,7 +64,7 @@ type Row = Record<string, any>;
 type Grant = { id: string; agent_id: string; guild_id: string; expires_at: Date | null; disabled_at: Date | null };
 // stored: the answer is persisted for replay. Denials and failures never are, so a client that
 // fixes its payload under the same key is answered, not conflicted.
-type Outcome = Answer & { eventKey?: string | null; stored?: boolean };
+type Outcome = Answer & { eventKey?: string | null; stored?: boolean; writeBack?: NonNullable<WriteBack> };
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 export function ulid(now = Date.now()): string {
@@ -143,6 +155,13 @@ export function validateFields(raw: unknown): { ok: true; fields: Fields } | { o
     if (typeof raw.capacity !== "number" || !Number.isInteger(raw.capacity) || raw.capacity < 1) bad("capacity", "The capacity field must be an integer of at least 1.");
     else capacity = raw.capacity;
   }
+  if (timezone && !e.timezone) {
+    for (const [name, value] of [["starts_at", startsAt], ["ends_at", endsAt]] as const) {
+      if (value) {
+        try { wallToUtc(value, timezone); } catch { bad(name, `The ${name} field names a time that never occurred in ${timezone}.`); }
+      }
+    }
+  }
   if (Object.keys(e).length) return { ok: false, errors: e };
   return { ok: true, fields: { title: title!, game, description, starts_at: startsAt!, ends_at: endsAt!, timezone: timezone!, location: location!, capacity } };
 }
@@ -163,6 +182,7 @@ export async function handleAgentEvent(
   body: unknown,
   credential: string | null,
   clientIp: string | null = null,
+  effects: IngressEffects = {},
 ): Promise<Answer> {
   const requestId = ulid();
   const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
@@ -211,7 +231,7 @@ export async function handleAgentEvent(
   if (!grant) return deny(null, op, idem, "denied", "unauthenticated", 401, "A valid machine credential is required.");
 
   if (!(OPS as readonly string[]).includes(op)) return deny(grant, op, idem, "denied", "forbidden_action", 403, "Unknown operation. Only create, read, update, publish and cancel are admitted.");
-  if (grant.expires_at && grant.expires_at.getTime() <= Date.now()) return deny(grant, op, idem, "denied", "grant_expired", 403, "The grant has expired. Expiry rejects ingress and dispatch alike.");
+  if (grant.expires_at && new Date(grant.expires_at).getTime() <= Date.now()) return deny(grant, op, idem, "denied", "grant_expired", 403, "The grant has expired. Expiry rejects ingress and dispatch alike.");
   if (grant.disabled_at) return deny(grant, op, idem, "denied", "grant_disabled", 403, "The grant has been disabled by its provisioning owner.");
 
   // Fail closed: no admitted caller configured means every grant is denied.
@@ -241,20 +261,24 @@ export async function handleAgentEvent(
   const eventKeyIn = typeof doc.event_key === "string" ? doc.event_key : null;
   try {
     const lockName = op === "create" || op === "read" ? `agent-event-grant:${grant.id}` : `agent-event:${eventKeyIn ?? `owned:${grant.id}`}`;
-    return await sql.begin(async (tx) => {
+    const committed = await sql.begin(async (tx) => {
       await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`;
       // Re-check under the lock: a concurrent identical call may have stored while we waited.
       const raced = await lookupReplay(tx, grant.id, idem);
       if (raced) return replayAnswer(tx, grant, op, raced, dig, requestId, idem);
 
-      const out = await execute(tx, grant, op as Op, doc, idem, dig, requestId);
+      const out = await execute(tx, grant, op as Op, doc, idem, dig, requestId, effects);
       if (out.stored) {
         await tx`INSERT INTO agent_event_idempotency_keys (grant_id, key, payload_digest, status, body, event_key)
-                 VALUES (${grant.id}, ${idem}, ${dig}, ${out.status}, ${tx.json(out.body as never)}, ${out.eventKey ?? null})`;
+                 VALUES (${grant.id}, ${idem}, ${dig}, ${out.status}, ${JSON.stringify(out.body)}::jsonb, ${out.eventKey ?? null})`;
       }
-      return { status: out.status, body: out.body };
+      return { status: out.status, body: out.body, writeBack: out.writeBack };
     });
+    // External queue work starts only after commit. Replays (including raced replays)
+    // have no dispatch intent, so a duplicate delivery never sends twice.
+    if ("writeBack" in committed && committed.writeBack) await effects.writeBack?.(committed.writeBack);
+    return { status: committed.status, body: committed.body };
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code === "55P03") {
@@ -353,26 +377,26 @@ async function audit(sql: Tx, grant: Grant | null, operation: string, eventKey: 
 
 const rid = (requestId: string) => ({ request_id: requestId });
 
-async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown>, key: string, dig: string, requestId: string): Promise<Outcome> {
+async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown>, key: string, dig: string, requestId: string, effects: IngressEffects): Promise<Outcome> {
   const denyOutcome = async (status: number, reason: string, message: string, extra: Record<string, unknown> = {}, eventKey: string | null = null): Promise<Outcome> => {
     await audit(tx, grant, op, eventKey, key, dig, requestId, "denied", reason);
     return { status, body: { reason, message, ...extra, ...rid(requestId) } };
   };
-  const done = async (status: number, body: Record<string, unknown>, eventKey: string): Promise<Outcome> => {
+  const done = async (status: number, body: Record<string, unknown>, eventKey: string, writeBack?: NonNullable<WriteBack>): Promise<Outcome> => {
     await audit(tx, grant, op, eventKey, key, dig, requestId, "ok", null);
-    return { status, body: { ...body, ...rid(requestId) }, eventKey, stored: true };
+    return { status, body: { ...body, ...rid(requestId) }, eventKey, stored: true, writeBack };
   };
 
   if (op === "create") {
-    const [existing] = await tx`SELECT event_key FROM agent_events WHERE agent_grant_id = ${grant.id}`;
+    const [existing] = await tx`SELECT event_key FROM events WHERE agent_grant_id = ${grant.id}`;
     if (existing) return denyOutcome(409, "quota_exceeded", "This grant already owns its one proof event. Updates reuse it.", { event_key: existing.event_key });
     const v = validateFields(doc.fields);
     if (!v.ok) return denyOutcome(422, "validation_failed", "The event fields did not validate.", { errors: v.errors });
     const f = v.fields;
     const eventKey = ulid();
     const marker = `agent-proof-${ulid()}`;
-    await tx`INSERT INTO agent_events (event_key, agent_grant_id, proof_marker, title, game, description, starts_at, ends_at, timezone, location, capacity)
-             VALUES (${eventKey}, ${grant.id}, ${marker}, ${f.title}, ${f.game}, ${f.description}, ${f.starts_at}, ${f.ends_at}, ${f.timezone}, ${f.location}, ${f.capacity})`;
+    await tx`INSERT INTO events (event_key, agent_grant_id, proof_marker, title, game, description, starts_at, ends_at, timezone, location, capacity)
+             VALUES (${eventKey}, ${grant.id}, ${marker}, ${f.title}, ${f.game}, ${f.description}, ${wallToUtc(f.starts_at, f.timezone).toISOString()}, ${wallToUtc(f.ends_at, f.timezone).toISOString()}, ${f.timezone}, ${f.location}, ${f.capacity})`;
     return done(201, { event_key: eventKey, status: "draft", agent_version: 1, proof_marker: marker }, eventKey);
   }
 
@@ -384,17 +408,15 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
   const ek = event.event_key as string;
 
   if (op === "read") {
-    const [{ n }] = await tx`SELECT count(*)::int AS n FROM agent_events WHERE agent_grant_id = ${grant.id}` as [{ n: number }];
+    const [{ n }] = await tx`SELECT count(*)::int AS n FROM events WHERE agent_grant_id = ${grant.id}` as [{ n: number }];
     // The bounded window (two-web AgentEventReceiptWindowTest): the latest 50,
     // oldest first. Newest-first then reversed — LIMIT applies before the flip.
     const newest = await tx`SELECT operation, result, reason_code, request_id, created_at FROM agent_event_audits WHERE grant_id = ${grant.id} AND event_key = ${ek} ORDER BY id DESC LIMIT 50`;
     const receipts = [...newest].reverse();
     return done(200, {
       event: proofFields(event),
-      local: { status: event.status, synced_to_discord: false },
-      // Discord write-back and the bot event.read observation are not ported yet: a marked
-      // absence, never a local receipt dressed up as an observation.
-      discord: { unavailable: "verification_unavailable", reason: "never_mirrored" },
+      local: { status: event.status, synced_to_discord: event.discord_event_id !== null },
+      discord: await observeDiscordEvent(event as ObservationEvent, effects.readEvent),
       owned_event_count: n,
       proof_marker_matches: 1,
       receipts: receipts.map((r) => ({ operation: r.operation, result: r.result, reason_code: r.reason_code, request_id: r.request_id, at: new Date(r.created_at).toISOString() })),
@@ -407,37 +429,49 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
     const v = validateFields(doc.fields);
     if (!v.ok) return denyOutcome(422, "validation_failed", "The event fields did not validate.", { errors: v.errors }, ek);
     const f = v.fields;
-    const [u] = await tx`UPDATE agent_events SET title=${f.title}, game=${f.game}, description=${f.description}, starts_at=${f.starts_at}, ends_at=${f.ends_at},
+    // Reuse the shared seat rules on this already-open raw transaction; a
+    // postgres TransactionSql has no client options for postgres-js drizzle().
+    const orm = drizzle(async (query, params) => ({ rows: await tx.unsafe(query, params as never).values() }));
+    if (f.capacity !== null && f.capacity < await goingCount(orm, event.id)) {
+      return denyOutcome(422, "validation_failed", "The event fields did not validate.", { errors: { capacity: [CAPACITY_BELOW_GOING] } }, ek);
+    }
+    const [u] = await tx`UPDATE events SET title=${f.title}, game=${f.game}, description=${f.description}, starts_at=${wallToUtc(f.starts_at, f.timezone).toISOString()}, ends_at=${wallToUtc(f.ends_at, f.timezone).toISOString()},
                          timezone=${f.timezone}, location=${f.location}, capacity=${f.capacity}, agent_version = agent_version + 1, updated_at = now()
                          WHERE event_key = ${ek} AND agent_version = ${doc.version as number} RETURNING status, agent_version`;
     if (!u) return denyOutcome(409, "stale_version", "The event changed since that version. Re-read and retry.", { agent_version: event.agent_version }, ek);
-    return done(200, { event_key: ek, status: u.status, agent_version: u.agent_version }, ek);
+    const [updated] = await orm.select().from(events).where(eq(events.id, event.id));
+    await promoteWaitlist(orm, updated!);
+    return done(200, { event_key: ek, status: u.status, agent_version: u.agent_version }, ek, writeBackFor(ek, u.status));
   }
 
   // publish / cancel: cancelled stays terminal.
   const ok = op === "publish" ? event.status === "draft" : event.status !== "cancelled";
   if (!ok) return denyOutcome(409, "event_not_open", "That event is not in a position to make this move.", {}, ek);
   const next = op === "publish" ? "published" : "cancelled";
-  await tx`UPDATE agent_events SET status = ${next}, updated_at = now() WHERE event_key = ${ek}`;
-  return done(200, { event_key: ek, status: next }, ek);
+  await tx`UPDATE events SET status = ${next}, updated_at = now() WHERE event_key = ${ek}`;
+  return done(200, { event_key: ek, status: next }, ek, writeBackFor(ek, next));
 }
 
 // An explicit event_key addresses that event; omitted, the grant's single owned event answers.
 // Unknown key is 404; known-but-not-mine is 403. Row-locked so the answer is the latest state.
 async function ownedEvent(tx: Tx, grant: Grant, key: unknown): Promise<Row | "event_not_found" | "foreign_event"> {
   if (key === undefined || key === null) {
-    const [owned] = await tx`SELECT * FROM agent_events WHERE agent_grant_id = ${grant.id} FOR UPDATE`;
+    const [owned] = await tx`SELECT * FROM events WHERE agent_grant_id = ${grant.id} FOR UPDATE`;
     return owned ?? "event_not_found";
   }
   if (typeof key !== "string" || key === "") return "event_not_found";
-  const [event] = await tx`SELECT * FROM agent_events WHERE event_key = ${key} FOR UPDATE`;
+  const [event] = await tx`SELECT * FROM events WHERE event_key = ${key} FOR UPDATE`;
   if (!event) return "event_not_found";
   return event.agent_grant_id === grant.id ? event : "foreign_event";
 }
 
 // Only proof-owned fields cross this boundary.
 const proofFields = (e: Row) => ({
-  event_key: e.event_key, title: e.title, game: e.game, description: e.description, starts_at: e.starts_at, ends_at: e.ends_at,
+  event_key: e.event_key, title: e.title, game: e.game, description: e.description, starts_at: utcToWall(new Date(e.starts_at), e.timezone), ends_at: utcToWall(new Date(e.ends_at), e.timezone),
   timezone: e.timezone, location: e.location, capacity: e.capacity, status: e.status, agent_version: e.agent_version,
-  proof_marker: e.proof_marker, discord_event_id: null,
+  proof_marker: e.proof_marker, discord_event_id: e.discord_event_id,
 });
+
+function writeBackFor(eventKey: string, status: EventStatus): NonNullable<WriteBack> | undefined {
+  return status === "published" || status === "cancelled" ? { eventKey, status } : undefined;
+}
