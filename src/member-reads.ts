@@ -11,7 +11,8 @@ type Capture = {
   pending: number;
   response?: Response;
 };
-type ReadPermit = { capture: Capture; queries: number };
+export type NonSensitiveRead = "events" | "featured" | "join-funnel" | "going-counts" | "search-widget" | "timeouts";
+type ReadPermit = { capture: Capture; queries: number; classification?: NonSensitiveRead };
 const captures = new AsyncLocalStorage<Capture>();
 const permits = new AsyncLocalStorage<ReadPermit>();
 
@@ -26,12 +27,21 @@ export function refuseMemberRead(): never {
 }
 
 /** Only one observed query can consume this permit, including nested reads. */
-export async function keyedMemberRead<T>(read: () => PromiseLike<T>): Promise<T> {
+export function keyedMemberRead<T>(read: () => PromiseLike<T>): Promise<T> {
+  return permittedRead(read);
+}
+
+/** The DB adapter checks this classification; it is not a blanket exemption. */
+export function nonSensitiveRead<T>(classification: NonSensitiveRead, read: () => PromiseLike<T>): Promise<T> {
+  return permittedRead(read, classification);
+}
+
+async function permittedRead<T>(read: () => PromiseLike<T>, classification?: NonSensitiveRead): Promise<T> {
   const capture = captures.getStore();
   if (!capture) return read();
   capture.pending++;
   try {
-    const permit = { capture, queries: 0 };
+    const permit: ReadPermit = { capture, queries: 0, classification };
     // Drizzle builders are lazy thenables: consume them inside the permit.
     const result = await permits.run(permit, async () => await read());
     if (permit.queries !== 1) refuseMemberRead();
@@ -40,12 +50,12 @@ export async function keyedMemberRead<T>(read: () => PromiseLike<T>): Promise<T>
 }
 
 /** The DB adapter calls this BEFORE executing a statement, not at declaration. */
-export function memberQueryPermit(): Capture | undefined {
+export function memberQueryPermit(): ReadPermit | undefined {
   const capture = captures.getStore();
   if (!capture) return undefined;
   const permit = permits.getStore();
   if (!permit || permit.capture !== capture || ++permit.queries !== 1) refuseMemberRead();
-  return capture;
+  return permit;
 }
 
 export function memberReadActive(): boolean { return captures.getStore() !== undefined; }
@@ -84,16 +94,20 @@ export function bufferedMemberText(c: Context, body: string, status: ContentfulS
   return c.res;
 }
 
+type ReadDeclaration = Omit<AccessDecl, "subjects"> & { viewer: string };
+
 export async function memberReadBoundary(
   c: Context,
-  declaration: Omit<AccessDecl, "subjects"> & { viewer: string },
+  declaration: ReadDeclaration | (() => ReadDeclaration | undefined),
   write: AccessSink,
   next: Next,
 ): Promise<void> {
-  const capture: Capture = { subjects: new Set(), failed: !/^\d{10,25}$/.test(declaration.viewer), pending: 0 };
+  const capture: Capture = { subjects: new Set(), failed: false, pending: 0 };
   await captures.run(capture, async () => {
     try { await next(); } catch { capture.failed = true; }
     if (c.error) capture.failed = true;
+    const declared = typeof declaration === "function" ? declaration() : declaration;
+    if (!declared || !/^\d{10,25}$/.test(declared.viewer)) capture.failed = true;
     // Classification is tied to this exact response. A later stream (declared
     // or not) cannot borrow an earlier buffered response's approval.
     if (capture.failed || capture.pending !== 0 || capture.response !== c.res) {
@@ -103,13 +117,13 @@ export async function memberReadBoundary(
     }
     // Hono header() clones a finalized Response; classify before changing it.
     c.header("cache-control", "private, no-store");
-    const subjects = [...capture.subjects].filter((key) => key !== declaration.viewer).sort();
+    const subjects = [...capture.subjects].filter((key) => key !== declared!.viewer).sort();
     if (subjects.length === 0) return;
     try {
       const recorded = await write({
-        viewerDiscordId: declaration.viewer, viewerUserId: declaration.viewer,
-        resource: declaration.resource, action: declaration.action,
-        route: declaration.route, subjectUserIds: subjects,
+        viewerDiscordId: declared!.viewer, viewerUserId: declared!.viewer,
+        resource: declared!.resource, action: declared!.action,
+        route: declared!.route, subjectUserIds: subjects,
       });
       if (!recorded) throw new MemberReadRefused();
     } catch (error) {

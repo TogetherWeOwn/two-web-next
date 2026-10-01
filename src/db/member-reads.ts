@@ -5,16 +5,8 @@ import { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { PgDialect, PgSession } from "drizzle-orm/pg-core";
 import { captureMemberKeys, memberQueryPermit, memberReadActive, refuseMemberRead } from "../member-reads";
 
-// Exact, fixed projections for the optional bot views. Arbitrary raw SQL does
-// not establish column provenance, even when wrapped in keyedMemberRead().
-const rawOwners = new Map([
-  ["select member_id, joined_at, tenure_days, rank_key, is_current_member from web_v1.members where member_id = $1 limit 1", "member_id"],
-  ["select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc", "member_id"],
-]);
-const normalized = (statement: string) => statement.trim().replace(/\s+/g, " ");
 import type { Db } from "./index";
-
-type SelectedField = { path: string[]; field: unknown };
+import { rawMemberOwner, validateNonSensitiveRead, type SelectedField } from "./read-classification";
 const owners: Record<string, string> = {
   users: "id", profiles: "user_id", rsvps: "user_id", join_attempts: "discord_id",
 };
@@ -75,8 +67,10 @@ export function observeMemberReads(db: Db): Db {
               const original = Reflect.get(query, method, queryReceiver);
               if ((method === "execute" || method === "all") && typeof original === "function") {
                 return async (...values: unknown[]) => {
-                  const capture = readStatement(statement) ? memberQueryPermit() : undefined;
-                  const rawOwner = capture && !fields?.length ? rawOwners.get(normalized(statement)) : undefined;
+                  const permit = readStatement(statement) ? memberQueryPermit() : undefined;
+                  if (permit?.classification) validateNonSensitiveRead(permit.classification, statement, fields);
+                  const capture = permit && !permit.classification ? permit.capture : undefined;
+                  const rawOwner = capture && !fields?.length ? rawMemberOwner(statement) : undefined;
                   const projection = capture && !rawOwner ? ownerProjection(fields) : undefined;
                   const rows: unknown = await Reflect.apply(original, query, values);
                   if (capture) {
