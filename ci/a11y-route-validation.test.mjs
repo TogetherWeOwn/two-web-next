@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { pathToFileURL } from "node:url";
-import { buildAuditWorker } from "./a11y-build.mjs";
+import { loadAuditWorkerRoutes } from "./a11y-test-worker.mjs";
 import { Hono } from "hono";
 import { coverage } from "./a11y-cases.mjs";
 import { auditCases } from "./a11y-policy.mjs";
@@ -65,6 +62,11 @@ test("an earlier static GET cannot stand in for an overlapping dynamic route", (
   assert(auditCases(routes, casesFor("/e/fixture")).some((scenario) => scenario.path === "/e/new" && scenario.route === "/e/new"));
 });
 
+test("an earlier dynamic GET cannot stand in for an overlapping static route", () => {
+  const routes = [{ method: "GET", path: route }, { method: "GET", path: "/e/new" }];
+  assert.throws(() => auditCases(routes, casesFor("/e/fixture")), /Invalid audit path for \/e\/new/);
+});
+
 test("checked-in cases and test-only errors stay valid with explicit exclusions", () => {
   const routes = Object.keys(coverage).map((path) => ({ method: "GET", path }));
   const scenarios = auditCases(routes, coverage);
@@ -74,20 +76,12 @@ test("checked-in cases and test-only errors stay valid with explicit exclusions"
 });
 
 test("all real audit-worker GET registrations accept their checked-in cases offline", async () => {
-  const scratch = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "a11y-route-test-"));
-  try {
-    await symlink(resolve("node_modules"), join(scratch, "node_modules"), "dir");
-    const bundle = join(scratch, "worker.mjs");
-    await buildAuditWorker(bundle);
-    const worker = await import(pathToFileURL(bundle).href);
-    const scenarios = auditCases(worker.routes, worker.coverage);
-    assert(scenarios.length > 0);
-    const audited = new Set(scenarios.map((scenario) => scenario.route));
-    for (const { method, path } of worker.routes) {
-      if (method === "GET") assert(worker.coverage[path]?.skip || audited.has(path), path);
-    }
-  } finally {
-    await rm(scratch, { recursive: true, force: true });
+  const worker = await loadAuditWorkerRoutes();
+  const scenarios = auditCases(worker.routes, worker.coverage);
+  assert(scenarios.length > 0);
+  const audited = new Set(scenarios.map((scenario) => scenario.route));
+  for (const { method, path } of worker.routes) {
+    if (method === "GET") assert(worker.coverage[path]?.skip || audited.has(path), path);
   }
 });
 
