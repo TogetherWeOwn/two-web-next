@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Direct-`postgres` acceptance probe for the shared Neon staging branch
 // (S1: TOG-9679 acceptance item 1, second half). The first half is the
-// Hyperdrive-bound Worker query (GET /db-ping); this script proves the same
+// Hyperdrive-bound Worker queue read (GET /up); this script proves the same
 // branch serves a direct client with the repo's `postgres` driver (the path
 // the bot Container uses without Hyperdrive). DATABASE_URL env only (e.g.
 // NEON_STAGING_DATABASE_URL) — never argv, never logs. Prints the row on

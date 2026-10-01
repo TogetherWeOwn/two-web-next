@@ -2,7 +2,7 @@
 // The driver wrapper only pins search_path; all SQL goes to test containers.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type postgres from "postgres";
-import app from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
@@ -80,7 +80,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
 
   const login = async (identity = "qa-member", bindings = env) => {
     const res = await request(`/auth/qa/${identity}`, {
-      method: "POST", headers: { "X-TWO-QA-Auth": baseEnv.QA_AUTH_TOKEN! },
+      method: "POST", headers: { origin: bindings.APP_URL, "X-TWO-QA-Auth": baseEnv.QA_AUTH_TOKEN! },
     }, bindings);
     expect(res.status).toBe(204);
     return cookieFrom(res);
