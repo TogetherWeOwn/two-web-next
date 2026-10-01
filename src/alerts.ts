@@ -36,7 +36,10 @@ export function fingerprintOf(err: unknown, route: string): string {
   return `${exceptionClass(err)}@${route}`;
 }
 
-/** Per-fingerprint mute, ports ErrorAlertRateLimit (1 alert / 5 min). Per isolate: see the runbook. */
+/**
+ * Per-fingerprint mute, ports ErrorAlertRateLimit (1 alert / 5 min). Per isolate: see the runbook.
+ * At 500 live fingerprints, new ones stay silent until a slot expires; never evict an active mute.
+ */
 export class AlertRateLimit {
   private readonly last = new Map<string, number>();
   constructor(
@@ -51,8 +54,8 @@ export class AlertRateLimit {
     if (prev !== undefined && t - prev < this.windowMs) return false;
     if (this.last.size >= MAX_TRACKED) {
       for (const [k, at] of this.last) if (t - at >= this.windowMs) this.last.delete(k);
-      // Still full of live entries: drop the oldest so memory stays bounded.
-      if (this.last.size >= MAX_TRACKED) this.last.delete(this.last.keys().next().value as string);
+      // Decline admission rather than forgetting a fingerprint still in its mute window.
+      if (this.last.size >= MAX_TRACKED) return false;
     }
     this.last.set(fingerprint, t);
     return true;

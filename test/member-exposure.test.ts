@@ -5,7 +5,7 @@
 // W15 Pest port: assert exposure on the mounted worker, not only isolated routers.
 // Legacy assertion mapping and intentional port differences: docs/w15-member-data-parity.md.
 import { Hono } from "hono";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import rawApp from "../src/index";
 import app from "./app";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
@@ -66,24 +66,26 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
   let fixture: MemberDataFixture;
   let db: Db;
   let sessions = createMemorySessionStore();
+  let remoteFetch: MockInstance<typeof fetch>;
   const bindings = () => ({
     ...env, ADMIN_DB: db, SESSION_STORE: sessions,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   });
-  // Privacy assertions must not depend on a live Discord response or fail-open.
-  const externalFetch = vi.fn(async () => { throw new Error("unexpected_external_fetch"); });
   const request = (path: string, init: RequestInit = {}) => app.request(path, init, bindings());
   const headers = async (actor: typeof MEMBER) => ({ cookie: await cookieFor(sessions, actor) });
 
   beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
   beforeEach(async () => {
-    externalFetch.mockClear();
-    vi.stubGlobal("fetch", externalFetch);
+    remoteFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected external fetch"));
     await fixture.reset(); await seed(db); sessions = createMemorySessionStore();
   });
   afterEach(async () => {
-    try { expect(externalFetch.mock.calls.length, "no external fixture I/O").toBe(0); }
-    finally { vi.unstubAllGlobals(); await fixture?.reset(); }
+    try {
+      await fixture?.reset();
+      expect(remoteFetch).not.toHaveBeenCalled();
+    } finally {
+      remoteFetch?.mockRestore();
+    }
   });
   afterAll(() => fixture?.dispose());
 
