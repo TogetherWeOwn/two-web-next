@@ -25,6 +25,8 @@ const commands = [
   ["npm", ["run", "test", "--", "--exclude", "test/review-p1-verify.test.ts"]],
   [process.execPath, ["--test", ...a11yTests]],
   ["npm", ["run", "test:cutover"]],
+  // Smoke self-tests answer a stubbed local HTTP server; they never reach a Worker or database.
+  ["npm", ["run", "test:smoke"]],
 ];
 
 console.log("Fixture-only check: SQL suites skipped/excluded; limited evidence, not database acceptance.");

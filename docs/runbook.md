@@ -56,7 +56,7 @@ Install development tools even when the shell defaults to production mode:
 ```
 
 `check:offline` runs typecheck, config checks, fixture Vitest tests, a11y policy
-self-tests and cutover self-tests. It unsets `DATABASE_URL`,
+self-tests, cutover self-tests and smoke self-tests. It unsets `DATABASE_URL`,
 `AUDIT_IMPORT_TEST_DATABASE_URL`, `W1_AGENT_TESTDB`, all
 `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_*` variables and `PG*` settings
 for every child. Conditional SQL suites then skip, including the fixed

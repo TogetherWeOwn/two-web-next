@@ -57,7 +57,7 @@ syncBuiltinESMExports();
 }
 
 describe("fixture-only check command (stub children, no SQL/network)", () => {
-  it("routes its fixed exclusion only to Vitest and preserves all five check stages", () => {
+  it("routes its fixed exclusion only to Vitest and preserves all six check stages", () => {
     const result = offline();
     expect(result.status, result.output).toBe(0);
     expect(result.calls.map(({ command, args }) => ({ command, args }))).toEqual([
@@ -66,13 +66,14 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
       { command: "npm", args: ["run", "test", "--", "--exclude", "test/review-p1-verify.test.ts"] },
       { command: process.execPath, args: ["--test", ...readdirSync("ci").filter(file => file.startsWith("a11y-") && file.endsWith(".test.mjs")).sort().map(file => `ci/${file}`)] },
       { command: "npm", args: ["run", "test:cutover"] },
+      { command: "npm", args: ["run", "test:smoke"] },
     ]);
   });
 
   it("unsets inherited SQL targets and W1_AGENT_TESTDB opt-in for every child but keeps unrelated environment", () => {
     const result = offline();
     expect(result.status, result.output).toBe(0);
-    expect(result.calls).toHaveLength(5);
+    expect(result.calls).toHaveLength(6);
     for (const call of result.calls) {
       expect(call.dbKeys).toEqual([]);
       expect(call.marker).toBe("preserved");
@@ -87,7 +88,7 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
     expect(result.output).toContain("does not accept arguments");
   });
 
-  it.each(["typecheck", "config:check", "test", "--test", "test:cutover"])("stops at a failed %s stage and preserves its exit status", (stage) => {
+  it.each(["typecheck", "config:check", "test", "--test", "test:cutover", "test:smoke"])("stops at a failed %s stage and preserves its exit status", (stage) => {
     const result = offline([], stage);
     expect(result.status, result.output).toBe(7);
     expect(result.calls.at(-1)?.args).toContain(stage);
@@ -112,7 +113,7 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
   it("documents the tested package entry point without changing the full check", () => {
     const { scripts } = JSON.parse(readFileSync("package.json", "utf8"));
     expect(scripts["check:offline"]).toBe("node ci/offline-check.mjs");
-    expect(scripts.check).toBe("npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover");
+    expect(scripts.check).toBe("npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:smoke");
     const runbook = readFileSync("docs/runbook.md", "utf8");
     expect(runbook).toContain("npm run check:offline");
     expect(runbook).not.toContain("npm run check -- -- --exclude");
