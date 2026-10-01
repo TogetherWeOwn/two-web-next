@@ -44,6 +44,8 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/events/:key` | **Save** event fields. |
 | POST | `/admin/events/:key/publish` | **Publish** a draft. |
 | POST | `/admin/events/:key/cancel` | **Cancel** / **Cancel event**. |
+| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling. |
+| POST | `/admin/events/:key/rsvp-reopen` | **Reopen RSVPs** on an eligible event. |
 | GET | `/admin/featured` | Featured content list. |
 | GET | `/admin/featured/new` | **New featured slot** form. |
 | POST | `/admin/featured` | **Create** a slot. |
@@ -51,8 +53,9 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/featured/:id` | **Save** slot settings. |
 | POST | `/admin/featured/:id/delete` | **Delete this slot**. |
 | GET | `/admin/join-attempts` | Read-only join diagnostics. |
+| GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
 
-These are all 15 routes in `src/admin/routes.tsx` (8 GET, 7 POST). There is
+These are all 18 routes in `src/admin/routes.tsx` (9 GET, 9 POST). There is
 no `/admin/featured-contents` legacy resource URL. Mutating buttons submit
 immediately: the current panel does **not** implement confirmation dialogs.
 Double-check the event/slot and intended action before pressing one.
@@ -61,8 +64,12 @@ Double-check the event/slot and intended action before pressing one.
 
 1. Open `/admin/events`, choose **New event**, or open an existing event by its
    title. **Search** matches title only; **Status** filters `draft`, `published`,
-   `cancelled` or `past`. Press **Filter** to apply. The list is newest start time
-   first and displays starts as UTC timestamps, not local wall time.
+   `cancelled` or `past`. **RSVPs** filters Open/Paused; **Series** filters
+   Parent/Child/Standalone; **Fill** filters Full/Has seats/Unlimited.
+   Press **Filter** to apply. The default order is newest start time first;
+   **Title**, **Status** and **Starts** column links change the sort. Use
+   **Previous**/**Next** for 25-row pages, retaining filters and sort.
+   Starts display as UTC timestamps, not local wall time.
 2. Fill in the form:
 
    | Field | Rule |
@@ -74,6 +81,7 @@ Double-check the event/slot and intended action before pressing one.
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
    | Location | Optional, at most 255 characters. |
    | Capacity | Empty = unlimited; otherwise a positive whole number. |
+   | Repeats (new events only) | **Does not repeat** or **Weekly**. Weekly requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. |
 
 3. Press **Create draft**. Creation always starts as `draft`; you cannot publish
    by changing a form field. After creation you land on the edit screen.
@@ -109,9 +117,34 @@ from the **Cancel event** action.
 - Cancelled/past event fields can still be edited, but saving does not reopen the
   event. Published/cancelled saves attempt asynchronous Discord write-back;
   draft/past saves do not. Do not repeatedly save/publish to force a queue repair.
-- There is **no event delete, restore, unpublish, bulk action, recurrence/series
-  editor, cover-image upload, or Pause/Reopen RSVPs control** in this panel.
-  Escalate needs outside the visible controls instead of invoking other APIs.
+- There is **no event delete, restore, unpublish, bulk action or cover-image
+  upload** in this panel. Repeat rules are available on creation, not as editable
+  recurrence fields afterward. Escalate needs outside the visible controls
+  instead of invoking other APIs.
+
+### Pause or reopen RSVPs
+
+Published events that have not ended show **Pause RSVPs** or **Reopen RSVPs**
+on the list and edit screen. These actions keep the event published; pausing is
+not cancellation and does not remove existing answers. Reopening can promote
+waiting members into available seats in first-in-first-out order. Both changed
+settings attempt asynchronous Discord write-back, not immediate delivery.
+Drafts, cancelled events and ended events cannot use these controls. If a
+transition is refused, check status and end time rather than retrying another API.
+
+### Weekly series
+
+Choose **Weekly** only for an approved series and review its count/end date
+before **Create draft**. Occurrences retain local wall time across clock changes;
+subsequent occurrences in a spring-forward gap move forward by that gap, and
+repeated-hour times use the first occurrence. Fresh ambiguous first-event times
+still follow the event form's validation rules.
+
+Each occurrence has its own event page and status. Cancelling an occurrence does
+not cancel the whole series. Moving the parent's start/end times also shifts
+not-yet-started children by the corresponding time differences; started instances
+retain their times. Check affected occurrences after saving. There is no bulk
+series cancel or repeat-rule editor.
 
 ### Read the RSVP roster
 
@@ -121,12 +154,14 @@ not only going seats. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation;
 member-data reads are audited and must stop if audit delivery fails.
 
-## Featured content settings — not yet homepage delivery
+## Featured content settings and homepage delivery
 
-**Important:** this implementation stores featured slots, but the current
-homepage does **not** load or render them. There is no **Preview** control or
-preview route. Do not promise a homepage feature went live because its Published
-box is checked. Homepage wiring requires engineering; it is not a moderator task.
+The homepage displays eligible published slots under **From the community team**.
+**Show from** is inclusive and **Show until** exclusive; slots appear in ascending
+position order, with ID breaking ties. A checked **Published** box alone does not
+guarantee display: its visibility window must qualify, and unavailable or slow
+featured reads omit the section. There is no **Preview** control or preview route.
+After an authorized content change, check the homepage before claiming it is live.
 
 To prepare or maintain an approved slot:
 
@@ -140,7 +175,7 @@ To prepare or maintain an approved slot:
    | Headline | Required, at most 255 characters. |
    | Body | Optional supporting text. |
    | Link | Optional full HTTP(S) URL, at most 255 characters. |
-   | Image URL | Optional full HTTP(S) URL, at most 255 characters; there is no upload or image-validity check. |
+   | Image URL | Optional full HTTP(S) URL on this site or HTTPS `cdn.discordapp.com`, at most 255 characters. Other hosts are rejected by the security-policy allowlist; no upload or check that the image exists. |
    | Image description | Required when an image URL is supplied, at most 255 characters. Describe the image accessibly. |
    | Published | Unchecked by default; a stored publication setting, not proof of homepage display. |
    | Position | Nonnegative whole number; defaults to 0, lower numbers sort first. |
@@ -167,8 +202,12 @@ and **Attempted** (UTC). It shows at most the newest **100 rows in the last
 Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`) and
 **Discord id or request id**, then **Filter**. Search is an exact ID match, not
 a username/substring search. Empty cells mean unavailable values, not verified
-anonymity. Source is attribution, not authenticated identity. There is no detail,
-edit, delete, retry or pagination control.
+anonymity. Source is attribution, not authenticated identity. Select an outcome
+link to open `/admin/join-attempts/:id`: it shows **Outcome**, **Source**,
+**Attempted at (UTC)** and **Trace** (**Request ID**, **Discord ID**) as recorded.
+Missing identifiers appear as a dash. Use **Back to join attempts** to return.
+There is no edit, delete, retry or pagination control; detail reads are audited
+and must stop if audit delivery fails.
 
 For outcome meanings and safe escalation, use the
 [join troubleshooting guide](troubleshooting-join.md#moderator-diagnostics-and-escalation).
@@ -231,8 +270,11 @@ For maintainers checking this guide:
 
 - [Admin routes](../src/admin/routes.tsx): complete route inventory and form actions.
 - [Admin pages](../src/admin/pages.tsx), [validation](../src/admin/validation.ts),
-  [store](../src/admin/store.ts) and [reads](../src/admin/reads.ts): labels,
-  limits, transitions, roster, join viewer and funnel counts.
+  [store](../src/admin/store.ts), [recurrence](../src/admin/recurrence.ts),
+  [event-list query](../src/admin/event-list.ts) and [reads](../src/admin/reads.ts):
+  labels, limits, transitions, series, filters, roster, join viewer and funnel counts.
+- [Featured reads](../src/featured.ts) and [image policy](../src/featured-image.ts):
+  homepage visibility windows and the accepted image hosts.
 - [Admin guard](../src/admin/guard.ts), [access log](../src/access-log.ts),
   [roles](../src/roles.ts) and [throttling](../src/throttle.ts): permissions,
   fail-closed member-data reads and request limits.
