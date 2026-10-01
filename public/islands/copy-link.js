@@ -60,12 +60,12 @@
 
   link.setAttribute("role", "button");
   link.addEventListener("click", (event) => {
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     void copy();
   });
   link.addEventListener("keydown", (event) => {
-    if (event.key !== " ") return;
+    if (event.defaultPrevented || event.repeat || event.key !== " ") return;
     event.preventDefault();
     void copy();
   });
