@@ -178,7 +178,7 @@ describe("sitemap published events (SitemapTest.php:21)", () => {
     expect(xml).toContain(`<lastmod>${UPDATED.toISOString()}</lastmod>`);
     const matches = [...xml.matchAll(/<url>([\s\S]*?)<\/url>/g)]
       .map((m) => m[1])
-      .filter((block) => block.includes(`<loc>${loc}</loc>`));
+      .filter((block) => (block ?? "").includes(`<loc>${loc}</loc>`));
     expect(matches).toHaveLength(1);
     expect(matches[0]).toContain('<changefreq>weekly</changefreq>');
     expect(matches[0]).toContain('<priority>0.6</priority>');
