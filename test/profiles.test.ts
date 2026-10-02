@@ -376,7 +376,10 @@ describe("member-access-log (memory doubles)", () => {
         const refused = await get();
         expect(refused.status).toBe(503);
         expect(refused.headers.get("cache-control")).toBe("private, no-store");
-        expect(await refused.text()).toBe("Member data is temporarily unavailable.");
+        const refusedBody = await refused.text();
+        expect(refusedBody).toContain("Together We Own");
+        expect(refusedBody).toContain('<a class="brand" href="/"');
+        expect(refusedBody).not.toContain("alice");
         expect(log).toHaveLength(0);
         expect(spy).toHaveBeenCalled();
         apply(refused);

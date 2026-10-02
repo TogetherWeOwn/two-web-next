@@ -42,7 +42,7 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   have fixture coverage; the general human throttle currently needs an explicit
   `DATABASE_URL` (the Hyperdrive-only path does not enforce it).
 - Worker queue/scheduler scaffolding: retries, locking, queue ledger,
-  `events:reconcile`, retention pruning and readiness `/up` (503 on DB/schema failure).
+  `events:reconcile`, retention pruning and readiness `/up` (503 on DB/schema failure or a missing required secret).
   Bot/Discord adapters are still reject-all stubs; the separate event write-back
   queue is not bound. These are not a claim of end-to-end live bot parity.
 
@@ -132,7 +132,7 @@ Keep `.dev.vars` on the passwordless test URL above. The checked-in local config
 uses `APP_URL=http://localhost:8787`, local Queue names and no remote bindings;
 set public Discord IDs only for an authorized test application/guild. Do not
 use real guild sign-in as a test fixture. `/up` is the readiness signal (503 on DB
-unreachable or pending web migrations; queue-only trouble stays 200; no auth); use the SQL suites for database
+unreachable, pending web migrations or a missing required secret; queue-only trouble stays 200; no auth); use the SQL suites for database
 verification. This exercises direct Postgres, not Hyperdrive pooling. Miniflare requires a nonempty password for a Hyperdrive
 local connection string, so the passwordless authorized URL cannot be used as
 that override. **Do not invent a password or substitute credentials.** Never
@@ -341,9 +341,10 @@ copied. The preflight proves source configuration, **not live isolation or a
 successful deployment**. Blank config remains a valid local revocation state,
 but unapproved extra roles (including duplicates) fail the probe.
 
-The live smoke runs manually via the `staging-smoke` workflow on
-`[self-hosted, two-selfhosted]` in a job container (it posts a real announcement
-to a throwaway channel and creates a real staging event). Dispatch only after
+The live smoke runs manually via the `staging-smoke` workflow in a job container
+(`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while
+public; TOG-12326). It posts a real announcement to a throwaway channel and
+creates a real staging event. Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
 Both probes are fixture-tested in `check` without real secrets.
 
