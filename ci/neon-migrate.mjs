@@ -9,7 +9,9 @@ const ledger = "drizzle.__drizzle_migrations";
 const lockKey = 11161001;
 
 class MigrationError extends Error {}
-const refuse = (message) => { throw new MigrationError(message); };
+const refuse = (message) => {
+  throw new MigrationError(message);
+};
 
 export function migrationConfig(env, { testDatabase = false } = {}) {
   const target = env.MIGRATION_TARGET;
@@ -22,41 +24,64 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
   const secret = target === "staging" ? "NEON_STAGING_DATABASE_URL" : "PRODUCTION_DATABASE_URL";
   if (!env[secret]) refuse(`Missing ${secret} Environment secret; no fallback is permitted.`);
   let url;
-  try { url = new URL(env[secret]); } catch { refuse("Invalid migration URL; value withheld."); }
-  if (!["postgres:", "postgresql:"].includes(url.protocol) || url.hash
-    || (url.port && url.port !== "5432") || !/^\/[a-zA-Z0-9_-]+$/.test(url.pathname)) {
+  try {
+    url = new URL(env[secret]);
+  } catch {
+    refuse("Invalid migration URL; value withheld.");
+  }
+  if (
+    !["postgres:", "postgresql:"].includes(url.protocol) ||
+    url.hash ||
+    (url.port && url.port !== "5432") ||
+    !/^\/[a-zA-Z0-9_-]+$/.test(url.pathname)
+  ) {
     refuse("Invalid migration endpoint; value withheld.");
   }
   if (testDatabase) {
-    const agent = url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "";
-    const ci = env.GITHUB_ACTIONS === "true" && env.CI === "true"
-      && url.hostname === "postgres" && url.username === "postgres" && url.password === "ci";
+    const agent =
+      url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "";
+    const ci =
+      env.GITHUB_ACTIONS === "true" &&
+      env.CI === "true" &&
+      url.hostname === "postgres" &&
+      url.username === "postgres" &&
+      url.password === "ci";
     if ((!agent && !ci) || url.search || !/^\/web_migrate_test_[a-f0-9]+$/.test(url.pathname)) {
       refuse("Selftest requires its owned database on agent-testdb or the CI Postgres service.");
     }
-  } else if (target === "staging"
-    && (!/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(url.hostname)
-      || url.hostname.split(".")[0].endsWith("-pooler"))) {
+  } else if (
+    target === "staging" &&
+    (!/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(url.hostname) ||
+      url.hostname.split(".")[0].endsWith("-pooler"))
+  ) {
     refuse("Migrations require a direct Neon endpoint with TLS; value withheld.");
-  } else if (target === "production"
+  } else if (
+    target === "production" &&
     // PlanetScale Postgres direct endpoint: <id>.pg.psdb.cloud:5432.
     // The pooled 6432 port and -pooler hosts are refused: DDL and the
     // transaction advisory lock must bypass transaction pooling.
-    && (!/^[a-z0-9-]+\.pg\.psdb\.cloud$/.test(url.hostname)
-      || url.hostname.split(".")[0].endsWith("-pooler"))) {
+    (!/^[a-z0-9-]+\.pg\.psdb\.cloud$/.test(url.hostname) ||
+      url.hostname.split(".")[0].endsWith("-pooler"))
+  ) {
     refuse("Production migrations require a direct PlanetScale endpoint with TLS; value withheld.");
   }
   // Disposable test databases carry no TLS params or password; their strict
   // hostname/principal check above is the whole gate. Live targets always
   // need credentials and verified TLS.
-  if (!testDatabase && (!url.username || !url.password
-    || !["require", "verify-full"].includes(url.searchParams.get("sslmode"))
-    || [...url.searchParams.keys()].some((key) => !["sslmode", "channel_binding"].includes(key)))) {
+  if (
+    !testDatabase &&
+    (!url.username ||
+      !url.password ||
+      !["require", "verify-full"].includes(url.searchParams.get("sslmode")) ||
+      [...url.searchParams.keys()].some((key) => !["sslmode", "channel_binding"].includes(key)))
+  ) {
     refuse("Migrations require a direct endpoint with TLS; value withheld.");
   }
   const bindings = url.searchParams.getAll("channel_binding");
-  if (bindings.includes("require")) refuse("Required channel binding is unsupported by the migration driver.");
-  if (bindings.some((value) => !["prefer", "disable"].includes(value))) refuse("Invalid channel binding option; value withheld.");
+  if (bindings.includes("require"))
+    refuse("Required channel binding is unsupported by the migration driver.");
+  if (bindings.some((value) => !["prefer", "disable"].includes(value)))
+    refuse("Invalid channel binding option; value withheld.");
   // postgres.js forwards unknown URL options as startup settings, not libpq flags.
   url.searchParams.delete("channel_binding");
   url.port = "5432";
@@ -64,16 +89,26 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
 }
 
 function journal() {
-  const entries = JSON.parse(readFileSync(resolve(migrationsFolder, "meta/_journal.json"), "utf8")).entries;
+  const entries = JSON.parse(
+    readFileSync(resolve(migrationsFolder, "meta/_journal.json"), "utf8"),
+  ).entries;
   const migrations = readMigrationFiles({ migrationsFolder });
-  const sqlFiles = readdirSync(migrationsFolder).filter((name) => name.endsWith(".sql")).sort();
+  const sqlFiles = readdirSync(migrationsFolder)
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
   const trackedFiles = entries.map((entry) => `${entry.tag}.sql`).sort();
-  if (JSON.stringify(sqlFiles) !== JSON.stringify(trackedFiles)) refuse("SQL files and migration journal differ.");
+  if (JSON.stringify(sqlFiles) !== JSON.stringify(trackedFiles))
+    refuse("SQL files and migration journal differ.");
   for (const [index, entry] of entries.entries()) {
-    const bootstrap = index === 0 && entry.tag === "0000_init-users"
-      || index === 1 && entry.tag === "0001_agent-events";
-    if (entry.idx !== index || (!bootstrap && !/^1\d{3}_[a-zA-Z0-9_-]+$/.test(entry.tag))
-      || !Number.isSafeInteger(entry.when) || (index > 0 && entry.when <= entries[index - 1].when)) {
+    const bootstrap =
+      (index === 0 && entry.tag === "0000_init-users") ||
+      (index === 1 && entry.tag === "0001_agent-events");
+    if (
+      entry.idx !== index ||
+      (!bootstrap && !/^1\d{3}_[a-zA-Z0-9_-]+$/.test(entry.tag)) ||
+      !Number.isSafeInteger(entry.when) ||
+      (index > 0 && entry.when <= entries[index - 1].when)
+    ) {
       refuse("Invalid web migration journal order or numbering.");
     }
   }
@@ -82,13 +117,21 @@ function journal() {
 
 async function pendingMigrations(client, migrations) {
   const [exists] = await client`select to_regclass(${ledger}) as ledger`;
-  const applied = exists.ledger ? await client`select hash, created_at from drizzle.__drizzle_migrations order by created_at, id` : [];
+  const applied = exists.ledger
+    ? await client`select hash, created_at from drizzle.__drizzle_migrations order by created_at, id`
+    : [];
   // Drizzle uses a timestamp high-water mark. Require an exact checksum prefix so
   // edited SQL, missing history, bot entries, or a newer release cannot hide work.
   for (const [index, row] of applied.entries()) {
     const migration = migrations[index];
-    if (!migration || Number(row.created_at) !== migration.folderMillis || row.hash !== migration.hash) {
-      refuse("Migration history is not an exact prefix of this release; coordinate with web/bot owners, do not repair automatically.");
+    if (
+      !migration ||
+      Number(row.created_at) !== migration.folderMillis ||
+      row.hash !== migration.hash
+    ) {
+      refuse(
+        "Migration history is not an exact prefix of this release; coordinate with web/bot owners, do not repair automatically.",
+      );
     }
   }
   return migrations.slice(applied.length);
@@ -102,7 +145,11 @@ export function safeMigrationError(error) {
 
 export function migrationClient(config) {
   return postgres(config.url.href, {
-    port: 5432, max: 1, idle_timeout: 0, max_lifetime: 0, connect_timeout: 10,
+    port: 5432,
+    max: 1,
+    idle_timeout: 0,
+    max_lifetime: 0,
+    connect_timeout: 10,
     password: () => decodeURIComponent(config.url.password),
     ssl: config.testDatabase ? false : { rejectUnauthorized: true },
     // Canonical migration SQL uses unqualified identifiers intending `public`.
@@ -110,7 +157,12 @@ export function migrationClient(config) {
     // in node_modules/postgres/src/connection.js), so pin per-connection GUCs
     // here: a hostile role/database `search_path` or `DateStyle` must not
     // misroute DDL or skew the PITR receipt. Never ALTER ROLE/DATABASE defaults.
-    connection: { statement_timeout: 120000, lock_timeout: 10000, search_path: "public", datestyle: "ISO, YMD" },
+    connection: {
+      statement_timeout: 120000,
+      lock_timeout: 10000,
+      search_path: "public",
+      datestyle: "ISO, YMD",
+    },
     onnotice: () => {},
   });
 }
@@ -128,13 +180,16 @@ export async function runMigration(mode, env = process.env, options = {}) {
   const plan = async (connection) => {
     const pending = await pendingMigrations(connection, migrations);
     await summary(`### Web migrations: ${config.target} / ${mode}`);
-    await summary(`Pending: ${pending.length}${pending.length ? ` (${pending.map((entry) => entry.tag).join(", ")})` : ""}`);
+    await summary(
+      `Pending: ${pending.length}${pending.length ? ` (${pending.map((entry) => entry.tag).join(", ")})` : ""}`,
+    );
     return pending;
   };
   try {
     if (mode !== "apply") {
       const pending = await plan(client);
-      if (mode === "verify" && pending.length) refuse("Post-check failed: web migrations remain pending.");
+      if (mode === "verify" && pending.length)
+        refuse("Post-check failed: web migrations remain pending.");
       return pending;
     }
     // sql.begin pins one connection and rejects on loss: never resume unlocked.
@@ -149,14 +204,18 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await transaction.unsafe("SET LOCAL search_path = public");
       await transaction.unsafe("SET LOCAL datestyle = 'ISO, YMD'");
       const [lock] = await transaction`select pg_try_advisory_xact_lock(${lockKey}) as acquired`;
-      if (!lock.acquired) refuse("Another web migration holds the database lock; retry only after it finishes.");
+      if (!lock.acquired)
+        refuse("Another web migration holds the database lock; retry only after it finishes.");
       const pending = await plan(transaction);
       // to_char text is immune to the server DateStyle: the driver parses
       // timestamptz via `new Date(text)` (postgres/src/types.js), which swaps
       // month/day on SQL/DMY output and shifts the PITR receipt by months.
-      const [clock] = await transaction`select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as timestamp`;
+      const [clock] =
+        await transaction`select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as timestamp`;
       await summary(`Pre-migration Neon PITR timestamp (UTC): ${clock.timestamp}`);
-      await summary(`Release: ${/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? "") ? env.GITHUB_SHA : "local selftest"}`);
+      await summary(
+        `Release: ${/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? "") ? env.GITHUB_SHA : "local selftest"}`,
+      );
       // Keep Drizzle's journal SQL/hash/timestamp and default ledger format, but
       // include ledger setup and history validation in the same locked transaction.
       // Source: https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-orm/src/pg-core/dialect.ts
@@ -175,10 +234,16 @@ export async function runMigration(mode, env = process.env, options = {}) {
     });
     await summary("Post-check: zero pending web migrations.");
     return remaining;
-  } finally { await client.end({ timeout: 5 }); }
+  } finally {
+    await client.end({ timeout: 5 });
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { await runMigration(process.argv[2]); }
-  catch (error) { console.error(safeMigrationError(error)); process.exitCode = 1; }
+  try {
+    await runMigration(process.argv[2]);
+  } catch (error) {
+    console.error(safeMigrationError(error));
+    process.exitCode = 1;
+  }
 }

@@ -6,18 +6,28 @@ import type { Env } from "../src/env";
 
 const DEADLINE_MS = CSP_REPORT_BODY_DEADLINE_MS;
 const encode = (text: string) => new TextEncoder().encode(text);
-const report = JSON.stringify({ "csp-report": { "blocked-uri": "inline", "evil-probe": "private-marker" } });
-const forbiddenAccess = vi.fn(() => { throw new Error("CSP sink touched a session or database binding"); });
-const env = Object.defineProperties({ APP_URL: "https://next.example.test" }, Object.fromEntries(
-  ["SESSION_STORE", "ROSTER_STORE", "ADMIN_DB", "DB", "DATABASE_URL", "SESSION_SECRET"].map((key) => [
-    key, { get: forbiddenAccess },
-  ]),
-)) as Env;
+const report = JSON.stringify({
+  "csp-report": { "blocked-uri": "inline", "evil-probe": "private-marker" },
+});
+const forbiddenAccess = vi.fn(() => {
+  throw new Error("CSP sink touched a session or database binding");
+});
+const env = Object.defineProperties(
+  { APP_URL: "https://next.example.test" },
+  Object.fromEntries(
+    ["SESSION_STORE", "ROSTER_STORE", "ADMIN_DB", "DB", "DATABASE_URL", "SESSION_SECRET"].map(
+      (key) => [key, { get: forbiddenAccess }],
+    ),
+  ),
+) as Env;
 
-const request = (body: BodyInit | null, headers: HeadersInit = {}) => new Request(
-  "https://next.example.test/csp-reports",
-  { method: "POST", body, duplex: "half", headers: { cookie: "__Host-two_session=two_forged.bad", ...headers } } as RequestInit,
-);
+const request = (body: BodyInit | null, headers: HeadersInit = {}) =>
+  new Request("https://next.example.test/csp-reports", {
+    method: "POST",
+    body,
+    duplex: "half",
+    headers: { cookie: "__Host-two_session=two_forged.bad", ...headers },
+  } as RequestInit);
 const post = async (req: Request) => app.request(req, undefined, env);
 const assert204 = async (response: Response | undefined) => {
   expect(response?.status).toBe(204);
@@ -28,7 +38,10 @@ const assert204 = async (response: Response | undefined) => {
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 };
 
@@ -36,7 +49,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   forbiddenAccess.mockClear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  vi.spyOn(globalThis, "fetch").mockImplementation(() => { throw new Error("CSP sink must not fetch"); });
+  vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+    throw new Error("CSP sink must not fetch");
+  });
 });
 
 afterEach(() => {
@@ -59,13 +74,20 @@ describe("CSP report stream liveness", () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const cancellation = deferred<void>();
     const cancel = vi.fn(() => cancellation.promise);
-    const stream = new ReadableStream<Uint8Array>({
-      start(c) { controller = c; },
-      cancel,
-    }, { highWaterMark: 0 });
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(c) {
+          controller = c;
+        },
+        cancel,
+      },
+      { highWaterMark: 0 },
+    );
     const req = request(stream);
     let response: Response | undefined;
-    const completed = post(req).then((r) => { response = r; });
+    const completed = post(req).then((r) => {
+      response = r;
+    });
     try {
       await vi.advanceTimersByTimeAsync(DEADLINE_MS - 1);
       expect(response).toBeUndefined();
@@ -84,13 +106,21 @@ describe("CSP report stream liveness", () => {
   it("discards even a valid JSON prefix and does not renew the deadline per chunk", async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const cancel = vi.fn();
-    const stream = new ReadableStream<Uint8Array>({
-      start(c) { controller = c; c.enqueue(encode(report)); },
-      cancel,
-    }, { highWaterMark: 0 });
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(c) {
+          controller = c;
+          c.enqueue(encode(report));
+        },
+        cancel,
+      },
+      { highWaterMark: 0 },
+    );
     const parse = vi.spyOn(JSON, "parse");
     let response: Response | undefined;
-    const completed = post(request(stream)).then((r) => { response = r; });
+    const completed = post(request(stream)).then((r) => {
+      response = r;
+    });
     await vi.advanceTimersByTimeAsync(0);
     for (let i = 0; i < 3; i += 1) {
       await vi.advanceTimersByTimeAsync(DEADLINE_MS / 4);
@@ -112,16 +142,21 @@ describe("CSP report stream liveness", () => {
     const prefix = report.padEnd(MAX_CSP_REPORT_BYTES, " ");
     const parse = vi.spyOn(JSON, "parse");
     let pulls = 0;
-    const stream = new ReadableStream<Uint8Array>({
-      pull(c) {
-        pulls += 1;
-        c.enqueue(pulls === 1 ? encode(prefix) : new Uint8Array(64 * 1024));
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(c) {
+          pulls += 1;
+          c.enqueue(pulls === 1 ? encode(prefix) : new Uint8Array(64 * 1024));
+        },
+        cancel,
       },
-      cancel,
-    }, { highWaterMark: 0 });
+      { highWaterMark: 0 },
+    );
     const req = request(stream, { "content-length": "1" });
     let response: Response | undefined;
-    const completed = post(req).then((r) => { response = r; });
+    const completed = post(req).then((r) => {
+      response = r;
+    });
     try {
       // Overflow returns immediately; cancellation gets no response budget.
       await vi.advanceTimersByTimeAsync(0);
@@ -144,16 +179,23 @@ describe("CSP report stream liveness", () => {
   it("discards an aborted read without waiting for cancellation", async () => {
     const cancellation = deferred<void>();
     const req = request(new ReadableStream<Uint8Array>({}, { highWaterMark: 0 }));
-    const read = vi.fn()
+    const read = vi
+      .fn()
       .mockResolvedValueOnce({ done: false, value: encode(report) })
       .mockRejectedValueOnce(new Error("synthetic read failure"));
     const cancel = vi.fn(() => cancellation.promise);
     const releaseLock = vi.fn();
     const body = req.body!;
-    vi.spyOn(body, "getReader").mockReturnValue({ read, cancel, releaseLock } as unknown as ReturnType<typeof body.getReader>);
+    vi.spyOn(body, "getReader").mockReturnValue({
+      read,
+      cancel,
+      releaseLock,
+    } as unknown as ReturnType<typeof body.getReader>);
     const parse = vi.spyOn(JSON, "parse");
     let response: Response | undefined;
-    const completed = post(req).then((r) => { response = r; });
+    const completed = post(req).then((r) => {
+      response = r;
+    });
     await vi.advanceTimersByTimeAsync(0);
     await assert204(response);
     expect(read).toHaveBeenCalledTimes(2);
@@ -165,34 +207,43 @@ describe("CSP report stream liveness", () => {
     await completed;
   });
 
-  it.each(["resolve", "reject"] as const)("consumes late read/cancel rejection and ignores a late read %s", async (outcome) => {
-    // A synthetic reader keeps its read pending through cancel/release, letting
-    // this test exercise late settlement independently of native stream cleanup.
-    const pending = deferred<ReadableStreamReadResult<Uint8Array>>();
-    const cancellation = deferred<void>();
-    const req = request(new ReadableStream<Uint8Array>({}, { highWaterMark: 0 }));
-    const read = vi.fn(() => pending.promise);
-    const cancel = vi.fn(() => cancellation.promise);
-    const releaseLock = vi.fn();
-    const body = req.body!;
-    vi.spyOn(body, "getReader").mockReturnValue({ read, cancel, releaseLock } as unknown as ReturnType<typeof body.getReader>);
-    let response: Response | undefined;
-    const completed = post(req).then((r) => { response = r; });
-    await vi.advanceTimersByTimeAsync(DEADLINE_MS);
-    await completed;
-    await assert204(response);
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(releaseLock).toHaveBeenCalledOnce();
-    const decode = vi.spyOn(TextDecoder.prototype, "decode");
-    if (outcome === "resolve") pending.resolve({ done: false, value: encode(report) });
-    else pending.reject(new Error("late synthetic read rejection"));
-    cancellation.reject(new Error("late synthetic cancellation rejection"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(read).toHaveBeenCalledOnce();
-    expect(decode).not.toHaveBeenCalled();
-    expect(console.warn).not.toHaveBeenCalled();
-    // Vitest also fails this suite on any unhandled rejection.
-  });
+  it.each(["resolve", "reject"] as const)(
+    "consumes late read/cancel rejection and ignores a late read %s",
+    async (outcome) => {
+      // A synthetic reader keeps its read pending through cancel/release, letting
+      // this test exercise late settlement independently of native stream cleanup.
+      const pending = deferred<ReadableStreamReadResult<Uint8Array>>();
+      const cancellation = deferred<void>();
+      const req = request(new ReadableStream<Uint8Array>({}, { highWaterMark: 0 }));
+      const read = vi.fn(() => pending.promise);
+      const cancel = vi.fn(() => cancellation.promise);
+      const releaseLock = vi.fn();
+      const body = req.body!;
+      vi.spyOn(body, "getReader").mockReturnValue({
+        read,
+        cancel,
+        releaseLock,
+      } as unknown as ReturnType<typeof body.getReader>);
+      let response: Response | undefined;
+      const completed = post(req).then((r) => {
+        response = r;
+      });
+      await vi.advanceTimersByTimeAsync(DEADLINE_MS);
+      await completed;
+      await assert204(response);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(releaseLock).toHaveBeenCalledOnce();
+      const decode = vi.spyOn(TextDecoder.prototype, "decode");
+      if (outcome === "resolve") pending.resolve({ done: false, value: encode(report) });
+      else pending.reject(new Error("late synthetic read rejection"));
+      cancellation.reject(new Error("late synthetic cancellation rejection"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(read).toHaveBeenCalledOnce();
+      expect(decode).not.toHaveBeenCalled();
+      expect(console.warn).not.toHaveBeenCalled();
+      // Vitest also fails this suite on any unhandled rejection.
+    },
+  );
 });
 
 describe("CSP stream controls", () => {
@@ -201,38 +252,71 @@ describe("CSP stream controls", () => {
     // URI fields are redacted fail-closed since main's credential-redaction
     // slice, so a relative `blocked-uri` can no longer carry the proof —
     // redaction would mask a broken reassembly as `null`.
-    const body = encode(JSON.stringify({ "csp-report": { "blocked-uri": "inline", "violated-directive": "script-src é", "evil-probe": "private-marker" } }));
+    const body = encode(
+      JSON.stringify({
+        "csp-report": {
+          "blocked-uri": "inline",
+          "violated-directive": "script-src é",
+          "evil-probe": "private-marker",
+        },
+      }),
+    );
     const split = body.indexOf(0xc3) + 1;
     const cancel = vi.fn();
-    const req = request(new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(body.slice(0, split));
-        c.enqueue(body.slice(split));
-        c.close();
-      },
-      cancel,
-    }, { highWaterMark: 0 }));
+    const req = request(
+      new ReadableStream<Uint8Array>(
+        {
+          start(c) {
+            c.enqueue(body.slice(0, split));
+            c.enqueue(body.slice(split));
+            c.close();
+          },
+          cancel,
+        },
+        { highWaterMark: 0 },
+      ),
+    );
     await assert204(await post(req));
     expect(req.body!.locked).toBe(false);
     expect(cancel).not.toHaveBeenCalled();
     expect(console.warn).toHaveBeenCalledExactlyOnceWith("csp.report.violation", {
-      blocked_uri: "inline", violated_directive: "script-src é", document_uri: null, source_file: null, line_number: null,
+      blocked_uri: "inline",
+      violated_directive: "script-src é",
+      document_uri: null,
+      source_file: null,
+      line_number: null,
     });
     expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain("private-marker");
   });
 
-  it.each([null, "", "not-json{{{", '{"hello":"world"}'])("silently returns 204 for empty/malformed input %j", async (body) => {
-    const stream = body === null ? null : new ReadableStream<Uint8Array>({
-      start(c) { c.enqueue(encode(body)); c.close(); },
-    }, { highWaterMark: 0 });
-    await assert204(await post(request(stream)));
-    expect(console.warn).not.toHaveBeenCalled();
-  });
+  it.each([null, "", "not-json{{{", '{"hello":"world"}'])(
+    "silently returns 204 for empty/malformed input %j",
+    async (body) => {
+      const stream =
+        body === null
+          ? null
+          : new ReadableStream<Uint8Array>(
+              {
+                start(c) {
+                  c.enqueue(encode(body));
+                  c.close();
+                },
+              },
+              { highWaterMark: 0 },
+            );
+      await assert204(await post(request(stream)));
+      expect(console.warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("accepts a complete valid body exactly at the cap", async () => {
     await assert204(await post(request(report.padEnd(MAX_CSP_REPORT_BYTES, " "))));
     expect(console.warn).toHaveBeenCalledExactlyOnceWith("csp.report.violation", {
-      blocked_uri: "inline", violated_directive: null, document_uri: null, source_file: null, line_number: null,
+      blocked_uri: "inline",
+      violated_directive: null,
+      document_uri: null,
+      source_file: null,
+      line_number: null,
     });
   });
 

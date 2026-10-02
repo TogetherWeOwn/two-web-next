@@ -12,7 +12,10 @@ export type CappedBody = { text: string; truncated: boolean; bytes: number };
  * `bytes` counts all observed bytes, including the discarded overflow chunk.
  * Incomplete bodies are discarded, even if their prefix is valid JSON.
  */
-export async function readCappedBody(req: Request, cap: number = MAX_CSP_REPORT_BYTES): Promise<CappedBody> {
+export async function readCappedBody(
+  req: Request,
+  cap: number = MAX_CSP_REPORT_BYTES,
+): Promise<CappedBody> {
   const declared = req.headers.get("content-length");
   if (declared !== null) {
     const n = Number.parseInt(declared, 10);
@@ -63,7 +66,9 @@ export async function readCappedBody(req: Request, cap: number = MAX_CSP_REPORT_
     if (!complete) {
       // Request-owned cancellation must never hold the always-204 response.
       // Handle both synchronous failure and a late cancellation rejection.
-      try { void reader.cancel().catch(() => {}); } catch {}
+      try {
+        void reader.cancel().catch(() => {});
+      } catch {}
     }
     reader.releaseLock();
   }

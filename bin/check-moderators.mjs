@@ -13,7 +13,9 @@ import { checkModerators, renderModeratorReport } from "../src/probes/check-mode
 
 const args = new Set(process.argv.slice(2));
 const configs = [...args].filter((a) => a.startsWith("--config="));
-const unknown = [...args].filter((a) => a !== "--require-configured" && a !== "--json" && !a.startsWith("--config="));
+const unknown = [...args].filter(
+  (a) => a !== "--require-configured" && a !== "--json" && !a.startsWith("--config="),
+);
 if (unknown.length > 0) {
   console.error(`check-moderators: unknown option(s): ${unknown.join(" ")}`);
   process.exit(2);
@@ -32,7 +34,9 @@ if (configs.length > 0) {
     raw = config.vars?.DISCORD_MODERATOR_ROLE_IDS;
     if (raw !== undefined && typeof raw !== "string") throw new Error("invalid var");
   } catch {
-    console.error("check-moderators: cannot read a valid Wrangler config with a string moderator var");
+    console.error(
+      "check-moderators: cannot read a valid Wrangler config with a string moderator var",
+    );
     process.exit(2);
   }
 }

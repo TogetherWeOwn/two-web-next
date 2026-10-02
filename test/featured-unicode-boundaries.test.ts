@@ -40,9 +40,12 @@ describe("featured Unicode boundaries", () => {
         const value = text(pattern, 255);
         expect(parseFeaturedForm({ ...base, [input]: value })[output]).toBe(value);
       });
-      it.each(characters)("rejects 256 $label code points with the existing field error", ({ pattern }) => {
-        expect(errors({ ...base, [input]: text(pattern, 256) })).toEqual({ [input]: error });
-      });
+      it.each(characters)(
+        "rejects 256 $label code points with the existing field error",
+        ({ pattern }) => {
+          expect(errors({ ...base, [input]: text(pattern, 256) })).toEqual({ [input]: error });
+        },
+      );
       it("accepts the reported 128 astral characters", () => {
         const value = "😀".repeat(128);
         expect(parseFeaturedForm({ ...base, [input]: value })[output]).toBe(value);
@@ -55,14 +58,11 @@ describe("featured Unicode boundaries", () => {
       it.each([
         { label: "combining marks", value: "é".repeat(127) + "x" },
         { label: "emoji joiners", value: "👩‍💻".repeat(85) },
-      ])(
-        "counts $label as separate code points",
-        ({ value }) => {
-          expect([...value]).toHaveLength(255);
-          expect(parseFeaturedForm({ ...base, [input]: value })[output]).toBe(value);
-          expect(errors({ ...base, [input]: value + "x" })).toEqual({ [input]: error });
-        },
-      );
+      ])("counts $label as separate code points", ({ value }) => {
+        expect([...value]).toHaveLength(255);
+        expect(parseFeaturedForm({ ...base, [input]: value })[output]).toBe(value);
+        expect(errors({ ...base, [input]: value + "x" })).toEqual({ [input]: error });
+      });
     });
   }
 
@@ -72,20 +72,36 @@ describe("featured Unicode boundaries", () => {
       image_alt: "Describe the photo in one plain sentence for screen-reader visitors.",
     });
     expect(errors({ ...base, title: "😀".repeat(256), image_alt: "😀".repeat(256) })).toEqual({
-      title: fields[0].error, image_alt: fields[1].error,
+      title: fields[0].error,
+      image_alt: fields[1].error,
     });
   });
 
   it("keeps optional text null and other featured fields unchanged", () => {
-    expect(parseFeaturedForm({
-      title: " Game night ", body: " \n ", url: " http://example.com ",
-      image_url: " ", image_alt: " \t ", position: "2", is_published: "on",
-      starts_at: "2030-01-01 18:00", ends_at: "2030-01-01 19:00",
-    })).toEqual({
-      title: "Game night", body: null, url: "http://example.com", imageUrl: null, imageAlt: null,
-      position: 2, isPublished: true,
-      startsAtUtc: new Date("2030-01-01T18:00:00Z"), endsAtUtc: new Date("2030-01-01T19:00:00Z"),
-      startsAtUtcText: "2030-01-01T18:00:00.000000Z", endsAtUtcText: "2030-01-01T19:00:00.000000Z",
+    expect(
+      parseFeaturedForm({
+        title: " Game night ",
+        body: " \n ",
+        url: " http://example.com ",
+        image_url: " ",
+        image_alt: " \t ",
+        position: "2",
+        is_published: "on",
+        starts_at: "2030-01-01 18:00",
+        ends_at: "2030-01-01 19:00",
+      }),
+    ).toEqual({
+      title: "Game night",
+      body: null,
+      url: "http://example.com",
+      imageUrl: null,
+      imageAlt: null,
+      position: 2,
+      isPublished: true,
+      startsAtUtc: new Date("2030-01-01T18:00:00Z"),
+      endsAtUtc: new Date("2030-01-01T19:00:00Z"),
+      startsAtUtcText: "2030-01-01T18:00:00.000000Z",
+      endsAtUtcText: "2030-01-01T19:00:00.000000Z",
     });
   });
 
@@ -93,8 +109,15 @@ describe("featured Unicode boundaries", () => {
     expect(errors({ ...base, title: "😀".repeat(255), url: "javascript:alert(1)" })).toEqual({
       url: "Link is a full http(s) URL, or empty for no link.",
     });
-    expect(errors({ ...base, image_alt: "😀".repeat(255), image_url: "http://cdn.discordapp.com/photo.png" })).toEqual({
-      image_url: "Image URL must be HTTPS on an approved public host, without credentials or a custom port (255 characters maximum).",
+    expect(
+      errors({
+        ...base,
+        image_alt: "😀".repeat(255),
+        image_url: "http://cdn.discordapp.com/photo.png",
+      }),
+    ).toEqual({
+      image_url:
+        "Image URL must be HTTPS on an approved public host, without credentials or a custom port (255 characters maximum).",
     });
   });
 });

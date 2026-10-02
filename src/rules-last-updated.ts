@@ -1,6 +1,16 @@
 const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 export function rulesLastUpdated(raw: string | undefined): { iso: string; label: string } | null {
@@ -22,6 +32,7 @@ export function rulesLastUpdated(raw: string | undefined): { iso: string; label:
   const leapYear = yearNumber % 4 === 0 && (yearNumber % 100 !== 0 || yearNumber % 400 === 0);
   const monthLengths = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   const maximumDay = monthLengths[monthIndex];
-  if (month === undefined || maximumDay === undefined || day < 1 || day > maximumDay) return invalid();
+  if (month === undefined || maximumDay === undefined || day < 1 || day > maximumDay)
+    return invalid();
   return { iso: `${year}-${mon}-${dayStr}`, label: `${day} ${month} ${year}` };
 }

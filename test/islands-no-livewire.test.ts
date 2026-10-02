@@ -36,7 +36,16 @@ describe("no Livewire wire-protocol dependency", () => {
         try {
           out = execFileSync(
             "grep",
-            ["-r", "--include=*.ts", "--include=*.tsx", "--include=*.js", "-l", "--exclude=islands-no-livewire.test.ts", marker, dir],
+            [
+              "-r",
+              "--include=*.ts",
+              "--include=*.tsx",
+              "--include=*.js",
+              "-l",
+              "--exclude=islands-no-livewire.test.ts",
+              marker,
+              dir,
+            ],
             {
               encoding: "utf8",
             },
