@@ -69,7 +69,7 @@ class Element {
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
 }
 
-interface Timer { id: number; cb: () => void; ms: number }
+interface Timer { id: number; cb: () => void; ms: number; delay: number }
 
 function fixture(abortable: boolean) {
   const document = {
@@ -118,7 +118,7 @@ function fixture(abortable: boolean) {
   let elapsed = 0;
   const setTimeout = (cb: () => void, ms = 0) => {
     const id = ++timerSeq;
-    timers.push({ id, cb, ms: elapsed + ms });
+    timers.push({ id, cb, ms: elapsed + ms, delay: ms });
     return id;
   };
   const clearTimeout = (id: number) => {
@@ -136,10 +136,11 @@ function fixture(abortable: boolean) {
   const cancel = () => {
     form.dispatch("reset");
     Object.values(form.elements).forEach((field) => { field.value = field.defaultValue; });
-    // The reset handler must have disposed the owned deadline timer already;
-    // only the focus timer may remain for the drain below.
-    expect(timers.every((t) => t.ms - elapsed < PROFILE_SAVE_DEADLINE_MS)).toBe(true);
-    timers.splice(0).forEach((t) => t.cb());
+    // Drain the focus timer only: a pending write keeps its owned deadline.
+    timers.filter((t) => t.delay < PROFILE_SAVE_DEADLINE_MS).forEach((t) => {
+      timers.splice(timers.indexOf(t), 1);
+      t.cb();
+    });
   };
   const advance = (ms: number) => {
     elapsed += ms;
@@ -317,23 +318,53 @@ describe("member-profile save deadline", () => {
     expect(f.bio.textContent).toBe("Keep this draft");
   });
 
-  it("cancel disposes the deadline timer and aborts the pending save", async () => {
-    const f = fixture(true);
+  it.each([true, false])("cancel keeps the pending save unaborted: a newer save waits until it settles (abortable=%s)", async (abortable) => {
+    const f = fixture(abortable);
     f.enter({ bio: "Cancelled write" });
     f.form.dispatch("submit");
     f.cancel();
-    expect(f.requests[0]!.init.signal?.aborted).toBe(true);
-    expect(f.timers).toHaveLength(0);
-    f.requests[0]!.reject(Object.assign(new Error("offline"), { name: "AbortError" }));
-    await flush();
-    for (const id of [PROFILE_UNCERTAIN_TESTID, "profile-saved", "profile-save-failed"]) expect(f.notice(id)).toBeNull();
-    // Immediately usable: the next save sends exactly one PATCH.
+    expect(f.form.elements.bio!.value).toBe("Original bio");
+    // Abort is not server rollback: the write stays live under its deadline.
+    expect(f.requests[0]!.init.signal?.aborted ?? false).toBe(false);
+    expect(f.timers).toHaveLength(1);
     f.enter({ bio: "New write" });
+    f.form.dispatch("submit");
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledOnce();
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.timers).toHaveLength(0);
+    expect(f.bio.textContent).toBe("Original bio");
+    for (const id of [PROFILE_UNCERTAIN_TESTID, "profile-saved", "profile-save-failed"]) expect(f.notice(id)).toBeNull();
     f.form.dispatch("submit");
     expect(f.fetch).toHaveBeenCalledTimes(2);
     f.requests[1]!.resolve(success());
     await flush();
     expect(f.bio.textContent).toBe("New write");
+  });
+
+  it.each([true, false])("a cancelled save that never settles releases the guard silently at the deadline (abortable=%s)", async (abortable) => {
+    const f = fixture(abortable);
+    f.enter({ bio: "Hung cancelled write" });
+    f.form.dispatch("submit");
+    f.cancel();
+    f.enter({ bio: "New write" });
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledOnce();
+    f.advance(PROFILE_SAVE_DEADLINE_MS);
+    await flush();
+    expect(f.requests[0]!.init.signal?.aborted ?? false).toBe(abortable);
+    // The member cancelled that write: no uncertain notice, draft untouched.
+    for (const id of [PROFILE_UNCERTAIN_TESTID, "profile-saved", "profile-save-failed"]) expect(f.notice(id)).toBeNull();
+    expect(f.form.elements.bio!.value).toBe("New write");
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+    // A late completion of the abandoned write changes nothing visible.
+    if (!abortable) f.requests[0]!.resolve(success());
+    f.requests[1]!.resolve(success());
+    await flush();
+    expect(f.bio.textContent).toBe("New write");
+    expect(f.notice("profile-saved")).not.toBeNull();
   });
 
   it("cancel after the deadline clears uncertain feedback and stays usable", async () => {

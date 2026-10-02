@@ -7,6 +7,7 @@ import app from "./app";
 import { cspReportsRoute, MAX_CSP_REPORT_BYTES } from "../src/csp-reports";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { serializeSigned } from "hono/utils/cookie";
+import { QA_HEADER } from "../src/qa";
 
 const ERROR = { reason: "payload_too_large", message: "Reduce the size of your request and try again." };
 const encoder = new TextEncoder();
@@ -74,7 +75,9 @@ describe("every registered write route is body-limited", () => {
         } as unknown as Env;
         const cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, { path: "/", secure: true })).split(";")[0]!;
         const response = await app.request(path, {
-          method, body: "x".repeat(bytes), headers: { cookie, origin: env.APP_URL, accept: "application/json", "content-type": "application/json" },
+          method, body: "x".repeat(bytes), headers: { cookie, origin: env.APP_URL, accept: "application/json", "content-type": "application/json",
+            ...(path === "/__probe/alert" ? { [QA_HEADER]: env.QA_AUTH_TOKEN! } : {}),
+          },
         }, env);
         if (bytes === max) expect(response.status).not.toBe(413);
         else {

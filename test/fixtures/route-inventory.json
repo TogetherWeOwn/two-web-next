@@ -47,6 +47,7 @@
   { "method": "GET", "path": "/up", "auth": "public" },
   { "method": "PATCH", "path": "/events/:key", "auth": "moderator" },
   { "method": "PATCH", "path": "/members/:user", "auth": "member-owner" },
+  { "method": "POST", "path": "/__probe/alert", "auth": "staging-token" },
   { "method": "POST", "path": "/admin/events", "auth": "moderator" },
   { "method": "POST", "path": "/admin/events/:key", "auth": "moderator" },
   { "method": "POST", "path": "/admin/events/:key/cancel", "auth": "moderator" },

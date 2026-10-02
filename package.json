@@ -15,6 +15,7 @@
     "test:smoke": "node --test test/smoke.test.mjs test/json-smoke.test.mjs",
     "gate:selftest": "node ci/require-performance.mjs --selftest",
     "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
+    "seed:staging": "node bin/seed-staging.mjs",
     "test:cutover": "node --test ci/cutover-check-selftest.mjs",
     "a11y": "node ci/a11y.mjs",
     "test:auth-browser": "node ci/session-recovery-browser.mjs",

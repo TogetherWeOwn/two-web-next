@@ -169,20 +169,23 @@ describe("shipped member-profile edit lifecycle", () => {
     expect(f.fetch).toHaveBeenCalledOnce();
   });
 
-  it.each(["success", "network"] as const)("does not let cancelled %s unlock or replace a newer pending save", async (outcome) => {
+  it.each(["success", "network"] as const)("keeps a cancelled %s write pending: newer save waits, then is sent deliberately", async (outcome) => {
     const f = fixture();
     f.enter({ bio: "Old write" });
     f.form.dispatch("submit");
     f.cancel();
     f.enter({ bio: "New write" });
     f.form.dispatch("submit");
-    expect(f.fetch).toHaveBeenCalledTimes(2);
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledOnce();
     if (outcome === "network") f.requests[0]!.reject(new Error("offline"));
     else f.requests[0]!.resolve(success());
     await flush();
     expect(f.form.elements.bio!.value).toBe("New write");
     expect(f.form.hidden).toBe(false);
-    expect(f.notice("profile-saved")).toBeNull();
+    for (const id of ["profile-saved", "profile-error", "profile-save-failed"]) expect(f.notice(id)).toBeNull();
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledTimes(2);
     f.form.dispatch("submit");
     expect(f.fetch).toHaveBeenCalledTimes(2);
     f.requests[1]!.resolve(success());
@@ -193,7 +196,28 @@ describe("shipped member-profile edit lifecycle", () => {
     expect(f.form.elements.bio!.value).toBe("New write");
   });
 
-  it("ignores delayed validation JSON after cancel and a newer successful save", async () => {
+  it("orders persistence: the cancelled write settles before the newer write is sent", async () => {
+    const f = fixture();
+    const store: string[] = [];
+    f.enter({ bio: "A" });
+    f.form.dispatch("submit");
+    f.cancel();
+    f.enter({ bio: "B" });
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledOnce();
+    store.push("A");
+    f.requests[0]!.resolve(success());
+    await flush();
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+    store.push("B");
+    f.requests[1]!.resolve(success());
+    await flush();
+    expect(store).toEqual(["A", "B"]);
+    expect(f.bio.textContent).toBe("B");
+  });
+
+  it("ignores delayed validation JSON after cancel; newer save waits until it settles", async () => {
     const f = fixture();
     const json = deferred<unknown>();
     f.enter({ bio: "Old invalid write" });
@@ -203,15 +227,15 @@ describe("shipped member-profile edit lifecycle", () => {
     f.cancel();
     f.enter({ bio: "Accepted" });
     f.form.dispatch("submit");
-    f.requests[1]!.resolve(success());
-    await flush();
-    const saved = f.notice("profile-saved");
+    expect(f.fetch).toHaveBeenCalledOnce();
     json.resolve({ errors: { bio: "Old validation error" } });
     await flush();
     expect(f.notice("profile-error")).toBeNull();
-    expect(f.notice("profile-saved")).toBe(saved);
+    f.form.dispatch("submit");
+    f.requests[1]!.resolve(success());
+    await flush();
     expect(f.bio.textContent).toBe("Accepted");
-    expect(f.document.activeElement).toBe(saved);
+    expect(f.notice("profile-saved")).not.toBeNull();
   });
 
   it.each(["validation", "network", "server"] as const)("keeps input and allows retry after %s failure", async (outcome) => {
