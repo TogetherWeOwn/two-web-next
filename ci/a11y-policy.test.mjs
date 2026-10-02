@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { auditCases, auditDatabaseUrl, assertNoViolations, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import {
+  auditCases,
+  auditDatabaseUrl,
+  assertNoViolations,
+  redactAuditLog,
+  WCAG_AA_TAGS,
+} from "./a11y-policy.mjs";
 import { coverage as documentCoverage } from "./a11y-cases.mjs";
 import { loadAuditWorkerRoutes } from "./a11y-test-worker.mjs";
 
@@ -22,8 +28,15 @@ test("derive cases from registered GETs, deduplicate middleware and omit non-GET
 });
 
 test("new static GETs are audited automatically; new parameterized GETs require fixtures", () => {
-  assert(auditCases([...routes, { method: "GET", path: "/new-page" }], coverage).some((entry) => entry.path === "/new-page"));
-  assert.throws(() => auditCases([...routes, { method: "GET", path: "/new-page/:id" }], coverage), /missing=\/new-page/);
+  assert(
+    auditCases([...routes, { method: "GET", path: "/new-page" }], coverage).some(
+      (entry) => entry.path === "/new-page",
+    ),
+  );
+  assert.throws(
+    () => auditCases([...routes, { method: "GET", path: "/new-page/:id" }], coverage),
+    /missing=\/new-page/,
+  );
 });
 
 test("event JSON reads are explicitly classified as non-documents, not HTML success pages", () => {
@@ -33,21 +46,43 @@ test("event JSON reads are explicitly classified as non-documents, not HTML succ
     assert.equal(entry.skip, true);
     assert.match(entry.reason, /Session-gated JSON/);
   }
-  assert.deepEqual(auditCases(paths.map((path) => ({ method: "GET", path })), entries), []);
+  assert.deepEqual(
+    auditCases(
+      paths.map((path) => ({ method: "GET", path })),
+      entries,
+    ),
+    [],
+  );
 });
 
 test("removed routes and unexplained exclusions fail", () => {
   assert.throws(() => auditCases(routes.slice(1), coverage), /stale=\//);
-  assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { skip: true } }), /exclusion reason/);
-  assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { cases: [] } }), /No audit cases/);
+  assert.throws(
+    () => auditCases([{ method: "GET", path: "/" }], { "/": { skip: true } }),
+    /exclusion reason/,
+  );
+  assert.throws(
+    () => auditCases([{ method: "GET", path: "/" }], { "/": { cases: [] } }),
+    /No audit cases/,
+  );
 });
 
 test("legacy aliases are non-documents while canonical admin destinations remain audited", async () => {
   const aliases = [
-    "/auth/discord/redirect", "/admin/events/create", "/admin/events/:key/edit",
-    "/admin/featured-contents", "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
+    "/auth/discord/redirect",
+    "/admin/events/create",
+    "/admin/events/:key/edit",
+    "/admin/featured-contents",
+    "/admin/featured-contents/create",
+    "/admin/featured-contents/:id/edit",
   ];
-  const destinations = ["/admin/events/new", "/admin/events/:key", "/admin/featured", "/admin/featured/new", "/admin/featured/:id"];
+  const destinations = [
+    "/admin/events/new",
+    "/admin/events/:key",
+    "/admin/featured",
+    "/admin/featured/new",
+    "/admin/featured/:id",
+  ];
   const worker = await loadAuditWorkerRoutes();
   const cases = auditCases(worker.routes, worker.coverage);
   for (const alias of aliases) {
@@ -55,12 +90,22 @@ test("legacy aliases are non-documents while canonical admin destinations remain
     assert.match(worker.coverage[alias].reason, /alias redirects/, alias);
     assert(!cases.some((entry) => entry.route === alias), alias);
   }
-  for (const destination of destinations) assert(cases.some((entry) => entry.route === destination), destination);
+  for (const destination of destinations)
+    assert(
+      cases.some((entry) => entry.route === destination),
+      destination,
+    );
 });
 
 test("refuse staging, production and ambiguous database configuration before connecting", () => {
-  assert.equal(auditDatabaseUrl("postgres://agent_test@agent-testdb:5432/two_web_next").hostname, "agent-testdb");
-  assert.equal(auditDatabaseUrl("postgres://postgres:ci@localhost:5432/postgres", true).hostname, "localhost");
+  assert.equal(
+    auditDatabaseUrl("postgres://agent_test@agent-testdb:5432/two_web_next").hostname,
+    "agent-testdb",
+  );
+  assert.equal(
+    auditDatabaseUrl("postgres://postgres:ci@localhost:5432/postgres", true).hostname,
+    "localhost",
+  );
   for (const raw of [
     "postgres://agent_test@staging.example/two_web_next",
     "postgres://agent_test@production.example/two_web_next",
@@ -70,11 +115,17 @@ test("refuse staging, production and ambiguous database configuration before con
     "postgres://agent_test@agent-testdb/two_web_next?host=production.example",
     "postgres://postgres:ci@localhost/postgres",
     "invalid",
-  ]) assert.throws(() => auditDatabaseUrl(raw), /refusing before connecting/);
+  ])
+    assert.throws(() => auditDatabaseUrl(raw), /refusing before connecting/);
 });
 
 test("every audit client pins authorized port/password despite runner PGPORT/PGPASSWORD", () => {
-  const execution = spawnSync(process.execPath, ["--input-type=module", "-e", `
+  const execution = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
     import assert from "node:assert/strict";
     import postgres from "postgres";
     import { auditDatabaseOptions, auditDatabaseUrl } from "./ci/a11y-policy.mjs";
@@ -93,13 +144,23 @@ test("every audit client pins authorized port/password despite runner PGPORT/PGP
         await client.end(); // Constructor-only: no database connection.
       }
     }
-  `], { env: { ...process.env, PGPORT: "5433", PGPASSWORD: "unauthorized-fixture-value" }, encoding: "utf8" });
+  `,
+    ],
+    {
+      env: { ...process.env, PGPORT: "5433", PGPASSWORD: "unauthorized-fixture-value" },
+      encoding: "utf8",
+    },
+  );
   assert.equal(execution.status, 0, execution.stderr);
 });
 
 test("audit artifacts omit Wrangler's synthetic session and DB configuration values", () => {
-  const log = 'env.SESSION_SECRET ("synthetic-value")\nenv.A11Y_DATABASE_URL ("fixture-url")\nenv.APP_URL ("https://127.0.0.1:1234")\nGET /up 200';
-  assert.equal(redactAuditLog(log), 'env.SESSION_SECRET: [redacted]\nenv.A11Y_DATABASE_URL: [redacted]\nenv.APP_URL ("https://127.0.0.1:1234")\nGET /up 200');
+  const log =
+    'env.SESSION_SECRET ("synthetic-value")\nenv.A11Y_DATABASE_URL ("fixture-url")\nenv.APP_URL ("https://127.0.0.1:1234")\nGET /up 200';
+  assert.equal(
+    redactAuditLog(log),
+    'env.SESSION_SECRET: [redacted]\nenv.A11Y_DATABASE_URL: [redacted]\nenv.APP_URL ("https://127.0.0.1:1234")\nGET /up 200',
+  );
   assert.equal(redactAuditLog("startup failed"), "startup failed");
 });
 
@@ -109,11 +170,20 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   assert.match(check, /\n    needs: \[a11y, lighthouse, bundle-budget, scope\]\n/);
   assert.match(check, /\n    if: always\(\)\n/);
   assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
-  const guard = check.match(/- name: Require successful accessibility audit\n        if: needs\.scope\.outputs\.docs_only != 'true'\n        env:\n          A11Y_RESULT: [^\n]+\n        run: ([^\n]+)/);
-  assert(guard, "Audit guard must precede the heavy suite (only the docs-only fast pass may run before it)");
+  const guard = check.match(
+    /- name: Require successful accessibility audit\n        if: needs\.scope\.outputs\.docs_only != 'true'\n        env:\n          A11Y_RESULT: [^\n]+\n        run: ([^\n]+)/,
+  );
+  assert(
+    guard,
+    "Audit guard must precede the heavy suite (only the docs-only fast pass may run before it)",
+  );
   for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
     const execution = spawnSync("bash", ["-c", guard[1]], { env: { A11Y_RESULT: result } });
-    assert.equal(execution.status, result === "success" ? 0 : 1, `Audit result ${result || "missing"}`);
+    assert.equal(
+      execution.status,
+      result === "success" ? 0 : 1,
+      `Audit result ${result || "missing"}`,
+    );
   }
 });
 
@@ -131,7 +201,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "npm run test:smoke",
     "npm run db:migrate",
     "npm run config:check",
-    "npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs",
+    "npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs",
     "npm run test:cutover",
     "bash ci/neon-backup-selftest.sh",
     "bash ci/check-migration-numbers.sh",
@@ -145,14 +215,32 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     // fast-pass step keeps `check` green while every gate keeps its command.
     for (const line of step.split("\n")) {
       if (/^        (?:if|continue-on-error):/.test(line)) {
-        assert.equal(line, "        if: needs.scope.outputs.docs_only != 'true'", `Required gate must not be bypassed: ${command}`);
+        assert.equal(
+          line,
+          "        if: needs.scope.outputs.docs_only != 'true'",
+          `Required gate must not be bypassed: ${command}`,
+        );
       }
     }
   }
 });
 
 test("WCAG 2.0, 2.1 and 2.2 A/AA are included, and even minor violations fail", () => {
-  assert.deepEqual(WCAG_AA_TAGS, ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]);
+  assert.deepEqual(WCAG_AA_TAGS, [
+    "wcag2a",
+    "wcag2aa",
+    "wcag21a",
+    "wcag21aa",
+    "wcag22a",
+    "wcag22aa",
+  ]);
   assert.doesNotThrow(() => assertNoViolations({ violations: [] }, "clean"));
-  assert.throws(() => assertNoViolations({ violations: [{ id: "image-alt", impact: "minor", nodes: [{}] }] }, "sentinel"), /sentinel: image-alt/);
+  assert.throws(
+    () =>
+      assertNoViolations(
+        { violations: [{ id: "image-alt", impact: "minor", nodes: [{}] }] },
+        "sentinel",
+      ),
+    /sentinel: image-alt/,
+  );
 });

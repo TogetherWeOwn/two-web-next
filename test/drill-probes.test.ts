@@ -12,20 +12,11 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HTTPException } from "hono/http-exception";
-import {
-  ALERT_WINDOW_MS,
-  AlertRateLimit,
-  alertRequestError,
-} from "../src/alerts";
+import { ALERT_WINDOW_MS, AlertRateLimit, alertRequestError } from "../src/alerts";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
 import { BotTerminalError } from "../src/jobs/types";
-import type {
-  BotClient,
-  EventStore,
-  QueueLedger,
-  UniqueLock,
-} from "../src/jobs/types";
+import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
 class DrillBoomError extends Error {}
 
@@ -36,7 +27,13 @@ function errorProbeFixture() {
   const sink = (line: string) => void lines.push(line);
   const emit = (route: string, err: unknown) =>
     alertRequestError(err, { method: "POST", route }, { limiter, sink });
-  return { emit, lines, advance: (ms: number) => { t += ms; } };
+  return {
+    emit,
+    lines,
+    advance: (ms: number) => {
+      t += ms;
+    },
+  };
 }
 
 describe("error-alert:probe drill", () => {
@@ -74,7 +71,9 @@ describe("error-alert:probe drill", () => {
 
   it("the critical line is single-line JSON with class@route and no message", () => {
     const f = errorProbeFixture();
-    expect(f.emit("/drill-probe", new DrillBoomError("secret INSERT values\nsecond line"))).toBe(true);
+    expect(f.emit("/drill-probe", new DrillBoomError("secret INSERT values\nsecond line"))).toBe(
+      true,
+    );
     expect(f.lines).toHaveLength(1);
     const line = f.lines[0]!;
     expect(line).not.toContain("\n");
@@ -93,7 +92,9 @@ describe("error-alert:probe drill", () => {
     const f = errorProbeFixture();
     expect(f.emit("/drill-probe", new HTTPException(404))).toBe(false);
     expect(f.emit("/drill-probe", new HTTPException(403))).toBe(false);
-    expect(f.emit("/drill-probe", Object.assign(new Error("invalid"), { name: "ZodError" }))).toBe(false);
+    expect(f.emit("/drill-probe", Object.assign(new Error("invalid"), { name: "ZodError" }))).toBe(
+      false,
+    );
     expect(f.lines).toHaveLength(0);
     // A reportable error on the same route still alerts: silenced probes never
     // occupied the fingerprint.
@@ -122,7 +123,9 @@ function memLock() {
   const held = new Set<string>();
   const lock: UniqueLock = {
     acquire: async (k) => (held.has(k) ? null : (held.add(k), LEASE)),
-    release: async (k, token) => { if (token === LEASE) held.delete(k); },
+    release: async (k, token) => {
+      if (token === LEASE) held.delete(k);
+    },
   };
   return { lock, held };
 }
@@ -131,7 +134,14 @@ function memStore(): EventStore {
   return {
     find: async (eventKey: string) => ({
       eventKey,
-      payload: { eventKey, name: "n", startsAt: "s", endsAt: null, location: "l", description: null },
+      payload: {
+        eventKey,
+        name: "n",
+        startsAt: "s",
+        endsAt: null,
+        location: "l",
+        description: null,
+      },
       mirrored: true,
     }),
     recordMirrored: async () => {},
@@ -144,8 +154,12 @@ function memStore(): EventStore {
 function track(body: unknown, attempts = 1) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
-    ack() { r.acked = true; },
-    retry(o?: { delaySeconds?: number }) { r.retried = o?.delaySeconds ?? "now"; },
+    ack() {
+      r.acked = true;
+    },
+    retry(o?: { delaySeconds?: number }) {
+      r.retried = o?.delaySeconds ?? "now";
+    },
   });
 }
 
@@ -162,9 +176,12 @@ describe("queue:poison-probe drill", () => {
     } as unknown as BotClient;
 
     const poison = track({ kind: "poison", payload: "private-poison-body", jobId: "poison-job" });
-    const ordinary = track(
-      { kind: "sync-event", eventKey: "e-ordinary", idempotencyKey: "k-ordinary", jobId: "ordinary-job" },
-    );
+    const ordinary = track({
+      kind: "sync-event",
+      eventKey: "e-ordinary",
+      idempotencyKey: "k-ordinary",
+      jobId: "ordinary-job",
+    });
 
     await consume({ messages: [poison, ordinary] }, { bot, events: memStore(), lock, ledger });
 
@@ -255,12 +272,21 @@ describe("queue:poison-probe drill", () => {
     const poisonKey = "sync-event:e-poison";
     held.add(poisonKey);
     const poison = track(
-      { kind: "sync-event", eventKey: "e-poison", idempotencyKey: "k-poison", leaseToken: LEASE, jobId: "poison-job" },
+      {
+        kind: "sync-event",
+        eventKey: "e-poison",
+        idempotencyKey: "k-poison",
+        leaseToken: LEASE,
+        jobId: "poison-job",
+      },
       SYNC_EVENT.tries,
     );
-    const ordinary = track(
-      { kind: "sync-event", eventKey: "e-ordinary", idempotencyKey: "k-ordinary", jobId: "ordinary-job" },
-    );
+    const ordinary = track({
+      kind: "sync-event",
+      eventKey: "e-ordinary",
+      idempotencyKey: "k-ordinary",
+      jobId: "ordinary-job",
+    });
 
     await consume({ messages: [poison, ordinary] }, { bot, events, lock, ledger });
 

@@ -23,15 +23,23 @@ export function parseEventListQuery(params: EventListParams): EventListQuery {
   return {
     // PostgreSQL text cannot contain NUL; retain the rest as literal input.
     q: (params.q ?? "").replaceAll("\u0000", "").trim(),
-    status: status === "draft" || status === "published" || status === "cancelled" || status === "past" ? status : "",
+    status:
+      status === "draft" || status === "published" || status === "cancelled" || status === "past"
+        ? status
+        : "",
     series: series === "parent" || series === "child" || series === "standalone" ? series : "",
     fill: fill === "full" || fill === "has_seats" || fill === "unlimited" ? fill : "",
     rsvp_open: params.rsvp_open === "1" || params.rsvp_open === "0" ? params.rsvp_open : "",
     sort: sort === "title" || sort === "status" || sort === "starts_at" ? sort : "starts_at",
     order: params.order === "asc" ? "asc" : "desc",
     // Keep the offset within a safe integer, even for adversarial page values.
-    page: /^\d+$/.test(params.page ?? "") && Number.isSafeInteger(page) && page > 0
-      && Number.isSafeInteger(page * EVENT_PAGE_SIZE) ? page : 1,
+    page:
+      /^\d+$/.test(params.page ?? "") &&
+      Number.isSafeInteger(page) &&
+      page > 0 &&
+      Number.isSafeInteger(page * EVENT_PAGE_SIZE)
+        ? page
+        : 1,
   };
 }
 

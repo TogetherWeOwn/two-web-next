@@ -1,7 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { resolveDrillTarget, resolveDrillWebOrigin, runInternalActionDrill } from "../src/probes/internal-action-drill";
+import {
+  resolveDrillTarget,
+  resolveDrillWebOrigin,
+  runInternalActionDrill,
+} from "../src/probes/internal-action-drill";
 import { BotTerminalError } from "../src/jobs/types";
 import type { AnnouncementResult, RoleAssignResult } from "../src/bot/client";
 import type { BotClient, BotFailure } from "../src/jobs/types";
@@ -12,7 +16,14 @@ const STAGING_WEB = "https://next.togetherweown.com";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const fail = (o: Partial<BotFailure>): BotFailure => ({
-  ok: false, code: "x", status: 503, requestId: null, message: "m", retryable: true, retryAfterSeconds: null, ...o,
+  ok: false,
+  code: "x",
+  status: 503,
+  requestId: null,
+  message: "m",
+  retryable: true,
+  retryAfterSeconds: null,
+  ...o,
 });
 const roleOk: RoleAssignResult = { ok: true, requestId: "r1", outcome: "assigned" };
 
@@ -28,11 +39,17 @@ function okClient() {
       bodies.push(a.body);
       return { ok: true, requestId: "r2", messageId: "m1", replayed: false } as AnnouncementResult;
     },
-    upsertEvent: async (): Promise<never> => { throw new Error("unreachable: the drill never upserts events"); },
+    upsertEvent: async (): Promise<never> => {
+      throw new Error("unreachable: the drill never upserts events");
+    },
   };
 }
 
-const ARGS = { discordId: "900000000000009999", roleKey: "rocketleague", channelKey: "qa-throwaway" };
+const ARGS = {
+  discordId: "900000000000009999",
+  roleKey: "rocketleague",
+  channelKey: "qa-throwaway",
+};
 const FIXED_NOW = () => new Date("2026-10-01T00:00:00.000Z");
 
 describe("drill web-origin guard (APP_URL)", () => {
@@ -66,20 +83,30 @@ describe("drill web-origin guard (APP_URL)", () => {
       expect(() => resolveDrillWebOrigin(unsafe)).toThrow(BotTerminalError);
     }
     // A bare subdomain of the apex is staging, not production — admitted.
-    expect(resolveDrillWebOrigin("https://anything.togetherweown.com")).toBe("https://anything.togetherweown.com");
+    expect(resolveDrillWebOrigin("https://anything.togetherweown.com")).toBe(
+      "https://anything.togetherweown.com",
+    );
   });
 });
 
 describe("drill target resolution", () => {
   it("admits a staging bot with a staging web origin", () => {
     expect(
-      resolveDrillTarget({ BOT_ENDPOINT_URL: STAGING_BOT, BOT_PRODUCTION_URL: PRODUCTION_BOT, APP_URL: STAGING_WEB }),
+      resolveDrillTarget({
+        BOT_ENDPOINT_URL: STAGING_BOT,
+        BOT_PRODUCTION_URL: PRODUCTION_BOT,
+        APP_URL: STAGING_WEB,
+      }),
     ).toEqual({ botUrl: STAGING_BOT, webOrigin: STAGING_WEB });
   });
 
   it("refuses the production bot host", () => {
     expect(() =>
-      resolveDrillTarget({ BOT_ENDPOINT_URL: PRODUCTION_BOT, BOT_PRODUCTION_URL: PRODUCTION_BOT, APP_URL: STAGING_WEB }),
+      resolveDrillTarget({
+        BOT_ENDPOINT_URL: PRODUCTION_BOT,
+        BOT_PRODUCTION_URL: PRODUCTION_BOT,
+        APP_URL: STAGING_WEB,
+      }),
     ).toThrow(/production/);
   });
 
@@ -98,7 +125,11 @@ describe("drill target resolution", () => {
       resolveDrillTarget({ BOT_ENDPOINT_URL: STAGING_BOT, BOT_PRODUCTION_URL: PRODUCTION_BOT }),
     ).toThrow(BotTerminalError);
     expect(() =>
-      resolveDrillTarget({ BOT_ENDPOINT_URL: STAGING_BOT, BOT_PRODUCTION_URL: "", APP_URL: STAGING_WEB }),
+      resolveDrillTarget({
+        BOT_ENDPOINT_URL: STAGING_BOT,
+        BOT_PRODUCTION_URL: "",
+        APP_URL: STAGING_WEB,
+      }),
     ).toThrow(BotTerminalError);
   });
 });
@@ -144,7 +175,8 @@ describe("runInternalActionDrill (fixture client, no network)", () => {
   it("a queued retry becomes a failed check: the drill takes a single pass", async () => {
     const bot = {
       ...okClient(),
-      postAnnouncement: async () => fail({ code: "rate_limited", status: 429, retryable: true, retryAfterSeconds: 42 }),
+      postAnnouncement: async () =>
+        fail({ code: "rate_limited", status: 429, retryable: true, retryAfterSeconds: 42 }),
     };
     const r = await runInternalActionDrill(bot as unknown as BotClient, ARGS, FIXED_NOW);
     expect(r.ok).toBe(false);
@@ -154,7 +186,9 @@ describe("runInternalActionDrill (fixture client, no network)", () => {
   it("a thrown transport error becomes a failed check, not a crash", async () => {
     const bot = {
       ...okClient(),
-      assignRole: async (): Promise<RoleAssignResult> => { throw new Error("connection reset"); },
+      assignRole: async (): Promise<RoleAssignResult> => {
+        throw new Error("connection reset");
+      },
     };
     const r = await runInternalActionDrill(bot as unknown as BotClient, ARGS, FIXED_NOW);
     expect(r.ok).toBe(false);
@@ -169,14 +203,19 @@ describe("runInternalActionDrill (fixture client, no network)", () => {
       assignRole: async (): Promise<RoleAssignResult> => {
         throw new BotTerminalError("The bot refused role.assign with `malformed` [fixture-secret]");
       },
-      postAnnouncement: async () => ({ ok: true, requestId: "r2", messageId: "m1", replayed: false }) as AnnouncementResult,
-      upsertEvent: async (): Promise<never> => { throw new Error("unreachable"); },
+      postAnnouncement: async () =>
+        ({ ok: true, requestId: "r2", messageId: "m1", replayed: false }) as AnnouncementResult,
+      upsertEvent: async (): Promise<never> => {
+        throw new Error("unreachable");
+      },
     };
     const r = await runInternalActionDrill(bot as unknown as BotClient, ARGS, FIXED_NOW);
     expect(r.ok).toBe(false);
     expect(r.checks.find((c) => c.label === "role.assign handled")?.ok).toBe(false);
     expect(r.failures.some((f) => f.includes("BotTerminalError"))).toBe(true);
-    expect(r.failures.some((f) => f.includes("malformed") || f.includes("fixture-secret"))).toBe(false);
+    expect(r.failures.some((f) => f.includes("malformed") || f.includes("fixture-secret"))).toBe(
+      false,
+    );
     expect(r.checks.find((c) => c.label === "announcement.post handled")?.ok).toBe(true);
   });
 });
@@ -195,7 +234,11 @@ describe("internal-action-drill CLI", () => {
       return { code: err.status ?? -1, out: `${err.stdout ?? ""}${err.stderr ?? ""}` };
     }
   };
-  const opts = ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"];
+  const opts = [
+    "--discord-id=900000000000009999",
+    "--role-key=rocketleague",
+    "--channel-key=qa-throwaway",
+  ];
   const stagingEnv = {
     APP_URL: STAGING_WEB,
     BOT_ENDPOINT_URL: STAGING_BOT,
@@ -222,12 +265,15 @@ describe("internal-action-drill CLI", () => {
     expect(r.out).toMatch(/production/);
   });
 
-  it.each(["", "not a url", "ftp://bot.internal.example"])("exit 2 on invalid production exclusion before network: %s", (production) => {
-    const r = run(opts, { ...stagingEnv, BOT_PRODUCTION_URL: production });
-    expect(r.code).toBe(2);
-    expect(r.out).toMatch(/BOT_PRODUCTION_URL/);
-    expect(r.out).not.toContain("fixture-only");
-  });
+  it.each(["", "not a url", "ftp://bot.internal.example"])(
+    "exit 2 on invalid production exclusion before network: %s",
+    (production) => {
+      const r = run(opts, { ...stagingEnv, BOT_PRODUCTION_URL: production });
+      expect(r.code).toBe(2);
+      expect(r.out).toMatch(/BOT_PRODUCTION_URL/);
+      expect(r.out).not.toContain("fixture-only");
+    },
+  );
 
   it("exit 2 on a missing APP_URL before network", () => {
     const { APP_URL: _dropped, ...noWeb } = stagingEnv;
@@ -254,7 +300,11 @@ describe("internal-action-drill CLI", () => {
 
   it("is wired as drill:internal-action without touching check or CI scripts", () => {
     const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
-    expect(scripts["drill:internal-action"]).toBe("node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs");
-    expect(scripts.check).toBe("npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke");
+    expect(scripts["drill:internal-action"]).toBe(
+      "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
+    );
+    expect(scripts.check).toBe(
+      "npm run lint && npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke",
+    );
   });
 });

@@ -92,11 +92,9 @@ export function pastEventsRequest(page: number): { method: "GET"; url: string } 
 }
 
 /** Singular RSVP resource: one answer per member per event (PUT + DELETE). */
-export const rsvpUrl = (eventKey: string): string =>
-  `/events/${encodeURIComponent(eventKey)}/rsvp`;
+export const rsvpUrl = (eventKey: string): string => `/events/${encodeURIComponent(eventKey)}/rsvp`;
 
-export const eventPageUrl = (eventKey: string): string =>
-  `/e/${encodeURIComponent(eventKey)}`;
+export const eventPageUrl = (eventKey: string): string => `/e/${encodeURIComponent(eventKey)}`;
 
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
@@ -291,7 +289,11 @@ export function isValidZone(zone: string | null | undefined): boolean {
   }
 }
 
-function partsIn(instant: Date, zone: string, opts: Intl.DateTimeFormatOptions): Map<string, string> {
+function partsIn(
+  instant: Date,
+  zone: string,
+  opts: Intl.DateTimeFormatOptions,
+): Map<string, string> {
   const z = isValidZone(zone) ? zone : "UTC";
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: z, ...opts }).formatToParts(instant);
   return new Map(parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
@@ -299,11 +301,18 @@ function partsIn(instant: Date, zone: string, opts: Intl.DateTimeFormatOptions):
 
 /** Canonical ISO wall date, including expanded years (invalid zones read as UTC). */
 export function wallDateIso(instant: Date, zone: string): string {
-  const p = partsIn(instant, zone, { era: "short", year: "numeric", month: "2-digit", day: "2-digit" });
+  const p = partsIn(instant, zone, {
+    era: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
   // Intl's Gregorian year is era-relative: 1 BC is astronomical year zero.
   const year = Number(p.get("year"));
   const isoYear = p.get("era") === "BC" ? 1 - year : year;
-  return calendarDate(isoYear, Number(p.get("month")) - 1, Number(p.get("day"))).toISOString().split("T")[0]!;
+  return calendarDate(isoYear, Number(p.get("month")) - 1, Number(p.get("day")))
+    .toISOString()
+    .split("T")[0]!;
 }
 
 /** "HH:mm" 24-hour wall time in `zone` (invalid zones read as UTC). */
@@ -355,7 +364,11 @@ export interface CalendarDay<E = unknown> {
 }
 
 /** Whole-weeks Monday-first grid for `month`; `byDay` buckets rows by their host-zone date. */
-export function monthGrid<E>(month: string, todayIso: string, byDay: Map<string, E[]>): CalendarDay<E>[][] {
+export function monthGrid<E>(
+  month: string,
+  todayIso: string,
+  byDay: Map<string, E[]>,
+): CalendarDay<E>[][] {
   const m = MONTH_RE.exec(month);
   const y = Number(m![1]);
   const mo = Number(m![2]);
@@ -480,7 +493,11 @@ export function calendarEmptyState(s: {
 }
 
 /** One GET per member action — the SSR page URL, not a data endpoint. */
-export function calendarRequest(s: CalendarState): { method: "GET"; url: string; accept: "text/html" } {
+export function calendarRequest(s: CalendarState): {
+  method: "GET";
+  url: string;
+  accept: "text/html";
+} {
   return { method: "GET", url: calendarUrl(s), accept: "text/html" };
 }
 
@@ -565,7 +582,11 @@ export interface GoingRefreshRequest {
 
 /** One request per answered event, filtered before collection pagination. */
 export function goingRefreshRequest(eventKey: string): GoingRefreshRequest {
-  return { method: "GET", url: `${EVENTS_JSON_URL}?event_key=${encodeURIComponent(eventKey)}`, eventKey };
+  return {
+    method: "GET",
+    url: `${EVENTS_JSON_URL}?event_key=${encodeURIComponent(eventKey)}`,
+    eventKey,
+  };
 }
 
 export interface EventJsonRow {
@@ -921,14 +942,20 @@ export function profileClientErrors(input: {
   timezone: string;
 }): Record<string, string> {
   const errors: Record<string, string> = {};
-  if (CONTROL_CHARS.test(input.bio) || CONTROL_CHARS.test(input.games_text) || CONTROL_CHARS.test(input.timezone)) {
+  if (
+    CONTROL_CHARS.test(input.bio) ||
+    CONTROL_CHARS.test(input.games_text) ||
+    CONTROL_CHARS.test(input.timezone)
+  ) {
     errors.control = "Remove control characters.";
   }
-  if ([...input.bio].length > PROFILE_LIMITS.bio) errors.bio = "Keep your bio to 1000 characters or fewer.";
+  if ([...input.bio].length > PROFILE_LIMITS.bio)
+    errors.bio = "Keep your bio to 1000 characters or fewer.";
   const games: string[] = [];
   for (const line of input.games_text.split(/\r\n|\r|\n/)) {
     const t = line.trim();
-    if ([...t].length > PROFILE_LIMITS.gameChars) errors.games ??= "Keep each game name to 80 characters or fewer.";
+    if ([...t].length > PROFILE_LIMITS.gameChars)
+      errors.games ??= "Keep each game name to 80 characters or fewer.";
     if (t !== "" && !games.includes(t)) games.push(t);
   }
   if (games.length > PROFILE_LIMITS.gamesMax) errors.games ??= "Add no more than 20 games.";
@@ -942,7 +969,13 @@ export function profileClientErrors(input: {
   return errors;
 }
 
-export type ProfileOutcome = "saved" | "invalid" | "failed" | "session-expired" | "uncertain" | "cancelled";
+export type ProfileOutcome =
+  | "saved"
+  | "invalid"
+  | "failed"
+  | "session-expired"
+  | "uncertain"
+  | "cancelled";
 
 /** Focus after each outcome: heading, alert, or saved confirmation (TOG-6957). */
 export function profileFocusTarget(outcome: ProfileOutcome): string | null {
@@ -977,10 +1010,16 @@ export function profileTrapTripped(input: Record<string, unknown>, nowMs: number
 }
 
 /** Discord CDN avatar with srcset, or null so SSR renders the initial fallback. */
-export function profileAvatarSrcset(id: string, avatar: string | null): { src: string; srcset: string } | null {
+export function profileAvatarSrcset(
+  id: string,
+  avatar: string | null,
+): { src: string; srcset: string } | null {
   if (!avatar || !/^[a-z0-9_]{1,64}$/i.test(avatar)) return null;
   const base = `https://cdn.discordapp.com/avatars/${id}/${avatar}.png`;
-  return { src: `${base}?size=128`, srcset: `${base}?size=64 1x, ${base}?size=128 2x, ${base}?size=256 3x` };
+  return {
+    src: `${base}?size=128`,
+    srcset: `${base}?size=64 1x, ${base}?size=128 2x, ${base}?size=256 3x`,
+  };
 }
 
 export function profileJoinedMonth(joinedAt: Date | null): string | null {

@@ -11,20 +11,23 @@ const state = vi.hoisted(() => ({
   liveQueries: 0,
   ranksQueries: 0,
 }));
-vi.mock("postgres", () => ({ default: () => {
-  const sql = async (parts: TemplateStringsArray) => {
-    const query = parts.join("");
-    state.queries.push(query);
-    const live = query.includes("web_v1.live_counts");
-    if (live) state.liveQueries++; else state.ranksQueries++;
-    if (state.delayMs) await new Promise((resolve) => setTimeout(resolve, state.delayMs));
-    const error = live ? state.liveError : state.ranksError;
-    if (error) throw error;
-    return (live ? state.live : state.ranks).map((row) => ({ ...row }));
-  };
-  sql.end = async () => {};
-  return sql;
-} }));
+vi.mock("postgres", () => ({
+  default: () => {
+    const sql = async (parts: TemplateStringsArray) => {
+      const query = parts.join("");
+      state.queries.push(query);
+      const live = query.includes("web_v1.live_counts");
+      if (live) state.liveQueries++;
+      else state.ranksQueries++;
+      if (state.delayMs) await new Promise((resolve) => setTimeout(resolve, state.delayMs));
+      const error = live ? state.liveError : state.ranksError;
+      if (error) throw error;
+      return (live ? state.live : state.ranks).map((row) => ({ ...row }));
+    };
+    sql.end = async () => {};
+    return sql;
+  },
+}));
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
 const env = { DB: { connectionString: "postgres://fixture.test/counts" } } as Env;
@@ -38,12 +41,20 @@ beforeEach(async () => {
   Object.assign(state, {
     live: [{ human_member_count: "84", online_count: "12", counts_updated_at: new Date(NOW) }],
     ranks: [{ rank_key: "prospect", rank_label: "Prospect", member_count: "24" }],
-    liveError: null, ranksError: null, delayMs: 0, queries: [], liveQueries: 0, ranksQueries: 0,
+    liveError: null,
+    ranksError: null,
+    delayMs: 0,
+    queries: [],
+    liveQueries: 0,
+    ranksQueries: 0,
   });
   warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   counts = await import("../src/counts");
 });
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 // docs/web-v1-contract.md: cached snapshots keep their already-evaluated
 // freshness until TTL expiry; there is no post-expiry stale fallback. These
@@ -101,7 +112,10 @@ describe("warm-cache freshness boundary", () => {
     state.live[0]!.human_member_count = "55";
     state.ranksError = new Error("rank view unavailable");
     vi.setSystemTime(NOW + 59_999);
-    expect(await counts.readCounts(env)).toMatchObject({ memberCount: null, ranks: [{ memberCount: 24 }] });
+    expect(await counts.readCounts(env)).toMatchObject({
+      memberCount: null,
+      ranks: [{ memberCount: 24 }],
+    });
     expect(state.liveQueries).toBe(1);
     expect(state.ranksQueries).toBe(1);
     // At expiry each view rereads exactly once and re-settles independently:

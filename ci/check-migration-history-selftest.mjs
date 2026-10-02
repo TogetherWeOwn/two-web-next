@@ -1,11 +1,27 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { checkMigrations, filesystemInventory, formatLock, resolveBaseline } from "./check-migration-history.mjs";
+import {
+  checkMigrations,
+  filesystemInventory,
+  formatLock,
+  resolveBaseline,
+} from "./check-migration-history.mjs";
 
 const initial = {
   "drizzle/0000_init-users.sql": "SELECT 'users';\n",
@@ -15,7 +31,23 @@ const initial = {
 };
 
 function git(root, ...args) {
-  return execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], { cwd: root, stdio: ["ignore", "pipe", "pipe"] }).toString("utf8").trim();
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "commit.gpgSign=false",
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      ...args,
+    ],
+    { cwd: root, stdio: ["ignore", "pipe", "pipe"] },
+  )
+    .toString("utf8")
+    .trim();
 }
 
 function put(root, path, content) {
@@ -33,7 +65,10 @@ function fixture(t, { bootstrap = false, defaultBranch, signing = false } = {}) 
   for (const [path, sql] of Object.entries(initial)) put(root, path, sql);
   if (!bootstrap) {
     lock(root);
-    copyFileSync(fileURLToPath(new URL("./check-migration-history.mjs", import.meta.url)), join(root, "helper-copy.mjs"));
+    copyFileSync(
+      fileURLToPath(new URL("./check-migration-history.mjs", import.meta.url)),
+      join(root, "helper-copy.mjs"),
+    );
     mkdirSync(join(root, "ci"));
     renameSync(join(root, "helper-copy.mjs"), join(root, "ci/check-migration-history.mjs"));
   }
@@ -59,11 +94,14 @@ for (const bootstrap of [false, true]) {
   });
   test(`append-only SQL passes (${bootstrap ? "initial adoption" : "locked base"})`, (t) => {
     const f = fixture(t, { bootstrap });
-    const before = Object.fromEntries(Object.keys(initial).map((path) => [path, readFileSync(join(f.root, path))]));
+    const before = Object.fromEntries(
+      Object.keys(initial).map((path) => [path, readFileSync(join(f.root, path))]),
+    );
     put(f.root, "migrations/1003_appended.sql", "SELECT 3;\n");
     lock(f.root);
     assert.deepEqual(f.check(), { total: 5, historical: 4 });
-    for (const [path, bytes] of Object.entries(before)) assert.deepEqual(readFileSync(join(f.root, path)), bytes);
+    for (const [path, bytes] of Object.entries(before))
+      assert.deepEqual(readFileSync(join(f.root, path)), bytes);
   });
   for (const path of Object.keys(initial)) {
     test(`cannot bless edit of ${path} by rewriting lock (${bootstrap ? "bootstrap" : "locked"})`, (t) => {
@@ -93,7 +131,10 @@ for (const changed of [false, true]) {
 
 test("moving migration to another directory fails", (t) => {
   const f = fixture(t);
-  renameSync(join(f.root, "drizzle/1000_original.sql"), join(f.root, "db/migrations/1000_original.sql"));
+  renameSync(
+    join(f.root, "drizzle/1000_original.sql"),
+    join(f.root, "db/migrations/1000_original.sql"),
+  );
   lock(f.root);
   assert.throws(f.check, /historical migration deleted\/renamed/);
 });
@@ -161,20 +202,65 @@ for (const [name, mutate, error] of [
   ["unreadable", (r) => chmodSync(join(r, "migrations.lock"), 0), /missing\/unreadable/],
   ["malformed", (r) => put(r, "migrations.lock", "not JSON"), /JSON/],
   ["empty", (r) => put(r, "migrations.lock", formatLock({})), /lock does not match/],
-  ["hash tampered", (r) => put(r, "migrations.lock", readFileSync(join(r, "migrations.lock"), "utf8").replace(/[0-9a-f]{64}/, "0".repeat(64))), /lock does not match/],
-  ["extra field", (r) => put(r, "migrations.lock", readFileSync(join(r, "migrations.lock"), "utf8").replace('"version": 1,', '"version": 1, "override": true,')), /invalid\/noncanonical/],
-  ["duplicate path", (r) => {
-    const value = JSON.parse(readFileSync(join(r, "migrations.lock"), "utf8"));
-    value.migrations.push(value.migrations[0]);
-    put(r, "migrations.lock", `${JSON.stringify(value, null, 2)}\n`);
-  }, /invalid\/noncanonical/],
-  ["missing path", (r) => {
-    const value = JSON.parse(readFileSync(join(r, "migrations.lock"), "utf8"));
-    delete value.migrations[0].path;
-    put(r, "migrations.lock", `${JSON.stringify(value, null, 2)}\n`);
-  }, /invalid\/noncanonical/],
-  ["invalid hash", (r) => put(r, "migrations.lock", readFileSync(join(r, "migrations.lock"), "utf8").replace(/[0-9a-f]{64}/, "not-a-sha256")), /invalid\/noncanonical/],
-  ["linked", (r) => { renameSync(join(r, "migrations.lock"), join(r, "outside.lock")); symlinkSync("outside.lock", join(r, "migrations.lock")); }, /missing\/unreadable/],
+  [
+    "hash tampered",
+    (r) =>
+      put(
+        r,
+        "migrations.lock",
+        readFileSync(join(r, "migrations.lock"), "utf8").replace(/[0-9a-f]{64}/, "0".repeat(64)),
+      ),
+    /lock does not match/,
+  ],
+  [
+    "extra field",
+    (r) =>
+      put(
+        r,
+        "migrations.lock",
+        readFileSync(join(r, "migrations.lock"), "utf8").replace(
+          '"version": 1,',
+          '"version": 1, "override": true,',
+        ),
+      ),
+    /invalid\/noncanonical/,
+  ],
+  [
+    "duplicate path",
+    (r) => {
+      const value = JSON.parse(readFileSync(join(r, "migrations.lock"), "utf8"));
+      value.migrations.push(value.migrations[0]);
+      put(r, "migrations.lock", `${JSON.stringify(value, null, 2)}\n`);
+    },
+    /invalid\/noncanonical/,
+  ],
+  [
+    "missing path",
+    (r) => {
+      const value = JSON.parse(readFileSync(join(r, "migrations.lock"), "utf8"));
+      delete value.migrations[0].path;
+      put(r, "migrations.lock", `${JSON.stringify(value, null, 2)}\n`);
+    },
+    /invalid\/noncanonical/,
+  ],
+  [
+    "invalid hash",
+    (r) =>
+      put(
+        r,
+        "migrations.lock",
+        readFileSync(join(r, "migrations.lock"), "utf8").replace(/[0-9a-f]{64}/, "not-a-sha256"),
+      ),
+    /invalid\/noncanonical/,
+  ],
+  [
+    "linked",
+    (r) => {
+      renameSync(join(r, "migrations.lock"), join(r, "outside.lock"));
+      symlinkSync("outside.lock", join(r, "migrations.lock"));
+    },
+    /missing\/unreadable/,
+  ],
 ]) {
   test(`${name} lock fails closed`, (t) => {
     const f = fixture(t);
@@ -216,7 +302,10 @@ test("missing base lock after adoption is not bootstrap", (t) => {
   git(f.root, "add", ".");
   git(f.root, "commit", "-qm", "synthetic missing lock base");
   lock(f.root);
-  assert.throws(() => checkMigrations(f.root, "HEAD"), /baseline lock is missing after guard adoption/);
+  assert.throws(
+    () => checkMigrations(f.root, "HEAD"),
+    /baseline lock is missing after guard adoption/,
+  );
 });
 
 test("CI resolves PR base and push-before SHA, not checked-out HEAD", (t) => {
@@ -226,12 +315,31 @@ test("CI resolves PR base and push-before SHA, not checked-out HEAD", (t) => {
   git(f.root, "add", ".");
   git(f.root, "commit", "-qm", "candidate");
   const eventPath = join(f.root, "event.json");
-  put(f.root, "event.json", JSON.stringify({ before: f.base, pull_request: { base: { sha: f.base } } }));
+  put(
+    f.root,
+    "event.json",
+    JSON.stringify({ before: f.base, pull_request: { base: { sha: f.base } } }),
+  );
   for (const name of ["pull_request", "push"]) {
-    assert.equal(resolveBaseline(f.root, { GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: name, GITHUB_EVENT_PATH: eventPath }), f.base);
+    assert.equal(
+      resolveBaseline(f.root, {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: name,
+        GITHUB_EVENT_PATH: eventPath,
+      }),
+      f.base,
+    );
   }
   put(f.root, "event.json", "{}");
-  assert.throws(() => resolveBaseline(f.root, { GITHUB_ACTIONS: "true", GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath }), /missing\/invalid CI base SHA/);
+  assert.throws(
+    () =>
+      resolveBaseline(f.root, {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: eventPath,
+      }),
+    /missing\/invalid CI base SHA/,
+  );
 });
 
 test("a SQL-named directory cannot hide as an absent file", (t) => {
@@ -273,21 +381,38 @@ for (const defaultBranch of ["main", "master"]) {
     git(f.root, "commit", "-qm", "candidate");
     git(f.root, "branch", "candidate");
     const clone = join(f.root, "shallow-clone");
-    git(f.root, "clone", "--quiet", "--depth=1", "--branch", "candidate", `file://${f.root}`, clone);
+    git(
+      f.root,
+      "clone",
+      "--quiet",
+      "--depth=1",
+      "--branch",
+      "candidate",
+      `file://${f.root}`,
+      clone,
+    );
     assert.equal(git(clone, "rev-parse", "--is-shallow-repository"), "true");
     const eventPath = join(f.root, "event.json");
     put(f.root, "event.json", JSON.stringify({ pull_request: { base: { sha: f.base } } }));
     const env = { GITHUB_ACTIONS: "true", GITHUB_EVENT_PATH: eventPath };
     assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "pull_request" }), f.base);
     assert.deepEqual(checkMigrations(clone, f.base), { total: 5, historical: 4 });
-    assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "workflow_dispatch" }), f.base);
+    assert.equal(
+      resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "workflow_dispatch" }),
+      f.base,
+    );
   });
 }
 
 test("CLI guard and regeneration cannot bless a historical edit", (t) => {
   const f = fixture(t);
   const env = { ...process.env, GITHUB_ACTIONS: "false" };
-  const cli = (...args) => spawnSync(process.execPath, ["ci/check-migration-history.mjs", ...args], { cwd: f.root, env, encoding: "utf8" });
+  const cli = (...args) =>
+    spawnSync(process.execPath, ["ci/check-migration-history.mjs", ...args], {
+      cwd: f.root,
+      env,
+      encoding: "utf8",
+    });
   assert.equal(cli().status, 0);
   put(f.root, "drizzle/1000_original.sql", "SELECT 999;\n");
   assert.equal(cli("--write-lock").status, 0);

@@ -3,7 +3,10 @@ import { URL as NodeURL } from "node:url";
 import { createContext, runInContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
-const binder = readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8");
+const binder = readFileSync(
+  new NodeURL("../public/islands/going-count.js", import.meta.url),
+  "utf8",
+);
 const MOUNT = '[data-island="going-count"]';
 const EVENT = "going-count-updated";
 
@@ -15,7 +18,9 @@ class TextTarget {
     this.value = initial;
   }
 
-  get textContent() { return this.value; }
+  get textContent() {
+    return this.value;
+  }
   set textContent(value: string) {
     this.value = value;
     this.writes.push(value);
@@ -24,7 +29,9 @@ class TextTarget {
 
 class SpotsTarget extends TextTarget {
   removed = false;
-  remove() { this.removed = true; }
+  remove() {
+    this.removed = true;
+  }
 }
 
 class Badge {
@@ -34,14 +41,26 @@ class Badge {
   announcement = new TextTarget("");
 
   constructor(key: string, capacity: string) {
-    this.attributes = new Map([["data-island", "going-count"], ["data-event-key", key], ["data-capacity", capacity]]);
+    this.attributes = new Map([
+      ["data-island", "going-count"],
+      ["data-event-key", key],
+      ["data-capacity", capacity],
+    ]);
     this.count = new TextTarget(capacity ? `4 of ${capacity} going` : "4 going");
-    this.spots = capacity ? new SpotsTarget(`${Number(capacity) - 4} of ${capacity} spots left`) : null;
+    this.spots = capacity
+      ? new SpotsTarget(`${Number(capacity) - 4} of ${capacity} spots left`)
+      : null;
   }
 
-  getAttribute(name: string) { return this.attributes.get(name) ?? null; }
-  setAttribute(name: string, value: string) { this.attributes.set(name, value); }
-  removeAttribute(name: string) { this.attributes.delete(name); }
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
+  }
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
+  }
+  removeAttribute(name: string) {
+    this.attributes.delete(name);
+  }
   querySelector(selector: string) {
     if (selector === "[data-count]") return this.count;
     if (selector === "[data-spots]") return this.spots && !this.spots.removed ? this.spots : null;
@@ -59,7 +78,10 @@ interface ReadResponse {
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
 
@@ -71,32 +93,49 @@ type PendingRead = ReturnType<typeof deferred<ReadResponse>>;
 // network, database or shared document.
 function browser(...badges: Badge[]) {
   const listeners: ((event: { detail: Detail }) => void)[] = [];
-  const requests: { url: string; init: { headers: Record<string, string> }; read: PendingRead }[] = [];
-  runInContext(binder, createContext({
-    CustomEvent: class { constructor(public type: string, public options: { detail: unknown }) {} get detail() { return this.options.detail; } },
-    document: {
-      addEventListener(type: string, listener: (event: { detail: Detail }) => void) {
-        expect(type).toBe(EVENT);
-        listeners.push(listener);
+  const requests: { url: string; init: { headers: Record<string, string> }; read: PendingRead }[] =
+    [];
+  runInContext(
+    binder,
+    createContext({
+      CustomEvent: class {
+        constructor(
+          public type: string,
+          public options: { detail: unknown },
+        ) {}
+        get detail() {
+          return this.options.detail;
+        }
       },
-      // The merged binder restores the refreshed broadcast the rsvp-button
-      // island consumes; the stub lets that path execute without asserting it.
-      dispatchEvent() { return true; },
-      querySelectorAll(selector: string) {
-        expect(selector).toBe(MOUNT);
-        return badges;
+      document: {
+        addEventListener(type: string, listener: (event: { detail: Detail }) => void) {
+          expect(type).toBe(EVENT);
+          listeners.push(listener);
+        },
+        // The merged binder restores the refreshed broadcast the rsvp-button
+        // island consumes; the stub lets that path execute without asserting it.
+        dispatchEvent() {
+          return true;
+        },
+        querySelectorAll(selector: string) {
+          expect(selector).toBe(MOUNT);
+          return badges;
+        },
       },
-    },
-    fetch(url: string, init: { headers: Record<string, string> }) {
-      const read = deferred<ReadResponse>();
-      requests.push({ url, init, read });
-      return read.promise;
-    },
-  }), { filename: "public/islands/going-count.js" });
+      fetch(url: string, init: { headers: Record<string, string> }) {
+        const read = deferred<ReadResponse>();
+        requests.push({ url, init, read });
+        return read.promise;
+      },
+    }),
+    { filename: "public/islands/going-count.js" },
+  );
 
   return {
     requests,
-    broadcast(detail: Detail) { listeners.forEach((listener) => listener({ detail })); },
+    broadcast(detail: Detail) {
+      listeners.forEach((listener) => listener({ detail }));
+    },
     async respond(index: number, body: unknown) {
       requests[index]!.read.resolve({ ok: true, status: 200, json: async () => body });
       await settle();
@@ -150,7 +189,10 @@ describe("GoingCount capacity refresh from the admitted snapshot", () => {
     const b = browser(...badges, other);
     b.broadcast({ eventKey: "a", viewerState: "going" });
     await b.respond(0, { data: [{ event_key: "a", going_count: 9, capacity: 10 }] });
-    expect(badges.map((badge) => badge.count.textContent)).toEqual(["9 of 10 going", "9 of 10 going"]);
+    expect(badges.map((badge) => badge.count.textContent)).toEqual([
+      "9 of 10 going",
+      "9 of 10 going",
+    ]);
     expect(badges[0]!.spots!.textContent).toBe("1 of 10 spots left");
     expect(other.count.writes).toEqual([]);
     expect(other.announcement.writes).toEqual([]);
@@ -166,22 +208,25 @@ describe("GoingCount capacity refresh from the admitted snapshot", () => {
     ["array", [10]],
     ["boolean", true],
     ["empty string", ""],
-  ])("rejects malformed capacity (%s) as a whole and preserves the prior display", async (_label, capacity) => {
-    const badge = new Badge("a", "5");
-    const b = browser(badge);
-    b.broadcast({ eventKey: "a", viewerState: "going" });
-    await b.respond(0, { data: [{ event_key: "a", going_count: 4, capacity }] });
-    expect(badge.count.textContent).toBe("4 of 5 going");
-    expect(badge.count.writes).toEqual([]);
-    expect(badge.spots!.writes).toEqual([]);
-    expect(badge.announcement.writes).toEqual([]);
-    // A later valid snapshot still recovers.
-    b.broadcast({ eventKey: "a", viewerState: "none" });
-    await b.respond(1, { data: [{ event_key: "a", going_count: 1, capacity: 10 }] });
-    expect(badge.count.textContent).toBe("1 of 10 going");
-    expect(badge.spots!.textContent).toBe("9 of 10 spots left");
-    expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
-  });
+  ])(
+    "rejects malformed capacity (%s) as a whole and preserves the prior display",
+    async (_label, capacity) => {
+      const badge = new Badge("a", "5");
+      const b = browser(badge);
+      b.broadcast({ eventKey: "a", viewerState: "going" });
+      await b.respond(0, { data: [{ event_key: "a", going_count: 4, capacity }] });
+      expect(badge.count.textContent).toBe("4 of 5 going");
+      expect(badge.count.writes).toEqual([]);
+      expect(badge.spots!.writes).toEqual([]);
+      expect(badge.announcement.writes).toEqual([]);
+      // A later valid snapshot still recovers.
+      b.broadcast({ eventKey: "a", viewerState: "none" });
+      await b.respond(1, { data: [{ event_key: "a", going_count: 1, capacity: 10 }] });
+      expect(badge.count.textContent).toBe("1 of 10 going");
+      expect(badge.spots!.textContent).toBe("9 of 10 spots left");
+      expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
+    },
+  );
 
   it("falls back to the SSR cap when the snapshot carries no capacity key", async () => {
     const badge = new Badge("a", "5");
