@@ -21,7 +21,8 @@ type Sql = ReturnType<typeof postgres>;
 export function pgEventStore(sql: TxClient | Sql): EventStore {
   return {
     find: (eventKey) => findEvent(sql, eventKey),
-    recordMirrored: (eventKey, discordEventId, mirroredAt) => recordMirrored(sql, eventKey, discordEventId, mirroredAt),
+    recordMirrored: (eventKey, discordEventId, mirroredAt) =>
+      recordMirrored(sql, eventKey, discordEventId, mirroredAt),
     closeFinished: (now) => closeFinished(sql, now),
     materializeSeries: () => materializeSeries(sql),
     staleEventKeys: () => staleEventKeys(sql),
@@ -42,7 +43,8 @@ type EventRow = {
 const asDate = (v: Date | string): Date => (v instanceof Date ? v : new Date(v));
 
 async function findEvent(sql: TxClient | Sql, eventKey: string): Promise<MirroredEvent | null> {
-  const rows = (await sql`select event_key, title, starts_at, ends_at, timezone, location, description, status
+  const rows =
+    (await sql`select event_key, title, starts_at, ends_at, timezone, location, description, status
     from events where event_key = ${eventKey}`) as EventRow[];
   const row = rows[0];
   if (!row) return null;
@@ -74,7 +76,12 @@ async function findEvent(sql: TxClient | Sql, eventKey: string): Promise<Mirrore
  * the same reason). A replay with the same id changes nothing at all — the
  * guard makes it a true no-op instead of a rewrite.
  */
-async function recordMirrored(sql: TxClient | Sql, eventKey: string, discordEventId: string, mirroredAt: Date): Promise<void> {
+async function recordMirrored(
+  sql: TxClient | Sql,
+  eventKey: string,
+  discordEventId: string,
+  mirroredAt: Date,
+): Promise<void> {
   await sql`update events set discord_event_id = ${discordEventId}
     where event_key = ${eventKey} and discord_event_id is distinct from ${discordEventId}`;
   await sql`update rsvps set synced_to_discord_at = ${mirroredAt}
@@ -162,7 +169,9 @@ async function materializeSeries(sql: TxClient | Sql): Promise<number> {
 }
 
 /** `dirty({}, child)` shape (src/admin/store.ts), minus the audit-excluded bot columns. */
-function childAuditProperties(child: Record<string, unknown>): Record<string, { before: null; after: unknown }> {
+function childAuditProperties(
+  child: Record<string, unknown>,
+): Record<string, { before: null; after: unknown }> {
   const after = (v: unknown) => (v instanceof Date ? v.toISOString() : (v ?? null));
   const cell = (v: unknown) => ({ before: null as null, after: after(v) });
   return {

@@ -1,6 +1,12 @@
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { internalErrorHandler, maintenanceHandler, notFoundHandler, notFoundResponse, rateLimitExceeded } from "../src/errors";
+import {
+  internalErrorHandler,
+  maintenanceHandler,
+  notFoundHandler,
+  notFoundResponse,
+  rateLimitExceeded,
+} from "../src/errors";
 import type { Env } from "../src/env";
 import app from "./app";
 
@@ -15,7 +21,12 @@ const env: Env = {
 };
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("error theme fixtures must remain offline"); }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => {
+      throw new Error("error theme fixtures must remain offline");
+    }),
+  );
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => {
@@ -27,9 +38,16 @@ afterEach(() => {
 function errors() {
   const fixture = new Hono();
   fixture.notFound(notFoundHandler);
-  fixture.get("/suggestions", (c) => notFoundResponse(c, [{
-    key: "game night", title: "Co-op evening", startsAt: new Date("2030-07-04T19:00:00Z"), location: "Voice lobby",
-  }]));
+  fixture.get("/suggestions", (c) =>
+    notFoundResponse(c, [
+      {
+        key: "game night",
+        title: "Co-op evening",
+        startsAt: new Date("2030-07-04T19:00:00Z"),
+        location: "Voice lobby",
+      },
+    ]),
+  );
   fixture.get("/429", (c) => rateLimitExceeded(c));
   fixture.get("/500", (c) => internalErrorHandler(new Error("private fixture details"), c));
   fixture.get("/503", maintenanceHandler(env.DISCORD_INVITE_URL!));
@@ -46,25 +64,28 @@ function assertTheme(html: string) {
   expect(html).toContain('<main id="main" tabindex="-1">');
   expect(html).toContain('<nav aria-label="Site">');
   expect(html).not.toContain('aria-current="page"');
-  expect(html).not.toContain('<script');
-  expect(html).not.toContain('<iframe');
+  expect(html).not.toContain("<script");
+  expect(html).not.toContain("<iframe");
 }
 
 describe("base-theme error and recovery shells without a DB binding", () => {
-  it.each([404, 429, 500, 503])("renders %i with shared chrome and unchanged refusal headers", async (status) => {
-    const response = await errors().request(status === 404 ? "/missing" : `/${status}`, {}, env);
-    expect(response.status).toBe(status);
-    expect(response.headers.get("cache-control")).toBe("no-store, private");
-    const html = await response.text();
-    assertTheme(html);
-    expect(html).toContain(`class="recovery-code" aria-hidden="true">${status}</p>`);
-    expect(html).toContain('name="robots" content="noindex, nofollow"');
-    expect(html).not.toContain("private fixture details");
-    if (status === 503) {
-      expect(html).not.toMatch(/href="\/auth\//);
-      expect(html.match(/href="https:\/\/discord.gg\/invite"/g)).toHaveLength(2);
-    }
-  });
+  it.each([404, 429, 500, 503])(
+    "renders %i with shared chrome and unchanged refusal headers",
+    async (status) => {
+      const response = await errors().request(status === 404 ? "/missing" : `/${status}`, {}, env);
+      expect(response.status).toBe(status);
+      expect(response.headers.get("cache-control")).toBe("no-store, private");
+      const html = await response.text();
+      assertTheme(html);
+      expect(html).toContain(`class="recovery-code" aria-hidden="true">${status}</p>`);
+      expect(html).toContain('name="robots" content="noindex, nofollow"');
+      expect(html).not.toContain("private fixture details");
+      if (status === 503) {
+        expect(html).not.toMatch(/href="\/auth\//);
+        expect(html.match(/href="https:\/\/discord.gg\/invite"/g)).toHaveLength(2);
+      }
+    },
+  );
 
   it("keeps suggested events and labelled search outside the error hero", async () => {
     const response = await errors().request("/suggestions", {}, env);

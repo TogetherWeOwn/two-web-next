@@ -20,16 +20,23 @@ const INF_END = "01J0000000000000000000AAC";
 const routeEnv = (adminDb: EnvWithAdminDb["ADMIN_DB"]) =>
   ({
     APP_URL: "https://next.example.test",
-    DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture",
-    DISCORD_GUILD_ID: "fixture", DISCORD_INVITE_URL: "https://discord.gg/fixture",
-    DISCORD_BOT_TOKEN: "fixture", SESSION_SECRET: "fixture",
+    DISCORD_CLIENT_ID: "fixture",
+    DISCORD_CLIENT_SECRET: "fixture",
+    DISCORD_GUILD_ID: "fixture",
+    DISCORD_INVITE_URL: "https://discord.gg/fixture",
+    DISCORD_BOT_TOKEN: "fixture",
+    SESSION_SECRET: "fixture",
     ADMIN_DB: adminDb,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   }) as unknown as Env;
 
 const app = () => {
   const application = new Hono<{ Bindings: Env }>();
-  registerEventRoutes(application, async () => null, async () => null);
+  registerEventRoutes(
+    application,
+    async () => null,
+    async () => null,
+  );
   return application;
 };
 

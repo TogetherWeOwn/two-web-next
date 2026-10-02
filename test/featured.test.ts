@@ -39,7 +39,9 @@ describe("featured homepage fallback (local fixtures)", () => {
     // Real Drizzle query construction with a local failing transport: no connection.
     const db = drizzle.mock();
     const session = Reflect.get(db, "session") as { prepareQuery: () => unknown };
-    vi.spyOn(session, "prepareQuery").mockImplementation(() => { throw new Error("database unavailable"); });
+    vi.spyOn(session, "prepareQuery").mockImplementation(() => {
+      throw new Error("database unavailable");
+    });
     const res = await app.request("/", {}, { ...env, ADMIN_DB: db } as Env);
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -56,7 +58,12 @@ describe("featured homepage fallback (local fixtures)", () => {
     let rejectRead!: (error: Error) => void;
     vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]); // only featured stalls in this test
     const session = Reflect.get(db, "session") as { transaction: () => Promise<unknown> };
-    const transaction = vi.spyOn(session, "transaction").mockImplementation(() => new Promise((_, reject) => { rejectRead = reject; }));
+    const transaction = vi.spyOn(session, "transaction").mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectRead = reject;
+        }),
+    );
     vi.useFakeTimers();
     try {
       const response = app.request("/", {}, { ...env, ADMIN_DB: db } as Env);
@@ -72,7 +79,9 @@ describe("featured homepage fallback (local fixtures)", () => {
       // A transport error arriving after the response is still handled.
       rejectRead(new Error("late database failure"));
       await vi.advanceTimersByTimeAsync(0);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses the configured allowlist for remote image rendering and CSP on the homepage", async () => {
@@ -84,14 +93,27 @@ describe("featured homepage fallback (local fixtures)", () => {
       expect(featuredImageSrc(`https://${host}/photo.jpg`, env.APP_URL, host)).toBeNull();
     }
     vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]);
-    vi.spyOn(featuredReads, "listVisibleFeatured").mockResolvedValue([{
-      id: 1, title: "Configured photo", body: null, url: null, imageUrl, imageAlt: "Squad photo",
-    }]);
-    const bindings = { ...env, ADMIN_DB: drizzle.mock(), FEATURED_IMAGE_HOSTS: "images.unsplash.com" } as Env;
+    vi.spyOn(featuredReads, "listVisibleFeatured").mockResolvedValue([
+      {
+        id: 1,
+        title: "Configured photo",
+        body: null,
+        url: null,
+        imageUrl,
+        imageAlt: "Squad photo",
+      },
+    ]);
+    const bindings = {
+      ...env,
+      ADMIN_DB: drizzle.mock(),
+      FEATURED_IMAGE_HOSTS: "images.unsplash.com",
+    } as Env;
     const res = await app.request("/", {}, bindings);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain(`src="${imageUrl}" alt="Squad photo"`);
-    expect(res.headers.get("content-security-policy")).toContain("img-src 'self' https://cdn.discordapp.com https://images.unsplash.com");
+    expect(res.headers.get("content-security-policy")).toContain(
+      "img-src 'self' https://cdn.discordapp.com https://images.unsplash.com",
+    );
     const unconfigured = await app.request("/", {}, { ...bindings, FEATURED_IMAGE_HOSTS: "" });
     expect(await unconfigured.text()).not.toContain(imageUrl);
   });
@@ -115,7 +137,10 @@ describe("featured homepage fallback (local fixtures)", () => {
   it.each([
     ["/local.jpg", "/local.jpg"],
     ["https://next.example.test/photo.jpg?a=1#frag", "/photo.jpg?a=1#frag"],
-    ["https://cdn.discordapp.com/attachments/photo.jpg", "https://cdn.discordapp.com/attachments/photo.jpg"],
+    [
+      "https://cdn.discordapp.com/attachments/photo.jpg",
+      "https://cdn.discordapp.com/attachments/photo.jpg",
+    ],
     ["https://images.example.test/photo.jpg", null],
     ["https://next.example.test//evil.test/photo.jpg", null],
   ])("renders a 'self'-safe src for %s", (url, src) => {
@@ -125,15 +150,22 @@ describe("featured homepage fallback (local fixtures)", () => {
 
 describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Postgres)", () => {
   let fixture: MemberDataFixture;
-  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 2 }); });
-  beforeEach(async () => { await fixture.db.delete(featuredContents); });
-  afterAll(async () => { await fixture?.dispose(); });
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 2 });
+  });
+  beforeEach(async () => {
+    await fixture.db.delete(featuredContents);
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
-  const home = () => app.request("/", {}, {
-    ...env,
-    ADMIN_DB: fixture.db,
-    SESSION_STORE: createMemorySessionStore(),
-  } as EnvWithAdminDb);
+  const home = () =>
+    app.request("/", {}, {
+      ...env,
+      ADMIN_DB: fixture.db,
+      SESSION_STORE: createMemorySessionStore(),
+    } as EnvWithAdminDb);
 
   it("shows inside/open windows, hides drafts, future, past and exact-end rows", async () => {
     await fixture.db.insert(featuredContents).values([
@@ -148,7 +180,11 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       { title: "End exact", isPublished: true, startsAt: before, endsAt: now },
     ]);
     expect((await listVisibleFeatured(fixture.db, now)).map((row) => row.title)).toEqual([
-      "Inside", "Open", "Start exact", "No start", "No end",
+      "Inside",
+      "Open",
+      "Start exact",
+      "No start",
+      "No end",
     ]);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(now);
@@ -156,20 +192,27 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       const res = await home();
       expect(res.status).toBe(200);
       const html = await res.text();
-      for (const title of ["Inside", "Open", "Start exact", "No start", "No end"]) expect(html).toContain(`<h3>${title}</h3>`);
-      for (const title of ["Draft", "Future", "Past", "End exact"]) expect(html).not.toContain(`<h3>${title}</h3>`);
+      for (const title of ["Inside", "Open", "Start exact", "No start", "No end"])
+        expect(html).toContain(`<h3>${title}</h3>`);
+      for (const title of ["Draft", "Future", "Past", "End exact"])
+        expect(html).not.toContain(`<h3>${title}</h3>`);
       expect(html.match(/data-testid="featured-item"/g)).toHaveLength(5);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("orders by position then id and does not impose the upcoming-events cap", async () => {
-    const rows = await fixture.db.insert(featuredContents).values([
-      { title: "Last", isPublished: true, position: 9 },
-      { title: "Tie first", isPublished: true, position: 1 },
-      { title: "Tie second", isPublished: true, position: 1 },
-      { title: "First", isPublished: true, position: -1 },
-      { title: "Middle", isPublished: true, position: 4 },
-    ]).returning();
+    const rows = await fixture.db
+      .insert(featuredContents)
+      .values([
+        { title: "Last", isPublished: true, position: 9 },
+        { title: "Tie first", isPublished: true, position: 1 },
+        { title: "Tie second", isPublished: true, position: 1 },
+        { title: "First", isPublished: true, position: -1 },
+        { title: "Middle", isPublished: true, position: 4 },
+      ])
+      .returning();
     const visible = await listVisibleFeatured(fixture.db, now);
     expect(visible.map((row) => row.id)).toEqual([3, 1, 2, 4, 0].map((index) => rows[index]!.id));
     const html = await (await home()).text();
@@ -182,8 +225,12 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
   it("renders escaped titles/bodies, title-only links and accessible lazy images", async () => {
     await fixture.db.insert(featuredContents).values([
       {
-        title: "Squad <night>", body: '<script>alert("body")</script>', isPublished: true,
-        url: "https://example.test/squad?a=1&b=2", imageUrl: "/squad.jpg", imageAlt: "  Squad & friends  ",
+        title: "Squad <night>",
+        body: '<script>alert("body")</script>',
+        isPublished: true,
+        url: "https://example.test/squad?a=1&b=2",
+        imageUrl: "/squad.jpg",
+        imageAlt: "  Squad & friends  ",
       },
       { title: "Title fallback", isPublished: true, imageUrl: "/fallback.jpg", imageAlt: null },
       { title: "Blank fallback", isPublished: true, imageUrl: "/blank.jpg", imageAlt: "   " },
@@ -193,23 +240,31 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     const html = await res.text();
     expect(html).toContain('<h2 id="featured-heading">From the community team</h2>');
     expect(html).toContain('aria-labelledby="featured-heading"');
-    expect(html).toContain('<h3><a href="https://example.test/squad?a=1&amp;b=2">Squad &lt;night&gt;</a></h3>');
+    expect(html).toContain(
+      '<h3><a href="https://example.test/squad?a=1&amp;b=2">Squad &lt;night&gt;</a></h3>',
+    );
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toMatch(/<script\b|\sstyle=|\son\w+=/i);
     expect(html).toContain('alt="Squad &amp; friends"');
     expect(html).toContain('alt="Title fallback"');
     expect(html).toContain('alt="Blank fallback"');
-    const featuredHtml = html.match(/<section\b[^>]*data-testid="featured-content"[^>]*>[\s\S]*?<\/section>/)?.[0];
+    const featuredHtml = html.match(
+      /<section\b[^>]*data-testid="featured-content"[^>]*>[\s\S]*?<\/section>/,
+    )?.[0];
     expect(featuredHtml).toBeDefined();
     expect(featuredHtml!.match(/loading="lazy"/g)).toHaveLength(3);
     expect(featuredHtml!.match(/width="640" height="360"/g)).toHaveLength(3);
     expect(featuredHtml!.match(/decoding="async" referrerpolicy="no-referrer"/g)).toHaveLength(3);
     expect(featuredHtml).not.toMatch(/<a[^>]*><img/);
-    expect(res.headers.get("content-security-policy")).toContain("img-src 'self' https://cdn.discordapp.com");
+    expect(res.headers.get("content-security-policy")).toContain(
+      "img-src 'self' https://cdn.discordapp.com",
+    );
   });
 
   it("keeps homepage 200 and cancels a lock-blocked SELECT in Postgres", async () => {
-    await fixture.db.insert(featuredContents).values({ title: "Locked feature", isPublished: true });
+    await fixture.db
+      .insert(featuredContents)
+      .values({ title: "Locked feature", isPublished: true });
     await fixture.client.begin(async (tx) => {
       await tx`lock table featured_contents in access exclusive mode`;
       const start = Date.now();
@@ -218,48 +273,100 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       expect(Date.now() - start).toBeLessThan(2000);
       expect(await res.text()).not.toContain('data-testid="featured-content"');
       await new Promise((resolve) => setTimeout(resolve, 300));
-      const waiting = await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%featured_contents%' and pid <> pg_backend_pid()`;
+      const waiting =
+        await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%featured_contents%' and pid <> pg_backend_pid()`;
       expect(waiting[0]!.n).toBe(0);
     });
     // Transaction-scoped settings do not leak; subsequent reads still work.
-    expect((await listVisibleFeatured(fixture.db)).map((row) => row.title)).toEqual(["Locked feature"]);
+    expect((await listVisibleFeatured(fixture.db)).map((row) => row.title)).toEqual([
+      "Locked feature",
+    ]);
   });
 
   it("publishes CSP-allowed photos through admin create/edit, rejects blocked hosts, and suppresses old blocked images", async () => {
     const store = createMemorySessionStore();
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "featured-mod", username: "moderator",
-      avatar: null, member: true, moderator: true, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId: "featured-mod",
+      username: "moderator",
+      avatar: null,
+      member: true,
+      moderator: true,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    const cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
+    const cookie = (
+      await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
     const admin = adminApp({ sessionStore: store, db: fixture.db });
-    const publish = (path: string, title: string, imageUrl: string) => admin.request(path, {
-      method: "POST",
-      headers: { cookie, origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ title, image_url: imageUrl, image_alt: "Squad photo", is_published: "on" }),
-    }, { ...env, ADMIN_DB: fixture.db } as EnvWithAdminDb);
-    for (const imageUrl of ["https://images.example.test/photo.jpg", "http://cdn.discordapp.com/photo.jpg"]) {
+    const publish = (path: string, title: string, imageUrl: string) =>
+      admin.request(
+        path,
+        {
+          method: "POST",
+          headers: {
+            cookie,
+            origin: env.APP_URL,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            title,
+            image_url: imageUrl,
+            image_alt: "Squad photo",
+            is_published: "on",
+          }),
+        },
+        { ...env, ADMIN_DB: fixture.db } as EnvWithAdminDb,
+      );
+    for (const imageUrl of [
+      "https://images.example.test/photo.jpg",
+      "http://cdn.discordapp.com/photo.jpg",
+    ]) {
       const rejected = await publish("/featured", "Rejected photo", imageUrl);
       expect(rejected.status).toBe(422);
       expect(await rejected.text()).toContain("HTTPS on an approved public host");
     }
     expect(await listVisibleFeatured(fixture.db)).toEqual([]);
-    const accepted = await publish("/featured", "Published photo", "https://cdn.discordapp.com/attachments/photo.jpg");
+    const accepted = await publish(
+      "/featured",
+      "Published photo",
+      "https://cdn.discordapp.com/attachments/photo.jpg",
+    );
     expect(accepted.status).toBe(303);
     const [row] = await listVisibleFeatured(fixture.db);
     expect(row!.imageUrl).toBe("https://cdn.discordapp.com/attachments/photo.jpg");
-    expect(await (await home()).text()).toContain('src="https://cdn.discordapp.com/attachments/photo.jpg" alt="Squad photo"');
-    const rejectedEdit = await publish(`/featured/${row!.id}`, "Bad edit", "https://images.example.test/photo.jpg");
+    expect(await (await home()).text()).toContain(
+      'src="https://cdn.discordapp.com/attachments/photo.jpg" alt="Squad photo"',
+    );
+    const rejectedEdit = await publish(
+      `/featured/${row!.id}`,
+      "Bad edit",
+      "https://images.example.test/photo.jpg",
+    );
     expect(rejectedEdit.status).toBe(422);
-    const rejectedLocal = await publish(`/featured/${row!.id}`, "Local photo", `${env.APP_URL}/local.jpg`);
+    const rejectedLocal = await publish(
+      `/featured/${row!.id}`,
+      "Local photo",
+      `${env.APP_URL}/local.jpg`,
+    );
     expect(rejectedLocal.status).toBe(422); // New URLs need an approved public host, even on this site.
-    const edited = await publish(`/featured/${row!.id}`, "Edited photo", "https://cdn.discordapp.com/attachments/edited.jpg");
+    const edited = await publish(
+      `/featured/${row!.id}`,
+      "Edited photo",
+      "https://cdn.discordapp.com/attachments/edited.jpg",
+    );
     expect(edited.status).toBe(303);
     await fixture.db.insert(featuredContents).values([
-      { title: "Old imported photo", imageUrl: "https://images.example.test/old.jpg", isPublished: true },
+      {
+        title: "Old imported photo",
+        imageUrl: "https://images.example.test/old.jpg",
+        isPublished: true,
+      },
       { title: "Legacy local photo", imageUrl: `${env.APP_URL}/local.jpg`, isPublished: true },
     ]);
     const res = await home();
@@ -268,7 +375,9 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     expect(html).not.toContain(`src="${env.APP_URL}/local.jpg"`);
     expect(html).toContain("Old imported photo");
     expect(html).not.toContain("https://images.example.test/old.jpg");
-    expect(res.headers.get("content-security-policy")).toContain("img-src 'self' https://cdn.discordapp.com");
+    expect(res.headers.get("content-security-policy")).toContain(
+      "img-src 'self' https://cdn.discordapp.com",
+    );
   });
 
   it("omits an empty published section", async () => {

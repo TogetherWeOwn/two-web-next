@@ -83,7 +83,9 @@ stop; do not substitute another credential or database.
 export DATABASE_URL="postgres://agent_test@agent-testdb:5432/two_web_next"
 npm run db:migrate    # apply the tracked migrations to this test database
 npm run db:check      # validate migration history
-npm run check         # types + config drift/selftest + Vitest (including SQL suites)
+npm run format        # formatting only; no lint fixes or import reordering
+npm run lint          # read-only Biome lint + format gate
+npm run check         # lint + format + types + config drift/selftest + Vitest (including SQL suites)
 ```
 
 For schema changes, `npm run db:generate` generates a migration; use the web
@@ -109,9 +111,9 @@ Apply migrations to that test database first. Coverage includes every
 area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`) live in
 `vitest.config.ts`. The baseline uses the full suite with the test database;
 without it, skipped live suites may put coverage below the floors. CI's
-required `check` job runs the configuration drift check, typecheck and the
-coverage gate against its Postgres service, writes a job summary with the ten
-least-covered files, and uploads HTML, LCOV and JSON reports for 14 days,
+required `check` job runs the configuration drift check, Biome lint/format gate,
+typecheck and the coverage gate against its Postgres service, writes a job summary
+with the ten least-covered files, and uploads HTML, LCOV and JSON reports for 14 days,
 including on failure.
 
 When intentionally raising a floor, re-measure with the same locked provider

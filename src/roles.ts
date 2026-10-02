@@ -37,7 +37,9 @@ export async function fetchMemberRoles(
     console.warn("moderator recompute lookup returned non-JSON");
     return null;
   }
-  const roles = Array.isArray(body.roles) ? body.roles.filter((r): r is string => typeof r === "string") : [];
+  const roles = Array.isArray(body.roles)
+    ? body.roles.filter((r): r is string => typeof r === "string")
+    : [];
   return { roles, joinedAt: typeof body.joined_at === "string" ? body.joined_at : null };
 }
 

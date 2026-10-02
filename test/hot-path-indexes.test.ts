@@ -21,9 +21,13 @@ it("declares the five legacy-named indexes in the Drizzle schema", () => {
   for (const { name, table, columns } of expectedIndexes) {
     const declared = getTableConfig(table).indexes.find((index) => index.config.name === name);
     expect(declared, name).toBeDefined();
-    expect(declared!.config.columns.map((column) => "name" in column ? column.name : null)).toEqual(columns);
+    expect(
+      declared!.config.columns.map((column) => ("name" in column ? column.name : null)),
+    ).toEqual(columns);
     if (name === "rsvps_unsynced_event_id_index") {
-      expect(new PgDialect().sqlToQuery(declared!.config.where!).sql).toMatch(/"synced_to_discord_at" is null/i);
+      expect(new PgDialect().sqlToQuery(declared!.config.where!).sql).toMatch(
+        /"synced_to_discord_at" is null/i,
+      );
     } else {
       expect(declared!.config.where).toBeUndefined();
     }
@@ -73,7 +77,9 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
     await client`analyze rsvps`;
     await client`analyze join_attempts`;
   });
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   it("creates all five exact index definitions on a fresh migrated schema", async () => {
     const indexes = await client<{ tablename: string; indexname: string; indexdef: string }[]>`
@@ -92,14 +98,20 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
   });
 
   it("applies twice over pre-existing legacy indexes without replacing them or losing rows", async () => {
-    const migration = await readFile(fileURLToPath(new URL("../drizzle/1013_hot-path-indexes.sql", import.meta.url).href), "utf8");
+    const migration = await readFile(
+      fileURLToPath(new URL("../drizzle/1013_hot-path-indexes.sql", import.meta.url).href),
+      "utf8",
+    );
     await client.begin(async (tx) => {
       // Recreate the independent legacy definitions before applying the new migration.
       // These are only the fixture's indexes, not anything in public or another test schema.
       for (const { name, table, columns } of expectedIndexes) {
         await tx.unsafe(`drop index "${name}"`);
-        const predicate = name === "rsvps_unsynced_event_id_index" ? " WHERE synced_to_discord_at IS NULL" : "";
-        await tx.unsafe(`create index "${name}" on "${getTableConfig(table).name}" (${columns.join(", ")})${predicate}`);
+        const predicate =
+          name === "rsvps_unsynced_event_id_index" ? " WHERE synced_to_discord_at IS NULL" : "";
+        await tx.unsafe(
+          `create index "${name}" on "${getTableConfig(table).name}" (${columns.join(", ")})${predicate}`,
+        );
       }
       const snapshot = () => tx`
         select c.relname, c.oid, i.indexdef from pg_class c
@@ -115,7 +127,8 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
       const counts = await rowCounts();
       expect(before).toHaveLength(5);
       for (let pass = 0; pass < 2; pass++) {
-        for (const statement of migration.split("--> statement-breakpoint")) await tx.unsafe(statement);
+        for (const statement of migration.split("--> statement-breakpoint"))
+          await tx.unsafe(statement);
         expect(await snapshot()).toEqual(before);
         expect(await rowCounts()).toEqual(counts);
       }
@@ -133,64 +146,109 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path indexes (agent-testdb)", ()
   }
 
   it("uses the composite RSVP index for going count and batched page counts", async () => {
-    expect(await plan("select count(*) from rsvps where event_id = $1 and status = 'going'", [eventId]))
-      .toContain("rsvps_event_id_status_index");
-    expect(await plan("select event_id, count(*) from rsvps where event_id in ($1, $2) and status = 'going' group by event_id", [eventId, 1]))
-      .toContain("rsvps_event_id_status_index");
+    expect(
+      await plan("select count(*) from rsvps where event_id = $1 and status = 'going'", [eventId]),
+    ).toContain("rsvps_event_id_status_index");
+    expect(
+      await plan(
+        "select event_id, count(*) from rsvps where event_id in ($1, $2) and status = 'going' group by event_id",
+        [eventId, 1],
+      ),
+    ).toContain("rsvps_event_id_status_index");
   });
 
   it("uses the composite RSVP index for the FIFO head and locked waitlist", async () => {
     for (const limit of ["limit 5", ""]) {
-      expect(await plan(`select id from rsvps where event_id = $1 and status = 'waitlisted'
-        order by created_at, coalesce(legacy_id, id), id ${limit} for update`, [eventId]))
-        .toContain("rsvps_event_id_status_index");
+      expect(
+        await plan(
+          `select id from rsvps where event_id = $1 and status = 'waitlisted'
+        order by created_at, coalesce(legacy_id, id), id ${limit} for update`,
+          [eventId],
+        ),
+      ).toContain("rsvps_event_id_status_index");
     }
   });
 
   it("uses the composite RSVP index for Next's batched waitlist-position window", async () => {
-    expect(await plan(`select event_id, position from (
+    expect(
+      await plan(
+        `select event_id, position from (
       select event_id, user_id, row_number() over (
         partition by event_id order by created_at, coalesce(legacy_id, id), id)::int as position
       from rsvps where event_id in ($1, $2) and status = 'waitlisted'
-      ) line where user_id = $3`, [eventId, 1, "member1"]))
-      .toContain("rsvps_event_id_status_index");
-    expect(await plan(`select count(*) from rsvps where event_id = $1 and status = 'waitlisted'
-      and (created_at < $2 or (created_at = $2 and id <= $3))`, [eventId, NOW, 1]))
-      .toContain("rsvps_event_id_status_index");
+      ) line where user_id = $3`,
+        [eventId, 1, "member1"],
+      ),
+    ).toContain("rsvps_event_id_status_index");
+    expect(
+      await plan(
+        `select count(*) from rsvps where event_id = $1 and status = 'waitlisted'
+      and (created_at < $2 or (created_at = $2 and id <= $3))`,
+        [eventId, NOW, 1],
+      ),
+    ).toContain("rsvps_event_id_status_index");
   });
 
   it("uses the partial RSVP index for the legacy unsynced event probe", async () => {
-    expect(await plan("select * from rsvps where event_id = $1 and synced_to_discord_at IS NULL", [eventId]))
-      .toContain("rsvps_unsynced_event_id_index");
+    expect(
+      await plan("select * from rsvps where event_id = $1 and synced_to_discord_at IS NULL", [
+        eventId,
+      ]),
+    ).toContain("rsvps_unsynced_event_id_index");
   });
 
   it("uses ends_at for Next's unlimited upcoming calendar and the legacy bounded listing", async () => {
     for (const limit of ["", "limit 20"]) {
-      expect(await plan(`select * from events where ends_at >= $1 and status <> 'draft' order by starts_at ${limit}`, [NOW]))
-        .toContain("events_ends_at_index");
+      expect(
+        await plan(
+          `select * from events where ends_at >= $1 and status <> 'draft' order by starts_at ${limit}`,
+          [NOW],
+        ),
+      ).toContain("events_ends_at_index");
     }
   });
 
   it("uses starts_at/id for the calendar past drawer and paginated archive", async () => {
-    expect(await plan("select * from events where ends_at < $1 and status <> 'draft' order by starts_at desc, id desc limit 20", [NOW]))
-      .toContain("events_starts_at_id_index");
-    expect(await plan(`select * from events where status = 'past' or (status = 'published' and ends_at < $1)
-      order by starts_at desc, id desc limit 21 offset 20`, [NOW]))
-      .toContain("events_starts_at_id_index");
+    expect(
+      await plan(
+        "select * from events where ends_at < $1 and status <> 'draft' order by starts_at desc, id desc limit 20",
+        [NOW],
+      ),
+    ).toContain("events_starts_at_id_index");
+    expect(
+      await plan(
+        `select * from events where status = 'past' or (status = 'published' and ends_at < $1)
+      order by starts_at desc, id desc limit 21 offset 20`,
+        [NOW],
+      ),
+    ).toContain("events_starts_at_id_index");
   });
 
   it("uses starts_at/id for both directions of the legacy neighbour shape", async () => {
-    for (const [comparison, direction] of [[">", "asc"], ["<", "desc"]]) {
-      expect(await plan(`select id from events where status <> 'draft' and status <> 'cancelled'
+    for (const [comparison, direction] of [
+      [">", "asc"],
+      ["<", "desc"],
+    ]) {
+      expect(
+        await plan(
+          `select id from events where status <> 'draft' and status <> 'cancelled'
         and (starts_at ${comparison} $1 or (starts_at = $1 and id ${comparison} $2))
-        order by starts_at ${direction}, id ${direction} limit 1`, [NOW, eventId]))
-        .toContain("events_starts_at_id_index");
+        order by starts_at ${direction}, id ${direction} limit 1`,
+          [NOW, eventId],
+        ),
+      ).toContain("events_starts_at_id_index");
     }
   });
 
   it("uses the outcome index for Next's retained funnel group-by", async () => {
-    const cutoff = new Date(Date.parse(NOW) - JOIN_ATTEMPT_RETENTION_DAYS * 86_400_000).toISOString();
-    expect(await plan("select outcome, count(*) from join_attempts where created_at >= $1 group by outcome", [cutoff]))
-      .toContain("join_attempts_outcome_index");
+    const cutoff = new Date(
+      Date.parse(NOW) - JOIN_ATTEMPT_RETENTION_DAYS * 86_400_000,
+    ).toISOString();
+    expect(
+      await plan(
+        "select outcome, count(*) from join_attempts where created_at >= $1 group by outcome",
+        [cutoff],
+      ),
+    ).toContain("join_attempts_outcome_index");
   });
 });
