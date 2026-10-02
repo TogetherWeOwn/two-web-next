@@ -8,9 +8,20 @@ function fixture() {
   const limiter = new AlertRateLimit(ALERT_WINDOW_MS, () => t);
   const lines: string[] = [];
   const emit = (route: string, err: unknown = new BoomError("private SQL values\nsecond line")) =>
-    alertRequestError(err, { method: "GET", route }, { limiter, sink: (line) => void lines.push(line) });
+    alertRequestError(
+      err,
+      { method: "GET", route },
+      { limiter, sink: (line) => void lines.push(line) },
+    );
   const size = () => (limiter as unknown as { last: Map<string, number> }).last.size;
-  return { emit, lines, size, advance: (ms: number) => { t += ms; } };
+  return {
+    emit,
+    lines,
+    size,
+    advance: (ms: number) => {
+      t += ms;
+    },
+  };
 }
 
 describe("alert capacity mute", () => {

@@ -2,7 +2,13 @@
 // EventCapacityFloorTest.php (form floor) and the fold-carrier rule (TOG-6805)
 // as pure functions against src/admin/validation.ts. Hermetic — no database.
 import { describe, expect, it } from "vitest";
-import { ValidationError, nextStatus, parseEventForm, utcToWall, wallToUtc } from "../src/admin/validation";
+import {
+  ValidationError,
+  nextStatus,
+  parseEventForm,
+  utcToWall,
+  wallToUtc,
+} from "../src/admin/validation";
 
 // Europe/London 2026: BST runs 2026-03-29 01:00Z → 2026-10-25 01:00Z.
 const errors = (fn: () => unknown): Record<string, string> => {
@@ -17,8 +23,12 @@ const errors = (fn: () => unknown): Record<string, string> => {
 
 describe("wall time → UTC (legacy EventTimezoneTest)", () => {
   it("stores the correct UTC instant for a local wall time on both sides of a DST boundary", () => {
-    expect(wallToUtc("2026-07-15 20:00", "Europe/London").toISOString()).toBe("2026-07-15T19:00:00.000Z"); // BST
-    expect(wallToUtc("2026-01-15 20:00", "Europe/London").toISOString()).toBe("2026-01-15T20:00:00.000Z"); // GMT
+    expect(wallToUtc("2026-07-15 20:00", "Europe/London").toISOString()).toBe(
+      "2026-07-15T19:00:00.000Z",
+    ); // BST
+    expect(wallToUtc("2026-01-15 20:00", "Europe/London").toISOString()).toBe(
+      "2026-01-15T20:00:00.000Z",
+    ); // GMT
   });
 
   it("renders back as 20:00 in the event's own zone on both sides of a DST boundary", () => {
@@ -54,13 +64,19 @@ describe("wall time → UTC (legacy EventTimezoneTest)", () => {
   });
 
   it("accepts the gap shoulders", () => {
-    expect(wallToUtc("2026-03-29 00:59", "Europe/London").toISOString()).toBe("2026-03-29T00:59:00.000Z");
-    expect(wallToUtc("2026-03-29 02:00", "Europe/London").toISOString()).toBe("2026-03-29T01:00:00.000Z");
+    expect(wallToUtc("2026-03-29 00:59", "Europe/London").toISOString()).toBe(
+      "2026-03-29T00:59:00.000Z",
+    );
+    expect(wallToUtc("2026-03-29 02:00", "Europe/London").toISOString()).toBe(
+      "2026-03-29T01:00:00.000Z",
+    );
   });
 
   it("resolves an autumn fold to the second (GMT) occurrence like legacy", () => {
     // Legacy EventTimezoneTest pins 2026-10-25 01:30 -> 01:30:00 UTC (TOG-11669).
-    expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T01:30:00.000Z");
+    expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe(
+      "2026-10-25T01:30:00.000Z",
+    );
   });
 
   it("rejects impossible calendar dates instead of rolling them over", () => {
@@ -106,17 +122,26 @@ describe("event form floor (legacy EventCapacityFloorTest, form rules)", () => {
           timezone: "Europe/London",
         }),
       ),
-    ).toEqual({ starts_at: "Not a date and time (want YYYY-MM-DD HH:mm): 2026-07-15T20:00:00+02:00" });
+    ).toEqual({
+      starts_at: "Not a date and time (want YYYY-MM-DD HH:mm): 2026-07-15T20:00:00+02:00",
+    });
   });
 
   it("keeps the exact stored instant for unchanged fold-ambiguous wall text (TOG-6805 carrier)", () => {
     const wall = "2026-10-25 01:30";
     const form = (carrier?: string) =>
-      parseEventForm({ title: "T", starts_at: wall, ends_at: "2026-10-25 03:00", timezone: "Europe/London" }, carrier === undefined ? undefined : { startsAtUtc: carrier });
+      parseEventForm(
+        { title: "T", starts_at: wall, ends_at: "2026-10-25 03:00", timezone: "Europe/London" },
+        carrier === undefined ? undefined : { startsAtUtc: carrier },
+      );
     // The carrier rides in the edit page's hidden *_utc field, and either side of
     // the fold survives an unchanged resubmit.
-    expect(form("2026-10-25T01:30:00.000Z").startsAtUtc.toISOString()).toBe("2026-10-25T01:30:00.000Z"); // GMT side
-    expect(form("2026-10-25T00:30:00.000Z").startsAtUtc.toISOString()).toBe("2026-10-25T00:30:00.000Z"); // BST side
+    expect(form("2026-10-25T01:30:00.000Z").startsAtUtc.toISOString()).toBe(
+      "2026-10-25T01:30:00.000Z",
+    ); // GMT side
+    expect(form("2026-10-25T00:30:00.000Z").startsAtUtc.toISOString()).toBe(
+      "2026-10-25T00:30:00.000Z",
+    ); // BST side
     // Without a carrier (create) the fresh parse takes the second, GMT occurrence.
     expect(form().startsAtUtc.toISOString()).toBe("2026-10-25T01:30:00.000Z");
   });
@@ -130,8 +155,12 @@ describe("status transition guard (legacy EventService::transitionTo)", () => {
   });
 
   it("refuses re-publishing and archiving a published event", () => {
-    expect(errors(() => nextStatus("published", "published"))).toMatchObject({ status: "Only a draft can be published." });
-    expect(errors(() => nextStatus("past", "published"))).toMatchObject({ status: "Only a draft can be published." });
+    expect(errors(() => nextStatus("published", "published"))).toMatchObject({
+      status: "Only a draft can be published.",
+    });
+    expect(errors(() => nextStatus("past", "published"))).toMatchObject({
+      status: "Only a draft can be published.",
+    });
   });
 
   it("refuses cancelling a past event and keeps cancelled terminal", () => {

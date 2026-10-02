@@ -8,7 +8,21 @@ const BATCH_SIZE = 500;
 const tables = [
   {
     name: "featured_contents",
-    columns: ["legacy_id", "title", "body", "url", "image_url", "image_alt", "is_published", "position", "starts_at", "ends_at", "created_by", "created_at", "updated_at"],
+    columns: [
+      "legacy_id",
+      "title",
+      "body",
+      "url",
+      "image_url",
+      "image_alt",
+      "is_published",
+      "position",
+      "starts_at",
+      "ends_at",
+      "created_by",
+      "created_at",
+      "updated_at",
+    ],
     timestamps: ["starts_at", "ends_at", "created_at", "updated_at"],
     clock: "created_at",
     prune: false,
@@ -39,26 +53,30 @@ function qualified(sql, schema, table) {
 }
 
 function sourceColumns(sql, table) {
-  return table.columns.map((column) => {
-    if (column === "legacy_id") return sql`l.id::text as legacy_id`;
-    if (column === "created_by") return sql`u.discord_id as created_by`;
-    const value = column === "updated_at"
-      ? sql`coalesce(l.updated_at, l.created_at)`
-      : sql`l.${sql(column)}`;
-    // Laravel timestamps have no zone and are UTC. Text preserves microseconds.
-    // Both sessions pin ISO, YMD DateStyle below, so the text round-trip is
-    // independent of server or role DateStyle defaults.
-    return table.timestamps.includes(column)
-      ? sql`(${value} at time zone 'UTC')::text as ${sql(column)}`
-      : sql`${value} as ${sql(column)}`;
-  }).reduce((a, b) => sql`${a}, ${b}`);
+  return table.columns
+    .map((column) => {
+      if (column === "legacy_id") return sql`l.id::text as legacy_id`;
+      if (column === "created_by") return sql`u.discord_id as created_by`;
+      const value =
+        column === "updated_at" ? sql`coalesce(l.updated_at, l.created_at)` : sql`l.${sql(column)}`;
+      // Laravel timestamps have no zone and are UTC. Text preserves microseconds.
+      // Both sessions pin ISO, YMD DateStyle below, so the text round-trip is
+      // independent of server or role DateStyle defaults.
+      return table.timestamps.includes(column)
+        ? sql`(${value} at time zone 'UTC')::text as ${sql(column)}`
+        : sql`${value} as ${sql(column)}`;
+    })
+    .reduce((a, b) => sql`${a}, ${b}`);
 }
 
 function targetColumns(sql, table) {
-  return table.columns.map((column) => table.timestamps.includes(column)
-    ? sql`${sql(column)}::text as ${sql(column)}`
-    : sql`${sql(column)}`,
-  ).reduce((a, b) => sql`${a}, ${b}`);
+  return table.columns
+    .map((column) =>
+      table.timestamps.includes(column)
+        ? sql`${sql(column)}::text as ${sql(column)}`
+        : sql`${sql(column)}`,
+    )
+    .reduce((a, b) => sql`${a}, ${b}`);
 }
 
 // Advisory locks are database-local, available to read-only roles and tied to
@@ -70,13 +88,22 @@ function targetColumns(sql, table) {
 async function assertSeparateDatabase(source, destination) {
   const key = randomBytes(8).readBigInt64BE().toString();
   const [held] = await source`select pg_try_advisory_xact_lock(${key}::bigint) as acquired`;
-  if (held?.acquired !== true) throw new Error("Could not establish source identity probe; retry import");
+  if (held?.acquired !== true)
+    throw new Error("Could not establish source identity probe; retry import");
   const [probe] = await destination`select pg_try_advisory_xact_lock(${key}::bigint) as acquired`;
-  if (probe?.acquired !== true) throw new Error("Source and target resolve to the same database and schema");
+  if (probe?.acquired !== true)
+    throw new Error("Source and target resolve to the same database and schema");
 }
 
 /** Pin UTC, UTF8 and a deterministic DateStyle inside each transaction. Dry-run performs no DML or sequence writes. */
-export async function importContentFunnel({ legacy, target, legacySchema = "public", targetSchema = "public", dryRun = true, now = new Date() }) {
+export async function importContentFunnel({
+  legacy,
+  target,
+  legacySchema = "public",
+  targetSchema = "public",
+  dryRun = true,
+  now = new Date(),
+}) {
   schemaName(legacySchema);
   schemaName(targetSchema);
   const cutoff = new Date(now.getTime() - RETENTION_MS).toISOString();
@@ -105,7 +132,8 @@ export async function importContentFunnel({ legacy, target, legacySchema = "publ
       if (!dryRun) {
         // Serialize importers AND native writes while counts/upserts are computed.
         // All three tables commit or roll back together; only the target is locked.
-        const names = tables.map((t) => qualified(destination, targetSchema, t.name))
+        const names = tables
+          .map((t) => qualified(destination, targetSchema, t.name))
           .reduce((a, b) => destination`${a}, ${b}`);
         await destination`lock table ${names} in share row exclusive mode`;
       }
@@ -122,13 +150,21 @@ export async function importContentFunnel({ legacy, target, legacySchema = "publ
             count(*) filter (where ${table.prune ? source`${clock} < ${cutoffUtc}` : source`false`})::int as skipped_old
           from ${sourceTable} l`;
         const summary = {
-          table: table.name, dry_run: dryRun, cutoff,
-          ...counts, eligible: counts.total - counts.skipped_missing_timestamp - counts.skipped_old,
-          would_insert: 0, would_update: 0, unchanged: 0, inserted: 0, updated: 0,
+          table: table.name,
+          dry_run: dryRun,
+          cutoff,
+          ...counts,
+          eligible: counts.total - counts.skipped_missing_timestamp - counts.skipped_old,
+          would_insert: 0,
+          would_update: 0,
+          unchanged: 0,
+          inserted: 0,
+          updated: 0,
         };
-        const creator = table.name === "featured_contents"
-          ? source`left join ${qualified(source, legacySchema, "users")} u on u.id = l.created_by`
-          : source``;
+        const creator =
+          table.name === "featured_contents"
+            ? source`left join ${qualified(source, legacySchema, "users")} u on u.id = l.created_by`
+            : source``;
         const cursor = source`
           select ${sourceColumns(source, table)} from ${sourceTable} l ${creator}
           where ${clock} is not null and ${window} order by l.id
@@ -150,22 +186,29 @@ export async function importContentFunnel({ legacy, target, legacySchema = "publ
             changed.push(row);
           }
           if (dryRun || changed.length === 0) continue;
-          const updates = table.columns.filter((column) => column !== "legacy_id")
+          const updates = table.columns
+            .filter((column) => column !== "legacy_id")
             .map((column) => destination`${destination(column)} = excluded.${destination(column)}`)
             .reduce((a, b) => destination`${a}, ${b}`);
           // Native IDs/sequences are never copied or reset. Multiple NULL keys
           // remain valid for native rows. https://www.postgresql.org/docs/17/sql-insert.html#SQL-ON-CONFLICT
-          const columns = table.columns.map((column) => destination`${destination(column)}`)
+          const columns = table.columns
+            .map((column) => destination`${destination(column)}`)
             .reduce((a, b) => destination`${a}, ${b}`);
-          const values = changed.map((row) => {
-            const fields = table.columns.map((column) => table.timestamps.includes(column)
-              // Explicit text -> timestamp cast avoids the driver's Date serializer,
-              // which would silently truncate historical microseconds to milliseconds.
-              ? destination`${destination.typed(row[column], 25)}::timestamptz`
-              : destination`${row[column]}`,
-            ).reduce((a, b) => destination`${a}, ${b}`);
-            return destination`(${fields})`;
-          }).reduce((a, b) => destination`${a}, ${b}`);
+          const values = changed
+            .map((row) => {
+              const fields = table.columns
+                .map((column) =>
+                  table.timestamps.includes(column)
+                    ? // Explicit text -> timestamp cast avoids the driver's Date serializer,
+                      // which would silently truncate historical microseconds to milliseconds.
+                      destination`${destination.typed(row[column], 25)}::timestamptz`
+                    : destination`${row[column]}`,
+                )
+                .reduce((a, b) => destination`${a}, ${b}`);
+              return destination`(${fields})`;
+            })
+            .reduce((a, b) => destination`${a}, ${b}`);
           await destination`
             insert into ${targetTable} (${columns}) values ${values}
             on conflict (legacy_id) do update set ${updates}`;
@@ -192,8 +235,17 @@ export function parseArgs(args) {
 export function connectionSettings(env, dryRun) {
   const parse = (key) => {
     let url;
-    try { url = new URL(env[key]); } catch { throw new Error(`${key} must be a Postgres URL`); }
-    if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname || !url.username || url.pathname.length < 2) {
+    try {
+      url = new URL(env[key]);
+    } catch {
+      throw new Error(`${key} must be a Postgres URL`);
+    }
+    if (
+      !["postgres:", "postgresql:"].includes(url.protocol) ||
+      !url.hostname ||
+      !url.username ||
+      url.pathname.length < 2
+    ) {
       throw new Error(`${key} must specify a Postgres host, user and database`);
     }
     // postgres.js forwards unknown query parameters as session startup
@@ -206,8 +258,21 @@ export function connectionSettings(env, dryRun) {
     // refused for determinism). Refuse them statically; the live
     // transaction-scoped identity probe in importContentFunnel catches DNS
     // aliases and routing the static comparison cannot see.
-    for (const param of ["database", "db", "user", "search_path", "options", "role", "session_authorization", "datestyle", "client_encoding", "default_transaction_read_only", "timezone"]) {
-      if (url.searchParams.has(param)) throw new Error(`${key} must not set ?${param}=; use the URL endpoint and schema env`);
+    for (const param of [
+      "database",
+      "db",
+      "user",
+      "search_path",
+      "options",
+      "role",
+      "session_authorization",
+      "datestyle",
+      "client_encoding",
+      "default_transaction_read_only",
+      "timezone",
+    ]) {
+      if (url.searchParams.has(param))
+        throw new Error(`${key} must not set ?${param}=; use the URL endpoint and schema env`);
     }
     return url;
   };
@@ -215,23 +280,37 @@ export function connectionSettings(env, dryRun) {
   const targetUrl = parse("DATABASE_URL");
   const legacySchema = schemaName(env.LEGACY_DATABASE_SCHEMA ?? "public");
   const targetSchema = schemaName(env.DATABASE_SCHEMA ?? "public");
-  if (legacyUrl.hostname === targetUrl.hostname && (legacyUrl.port || "5432") === (targetUrl.port || "5432")
-    && legacyUrl.pathname === targetUrl.pathname && legacySchema === targetSchema) {
+  if (
+    legacyUrl.hostname === targetUrl.hostname &&
+    (legacyUrl.port || "5432") === (targetUrl.port || "5432") &&
+    legacyUrl.pathname === targetUrl.pathname &&
+    legacySchema === targetSchema
+  ) {
     throw new Error("Source and target must be different databases or schemas");
   }
   const options = (url, readOnly) => ({
-    max: 1, port: Number(url.port || 5432), connect_timeout: 10,
+    max: 1,
+    port: Number(url.port || 5432),
+    connect_timeout: 10,
     // Pin even an empty password; never inherit PGPASSWORD as a substitute.
     password: () => decodeURIComponent(url.password),
     // Pin the startup encoding alongside the timezone: the driver always
     // decodes UTF8, so a non-UTF8 session would mis-decode non-ASCII bytes.
     // In-transaction SET LOCAL re-pins it for sessions built outside this guard.
-    connection: { timezone: "UTC", client_encoding: "UTF8", default_transaction_read_only: readOnly ? "on" : "off" },
+    connection: {
+      timezone: "UTC",
+      client_encoding: "UTF8",
+      default_transaction_read_only: readOnly ? "on" : "off",
+    },
     onnotice: () => {},
   });
   return {
-    legacyUrl: legacyUrl.href, targetUrl: targetUrl.href, legacySchema, targetSchema,
-    legacyOptions: options(legacyUrl, true), targetOptions: options(targetUrl, dryRun),
+    legacyUrl: legacyUrl.href,
+    targetUrl: targetUrl.href,
+    legacySchema,
+    targetSchema,
+    legacyOptions: options(legacyUrl, true),
+    targetOptions: options(targetUrl, dryRun),
   };
 }
 
@@ -241,7 +320,9 @@ async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
     if (args.help) {
-      console.log("content-funnel: [--dry-run (default) | --apply]; LEGACY_DATABASE_URL + DATABASE_URL env-only");
+      console.log(
+        "content-funnel: [--dry-run (default) | --apply]; LEGACY_DATABASE_URL + DATABASE_URL env-only",
+      );
       return;
     }
     const settings = connectionSettings(process.env, args.dryRun);
@@ -251,11 +332,18 @@ async function main() {
     for (const row of report) console.log(JSON.stringify(row));
   } catch (error) {
     // Driver errors can contain URLs, query parameters and row data. Print none.
-    const code = typeof error?.code === "string" && /^[A-Z0-9_]{1,40}$/.test(error.code) ? error.code : "REFUSED";
-    console.error(`content-funnel: failed (${code}); completion not confirmed. Check env, migrations and source schema; no URLs or row data logged.`);
+    const code =
+      typeof error?.code === "string" && /^[A-Z0-9_]{1,40}$/.test(error.code)
+        ? error.code
+        : "REFUSED";
+    console.error(
+      `content-funnel: failed (${code}); completion not confirmed. Check env, migrations and source schema; no URLs or row data logged.`,
+    );
     process.exitCode = 1;
   } finally {
-    await Promise.all([legacy, target].filter(Boolean).map((sql) => sql.end({ timeout: 2 }).catch(() => {})));
+    await Promise.all(
+      [legacy, target].filter(Boolean).map((sql) => sql.end({ timeout: 2 }).catch(() => {})),
+    );
   }
 }
 

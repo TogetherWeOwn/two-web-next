@@ -6,6 +6,7 @@
 
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
+import { isDatabaseUnavailable } from "../db/errors";
 import { nonSensitiveRead } from "../member-reads";
 import { joinFunnelStats } from "./reads";
 
@@ -44,9 +45,11 @@ let publishedFill = 0;
  */
 async function funnelRead(db: Db): Promise<Funnel> {
   return db.transaction(async (tx) => {
-    await nonSensitiveRead("timeouts", () => tx.execute(
-      sql`select set_config('lock_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true)`,
-    ));
+    await nonSensitiveRead("timeouts", () =>
+      tx.execute(
+        sql`select set_config('lock_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true)`,
+      ),
+    );
     return joinFunnelStats(tx);
   });
 }
@@ -54,9 +57,10 @@ async function funnelRead(db: Db): Promise<Funnel> {
 /**
  * Dashboard-facing funnel read: the aggregate is reused for FUNNEL_CACHE_TTL_MS
  * per DB identity, and every fill is bounded by FUNNEL_READ_DEADLINE_MS. A
- * failed, timed-out or indefinitely pending read resolves undefined — the
- * route omits the optional widget and the dashboard still answers 200.
- * `identity` scopes the cache to the connection; `read` is a test seam.
+ * failed, timed-out or indefinitely pending widget read resolves undefined —
+ * the dashboard still answers 200. A classified DB outage propagates to the
+ * shared sanitized 503 handler instead. `identity` scopes the cache to the
+ * connection; `read` is a test seam.
  */
 export async function dashboardJoinFunnel(
   db: Db,
@@ -67,12 +71,12 @@ export async function dashboardJoinFunnel(
   if (cache && cache.identity === identity && Date.now() < cache.expiresAt) return cache.value;
   const fill = ++nextFill;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  // Never rejects: a failure landing after the deadline resolves undefined
-  // instead of surfacing as an unhandled rejection.
+  // Promise.race also consumes late rejections after the deadline has won.
   const settled = (async (): Promise<Funnel | undefined> => {
     try {
       return await read(db);
-    } catch {
+    } catch (err) {
+      if (isDatabaseUnavailable(err)) throw err;
       return undefined;
     }
   })();

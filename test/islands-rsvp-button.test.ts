@@ -239,25 +239,59 @@ const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 // ids; non-digit ids are refused with a 503 before any assertion runs.
 const VIEWER_ONE = "420000000000000042";
 const VIEWER_TWO = "420000000000000043";
-const viewer: Session = { id: VIEWER_ONE, username: "one", avatar: null, member: true, moderator: false };
-function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<string, ViewerRsvp> = {}, protectWrites = false) {
+const viewer: Session = {
+  id: VIEWER_ONE,
+  username: "one",
+  avatar: null,
+  member: true,
+  moderator: false,
+};
+function page(
+  over: Partial<typeof events.$inferSelect> = {},
+  answers: Record<string, ViewerRsvp> = {},
+  protectWrites = false,
+) {
   const startsAt = new Date("2030-01-01T20:00:00Z");
   const event: typeof events.$inferSelect = {
-    id: 42, eventKey: KEY, title: "Squad night", game: null, description: null,
-    startsAt, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "Europe/London",
-    location: null, capacity: 4, status: "published", discordEventId: null,
-    discordSyncFailedAt: null, discordSyncFailureCode: null,
-    createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
-    recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
-    createdAt: startsAt, updatedAt: startsAt, icsSequence: 0n, ...over,
+    id: 42,
+    eventKey: KEY,
+    title: "Squad night",
+    game: null,
+    description: null,
+    startsAt,
+    endsAt: new Date("2030-01-01T22:00:00Z"),
+    timezone: "Europe/London",
+    location: null,
+    capacity: 4,
+    status: "published",
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    createdBy: null,
+    rsvpOpen: true,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: startsAt,
+    updatedAt: startsAt,
+    icsSequence: 0n,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    ...over,
   };
   const queries: { sql: string; params: unknown[] }[] = [];
   const cols = Object.keys(getTableColumns(events)) as (keyof typeof event)[];
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
     if (sql.includes("isfinite(") || sql.includes("row_number()")) return { rows: [] };
-    if (sql.includes('from "events"')) return { rows: [cols.map((k) => event[k] instanceof Date ? event[k].toISOString() : event[k])] };
-    if (sql.includes('group by')) return { rows: [[event.id, 4]] };
+    if (sql.includes('from "events"'))
+      return {
+        rows: [cols.map((k) => (event[k] instanceof Date ? event[k].toISOString() : event[k]))],
+      };
+    if (sql.includes("group by")) return { rows: [[event.id, 4]] };
     // The member-only attendees projection joins users and is empty in this
     // fixture; without this arm it would fall through to the answer lookup.
     if (sql.includes('inner join "users"')) return { rows: [] };
@@ -270,19 +304,37 @@ function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<st
     // snowflake or the boundary refuses the response with a 503.
     const userId = String(params[1]);
     const synced = answer.syncedToDiscordAt?.toISOString() ?? null;
-    return { rows: [Object.assign([userId, answer.status, synced], { userId, status: answer.status, syncedToDiscordAt: synced })] };
+    return {
+      rows: [
+        Object.assign([userId, answer.status, synced], {
+          userId,
+          status: answer.status,
+          syncedToDiscordAt: synced,
+        }),
+      ],
+    };
   });
   let who: Session | null = null;
   let authReads = 0;
-  const auth = async () => { authReads++; return who; };
+  const auth = async () => {
+    authReads++;
+    return who;
+  };
   const app = new Hono<{ Bindings: Env }>();
   if (protectWrites) app.use("*", sameOrigin);
   registerEventRoutes(app, auth, auth);
-  const env = { APP_URL: "https://next.example.test", ADMIN_DB: db as unknown as Db } as unknown as Env;
+  const env = {
+    APP_URL: "https://next.example.test",
+    ADMIN_DB: db as unknown as Db,
+  } as unknown as Env;
   return {
-    queries, db, event,
+    queries,
+    db,
+    event,
     authReads: () => authReads,
-    as: (session: Session | null) => { who = session; },
+    as: (session: Session | null) => {
+      who = session;
+    },
     request: (path = `/e/${KEY}`, init?: RequestInit) => app.request(path, init, env),
   };
 }
@@ -295,14 +347,19 @@ describe("rsvp-button SSR/server drift", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("SSR binds the event key and guest page-return link without exposing actions or reading an answer", async () => {
-    const p = page(); const res = await p.request(`/e/${KEY}?from=calendar`); const html = await res.text();
-    expect(res.status).toBe(200); expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const p = page();
+    const res = await p.request(`/e/${KEY}?from=calendar`);
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(mount(html)).toContain(`data-event-key="${KEY}"`);
     expect(mount(html)).toContain(`href="${loginUrl(`/e/${KEY}?from=calendar`)}"`);
     expect(mount(html)).toContain(RSVP_COPY.guestCta);
     expect(mount(html)).not.toContain("data-action");
     expect(html).toContain('src="/islands/rsvp-button.js"');
-    expect(p.queries.filter((q) => q.sql.includes('from "rsvps"') && !q.sql.includes('group by'))).toHaveLength(0);
+    expect(
+      p.queries.filter((q) => q.sql.includes('from "rsvps"') && !q.sql.includes("group by")),
+    ).toHaveLength(0);
   });
 
   it.each([
@@ -310,21 +367,30 @@ describe("rsvp-button SSR/server drift", () => {
     ["draft", {}, "Not published yet", 200],
     ["past", {}, "This one has been and gone", 200],
     ["published", { endsAt: new Date("2020-01-01T22:00:00Z") }, "This one has been and gone", 200],
-  ] as const)("closes %s, including clock-ended Published, without action controls", async (status, over, copy, code) => {
-    const p = page({ status, ...over }); p.as({ ...viewer, moderator: true });
-    const res = await p.request(); const html = mount(await res.text());
-    expect(res.status).toBe(code); expect(html).toContain(`role="status" data-testid="${RSVP_CLOSED_TESTID}">${copy}`);
-    expect(html).not.toContain("data-action");
-    if (status === "cancelled") expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-  });
+  ] as const)(
+    "closes %s, including clock-ended Published, without action controls",
+    async (status, over, copy, code) => {
+      const p = page({ status, ...over });
+      p.as({ ...viewer, moderator: true });
+      const res = await p.request();
+      const html = mount(await res.text());
+      expect(res.status).toBe(code);
+      expect(html).toContain(`role="status" data-testid="${RSVP_CLOSED_TESTID}">${copy}`);
+      expect(html).not.toContain("data-action");
+      if (status === "cancelled") expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    },
+  );
 
   it("preserves draft authorization", async () => {
-    const p = page({ status: "draft" }); p.as(viewer);
+    const p = page({ status: "draft" });
+    p.as(viewer);
     expect((await p.request()).status).toBe(403);
   });
 
   it("renders full + waitlist join, never a going button", async () => {
-    const p = page(); p.as(viewer); const html = mount(await (await p.request()).text());
+    const p = page();
+    p.as(viewer);
+    const html = mount(await (await p.request()).text());
     expect(html).toContain(`data-testid="${EVENT_FULL_TESTID}"`);
     expect(html).toContain("This one&#39;s full. Cap is 4.");
     expect(html).toContain(`data-testid="${WAITLIST_JOIN_TESTID}"`);
@@ -332,8 +398,12 @@ describe("rsvp-button SSR/server drift", () => {
   });
 
   it("renders going, withdraw and the stored sync stamp with an accessible confirmation", async () => {
-    const p = page({}, { [viewer.id]: { status: "going", syncedToDiscordAt: new Date("2026-09-29T12:00:00Z") } });
-    p.as(viewer); const html = mount(await (await p.request()).text());
+    const p = page(
+      {},
+      { [viewer.id]: { status: "going", syncedToDiscordAt: new Date("2026-09-29T12:00:00Z") } },
+    );
+    p.as(viewer);
+    const html = mount(await (await p.request()).text());
     expect(html).toContain(`role="status" tabindex="-1" data-testid="${RSVP_CONFIRMED_TESTID}"`);
     expect(html).toContain(`aria-hidden="true" data-testid="${RSVP_CHECK_TESTID}"`);
     expect(html).toContain(`data-testid="${RSVP_WITHDRAW_TESTID}"`);
@@ -342,8 +412,12 @@ describe("rsvp-button SSR/server drift", () => {
   });
 
   it("renders waitlist fallback + claim-seat when room exists, without inventing a position", async () => {
-    const p = page({ capacity: null }, { [viewer.id]: { status: "waitlisted", syncedToDiscordAt: null } });
-    p.as(viewer); const html = mount(await (await p.request()).text());
+    const p = page(
+      { capacity: null },
+      { [viewer.id]: { status: "waitlisted", syncedToDiscordAt: null } },
+    );
+    p.as(viewer);
+    const html = mount(await (await p.request()).text());
     expect(html).toContain(`data-testid="${WAITLIST_POSITION_TESTID}">You&#39;re on the waitlist`);
     expect(html).toContain(`data-testid="${WAITLIST_CLAIM_TESTID}"`);
     expect(html).toContain(`data-testid="${WAITLIST_LEAVE_TESTID}"`);
@@ -351,98 +425,199 @@ describe("rsvp-button SSR/server drift", () => {
     expect(html).not.toContain("in line");
   });
 
-  it.each([null, "going", "waitlisted"] as const)("paused keeps only withdraw/leave for holder %s", async (status) => {
-    const p = page({ rsvpOpen: false }, status ? { [viewer.id]: { status, syncedToDiscordAt: null } } : {});
-    p.as(viewer); const html = mount(await (await p.request()).text());
-    expect(html).toContain(RSVP_COPY.paused);
-    expect(html).not.toContain('data-action="going"'); expect(html).not.toContain('data-action="waitlisted"');
-    expect(html.includes('data-action="withdraw"')).toBe(status !== null);
-  });
+  it.each([null, "going", "waitlisted"] as const)(
+    "paused keeps only withdraw/leave for holder %s",
+    async (status) => {
+      const p = page(
+        { rsvpOpen: false },
+        status ? { [viewer.id]: { status, syncedToDiscordAt: null } } : {},
+      );
+      p.as(viewer);
+      const html = mount(await (await p.request()).text());
+      expect(html).toContain(RSVP_COPY.paused);
+      expect(html).not.toContain('data-action="going"');
+      expect(html).not.toContain('data-action="waitlisted"');
+      expect(html.includes('data-action="withdraw"')).toBe(status !== null);
+    },
+  );
 
   it("never serves another member's answer and marks personalized HTML uncacheable", async () => {
     const p = page({}, { [viewer.id]: { status: "going", syncedToDiscordAt: null } });
-    p.as(viewer); const first = await p.request(); expect(mount(await first.text())).toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
-    p.as({ ...viewer, id: VIEWER_TWO }); const second = await p.request();
+    p.as(viewer);
+    const first = await p.request();
+    expect(mount(await first.text())).toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
+    p.as({ ...viewer, id: VIEWER_TWO });
+    const second = await p.request();
     expect(mount(await second.text())).not.toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
     expect(second.headers.get("cache-control")).toBe("private, no-store");
     // Viewer-answer reads stay keyed on the session user (they select the
     // sync stamp); the member-only attendees projection (merged from main)
     // joins users and reads by event + status, never another member's answer.
     const viewerReads = p.queries.filter((q) => q.sql.includes('"synced_to_discord_at"'));
-    expect(viewerReads.map((q) => q.params)).toEqual([[42, VIEWER_ONE], [42, VIEWER_TWO]]);
+    expect(viewerReads.map((q) => q.params)).toEqual([
+      [42, VIEWER_ONE],
+      [42, VIEWER_TWO],
+    ]);
     const attendeeReads = p.queries.filter((q) => q.sql.includes('inner join "users"'));
     // The member-only attendees projection excludes nameless rows in SQL.
-    expect(attendeeReads.map((q) => q.params)).toEqual([[42, "going", ""], [42, "going", ""]]);
+    expect(attendeeReads.map((q) => q.params)).toEqual([
+      [42, "going", ""],
+      [42, "going", ""],
+    ]);
   });
 
-  it.each(["going", "waitlisted", "withdraw"] as const)("no-JS %s submits a real form, shares the JSON service and returns to the event", async (status) => {
-    const p = page(status === "going" ? { capacity: null } : {}, status === "withdraw" ? { [viewer.id]: { status: "going", syncedToDiscordAt: null } } : {}, true);
-    p.as(viewer);
-    const html = mount(await (await p.request()).text());
-    const action = /<form method="post" action="([^"]+)"/.exec(html)?.[1];
-    expect(action).toBe(`/e/${KEY}/rsvp`);
-    expect(html).toContain(`type="submit" name="status" value="${status}"`);
-    const write = vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({ ok: true, created: true,
-      answer: { status: status === "withdraw" ? "going" : status, syncedToDiscordAt: null, waitlistPosition: null }, mirrored: null, eventKey: KEY });
-    const remove = vi.spyOn(rsvpService, "withdrawRsvp").mockResolvedValue({ limited: false, deleted: true, status: null });
-    const res = await p.request(action!, { method: "POST", headers: { origin: "https://next.example.test" }, body: new URLSearchParams({ status }) });
-    expect(res.status).toBe(303); expect(res.headers.get("location")).toBe(`/e/${KEY}`);
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
-    // The route passes the boundary-observed db (memberReadDb proxy over the
-    // same pool), so pin the write routing (key, user, status), not db identity.
-    if (status === "withdraw") { expect(remove.mock.calls[0]?.slice(1)).toEqual([KEY, viewer.id]); expect(write).not.toHaveBeenCalled(); }
-    else { expect(write.mock.calls[0]?.slice(1)).toEqual([KEY, viewer.id, status]); expect(remove).not.toHaveBeenCalled(); }
-  });
+  it.each(["going", "waitlisted", "withdraw"] as const)(
+    "no-JS %s submits a real form, shares the JSON service and returns to the event",
+    async (status) => {
+      const p = page(
+        status === "going" ? { capacity: null } : {},
+        status === "withdraw" ? { [viewer.id]: { status: "going", syncedToDiscordAt: null } } : {},
+        true,
+      );
+      p.as(viewer);
+      const html = mount(await (await p.request()).text());
+      const action = /<form method="post" action="([^"]+)"/.exec(html)?.[1];
+      expect(action).toBe(`/e/${KEY}/rsvp`);
+      expect(html).toContain(`type="submit" name="status" value="${status}"`);
+      const write = vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({
+        ok: true,
+        created: true,
+        answer: {
+          status: status === "withdraw" ? "going" : status,
+          syncedToDiscordAt: null,
+          waitlistPosition: null,
+        },
+        mirrored: null,
+        eventKey: KEY,
+      });
+      const remove = vi
+        .spyOn(rsvpService, "withdrawRsvp")
+        .mockResolvedValue({ limited: false, deleted: true, status: null });
+      const res = await p.request(action!, {
+        method: "POST",
+        headers: { origin: "https://next.example.test" },
+        body: new URLSearchParams({ status }),
+      });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`/e/${KEY}`);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+      // The route passes the boundary-observed db (memberReadDb proxy over the
+      // same pool), so pin the write routing (key, user, status), not db identity.
+      if (status === "withdraw") {
+        expect(remove.mock.calls[0]?.slice(1)).toEqual([KEY, viewer.id]);
+        expect(write).not.toHaveBeenCalled();
+      } else {
+        expect(write.mock.calls[0]?.slice(1)).toEqual([KEY, viewer.id, status]);
+        expect(remove).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("no-JS failures preserve status, throttle copy and an actionable recovery link", async () => {
-    const p = page({}, {}, true); p.as(viewer);
-    vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({ ok: false, reason: "limited", retryAfter: 5 });
-    const res = await p.request(`/e/${KEY}/rsvp`, { method: "POST", headers: { origin: "https://next.example.test" }, body: new URLSearchParams({ status: "going" }) });
-    expect(res.status).toBe(429); expect(res.headers.get("Retry-After")).toBe("5");
-    const html = await res.text(); expect(html).toContain('role="alert"');
-    expect(html).toContain(throttleWaitCopy(5)); expect(html).toContain(`href="/e/${KEY}"`);
+    const p = page({}, {}, true);
+    p.as(viewer);
+    vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({
+      ok: false,
+      reason: "limited",
+      retryAfter: 5,
+    });
+    const res = await p.request(`/e/${KEY}/rsvp`, {
+      method: "POST",
+      headers: { origin: "https://next.example.test" },
+      body: new URLSearchParams({ status: "going" }),
+    });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("5");
+    const html = await res.text();
+    expect(html).toContain('role="alert"');
+    expect(html).toContain(throttleWaitCopy(5));
+    expect(html).toContain(`href="/e/${KEY}"`);
   });
 
   it("no-JS refuses missing/foreign origins, non-members and cross-user writes; expired sessions get the return-aware link", async () => {
-    const p = page({}, {}, true); p.as(viewer);
+    const p = page({}, {}, true);
+    p.as(viewer);
     const write = vi.spyOn(rsvpService, "writeRsvp");
-    const init = (origin?: string, extra: Record<string, string> = {}): RequestInit => ({ method: "POST",
-      headers: origin ? { origin } : {}, body: new URLSearchParams({ status: "going", ...extra }) });
+    const init = (origin?: string, extra: Record<string, string> = {}): RequestInit => ({
+      method: "POST",
+      headers: origin ? { origin } : {},
+      body: new URLSearchParams({ status: "going", ...extra }),
+    });
     const path = `/e/${KEY}/rsvp`;
-    for (const origin of [undefined, "https://evil.test"]) expect((await p.request(path, init(origin))).status).toBe(403);
-    expect((await p.request(path, init("https://next.example.test", { user_id: "other-member" }))).status).toBe(403);
-    p.as({ ...viewer, member: false }); expect((await p.request(path, init("https://next.example.test"))).status).toBe(403);
-    p.as(null); const expired = await p.request(path, init("https://next.example.test"));
-    expect(expired.status).toBe(303); expect(expired.headers.get("location")).toBe(loginUrl(`/e/${KEY}`));
+    for (const origin of [undefined, "https://evil.test"])
+      expect((await p.request(path, init(origin))).status).toBe(403);
+    expect(
+      (await p.request(path, init("https://next.example.test", { user_id: "other-member" })))
+        .status,
+    ).toBe(403);
+    p.as({ ...viewer, member: false });
+    expect((await p.request(path, init("https://next.example.test"))).status).toBe(403);
+    p.as(null);
+    const expired = await p.request(path, init("https://next.example.test"));
+    expect(expired.status).toBe(303);
+    expect(expired.headers.get("location")).toBe(loginUrl(`/e/${KEY}`));
     expect(write).not.toHaveBeenCalled();
   });
 
   it("no-JS filled decoys touch no auth/DB/service and the JSON resource still refuses POST", async () => {
     const p = page({}, {}, true);
-    const write = vi.spyOn(rsvpService, "writeRsvp"); const remove = vi.spyOn(rsvpService, "withdrawRsvp");
+    const write = vi.spyOn(rsvpService, "writeRsvp");
+    const remove = vi.spyOn(rsvpService, "withdrawRsvp");
     for (const status of ["going", "withdraw"]) {
-      const res = await p.request(`/e/${KEY}/rsvp`, { method: "POST", headers: { origin: "https://next.example.test" },
-        body: new URLSearchParams({ status, website: "filled" }) });
-      expect(res.status).toBe(303); expect(res.headers.get("location")).toBe(`/e/${KEY}`);
+      const res = await p.request(`/e/${KEY}/rsvp`, {
+        method: "POST",
+        headers: { origin: "https://next.example.test" },
+        body: new URLSearchParams({ status, website: "filled" }),
+      });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`/e/${KEY}`);
     }
-    expect(p.authReads()).toBe(0); expect(p.queries).toHaveLength(0);
-    expect(write).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
-    const offVerb = await p.request(`/events/${KEY}/rsvp`, { method: "POST", headers: { origin: "https://next.example.test" } });
-    expect(offVerb.status).toBe(405); expect(offVerb.headers.get("Allow")).toBe("PUT, DELETE");
+    expect(p.authReads()).toBe(0);
+    expect(p.queries).toHaveLength(0);
+    expect(write).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    const offVerb = await p.request(`/events/${KEY}/rsvp`, {
+      method: "POST",
+      headers: { origin: "https://next.example.test" },
+    });
+    expect(offVerb.status).toBe(405);
+    expect(offVerb.headers.get("Allow")).toBe("PUT, DELETE");
   });
 
   it("filled decoy is byte-identical to first-write success without auth, DB, limiter or write service", async () => {
-    const p = page({ capacity: null }); p.as(viewer);
-    const write = vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({ ok: true, created: true,
-      answer: { status: "going", syncedToDiscordAt: null, waitlistPosition: null }, mirrored: null, eventKey: KEY });
-    const init = (input: unknown): RequestInit => ({ method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(input) });
+    const p = page({ capacity: null });
+    p.as(viewer);
+    const write = vi.spyOn(rsvpService, "writeRsvp").mockResolvedValue({
+      ok: true,
+      created: true,
+      answer: { status: "going", syncedToDiscordAt: null, waitlistPosition: null },
+      mirrored: null,
+      eventKey: KEY,
+    });
+    const init = (input: unknown): RequestInit => ({
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
     const real = await p.request(`/events/${KEY}/rsvp`, init({ status: "going" }));
-    expect(real.status).toBe(201); expect(write).toHaveBeenCalledTimes(1);
-    const authReads = p.authReads(); const queries = p.queries.length;
-    const trap = await p.request("/events/invalid-key/rsvp", init({ status: "going", website: "filled" }));
-    expect(trap.status).toBe(real.status); expect(await trap.text()).toBe(await real.text());
-    expect(p.authReads()).toBe(authReads); expect(p.queries).toHaveLength(queries); expect(write).toHaveBeenCalledTimes(1);
-    const withdrawn = await p.request("/events/invalid-key/rsvp?website=filled", { method: "DELETE" });
-    expect(withdrawn.status).toBe(204); expect(await withdrawn.text()).toBe(""); expect(p.authReads()).toBe(authReads);
+    expect(real.status).toBe(201);
+    expect(write).toHaveBeenCalledTimes(1);
+    const authReads = p.authReads();
+    const queries = p.queries.length;
+    const trap = await p.request(
+      "/events/invalid-key/rsvp",
+      init({ status: "going", website: "filled" }),
+    );
+    expect(trap.status).toBe(real.status);
+    expect(await trap.text()).toBe(await real.text());
+    expect(p.authReads()).toBe(authReads);
+    expect(p.queries).toHaveLength(queries);
+    expect(write).toHaveBeenCalledTimes(1);
+    const withdrawn = await p.request("/events/invalid-key/rsvp?website=filled", {
+      method: "DELETE",
+    });
+    expect(withdrawn.status).toBe(204);
+    expect(await withdrawn.text()).toBe("");
+    expect(p.authReads()).toBe(authReads);
   });
 });
