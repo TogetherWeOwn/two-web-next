@@ -17,7 +17,7 @@ const eventRow: EventRow = {
   timezone: "UTC", location: null, capacity: null, status: "published",
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
   recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-  parentEventId: null, recurrenceIndex: null, icsSequence: 0n,
+  parentEventId: null, recurrenceIndex: null, icsSequence: 0n, syncRevision: 0, syncedRevision: 0,
   rsvpOpen: true, createdBy: null, createdAt: at, updatedAt: at,
 };
 const roster: RosterEntry[] = [
