@@ -1,3 +1,4 @@
+import { validProbeId } from "../alert-probe-error";
 import type { QueueMessage } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -8,6 +9,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function isQueueMessage(value: unknown): value is QueueMessage {
   if (!isRecord(value) || (value.jobId !== undefined && typeof value.jobId !== "string")) return false;
   switch (value.kind) {
+    case "alert-probe":
+      // Synthetic jobs never own ledger rows; accept legacy probes without an ID.
+      return value.jobId === undefined && (value.probeId === undefined || validProbeId(value.probeId));
     case "sync-event":
       // Ownership is a Postgres UUID, unlike the opaque legacy identifiers.
       // Missing tokens remain valid for carriers queued before lease fencing.

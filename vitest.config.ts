@@ -9,7 +9,7 @@ export default defineConfig({
     fileParallelism: false,
     coverage: {
       provider: "v8",
-      include: ["src/**/*.{ts,tsx}"],
+      include: ["src/**/*.{ts,tsx}", "tail/**/*.ts"],
       reporter: ["text", "json-summary", "lcov", "html"],
       reportOnFailure: true,
       // Node 24 + full test-DB suite: baseline minus 1 point, rounded down to 0.1.
