@@ -44,7 +44,13 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
   beforeAll(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!);
     schemaName = `w15_${randomUUID().replaceAll("-", "")}`;
-    const base = { max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
+    const base = {
+      max: 1,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+      onnotice: () => {},
+    };
     admin = postgres(url.href, base);
     client = postgres(url.href, {
       ...base,
@@ -54,12 +60,15 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     db = drizzle(client, { schema: { ...schema, ...adminSchema } });
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
-    const migrations = readMigrationFiles({ migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url).href) });
+    const migrations = readMigrationFiles({
+      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url).href),
+    });
     for (const migration of migrations) {
       // Drizzle applies each migration in one transaction; some (LOCK TABLE) require it.
       await client.begin(async (tx) => {
         for (const statement of migration.sql) {
-          if (statement.trim()) await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+          if (statement.trim())
+            await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
         }
       });
     }
@@ -108,7 +117,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
 
   async function seedFeatured(n: number, tag: string): Promise<void> {
     for (let i = 0; i < n; i++) {
-      await db.insert(featuredContents).values({ title: `Slot ${tag}-${i}`, isPublished: true, position: i });
+      await db
+        .insert(featuredContents)
+        .values({ title: `Slot ${tag}-${i}`, isPublished: true, position: i });
     }
   }
 

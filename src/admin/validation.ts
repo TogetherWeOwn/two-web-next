@@ -141,8 +141,10 @@ export type FoldPreference = "earlier" | "later";
  */
 export function wallToUtc(raw: string, timezone: string, fold: FoldPreference = "later"): Date {
   const parts = parseWall(raw);
-  if (!parts) throw new ValidationError({ wall: `Not a date and time (want YYYY-MM-DD HH:mm): ${raw}` });
-  if (!isKnownTimezone(timezone)) throw new ValidationError({ timezone: `Unknown timezone: ${timezone}` });
+  if (!parts)
+    throw new ValidationError({ wall: `Not a date and time (want YYYY-MM-DD HH:mm): ${raw}` });
+  if (!isKnownTimezone(timezone))
+    throw new ValidationError({ timezone: `Unknown timezone: ${timezone}` });
 
   // Sample offsets on both sides of a nearby transition. Keep only
   // candidates that round-trip, then choose by fold preference: a fold wall
@@ -159,7 +161,13 @@ export function wallToUtc(raw: string, timezone: string, fold: FoldPreference = 
     const sample = naiveMs + delta * 3600_000;
     const rendered = parseWall(wallOfInstant(sample, formatter));
     if (!rendered) continue;
-    const renderedAsUtc = Date.UTC(rendered.y, rendered.mo - 1, rendered.d, rendered.h, rendered.mi);
+    const renderedAsUtc = Date.UTC(
+      rendered.y,
+      rendered.mo - 1,
+      rendered.d,
+      rendered.h,
+      rendered.mi,
+    );
     const candidate = naiveMs - (renderedAsUtc - sample);
     if (wallOfInstant(candidate, formatter) === wallString(parts)) candidates.add(candidate);
   }
@@ -245,11 +253,13 @@ export function parseEventForm(
   const game = str(data.game);
   if (game && [...game].length > 100) fields.game = "Keep the game to 100 characters.";
   const description = str(data.description);
-  if (description && [...description].length > 1000) fields.description = "Keep the description to 1000 characters.";
+  if (description && [...description].length > 1000)
+    fields.description = "Keep the description to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
-  if (location && [...location].length > 255) fields.location = "Keep the location to 255 characters.";
+  if (location && [...location].length > 255)
+    fields.location = "Keep the location to 255 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
   for (const field of ["title", "description", "location"] as const) {
     const raw = data[field];
@@ -263,11 +273,16 @@ export function parseEventForm(
   // value must not silently erase a cap and bypass the occupied-seat guard.
   const capRaw = typeof data.capacity === "number" ? String(data.capacity) : str(data.capacity);
   const capError = "Capacity is a headcount from 1 to 2147483647, or empty for unlimited.";
-  if (data.capacity != null && typeof data.capacity !== "string" && typeof data.capacity !== "number") {
+  if (
+    data.capacity != null &&
+    typeof data.capacity !== "string" &&
+    typeof data.capacity !== "number"
+  ) {
     fields.capacity = capError;
   } else if (capRaw !== null) {
     const value = Number(capRaw);
-    if (!/^\d+$/.test(capRaw) || !Number.isInteger(value) || value < 1 || value > 2_147_483_647) fields.capacity = capError;
+    if (!/^\d+$/.test(capRaw) || !Number.isInteger(value) || value < 1 || value > 2_147_483_647)
+      fields.capacity = capError;
     else capacity = value;
   }
 
@@ -300,7 +315,8 @@ export function parseEventForm(
         }
       }
     }
-    if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc) fields.ends_at = "The end is after the start.";
+    if (startsAtUtc && endsAtUtc && endsAtUtc <= startsAtUtc)
+      fields.ends_at = "The end is after the start.";
   }
   if (Object.keys(fields).length > 0) fail(fields);
   return {
@@ -338,30 +354,38 @@ function isHttpUrl(raw: string): boolean {
 }
 
 /** Parse the featured-content create/edit form (ports FeaturedContentForm rules). */
-export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: string): FeaturedFormInput {
+export function parseFeaturedForm(
+  data: Record<string, unknown>,
+  imageHosts?: string,
+): FeaturedFormInput {
   const fields: FieldErrors = {};
   const title = str(data.title);
   if (!title) fields.title = "Give it a headline.";
   else if ([...title].length > 255) fields.title = "Keep the headline to 255 characters.";
   const body = str(data.body);
   const url = str(data.url);
-  if (url && (url.length > 255 || !isHttpUrl(url))) fields.url = "Link is a full http(s) URL, or empty for no link.";
+  if (url && (url.length > 255 || !isHttpUrl(url)))
+    fields.url = "Link is a full http(s) URL, or empty for no link.";
   const imageUrl = str(data.image_url);
   if (imageUrl && (imageUrl.length > 255 || !isFeaturedImageUrl(imageUrl, imageHosts))) {
-    fields.image_url = "Image URL must be HTTPS on an approved public host, without credentials or a custom port (255 characters maximum).";
+    fields.image_url =
+      "Image URL must be HTTPS on an approved public host, without credentials or a custom port (255 characters maximum).";
   }
   const imageAlt = str(data.image_alt);
   // TOG-8707: an image with no description is silent for screen-reader
   // visitors — the URL and its description arrive together or not at all.
-  if (imageUrl && !imageAlt) fields.image_alt = "Describe the photo in one plain sentence for screen-reader visitors.";
-  if (imageAlt && [...imageAlt].length > 255) fields.image_alt = "Keep the alt text to 255 characters.";
+  if (imageUrl && !imageAlt)
+    fields.image_alt = "Describe the photo in one plain sentence for screen-reader visitors.";
+  if (imageAlt && [...imageAlt].length > 255)
+    fields.image_alt = "Keep the alt text to 255 characters.";
 
   let position = 0;
   const posRaw = str(data.position);
   if (posRaw !== null) {
     position = Number(posRaw);
     if (!/^\d+$/.test(posRaw) || !Number.isSafeInteger(position) || position > 2147483647) {
-      fields.position = "Position is a whole number from 0 to 2147483647; lower numbers appear first.";
+      fields.position =
+        "Position is a whole number from 0 to 2147483647; lower numbers appear first.";
     }
   }
 
@@ -372,10 +396,14 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
   let startsAtUtcText: string | null = null;
   let endsAtUtcText: string | null = null;
   // The show-window is UTC on both sides (legacy labels it "(UTC)").
-  for (const [raw, key] of [[startsRaw, "starts_at"], [endsRaw, "ends_at"]] as const) {
+  for (const [raw, key] of [
+    [startsRaw, "starts_at"],
+    [endsRaw, "ends_at"],
+  ] as const) {
     if (raw !== null) {
       if (/\sBC$/i.test(raw)) {
-        fields[key] = "BC dates are not supported. Clear or replace this window bound with an AD date.";
+        fields[key] =
+          "BC dates are not supported. Clear or replace this window bound with an AD date.";
         continue;
       }
       // Featured windows support PostgreSQL precision; event wall times still speak minutes.
@@ -383,20 +411,28 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
       const wall = match && parseWall(match[1]!);
       const seconds = Number(match?.[2] ?? 0);
       const fraction = (match?.[3] ?? "").padEnd(6, "0");
-      if (!wall || wall.y === 0 || seconds > 59) fields[key] = "Not a date and time (want YYYY-MM-DD HH:mm[:ss[.ffffff]], UTC; up to 6 fractional digits).";
+      if (!wall || wall.y === 0 || seconds > 59)
+        fields[key] =
+          "Not a date and time (want YYYY-MM-DD HH:mm[:ss[.ffffff]], UTC; up to 6 fractional digits).";
       else {
         // Date.UTC maps years 0–99 to 1900–1999; featured years must stay literal.
         const instant = new Date(0);
         instant.setUTCFullYear(wall.y, wall.mo - 1, wall.d);
         instant.setUTCHours(wall.h, wall.mi, seconds, Number(fraction.slice(0, 3)));
         const text = `${instant.toISOString().slice(0, 19)}.${fraction}Z`;
-        if (key === "starts_at") { startsAtUtc = instant; startsAtUtcText = text; }
-        else { endsAtUtc = instant; endsAtUtcText = text; }
+        if (key === "starts_at") {
+          startsAtUtc = instant;
+          startsAtUtcText = text;
+        } else {
+          endsAtUtc = instant;
+          endsAtUtcText = text;
+        }
       }
     }
   }
   // Fixed-width UTC strings sort chronologically, even within one Date millisecond.
-  if (startsAtUtcText && endsAtUtcText && endsAtUtcText <= startsAtUtcText) fields.ends_at = "The window ends after it starts.";
+  if (startsAtUtcText && endsAtUtcText && endsAtUtcText <= startsAtUtcText)
+    fields.ends_at = "The window ends after it starts.";
 
   if (Object.keys(fields).length > 0) fail(fields);
   return {
@@ -405,7 +441,8 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
     url,
     imageUrl,
     imageAlt,
-    isPublished: data.is_published === "on" || data.is_published === true || data.is_published === "true",
+    isPublished:
+      data.is_published === "on" || data.is_published === true || data.is_published === "true",
     position,
     startsAtUtc,
     endsAtUtc,
@@ -417,7 +454,9 @@ export function parseFeaturedForm(data: Record<string, unknown>, imageHosts?: st
 /** Transition guard (ports EventService::transitionTo): cancelled is terminal. */
 export function nextStatus(from: EventStatus, to: "published" | "cancelled"): EventStatus {
   if (from === "cancelled") {
-    throw new ValidationError({ status: "A cancelled event stays cancelled — Discord was already told." });
+    throw new ValidationError({
+      status: "A cancelled event stays cancelled — Discord was already told.",
+    });
   }
   if (to === "published" && from !== "draft") {
     throw new ValidationError({ status: "Only a draft can be published." });
