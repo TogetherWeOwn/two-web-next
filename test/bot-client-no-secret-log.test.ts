@@ -122,7 +122,10 @@ describe("bot client failure paths log no secrets", () => {
 
   it.each([
     ["non-JSON answer", new Response("<html>bot down</html>", { status: 200 })],
-    ["envelope without an ok field", jsonResponse(200, { result: { message_id: "m1" }, request_id: "r1" })],
+    [
+      "envelope without an ok field",
+      jsonResponse(200, { result: { message_id: "m1" }, request_id: "r1" }),
+    ],
     ["success without a result object", jsonResponse(200, { ok: true, request_id: "r1" })],
     ["failure without an error code", jsonResponse(400, { ok: false, request_id: "r1" })],
   ])("garbage response (%s) throws transport with no log lines", async (_label, response) => {
@@ -139,25 +142,65 @@ describe("bot client failure paths log no secrets", () => {
   });
 
   it.each([
-    ["retryable refusal", 409, { ok: false, error: { code: "in_progress", message: "busy", retryable: true }, request_id: "r1" }, {}],
-    ["terminal refusal", 400, { ok: false, error: { code: "malformed", message: "no", retryable: false }, request_id: "r1" }, {}],
-    ["rate-limited refusal", 429, { ok: false, error: { code: "rate_limited", message: "slow", retryable: true }, request_id: "r1" }, { "Retry-After": "42" }],
-  ])("%s logs metadata only, never secret material or the body", async (_label, status, envelope, headers) => {
-    const { client, seen } = stubFetch(async () => jsonResponse(status, envelope, headers));
-    const readLogs = captureLogs();
-    const answer = await client.postAnnouncement({ channelKey: "qa-throwaway", body: BODY }, UUID);
-    expect(answer).toMatchObject({ ok: false });
-    const lines = readLogs();
-    expect(lines.length).toBeGreaterThan(0); // the refusal line exists; prove it is clean
-    expectSecretFree(lines, forbiddenFor(seen));
-  });
+    [
+      "retryable refusal",
+      409,
+      {
+        ok: false,
+        error: { code: "in_progress", message: "busy", retryable: true },
+        request_id: "r1",
+      },
+      {},
+    ],
+    [
+      "terminal refusal",
+      400,
+      {
+        ok: false,
+        error: { code: "malformed", message: "no", retryable: false },
+        request_id: "r1",
+      },
+      {},
+    ],
+    [
+      "rate-limited refusal",
+      429,
+      {
+        ok: false,
+        error: { code: "rate_limited", message: "slow", retryable: true },
+        request_id: "r1",
+      },
+      { "Retry-After": "42" },
+    ],
+  ])(
+    "%s logs metadata only, never secret material or the body",
+    async (_label, status, envelope, headers) => {
+      const { client, seen } = stubFetch(async () => jsonResponse(status, envelope, headers));
+      const readLogs = captureLogs();
+      const answer = await client.postAnnouncement(
+        { channelKey: "qa-throwaway", body: BODY },
+        UUID,
+      );
+      expect(answer).toMatchObject({ ok: false });
+      const lines = readLogs();
+      expect(lines.length).toBeGreaterThan(0); // the refusal line exists; prove it is clean
+      expectSecretFree(lines, forbiddenFor(seen));
+    },
+  );
 
   it("a role.assign refusal likewise logs no secret material", async () => {
     const { client, seen } = stubFetch(async () =>
-      jsonResponse(409, { ok: false, error: { code: "in_progress", message: "busy" }, request_id: "r1" }),
+      jsonResponse(409, {
+        ok: false,
+        error: { code: "in_progress", message: "busy" },
+        request_id: "r1",
+      }),
     );
     const readLogs = captureLogs();
-    const answer = await client.assignRole({ userId: "900000000000009999", roleKey: "rocketleague" });
+    const answer = await client.assignRole({
+      userId: "900000000000009999",
+      roleKey: "rocketleague",
+    });
     expect(answer).toMatchObject({ ok: false, code: "in_progress" });
     const lines = readLogs();
     expect(lines.length).toBeGreaterThan(0);

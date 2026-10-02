@@ -34,18 +34,28 @@ for (const [identity, status, selectors] of [
   test(`event ${identity} ${status} checks the actual themed entry points`, async () => {
     const calls = [];
     const page = {
-      locator(selector) { return {
-        hover: async () => {},
-        evaluate: async () => selector === ".skip-link" && calls.length === 0
-          ? (calls.push("first-tab"), true)
-          : { foreground: "rgb(21, 23, 32)", background: "rgb(163, 255, 18)" },
-      }; },
-      keyboard: { press: async (key) => { assert.equal(key, "Tab"); } },
+      locator(selector) {
+        return {
+          hover: async () => {},
+          evaluate: async () =>
+            selector === ".skip-link" && calls.length === 0
+              ? (calls.push("first-tab"), true)
+              : { foreground: "rgb(21, 23, 32)", background: "rgb(163, 255, 18)" },
+        };
+      },
+      keyboard: {
+        press: async (key) => {
+          assert.equal(key, "Tab");
+        },
+      },
       mouse: { move: async () => calls.push("clear-hover") },
       evaluate: async () => calls.push("clear-focus"),
     };
     const results = await assertHomeInteractions(page, { route: "/e/:key", identity, status });
-    assert.deepEqual(results.map((item) => item.selector), selectors);
+    assert.deepEqual(
+      results.map((item) => item.selector),
+      selectors,
+    );
     assert(results.every((item) => item.contrast >= 4.5));
     assert.deepEqual(calls, ["first-tab", "clear-hover", "clear-focus"]);
   });

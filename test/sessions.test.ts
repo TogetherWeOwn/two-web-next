@@ -57,11 +57,18 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
       const statusHash = (await store.statusHash(original.tokenHash))!;
       const first = row();
       const second = { ...row(), moderator: true };
-      for (const [source, replacement] of [[original, first], [first, second], [second, second]] as const) {
+      for (const [source, replacement] of [
+        [original, first],
+        [first, second],
+        [second, second],
+      ] as const) {
         expect(await store.rotate(source.tokenHash, replacement)).toBe(true);
         expect(await store.statusHash(replacement.tokenHash)).toBe(statusHash);
         expect(await store.isActive(statusHash)).toBe(true);
-        expect(await store.get(replacement.tokenHash)).toMatchObject({ userId: "42", moderator: replacement.moderator });
+        expect(await store.get(replacement.tokenHash)).toMatchObject({
+          userId: "42",
+          moderator: replacement.moderator,
+        });
         if (source.tokenHash !== replacement.tokenHash) {
           expect(await store.get(source.tokenHash)).toBeNull();
           expect(await store.statusHash(source.tokenHash)).toBeNull();
@@ -102,21 +109,27 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
       expect(await store.get(replacement.tokenHash)).toBeNull();
     });
 
-    it.each(["expired", "revoked"] as const)("a session marked %s cannot expose a status key or regain one through rotation", async (state) => {
-      const s = { ...row(), expiresAt: new Date(Date.now() + (state === "expired" ? -1000 : 3600_000)) };
-      await store.create(s);
-      if (state === "revoked") await store.revoke(s.tokenHash);
-      expect(await store.isActive(s.tokenHash)).toBe(false);
-      expect(await store.statusHash(s.tokenHash)).toBeNull();
-      expect(await store.get(s.tokenHash)).toBeNull();
-      expect(await store.rotate(s.tokenHash, s)).toBe(false);
-      const replacement = row();
-      expect(await store.rotate(s.tokenHash, replacement)).toBe(false);
-      expect(await store.get(replacement.tokenHash)).toBeNull();
-      expect(await store.statusHash(replacement.tokenHash)).toBeNull();
-      expect(await store.isActive(replacement.tokenHash)).toBe(false);
-      expect(await store.isActive(s.tokenHash)).toBe(false);
-    });
+    it.each(["expired", "revoked"] as const)(
+      "a session marked %s cannot expose a status key or regain one through rotation",
+      async (state) => {
+        const s = {
+          ...row(),
+          expiresAt: new Date(Date.now() + (state === "expired" ? -1000 : 3600_000)),
+        };
+        await store.create(s);
+        if (state === "revoked") await store.revoke(s.tokenHash);
+        expect(await store.isActive(s.tokenHash)).toBe(false);
+        expect(await store.statusHash(s.tokenHash)).toBeNull();
+        expect(await store.get(s.tokenHash)).toBeNull();
+        expect(await store.rotate(s.tokenHash, s)).toBe(false);
+        const replacement = row();
+        expect(await store.rotate(s.tokenHash, replacement)).toBe(false);
+        expect(await store.get(replacement.tokenHash)).toBeNull();
+        expect(await store.statusHash(replacement.tokenHash)).toBeNull();
+        expect(await store.isActive(replacement.tokenHash)).toBe(false);
+        expect(await store.isActive(s.tokenHash)).toBe(false);
+      },
+    );
 
     it("rotation deletes the old row and inserts the replacement; replay misses", async () => {
       const s = row();

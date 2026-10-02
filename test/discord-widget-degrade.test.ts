@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
 import { DISCORD_HTTP_BUDGET_MS } from "../src/discord-http";
-import { DISCORD_WIDGET_VERDICT_TTL_MS, createDiscordWidgetHealth, discordWidgetHealth } from "../src/discord-widget";
+import {
+  DISCORD_WIDGET_VERDICT_TTL_MS,
+  createDiscordWidgetHealth,
+  discordWidgetHealth,
+} from "../src/discord-widget";
 
 const GUILD = "326474832151838730";
 const PROBE_URL = `https://discord.com/api/v10/guilds/${GUILD}/widget.json`;
@@ -35,18 +39,27 @@ function harness(transport: Transport, overrides: Partial<Env> = {}) {
   });
   // /join reads the module's widget health and no binding (static-theme
   // guard), so each test swaps in a fresh instance on its own clock.
-  const widget = createDiscordWidgetHealth({ fetch: fetch as typeof globalThis.fetch, now: () => clock });
+  const widget = createDiscordWidgetHealth({
+    fetch: fetch as typeof globalThis.fetch,
+    now: () => clock,
+  });
   vi.spyOn(discordWidgetHealth, "url").mockImplementation(widget.url);
   const bindings = { ...env, ...overrides };
   return {
     calls,
     inits: () => fetch.mock.calls.map(([, init]) => init),
-    advance: (ms: number) => { clock += ms; },
+    advance: (ms: number) => {
+      clock += ms;
+    },
     // One /join request with a Workers-style execution context; background
     // probes land in `pending` instead of the response path.
     async join(withContext = true) {
       const pending: Promise<unknown>[] = [];
-      const ctx = { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {}, props: {} };
+      const ctx = {
+        waitUntil: (p: Promise<unknown>) => pending.push(p),
+        passThroughOnException() {},
+        props: {},
+      };
       const res = await app.request("/join", {}, bindings, withContext ? ctx : undefined);
       return { status: res.status, html: await res.text(), pending };
     },
@@ -116,33 +129,44 @@ describe("/join Discord widget: outage", () => {
   const outages: [string, Transport][] = [
     ["503 from Discord", async () => new Response("upstream-private-body", { status: 503 })],
     ["500 from Discord", async () => new Response("upstream-private-body", { status: 500 })],
-    ["widget disabled (403)", async () => Response.json({ code: 50004, message: "upstream-private-body" }, { status: 403 })],
-    ["network failure", async () => { throw new TypeError("fetch failed upstream-private-body"); }],
+    [
+      "widget disabled (403)",
+      async () => Response.json({ code: 50004, message: "upstream-private-body" }, { status: 403 }),
+    ],
+    [
+      "network failure",
+      async () => {
+        throw new TypeError("fetch failed upstream-private-body");
+      },
+    ],
   ];
 
-  it.each(outages)("%s renders the static fallback with a 200 and logs no body", async (_name, transport) => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const h = harness(transport);
-    // The first view answers from the (optimistic) verdict; the probe runs after.
-    const first = await h.join();
-    expect(first.status).toBe(200);
-    expectIframe(first.html);
-    await Promise.all(first.pending);
+  it.each(outages)(
+    "%s renders the static fallback with a 200 and logs no body",
+    async (_name, transport) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const h = harness(transport);
+      // The first view answers from the (optimistic) verdict; the probe runs after.
+      const first = await h.join();
+      expect(first.status).toBe(200);
+      expectIframe(first.html);
+      await Promise.all(first.pending);
 
-    const degraded = await h.join();
-    expect(degraded.status).toBe(200);
-    expectFallback(degraded.html);
-    expect(degraded.pending).toHaveLength(0);
-    expect(warn).toHaveBeenCalledOnce();
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("upstream-private-body");
+      const degraded = await h.join();
+      expect(degraded.status).toBe(200);
+      expectFallback(degraded.html);
+      expect(degraded.pending).toHaveLength(0);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("upstream-private-body");
 
-    // Still down at the next window: fallback stays, no repeat warning.
-    h.advance(DISCORD_WIDGET_VERDICT_TTL_MS);
-    const stillDown = await h.join();
-    expectFallback(stillDown.html);
-    await Promise.all(stillDown.pending);
-    expect(warn).toHaveBeenCalledOnce();
-  });
+      // Still down at the next window: fallback stays, no repeat warning.
+      h.advance(DISCORD_WIDGET_VERDICT_TTL_MS);
+      const stillDown = await h.join();
+      expectFallback(stillDown.html);
+      await Promise.all(stillDown.pending);
+      expect(warn).toHaveBeenCalledOnce();
+    },
+  );
 
   it("restores the iframe once Discord answers again", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -209,10 +233,13 @@ describe("/join Discord widget: probe guards", () => {
 describe("home shell during a Discord outage", () => {
   it("stays 200 with the static lobby link and never reaches for the widget", async () => {
     const calls: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      calls.push(String(input));
-      throw new TypeError("discord is down");
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        calls.push(String(input));
+        throw new TypeError("discord is down");
+      }),
+    );
     const ctx = { waitUntil: vi.fn(), passThroughOnException() {}, props: {} };
     const res = await app.request("/", {}, env, ctx);
     expect(res.status).toBe(200);
