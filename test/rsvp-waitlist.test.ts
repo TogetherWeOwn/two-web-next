@@ -2,12 +2,14 @@
 // Every driver is guarded and scoped to its own disposable schema.
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import postgres from "postgres";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import { uniqueKey } from "../src/jobs/sync-event";
+import type { QueueMessage } from "../src/jobs/types";
 import { writeRsvp } from "../src/events/rsvp";
 import { CAPACITY_BELOW_GOING, waitlistPosition } from "../src/events/waitlist";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -17,6 +19,13 @@ import {
   type MemberDataFixture,
 } from "./helpers/member-data-db";
 
+// Keep the tracked producer real; only its native pools are pinned to our test schema.
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
+
+type SyncEventMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const PAGE_MEMBER_KEYS = ["100000000000000101", "100000000000000102", "100000000000000103"];
@@ -43,8 +52,9 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
   let fixture: MemberDataFixture;
   let db: MemberDataFixture["db"];
   let client: MemberDataFixture["client"];
+  let realPostgres: typeof postgres;
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  const sent: { body: SyncEventMessage; options?: { delaySeconds?: number } }[] = [];
   const env = {
     APP_URL,
     SESSION_SECRET,
@@ -57,22 +67,97 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     get ADMIN_DB() {
       return db;
     },
-    EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+    get DB() {
+      return { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href };
+    },
+    SYNC_EVENT_QUEUE: {
+      send: async (body: SyncEventMessage, options?: { delaySeconds?: number }) => {
+        sent.push({ body, options });
+      },
+    },
   } as unknown as Env;
 
   beforeAll(async () => {
+    realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres")).default;
+    vi.mocked(postgres).mockImplementation(realPostgres);
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 20 });
     db = fixture.db;
     client = fixture.client;
+    // Create the fixture first: producer clients must be native, not Drizzle's
+    // serializer-mutated client, and cannot escape the owned schema or URL guard.
+    vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}> = {}) => {
+      const safe = testDatabaseUrl(raw);
+      return realPostgres(safe.href, {
+        ...opts,
+        password: () => safe.password,
+        connection: { ...opts.connection, search_path: fixture.schemaName },
+      });
+    }) as typeof postgres);
   });
   beforeEach(async () => {
     await fixture.reset();
     await client`delete from web_throttle_hits`;
-    sent.length = 0;
+    await completeQueuedDeliveries();
   });
   afterAll(async () => {
+    if (realPostgres) vi.mocked(postgres).mockImplementation(realPostgres);
     await fixture?.dispose();
   });
+
+  async function completeQueuedDeliveries() {
+    // Model completion of prior deliveries before a separate logical dispatch.
+    // Clearing only `sent` would leave W13's uniqueness lock absorbing that write.
+    await client`delete from queue_jobs`;
+    await client`delete from job_unique_locks`;
+    sent.length = 0;
+  }
+
+  async function assertTracked(eventKeys: string[], requestId?: string) {
+    // The carrier contains identity only; action/payload are chosen at consumption.
+    // requestId is optional route correlation (#89): HTTP routes stamp it,
+    // while adminApp and direct dispatches omit it (pass undefined).
+    expect(sent).toEqual(
+      eventKeys.map((eventKey) => ({
+        body: {
+          kind: "sync-event",
+          eventKey,
+          idempotencyKey: expect.any(String),
+          jobId: expect.any(String),
+          leaseToken: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+          ),
+          requestId,
+        },
+        options: { delaySeconds: 10 },
+      })),
+    );
+    for (const { body } of sent) {
+      expect(body.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
+      expect(body.jobId).toMatch(/^[0-9a-f-]{36}$/);
+    }
+    const tracked =
+      await client`select job_id, kind, key, available_at > created_at as delayed from queue_jobs`;
+    expect(tracked).toHaveLength(eventKeys.length);
+    expect(tracked).toEqual(
+      expect.arrayContaining(
+        sent.map(({ body }) => ({
+          job_id: body.jobId,
+          kind: "sync-event",
+          key: uniqueKey(body.eventKey),
+          delayed: true,
+        })),
+      ),
+    );
+    const locks = await client`select key, owner_token from job_unique_locks`;
+    expect(locks.map((row) => row.key).sort()).toEqual(eventKeys.map(uniqueKey).sort());
+    for (const { body } of sent) {
+      expect(locks.find((row) => row.key === uniqueKey(body.eventKey))).toEqual({
+        key: uniqueKey(body.eventKey),
+        owner_token: body.leaseToken,
+      });
+    }
+    return sent.map(({ body }) => body);
+  }
 
   async function cookieFor(userId: string, moderator = false): Promise<string> {
     const token = newSessionToken();
@@ -102,6 +187,8 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     moderator = false,
     extra: Record<string, string> = {},
   ) {
+    // Every HTTP write carries a cf-ray so the tracked carrier pins the
+    // request correlation (#89); direct dispatches omit it.
     return app.request(
       path,
       {
@@ -109,6 +196,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
         headers: {
           origin: APP_URL,
           "content-type": "application/json",
+          "cf-ray": "0123456789abcdef-LHR",
           ...(userId ? { cookie: await cookieFor(userId, moderator) } : {}),
           ...extra,
         },
@@ -152,10 +240,13 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     for (let i = 1; i <= count; i++) await put(ev.eventKey, memberKeys[i] ?? `waiter-${i}`);
     // Pin same-instant FIFO so ID, not wall time, breaks the tie.
     await client`update rsvps set created_at = '2020-01-01T00:00:00Z', synced_to_discord_at = now() where event_id = ${ev.id}`;
-    sent.length = 0;
+    await completeQueuedDeliveries();
     return ev;
   }
   async function adminEdit(ev: typeof events.$inferSelect, capacity: number | null) {
+    // Standalone adminApp mounts no requestLog, so c.get("requestId") is
+    // undefined and the dispatch omits correlation (safeRequestId(undefined)
+    // is undefined). Live-mounted /admin inherits the outer requestLog.
     return adminApp({ sessionStore: store, db }).request(
       `/events/${ev.eventKey}`,
       {
@@ -191,6 +282,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     const [hit] =
       await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:waiter'`;
     expect(hit!.n).toBe(2);
+    await assertTracked([ev.eventKey], "0123456789abcdef-LHR"); // Re-answers in one burst share a tracked carrier.
   });
 
   it("a stale-view explicit waitlist answer takes a vacant seat before a newcomer", async () => {
@@ -228,7 +320,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       ["newcomer", "waitlisted"],
     ]);
     expect(line[0]!.syncedToDiscordAt).toBeNull();
-    expect(sent.map((m) => m.action)).toEqual(["event.upsert"]);
+    await assertTracked([ev.eventKey], "0123456789abcdef-LHR");
   });
 
   it.each(["new", "older-maybe"])(
@@ -264,7 +356,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(after[1]!.syncedToDiscordAt).toEqual(before[2]!.syncedToDiscordAt);
     expect(await waitlistPosition(db, ev.id, "waiter-1")).toBeNull();
     expect(await waitlistPosition(db, ev.id, "waiter-2")).toBe(1);
-    expect(sent.map((m) => [m.eventKey, m.action])).toEqual([[ev.eventKey, "event.upsert"]]);
+    await assertTracked([ev.eventKey], "0123456789abcdef-LHR");
     const [hit] =
       await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:waiter-1'`;
     expect(hit!.n).toBe(1); // Automatic promotion spends no member attempt.
@@ -339,12 +431,22 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       expect(line.map((r) => r.status)).toEqual(["going", "going", "going", "waitlisted"]);
       expect(line.slice(1, 3).every((r) => r.syncedToDiscordAt === null)).toBe(true);
       expect(line[3]!.syncedToDiscordAt).not.toBeNull();
+      const [firstDelivery] = await assertTracked(
+        [ev.eventKey],
+        surface === "admin" ? undefined : "0123456789abcdef-LHR",
+      );
+      await completeQueuedDeliveries();
       const unlimited =
         surface === "json" ? await patch(ev.eventKey, null) : await adminEdit(ev, null);
       expect(unlimited.status).toBe(surface === "json" ? 200 : 303);
       line = await rows(ev.id);
       expect(line.every((r) => r.status === "going")).toBe(true);
-      expect(sent.map((m) => m.action)).toEqual(["event.upsert", "event.upsert"]);
+      const [nextDelivery] = await assertTracked(
+        [ev.eventKey],
+        surface === "admin" ? undefined : "0123456789abcdef-LHR",
+      );
+      expect(nextDelivery!.jobId).not.toBe(firstDelivery!.jobId);
+      expect(nextDelivery!.idempotencyKey).not.toBe(firstDelivery!.idempotencyKey);
     },
   );
 
@@ -378,10 +480,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(shifted!.startsAt.toISOString()).toBe("2099-01-09T20:00:00.000Z");
     expect(shifted!.endsAt.toISOString()).toBe("2099-01-09T22:00:00.000Z");
     expect(shifted!.capacity).toBe(1);
-    expect(sent.map((m) => [m.eventKey, m.action])).toEqual([
-      [ev.eventKey, "event.upsert"],
-      [child.eventKey, "event.upsert"],
-    ]);
+    await assertTracked([ev.eventKey, child.eventKey], "0123456789abcdef-LHR");
   });
 
   it.each(["json", "admin"])(
@@ -393,7 +492,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       await put(ev.eventKey, "maybe", "maybe");
       await put(ev.eventKey, "no", "not_going");
       await put(ev.eventKey, "line", "waitlisted");
-      sent.length = 0;
+      await completeQueuedDeliveries();
       const res = surface === "json" ? await patch(ev.eventKey, 1) : await adminEdit(ev, 1);
       expect(res.status).toBe(422);
       const capacityError = `${CAPACITY_BELOW_GOING} Occupied seats: 2.`;

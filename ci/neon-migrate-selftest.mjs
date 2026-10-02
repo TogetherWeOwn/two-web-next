@@ -74,7 +74,7 @@ async function fixture(callback) {
       CI: process.env.CI,
       GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
       NEON_STAGING_DATABASE_URL: url.href,
-      NEON_PRODUCTION_DATABASE_URL: url.href,
+      PRODUCTION_DATABASE_URL: url.href,
     };
     const run = (mode, overrides = {}) =>
       runMigration(
@@ -157,7 +157,7 @@ test("production is denied before connection for unset, false or non-exact flags
       ...mainEnv,
       MIGRATION_TARGET: "production",
       PRODUCTION_DEPLOY_ENABLED: "",
-      NEON_PRODUCTION_DATABASE_URL: "postgres://stub:DO_NOT_ECHO@invalid.test/db",
+      PRODUCTION_DATABASE_URL: "postgres://stub:DO_NOT_ECHO@invalid.test/db",
     },
     encoding: "utf8",
   });
@@ -181,7 +181,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
         PRODUCTION_DEPLOY_ENABLED: "true",
         NEON_STAGING_DATABASE_URL: "unused",
       }),
-    /Missing NEON_PRODUCTION/,
+    /Missing PRODUCTION_DATABASE_URL/,
   );
   for (const raw of [
     "secret-value",
@@ -202,14 +202,31 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging }).target,
     "staging",
   );
+  // Production is PlanetScale, not Neon: a Neon URL must be refused, and a
+  // direct PlanetScale URL (5432, pooled 6432 never) must be accepted.
+  const production = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
   assert.equal(
     migrationConfig({
       ...mainEnv,
       MIGRATION_TARGET: "production",
       PRODUCTION_DEPLOY_ENABLED: "true",
-      NEON_PRODUCTION_DATABASE_URL: staging,
+      PRODUCTION_DATABASE_URL: production,
     }).target,
     "production",
+  );
+  assert.throws(
+    () =>
+      migrationConfig({
+        ...mainEnv,
+        MIGRATION_TARGET: "production",
+        PRODUCTION_DEPLOY_ENABLED: "true",
+        PRODUCTION_DATABASE_URL: staging,
+      }),
+    /PlanetScale/,
+  );
+  assert.throws(
+    () => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: production }),
+    /Neon/,
   );
   assert.doesNotMatch(
     safeMigrationError(new Error("DO_NOT_ECHO postgres://credentials/ SQL")),

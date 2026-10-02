@@ -17,7 +17,6 @@ import { sha256Hex } from "../src/bot/signer";
 import { rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { CAPACITY_BELOW_GOING } from "../src/events/waitlist";
-import type { SyncMessage } from "../src/events/sync";
 import { createMemorySessionStore } from "../src/sessions";
 import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
@@ -202,7 +201,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it("the mounted route refuses the shrink end to end", async () => {
       const eventKey = await create(8);
       await occupy(await eventId(eventKey), 5, "seat");
-      const sent: SyncMessage[] = [];
+      const sent: unknown[] = [];
       const env = {
         APP_URL: "https://next.example.test",
         SESSION_SECRET: "fixture-session-secret-long-enough-for-tests",
@@ -216,8 +215,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
         AGENT_EVENT_SQL: fixture.client,
         ADMIN_DB: fixture.db,
         SESSION_STORE: createMemorySessionStore(),
-        EVENT_SYNC_QUEUE: {
-          send: async (message: SyncMessage) => {
+        SYNC_EVENT_QUEUE: {
+          send: async (message: unknown) => {
             sent.push(message);
           },
         },

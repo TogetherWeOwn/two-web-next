@@ -70,6 +70,8 @@ function listRow(status: EventListRow["status"], eventKey: string): EventListRow
     updatedAt: at,
     icsSequence: 0n,
     goingCount: 0,
+    syncRevision: 1,
+    syncedRevision: 0,
   };
 }
 
@@ -109,6 +111,8 @@ function publicEvent(over: Partial<PublicEvent> = {}): PublicEvent {
     createdAt: start,
     updatedAt: start,
     goingCount: 0,
+    syncRevision: 1,
+    syncedRevision: 0,
     ...over,
   };
 }
