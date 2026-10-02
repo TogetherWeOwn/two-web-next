@@ -63,9 +63,10 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
       if (route.json) {
         try {
           const data = JSON.parse(body);
-          const valid = ["healthy", "degraded"].includes(data?.status) &&
+          const valid = data?.db === "ok" && data?.pending_migrations === 0 &&
+            ["healthy", "degraded"].includes(data?.status) &&
             ["healthy", "degraded", "unknown"].includes(data?.queue?.status);
-          check(valid, "JSON /up status and queue.status", "valid JSON with unexpected health shape");
+          check(valid, "JSON /up db:ok, pending_migrations:0, status and queue.status", "valid JSON with unexpected health shape");
         } catch {
           check(false, "valid JSON object", "invalid JSON");
         }

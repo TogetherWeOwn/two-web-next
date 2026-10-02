@@ -8,7 +8,7 @@ import { smoke } from "../bin/smoke.mjs";
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
 const fixtures = {
-  "/up": [200, "application/json", '{"status":"healthy","queue":{"status":"unknown"}}'],
+  "/up": [200, "application/json", '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown"}}'],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
   "/faq": [200, "text/html", "<h1>Frequently asked questions</h1>"],
@@ -208,7 +208,9 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
       const pending = state === "degraded" ? 20 : 0;
       return { pending, delayed: 0, reserved: 0, total: pending, failed: 0, oldestPendingAgeSeconds: null };
     });
-    const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = JSON.stringify(body); });
+    // The envelope's queue slice comes from the real renderer; DB readiness fields are set explicitly.
+    const ready = { ...body, db: "ok", pending_migrations: 0 };
+    const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = JSON.stringify(ready); });
     const result = await run(url);
     assert.equal(result.ok, true, `${state}: ${result.output}`);
   }
@@ -223,18 +225,21 @@ for (const body of [
   "<html>not JSON</html>",
   '{"status":"healthy"}',
   '{"status":"healthy","queue":{"status":"unexpected"}}',
+  '{"status":"degraded","db":"ok","pending_migrations":1,"queue":{"status":"healthy"}}',
+  '{"status":"healthy","db":"error","pending_migrations":null,"queue":{"status":"healthy"}}',
+  '{"status":"healthy","db":"ok","pending_migrations":"0","queue":{"status":"healthy"}}',
 ]) {
   test(`rejects invalid /up envelope (${body})`, async (t) => {
     const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = body; });
     const result = await run(url);
     assert.equal(result.ok, false);
-    assert.match(result.output, /FAIL \/up: expected (JSON \/up status and queue.status|valid JSON object)/);
+    assert.match(result.output, /FAIL \/up: expected (JSON \/up db:ok, pending_migrations:0, status and queue.status|valid JSON object)/);
   });
 }
 
 test("allows degraded /up and guest admin 403", async (t) => {
   const { url } = await stub(t, (route, result) => {
-    if (route === "/up") result.body = '{"status":"degraded","queue":{"status":"degraded"}}';
+    if (route === "/up") result.body = '{"status":"degraded","db":"ok","pending_migrations":0,"queue":{"status":"degraded"}}';
     if (route === "/admin") { result.status = 403; delete result.headers.location; }
   });
   const result = await run(url);
