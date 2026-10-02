@@ -2,14 +2,17 @@
 // (one critical line per distinct `class@route` fingerprint, muted by
 // ErrorAlertRateLimit for 5 minutes, dont-report list silent) and
 // AppServiceProvider::Queue::failing (one critical line per failed job).
-// There are no webhooks or mail: the platform log tail is the only channel
-// (see docs/runbook-alerts.md). Every alert is ONE single-line JSON object on
+// The app emits logs only; tail/worker.ts delivers allowlisted summaries to
+// the optional ops Discord webhook (see docs/runbook-alerts.md). Every alert is
+// ONE single-line JSON object on
 // console.error with `event` set to "error.alert" or "queue.failing".
 //
 // Alert lines carry the exception CLASS, never its message: a database error
 // message can carry the failed statement's bound values. The full error is
 // still logged by the caller (internalErrorHandler) for whoever follows the
 // alert line to the trace.
+
+import { AlertProbeError } from "./alert-probe-error";
 
 export const ALERT_WINDOW_MS = 5 * 60 * 1000;
 const MAX_TRACKED = 500;
@@ -92,6 +95,7 @@ export function alertRequestError(
       exception: exceptionClass(err),
       method: req.method,
       route: req.route,
+      ...(err instanceof AlertProbeError && err.probeId ? { probeId: err.probeId } : {}),
     }),
   );
   return true;
@@ -103,6 +107,7 @@ export type FailedJob = {
   job: string;
   attempts: number;
   exception: string;
+  probeId?: string;
 };
 
 /** Failing queue job (ports Queue::failing): connection, queue, job class, attempts, exception. */

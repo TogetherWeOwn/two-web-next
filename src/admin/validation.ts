@@ -11,8 +11,9 @@
 //   over the explicit zone: refused by shape, the parser only accepts naive
 //   input (TOG-6804).
 // - An autumn-overlap (fold) wall time names two instants. A fresh parse
-//   takes the first occurrence; an unchanged edit keeps the exact stored
-//   instant via the hidden *_utc carrier (TOG-6805, see routes).
+//   takes the second occurrence (legacy/Carbon parity, TOG-11669); an
+//   unchanged edit keeps the exact stored instant via the hidden *_utc
+//   carrier (TOG-6805, see routes).
 
 import { isFeaturedImageUrl } from "../image-policy";
 
@@ -126,18 +127,29 @@ function wallString(p: WallParts): string {
 }
 
 /**
+ * Which instant a fold-ambiguous wall time resolves to. Single events take
+ * the second (later) occurrence, matching legacy/Carbon; series take the
+ * earlier one to keep the seed's offset like legacy `addWeeks` (TOG-11669).
+ */
+export type FoldPreference = "earlier" | "later";
+
+/**
  * Resolve a naive local wall time in an IANA zone to the UTC instant it names.
  * Throws on unparseable input, unknown zones, and gap times that never
- * occurred. Fold-ambiguous times resolve to the first occurrence.
+ * occurred. Fold-ambiguous times resolve to the second occurrence by default
+ * (legacy/Carbon single-event parity, TOG-11669).
  */
-export function wallToUtc(raw: string, timezone: string): Date {
+export function wallToUtc(raw: string, timezone: string, fold: FoldPreference = "later"): Date {
   const parts = parseWall(raw);
   if (!parts) throw new ValidationError({ wall: `Not a date and time (want YYYY-MM-DD HH:mm): ${raw}` });
   if (!isKnownTimezone(timezone)) throw new ValidationError({ timezone: `Unknown timezone: ${timezone}` });
 
-  // Sample offsets on both sides of a nearby transition. Iteration alone
-  // can settle on the SECOND occurrence of a fold (e.g. Europe/London).
-  // Keep only candidates that round-trip, then choose the earliest instant.
+  // Sample offsets on both sides of a nearby transition. Keep only
+  // candidates that round-trip, then choose by fold preference: a fold wall
+  // time names two instants. Single events default to the latest instant —
+  // legacy/Carbon resolves to the second (post-transition) occurrence
+  // (TOG-11669) — while series ask for the earliest to keep the seed's
+  // offset the way legacy `addWeeks` does.
   // This also handles half-hour DST without assuming a one-hour change.
   const naiveMs = Date.UTC(parts.y, parts.mo - 1, parts.d, parts.h, parts.mi);
   // Reuse one real formatter for all samples and round-trips in this parse.
@@ -158,7 +170,8 @@ export function wallToUtc(raw: string, timezone: string): Date {
       wall: `That time never occurred in ${timezone} — clocks skipped forward over it. Pick a time outside the gap.`,
     });
   }
-  return new Date(Math.min(...candidates));
+  const instants = [...candidates];
+  return new Date(fold === "later" ? Math.max(...instants) : Math.min(...instants));
 }
 
 /** Render a stored UTC instant as wall text in the row's zone (edit form fill). */
