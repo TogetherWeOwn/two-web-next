@@ -6,7 +6,7 @@ import app from "./app";
 import type { Env } from "../src/env";
 import { BODY_LIMIT_BYTES, bodyLimitClass, requestBodyLimit, type BodyClass } from "../src/body-limit";
 import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, isThrottleMiddleware, type EnvWithThrottle } from "../src/throttle";
-import { STAGING_APP_URL } from "../src/qa";
+import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, hashToken, newSessionToken, type Sql } from "../src/sessions";
 
 const ERROR = { reason: "payload_too_large", message: "Reduce the size of your request and try again." };
@@ -17,7 +17,7 @@ function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");
   const kind = rawApp.routes.filter((r) => `${r.method} ${r.path}` === key).map((r) => bodyLimitClass(r.handler)).find(Boolean) as BodyClass;
   const path = pattern!.replace(":key", "test-event").replace(":id", "1").replace(":identity", "qa-member");
-  const budget = path.startsWith("/auth/qa/") ? AUTH_THROTTLE_PER_MINUTE : WRITE_THROTTLE_PER_MINUTE;
+  const budget = path.startsWith("/auth/qa/") || path === "/__probe/alert" ? AUTH_THROTTLE_PER_MINUTE : WRITE_THROTTLE_PER_MINUTE;
   return { method: method!, path, max: BODY_LIMIT_BYTES[kind], budget };
 }
 
@@ -53,6 +53,7 @@ function upload(path: string, method: string, cookie: string, max: number, adver
   const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => controller.enqueue(new Uint8Array(1024)));
   const body = new ReadableStream({ pull }, { highWaterMark: 0 });
   const headers: Record<string, string> = { cookie, origin: appUrl, accept: "application/json" };
+  if (path === "/__probe/alert") headers[QA_HEADER] = "test-only-qa-token";
   if (advertised) headers["content-length"] = String(max + 1);
   const request = new Request(new URL(path, appUrl), { method, body, headers, duplex: "half" } as RequestInit);
   return { request, pull };
@@ -63,7 +64,9 @@ describe("shared throttles admit before buffering", () => {
     const { method, path, max, budget } = routeInfo(key);
     const { sql, count } = throttleFixture(budget);
     const { env, cookie } = await sessionEnv(sql as unknown as Sql);
-    const empty = await app.request(path, { method, headers: { cookie, origin: env.APP_URL, accept: "application/json" } }, env);
+    const empty = await app.request(path, { method, headers: { cookie, origin: env.APP_URL, accept: "application/json",
+      ...(path === "/__probe/alert" ? { [QA_HEADER]: env.QA_AUTH_TOKEN! } : {}),
+    } }, env);
     expect(empty.status).toBe(429);
     for (const advertised of [false, true]) {
       const { request, pull } = upload(path, method, cookie, max, advertised);
@@ -120,7 +123,7 @@ describe("global gates reject before admission or buffering", () => {
   });
 });
 
-describe("disabled QA seam rejects before admission or buffering", () => {
+describe.each(["/auth/qa/qa-member", "/__probe/alert"])("%s disabled QA seam rejects before admission or buffering", (path) => {
   it.each([
     { APP_URL: "https://next.example.test", QA_AUTH_TOKEN: "test-only-qa-token" },
     { APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: undefined },
@@ -128,11 +131,30 @@ describe("disabled QA seam rejects before admission or buffering", () => {
     const store = vi.fn(async () => null);
     const env = { ...config, THROTTLE_STORE: store } as unknown as EnvWithThrottle;
     for (const advertised of [false, true]) {
-      const { request, pull } = upload("/auth/qa/qa-member", "POST", "", BODY_LIMIT_BYTES.action, advertised, config.APP_URL);
+      const { request, pull } = upload(path, "POST", "", BODY_LIMIT_BYTES.action, advertised, config.APP_URL);
       const response = await app.request(request, undefined, env);
       expect(response.status).toBe(404);
       expect(pull).not.toHaveBeenCalled();
       expect(store).not.toHaveBeenCalled();
+      await request.body?.cancel().catch(() => {});
+    }
+  });
+});
+
+describe("alert probe authentication rejects before admission or buffering", () => {
+  it.each(["", "wrong"])("returns 404 for token %j without upload pulls or side effects", async (token) => {
+    const { sql } = throttleFixture(0);
+    const { env } = await sessionEnv(sql as unknown as Sql);
+    const send = vi.fn();
+    for (const advertised of [false, true]) {
+      const { request, pull } = upload("/__probe/alert", "POST", "", BODY_LIMIT_BYTES.action, advertised);
+      if (token) request.headers.set(QA_HEADER, token);
+      else request.headers.delete(QA_HEADER);
+      const response = await app.request(request, undefined, { ...env, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue });
+      expect(response.status).toBe(404);
+      expect(pull).not.toHaveBeenCalled();
+      expect(sql).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
       await request.body?.cancel().catch(() => {});
     }
   });
