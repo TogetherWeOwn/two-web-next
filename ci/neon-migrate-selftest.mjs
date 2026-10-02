@@ -43,7 +43,7 @@ async function fixture(callback) {
     client = postgres(url.href, options);
     const output = [];
     const env = { ...mainEnv, CI: process.env.CI, GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
-      NEON_STAGING_DATABASE_URL: url.href, NEON_PRODUCTION_DATABASE_URL: url.href };
+      NEON_STAGING_DATABASE_URL: url.href, PRODUCTION_DATABASE_URL: url.href };
     const run = (mode, overrides = {}) => runMigration(mode, { ...env, ...overrides }, { testDatabase: true, report: (line) => output.push(line) });
     await callback({ client, run, env, output });
   } finally {
@@ -83,7 +83,7 @@ test("production is denied before connection for unset, false or non-exact flags
   }
   const result = spawnSync(process.execPath, [script, "apply"], {
     env: { ...process.env, ...mainEnv, MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "",
-      NEON_PRODUCTION_DATABASE_URL: "postgres://stub:DO_NOT_ECHO@invalid.test/db" }, encoding: "utf8",
+      PRODUCTION_DATABASE_URL: "postgres://stub:DO_NOT_ECHO@invalid.test/db" }, encoding: "utf8",
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /PRODUCTION_DEPLOY_ENABLED=true/);
@@ -94,7 +94,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
   assert.throws(() => migrationConfig({ ...mainEnv, MIGRATION_TARGET: "other" }), /Target/);
   assert.throws(() => migrationConfig({ ...mainEnv, GITHUB_REF: "refs/heads/topic" }), /main/);
   assert.throws(() => migrationConfig({ ...mainEnv, DATABASE_URL: "unused" }), /Missing NEON_STAGING/);
-  assert.throws(() => migrationConfig({ ...mainEnv, MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true", NEON_STAGING_DATABASE_URL: "unused" }), /Missing NEON_PRODUCTION/);
+  assert.throws(() => migrationConfig({ ...mainEnv, MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true", NEON_STAGING_DATABASE_URL: "unused" }), /Missing PRODUCTION_DATABASE_URL/);
   for (const raw of ["secret-value", "postgres://user:DO_NOT_ECHO@localhost/postgres",
     "postgres://user:DO_NOT_ECHO@ep-stub-pooler.eu.aws.neon.tech/db?sslmode=require",
     "postgres://user:DO_NOT_ECHO@ep-stub.eu.aws.neon.tech/db?sslmode=disable"]) {
@@ -105,7 +105,12 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
   }
   const staging = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
   assert.equal(migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging }).target, "staging");
-  assert.equal(migrationConfig({ ...mainEnv, MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true", NEON_PRODUCTION_DATABASE_URL: staging }).target, "production");
+  // Production is PlanetScale, not Neon: a Neon URL must be refused, and a
+  // direct PlanetScale URL (5432, pooled 6432 never) must be accepted.
+  const production = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
+  assert.equal(migrationConfig({ ...mainEnv, MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true", PRODUCTION_DATABASE_URL: production }).target, "production");
+  assert.throws(() => migrationConfig({ ...mainEnv, MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true", PRODUCTION_DATABASE_URL: staging }), /PlanetScale/);
+  assert.throws(() => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: production }), /Neon/);
   assert.doesNotMatch(safeMigrationError(new Error("DO_NOT_ECHO postgres://credentials/ SQL")), /DO_NOT_ECHO|postgres:\/\/credentials|SQL/);
 });
 
