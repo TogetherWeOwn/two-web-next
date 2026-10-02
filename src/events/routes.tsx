@@ -16,6 +16,7 @@ import { matchQuery, recordSearch } from "./search-log";
 import { NotFoundPage, rateLimitExceeded } from "../errors";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
+import { safeNext } from "../join/service";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
@@ -29,6 +30,7 @@ import {
   mergeCalendarRows,
   parseCalendarMonth,
   parseCalendarView,
+  loginUrl,
   wallMonth,
   calendarZone,
   currentCalendarMonth,
@@ -37,13 +39,12 @@ import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswe
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
+import { eventKeyAllowed } from "./keys";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, normalizePastPage, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
 export type SessionReader = (c: Ctx) => Promise<Session | null>;
-
-const KEY_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
 
 export function eventJson(e: PublicEvent) {
   return {
@@ -230,26 +231,53 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} totalPages={totalPages} appUrl={c.env.APP_URL} />);
   });
 
-  app.get("/events.json", async (c) => {
-    // Non-rotating: concurrent writes with one cookie must all authenticate.
+  async function jsonSession(c: Ctx): Promise<Session | Response> {
+    c.header("cache-control", "private, no-store");
+    c.header("vary", "Cookie, Accept");
+    // Non-rotating: JSON polling must not consume the browser's session cookie.
     const session = await readFragmentSession(c);
-    if (!session) return c.json({ error: "unauthenticated" }, 401);
-    const db = await dbFor(c);
-    if (!db) return c.json({ error: "db_unavailable" }, 503);
-    const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
-    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
-    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const eventKey = c.req.query("event_key");
-    if (eventKey !== undefined && !KEY_RE.test(eventKey)) return c.json({ error: "invalid_event_key" }, 422);
-    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator, eventKey });
-    const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
-    const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
-    const body = JSON.stringify({ data, page, limit });
+    if (session) return session;
+    const ranges = (c.req.header("accept") ?? "").toLowerCase().split(",").map((range) => {
+      const [type, ...parameters] = range.split(";").map((part) => part.trim());
+      const weights = parameters.filter((parameter) => /^q\s*=/.test(parameter));
+      const quality = weights[0]?.replace(/^q\s*=\s*/, "") ?? "1";
+      const accepted = weights.length <= 1 && /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(quality) && Number(quality) > 0;
+      return { type, accepted };
+    });
+    // Any explicit JSON range keeps mixed clients on the JSON refusal path.
+    if (ranges.some((range) => range.type === "text/html" && range.accepted)
+      && !ranges.some((range) => range.type === "application/json")) {
+      const url = new URL(c.req.url);
+      return c.redirect(loginUrl(safeNext(url.pathname + url.search)), 302);
+    }
+    return c.json({ error: "unauthenticated" }, 401);
+  }
+
+  async function jsonResponse(c: Ctx, value: unknown): Promise<Response> {
+    const body = JSON.stringify(value);
     const etag = await etagFor(body);
     c.header("cache-control", "private, no-cache");
     c.header("etag", etag);
     if (c.req.header("if-none-match") === etag) return c.body(null, 304);
     return c.body(body, 200, { "content-type": "application/json; charset=UTF-8" });
+  }
+
+  app.get("/events.json", async (c) => {
+    const session = await jsonSession(c);
+    if (session instanceof Response) return session;
+    const db = await dbFor(c);
+    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    const limitRaw = c.req.query("per_page") ?? c.req.query("limit") ?? "";
+    const limit = /^[+-]?\d+$/.test(limitRaw) ? Math.max(1, Math.min(Number(limitRaw), JSON_MAX_LIMIT)) : JSON_DEFAULT_LIMIT;
+    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
+    const eventKey = c.req.query("event_key");
+    if (eventKey !== undefined && !eventKeyAllowed(eventKey, c.env.APP_URL)) return c.json({ error: "invalid_event_key" }, 422);
+    const { rows, total } = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator, eventKey });
+    const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
+    const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
+    return jsonResponse(c, { data, page, limit, meta: {
+      current_page: page, per_page: limit, total, last_page: Math.max(1, Math.ceil(total / limit)),
+    } });
   });
 
   app.get("/events.rss", async (c) => {
@@ -277,7 +305,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   // Same view policy as /e/:key: drafts are moderator-only; cancelled/past download fine.
   app.get("/events/:file{.+\\.ics}", async (c) => {
     const key = c.req.param("file").slice(0, -4);
-    if (!KEY_RE.test(key)) return c.notFound();
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return c.notFound();
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const e = await getEventRow(db, key);
@@ -291,6 +319,24 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
       "cache-control": "max-age=300, private",
     });
+  });
+
+  app.get("/events/:key", async (c) => {
+    const session = await jsonSession(c);
+    if (session instanceof Response) return session;
+    const key = c.req.param("key");
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+    const db = await dbFor(c);
+    if (!db) return c.json({ error: "db_unavailable" }, 503);
+    const e = await getPublicEvent(db, key);
+    if (!e) return c.json({ error: "not_found" }, 404);
+    if (e.status === "draft" && !session.moderator) return c.json({ error: "forbidden" }, 403);
+    if (e.status === "cancelled") return c.json({
+      reason: "event_cancelled", message: "This event was cancelled.", event_key: e.eventKey, status: e.status,
+    }, 410);
+    if (e.status === "draft") c.header("x-robots-tag", "noindex, nofollow");
+    const position = await waitlistPosition(db, e.id, session.id);
+    return jsonResponse(c, { data: { ...eventJson(e), waitlist_position: position } });
   });
 
   app.get("/e/:key", async (c) => {
@@ -309,7 +355,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       };
       const render = async () => {
         const key = c.req.param("key") ?? "";
-        if (!KEY_RE.test(key)) return notFound();
+        if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
         const db = await dbFor(c);
         if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
         const e = await getPublicEvent(db, key);
@@ -489,7 +535,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // Accepted, then refused: answering for the caller instead would look like it worked.
     if (input.user_id !== undefined && String(input.user_id) !== who.id) return c.json({ error: "forbidden" }, 403);
     const key = c.req.param("key");
-    if (!KEY_RE.test(key)) return c.json({ error: "not_found" }, 404);
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     // Policy, clock and budget are decided inside writeRsvp, after all blocking waits
@@ -522,7 +568,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // Only the caller's own row is reachable: the delete is keyed on the session user.
     // The budget is charged inside withdrawRsvp, atomically with the delete.
     const key = c.req.param("key");
-    const r = await withdrawRsvp(db, KEY_RE.test(key) ? key : "", who.id);
+    const r = await withdrawRsvp(db, eventKeyAllowed(key, c.env.APP_URL) ? key : "", who.id);
     if (r.limited) return rateLimitExceeded(c, r.retryAfter);
     await dispatchRsvpSync(c.env, key, r.status);
     return c.body(null, 204);

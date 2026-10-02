@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { build } from "esbuild";
 import { request as httpRequest } from "node:http";
 import { convertV4MiniflareOptions, Miniflare, Response as WorkerResponse, type Request as WorkerRequest } from "miniflare";
@@ -10,6 +10,9 @@ describe("W15 auth/join in Miniflare", () => {
   let mf: Miniflare;
   const calls: { path: string; method: string; auth: string | null; body: string }[] = [];
   const unexpected: string[] = [];
+  // The /join widget health probe rides waitUntil, so it can land after the
+  // test that caused it; it is kept apart from the auth-path ledger.
+  const widgetProbes: { method: string; auth: string | null; cookie: string | null }[] = [];
   let joinStatus: 201 | 204 = 201;
   // TOG-10355: when set, the token endpoint answers with this instead of the
   // success body — the workerd fixture for expired-grant / outage responses.
@@ -50,6 +53,10 @@ describe("W15 auth/join in Miniflare", () => {
       compatibilityDate: "2026-09-29", compatibilityFlags: ["nodejs_compat"],
       outboundService: async (request: WorkerRequest) => {
         const url = new URL(request.url);
+        if (url.origin === "https://discord.com" && url.pathname === "/api/v10/guilds/326474832151838730/widget.json") {
+          widgetProbes.push({ method: request.method, auth: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
+          return WorkerResponse.json({ id: "326474832151838730", presence_count: 3 });
+        }
         const call = { path: url.pathname, method: request.method, auth: request.headers.get("authorization"), body: await request.text() };
         calls.push(call);
         if (url.origin === "https://discord.com") {
@@ -136,6 +143,15 @@ describe("W15 auth/join in Miniflare", () => {
     const again = await request("/join", { headers: { cookie: cookie(view) } });
     expect(await again.text()).not.toContain('data-testid="join-result"');
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
+  });
+
+  it("probes the public widget JSON off the /join response path as a bare GET", async () => {
+    const res = await request("/join", { headers: { cookie: "__Host-two_session=member-cookie" } });
+    expect(res.status).toBe(200);
+    // One probe per verdict window per isolate: an earlier /join may own it.
+    await vi.waitFor(() => expect(widgetProbes.length).toBeGreaterThan(0));
+    for (const probe of widgetProbes) expect(probe).toEqual({ method: "GET", auth: null, cookie: null });
+    expect(calls).toEqual([]);
   });
 
   it("carries an explicit ?next= through ordinary login and clears the journey cookies", async () => {

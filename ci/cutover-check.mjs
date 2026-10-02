@@ -31,6 +31,7 @@ export const URL_CASES = [
   { frozen: '/events/past', path: '/events/past', status: 200, html: true, indexable: false },
   { frozen: '/e/{key}', path: '/e/{key}', status: 200, html: true, indexable: true },
   { frozen: '/events.json', path: '/events.json', status: 401 },
+  { frozen: '/events/{key}', path: '/events/{key}', status: 401 },
   { frozen: '.ics', path: '/events.ics', status: 200 },
   { frozen: '.ics', path: '/events/{key}.ics', status: 200 },
   { frozen: '.rss', path: '/events.rss', status: 200 },
