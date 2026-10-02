@@ -98,7 +98,7 @@ describe.each(["/events.json", "/events/01ARZ3NDEKTSV4RRFFQ69G5FAV"])("guest eve
     const res = await app.request(target, { headers: { accept } }, baseEnv);
     expect(res.status).toBe(302);
     const location = new URL(res.headers.get("location")!, APP_URL);
-    expect(location.pathname).toBe("/auth/discord");
+    expect(location.pathname).toBe("/join/discord");
     expect(location.searchParams.get("next")).toBe(target);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
   });

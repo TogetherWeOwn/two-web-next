@@ -3,6 +3,7 @@ import { build } from "esbuild";
 import { request as httpRequest } from "node:http";
 import { convertV4MiniflareOptions, Miniflare, Response as WorkerResponse, type Request as WorkerRequest } from "miniflare";
 import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
+import { loginUrl } from "../src/islands/contracts";
 
 // Workers runtime parity: no remote binding, deployment secrets or live HTTP.
 // Discord is intercepted; unmatched network access is forbidden.
@@ -178,6 +179,18 @@ describe("W15 auth/join in Miniflare", () => {
       headers: { cookie: `${cookie(bounce)}; ${cookie(start)}` },
     });
     expect(login.headers.get("location")).toBe("/profile");
+    expect(calls.map((c) => c.path)).toEqual(expectedPaths);
+  });
+
+  it("returns RSVP guests and expired sessions to the event via the existing join flow", async () => {
+    joinStatus = 204;
+    const next = "/e/01ARZ3NDEKTSV4RRFFQ69G5FAV?from=calendar";
+    const start = await request(loginUrl(next));
+    const url = new URL(start.headers.get("location")!);
+    const result = await request(`/join/callback?code=test-code&state=${url.searchParams.get("state")}`, { headers: { cookie: cookie(start) } });
+    expect(result.status).toBe(302);
+    expect(result.headers.get("location")).toBe(next);
+    expect(result.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });
 

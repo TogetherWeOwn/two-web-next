@@ -56,9 +56,12 @@ app.get("/fixture/:surface/:mode", async (c) => {
     if (!fields?.length) return []; // fixed timeouts / empty self waitlist
     if (statement.includes('from "event_search_logs"') || statement.includes('from "featured_contents"')) return [];
     if (statement.includes('from "events"') && !statement.includes('"event_key" =')) return [];
-    if (statement.includes('from "rsvps"') && !statement.includes('join "users"')) {
+    if (statement.includes('from "rsvps"') && !statement.includes('join "users"') && statement.includes("count(")) {
       return mode === "empty" ? [] : [{ eventId: 1, n: 1 }];
     }
+    // Keyed viewer-answer selects fall through to the owner-attributable field
+    // mapping below; empty mode answers nothing so no receipt is created.
+    if (mode === "empty" && statement.includes('from "rsvps"')) return [];
     if (mode === "empty" && (statement.includes('from "join_attempts"') || statement.includes('join "users"'))) return [];
     const row: Record<string, unknown> = {};
     for (const { path, field } of fields) {
