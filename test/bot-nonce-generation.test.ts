@@ -17,7 +17,10 @@ describe("newNonce", () => {
   it.each([
     {
       name: "leading zeros, high-bit bytes and 0xff",
-      bytes: [0x00, 0x01, 0x09, 0x0a, 0x0f, 0x10, 0x7f, 0x80, 0x81, 0x9a, 0xab, 0xcd, 0xef, 0xfe, 0xff, 0x00],
+      bytes: [
+        0x00, 0x01, 0x09, 0x0a, 0x0f, 0x10, 0x7f, 0x80, 0x81, 0x9a, 0xab, 0xcd, 0xef, 0xfe, 0xff,
+        0x00,
+      ],
       expected: "0001090a0f107f80819aabcdeffeff00",
     },
     {
@@ -26,7 +29,9 @@ describe("newNonce", () => {
       expected: "00000000000000000000000000000000",
     },
   ])("encodes $name from one 16-byte Web Crypto request", ({ bytes, expected }) => {
-    const entropy = vi.spyOn(crypto, "getRandomValues").mockImplementation((array) => fillNonceBytes(array, bytes));
+    const entropy = vi
+      .spyOn(crypto, "getRandomValues")
+      .mockImplementation((array) => fillNonceBytes(array, bytes));
 
     const nonce = newNonce();
 
@@ -37,7 +42,8 @@ describe("newNonce", () => {
   });
 
   it("requests a fresh byte array on each call instead of reusing a cached nonce", () => {
-    const entropy = vi.spyOn(crypto, "getRandomValues")
+    const entropy = vi
+      .spyOn(crypto, "getRandomValues")
       .mockImplementationOnce((array) => fillNonceBytes(array, Array(16).fill(0x01)))
       .mockImplementationOnce((array) => fillNonceBytes(array, Array(16).fill(0xff)));
 
@@ -52,9 +58,12 @@ describe("newNonce", () => {
 
   it("propagates the entropy failure even after success, with no cached or weak fallback", () => {
     const failure = new Error("fixture Web Crypto failure");
-    const entropy = vi.spyOn(crypto, "getRandomValues")
+    const entropy = vi
+      .spyOn(crypto, "getRandomValues")
       .mockImplementationOnce((array) => fillNonceBytes(array, Array(16).fill(0xab)))
-      .mockImplementationOnce(() => { throw failure; });
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
     const weakRandom = vi.spyOn(Math, "random").mockReturnValue(0.5);
     const timestamp = vi.spyOn(Date, "now").mockReturnValue(1787173135000);
 

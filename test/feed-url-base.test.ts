@@ -60,7 +60,11 @@ describe("feed URL base normalization", () => {
   });
 
   it("keeps a path-bearing APP_URL intact except for its trailing slash", () => {
-    expect(feedUrl("https://next.example.test/app/")).toBe("https://next.example.test/app/events.ics");
-    expect(eventIcs(row(), "https://next.example.test/app/")).toContain(`URL:https://next.example.test/app/e/${KEY}`);
+    expect(feedUrl("https://next.example.test/app/")).toBe(
+      "https://next.example.test/app/events.ics",
+    );
+    expect(eventIcs(row(), "https://next.example.test/app/")).toContain(
+      `URL:https://next.example.test/app/e/${KEY}`,
+    );
   });
 });
