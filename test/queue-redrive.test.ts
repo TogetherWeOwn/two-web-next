@@ -24,10 +24,21 @@ describe.skipIf(!process.env.DATABASE_URL)("queue redrive: list / retry-once / d
 
   it("lists failed rows newest-first, with a kind filter and a bounded limit", async () => {
     const ledger = pgQueueLedger(sql);
-    const first = crypto.randomUUID(), second = crypto.randomUUID();
-    await ledger.enqueued({ jobId: first, kind: "sync-event", key: "sync-event:e1", availableAt: new Date(Date.now() - 1000) });
+    const first = crypto.randomUUID(),
+      second = crypto.randomUUID();
+    await ledger.enqueued({
+      jobId: first,
+      kind: "sync-event",
+      key: "sync-event:e1",
+      availableAt: new Date(Date.now() - 1000),
+    });
     await ledger.failed(first, "sync-event", "sync-event:e1", "bot down");
-    await ledger.enqueued({ jobId: second, kind: "announcement", key: null, availableAt: new Date(Date.now() - 1000) });
+    await ledger.enqueued({
+      jobId: second,
+      kind: "announcement",
+      key: null,
+      availableAt: new Date(Date.now() - 1000),
+    });
     await ledger.failed(second, "announcement", null, "bot refused");
 
     const all = await listFailedJobs(sql);
@@ -40,7 +51,9 @@ describe.skipIf(!process.env.DATABASE_URL)("queue redrive: list / retry-once / d
     expect(all[1]!.jobId).toBe(first);
     expect(all[1]!.key).toBe("sync-event:e1");
 
-    expect((await listFailedJobs(sql, { kind: "sync-event" })).map((r) => r.jobId)).toEqual([first]);
+    expect((await listFailedJobs(sql, { kind: "sync-event" })).map((r) => r.jobId)).toEqual([
+      first,
+    ]);
     expect(await listFailedJobs(sql, { limit: 1 })).toHaveLength(1);
     expect(await listFailedJobs(sql, { kind: "role-assign" })).toHaveLength(0);
   });
@@ -48,17 +61,31 @@ describe.skipIf(!process.env.DATABASE_URL)("queue redrive: list / retry-once / d
   it("retry-once mints a fresh live row and leaves the dead letter untouched", async () => {
     const ledger = pgQueueLedger(sql);
     const failedId = crypto.randomUUID();
-    await ledger.enqueued({ jobId: failedId, kind: "sync-event", key: "sync-event:e9", availableAt: new Date(Date.now() - 1000) });
+    await ledger.enqueued({
+      jobId: failedId,
+      kind: "sync-event",
+      key: "sync-event:e9",
+      availableAt: new Date(Date.now() - 1000),
+    });
     await ledger.failed(failedId, "sync-event", "sync-event:e9", "transport error");
 
     // The redrive re-dispatches from the original authorized source through
     // the producer path — a new jobId, never the dead row moved back.
     const sent: unknown[] = [];
-    const queue = trackingQueue({ send: async (body) => { sent.push(body); } }, pgQueueLedger(sql));
+    const queue = trackingQueue(
+      {
+        send: async (body) => {
+          sent.push(body);
+        },
+      },
+      pgQueueLedger(sql),
+    );
     await queue.send({ kind: "sync-event", eventKey: "e9", idempotencyKey: "redrive-e9" });
 
     expect(sent).toHaveLength(1);
-    const live = (await sql`select job_id, kind, key from queue_jobs`).map((r) => r as { job_id: unknown; kind: string; key: string });
+    const live = (await sql`select job_id, kind, key from queue_jobs`).map(
+      (r) => r as { job_id: unknown; kind: string; key: string },
+    );
     expect(live).toHaveLength(1);
     // Fresh identity: the live row is not the dead row resurrected.
     expect(String(live[0]!.job_id)).not.toBe(failedId);
@@ -73,10 +100,21 @@ describe.skipIf(!process.env.DATABASE_URL)("queue redrive: list / retry-once / d
 
   it("discard removes exactly one row and ignores unknown ids", async () => {
     const ledger = pgQueueLedger(sql);
-    const keep = crypto.randomUUID(), drop = crypto.randomUUID();
-    await ledger.enqueued({ jobId: keep, kind: "sync-event", key: "sync-event:k", availableAt: new Date(Date.now() - 1000) });
+    const keep = crypto.randomUUID(),
+      drop = crypto.randomUUID();
+    await ledger.enqueued({
+      jobId: keep,
+      kind: "sync-event",
+      key: "sync-event:k",
+      availableAt: new Date(Date.now() - 1000),
+    });
     await ledger.failed(keep, "sync-event", "sync-event:k", "recovered elsewhere");
-    await ledger.enqueued({ jobId: drop, kind: "announcement", key: null, availableAt: new Date(Date.now() - 1000) });
+    await ledger.enqueued({
+      jobId: drop,
+      kind: "announcement",
+      key: null,
+      availableAt: new Date(Date.now() - 1000),
+    });
     await ledger.failed(drop, "announcement", null, "poison payload");
 
     const [dropRow] = await sql`select id from queue_failed_jobs where job_id = ${drop}::uuid`;

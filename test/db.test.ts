@@ -18,7 +18,11 @@ describe.skipIf(!process.env.DATABASE_URL)("users table", () => {
   beforeAll(async () => {
     admin = postgres(process.env.DATABASE_URL!, { max: 1 });
     await admin.unsafe(`CREATE SCHEMA ${schemaName}`);
-    sql = postgres(process.env.DATABASE_URL!, { max: 4, connection: { search_path: schemaName }, onnotice: () => {} });
+    sql = postgres(process.env.DATABASE_URL!, {
+      max: 4,
+      connection: { search_path: schemaName },
+      onnotice: () => {},
+    });
     // Canonical migration SQL is the source of truth, not the runtime DDL.
     for (const stmt of usersMigration.split("--> statement-breakpoint")) {
       if (stmt.trim()) await sql.unsafe(stmt);

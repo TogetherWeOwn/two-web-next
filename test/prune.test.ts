@@ -78,7 +78,12 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     for (const t of Object.values(stores.tables)) t.at.push(old, edge, fresh);
 
     const counts = await pruneModelTables(stores, now);
-    expect(counts).toMatchObject({ accessLog: 1, joinAttempts: 1, idempotencyKeys: 1, searchLog: 1 });
+    expect(counts).toMatchObject({
+      accessLog: 1,
+      joinAttempts: 1,
+      idempotencyKeys: 1,
+      searchLog: 1,
+    });
     for (const [name, t] of Object.entries(stores.tables)) {
       expect(t.at, name).toEqual([edge, fresh]);
       expect(t.cutoffs, name).toEqual([edge]);
@@ -89,7 +94,13 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     const now = new Date("2026-09-30T00:00:00Z");
     const sessions = createMemorySessionStore(() => now.getTime());
     const row = (expiresAt: Date, tokenHash: string) => ({
-      tokenHash, userId: "42", username: "r", avatar: null, member: true, moderator: false, expiresAt,
+      tokenHash,
+      userId: "42",
+      username: "r",
+      avatar: null,
+      member: true,
+      moderator: false,
+      expiresAt,
     });
     await sessions.create(row(new Date(now.getTime() - 1000), "old"));
     await sessions.create(row(new Date(now.getTime()), "edge"));
@@ -106,23 +117,39 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     for (const t of Object.values(stores.tables)) t.at.push(new Date(now.getTime() - 91 * DAY));
     const sessions = stores.sessions;
     await sessions.create({
-      tokenHash: "gone", userId: "42", username: "r", avatar: null,
-      member: true, moderator: false, expiresAt: new Date(now.getTime() - 1000),
+      tokenHash: "gone",
+      userId: "42",
+      username: "r",
+      avatar: null,
+      member: true,
+      moderator: false,
+      expiresAt: new Date(now.getTime() - 1000),
     });
     await pruneModelTables(stores, now);
     expect(await pruneModelTables(stores, now)).toEqual({
-      accessLog: 0, joinAttempts: 0, idempotencyKeys: 0, searchLog: 0, sessions: 0,
+      accessLog: 0,
+      joinAttempts: 0,
+      idempotencyKeys: 0,
+      searchLog: 0,
+      sessions: 0,
     });
   });
 
   it("single-flight skip: the prune job does not run when the lock is held", async () => {
     const prune = vi.fn(async (_db: unknown) => {});
     const tx = {};
-    expect(await runScheduled(PRUNE_CRON, async () => false, { reconcile: prune, prune })).toBe(false);
+    expect(await runScheduled(PRUNE_CRON, async () => false, { reconcile: prune, prune })).toBe(
+      false,
+    );
     expect(prune).not.toHaveBeenCalled();
     // The flight hands the body its reserved transaction client; the body
     // must receive it (the max:1 deadlock fix pins work to that client).
-    expect(await runScheduled(PRUNE_CRON, async (_name, fn) => (await fn(tx as never), true), { reconcile: prune, prune })).toBe(true);
+    expect(
+      await runScheduled(PRUNE_CRON, async (_name, fn) => (await fn(tx as never), true), {
+        reconcile: prune,
+        prune,
+      }),
+    ).toBe(true);
     expect(prune).toHaveBeenCalledTimes(1);
     expect(prune).toHaveBeenCalledWith(tx);
   });
@@ -140,7 +167,9 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     const { migrate } = await import("../src/sessions");
     await migrate(sql as unknown as Parameters<typeof migrate>[0]);
   });
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   it("prunes each table by age, sweeps expired sessions, and re-runs clean", async () => {
     const now = new Date();
@@ -152,7 +181,9 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       values ('1','members','view','["2"]',1,${old}),('1','members','view','["2"]',1,${edge}),('1','members','view','["2"]',1,${fresh})`;
     await sql`insert into join_attempts (outcome, source, request_id, discord_id, created_at)
       values ('added','site','r1','10',${old}),('added','site','r2','11',${edge}),('denied','site','r3','12',${fresh})`;
-    const [grant] = await sql<{ id: string }[]>`insert into agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
+    const [grant] = await sql<
+      { id: string }[]
+    >`insert into agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
       values ('a','co','g',${`h-${fixture!.schemaName}`}) returning id`;
     await sql`insert into agent_event_idempotency_keys (grant_id, key, payload_digest, status, body, created_at)
       values (${grant!.id},'k-old','d',200,'{}',${old}),(${grant!.id},'k-edge','d',200,'{}',${edge}),(${grant!.id},'k-fresh','d',200,'{}',${fresh})`;
@@ -164,22 +195,40 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
              ('live','3','c',true,false,${new Date(now.getTime() + 3600_000)})`;
 
     const counts = await pruneModelTables(pgPruneStores(sql), now);
-    expect(counts).toEqual({ accessLog: 1, joinAttempts: 1, idempotencyKeys: 1, searchLog: 1, sessions: 2 });
+    expect(counts).toEqual({
+      accessLog: 1,
+      joinAttempts: 1,
+      idempotencyKeys: 1,
+      searchLog: 1,
+      sessions: 2,
+    });
 
     // Survivors: cutoff-exact age rows stay; only expired sessions are gone.
-    const access = await sql<{ occurred_at: Date }[]>`select occurred_at from member_data_access_logs order by id`;
+    const access = await sql<
+      { occurred_at: Date }[]
+    >`select occurred_at from member_data_access_logs order by id`;
     expect(access.map((r) => r.occurred_at.getTime())).toEqual([edge.getTime(), fresh.getTime()]);
-    const joins = await sql<{ request_id: string }[]>`select request_id from join_attempts order by id`;
+    const joins = await sql<
+      { request_id: string }[]
+    >`select request_id from join_attempts order by id`;
     expect(joins.map((r) => r.request_id)).toEqual(["r2", "r3"]);
-    const keys = await sql<{ key: string }[]>`select key from agent_event_idempotency_keys order by id`;
+    const keys = await sql<
+      { key: string }[]
+    >`select key from agent_event_idempotency_keys order by id`;
     expect(keys.map((r) => r.key)).toEqual(["k-edge", "k-fresh"]);
-    const searches = await sql<{ normalized_query: string }[]>`select normalized_query from event_search_logs order by id`;
+    const searches = await sql<
+      { normalized_query: string }[]
+    >`select normalized_query from event_search_logs order by id`;
     expect(searches.map((r) => r.normalized_query)).toEqual(["edge q", "fresh q"]);
     const sessions = await sql<{ token_hash: string }[]>`select token_hash from web_sessions`;
     expect(sessions.map((r) => r.token_hash)).toEqual(["live"]);
 
     expect(await pruneModelTables(pgPruneStores(sql), now)).toEqual({
-      accessLog: 0, joinAttempts: 0, idempotencyKeys: 0, searchLog: 0, sessions: 0,
+      accessLog: 0,
+      joinAttempts: 0,
+      idempotencyKeys: 0,
+      searchLog: 0,
+      sessions: 0,
     });
   });
 });

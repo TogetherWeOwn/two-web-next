@@ -6,13 +6,22 @@ import { describe, expect, it, vi } from "vitest";
 const binder = readFileSync(new NodeURL("../public/islands/avatar.js", import.meta.url), "utf8");
 const css = readFileSync(new NodeURL("../public/styles.css", import.meta.url), "utf8");
 
-function avatar(opts: { complete?: boolean; naturalWidth?: number; missingImage?: boolean; missingInitial?: boolean } = {}) {
+function avatar(
+  opts: {
+    complete?: boolean;
+    naturalWidth?: number;
+    missingImage?: boolean;
+    missingInitial?: boolean;
+  } = {},
+) {
   const listeners = new Map<string, () => void>();
   const image = {
     hidden: false,
     complete: opts.complete ?? false,
     naturalWidth: opts.naturalWidth ?? 0,
-    addEventListener: vi.fn((event: string, listener: () => void) => listeners.set(event, listener)),
+    addEventListener: vi.fn((event: string, listener: () => void) =>
+      listeners.set(event, listener),
+    ),
   };
   const initial = { hidden: true };
   const root = {
@@ -37,15 +46,16 @@ function mount(avatars: ReturnType<typeof avatar>[]) {
 }
 
 describe("Avatar island DOM fixture", () => {
-  it.each([{ complete: false, naturalWidth: 0 }, { complete: true, naturalWidth: 64 }])(
-    "keeps a pending or successfully loaded image visible (%j)", (opts) => {
-      const a = avatar(opts);
-      mount([a]);
-      expect(a.image.addEventListener).toHaveBeenCalledWith("error", expect.any(Function));
-      expect(a.image.hidden).toBe(false);
-      expect(a.initial.hidden).toBe(true);
-    },
-  );
+  it.each([
+    { complete: false, naturalWidth: 0 },
+    { complete: true, naturalWidth: 64 },
+  ])("keeps a pending or successfully loaded image visible (%j)", (opts) => {
+    const a = avatar(opts);
+    mount([a]);
+    expect(a.image.addEventListener).toHaveBeenCalledWith("error", expect.any(Function));
+    expect(a.image.hidden).toBe(false);
+    expect(a.initial.hidden).toBe(true);
+  });
 
   it("reveals the initial and hides the broken image on a later error, idempotently", () => {
     const a = avatar();
