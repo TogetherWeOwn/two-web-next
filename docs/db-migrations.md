@@ -133,6 +133,34 @@ policy-change PR with a rationale and independent Code Reviewer approval under
 the same exact-head green-CI merge gate; lock regeneration alone is never an
 exception. Normal migration PRs review the append-only SQL and lock diff together.
 
+## Audit tables are append-only (deployed-role prerequisite)
+
+`drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,
+`member_data_access_logs` and `activity_log` with triggers
+([TOG-10289](/TOG/issues/TOG-10289)). INSERT is unrestricted. UPDATE and
+TRUNCATE are refused, and so is any DELETE except of a row strictly older than
+90 days by its age column (`created_at`, or `occurred_at` for access logs). That
+retention exception is what `model:prune` uses. The guard has no bypass
+setting. It also refuses deleting an `agent_event_grants` row that audits still
+reference, because `ON DELETE SET NULL` would rewrite them. Grants are disabled,
+never deleted.
+
+The guard binds every role that cannot alter the tables. It does not bind
+their owner or a superuser: either can disable or drop the triggers. This
+must hold before the web/bot roles reach staging or production data (not
+yet provisioned; this PR changes no live role or credential):
+
+- Migrations run as a separate owner role. The runtime roles (Workers via
+  Hyperdrive and the bot container) do not own these tables and are not
+  superusers or members of the owner role.
+- On these three tables the runtime roles hold only `SELECT, INSERT, DELETE`,
+  plus `USAGE` on their id sequences. They hold no `UPDATE`, `TRUNCATE`,
+  `TRIGGER` or `REFERENCES`.
+- Test fixtures own their disposable schemas, so `test/helpers/audit-rows.ts`
+  can lift the TRUNCATE guard inside one transaction for teardown.
+  `test/audit-immutability.test.ts` proves the guard under a throwaway non-owner
+  role.
+
 ## Backups
 
 Nightly `pg_dump -Fc` of the `staging` branch (and `main` after
