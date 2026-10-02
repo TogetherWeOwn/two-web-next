@@ -19,7 +19,6 @@ const KEY = "01J0000000000000000000ABCD";
 const EVENT_PATH = `/events/${KEY}.ics`;
 const row = {
   id: 1,
-  icsSequence: 1782907200n,
   eventKey: KEY,
   title: "Synthetic calendar event",
   game: null,
@@ -29,6 +28,9 @@ const row = {
   discordEventId: null,
   discordSyncFailedAt: null,
   discordSyncFailureCode: null,
+  icsSequence: 1782907200n,
+  syncRevision: 1,
+  syncedRevision: 0,
   recurrenceFrequency: null,
   recurrenceCount: null,
   recurrenceEndsOn: null,

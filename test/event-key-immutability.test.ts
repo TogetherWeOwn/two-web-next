@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -41,7 +41,7 @@ const baseEnv: Env = {
 describe.skipIf(!process.env.DATABASE_URL)("event key immutability (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  const sent: QueueMessage[] = [];
   let env: Env;
 
   beforeAll(async () => {
@@ -50,7 +50,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event key immutability (agent-testdb
       ...baseEnv,
       ADMIN_DB: fixture.db,
       SESSION_STORE: store,
-      EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
+      SYNC_EVENT_QUEUE: {
+        send: async (message: unknown) => {
+          sent.push(message as QueueMessage);
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+        },
+      },
     } as unknown as Env;
   });
   afterAll(async () => {

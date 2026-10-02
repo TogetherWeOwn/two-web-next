@@ -545,11 +545,10 @@ app.get("/up", async (c) => {
   // Fixed app identity for the cutover probe, including unknown/degraded reads.
   c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
-  // Readiness must probe the database selected by the web stores. Preserve the
-  // queue's existing Hyperdrive-first selection without falling back on failure.
+  // Readiness and the queue slice both read the database the web stores and
+  // the queue producers/consumer select: explicit DATABASE_URL wins, DB only
+  // when absent, never as a retry after a failed connection.
   const url = databaseUrl(c.env);
-  const queueUrl = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
-  const shared = url === queueUrl;
   const owned = new Set<ReturnType<typeof postgres>>();
   const connect = (target: string | undefined, max: number) => {
     if (injected) return injected;
@@ -572,11 +571,10 @@ app.get("/up", async (c) => {
   };
   try {
     c.header("cache-control", "no-store");
-    // Two slots when shared, one per client otherwise: queue cannot starve DB.
-    const sql = connect(url, shared ? 2 : 1);
-    const queueSql = shared ? sql : connect(queueUrl, 1);
+    // Two slots on the one client: the queue read cannot starve the DB read.
+    const sql = connect(url, 2);
     const body = await upBody(
-      queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null,
+      sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
       sql,
       configReadiness(c.env),
     );
