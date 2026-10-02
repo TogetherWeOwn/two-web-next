@@ -69,10 +69,13 @@ describe("source-managed moderator deployment preflight", () => {
 });
 
 describe("staging smoke workflow safety", () => {
-  it("uses approved self-hosted labels with a job-private container", () => {
-    expect(smoke).toContain("runs-on: [self-hosted, two-selfhosted]");
+  it("routes runners by repo visibility with a job-private container", () => {
+    // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
+    expect(smoke).toContain(
+      `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`,
+    );
     expect(smoke).toContain("image: node:24-bookworm");
-    expect(smoke).not.toContain("ubuntu-latest");
+    expect(smoke.split("ubuntu-latest")).toHaveLength(2);
   });
 
   it("matches the documented vars/secrets namespaces", () => {

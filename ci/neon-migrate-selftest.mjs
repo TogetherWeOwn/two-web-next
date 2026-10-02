@@ -69,7 +69,7 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     MIGRATION_TARGET: "production", PRODUCTION_DEPLOY_ENABLED: "true" } }).status, 0);
   assert.equal(spawnSync("bash", ["-c", script], { env: { ...process.env, ...mainEnv,
     GITHUB_REF: "refs/heads/topic" } }).status, 1);
-  assert.match(workflow, /runs-on: \[self-hosted, two-selfhosted\]/);
+  assert.ok(workflow.includes(`runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`));
   assert.match(workflow, /environment: \$\{\{ inputs.target \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /bash ci\/check-migration-numbers.sh/);
