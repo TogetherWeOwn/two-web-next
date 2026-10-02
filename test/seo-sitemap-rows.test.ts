@@ -4,7 +4,12 @@
 // archive is never listed (TOG-7072), and no APP_URL shape leaks a
 // double-slash canonical (TOG-10118).
 import { describe, expect, it } from "vitest";
-import { buildSitemapUrls, crawlableEvents, renderSitemap, type SitemapEventCandidate } from "../src/seo";
+import {
+  buildSitemapUrls,
+  crawlableEvents,
+  renderSitemap,
+  type SitemapEventCandidate,
+} from "../src/seo";
 
 const BASE = "https://next.example.test";
 
@@ -27,7 +32,12 @@ describe("sitemap /join and /e/{key} rows (TOG-11986)", () => {
   it("emits one 0.6 row per published key, in query order, lastmod only when known", () => {
     const events = rows().filter((u) => u.loc.startsWith(`${BASE}/e/`));
     expect(events).toEqual([
-      { loc: `${BASE}/e/board-games`, lastmod: "2026-09-01T00:00:00.000Z", changefreq: "weekly", priority: "0.6" },
+      {
+        loc: `${BASE}/e/board-games`,
+        lastmod: "2026-09-01T00:00:00.000Z",
+        changefreq: "weekly",
+        priority: "0.6",
+      },
       { loc: `${BASE}/e/movie-night`, changefreq: "weekly", priority: "0.6" },
     ]);
   });
@@ -43,18 +53,24 @@ describe("sitemap /join and /e/{key} rows (TOG-11986)", () => {
   });
 
   it("emits no event rows when nothing is published", () => {
-    const none = buildSitemapUrls(BASE, crawlableEvents(CANDIDATES.filter((e) => e.status !== "published")));
+    const none = buildSitemapUrls(
+      BASE,
+      crawlableEvents(CANDIDATES.filter((e) => e.status !== "published")),
+    );
     expect(none.some((u) => u.loc.includes("/e/"))).toBe(false);
     expect(none.some((u) => u.loc === `${BASE}/join`)).toBe(true);
   });
 
-  it.each([BASE, `${BASE}/`, `${BASE}//`])("never emits a double-slash loc for APP_URL %s", (appUrl) => {
-    const locs = rows(appUrl).map((u) => u.loc);
-    expect(locs).toContain(`${BASE}/join`);
-    expect(locs).toContain(`${BASE}/e/board-games`);
-    for (const loc of locs) {
-      expect(loc.startsWith(`${BASE}/`)).toBe(true);
-      expect(loc.slice("https://".length)).not.toContain("//");
-    }
-  });
+  it.each([BASE, `${BASE}/`, `${BASE}//`])(
+    "never emits a double-slash loc for APP_URL %s",
+    (appUrl) => {
+      const locs = rows(appUrl).map((u) => u.loc);
+      expect(locs).toContain(`${BASE}/join`);
+      expect(locs).toContain(`${BASE}/e/board-games`);
+      for (const loc of locs) {
+        expect(loc.startsWith(`${BASE}/`)).toBe(true);
+        expect(loc.slice("https://".length)).not.toContain("//");
+      }
+    },
+  );
 });
