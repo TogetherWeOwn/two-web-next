@@ -7,10 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
 import { DISCORD_HTTP_BUDGET_MS } from "../src/discord-http";
-import { DISCORD_WIDGET_VERDICT_TTL_MS, createDiscordWidgetHealth } from "../src/discord-widget";
+import { DISCORD_WIDGET_VERDICT_TTL_MS, createDiscordWidgetHealth, discordWidgetHealth } from "../src/discord-widget";
 
 const GUILD = "326474832151838730";
-const PROBE_URL = `https://discord.com/api/guilds/${GUILD}/widget.json`;
+const PROBE_URL = `https://discord.com/api/v10/guilds/${GUILD}/widget.json`;
 const IFRAME = `src="https://discord.com/widget?id=${GUILD}&amp;theme=dark" width="350" height="500"`;
 const FALLBACK = '<div class="join-preview"><p class="strap" data-testid="join-widget-fallback">';
 
@@ -33,10 +33,14 @@ function harness(transport: Transport, overrides: Partial<Env> = {}) {
     calls.push(String(input));
     return transport(String(input), init);
   });
+  // /join reads the module's widget health and no binding (static-theme
+  // guard), so each test swaps in a fresh instance on its own clock.
   const widget = createDiscordWidgetHealth({ fetch: fetch as typeof globalThis.fetch, now: () => clock });
-  const bindings = { ...env, ...overrides, JOIN_DEPS: { widget } } as unknown as Env;
+  vi.spyOn(discordWidgetHealth, "url").mockImplementation(widget.url);
+  const bindings = { ...env, ...overrides };
   return {
     calls,
+    inits: () => fetch.mock.calls.map(([, init]) => init),
     advance: (ms: number) => { clock += ms; },
     // One /join request with a Workers-style execution context; background
     // probes land in `pending` instead of the response path.
@@ -81,6 +85,10 @@ describe("/join Discord widget: success", () => {
     expect(first.pending).toHaveLength(1);
     await Promise.all(first.pending);
     expect(h.calls).toEqual([PROBE_URL]);
+    // A bare GET: no credential or member cookie ever reaches the probe.
+    const [init] = h.inits();
+    expect(init?.method ?? "GET").toBe("GET");
+    expect([...new Headers(init?.headers).keys()]).toEqual([]);
 
     const second = await h.join();
     expectIframe(second.html);

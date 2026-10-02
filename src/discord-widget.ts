@@ -40,7 +40,7 @@ export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): D
     const previous = verdict?.guildId === guildId ? verdict.available : true;
     let available: boolean;
     try {
-      const res = await discordFetch(`https://discord.com/api/guilds/${guildId}/widget.json`, {}, deps.fetch);
+      const res = await discordFetch(`https://discord.com/api/v10/guilds/${guildId}/widget.json`, {}, deps.fetch);
       available = res.status === 429 ? previous : res.ok;
       if (!available && previous) console.warn("discord widget unavailable; rendering the join fallback", { status: res.status });
     } catch (error) {
