@@ -296,26 +296,26 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
 });
 
-test("main CI runs are never cancelled in progress, so their success can reach staging", () => {
+test("main CI runs are never cancelled in progress and finish in push order", () => {
   // A cancel request marks the run cancelled even when every job then succeeds,
-  // and the deploy trigger above rejects a cancelled conclusion.
-  // Main pushes each keep their own group (per-SHA, same shape as pr-gates.yml),
-  // while PR pushes share one group per PR number (TOG-11811 queue economy).
+  // and the deploy trigger above rejects a cancelled conclusion. The group stays
+  // per ref so main runs are serialized: an older SHA cannot finish after, and
+  // deploy over, a newer one.
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
-  const block = ci.match(/^concurrency:\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ (.+) \}\}\n  cancel-in-progress: true\n/m);
-  assert(block, "ci.yml concurrency must group per-PR-or-SHA with cancel-in-progress");
+  const block = ci.match(/^concurrency:\n  group: (.+)\n  cancel-in-progress: \$\{\{ (.+) \}\}\n/m);
+  assert(block, "ci.yml concurrency must group per-PR-or-ref and exempt main from cancel-in-progress");
   // GitHub expression dereference is null-safe (missing pull_request reads as
   // null); emulate that with optional chaining so main-push contexts evaluate.
-  const expr = block[1].replaceAll("github.event.pull_request.number", "github.event.pull_request?.number");
-  const keyOf = new Function("github", `return (${expr});`);
-  // Main push: distinct SHAs get distinct groups, so no run cancels another.
-  assert.notEqual(
-    keyOf({ event: {}, sha: "aaa" }),
-    keyOf({ event: {}, sha: "bbb" }),
-  );
-  // PR pushes for the same PR share a group, so superseded pushes still cancel.
-  assert.equal(
-    keyOf({ event: { pull_request: { number: 7 } }, sha: "aaa" }),
-    keyOf({ event: { pull_request: { number: 7 } }, sha: "bbb" }),
-  );
+  const nullSafe = (expr) => expr.replaceAll("github.event.pull_request.number", "github.event.pull_request?.number");
+  const groupOf = new Function("github", `return \`${nullSafe(block[1]).replaceAll("${{ ", "${").replaceAll(" }}", "}")}\`;`);
+  const cancelsOf = new Function("github", `return (${nullSafe(block[2])});`);
+  const main = (sha) => ({ workflow: "ci", event: {}, ref: "refs/heads/main", sha });
+  const pr = (number, ref) => ({ workflow: "ci", event: { pull_request: { number } }, ref, sha: "x" });
+  // Main pushes share one group (serialized, in order) and are never cancelled.
+  assert.equal(groupOf(main("aaa")), groupOf(main("bbb")));
+  assert.equal(cancelsOf(main("aaa")), false);
+  // PR pushes for the same PR share a group and cancel superseded runs.
+  assert.equal(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(7, "refs/pull/7/merge")));
+  assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));
+  assert.equal(cancelsOf(pr(7, "refs/pull/7/merge")), true);
 });

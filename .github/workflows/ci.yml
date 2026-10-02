@@ -14,15 +14,18 @@ permissions:
   # The scope job lists the PR's changed files via the API.
   pull-requests: read
 
-# Main pushes each keep their own group (per-SHA, same shape as pr-gates.yml),
-# so a newer main push never cancels an in-progress run and its exact-SHA
-# success can trigger the staging deploy. Cancelling in-progress main runs left
-# 54 of 60 cancelled on 2026-10-02 (one with both jobs green), so staging never
-# deployed. PR pushes share one group per PR number, so superseded pushes still
-# cancel (TOG-11811 queue economy; test/ci-concurrency.test.ts pins this).
+# Runs on main are never cancelled in progress: a cancel request marks the run
+# cancelled even when every job then succeeds, and the staging deploy trigger
+# rejects a cancelled conclusion. That left 54 of 60 main runs cancelled on
+# 2026-10-02 and staging never deployed. The group stays per ref, so main runs
+# are serialized (finish in push order; a newer pending run replaces an older
+# pending one before it starts), and an older SHA can never finish after, and
+# deploy over, a newer one. PR pushes still cancel superseded runs (TOG-11811
+# queue economy). test/ci-concurrency.test.ts and the staging gate selftest pin
+# this.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose

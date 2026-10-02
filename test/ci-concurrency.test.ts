@@ -9,7 +9,11 @@ const workflows = readdirSync(dir)
   .filter((name) => name.endsWith(".yml"))
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
 const triggers = (text: string) => text.split(/\non:\n/)[1]?.split(/\n\S/)[0] ?? "";
-const cancels = (text: string) => /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: true\n/.test(text);
+// ci.yml alone exempts main from cancellation (a cancelled main run cannot
+// trigger the staging deploy); its concurrency group stays per ref so main runs
+// finish in push order and an older SHA never deploys over a newer one.
+const cancels = (text: string) =>
+  /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: (true|\$\{\{ github\.ref != 'refs\/heads\/main' \}\})\n/.test(text);
 
 describe("workflow concurrency", () => {
   it("cancels superseded runs of every pull_request workflow", () => {
