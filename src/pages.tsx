@@ -5,7 +5,7 @@ import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
 import type { JoinResult } from "./return-journey";
 import type { HomeEvent } from "./events/reads";
-import { cardTimeLabel, isValidZone, loginUrl } from "./islands/contracts";
+import { cardTimeLabel, isValidZone } from "./islands/contracts";
 import { inviteDestination } from "./invite";
 import { canonicalUrl } from "./seo";
 
@@ -117,6 +117,11 @@ export const Layout: FC<
 
 type HeaderCta = { href: string; label: string };
 
+// Header sign-in is the ordinary login round trip (/auth/discord). The RSVP and
+// guest-redirect CTAs use loginUrl, which starts the join journey instead.
+const signInUrl = (returnTo: string | null) =>
+  returnTo ? `/auth/discord?next=${encodeURIComponent(returnTo)}` : "/auth/discord";
+
 // Static pages pass no session: shared chrome never reads account persistence.
 // joinAction renders the join-funnel entry on the static leaves; an explicit
 // cta overrides the guest action (recovery shells pass their way back in).
@@ -165,7 +170,7 @@ export const SiteHeader: FC<
                 Join with Discord
               </a>
             ) : (
-              <a class="btn" href={loginUrl(loginReturnTo)} data-testid="signin">
+              <a class="btn" href={signInUrl(loginReturnTo)} data-testid="signin">
                 Sign in with Discord
               </a>
             )}
