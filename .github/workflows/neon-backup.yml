@@ -51,11 +51,14 @@ jobs:
 
       - id: probe
         name: Probe provisioning
+        env:
+          STAGING_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
         run: |
           set -euo pipefail
           case "$TARGET" in
-            staging) ready="${{ secrets.NEON_STAGING_DATABASE_URL }}" ;;
-            production) ready="${{ secrets.PRODUCTION_DATABASE_URL }}" ;;
+            staging) ready="$STAGING_URL" ;;
+            production) ready="$PRODUCTION_URL" ;;
             *) echo "Unknown backup target: $TARGET" >&2; exit 1 ;;
           esac
           if [ -n "$ready" ]; then
