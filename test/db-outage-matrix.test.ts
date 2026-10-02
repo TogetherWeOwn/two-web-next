@@ -70,6 +70,13 @@ const MATRIX: Case[] = [
     path: route === "/events/:file{.+\\.ics}" ? `/events/${EVENT_KEY}.ics` : undefined,
   })),
   { method: "GET", route: "/events.json", status: 503, actor: "member", format: "json" },
+  // Main #109/#98: JSON event show. Anonymous browsers redirect to the join
+  // funnel before any DB read. The member-session outage envelope is pinned
+  // below, outside the inventory, so the route string stays unique.
+  { method: "GET", route: "/events/:key", status: 302, location: `/join/discord?next=%2Fevents%2F${EVENT_KEY}` },
+  // Main #120: the alert probe gate (QA disabled here) 404s before any
+  // throttle/queue/DB read, so it is outage-independent and branded.
+  { method: "POST", route: "/__probe/alert", status: 404, format: "html", body: "{}" },
   { method: "POST", route: "/events", status: 503, actor: "moderator", format: "json", body: eventForm },
   { method: "PATCH", route: "/events/:key", status: 503, actor: "moderator", format: "json", body: "{}" },
   ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => ({
@@ -77,6 +84,9 @@ const MATRIX: Case[] = [
   })),
   { method: "PUT", route: "/events/:key/rsvp", status: 503, actor: "member", format: "json", body: '{"status":"going"}' },
   { method: "DELETE", route: "/events/:key/rsvp", status: 503, actor: "member", format: "json" },
+  // Main #98: the HTML form adapter reuses the JSON RSVP paths, so a member
+  // write during an outage renders the branded 503 instead of redirecting.
+  { method: "POST", route: "/e/:key/rsvp", status: 503, actor: "member", format: "html", body: '{"status":"going"}' },
   { method: "ALL", route: "/events/:key/rsvp", status: 405 },
   ...["/profile", "/members/:user"].map((route) => ({ method: "GET", route, status: 503, actor: "member" as const, format: "html" as const })),
   { method: "PATCH", route: "/members/:user", status: 503, actor: "member", format: "json", body: '{"bio":"Fixture","games":[]}' },
@@ -238,6 +248,28 @@ it("enabled agent ingress retains its reason envelope without a configured bindi
   expect(res.status).toBe(503);
   expect(await res.json()).toEqual({ reason: "ingress_unavailable", message: "The agent event store is not configured." });
   expect(clients).toHaveLength(0);
+});
+
+// Main #109: a member session on the JSON event show reaches the outage
+// envelope, not login and not a 500. Also holds when the session store itself
+// is down: the JSON refusal precedes session resolution.
+it("member event show fails closed to the outage envelope during an outage", async () => {
+  for (const sessionDown of [false, true]) {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store, MEMBER);
+    const bindings = outageEnv();
+    if (!sessionDown) Object.assign(bindings, { SESSION_STORE: store });
+    const res = await testApp.request(`/events/${EVENT_KEY}`, {
+      method: "GET",
+      headers: { origin: env.APP_URL, accept: "application/json", cookie },
+    }, bindings);
+    await assertResponse(res.clone(), { method: "GET", route: "/events/:key", status: 503, format: "json" });
+    expect(res.headers.get("cache-control")).toContain("private");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(await res.json()).toEqual({
+      error: "db_unavailable", message: "The service is temporarily unavailable. Try again shortly.",
+    });
+  }
 });
 
 it("valid login callback fails closed at session persistence, not OAuth validation", async () => {

@@ -87,6 +87,14 @@ DB recovers. Cross-origin logout remains forbidden without clearing cookies.
 `test/db-outage-responses.test.ts` supplements the real-socket matrix with
 classification negative controls, guest-home and logout security regressions,
 and failures after successful profile reads (save and mandatory audit).
+The JSON event show (`GET /events/:key`, main #109/#98) redirects anonymous
+browsers to the join funnel before any DB read and returns the outage envelope
+to member sessions, including when the session store itself is down. The RSVP
+HTML adapter (`POST /e/:key/rsvp`, main #98) reuses the JSON RSVP paths, so a
+member write during an outage renders the branded 503 instead of redirecting.
+The alert probe (`POST /__probe/alert`, main #120) refuses with a branded 404
+before any queue or DB read while its QA gate is disabled, so it is
+outage-independent.
 
 These tests verify in-process HTTP behavior. They do not claim staging,
 production, deployed Hyperdrive, real Discord or real OAuth acceptance.

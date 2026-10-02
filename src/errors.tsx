@@ -8,6 +8,7 @@ import { notFoundSuggestions, type SuggestedEvent } from "./events/suggestions";
 import { inviteDestination } from "./invite";
 import { RecoveryShell } from "./pages";
 import { bufferedMemberHtml, bufferedMemberText, memberReadActive } from "./member-reads";
+import { requestRoute } from "./request-log";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
 // errors/*.blade.php views (TOG-5626/TOG-6788). No session or cookie reads.
@@ -147,8 +148,7 @@ export function internalErrorHandler(err: unknown, c: Context): Response | Promi
     });
     return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
   }
-  console.error("unhandled error:", err);
-  alertRequestError(err, { method: c.req.method, route: c.req.routePath || c.req.path });
+  alertRequestError(err, { method: c.req.method, route: requestRoute(c), requestId: c.get("requestId") });
   if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
   c.header("cache-control", "no-store, private");
   c.status(500);
