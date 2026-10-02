@@ -90,7 +90,7 @@ describe("recordPageView on the mounted worker", () => {
       body: "{}",
     }, withBinding);
     expect(post.status).toBe(204);
-    const json = await app.request("/up", {}, withBinding);
+    const json = await app.request("/robots.txt", {}, withBinding);
     expect(json.status).toBe(200);
     await json.text();
     const unbound = await app.request("/about", {}, base);
