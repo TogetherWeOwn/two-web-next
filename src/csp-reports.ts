@@ -20,6 +20,7 @@
 import type { Context } from "hono";
 import type { Env } from "./env";
 import { readCappedBody } from "./csp-report-body";
+import { redactCspReportUri } from "./csp-report-uri";
 
 export { MAX_CSP_REPORT_BYTES, readCappedBody } from "./csp-report-body";
 export type { CappedBody } from "./csp-report-body";
@@ -82,7 +83,7 @@ const firstNumber = (...vals: unknown[]): number | null => {
   return null;
 };
 
-/** Fixed-key log line. Non-scalar values collapse to null — never nested attacker data. */
+/** Fixed-key log line. URI credentials are removed; non-scalars collapse to null. */
 export function cspReportLogFields(report: CspReportFields): {
   blocked_uri: string | null;
   violated_directive: string | null;
@@ -91,10 +92,10 @@ export function cspReportLogFields(report: CspReportFields): {
   line_number: number | null;
 } {
   return {
-    blocked_uri: firstString(report["blocked-uri"], report.blockedURL),
+    blocked_uri: redactCspReportUri(firstString(report["blocked-uri"], report.blockedURL)),
     violated_directive: firstString(report["violated-directive"], report.effectiveDirective),
-    document_uri: firstString(report["document-uri"], report.documentURL, report.url),
-    source_file: firstString(report["source-file"], report.sourceFile),
+    document_uri: redactCspReportUri(firstString(report["document-uri"], report.documentURL, report.url)),
+    source_file: redactCspReportUri(firstString(report["source-file"], report.sourceFile)),
     line_number: firstNumber(report["line-number"], report.lineNumber),
   };
 }

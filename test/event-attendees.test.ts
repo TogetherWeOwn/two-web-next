@@ -4,6 +4,8 @@ import app from "./app";
 import { events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import { listGoingAttendees } from "../src/events/reads";
+import * as reads from "../src/events/reads";
+import * as memberReads from "../src/member-reads";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR, OUTSIDER, seed, SUBJECT } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
@@ -151,17 +153,72 @@ describe.skipIf(!process.env.DATABASE_URL)("member-only event attendees (isolate
     expect(await logs()).toHaveLength(0);
   });
 
+  it.each(["guest", "member"])("refuses an added sensitive query inside the existing event handler for %s", async (role) => {
+    const original = reads.getPublicEvent;
+    vi.spyOn(reads, "getPublicEvent").mockImplementationOnce(async (db, key) => {
+      const event = await original(db, key);
+      try { await db.select().from(users); } catch {}
+      return event;
+    });
+    const res = await request(undefined, { headers: role === "guest" ? {} : await headers(MEMBER) });
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain(SUBJECT.username);
+    expect(await logs()).toHaveLength(0);
+  });
+
+  it("refuses a newly added keyless projection even inside a keyed attendee helper", async () => {
+    const original = reads.listGoingAttendees;
+    vi.spyOn(reads, "listGoingAttendees").mockImplementationOnce(async (db, eventId) => {
+      const attendees = await original(db, eventId);
+      try { await memberReads.keyedMemberRead(() => db.select({ name: users.username }).from(users)); } catch {}
+      return attendees;
+    });
+    const res = await request(undefined, { headers: await headers(MEMBER) });
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain(SUBJECT.username);
+    expect(await logs()).toHaveLength(0);
+  });
+
+  it("one malformed attendee key refuses the whole partial set", async () => {
+    const [event] = await fixture.db.select().from(events);
+    await fixture.db.insert(users).values({ id: "123", username: "invalid-key-private-name" });
+    await fixture.db.insert(rsvps).values({ eventId: event!.id, userId: "123", status: "going" });
+    const res = await request(undefined, { headers: await headers(MEMBER) });
+    expect(res.status).toBe(503);
+    const body = await res.text();
+    expect(body).not.toContain(SUBJECT.username);
+    expect(body).not.toContain("invalid-key-private-name");
+    expect(await logs()).toHaveLength(0);
+  });
+
+  it.each(["guest", "member"])("refuses undeclared/declared event streams for %s before a producer pull", async (role) => {
+    let pulls = 0;
+    vi.spyOn(memberReads, "bufferedMemberHtml").mockImplementationOnce(async (c) => {
+      c.res = new Response(new ReadableStream({ pull(controller) {
+        pulls++; controller.enqueue(new TextEncoder().encode(SUBJECT.username));
+      } }, { highWaterMark: 0 }));
+      return c.res;
+    });
+    const res = await request(undefined, { headers: role === "guest" ? {} : await headers(MEMBER) });
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain(SUBJECT.username);
+    expect(pulls).toBe(0);
+    expect(await logs()).toHaveLength(0);
+  });
+
   it.each([undefined, "false"])("failed log INSERT enforces=%s without spilling subjects", async (enforce) => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     await fixture.db.execute(sql`ALTER TABLE member_data_access_logs ADD CONSTRAINT reject_test_access CHECK (false)`);
     try {
       const res = await request(undefined, { headers: await headers(MEMBER) }, enforce);
-      expect(res.status).toBe(enforce === "false" ? 200 : 503);
+      expect(res.status).toBe(503);
       const html = await res.text();
-      expect(html.includes(SUBJECT.username)).toBe(enforce === "false");
+      expect(html).not.toContain(SUBJECT.username);
       expect(res.headers.get("cache-control")).toBe("private, no-store");
       expect(await logs()).toHaveLength(0);
       const logged = JSON.stringify(error.mock.calls);
+      expect(logged).toContain("DrizzleQueryError");
+      expect(logged).not.toContain("insert into");
       expect(logged).not.toContain(SUBJECT.userId);
       expect(logged).not.toContain(SUBJECT.username);
     } finally {

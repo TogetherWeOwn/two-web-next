@@ -1,8 +1,10 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts", "test/**/*.test.mjs"],
+    // Smoke fixtures use node:test and run separately through test:smoke.
+    exclude: [...configDefaults.exclude, "test/smoke.test.mjs", "test/json-smoke.test.mjs"],
     // Live suites truncate shared tables in one database, so files run serially.
     fileParallelism: false,
     coverage: {
