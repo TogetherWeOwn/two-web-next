@@ -2,6 +2,7 @@ import { SYNC_EVENT, backoffFor } from "./constants";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
 import type { BotClient, EventStore, UniqueLock } from "./types";
+import { safeRequestId } from "../request-log";
 
 export type Outcome = { done: true } | { retryInSeconds: number } | { failed: string; definitive?: true };
 
@@ -14,8 +15,12 @@ export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },
   lock: UniqueLock,
   eventKey: string,
+  // Build-time key (the constructor in Laravel): every retry carries this same key.
   idempotencyKey: string = crypto.randomUUID(),
   signal?: AbortSignal,
+  // Originating HTTP request for queue.failing correlation; optional for
+  // scheduled/reconcile/legacy dispatches. Never a job or idempotency key.
+  requestId?: string,
 ): Promise<boolean> {
   signal?.throwIfAborted();
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
@@ -25,7 +30,8 @@ export async function dispatchSyncEvent(
   try {
     signal?.throwIfAborted();
     await queue.send(
-      { kind: "sync-event", eventKey, idempotencyKey, leaseToken },
+      // Idempotency stays build-time; correlation rides alongside, never as the key.
+      { kind: "sync-event", eventKey, idempotencyKey, leaseToken, requestId: safeRequestId(requestId) },
       { delaySeconds: SYNC_EVENT.debounceSeconds },
     );
   } catch (err) {

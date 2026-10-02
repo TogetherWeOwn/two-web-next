@@ -67,10 +67,12 @@ it("keeps the join targets, guarded return path, widget and fallback in the auth
   expect(fallback).not.toContain("<iframe");
 });
 
-it.each(["/events"])("%s stays outside this styling slice", async (path) => {
-  // The denied OAuth callback and unknown pages render the themed recovery
-  // shell (base-theme homepage-theme), so only truly unthemed routes belong here.
-  const html = await (await app.request(path, {}, env)).text();
+it.each(["/events"])("%s is not a static leaf: without a database it fails closed", async (path) => {
+  // The schedule opts into its own theme (base-theme schedule-theme), covered
+  // with local fixtures in page-shells.test.ts; it never borrows the content shell.
+  const response = await app.request(path, {}, env);
+  expect(response.status).toBe(503);
+  const html = await response.text();
+  expect(html).not.toContain("content-theme");
   expect(html).not.toContain('href="/theme.css"');
-  expect(html).not.toContain('class="base-theme');
 });

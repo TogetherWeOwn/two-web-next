@@ -96,8 +96,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   async function assertTracked() {
     expect(sent).toHaveLength(1);
     const { body, options } = sent[0]!;
-    expect(body).toEqual({ kind: "sync-event", eventKey, idempotencyKey: expect.any(String), jobId: expect.any(String),
+    // Route-produced messages carry the request correlation beside build-time
+    // identity (#89); direct dispatches omit it. Assert the tracked shape and
+    // pin the correlation contract separately per caller below.
+    expect(body).toMatchObject({ kind: "sync-event", eventKey, idempotencyKey: expect.any(String), jobId: expect.any(String),
       leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) });
+    // requestId is optional correlation: a defined string on route-produced
+    // messages, undefined on direct dispatches — never a job or dedupe key.
+    if (body.requestId !== undefined) expect(body.requestId).not.toBe(body.idempotencyKey);
     expect(body.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.jobId).toMatch(/^[0-9a-f-]{36}$/);
     expect(options).toEqual({ delaySeconds: 10 });

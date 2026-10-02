@@ -224,12 +224,15 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     expect(sent).toHaveLength(1);
   });
 
-  it("a spring-forward gap returns the start-input wall-time error without writes", async () => {
+  it.each([
+    ["starts_at", "2027-03-28 01:30", "2027-03-28 03:30"],
+    ["ends_at", "2027-03-28 00:30", "2027-03-28 01:30"],
+  ] as const)("a spring-forward gap returns the %s field error without writes", async (field, starts_at, ends_at) => {
     const before = await snapshot();
-    const res = await patch({ starts_at: "2027-03-28 01:30", ends_at: "2027-03-28 03:30" });
+    const res = await patch({ starts_at, ends_at });
     expect(res.status).toBe(422);
     expect(await res.json()).toEqual({ error: "invalid", fields: {
-      starts_at: "That time never occurred in Europe/London — clocks skipped forward over it. Pick a time outside the gap.",
+      [field]: "That time never occurred in Europe/London — clocks skipped forward over it. Pick a time outside the gap.",
     } });
     await expectUnchanged(before);
   });

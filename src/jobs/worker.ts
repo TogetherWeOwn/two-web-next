@@ -63,7 +63,7 @@ export async function enqueueSyncEvent(env: Env, message: Extract<QueueMessage, 
   try {
     return await dispatchSyncEvent(
       trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(sql)),
-      pgUniqueLock(sql), message.eventKey, message.idempotencyKey,
+      pgUniqueLock(sql), message.eventKey, message.idempotencyKey, undefined, message.requestId,
     );
   } finally {
     await sql.end({ timeout: 1 });
