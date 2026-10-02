@@ -20,7 +20,7 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import postgres from "postgres";
 import { authorizeUrl, exchangeCode, failureMeta, fetchUser } from "../discord";
-import { discordWidgetUrl } from "../discord-widget";
+import { type DiscordWidgetHealth, discordWidgetHealth } from "../discord-widget";
 import { rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
@@ -52,6 +52,7 @@ export type JoinRouteDeps = {
   store?: () => Promise<Sql | null>;
   bot?: (botToken: string) => BotAdd;
   now?: () => number;
+  widget?: DiscordWidgetHealth;
 };
 export type EnvWithJoin = Env & { JOIN_DEPS?: JoinRouteDeps };
 
@@ -74,6 +75,15 @@ async function joinStore(c: Ctx): Promise<Sql | null> {
     migratedJoinUrls.add(url);
   }
   return sql;
+}
+
+function background(c: Ctx): ((work: Promise<void>) => void) | undefined {
+  try {
+    const ctx = c.executionCtx;
+    return (work) => ctx.waitUntil(work);
+  } catch {
+    return undefined;
+  }
 }
 
 const joinRedirectUri = (env: Env) => `${env.APP_URL}/join/callback`;
@@ -126,7 +136,12 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
   // `/join` — the journey page. Database-free leaf like /about: it must stay
   // 200 when everything behind it is down (a 500 here loses the member).
   app.get("/join", (c) => {
-    const widgetUrl = discordWidgetUrl(c.env.DISCORD_GUILD_ID);
+    // The widget verdict is read, never awaited: a Discord outage or a hung
+    // probe swaps the iframe for the static fallback without touching the
+    // response path. Re-probes ride waitUntil, so they need an execution
+    // context; without one (local requests) the last verdict stands.
+    const widget = (c.env as EnvWithJoin).JOIN_DEPS?.widget ?? discordWidgetHealth;
+    const widgetUrl = widget.url(c.env.DISCORD_GUILD_ID, background(c));
     // A safe `?next=` survives onto the one-click link; a hostile one leaves
     // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
     const next = safeNext(c.req.query("next"));
