@@ -27,11 +27,11 @@ const roleKey = opt("role-key");
 const channelKey = opt("channel-key");
 const eventKey = opt("event-key") || `tog10112-${crypto.randomUUID().slice(0, 12)}`;
 
-const missing = ["discord-id", "role-key", "channel-key"].filter(
-  (n) => opt(n) === "",
-);
+const missing = ["discord-id", "role-key", "channel-key"].filter((n) => opt(n) === "");
 if (missing.length > 0) {
-  console.error(`internal-action-smoke: missing required option(s): ${missing.map((n) => `--${n}`).join(" ")}`);
+  console.error(
+    `internal-action-smoke: missing required option(s): ${missing.map((n) => `--${n}`).join(" ")}`,
+  );
   process.exit(2);
 }
 

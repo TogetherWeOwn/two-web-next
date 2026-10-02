@@ -72,7 +72,14 @@
 
   link.setAttribute("role", "button");
   link.addEventListener("click", (event) => {
-    if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.altKey
+    )
       return;
     event.preventDefault();
     void copy();

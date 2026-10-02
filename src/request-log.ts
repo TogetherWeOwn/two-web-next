@@ -19,7 +19,8 @@ export function safeRequestId(value: unknown): string | undefined {
 /** 48-bit timestamp + 80 cryptographically random bits, Crockford base32. */
 export function newRequestId(): string {
   let value = BigInt(Date.now());
-  for (const byte of crypto.getRandomValues(new Uint8Array(10))) value = (value << 8n) | BigInt(byte);
+  for (const byte of crypto.getRandomValues(new Uint8Array(10)))
+    value = (value << 8n) | BigInt(byte);
   let id = "";
   for (let i = 0; i < 26; i++) {
     id = BASE32[Number(value & 31n)] + id;
@@ -51,13 +52,15 @@ export async function requestLog(c: Context, next: Next): Promise<void> {
   await next();
   c.header("x-request-id", requestId);
   const colo = (c.req.raw.cf as { colo?: unknown } | undefined)?.colo;
-  console.log(JSON.stringify({
-    event: "http.request",
-    request_id: requestId,
-    method: c.req.method,
-    route: requestRoute(c),
-    status: c.res.status,
-    duration_ms: Math.max(0, Math.round((performance.now() - started) * 100) / 100),
-    colo: typeof colo === "string" && /^[A-Z]{3}$/.test(colo) ? colo : null,
-  }));
+  console.log(
+    JSON.stringify({
+      event: "http.request",
+      request_id: requestId,
+      method: c.req.method,
+      route: requestRoute(c),
+      status: c.res.status,
+      duration_ms: Math.max(0, Math.round((performance.now() - started) * 100) / 100),
+      colo: typeof colo === "string" && /^[A-Z]{3}$/.test(colo) ? colo : null,
+    }),
+  );
 }

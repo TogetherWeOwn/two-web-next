@@ -13,32 +13,47 @@ function avatarHash(id, avatar) {
     throw new Error("Invalid legacy avatar");
   }
   if (/^\/embed\/avatars\/[0-5]\.png$/.test(url.pathname)) return null;
-  const match = /^\/avatars\/(\d{1,20})\/([a-z0-9_]{1,64})\.(?:png|jpe?g|webp|gif)$/.exec(url.pathname);
+  const match = /^\/avatars\/(\d{1,20})\/([a-z0-9_]{1,64})\.(?:png|jpe?g|webp|gif)$/.exec(
+    url.pathname,
+  );
   if (!match || match[1] !== id) throw new Error("Invalid legacy avatar");
   return match[2]; // Image query parameters are not part of the stored hash.
 }
 
 export function createImportClient(url) {
   const parsed = new URL(url);
-  if (!["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname || !parsed.username || parsed.pathname.length < 2 || parsed.hash) {
+  if (
+    !["postgres:", "postgresql:"].includes(parsed.protocol) ||
+    !parsed.hostname ||
+    !parsed.username ||
+    parsed.pathname.length < 2 ||
+    parsed.hash
+  ) {
     throw new Error("Invalid connection URL");
   }
   // Unknown URL parameters become startup settings in Postgres.js, even
   // overriding connection options. Allow only TLS mode and one literal schema;
   // options, role, endpoint and session overrides must not cross this boundary.
   for (const [key, value] of parsed.searchParams) {
-    if (parsed.searchParams.getAll(key).length !== 1
-      || (key !== "sslmode" && key !== "search_path")
-      || (key === "sslmode" && !["disable", "require", "verify-ca", "verify-full", "prefer", "allow"].includes(value))
-      || (key === "search_path" && (value.trim() !== value || !/^[a-z_][a-z0-9_]{0,62}$/.test(value)))) {
+    if (
+      parsed.searchParams.getAll(key).length !== 1 ||
+      (key !== "sslmode" && key !== "search_path") ||
+      (key === "sslmode" &&
+        !["disable", "require", "verify-ca", "verify-full", "prefer", "allow"].includes(value)) ||
+      (key === "search_path" && (value.trim() !== value || !/^[a-z_][a-z0-9_]{0,62}$/.test(value)))
+    ) {
       throw new Error("Invalid connection URL parameters");
     }
   }
   return postgres(url, {
-    max: 1, connect_timeout: 10, debug: false,
-    connection: { timezone: "UTC", client_encoding: "UTF8" }, onnotice: () => {},
+    max: 1,
+    connect_timeout: 10,
+    debug: false,
+    connection: { timezone: "UTC", client_encoding: "UTF8" },
+    onnotice: () => {},
     // URL/default port and empty password must never inherit PGPORT/PGPASSWORD.
-    port: Number(parsed.port || 5432), password: () => decodeURIComponent(parsed.password),
+    port: Number(parsed.port || 5432),
+    password: () => decodeURIComponent(parsed.password),
   });
 }
 
@@ -64,8 +79,12 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
     for (const row of [...users, ...profiles]) {
       // Keep the Date serializer's finite-date boundary for Next's readers,
       // but retain the original timestamp text for microsecond-exact binding.
-      if (typeof row.discord_id !== "string" || !/^\d{1,20}$/.test(row.discord_id)
-        || !Number.isFinite(Date.parse(row.created_at)) || !Number.isFinite(Date.parse(row.updated_at))) {
+      if (
+        typeof row.discord_id !== "string" ||
+        !/^\d{1,20}$/.test(row.discord_id) ||
+        !Number.isFinite(Date.parse(row.created_at)) ||
+        !Number.isFinite(Date.parse(row.updated_at))
+      ) {
         throw new Error("Invalid legacy identity or timestamps");
       }
     }
@@ -143,11 +162,15 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
 
 export async function main(args = process.argv.slice(2), env = process.env) {
   if (args.length === 1 && args[0] === "--help") {
-    console.log("Usage: node bin/import/users-profiles.mjs [--dry-run | --apply]\nLEGACY_DATABASE_URL and DATABASE_URL must be supplied via env only. Default: --dry-run.");
+    console.log(
+      "Usage: node bin/import/users-profiles.mjs [--dry-run | --apply]\nLEGACY_DATABASE_URL and DATABASE_URL must be supplied via env only. Default: --dry-run.",
+    );
     return 0;
   }
   if (args.length > 1 || (args.length === 1 && !["--dry-run", "--apply"].includes(args[0]))) {
-    console.error("users-profiles: refusing: expected --dry-run or --apply; connection URLs are env-only.");
+    console.error(
+      "users-profiles: refusing: expected --dry-run or --apply; connection URLs are env-only.",
+    );
     return 2;
   }
   if (!env.LEGACY_DATABASE_URL || !env.DATABASE_URL) {
@@ -171,7 +194,9 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   } catch {
     // Driver messages/details can include credentials, connection URLs and member
     // contents. Print none of them, even on malformed URLs or constraint failures.
-    console.error("users-profiles: import failed; check connections, migrations and source data privately before retrying.");
+    console.error(
+      "users-profiles: import failed; check connections, migrations and source data privately before retrying.",
+    );
     return 1;
   } finally {
     await Promise.all([legacy, next].map((sql) => sql?.end({ timeout: 2 }).catch(() => {})));

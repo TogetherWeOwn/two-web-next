@@ -14,14 +14,22 @@ const staging = { ...baseEnv, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: token };
 afterEach(() => vi.restoreAllMocks());
 
 function request(env: Env, headers: Record<string, string> = {}, method = "POST") {
-  return app.request(new URL("/__probe/alert", env.APP_URL).toString(), {
-    method, headers: { origin: new URL(env.APP_URL).origin, [QA_HEADER]: token, ...headers },
-  }, env);
+  return app.request(
+    new URL("/__probe/alert", env.APP_URL).toString(),
+    {
+      method,
+      headers: { origin: new URL(env.APP_URL).origin, [QA_HEADER]: token, ...headers },
+    },
+    env,
+  );
 }
 
 const noDependencies = () => ({
   // Any accidental DB, lock or bot operation fails this local-fixture test.
-  bot: {} as BotClient, events: {} as EventStore, lock: {} as UniqueLock, ledger: {} as QueueLedger,
+  bot: {} as BotClient,
+  events: {} as EventStore,
+  lock: {} as UniqueLock,
+  ledger: {} as QueueLedger,
 });
 
 describe("staging alert probe gates", () => {
@@ -53,7 +61,10 @@ describe("staging alert probe gates", () => {
 
   it("the QA token never bypasses same-origin; deny before queue effects", async () => {
     const send = vi.fn();
-    const res = await request({ ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue }, { origin: "https://evil.test" });
+    const res = await request(
+      { ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue },
+      { origin: "https://evil.test" },
+    );
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "cross_origin" });
     expect(send).not.toHaveBeenCalled();
@@ -62,7 +73,11 @@ describe("staging alert probe gates", () => {
   it("throttles authorized probes, while disabled/bad-token calls never reach the counter", async () => {
     const send = vi.fn();
     const store = vi.fn(async () => (async () => [{ n: 10, wait: 30 }]) as never);
-    const env = { ...staging, THROTTLE_STORE: store, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue };
+    const env = {
+      ...staging,
+      THROTTLE_STORE: store,
+      INTERNAL_ACTION_QUEUE: { send } as unknown as Queue,
+    };
     const res = await request(env);
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("30");
@@ -74,16 +89,21 @@ describe("staging alert probe gates", () => {
     expect(store).not.toHaveBeenCalled();
   });
 
-  it.each(["", "token=private", "11111111-1111-7111-8111-111111111111"])("rejects invalid probe ID %s only after QA authentication", async (probeId) => {
-    const send = vi.fn();
-    const env = { ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue };
-    const res = await request(env, { [ALERT_PROBE_HEADER]: probeId });
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: "invalid_probe_id" });
-    expect(send).not.toHaveBeenCalled();
-    expect((await request(env, { [ALERT_PROBE_HEADER]: probeId, [QA_HEADER]: "wrong" })).status).toBe(404);
-    expect(new AlertProbeError(probeId).probeId).toBeUndefined();
-  });
+  it.each(["", "token=private", "11111111-1111-7111-8111-111111111111"])(
+    "rejects invalid probe ID %s only after QA authentication",
+    async (probeId) => {
+      const send = vi.fn();
+      const env = { ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue };
+      const res = await request(env, { [ALERT_PROBE_HEADER]: probeId });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_probe_id" });
+      expect(send).not.toHaveBeenCalled();
+      expect(
+        (await request(env, { [ALERT_PROBE_HEADER]: probeId, [QA_HEADER]: "wrong" })).status,
+      ).toBe(404);
+      expect(new AlertProbeError(probeId).probeId).toBeUndefined();
+    },
+  );
 
   it("missing queue is an explicit 503, not a successful probe", async () => {
     expect((await request(staging)).status).toBe(503);
@@ -94,7 +114,9 @@ describe("local end-to-end probe chain", () => {
   it("real 500 handler + real poisoned consumer produce two redacted delivery receipts", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const queued: unknown[] = [];
-    const send = vi.fn(async (body: unknown) => { queued.push(body); });
+    const send = vi.fn(async (body: unknown) => {
+      queued.push(body);
+    });
     const env = { ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue };
     const sentProbeId = "11111111-1111-4111-8111-111111111111";
     const response = await request(env, { [ALERT_PROBE_HEADER]: sentProbeId });
@@ -107,21 +129,43 @@ describe("local end-to-end probe chain", () => {
     expect(validProbeId(probeId)).toBe(true);
     expect(probeId).toBe(sentProbeId);
 
-    const ack = vi.fn(), retry = vi.fn();
-    await consume({ messages: [{ body: queued[0], attempts: 1, ack, retry }] }, { ...noDependencies(), probeEnabled: true });
+    const ack = vi.fn(),
+      retry = vi.fn();
+    await consume(
+      { messages: [{ body: queued[0], attempts: 1, ack, retry }] },
+      { ...noDependencies(), probeEnabled: true },
+    );
     expect(ack).toHaveBeenCalledOnce();
     expect(retry).not.toHaveBeenCalled();
-    const lines = errors.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('{"level":"critical"'));
+    const lines = errors.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith('{"level":"critical"'));
     expect(lines).toHaveLength(2);
     expect(lines.map((line) => JSON.parse(line).probeId)).toEqual([probeId, probeId]);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ event: "error.alert", fingerprint: "AlertProbeError@/__probe/alert", route: "/__probe/alert" });
-    expect(JSON.parse(lines[1]!)).toMatchObject({ event: "queue.failing", job: "AlertProbe", attempts: 1, exception: "AlertProbeError" });
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      event: "error.alert",
+      fingerprint: "AlertProbeError@/__probe/alert",
+      route: "/__probe/alert",
+    });
+    expect(JSON.parse(lines[1]!)).toMatchObject({
+      event: "queue.failing",
+      job: "AlertProbe",
+      attempts: 1,
+      exception: "AlertProbeError",
+    });
 
     const webhook = vi.fn(async () => new Response(null, { status: 200 }));
     const receipt = vi.fn();
     const tail = createTailWorker({ fetch: webhook as unknown as typeof fetch, sink: receipt });
-    await tail.tail([{ scriptName: "two-web-next", logs: [{ level: "error", message: lines, timestamp: Date.now() }] }],
-      { OPS_ALERT_WEBHOOK_URL: "https://discord.com/api/webhooks/123456789/test-token" });
+    await tail.tail(
+      [
+        {
+          scriptName: "two-web-next",
+          logs: [{ level: "error", message: lines, timestamp: Date.now() }],
+        },
+      ],
+      { OPS_ALERT_WEBHOOK_URL: "https://discord.com/api/webhooks/123456789/test-token" },
+    );
     expect(webhook).toHaveBeenCalledTimes(2);
     expect(receipt.mock.calls.map(([line]) => JSON.parse(line))).toMatchObject([
       { event: "error.alert", route: "/__probe/alert", probeId, delivery: "ops.alert.delivered" },
@@ -132,15 +176,21 @@ describe("local end-to-end probe chain", () => {
   it("generates a bounded probe ID for a caller without the optional header", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const send = vi.fn(async (_body: { probeId?: string }) => {});
-    expect((await request({ ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue })).status).toBe(500);
+    expect(
+      (await request({ ...staging, INTERNAL_ACTION_QUEUE: { send } as unknown as Queue })).status,
+    ).toBe(500);
     expect(send).toHaveBeenCalledOnce();
     expect(validProbeId(send.mock.calls[0]?.[0]?.probeId)).toBe(true);
   });
 
   it("a queued synthetic job is silently acked when the consumer QA gate is off", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const ack = vi.fn(), retry = vi.fn();
-    await consume({ messages: [{ body: { kind: "alert-probe" }, attempts: 1, ack, retry }] }, noDependencies());
+    const ack = vi.fn(),
+      retry = vi.fn();
+    await consume(
+      { messages: [{ body: { kind: "alert-probe" }, attempts: 1, ack, retry }] },
+      noDependencies(),
+    );
     expect(ack).toHaveBeenCalledOnce();
     expect(retry).not.toHaveBeenCalled();
     expect(errors).not.toHaveBeenCalled();

@@ -25,8 +25,10 @@ export function validateProfile(
 
   const bioRaw = input.bio ?? null;
   if (bioRaw !== null && typeof bioRaw !== "string") errors.bio = "Bio must be text.";
-  else if (typeof bioRaw === "string" && [...bioRaw].length > 1000) errors.bio = "Keep your bio to 1000 characters or fewer.";
-  else if (typeof bioRaw === "string" && CONTROL_CHARS.test(bioRaw)) errors.bio = "Remove control characters.";
+  else if (typeof bioRaw === "string" && [...bioRaw].length > 1000)
+    errors.bio = "Keep your bio to 1000 characters or fewer.";
+  else if (typeof bioRaw === "string" && CONTROL_CHARS.test(bioRaw))
+    errors.bio = "Remove control characters.";
 
   let gamesRaw: unknown = input.games;
   if (typeof input.games_text === "string") {
