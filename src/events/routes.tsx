@@ -22,7 +22,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
-import { NotFoundPage, rateLimitExceeded } from "../errors";
+import { databaseUnavailable, NotFoundPage, rateLimitExceeded } from "../errors";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { safeNext } from "../join/service";
@@ -539,6 +539,7 @@ export function registerEventRoutes(
         };
         await render();
       },
+      databaseUnavailable,
     );
     // Consume only after the keyed boundary allows a visible response.
     if (c.res.status === 200) await takeJoinResult(c);

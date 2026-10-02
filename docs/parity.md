@@ -14,6 +14,12 @@ W-card statuses at write time:
 W2 ✅, W3 ✅, W4 ✅, W5 ✅, W14 ✅ · W6 🔶, W11 🔶 · W1 ⛔, W10 ⛔ (slice 1
 shipped), W13 ⛔ (PR #7 in review), W15 ⛔, S1 ⛔ · W7/W8/W9/W12/W16 📋 todo.
 
+Database-outage acceptance is maintained separately in
+[`db-outage-matrix.md`](db-outage-matrix.md) and
+`test/db-outage-matrix.test.ts`. It distinguishes the legacy bot-only outage
+from app-DB loss and lists the stronger Next targets; this historical snapshot
+is not evidence that a configured-but-unreachable DB already meets them.
+
 ## 1. Web routes (`routes/web.php` → Hono)
 
 | Legacy route | Next status | Card |
