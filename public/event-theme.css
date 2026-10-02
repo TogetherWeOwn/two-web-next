@@ -1,0 +1,59 @@
+/* Match overview and lineup adaptation; only /e/:key opts in. */
+.event-theme main { max-width: 76rem; }
+.event-theme .event-back { padding: 1.5rem 0 .5rem; font-size: .9rem; }
+.event-theme .event-back a { display: inline-flex; align-items: center; min-height: 44px; }
+.event-theme .event-hero {
+  position: relative; overflow: hidden; text-align: center; border: 0; padding: 3rem 1.5rem 4rem;
+  background: linear-gradient(135deg, transparent 90%, var(--surface) 90%), linear-gradient(45deg, var(--surface) 10%, transparent 10%);
+}
+.event-theme .event-kicker { color: var(--brand); font: 700 1.1rem/1.4 Display, 'Arial Narrow', sans-serif; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 1rem; }
+.event-theme .event-hero h1 { max-width: 18ch; margin: .5rem auto 0; font-size: clamp(2.75rem, 6vw, 5.5rem); line-height: 1.05; text-wrap: balance; overflow-wrap: anywhere; }
+.event-theme .event-hero .notice { display: inline-block; margin: 0 0 1rem; }
+.event-theme .event-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); margin: 0 0 1rem; padding: 0; border-block: 1px solid var(--line); background: var(--surface); }
+.event-theme .event-meta > div { min-width: 0; padding: 1.5rem; }
+.event-theme .event-meta dt { font: 700 .9rem/1.4 Display, 'Arial Narrow', sans-serif; text-transform: uppercase; color: var(--muted); letter-spacing: .06em; margin-bottom: .5rem; }
+.event-theme .event-meta dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.event-theme .event-meta dd p { color: inherit; margin: 0; }
+.event-theme .event-rsvp { display: flex; justify-content: center; margin: 0 0 2rem; }
+.event-theme .event-rsvp > section { display: flex; flex-direction: column; align-items: center; gap: .75rem; border: 0; padding: 0; text-align: center; }
+.event-theme .event-rsvp form { display: flex; flex-direction: column; align-items: center; gap: .75rem; margin: 0; }
+.event-theme .event-rsvp p { margin: 0; }
+.event-theme .event-rsvp > section > a, .event-theme .event-rsvp button {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .65rem 1.8rem; border: 1px solid var(--brand);
+  background: var(--brand); color: var(--paper); font: 700 1.1rem/1.2 Display, 'Arial Narrow', sans-serif; text-transform: uppercase; text-decoration: none; cursor: pointer;
+}
+.event-theme .event-rsvp button[data-action='withdraw'] { background: transparent; color: var(--brand); }
+.event-theme .event-rsvp button:disabled { opacity: .65; cursor: progress; }
+.event-theme .event-detail-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 3rem; align-items: start; }
+.event-theme .event-detail-grid > * { min-width: 0; }
+.event-theme .event-detail-grid section { border: 0; }
+.event-theme .event-description p { max-width: 65ch; white-space: pre-line; overflow-wrap: anywhere; }
+.event-theme .event-pitch { padding-top: 0; }
+.event-theme .event-pitch p { max-width: 60ch; }
+.event-theme .event-share h2 { font-size: 1.6rem; }
+.event-theme .event-share a { display: inline-flex; min-height: 44px; align-items: center; }
+.event-theme [data-copy-toast] { min-height: 1.65em; margin-bottom: 0; }
+.event-theme .event-attendee-grid, .event-theme .event-related-grid { list-style: none; padding: 0; margin: 1.5rem 0 0; display: grid; gap: 1rem; }
+.event-theme .event-attendee-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); }
+.event-theme .event-attendee-grid li { display: flex; align-items: center; gap: 1rem; min-width: 0; background: var(--surface); padding: 1rem; border-left: 2px solid var(--brand); }
+.event-theme .event-attendee-grid a { min-width: 0; min-height: 44px; display: flex; align-items: center; overflow-wrap: anywhere; }
+.event-theme .event-attendee-mark { width: 3rem; height: 3rem; flex-shrink: 0; display: grid; place-items: center; background: var(--paper); color: var(--muted); font: 700 1.6rem/1 Display, 'Arial Narrow', sans-serif; text-transform: uppercase; }
+.event-theme .event-pagination { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem 2rem; padding: 2rem 0; border-top: 1px solid var(--line); }
+.event-theme .event-pagination a { flex: 1 1 16rem; min-height: 44px; display: flex; align-items: center; overflow-wrap: anywhere; }
+.event-theme .event-pagination a[rel='next'] { justify-content: end; text-align: right; }
+.event-theme .event-related-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); }
+.event-theme .event-related-grid a { display: block; height: 100%; padding: 1.5rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); text-decoration: none; overflow-wrap: anywhere; }
+.event-theme .event-related-grid a:hover { border-color: var(--brand); color: var(--brand); }
+.event-theme .event-related-grid time { display: block; font-size: .9rem; color: var(--muted); margin-top: .5rem; }
+.event-theme .event-gone { min-height: 28rem; padding-block: 4rem; }
+.event-theme .event-gone h1 { margin-bottom: 1.5rem; }
+.event-theme .event-gone .event-rsvp { margin-bottom: 1.5rem; }
+@media (max-width: 48rem) {
+  .event-theme .event-hero { padding: 2rem 0 3rem; }
+  .event-theme .event-meta { grid-template-columns: 1fr; }
+  .event-theme .event-meta > div { padding: 1.25rem; }
+  .event-theme .event-meta > div + div { border-top: 1px solid var(--line); }
+  .event-theme .event-detail-grid { grid-template-columns: 1fr; gap: 0; }
+  .event-theme .event-share { padding-top: 0; }
+  .event-theme .event-pagination a[rel='next'] { justify-content: start; text-align: left; }
+}
