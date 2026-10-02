@@ -4,15 +4,27 @@
 // zero mutations and no write-back queued, while a moderator control passes.
 // Lives here instead of test/events.test.ts, which open PRs #245/#68 touch.
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import postgres from "postgres";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { getEvent } from "../src/admin/store";
 import { newEventKey } from "../src/admin/validation";
 import { activityLog, events } from "../src/db/admin-schema";
+import { databaseOptions } from "../src/db/connection";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+
+// TOG-10815: the W8 SyncMessage carrier is deleted; routes produce the tracked
+// W13 sync-event message. The queue double below only observes absence (member
+// 403 enqueues nothing); the moderator controls pin the tracked shape.
+type TrackedSync = Extract<QueueMessage, { kind: "sync-event" }>;
+
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -42,20 +54,40 @@ type Action = "publish" | "cancel" | "rsvp-pause" | "rsvp-reopen";
 
 describe.skipIf(!process.env.DATABASE_URL)("event write member-denied matrix (agent-testdb)", () => {
   let fixture: MemberDataFixture;
-  const sent: SyncMessage[] = [];
+  let realPostgres: typeof postgres;
+  const sent: TrackedSync[] = [];
   const env = {
     ...baseEnv,
     get ADMIN_DB() { return fixture.db; },
-    EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+    // The tracked producer's ledger and lock run on this fixture-owned
+    // schema (same postgres-mock pattern as event-mutation-invariants).
+    get DATABASE_URL() { return process.env.DATABASE_URL; },
+    SYNC_EVENT_QUEUE: { send: async (m: unknown) => void sent.push(m as TrackedSync) },
   } as unknown as Env;
 
-  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); });
+  beforeAll(async () => {
+    realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres")).default;
+    vi.mocked(postgres).mockImplementation(realPostgres);
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}> = {}) => {
+      const safe = testDatabaseUrl(raw);
+      return realPostgres(safe.href, {
+        ...opts, password: () => safe.password,
+        connection: { ...opts.connection, search_path: fixture.schemaName },
+      });
+    }) as typeof postgres);
+  });
   beforeEach(async () => {
     await fixture.reset();
     await fixture.client`delete from web_throttle_hits`;
+    await fixture.client`delete from queue_jobs`;
+    await fixture.client`delete from job_unique_locks`;
     sent.length = 0;
   });
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    if (realPostgres) vi.mocked(postgres).mockImplementation(realPostgres);
+    await fixture?.dispose();
+  });
 
   const seed = async (over: Partial<typeof events.$inferInsert> = {}) => {
     const [row] = await fixture.db.insert(events).values({
@@ -118,7 +150,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write member-denied matrix (ag
     expect(await res.json()).toMatchObject({ data: { event_key: row.eventKey, status: "published" } });
     expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("published");
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ eventKey: row.eventKey, action: "event.upsert" });
+    expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: row.eventKey });
     expect(await fixture.db.select().from(activityLog)).toHaveLength(1);
   });
 
@@ -132,7 +164,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write member-denied matrix (ag
     expect(await res.json()).toMatchObject({ data: { event_key: row.eventKey, rsvp_open: false } });
     expect((await getEvent(fixture.db, row.eventKey))?.rsvpOpen).toBe(false);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ eventKey: row.eventKey, action: "event.upsert" });
+    expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: row.eventKey });
     expect(await fixture.db.select().from(activityLog)).toHaveLength(1);
   });
 
