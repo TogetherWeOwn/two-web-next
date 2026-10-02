@@ -7,6 +7,7 @@ import {
   assertProductionCredentials,
   assertProductionProtection,
   assertProductionTarget,
+  assertRollbackVersionId,
   checkProductionGate,
 } from "./production-deploy-gate.mjs";
 
@@ -247,6 +248,52 @@ for (const key of Object.keys(credentials)) {
   }
 }
 
+for (const value of [
+  undefined,
+  "",
+  "   ",
+  "not-a-version",
+  "12345678-1234-1234-1234-123456789abc\n",
+  " 12345678-1234-1234-1234-123456789abc",
+  "12345678-1234-1234-1234-123456789abc ",
+  "12345678_1234_1234_1234_123456789abc",
+  "12345678123412341234123456789abc",
+  "{12345678-1234-1234-1234-123456789abc}",
+  "ABCDEF12-1234-1234-1234-123456789ABC",
+  // Shell metacharacters must never reach the rollback command as an argument.
+  "12345678-1234-1234-1234-123456789abc; printf HARMLESS",
+  "$(printf HARMLESS)",
+  "`printf HARMLESS`",
+  "12345678-1234-1234-1234-123456789abc || true",
+  "12345678-1234-1234-1234-123456789abc$HOME",
+  "12345678-1234-1234-1234-123456789abc*",
+]) {
+  test(`refuses rollback version_id ${JSON.stringify(value)}`, () => {
+    assert.throws(() => assertRollbackVersionId(value), /Rollback version_id/);
+  });
+}
+
+test("accepts only a lowercase Worker Version UUID", () => {
+  assert.doesNotThrow(() => assertRollbackVersionId("12345678-1234-1234-1234-123456789abc"));
+});
+
+test("version-id CLI fails closed without network access and never echoes the value", () => {
+  const hostile = "12345678-1234-1234-1234-123456789abc; printf CREDENTIAL_MARKER";
+  const rejected = spawnSync(process.execPath, ["ci/production-deploy-gate.mjs", "--version-id"], {
+    env: { ROLLBACK_VERSION_ID: hostile },
+    encoding: "utf8",
+  });
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /Rollback version_id/);
+  assert.ok(!rejected.stdout.includes("CREDENTIAL_MARKER"));
+  assert.ok(!rejected.stderr.includes("CREDENTIAL_MARKER"));
+  const accepted = spawnSync(process.execPath, ["ci/production-deploy-gate.mjs", "--version-id"], {
+    env: { ROLLBACK_VERSION_ID: "12345678-1234-1234-1234-123456789abc" },
+    encoding: "utf8",
+  });
+  assert.equal(accepted.status, 0);
+});
+
 test("credential CLI fails closed without printing credentials or accessing the API", () => {
   const missing = spawnSync(process.execPath, ["ci/production-deploy-gate.mjs", "--credentials"], {
     env: { CLOUDFLARE_API_TOKEN: credentials.CLOUDFLARE_API_TOKEN },
@@ -294,4 +341,74 @@ test("manual production workflow uses private-repo runners and production-only s
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const deploy = workflow.indexOf("run: npx wrangler deploy --env production");
   assert.ok(credentialCheck > 0 && credentialCheck < deploy);
+});
+
+test("rollback workflow reuses the production gate with no wider permissions", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  // Manual-only on main: no push, PR, release or completion trigger.
+  assert.match(workflow, /\n  workflow_dispatch:\n/);
+  assert.ok(!workflow.includes("push:"));
+  assert.ok(!workflow.includes("pull_request:"));
+  assert.ok(!workflow.includes("workflow_run:"));
+  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
+  assert.ok(
+    !/^ {4,}permissions:/m.test(workflow),
+    "job overrides must not drop inherited Actions read",
+  );
+  assert.match(workflow, /^  preflight:/m);
+  assert.match(workflow, /^  rollback-production:/m);
+  // Production Environment approval with required reviewers; never cancelled.
+  assert.match(workflow, /environment:\n      name: production\n/);
+  assert.match(workflow, /cancel-in-progress: false/);
+  // Same request gate as a deploy, in both jobs.
+  assert.equal((workflow.match(/run: node ci\/production-deploy-gate\.mjs\n/g) ?? []).length, 2);
+  // version_id validation runs before the rollback command, in both jobs.
+  assert.equal(
+    (workflow.match(/run: node ci\/production-deploy-gate\.mjs --version-id\n/g) ?? []).length,
+    2,
+  );
+  // Same private-repo runners as the production deploy workflow.
+  assert.equal((workflow.match(/runs-on: \[self-hosted, two-selfhosted\]/g) ?? []).length, 2);
+  assert.ok(!workflow.includes("ubuntu-latest"));
+  // Production-only secrets, credential check before the mutation.
+  assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
+  assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
+  for (const key of Object.keys(credentials)) {
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 2);
+  }
+  const versionCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --version-id");
+  const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
+  const rollback = workflow.indexOf(
+    'run: npx wrangler rollback "$ROLLBACK_VERSION_ID" --name two-web-next-production',
+  );
+  assert.ok(rollback > 0);
+  assert.ok(versionCheck > 0 && versionCheck < credentialCheck && credentialCheck < rollback);
+  // The input never interpolates into a run: block; it travels inputs -> env.
+  for (const line of workflow.split("\n")) {
+    if (line.trimStart().startsWith("run:") && line.includes("inputs.version_id")) {
+      assert.fail(`input interpolates into a run: block: ${line}`);
+    }
+  }
+  assert.match(workflow, /ROLLBACK_VERSION_ID: \$\{\{ inputs\.version_id \}\}/);
+});
+
+test("rollback smoke enforces the same /up envelope as the deploy smoke", () => {
+  const deploy = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const rollback = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  const block = (text) =>
+    text.match(
+      /      - name: Smoke test \/up\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+  assert.ok(block(deploy) && block(rollback));
+  // Identical checks and retries; only the failure message names the operation.
+  assert.equal(block(rollback), block(deploy).replaceAll("after deploy", "after rollback"));
 });

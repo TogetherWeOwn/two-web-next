@@ -245,6 +245,25 @@ Use the explicit known-good version recorded before the release. Do not accept
 Wrangler's implicit previous-version default in a concurrent release incident.
 Keep required resources/bindings in place; never delete a queue to roll back.
 
+#### Production (one-click workflow)
+
+[.github/workflows/rollback-production.yml](../.github/workflows/rollback-production.yml)
+is the one-click production rollback: Actions → `rollback-production` → Run
+workflow, branch `main`, `version_id` set to the recorded known-good Worker
+Version ID. It reuses the same request gate
+(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`),
+the same `production` Environment approval (required reviewers, no
+self-review) and the same production-only Cloudflare credentials as a deploy,
+then runs `wrangler rollback <version_id> --name two-web-next-production`
+followed by the same `/up` smoke. The `version_id` input must be a lowercase
+Worker Version UUID and travels inputs → `env:` only, never through
+expression interpolation in a shell block. A rollback does **not** undo
+Postgres migrations, data writes, Discord side effects, queue messages or
+external-resource changes; keep the release workflow from redeploying the bad
+head. Record the rollback deployment and previous/current version IDs.
+
+#### Staging (manual)
+
 ```bash
 (
   set -euo pipefail

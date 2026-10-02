@@ -152,7 +152,7 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
     const { scripts } = JSON.parse(readFileSync("package.json", "utf8"));
     expect(scripts["check:offline"]).toBe("node ci/offline-check.mjs");
     expect(scripts.check).toBe(
-      "npm run lint && npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke",
+      "npm run lint && npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke",
     );
     const runbook = readFileSync("docs/runbook.md", "utf8");
     expect(runbook).toContain("npm run check:offline");
