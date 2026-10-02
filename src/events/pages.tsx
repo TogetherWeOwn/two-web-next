@@ -89,7 +89,8 @@ import type { JoinResult } from "../return-journey";
 import { feedUrl, googleCalendarUrl, webcalUrl } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent } from "./reads";
 
-const fmt = (d: Date, tz: string): string => {
+// Exported for the SvelteKit spike page (web/, TOG-12247): one formatter, one markup contract.
+export const fmt = (d: Date, tz: string): string => {
   try {
     return new Intl.DateTimeFormat("en-GB", { dateStyle: "full", timeStyle: "short", timeZone: tz }).format(d);
   } catch {

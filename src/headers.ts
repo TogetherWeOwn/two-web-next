@@ -1,5 +1,6 @@
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
+import { imageHosts } from "./image-policy";
 
 // Response-header parity (TOG-10118 ports two-web TOG-7328 + TOG-8729).
 // Two layers, same split as legacy:
@@ -74,4 +75,47 @@ export async function robotsTag(c: Context<{ Bindings: Env }>, next: Next): Prom
   }
   const tag = robotsTagFor(c.env.APP_URL, serving);
   if (tag) c.res.headers.set("X-Robots-Tag", tag);
+}
+
+// Framework-neutral twin of the secureHeaders() options in src/index.tsx, for
+// hosts that are not Hono (the SvelteKit spike's web/src/hooks.server.ts,
+// TOG-12247). Same names, values and order as hono's middleware emits, so a
+// page moved out of Hono keeps its headers byte-for-byte.
+// test/security-headers-builder.test.ts pins equality with app.request().
+const CSP_REPORT_ENDPOINT = "/csp-reports";
+const CSP_REPORT_GROUP = "csp-endpoint";
+
+export function securityHeadersFor(
+  request: { path: string; method: string },
+  featuredImageHosts?: string,
+): Array<[string, string]> {
+  const framed = request.path === "/join" && ["GET", "HEAD"].includes(request.method);
+  const images = imageHosts(featuredImageHosts).map((host) => `https://${host}`).join(" ");
+  const csp = [
+    ["default-src", "'self'"],
+    ["img-src", "'self'", images],
+    ["frame-src", framed ? "https://discord.com/widget" : "'none'"],
+    ["style-src", "'self'"],
+    ["script-src", "'self'"],
+    ["font-src", "'self'"],
+    ["frame-ancestors", "'none'"],
+    ["form-action", "'self'"],
+    ["report-uri", CSP_REPORT_ENDPOINT],
+    ["report-to", CSP_REPORT_GROUP],
+  ].map((directive) => directive.join(" ")).join("; ");
+  return [
+    ["Cross-Origin-Resource-Policy", "same-origin"],
+    ["Cross-Origin-Opener-Policy", "same-origin"],
+    ["Origin-Agent-Cluster", "?1"],
+    ["Referrer-Policy", SECURITY_HEADERS["Referrer-Policy"]!],
+    ["X-Content-Type-Options", SECURITY_HEADERS["X-Content-Type-Options"]!],
+    ["X-DNS-Prefetch-Control", "off"],
+    ["X-Download-Options", "noopen"],
+    ["X-Frame-Options", SECURITY_HEADERS["X-Frame-Options"]!],
+    ["X-Permitted-Cross-Domain-Policies", "none"],
+    ["X-XSS-Protection", "0"],
+    ["Content-Security-Policy", csp],
+    ["Permissions-Policy", SECURITY_HEADERS["Permissions-Policy"]!],
+    ["Reporting-Endpoints", `${CSP_REPORT_GROUP}="${CSP_REPORT_ENDPOINT}"`],
+  ];
 }
