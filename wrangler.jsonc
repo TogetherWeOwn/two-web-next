@@ -24,8 +24,18 @@
     ],
     // Terminal outcomes are acked by the consumer; max_retries is only a backstop above the largest `tries`.
     "consumers": [
-      { "queue": "two-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-      { "queue": "two-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+      {
+        "queue": "two-sync-event",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      },
+      {
+        "queue": "two-internal-action",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      }
     ]
   },
   // W8 write-back carrier. Still NOT bound: a producer binding to a queue that does not exist fails
@@ -67,19 +77,36 @@
           { "queue": "two-web-next-production-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
         ],
         "consumers": [
-          { "queue": "two-web-next-production-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-          { "queue": "two-web-next-production-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+          {
+            "queue": "two-web-next-production-sync-event",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "two-web-next-production-internal-action",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
         ]
       },
       // PLACEHOLDER: replace with the separately provisioned production Hyperdrive
       // id in a reviewed cutover PR. The manual workflow refuses this sentinel.
       "hyperdrive": [{ "binding": "DB", "id": "00000000000000000000000000000000" }],
       // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
+      // env.production.vars must repeat every var the worker reads: Wrangler
+      // never inherits top-level vars into a named environment. The moderator
+      // list is the same approved SySOp role as staging (TOG-106); without it
+      // production boots with no moderators and admin authorization fails
+      // closed for everyone.
       "vars": {
         "APP_URL": "https://togetherweown.com",
         "FEATURED_IMAGE_HOSTS": "",
         "DISCORD_CLIENT_ID": "1539711683898118154",
         "DISCORD_GUILD_ID": "326474832151838730",
+        // Approved SySOp only. Production preflight checks this exact value.
+        "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
         "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
       }
     }

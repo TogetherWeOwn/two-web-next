@@ -7,12 +7,24 @@ const binder = readFileSync("public/islands/member-profile.js", "utf8");
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
 
-type ResponseFixture = { ok: boolean; status: number; type?: string; json?: () => Promise<unknown> };
-const ack = () => ({ ok: true, status: 200, json: async () => ({ saved: true, message: "Profile saved." }) });
+type ResponseFixture = {
+  ok: boolean;
+  status: number;
+  type?: string;
+  json?: () => Promise<unknown>;
+};
+const ack = () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({ saved: true, message: "Profile saved." }),
+});
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 // Only the DOM surface used by the shipped binder. Network and reset timers
@@ -26,12 +38,28 @@ class Element {
   value = "";
   defaultValue = "";
   private text = "";
-  constructor(readonly tag: string, readonly document: { activeElement: Element | null }) {}
-  get textContent(): string { return this.text + this.children.map((child) => child.textContent).join(""); }
-  set textContent(value: string) { this.text = value; this.children = []; }
-  setAttribute(key: string, value: string) { this.attributes[key] = value; }
-  getAttribute(key: string) { return this.attributes[key] ?? null; }
-  appendChild(child: Element) { child.parentNode = this; this.children.push(child); return child; }
+  constructor(
+    readonly tag: string,
+    readonly document: { activeElement: Element | null },
+  ) {}
+  get textContent(): string {
+    return this.text + this.children.map((child) => child.textContent).join("");
+  }
+  set textContent(value: string) {
+    this.text = value;
+    this.children = [];
+  }
+  setAttribute(key: string, value: string) {
+    this.attributes[key] = value;
+  }
+  getAttribute(key: string) {
+    return this.attributes[key] ?? null;
+  }
+  appendChild(child: Element) {
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
   insertBefore(child: Element, before: Element) {
     child.parentNode = this;
     this.children.splice(this.children.indexOf(before), 0, child);
@@ -40,7 +68,9 @@ class Element {
     if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
     this.parentNode = null;
   }
-  focus() { this.document.activeElement = this; }
+  focus() {
+    this.document.activeElement = this;
+  }
   addEventListener(type: string, listener: (event: { preventDefault: () => void }) => void) {
     (this.listeners[type] ??= []).push(listener);
   }
@@ -53,19 +83,27 @@ class Element {
     const attr = selector.match(/^\[([^=\^]+)(\^?=)["']([^"']*)["']\]$/);
     return this.children.flatMap((child) => {
       const matches = attr
-        ? attr[2] === "^=" ? child.getAttribute(attr[1]!)?.startsWith(attr[3]!) : child.getAttribute(attr[1]!) === attr[3]
+        ? attr[2] === "^="
+          ? child.getAttribute(attr[1]!)?.startsWith(attr[3]!)
+          : child.getAttribute(attr[1]!) === attr[3]
         : child.tag === selector;
       return [...(matches ? [child] : []), ...child.querySelectorAll(selector)];
     });
   }
-  querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
+  querySelector(selector: string) {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
 }
 
 function fixture() {
   const document = {
     activeElement: null as Element | null,
     createElement: (tag: string): Element => new Element(tag, document),
-    createTextNode: (text: string): Element => { const node = new Element("#text", document); node.textContent = text; return node; },
+    createTextNode: (text: string): Element => {
+      const node = new Element("#text", document);
+      node.textContent = text;
+      return node;
+    },
     querySelector: (selector: string): Element | null => page.querySelector(selector),
   };
   const page = document.createElement("main");
@@ -89,26 +127,66 @@ function fixture() {
   editControl.hidden = true;
   const edit = node(editControl, "button", "profile-edit-again", "Edit your profile");
   const form = Object.assign(node(root, "form", "profile-form"), {
-    elements: Object.fromEntries(Object.entries({ bio: "Original bio", games_text: "Chess", timezone: "UTC", website: "", formOpenedAt: "1800000000000", _method: "PATCH" }).map(([key, value]) => {
-      const field = node(root.querySelector("form")!, key === "bio" || key === "games_text" ? "textarea" : "input");
-      field.value = field.defaultValue = value;
-      return [key, field];
-    })) as Record<string, Element>,
+    elements: Object.fromEntries(
+      Object.entries({
+        bio: "Original bio",
+        games_text: "Chess",
+        timezone: "UTC",
+        website: "",
+        formOpenedAt: "1800000000000",
+        _method: "PATCH",
+      }).map(([key, value]) => {
+        const field = node(
+          root.querySelector("form")!,
+          key === "bio" || key === "games_text" ? "textarea" : "input",
+        );
+        field.value = field.defaultValue = value;
+        return [key, field];
+      }),
+    ) as Record<string, Element>,
   });
   const requests: ReturnType<typeof deferred<ResponseFixture>>[] = [];
-  const fetch = vi.fn(() => { const request = deferred<ResponseFixture>(); requests.push(request); return request.promise; });
+  const fetch = vi.fn(() => {
+    const request = deferred<ResponseFixture>();
+    requests.push(request);
+    return request.promise;
+  });
   const timers: (() => void)[] = [];
-  runInNewContext(binder, { document, fetch, location: { pathname: "/members/100000000000000001" }, setTimeout: (callback: () => void) => timers.push(callback), Intl });
+  runInNewContext(binder, {
+    document,
+    fetch,
+    location: { pathname: "/members/100000000000000001" },
+    setTimeout: (callback: () => void) => timers.push(callback),
+    Intl,
+  });
   const enter = (values: Partial<Record<"bio" | "games_text" | "timezone", string>>) => {
     for (const [key, value] of Object.entries(values)) form.elements[key]!.value = value;
   };
   const cancel = () => {
     form.dispatch("reset");
-    Object.values(form.elements).forEach((field) => { field.value = field.defaultValue; });
+    Object.values(form.elements).forEach((field) => {
+      field.value = field.defaultValue;
+    });
     timers.splice(0).forEach((callback) => callback());
   };
   const notice = (id: string) => root.querySelector(`[data-testid="${id}"]`);
-  return { document, root, name, heading, bio, games, timezone, form, edit, editControl, fetch, requests, enter, cancel, notice };
+  return {
+    document,
+    root,
+    name,
+    heading,
+    bio,
+    games,
+    timezone,
+    form,
+    edit,
+    editControl,
+    fetch,
+    requests,
+    enter,
+    cancel,
+    notice,
+  };
 }
 
 describe("member-profile response admission", () => {
@@ -128,10 +206,28 @@ describe("member-profile response admission", () => {
   });
 
   it.each([
-    ["200 HTML", { ok: true, status: 200, json: async () => { throw new Error("Unexpected token"); } }],
+    [
+      "200 HTML",
+      {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new Error("Unexpected token");
+        },
+      },
+    ],
     ["unrelated JSON", { ok: true, status: 200, json: async () => ({ ok: true }) }],
     ["saved:false", { ok: true, status: 200, json: async () => ({ saved: false }) }],
-    ["malformed JSON", { ok: true, status: 200, json: async () => { throw new SyntaxError("bad json"); } }],
+    [
+      "malformed JSON",
+      {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("bad json");
+        },
+      },
+    ],
     ["missing json", { ok: true, status: 200 }],
     ["null body", { ok: true, status: 200, json: async () => null }],
     ["string body", { ok: true, status: 200, json: async () => "saved" }],
@@ -190,7 +286,13 @@ describe("member-profile response admission", () => {
     const f = fixture();
     f.enter({ bio: "Keep this draft" });
     f.form.dispatch("submit");
-    f.requests[0]!.resolve({ ok: false, status: 422, json: async () => { throw new SyntaxError("bad json"); } });
+    f.requests[0]!.resolve({
+      ok: false,
+      status: 422,
+      json: async () => {
+        throw new SyntaxError("bad json");
+      },
+    });
     await flush();
     await flush();
     const alert = f.notice("profile-error");
@@ -205,7 +307,11 @@ describe("member-profile response admission", () => {
     const html = "<img src=x onerror=alert(1)>";
     f.enter({ bio: "Keep this draft" });
     f.form.dispatch("submit");
-    f.requests[0]!.resolve({ ok: false, status: 422, json: async () => ({ errors: { bio: long, games: html } }) });
+    f.requests[0]!.resolve({
+      ok: false,
+      status: 422,
+      json: async () => ({ errors: { bio: long, games: html } }),
+    });
     await flush();
     await flush();
     const alert = f.notice("profile-error");

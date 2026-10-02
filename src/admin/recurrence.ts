@@ -32,7 +32,9 @@ const WALL_PARTS = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
 
 function addDaysToWall(wall: PreciseWall, days: number): PreciseWall {
   const m = WALL_PARTS.exec(wall.minute)!;
-  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days, Number(m[4]), Number(m[5])));
+  const d = new Date(
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days, Number(m[4]), Number(m[5])),
+  );
   const p = (n: number) => String(n).padStart(2, "0");
   return {
     minute: `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`,
@@ -61,7 +63,10 @@ function resolveWall(wall: PreciseWall, timezone: string): Date {
 
 function asUtcMs(wall: PreciseWall): number {
   const m = WALL_PARTS.exec(wall.minute)!;
-  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) + wall.subMinuteMs;
+  return (
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])) +
+    wall.subMinuteMs
+  );
 }
 
 /**
@@ -159,16 +164,23 @@ export function parseRecurrenceForm(data: Record<string, unknown>): RecurrenceIn
   if (Object.keys(fields).length > 0) throw new ValidationError(fields);
 
   if (count === null && endsOn === null) {
-    throw new ValidationError({ recurrence_count: "Give a number of occurrences or a repeat-until date." });
+    throw new ValidationError({
+      recurrence_count: "Give a number of occurrences or a repeat-until date.",
+    });
   }
 
   // The event rules own bad starts/timezone fields; only compare when they parse.
   const startsRaw = str(data.starts_at);
   const timezone = str(data.timezone) ?? "Europe/London";
   if (endsOn && startsRaw && isKnownTimezone(timezone)) {
-    const startsDate = /^\d{4}-\d{2}-\d{2}/.test(startsRaw) && parseRecurrenceDate(startsRaw.slice(0, 10)) ? startsRaw.slice(0, 10) : null;
+    const startsDate =
+      /^\d{4}-\d{2}-\d{2}/.test(startsRaw) && parseRecurrenceDate(startsRaw.slice(0, 10))
+        ? startsRaw.slice(0, 10)
+        : null;
     if (startsDate && endsOn.toISOString().slice(0, 10) < startsDate) {
-      throw new ValidationError({ recurrence_ends_on: "The repeat-until date is before the first meeting." });
+      throw new ValidationError({
+        recurrence_ends_on: "The repeat-until date is before the first meeting.",
+      });
     }
   }
   return { frequency: frequency as RecurrenceFrequency, count, endsOn };

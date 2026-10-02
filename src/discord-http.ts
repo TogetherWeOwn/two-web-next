@@ -55,7 +55,11 @@ export async function discordFetch(
       // with the real status so downstream parsing classifies exactly as it
       // did when the body was consumed in place.
       void error;
-      return new Response("", { status: res.status, statusText: res.statusText, headers: res.headers });
+      return new Response("", {
+        status: res.status,
+        statusText: res.statusText,
+        headers: res.headers,
+      });
     }
     const bytes = new Uint8Array(size);
     let offset = 0;
@@ -63,7 +67,11 @@ export async function discordFetch(
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return new Response(bytes, { status: res.status, statusText: res.statusText, headers: res.headers });
+    return new Response(bytes, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
   })();
 
   try {

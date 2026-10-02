@@ -25,7 +25,9 @@ const SHELL_TIMEOUT_S = 600;
 const socket = createServer();
 await new Promise((resolve) => socket.listen(0, "127.0.0.1", resolve));
 const port = socket.address().port;
-await new Promise((resolve, reject) => socket.close((error) => error ? reject(error) : resolve()));
+await new Promise((resolve, reject) =>
+  socket.close((error) => (error ? reject(error) : resolve())),
+);
 // Local driver defaults must not inherit alternate credentials or connection options.
 for (const key of Object.keys(process.env)) {
   if (key.startsWith("PG")) delete process.env[key];
@@ -33,17 +35,18 @@ for (const key of Object.keys(process.env)) {
 process.env.WRANGLER_SEND_METRICS = "false";
 const result = await runWithWorker({
   timeoutMs: STARTUP_TIMEOUT_MS,
-  startWorker: () => unstable_dev("spike/hyperdrive-semantics/probe-worker.ts", {
-    config: "spike/hyperdrive-semantics/wrangler.probe.jsonc",
-    local: true,
-    ip: "127.0.0.1",
-    port,
-    inspectorPort: 0,
-    persist: false,
-    envFiles: [],
-    logLevel: "error",
-    experimental: { forceLocal: true, watch: false, disableExperimentalWarning: true },
-  }),
+  startWorker: () =>
+    unstable_dev("spike/hyperdrive-semantics/probe-worker.ts", {
+      config: "spike/hyperdrive-semantics/wrangler.probe.jsonc",
+      local: true,
+      ip: "127.0.0.1",
+      port,
+      inspectorPort: 0,
+      persist: false,
+      envFiles: [],
+      logLevel: "error",
+      experimental: { forceLocal: true, watch: false, disableExperimentalWarning: true },
+    }),
   runChecks: async (worker) => {
     // workerd cold boot can exceed a single short timeout; retry readiness.
     let ready;
@@ -58,7 +61,8 @@ const result = await runWithWorker({
     }
     assert.equal(ready.status, 404, "Local Worker did not answer the DB-free readiness check");
     const response = await worker.fetch("/spike-run", {
-      method: "POST", signal: AbortSignal.timeout(30000),
+      method: "POST",
+      signal: AbortSignal.timeout(30000),
     });
     const checkResult = await response.json();
     console.log(JSON.stringify(checkResult, null, 2));
@@ -70,10 +74,13 @@ const result = await runWithWorker({
   },
 });
 if (result.exitCode !== 0) {
-  const tag = result.exitCode === STARTUP_FAILURE_EXIT
-    ? `startup did not become ready within ${STARTUP_TIMEOUT_S}s (shell budget ${SHELL_TIMEOUT_S}s)`
-    : "checks failed";
+  const tag =
+    result.exitCode === STARTUP_FAILURE_EXIT
+      ? `startup did not become ready within ${STARTUP_TIMEOUT_S}s (shell budget ${SHELL_TIMEOUT_S}s)`
+      : "checks failed";
   console.error(`worker-checks: ${tag}; teardown attempted`);
   if (result.error instanceof Error) console.error(`worker-checks: ${result.error.message}`);
-  process.exit(result.exitCode === STARTUP_FAILURE_EXIT ? STARTUP_FAILURE_EXIT : CHECK_FAILURE_EXIT);
+  process.exit(
+    result.exitCode === STARTUP_FAILURE_EXIT ? STARTUP_FAILURE_EXIT : CHECK_FAILURE_EXIT,
+  );
 }

@@ -42,7 +42,10 @@ const cookiesFrom = (res: Response) =>
 // In-memory Sql double for the roster upsert. Understands exactly the
 // statement upsertRosterUser emits; anything else is a test bug, surfaced loudly.
 function fakeRoster() {
-  const rows = new Map<string, { id: string; username: string; avatar: string | null; member: boolean }>();
+  const rows = new Map<
+    string,
+    { id: string; username: string; avatar: string | null; member: boolean }
+  >();
   const statements: string[] = [];
   const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const head = strings[0] ?? "";
@@ -133,12 +136,21 @@ describe("sign-in writes the roster", () => {
     const res = await signIn(e, state, cookie);
     expect(res.headers.get("location")).toBe("/?n=joined");
 
-    expect(roster.rows.get("42")).toEqual({ id: "42", username: "Rick", avatar: "ava-1", member: true });
+    expect(roster.rows.get("42")).toEqual({
+      id: "42",
+      username: "Rick",
+      avatar: "ava-1",
+      member: true,
+    });
 
     // Moderator ownership: the flag lands in the session row from the role
     // recompute, while the roster row carries no such field.
     const signed = decodeURIComponent(
-      res.headers.getSetCookie().find((c) => c.startsWith("__Host-two_session="))!.split(";")[0]!.split("=")[1]!,
+      res.headers
+        .getSetCookie()
+        .find((c) => c.startsWith("__Host-two_session="))!
+        .split(";")[0]!
+        .split("=")[1]!,
     );
     const row = await store.get(await hashToken(signed.split(".")[0]!));
     expect(row?.moderator).toBe(true);
@@ -191,7 +203,12 @@ describe("join callback writes the roster", () => {
       e,
     );
     expect(res.status).toBe(302);
-    expect(roster.rows.get("42")).toEqual({ id: "42", username: "Rick", avatar: "ava-9", member: true });
+    expect(roster.rows.get("42")).toEqual({
+      id: "42",
+      username: "Rick",
+      avatar: "ava-9",
+      member: true,
+    });
   });
 });
 
@@ -201,7 +218,11 @@ describe("staging QA seam writes the roster", () => {
       APP_URL: "https://next.togetherweown.com",
       QA_AUTH_TOKEN: "qa-secret",
     });
-    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } }, e);
+    const res = await app.request(
+      "/auth/qa/qa-member",
+      { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } },
+      e,
+    );
     expect(res.status).toBe(204);
     expect(roster.rows.get("900000000000001396")).toEqual({
       id: "900000000000001396",

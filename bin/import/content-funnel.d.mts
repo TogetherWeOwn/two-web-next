@@ -25,7 +25,10 @@ export function importContentFunnel(options: {
 }): Promise<TableReport[]>;
 
 export function parseArgs(args: string[]): { help: boolean; dryRun: boolean };
-export function connectionSettings(env: NodeJS.ProcessEnv, dryRun: boolean): {
+export function connectionSettings(
+  env: NodeJS.ProcessEnv,
+  dryRun: boolean,
+): {
   legacyUrl: string;
   targetUrl: string;
   legacySchema: string;

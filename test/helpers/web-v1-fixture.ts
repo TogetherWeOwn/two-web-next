@@ -8,12 +8,17 @@ import { testDatabaseUrl } from "./member-data-db";
 export async function createWebV1Fixture(raw: string) {
   const url = testDatabaseUrl(raw); // Refuse before constructing a client or DDL.
   const pool = postgres(url.href, {
-    max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {},
+    max: 1,
+    port: 5432,
+    connect_timeout: 5,
+    password: () => url.password,
+    onnotice: () => {},
     connection: { lock_timeout: 2_000, statement_timeout: 5_000 },
   });
   let sql: postgres.ReservedSql;
-  try { sql = await pool.reserve(); }
-  catch (error) {
+  try {
+    sql = await pool.reserve();
+  } catch (error) {
     await pool.end({ timeout: 1 });
     throw error;
   }
@@ -21,8 +26,9 @@ export async function createWebV1Fixture(raw: string) {
   const dispose = async () => {
     if (disposed) return;
     disposed = true;
-    try { await sql.unsafe("ROLLBACK"); }
-    finally {
+    try {
+      await sql.unsafe("ROLLBACK");
+    } finally {
       sql.release();
       await pool.end({ timeout: 1 });
     }

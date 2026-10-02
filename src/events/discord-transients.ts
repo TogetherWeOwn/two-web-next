@@ -32,6 +32,10 @@ export interface DiscordEventsSource {
 }
 
 function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
+  // Legacy drops rows it cannot honestly place on the calendar
+  // (DiscordEventsReaderTest "drops rows…"): a whitespace-only name is no
+  // name — it would render a blank card and pollute search.
+  if (!row.name.trim()) return null;
   const startsAt = new Date(row.scheduled_start_time);
   if (Number.isNaN(startsAt.getTime())) return null;
   const ends = row.scheduled_end_time == null ? null : new Date(row.scheduled_end_time);
@@ -63,7 +67,10 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("DiscordReadDeadline")), DISCORD_READ_DEADLINE_MS);
+        timer = setTimeout(
+          () => reject(new Error("DiscordReadDeadline")),
+          DISCORD_READ_DEADLINE_MS,
+        );
       });
       const read = async (): Promise<unknown> => {
         const res = await fetch(`${API}/guilds/${env.DISCORD_GUILD_ID}/scheduled-events`, {
@@ -98,7 +105,9 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         const horizon = now.getTime() + HORIZON_MS;
         return rows
           .map(admitScheduledEvent)
-          .filter((r): r is AdmittedScheduledEvent => r !== null && LIVE_STATUSES.has(r.status ?? 1))
+          .filter(
+            (r): r is AdmittedScheduledEvent => r !== null && LIVE_STATUSES.has(r.status ?? 1),
+          )
           .map(toTransient)
           .filter((t): t is DiscordTransient => t !== null && t.startsAt.getTime() <= horizon);
       } catch {

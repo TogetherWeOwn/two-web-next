@@ -14,13 +14,18 @@ The app writes ONE single-line JSON object on `console.error`, with
 
 | `event` | When | Source fields (internal logs only) |
 | --- | --- | --- |
-| `error.alert` | An unhandled error reached the 500 handler | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `method`, `route` |
-| `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception` |
+| `error.alert` | An unhandled error reached the 500 handler | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `method`, `route`, optional `request_id` |
+| `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, optional `request_id` |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
   (404, 403, 429, other 4xx and validation errors) stay silent.
-- Request alert lines use exception classes, not messages. A separate
-  `unhandled error:` line can contain the full internal exception.
+- Request alert lines use exception classes, not messages or stacks (a database
+  error message can hold bound values); no `unhandled error:` line is emitted.
+- Both alert types carry a validated `request_id` when an HTTP request
+  originated them; scheduled jobs and legacy queue messages may omit it.
+  Correlate it with the `http.request` record, see
+  [request-log queries](runbook-logs.md). Request IDs do not change the
+  fingerprint or mute window, and the Tail Worker does not forward them.
 - Queue source lines are not muted: one per terminal job failure. **Their
   `exception` can be a bot refusal message**, not just a class. Neither that field
   nor any trace exception/request/header/body is forwarded by the Tail Worker.

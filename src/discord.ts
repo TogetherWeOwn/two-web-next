@@ -5,7 +5,12 @@ const API = "https://discord.com/api/v10";
 // identify: who they are. guilds.join: lets our bot add them to the TWO server in one click.
 export const SCOPES = ["identify", "guilds.join"] as const;
 
-export type DiscordUser = { id: string; username: string; global_name: string | null; avatar: string | null };
+export type DiscordUser = {
+  id: string;
+  username: string;
+  global_name: string | null;
+  avatar: string | null;
+};
 
 export function authorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
@@ -117,7 +122,8 @@ export function failureMeta(err: unknown): {
   kind: DiscordFailureKind | "unknown";
   status: number | null;
 } {
-  if (err instanceof DiscordError) return { exception: err.name, kind: err.kind, status: err.status };
+  if (err instanceof DiscordError)
+    return { exception: err.name, kind: err.kind, status: err.status };
   return {
     exception: (err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown",
     kind: "unknown",
@@ -156,8 +162,11 @@ export async function exchangeCode(
   const body: unknown = await res.json().catch(() => null);
   const token = body as { access_token?: unknown } | null;
   if (
-    token === null || typeof token !== "object" || Array.isArray(token) ||
-    typeof token.access_token !== "string" || !token.access_token
+    token === null ||
+    typeof token !== "object" ||
+    Array.isArray(token) ||
+    typeof token.access_token !== "string" ||
+    !token.access_token
   ) {
     throw new DiscordError("token_exchange", res.status, "provider_reject");
   }
@@ -167,7 +176,9 @@ export async function exchangeCode(
 export async function fetchUser(accessToken: string): Promise<DiscordUser> {
   let res: Response;
   try {
-    res = await discordFetch(`${API}/users/@me`, { headers: { authorization: `Bearer ${accessToken}` } });
+    res = await discordFetch(`${API}/users/@me`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
   } catch {
     throw transportFailure("fetch_user");
   }
@@ -177,9 +188,13 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
   const body: unknown = await res.json().catch(() => null);
   const user = body as Partial<DiscordUser> | null;
   if (
-    user === null || typeof user !== "object" || Array.isArray(user) ||
-    typeof user.id !== "string" || !user.id ||
-    typeof user.username !== "string" || !user.username ||
+    user === null ||
+    typeof user !== "object" ||
+    Array.isArray(user) ||
+    typeof user.id !== "string" ||
+    !user.id ||
+    typeof user.username !== "string" ||
+    !user.username ||
     (user.global_name !== null && typeof user.global_name !== "string") ||
     (user.avatar !== null && typeof user.avatar !== "string")
   ) {
@@ -200,6 +215,10 @@ export async function addGuildMember(
   accessToken: string,
   botToken: string,
 ): Promise<JoinResult> {
+  // Fail closed on an unconfigured bot token (TOG-12687): a blank token must
+  // emit zero bot-credentialed calls, so the callers degrade to the invite
+  // fallback instead of sending `Bot ` with nothing after it.
+  if (!botToken || botToken.trim().length === 0) return "failed";
   let res: Response;
   try {
     res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {

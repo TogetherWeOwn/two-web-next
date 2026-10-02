@@ -8,22 +8,28 @@ const INTENDED_COOKIE = "__Host-two_login_intended";
 const OPTIONS = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const, maxAge: 600 };
 type Ctx = Context<any>;
 
-export const recoveryUrl = (next: string) => `/auth/recover?next=${encodeURIComponent(safeNext(next) ?? "/profile")}`;
+export const recoveryUrl = (next: string) =>
+  `/auth/recover?next=${encodeURIComponent(safeNext(next) ?? "/profile")}`;
 
 function writeReturn(c: Ctx): string {
   const fallback = c.req.path.startsWith("/members/") ? "/profile" : "/events";
   try {
     const ref = new URL(c.req.header("referer") ?? "");
-    if (ref.origin === new URL(c.env.APP_URL).origin) return safeNext(ref.pathname + ref.search) ?? fallback;
-  } catch { /* No trusted page history: use a GET destination, never the write URL. */ }
+    if (ref.origin === new URL(c.env.APP_URL).origin)
+      return safeNext(ref.pathname + ref.search) ?? fallback;
+  } catch {
+    /* No trusted page history: use a GET destination, never the write URL. */
+  }
   return fallback;
 }
 
 export async function expiredWriteBounce(c: Ctx): Promise<Response> {
   const next = writeReturn(c);
   // JSON callers keep 401, with an explicit recovery link, never an OAuth redirect.
-  if ((c.req.header("accept") ?? "").includes("application/json") ||
-      (c.req.header("content-type") ?? "").includes("application/json")) {
+  if (
+    (c.req.header("accept") ?? "").includes("application/json") ||
+    (c.req.header("content-type") ?? "").includes("application/json")
+  ) {
     return c.json({ error: "Unauthorized", recovery: recoveryUrl(next) }, 401);
   }
   return c.redirect(recoveryUrl(next), 303);
@@ -35,9 +41,15 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
   await setSignedCookie(c, INTENDED_COOKIE, next, c.env.SESSION_SECRET, OPTIONS);
   await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
   c.header("cache-control", "no-store, private");
-  return c.html(<Recovery title="Your session expired"
-    message="Your earlier changes were not saved. Sign in again, then review and submit them when you are ready."
-    retryUrl={`/auth/discord?next=${encodeURIComponent(next)}`} retryLabel="Log in with Discord" inviteUrl="/discord" />);
+  return c.html(
+    <Recovery
+      title="Your session expired"
+      message="Your earlier changes were not saved. Sign in again, then review and submit them when you are ready."
+      retryUrl={`/auth/discord?next=${encodeURIComponent(next)}`}
+      retryLabel="Log in with Discord"
+      inviteUrl="/discord"
+    />,
+  );
 }
 
 /** Every terminal callback clears the pending notice, including denial/failure. */
@@ -55,10 +67,16 @@ export async function flashExpiredWrite(c: Ctx, next: string | null): Promise<vo
 /** Consume only an actual visible document, after all inner access/audit guards. */
 export async function expiredWriteBanner(c: Ctx, next: Next): Promise<void> {
   await next();
-  if (c.req.method !== "GET" || c.req.path.startsWith("/auth/") || c.res.status !== 200 ||
-      !c.res.headers.get("content-type")?.includes("text/html")) return;
+  if (
+    c.req.method !== "GET" ||
+    c.req.path.startsWith("/auth/") ||
+    c.res.status !== 200 ||
+    !c.res.headers.get("content-type")?.includes("text/html")
+  )
+    return;
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, EXPIRED_WRITE_COOKIE);
-  const destination = typeof raw === "string" && raw.startsWith("restored|") ? safeNext(raw.slice(9)) : null;
+  const destination =
+    typeof raw === "string" && raw.startsWith("restored|") ? safeNext(raw.slice(9)) : null;
   if (!destination) return;
   // Keep the original stream usable while Hono rebuilds headers for deletion.
   const html = await c.res.clone().text();
@@ -69,6 +87,12 @@ export async function expiredWriteBanner(c: Ctx, next: Next): Promise<void> {
   deleteCookie(c, EXPIRED_WRITE_COOKIE, { path: "/", secure: true });
   c.header("cache-control", "no-store, private");
   c.header("vary", "Cookie");
-  const banner = '<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again. <a href="' + recoveryUrl(destination) + '">Try signing in again</a></div>';
-  c.res = new Response(html.replace(/(<main\b[^>]*>)/, `$1${banner}`), { status: c.res.status, headers: c.res.headers });
+  const banner =
+    '<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again. <a href="' +
+    recoveryUrl(destination) +
+    '">Try signing in again</a></div>';
+  c.res = new Response(html.replace(/(<main\b[^>]*>)/, `$1${banner}`), {
+    status: c.res.status,
+    headers: c.res.headers,
+  });
 }
