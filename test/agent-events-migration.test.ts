@@ -267,16 +267,22 @@ describe.skipIf(!process.env.DATABASE_URL)("1015 populated shared-agent-events m
     expect(await snapshotTimes()).toEqual(original);
     expect((await call("update", { version: 1, fields: { ...event, title: "Title only" } })).status).toBe(200);
     expect(await snapshotTimes()).toEqual(original);
-    // A changed end cannot resolve before the preserved second-fold start.
-    const invalid = await call("update", { version: 2, fields: { ...event, ends_at: "2026-10-25 01:20" } });
+    // A changed end before the preserved second-fold start cannot resolve.
+    // (TOG-11669: changed fold walls take the second/GMT occurrence, so the
+    // old 01:20 probe is now a valid 01:20Z end; 01:05Z still precedes 01:10Z.)
+    const invalid = await call("update", { version: 2, fields: { ...event, ends_at: "2026-10-25 01:05" } });
     expect(invalid.status).toBe(422);
     expect(invalid.body.errors).toHaveProperty("ends_at");
     expect(await snapshotTimes()).toEqual(original);
-    // A changed start uses the first occurrence; the unchanged end stays exact.
-    expect((await call("update", { version: 2, fields: { ...event, starts_at: "2026-10-25 01:20" } })).status).toBe(200);
-    expect(await snapshotTimes()).toEqual(["2026-10-25T00:20:00.000Z", original[1]]);
+    // A changed end takes the second occurrence; the unchanged start stays exact.
+    expect((await call("update", { version: 2, fields: { ...event, ends_at: "2026-10-25 01:20" } })).status).toBe(200);
+    expect(await snapshotTimes()).toEqual([original[0], "2026-10-25T01:20:00.000Z"]);
+    // A changed start takes the second occurrence; the sent end (the original
+    // read's 01:50, unchanged here) keeps its exact instant.
+    expect((await call("update", { version: 3, fields: { ...event, starts_at: "2026-10-25 01:15" } })).status).toBe(200);
+    expect(await snapshotTimes()).toEqual(["2026-10-25T01:15:00.000Z", original[1]]);
     // An explicit zone change must re-resolve even identical wall text.
-    expect((await call("update", { version: 3, fields: { ...event, timezone: "Europe/Paris" } })).status).toBe(200);
+    expect((await call("update", { version: 4, fields: { ...event, timezone: "Europe/Paris" } })).status).toBe(200);
     expect(await snapshotTimes()).toEqual(["2026-10-24T23:10:00.000Z", "2026-10-24T23:50:00.000Z"]);
   }, 30_000);
 

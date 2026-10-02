@@ -464,9 +464,12 @@ async function execute(tx: Tx, grant: Grant, op: Op, doc: Record<string, unknown
   };
 
   if (op === "create") {
-    // Admission was revalidated under the locks by the outer flow (main #215);
-    // only the table name changed here: the shared `events` rows carry the
-    // agent ownership columns, not the retired standalone table.
+    // The final admission lock follows the operation/event locks, never precedes
+    // an event-row wait (main #215). Only the table name changed here: the
+    // shared `events` rows carry the agent ownership columns, not the retired
+    // standalone table.
+    const refusedCreate = await checkGrant(tx, grant, op, key, dig, requestId, null, true);
+    if (refusedCreate) return refusedCreate;
     const [existing] = await tx`SELECT event_key FROM events WHERE agent_grant_id = ${grant.id}`;
     if (existing) return denyOutcome(409, "quota_exceeded", "This grant already owns its one proof event. Updates reuse it.", { event_key: existing.event_key });
     const v = validateFields(doc.fields);

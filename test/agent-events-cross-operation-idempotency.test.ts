@@ -4,7 +4,14 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG, handleAgentEvent, type Answer } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
-import migration from "../drizzle/0001_agent-events.sql?raw";
+import agentTables from "../drizzle/0001_agent-events.sql?raw";
+import sharedEvents from "../drizzle/1001_admin-slice.sql?raw";
+import rsvpSeats from "../drizzle/1002_rsvps.sql?raw";
+import rsvpSyncStamp from "../drizzle/1006_rsvp-synced-at.sql?raw";
+import syncFailure from "../drizzle/1009_event-sync-failure.sql?raw";
+import rsvpLegacyOrder from "../drizzle/1010_rsvp-legacy-order.sql?raw";
+import icsSequence from "../drizzle/1014_event-ics-sequence.sql?raw";
+import sharedAgentColumns from "../drizzle/1015_shared-agent-events.sql?raw";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
 const cfg = { ...DEFAULT_CONFIG, enabled: true, callerAgentId: "synthetic-cross-operation", lockWaitMs: 10000 };
@@ -48,8 +55,18 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
     setup = client("setup");
-    for (const statement of migration.replaceAll('"public".', `"${schemaName}".`).split("--> statement-breakpoint")) {
-      if (statement.trim()) await setup.unsafe(statement);
+    // The merged ingress acts on the shared `events` rows: the agent tables
+    // from 0001, the shared events table from 1001, the seat tally from 1002,
+    // later additive columns the shared-row queries select (1006/1009/1010
+    // and 1014 without its backfill UPDATE, which needs no rows here), then
+    // the agent ownership columns from 1015 (without its data migration — no
+    // retired rows exist in this fresh schema).
+    const columnAdds = sharedAgentColumns.split("--> statement-breakpoint").slice(0, 5).join("--> statement-breakpoint");
+    const icsColumns = icsSequence.split("--> statement-breakpoint")[0]!;
+    for (const migration of [agentTables, sharedEvents, rsvpSeats, rsvpSyncStamp, syncFailure, rsvpLegacyOrder, icsColumns, columnAdds]) {
+      for (const statement of migration.replaceAll('"public".', `"${schemaName}".`).split("--> statement-breakpoint")) {
+        if (statement.trim()) await setup.unsafe(statement);
+      }
     }
   });
   afterAll(async () => {
@@ -88,7 +105,7 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
     let holderPid = 0;
     const held = holder.begin(async (tx) => {
       holderPid = (await tx`SELECT pg_backend_pid() AS pid`)[0]!.pid;
-      await tx`SELECT event_key FROM agent_events WHERE event_key = ${eventKey} FOR UPDATE`;
+      await tx`SELECT event_key FROM events WHERE event_key = ${eventKey} FOR UPDATE`;
       ready.release();
       await release.promise;
     });
@@ -101,7 +118,7 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
         op: "update", idempotency_key: key, event_key: eventKey, version: 1, fields: { ...FIELDS, title: "Updated once" },
       }, token));
       const updateWait = await waitForLock(`update-${n}`);
-      expect(updateWait.query).toMatch(/SELECT \* FROM agent_events .*FOR UPDATE/);
+      expect(updateWait.query).toMatch(/SELECT \* FROM events .*FOR UPDATE/);
       expect(updateWait.blockers).toContain(holderPid);
       read = attempt(handleAgentEvent(reader, cfg, {
         op: "read", idempotency_key: key, ...(explicit ? { event_key: eventKey } : {}),
@@ -109,7 +126,7 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
       const readWait = await waitForLock(`read-${n}`);
       // Pre-fix read passed the transactional replay lookup and waits in the
       // row/tuple queue. With key serialization, it waits on the writer's lock.
-      expect(readWait.query).toMatch(/SELECT \* FROM agent_events .*FOR UPDATE|pg_advisory_xact_lock/);
+      expect(readWait.query).toMatch(/SELECT \* FROM events .*FOR UPDATE|pg_advisory_xact_lock/);
       expect(readWait.blockers).toContain(updateWait.pid);
       console.info("observed schedule", { updateWait: updateWait.wait_event, readWait: readWait.wait_event, readReachedRow: readWait.query.includes("FOR UPDATE") });
     } finally {
@@ -119,7 +136,7 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
       if (error) throw error;
     }
     const results = await Promise.all([updated!, read!]);
-    const [event] = await setup`SELECT agent_version, title FROM agent_events WHERE event_key = ${eventKey}`;
+    const [event] = await setup`SELECT agent_version, title FROM events WHERE event_key = ${eventKey}`;
     const stored = await setup`SELECT status, event_key, body FROM agent_event_idempotency_keys WHERE grant_id = ${grantId} AND key = ${key}`;
     const receipts = await setup`SELECT operation, result, reason_code, request_id FROM agent_event_audits
       WHERE grant_id = ${grantId} AND idempotency_key = ${key} ORDER BY id`;
@@ -163,7 +180,7 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
     const reader = client(`duplicate-second-${n}`);
     let first!: Promise<Attempt>;
     let second!: Promise<Attempt>;
-    await withLock((tx) => tx`SELECT event_key FROM agent_events WHERE event_key = ${eventKey} FOR UPDATE`, async () => {
+    await withLock((tx) => tx`SELECT event_key FROM events WHERE event_key = ${eventKey} FOR UPDATE`, async () => {
       first = attempt(handleAgentEvent(writer, cfg, request, token));
       const owner = await waitForLock(`duplicate-first-${n}`);
       second = attempt(handleAgentEvent(reader, cfg, request, token));
@@ -173,7 +190,7 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
     });
     expect(await first).toMatchObject({ answer: { status: 200, body: { agent_version: 2 } } });
     expect(await second).toMatchObject({ answer: { status: 200, body: { replayed: true, agent_version: 2 } } });
-    expect((await setup`SELECT agent_version FROM agent_events WHERE event_key = ${eventKey}`)[0]!.agent_version).toBe(2);
+    expect((await setup`SELECT agent_version FROM events WHERE event_key = ${eventKey}`)[0]!.agent_version).toBe(2);
     expect(await setup`SELECT key FROM agent_event_idempotency_keys WHERE grant_id = ${grantId} AND key = ${key}`).toHaveLength(1);
   });
 
@@ -185,7 +202,7 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
     const request = { op: "update", idempotency_key: key, event_key: eventKey, version: 1, fields: FIELDS };
     await withLock((tx) => lock === "key"
       ? tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-idempotency:${grantId}:${key}`}, 0))`
-      : tx`SELECT event_key FROM agent_events WHERE event_key = ${eventKey} FOR UPDATE`, async () => {
+      : tx`SELECT event_key FROM events WHERE event_key = ${eventKey} FOR UPDATE`, async () => {
       const pending = attempt(handleAgentEvent(writer, { ...cfg, lockWaitMs: 200 }, request, token));
       const waited = await waitForLock(role);
       expect(waited.query).toMatch(lock === "key" ? /pg_advisory_xact_lock/ : /FOR UPDATE/);
@@ -206,7 +223,7 @@ describe.skipIf(!process.env.DATABASE_URL)("cross-operation idempotency (owned P
     const writer = client(role);
     const reader = client(`grant-other-${n}`);
     let pending!: Promise<Attempt>;
-    await withLock((tx) => tx`SELECT event_key FROM agent_events WHERE event_key = ${owned.eventKey} FOR UPDATE`, async () => {
+    await withLock((tx) => tx`SELECT event_key FROM events WHERE event_key = ${owned.eventKey} FOR UPDATE`, async () => {
       pending = attempt(handleAgentEvent(writer, cfg, { op: "update", idempotency_key: key, event_key: owned.eventKey, version: 1, fields: FIELDS }, owned.token));
       await waitForLock(role);
       // A global key lock would time out while the first call is still held.
