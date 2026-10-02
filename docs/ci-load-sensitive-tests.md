@@ -1,9 +1,11 @@
 # Load-sensitive tests in `check`
 
-`check` runs the full coverage suite serially on shared self-hosted runners
-(`[self-hosted, two-selfhosted]`). The slowest runners (ci-rbx1) take 17-20
-minutes for a green run, about 4-5x a hosted runner, so wall-clock limits
-written for a laptop fail under normal queue load (TOG-12177).
+`check` runs the full coverage suite serially. These budgets were sized on the
+shared self-hosted runners (`ci-rbx1`), which took 17-20 minutes for a green
+run, about 4-5x a hosted runner, so wall-clock limits written for a laptop
+failed under normal queue load (TOG-12177). Since TOG-12340 every job defaults
+to GitHub-hosted `ubuntu-latest`; the budgets keep headroom in case the
+`CI_OVERFLOW_*` switch routes `check` back to slower runners.
 
 ## Budgets
 

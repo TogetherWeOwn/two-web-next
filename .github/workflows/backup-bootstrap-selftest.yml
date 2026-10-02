@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   bootstrap-selftest:
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     container: python:3.13-bookworm
     timeout-minutes: 5
     steps:

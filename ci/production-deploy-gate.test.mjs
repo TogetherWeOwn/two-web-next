@@ -211,10 +211,10 @@ test('both Environment gate jobs inherit contents and Actions read permissions',
   assert.equal((workflow.match(/run: node ci\/production-deploy-gate\.mjs\n/g) ?? []).length, 2);
 });
 
-test('manual production workflow uses private-repo runners and production-only secrets', () => {
+test('manual production workflow uses GitHub-hosted runners and production-only secrets', () => {
   const workflow = readFileSync(new URL('../.github/workflows/deploy-production.yml', import.meta.url), 'utf8');
-  assert.equal((workflow.match(/runs-on: \[self-hosted, two-selfhosted\]/g) ?? []).length, 2);
-  assert.ok(!workflow.includes('ubuntu-latest'));
+  assert.equal((workflow.match(/runs-on: ubuntu-latest\n/g) ?? []).length, 2);
+  assert.ok(!workflow.includes('self-hosted'));
   assert.ok(!workflow.includes('secrets.CLOUDFLARE_API_TOKEN'));
   assert.ok(!workflow.includes('secrets.CLOUDFLARE_ACCOUNT_ID'));
   for (const key of Object.keys(credentials)) {

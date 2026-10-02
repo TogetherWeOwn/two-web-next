@@ -30,7 +30,7 @@ concurrency:
 jobs:
   release-please:
     name: release-please
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       prs_created: ${{ steps.release.outputs.prs_created }}
@@ -46,7 +46,7 @@ jobs:
     name: dispatch-checks
     needs: release-please
     if: needs.release-please.outputs.prs_created == 'true'
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - env:

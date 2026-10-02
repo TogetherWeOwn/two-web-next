@@ -32,7 +32,7 @@ concurrency:
 jobs:
   backup:
     name: backup
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       BRANCH: ${{ inputs.branch || 'staging' }}

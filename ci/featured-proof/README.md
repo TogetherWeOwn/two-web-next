@@ -2,7 +2,7 @@
 
 This is the bounded offline CI lane authorized by [TOG-11003](/TOG/issues/TOG-11003), following [TOG-10986](/TOG/issues/TOG-10986). The installed GitHub company-bot connection `73e50cff-255d-4fc3-9ec1-8553a8984cfd` successfully listed this repository's workflows; the documented project-scoped git credential helper successfully read `main` before implementation. Neither the stopped `gh` shim nor runtime-tools transport is used. No connection, credential, paid runner or capacity provisioning is involved.
 
-The private repository uses `[self-hosted, two-selfhosted]` runners. Both capture jobs retain their digest-pinned browser job container, isolating browser execution from the shared Docker host. No GitHub-hosted runner or additional capacity is requested.
+Both capture jobs run on GitHub-hosted `ubuntu-latest`: the repository is public, and the org's self-hosted runner group refuses public repositories ([TOG-12340](/TOG/issues/TOG-12340)). They retain their digest-pinned browser job container. Hosted Linux is free for public repositories; no paid runner or additional capacity is requested.
 
 ## Current-source PR proof
 
@@ -15,7 +15,7 @@ PR source changes run this new job automatically. Manual `workflow_dispatch` ret
 ## Frozen-input invocation and containment
 
 - Service/repository: GitHub Actions, `TogetherWeOwn/two-web-next`.
-- Entry point: `.github/workflows/featured-offline-proof.yml`, job `capture` on `[self-hosted, two-selfhosted]` in the pinned browser job container.
+- Entry point: `.github/workflows/featured-offline-proof.yml`, job `capture` on `ubuntu-latest` in the pinned browser job container.
 - Runs on an explicitly authorized `workflow_dispatch`; PR changes use the separate current-source job above. No automatic main/deployment job is added.
 - Browser image: `mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d`. The public MCR manifest resolved this digest on 2026-09-30; amd64 manifest is `sha256:65cefd09a5e943921ecd3a6e5414c603db2eb161e9eb48f2e2ccc63486dc7dc0`.
 - Matching `playwright@1.58.2` npm module is installed **only inside the CI container**, under `RUNNER_TEMP`, with scripts/browser downloads disabled. No root app dependency changes, host installs or browser installs.
