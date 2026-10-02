@@ -13,6 +13,10 @@ const bound = "postgres://bound.invalid/db";
 const environment = (sources: Record<string, unknown>) =>
   ({
     APP_URL: "https://next.example.test",
+    // Required Worker secrets: readiness fails closed without them.
+    DISCORD_CLIENT_SECRET: "test-client-secret",
+    DISCORD_BOT_TOKEN: "test-bot-token",
+    SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     ...sources,
     SYNC_EVENT_QUEUE: { send: vi.fn(async () => {}) },
     INTERNAL_ACTION_QUEUE: { send: vi.fn(async () => {}) },
