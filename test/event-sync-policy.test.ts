@@ -23,9 +23,23 @@ import { dispatchSyncEvent, handleSyncEvent, uniqueKey } from "../src/jobs/sync-
 import { BotTerminalError, BotTransportError } from "../src/jobs/types";
 import type { BotClient, BotFailure, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
-const payload = { eventKey: "e1", name: "n", startsAt: "2026-10-01T12:00:00.000Z", endsAt: null, location: "l", description: null };
+const payload = {
+  eventKey: "e1",
+  name: "n",
+  startsAt: "2026-10-01T12:00:00.000Z",
+  endsAt: null,
+  location: "l",
+  description: null,
+};
 const fail = (o: Partial<BotFailure>): BotFailure => ({
-  ok: false, code: "x", status: 503, requestId: null, message: "m", retryable: true, retryAfterSeconds: null, ...o,
+  ok: false,
+  code: "x",
+  status: 503,
+  requestId: null,
+  message: "m",
+  retryable: true,
+  retryAfterSeconds: null,
+  ...o,
 });
 
 /** TTL-aware lock: a held key absorbs redispatch until its expiry, like pgUniqueLock. */
@@ -52,7 +66,8 @@ function memLedger(): QueueLedger & { rows: Map<string, { state: string; availab
     rows,
     enqueued: async (j) => void rows.set(j.jobId, { state: "pending", availableAt: j.availableAt }),
     reserved: async (id) => void rows.set(id, { ...rows.get(id), state: "reserved" } as never),
-    released: async (id, at) => void rows.set(id, { ...rows.get(id), state: "released", availableAt: at } as never),
+    released: async (id, at) =>
+      void rows.set(id, { ...rows.get(id), state: "released", availableAt: at } as never),
     dequeued: async (id) => void rows.delete(id),
     failed: async (id) => void rows.set(id, { state: "failed" }),
   };
@@ -62,7 +77,8 @@ function store(over: Partial<EventStore> = {}) {
   const stamped: { eventKey: string; discordEventId: string; mirroredAt: Date }[] = [];
   const events: EventStore = {
     find: async (eventKey) => ({ eventKey, payload: { ...payload, eventKey }, mirrored: true }),
-    recordMirrored: async (eventKey, discordEventId, mirroredAt) => void stamped.push({ eventKey, discordEventId, mirroredAt }),
+    recordMirrored: async (eventKey, discordEventId, mirroredAt) =>
+      void stamped.push({ eventKey, discordEventId, mirroredAt }),
     closeFinished: async () => 0,
     materializeSeries: async () => 0,
     staleEventKeys: async () => [],
@@ -112,7 +128,10 @@ describe("debounce window (fake clock)", () => {
     const sent: { body: any; opts: any }[] = [];
     const ledger = memLedger();
     const queue = trackingQueue(
-      { send: async (body: unknown, opts?: { delaySeconds?: number }) => void sent.push({ body, opts }) },
+      {
+        send: async (body: unknown, opts?: { delaySeconds?: number }) =>
+          void sent.push({ body, opts }),
+      },
       ledger,
       () => new Date(),
     );
@@ -123,7 +142,9 @@ describe("debounce window (fake clock)", () => {
     expect(sent[0]!.opts).toEqual({ delaySeconds: 10 });
 
     // The uniqueness lease spans the full window from dispatch time.
-    expect(lock.rows.get(uniqueKey("e1"))!.expiresAt - Date.now()).toBe(SYNC_EVENT.uniqueForSeconds * 1000);
+    expect(lock.rows.get(uniqueKey("e1"))!.expiresAt - Date.now()).toBe(
+      SYNC_EVENT.uniqueForSeconds * 1000,
+    );
     // The ledger availability carries the same debounce delay.
     const jobId = sent[0]!.body.jobId as string;
     expect(ledger.rows.get(jobId)?.availableAt).toEqual(new Date(Date.now() + 10_000));
@@ -141,7 +162,9 @@ describe("debounce window (fake clock)", () => {
   it("publish and cancel write-backs share the same 10 s debounce", async () => {
     const sent: { m: unknown; o?: { delaySeconds?: number } }[] = [];
     const env = {
-      EVENT_SYNC_QUEUE: { send: async (m: unknown, o?: { delaySeconds?: number }) => void sent.push({ m, o }) },
+      EVENT_SYNC_QUEUE: {
+        send: async (m: unknown, o?: { delaySeconds?: number }) => void sent.push({ m, o }),
+      },
     } as unknown as Env;
     await enqueueEventSync(env, "e1", "published");
     await enqueueEventSync(env, "e1", "cancelled");
@@ -151,16 +174,30 @@ describe("debounce window (fake clock)", () => {
 
 describe("retry count and backoff ladder", () => {
   it("walks 10/60/300/900/3600 on transport failure, then fails on attempt 6", async () => {
-    const bot = { upsertEvent: async () => { throw new BotTransportError("bot down"); } } as unknown as BotClient;
-    for (const [attempt, delay] of [[1, 10], [2, 60], [3, 300], [4, 900], [5, 3600]] as const) {
+    const bot = {
+      upsertEvent: async () => {
+        throw new BotTransportError("bot down");
+      },
+    } as unknown as BotClient;
+    for (const [attempt, delay] of [
+      [1, 10],
+      [2, 60],
+      [3, 300],
+      [4, 900],
+      [5, 3600],
+    ] as const) {
       const s = store();
-      const outcome = await handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, attempt, { bot, events: s.events });
+      const outcome = await handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, attempt, {
+        bot,
+        events: s.events,
+      });
       expect(outcome).toEqual({ retryInSeconds: delay });
       expect(s.stamped).toHaveLength(0); // a wait stamps nothing
     }
     const s = store();
-    await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 6, { bot, events: s.events }))
-      .resolves.toEqual({ failed: "gave up after 6 attempts" });
+    await expect(
+      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 6, { bot, events: s.events }),
+    ).resolves.toEqual({ failed: "gave up after 6 attempts" });
     expect(s.stamped).toHaveLength(0);
   });
 
@@ -168,18 +205,28 @@ describe("retry count and backoff ladder", () => {
     let answer: BotFailure = fail({ retryAfterSeconds: 42 });
     const bot = { upsertEvent: async () => answer } as unknown as BotClient;
     const s = store();
-    await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot, events: s.events }))
-      .resolves.toEqual({ retryInSeconds: 42 });
+    await expect(
+      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot, events: s.events }),
+    ).resolves.toEqual({ retryInSeconds: 42 });
 
     answer = fail({ retryable: false, code: "action_not_allowed" });
-    await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot, events: s.events }))
-      .resolves.toMatchObject({ failed: expect.stringContaining("action_not_allowed") });
+    await expect(
+      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot, events: s.events }),
+    ).resolves.toMatchObject({ failed: expect.stringContaining("action_not_allowed") });
 
     // Class-only (#233): a terminal throw fails with its class, never the
     // message (which can carry secrets) — so this pins "BotTerminalError".
-    const terminal = { upsertEvent: async () => { throw new BotTerminalError("missing secret"); } } as unknown as BotClient;
-    await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot: terminal, events: s.events }))
-      .resolves.toEqual({ failed: "BotTerminalError" });
+    const terminal = {
+      upsertEvent: async () => {
+        throw new BotTerminalError("missing secret");
+      },
+    } as unknown as BotClient;
+    await expect(
+      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, {
+        bot: terminal,
+        events: s.events,
+      }),
+    ).resolves.toEqual({ failed: "BotTerminalError" });
     expect(s.stamped).toHaveLength(0);
   });
 });
@@ -215,8 +262,9 @@ describe("mirrored recheck and terminal stamp", () => {
     const bot = { upsertEvent } as unknown as BotClient;
     const find = vi.fn(async () => null);
     const gone = store({ find: find as unknown as EventStore["find"] });
-    await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 3, { bot, events: gone.events }))
-      .resolves.toEqual({ done: true });
+    await expect(
+      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 3, { bot, events: gone.events }),
+    ).resolves.toEqual({ done: true });
     expect(find).toHaveBeenCalledWith("e1");
     expect(upsertEvent).not.toHaveBeenCalled();
     expect(gone.stamped).toHaveLength(0);
@@ -224,19 +272,34 @@ describe("mirrored recheck and terminal stamp", () => {
     const unmirrored = store({
       find: async (eventKey) => ({ eventKey, payload: { ...payload, eventKey }, mirrored: false }),
     });
-    await expect(handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot, events: unmirrored.events }))
-      .resolves.toEqual({ done: true });
+    await expect(
+      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, {
+        bot,
+        events: unmirrored.events,
+      }),
+    ).resolves.toEqual({ done: true });
     expect(upsertEvent).not.toHaveBeenCalled();
     expect(unmirrored.stamped).toHaveLength(0);
   });
 
   it("success stamps the discord id and the fake-clock time, exactly once", async () => {
-    const bot = { upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "discord-1" }) } as unknown as BotClient;
+    const bot = {
+      upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "discord-1" }),
+    } as unknown as BotClient;
     const s = store();
-    await expect(handleSyncEvent(
-      { eventKey: "e1", idempotencyKey: "k" }, 1,
-      { bot, events: s.events, now: () => new Date() },
-    )).resolves.toEqual({ done: true });
-    expect(s.stamped).toEqual([{ eventKey: "e1", discordEventId: "discord-1", mirroredAt: new Date("2026-10-01T12:00:00.000Z") }]);
+    await expect(
+      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, {
+        bot,
+        events: s.events,
+        now: () => new Date(),
+      }),
+    ).resolves.toEqual({ done: true });
+    expect(s.stamped).toEqual([
+      {
+        eventKey: "e1",
+        discordEventId: "discord-1",
+        mirroredAt: new Date("2026-10-01T12:00:00.000Z"),
+      },
+    ]);
   });
 });

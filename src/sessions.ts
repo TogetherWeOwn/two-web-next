@@ -97,14 +97,18 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           expires_at = excluded.expires_at, revoked_at = null`;
     },
     async get(tokenHash) {
-      const rows = await sql<Record<string, unknown>[]>`select user_id, username, avatar, member, moderator
+      const rows = await sql<
+        Record<string, unknown>[]
+      >`select user_id, username, avatar, member, moderator
         from web_sessions
         where token_hash = ${tokenHash} and revoked_at is null and expires_at > now()`;
       const row = rows[0];
       return row ? toRow(row) : null;
     },
     async statusHash(tokenHash) {
-      const rows = await sql<{ status_hash: string }[]>`select coalesce(status_hash, token_hash) as status_hash
+      const rows = await sql<
+        { status_hash: string }[]
+      >`select coalesce(status_hash, token_hash) as status_hash
         from web_sessions where token_hash = ${tokenHash}
           and revoked_at is null and expires_at > clock_timestamp()`;
       return rows[0]?.status_hash ?? null;
@@ -185,7 +189,15 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async get(hash) {
       const r = live(hash);
-      return r ? { userId: r.userId, username: r.username, avatar: r.avatar, member: r.member, moderator: r.moderator } : null;
+      return r
+        ? {
+            userId: r.userId,
+            username: r.username,
+            avatar: r.avatar,
+            member: r.member,
+            moderator: r.moderator,
+          }
+        : null;
     },
     async statusHash(hash) {
       return live(hash)?.statusHash ?? null;
@@ -201,7 +213,11 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       if (!source) return false;
       if (oldHash === replacement.tokenHash) return true;
       rows.delete(oldHash);
-      rows.set(replacement.tokenHash, { ...replacement, expiresAt: replacement.expiresAt.getTime(), statusHash: source.statusHash });
+      rows.set(replacement.tokenHash, {
+        ...replacement,
+        expiresAt: replacement.expiresAt.getTime(),
+        statusHash: source.statusHash,
+      });
       return true;
     },
     async revoke(hash) {

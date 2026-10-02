@@ -15,7 +15,10 @@ export type MemberStatsSource = (id: string, signal: AbortSignal) => Promise<Mem
 export const MEMBER_STATS_BUDGET_MS = 500;
 
 // One budget for connection setup and both optional reads, not one per query.
-export async function memberStatsWithBudget(source: MemberStatsSource, id: string): Promise<MemberStats | null> {
+export async function memberStatsWithBudget(
+  source: MemberStatsSource,
+  id: string,
+): Promise<MemberStats | null> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<null>((resolve) => {
@@ -37,9 +40,15 @@ export async function memberStatsWithBudget(source: MemberStatsSource, id: strin
 
 // Only a dedicated stats client belongs here: force-closing it on expiry
 // cancels in-flight SQL and connection attempts without touching the audit DB.
-export async function readOwnedMemberStats(db: Pick<Db, "execute" | "$client">, id: string, signal: AbortSignal): Promise<MemberStats | null> {
+export async function readOwnedMemberStats(
+  db: Pick<Db, "execute" | "$client">,
+  id: string,
+  signal: AbortSignal,
+): Promise<MemberStats | null> {
   let closing: Promise<void> | undefined;
-  const close = () => { closing ??= db.$client.end({ timeout: 0 }).catch(() => {}); };
+  const close = () => {
+    closing ??= db.$client.end({ timeout: 0 }).catch(() => {});
+  };
   signal.addEventListener("abort", close, { once: true });
   try {
     signal.throwIfAborted();
@@ -51,7 +60,8 @@ export async function readOwnedMemberStats(db: Pick<Db, "execute" | "$client">, 
   }
 }
 
-const stringOrNull = (value: unknown): string | null => typeof value === "string" && value !== "" ? value : null;
+const stringOrNull = (value: unknown): string | null =>
+  typeof value === "string" && value !== "" ? value : null;
 const dateOrNull = (value: unknown): Date | null => {
   if (!(value instanceof Date) && (typeof value !== "string" || value === "")) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -65,23 +75,32 @@ const daysOrNull = (value: unknown): number | null => {
 
 // Bot-owned views are optional. Never include an exception message in logs:
 // database errors can carry connection strings or member data.
-export async function readMemberStats(db: Pick<Db, "execute"> | null, id: string, signal?: AbortSignal): Promise<MemberStats | null> {
+export async function readMemberStats(
+  db: Pick<Db, "execute"> | null,
+  id: string,
+  signal?: AbortSignal,
+): Promise<MemberStats | null> {
   if (!db) return null;
-  if (!signal) return memberStatsWithBudget((memberId, budget) => readMemberStats(db, memberId, budget), id);
+  if (!signal)
+    return memberStatsWithBudget((memberId, budget) => readMemberStats(db, memberId, budget), id);
   const connection = memberReadDb(db as Db);
   try {
     signal.throwIfAborted();
-    const members = await keyedMemberRead(() => connection.execute(sql`
+    const members = await keyedMemberRead(() =>
+      connection.execute(sql`
       select member_id, joined_at, tenure_days, rank_key, is_current_member
       from web_v1.members where member_id = ${id} limit 1
-    `));
+    `),
+    );
     signal.throwIfAborted();
     const member = members[0];
     if (!member) return null;
-    const rows = await keyedMemberRead(() => connection.execute(sql`
+    const rows = await keyedMemberRead(() =>
+      connection.execute(sql`
       select member_id, milestone, occurred_at, detail from web_v1.member_milestones
       where member_id = ${id} order by occurred_at desc
-    `));
+    `),
+    );
     signal.throwIfAborted();
     return {
       joinedAt: dateOrNull(member.joined_at),
@@ -90,7 +109,15 @@ export async function readMemberStats(db: Pick<Db, "execute"> | null, id: string
       isCurrentMember: member.is_current_member !== false,
       milestones: rows.flatMap((row) => {
         const occurredAt = dateOrNull(row.occurred_at);
-        return occurredAt ? [{ type: stringOrNull(row.milestone) ?? "Milestone", occurredAt, detail: stringOrNull(row.detail) }] : [];
+        return occurredAt
+          ? [
+              {
+                type: stringOrNull(row.milestone) ?? "Milestone",
+                occurredAt,
+                detail: stringOrNull(row.detail),
+              },
+            ]
+          : [];
       }),
     };
   } catch {

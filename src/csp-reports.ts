@@ -57,7 +57,8 @@ export function extractCspReport(raw: string): CspReportFields | null {
     return null;
   }
   // Classic `report-uri` shape: {"csp-report": {...}}.
-  if (isRecord(decoded) && isRecord(decoded["csp-report"])) return decoded["csp-report"] as CspReportFields;
+  if (isRecord(decoded) && isRecord(decoded["csp-report"]))
+    return decoded["csp-report"] as CspReportFields;
   // Reporting API shape: [{...}, ...] — still handle only the first report.
   if (Array.isArray(decoded) && isRecord(decoded[0])) {
     const first = decoded[0];
@@ -68,7 +69,7 @@ export function extractCspReport(raw: string): CspReportFields | null {
     // Preserve the envelope URL as a fallback, below the body document fields.
     return typeof first.url === "string"
       ? { ...first.body, url: firstString(first.body.url, first.url) }
-      : first.body as CspReportFields;
+      : (first.body as CspReportFields);
   }
   return null;
 }
@@ -94,7 +95,9 @@ export function cspReportLogFields(report: CspReportFields): {
   return {
     blocked_uri: redactCspReportUri(firstString(report["blocked-uri"], report.blockedURL)),
     violated_directive: firstString(report["violated-directive"], report.effectiveDirective),
-    document_uri: redactCspReportUri(firstString(report["document-uri"], report.documentURL, report.url)),
+    document_uri: redactCspReportUri(
+      firstString(report["document-uri"], report.documentURL, report.url),
+    ),
     source_file: redactCspReportUri(firstString(report["source-file"], report.sourceFile)),
     line_number: firstNumber(report["line-number"], report.lineNumber),
   };

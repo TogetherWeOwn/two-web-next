@@ -3,7 +3,8 @@ export function readWranglerConfig(text) {
   // comments and trailing commas. JSON.parse still rejects malformed input.
   const stringsOrComments = /"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
   const stringsOrTrailingCommas = /"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g;
-  const json = text.replace(stringsOrComments, (match) => match.startsWith('"') ? match : " ")
-    .replace(stringsOrTrailingCommas, (match) => match === "," ? "" : match);
+  const json = text
+    .replace(stringsOrComments, (match) => (match.startsWith('"') ? match : " "))
+    .replace(stringsOrTrailingCommas, (match) => (match === "," ? "" : match));
   return JSON.parse(json);
 }

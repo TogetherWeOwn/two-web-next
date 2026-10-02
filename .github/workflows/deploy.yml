@@ -25,7 +25,11 @@ jobs:
     concurrency:
       group: deploy-staging
       cancel-in-progress: false
-    runs-on: [self-hosted, two-selfhosted]
+    # The org's two-selfhosted runner group refuses public repositories, so a
+    # fixed self-hosted label strands this job while the repo is public
+    # (TOG-12326). Public: GitHub-hosted, free for public repos. Private:
+    # back on the self-hosted fleet with no workflow change.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     # Production-style gate: GitHub Environment protection rules (required
     # reviewers, etc.) apply to staging deploys the same way they would to prod.
