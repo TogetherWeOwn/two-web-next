@@ -100,8 +100,10 @@ describe("join-attempt write policy: single controller insert (DB-free source al
   it("recordAttempt is defined once and called only from the join callback route", () => {
     // recordAttempt\( matches the definition plus call sites; the import,
     // comments and docs carry no paren and stay out of this pin.
+    // Six call sites: denied, expired/invalid-state error, degraded (blank
+    // bot, still controller-direct), exchange error, recoverable, success.
     expect(filesMatching(/recordAttempt\(/)).toEqual(["src/join/route.ts", "src/join/service.ts"]);
-    expect(read("src/join/route.ts").match(/await recordAttempt\(/g)).toHaveLength(5);
+    expect(read("src/join/route.ts").match(/await recordAttempt\(/g)).toHaveLength(6);
     expect(read("src/join/route.ts")).not.toMatch(/INSERT INTO join_attempts/);
   });
 
