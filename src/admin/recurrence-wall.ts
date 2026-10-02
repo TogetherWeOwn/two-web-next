@@ -12,6 +12,9 @@ export function utcToPreciseWall(instant: Date, timezone: string): PreciseWall {
 }
 
 export function preciseWallToUtc(wall: PreciseWall, timezone: string): Date {
-  const minute = wallToUtc(wall.minute, timezone);
+  // Series keep the seed's offset the way legacy `addWeeks` does: a fold
+  // wall time resolves to the earlier occurrence (TOG-11669). Single-event
+  // form parses use the `wallToUtc` default (later / second occurrence).
+  const minute = wallToUtc(wall.minute, timezone, "earlier");
   return new Date(minute.getTime() + wall.subMinuteMs);
 }

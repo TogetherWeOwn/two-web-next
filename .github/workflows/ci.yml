@@ -148,6 +148,8 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
+        run: node --test ci/staging-deploy-gate-selftest.mjs
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
         run: npm run test:cutover
       - name: Coverage job summary
@@ -182,5 +184,7 @@ jobs:
         run: node --test ci/production-deploy-gate.test.mjs
       - name: Build (wrangler dry run)
         run: npx wrangler deploy --dry-run --outdir dist
+      - name: Build alert Tail Worker (wrangler dry run)
+        run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail
       - name: Production build (wrangler dry run, no deployment)
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
