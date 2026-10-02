@@ -2,12 +2,7 @@ import { jsx } from "hono/jsx/jsx-runtime";
 import { describe, expect, it } from "vitest";
 import { FeaturedFormPage } from "../src/admin/pages";
 import type { FeaturedRow } from "../src/admin/store";
-import {
-  EventGonePage,
-  EventPage,
-  EventsCalendarPage,
-  PastEventsPage,
-} from "../src/events/pages";
+import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
 import type { CalendarEmptyState, CalendarState } from "../src/islands/contracts";
 
@@ -54,26 +49,58 @@ const NOW = new Date("2030-01-10T20:00:00Z");
 function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
   const start = new Date("2030-01-10T20:00:00Z");
   return {
-    id: 1, icsSequence: 1n, eventKey: "friday-helldivers", title: "Friday night Helldivers",
-    game: "Helldivers", description: "Bring a friend.", startsAt: start,
-    endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC", location: "Voice channel",
-    capacity: null, status: "published", rsvpOpen: true, goingCount: 3,
-    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    createdBy: null, recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-    parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
-    syncRevision: 1, syncedRevision: 0, ...overrides,
+    id: 1,
+    icsSequence: 1n,
+    eventKey: "friday-helldivers",
+    title: "Friday night Helldivers",
+    game: "Helldivers",
+    description: "Bring a friend.",
+    startsAt: start,
+    endsAt: new Date("2030-01-10T22:00:00Z"),
+    timezone: "UTC",
+    location: "Voice channel",
+    capacity: null,
+    status: "published",
+    rsvpOpen: true,
+    goingCount: 3,
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    createdBy: null,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: start,
+    updatedAt: start,
+    syncRevision: 1,
+    syncedRevision: 0,
+    ...overrides,
   };
 }
 
 const listState: CalendarState = { view: "list", month: "2030-01", q: "", past: true };
-const pastEvent = () => event({
-  id: 2, eventKey: "old-valorant", title: "Last week's Valorant night",
-  status: "past", startsAt: new Date("2030-01-03T20:00:00Z"), endsAt: new Date("2030-01-03T22:00:00Z"),
-});
+const pastEvent = () =>
+  event({
+    id: 2,
+    eventKey: "old-valorant",
+    title: "Last week's Valorant night",
+    status: "past",
+    startsAt: new Date("2030-01-03T20:00:00Z"),
+    endsAt: new Date("2030-01-03T22:00:00Z"),
+  });
 const calendarProps = (state: CalendarState) => ({
-  state, upcoming: [event()], past: [pastEvent()], zone: "UTC", now: NOW,
-  emptyState: null as CalendarEmptyState, discordFailed: false, member: false,
-  inviteUrl: "https://discord.gg/fixture", appUrl: APP_URL,
+  state,
+  upcoming: [event()],
+  past: [pastEvent()],
+  zone: "UTC",
+  now: NOW,
+  emptyState: null as CalendarEmptyState,
+  discordFailed: false,
+  member: false,
+  inviteUrl: "https://discord.gg/fixture",
+  appUrl: APP_URL,
 });
 
 describe("event cover-image layout boxes (TOG-7331 tripwires)", () => {
@@ -82,15 +109,21 @@ describe("event cover-image layout boxes (TOG-7331 tripwires)", () => {
     expect(list).toContain('data-testid="event-card"');
     expectBoxed(list, "GET /events (list)");
 
-    const grid = await jsx(EventsCalendarPage, calendarProps({ ...listState, view: "calendar" })).toString();
+    const grid = await jsx(
+      EventsCalendarPage,
+      calendarProps({ ...listState, view: "calendar" }),
+    ).toString();
     expect(grid).toContain('data-testid="events-calendar-grid"');
     expectBoxed(grid, "GET /events (calendar)");
   });
 
   it("event detail carries no dimensionless images", async () => {
     const html = await jsx(EventPage, {
-      e: event(), neighbors: { previous: null, next: null }, related: [],
-      appUrl: APP_URL, jsonLd: "{}",
+      e: event(),
+      neighbors: { previous: null, next: null },
+      related: [],
+      appUrl: APP_URL,
+      jsonLd: "{}",
     }).toString();
     expect(html).toContain("Friday night Helldivers");
     expectBoxed(html, "GET /e/{event_key}");
@@ -98,7 +131,8 @@ describe("event cover-image layout boxes (TOG-7331 tripwires)", () => {
 
   it("gone page carries no dimensionless images", async () => {
     const html = await jsx(EventGonePage, {
-      e: event({ status: "cancelled" }), jsonLd: "{}",
+      e: event({ status: "cancelled" }),
+      jsonLd: "{}",
     }).toString();
     expect(html).toContain('data-testid="event-cancelled"');
     expectBoxed(html, "GET /e/{event_key} (410)");
@@ -106,7 +140,11 @@ describe("event cover-image layout boxes (TOG-7331 tripwires)", () => {
 
   it("past archive carries no dimensionless images", async () => {
     const html = await jsx(PastEventsPage, {
-      rows: [event({ status: "past" })], page: 1, hasMore: false, totalPages: 1, appUrl: APP_URL,
+      rows: [event({ status: "past" })],
+      page: 1,
+      hasMore: false,
+      totalPages: 1,
+      appUrl: APP_URL,
     }).toString();
     expect(html).toContain('data-testid="past-events-list"');
     expectBoxed(html, "GET /events/past");
@@ -117,13 +155,30 @@ const previewNow = new Date("2026-09-30T20:00:00Z");
 const previewBefore = new Date(previewNow.getTime() - 1);
 const previewAfter = new Date(previewNow.getTime() + 1);
 const previewRow: FeaturedRow = {
-  id: 1, legacyId: null, title: "Community night on Friday", body: "Everyone is welcome.",
-  url: null, imageUrl: "https://cdn.discordapp.com/photo.jpg", imageAlt: "Friends playing together",
-  isPublished: true, position: 0, startsAt: previewBefore, endsAt: previewAfter,
-  createdBy: "moderator", createdAt: previewBefore, updatedAt: previewBefore,
+  id: 1,
+  legacyId: null,
+  title: "Community night on Friday",
+  body: "Everyone is welcome.",
+  url: null,
+  imageUrl: "https://cdn.discordapp.com/photo.jpg",
+  imageAlt: "Friends playing together",
+  isPublished: true,
+  position: 0,
+  startsAt: previewBefore,
+  endsAt: previewAfter,
+  createdBy: "moderator",
+  createdAt: previewBefore,
+  updatedAt: previewBefore,
 };
 const previewHtml = (row: FeaturedRow) =>
-  jsx(FeaturedFormPage, { mode: "edit", row, values: {}, errors: {}, now: previewNow, appUrl: APP_URL }).toString();
+  jsx(FeaturedFormPage, {
+    mode: "edit",
+    row,
+    values: {},
+    errors: {},
+    now: previewNow,
+    appUrl: APP_URL,
+  }).toString();
 
 describe("featured admin preview image box", () => {
   it("reserves an explicit-dimension 16:9 box on the preview image", async () => {

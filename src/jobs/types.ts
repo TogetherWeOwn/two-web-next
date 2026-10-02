@@ -39,9 +39,18 @@ export class SyncRetryPersistenceError extends Error {
 }
 
 export interface BotClient {
-  upsertEvent(p: EventUpsert, idempotencyKey: string): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
-  cancelEvent(p: { eventKey: string }, idempotencyKey: string): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
-  postAnnouncement(a: Announcement, idempotencyKey: string): Promise<BotSuccess<{ messageId: string; replayed: boolean }> | BotFailure>;
+  upsertEvent(
+    p: EventUpsert,
+    idempotencyKey: string,
+  ): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
+  cancelEvent(
+    p: { eventKey: string },
+    idempotencyKey: string,
+  ): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
+  postAnnouncement(
+    a: Announcement,
+    idempotencyKey: string,
+  ): Promise<BotSuccess<{ messageId: string; replayed: boolean }> | BotFailure>;
   assignRole(r: RoleAssignment): Promise<BotSuccess<{ outcome: string }> | BotFailure>;
 }
 
@@ -55,11 +64,18 @@ export type SyncAttempt = {
   requestAttempts: number;
   /** Null while a claim's result is unsettled, or after retirement/exhaustion. */
   nextAttemptAt: Date | null;
-} & ({ action: "event.upsert"; payload: EventUpsert } | { action: "event.cancel"; payload: { eventKey: string } });
+} & (
+  | { action: "event.upsert"; payload: EventUpsert }
+  | { action: "event.cancel"; payload: { eventKey: string } }
+);
 
 export interface EventStore {
   /** Snapshot at first attempt, not dispatch. Retries return the persisted request. */
-  prepareSync(eventKey: string, idempotencyKey: string, mirroredAt: Date): Promise<SyncAttempt | { waiting: true } | null>;
+  prepareSync(
+    eventKey: string,
+    idempotencyKey: string,
+    mirroredAt: Date,
+  ): Promise<SyncAttempt | { waiting: true } | null>;
   /** Atomically settle the attempt and acknowledge only its revision/RSVP cutoff. */
   completeSync(attempt: SyncAttempt, discordEventId: string): Promise<void>;
   /** Fence a due request until its result commits, or retire an obsolete snapshot. */
@@ -118,13 +134,20 @@ export interface UniqueLock {
 /** Originating web request, not the bot response ID or a deduplication key. */
 type QueueCorrelation = { requestId?: string };
 
-export type QueueMessage = QueueCorrelation & (
+export type QueueMessage = QueueCorrelation &
   // Optional only for pre-fencing messages: those finish without releasing a lock (TTL recovers it).
-  | { kind: "sync-event"; eventKey: string; idempotencyKey: string; leaseToken?: string; jobId?: string }
-  | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
-  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
-  | { kind: "alert-probe"; probeId?: string; jobId?: never }
-);
+  (
+    | {
+        kind: "sync-event";
+        eventKey: string;
+        idempotencyKey: string;
+        leaseToken?: string;
+        jobId?: string;
+      }
+    | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
+    | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
+    | { kind: "alert-probe"; probeId?: string; jobId?: never }
+  );
 
 /**
  * N3 (TOG-9895): the countable side of the queue. Cloudflare Queues carries the
@@ -136,7 +159,12 @@ export type QueueMessage = QueueCorrelation & (
  */
 export interface QueueLedger {
   /** A message was accepted by the queue. `availableAt` includes the debounce delay. */
-  enqueued(job: { jobId: string; kind: string; key: string | null; availableAt: Date }): Promise<void>;
+  enqueued(job: {
+    jobId: string;
+    kind: string;
+    key: string | null;
+    availableAt: Date;
+  }): Promise<void>;
   /** A consumer picked the message up. */
   reserved(jobId: string): Promise<void>;
   /** The message went back to the queue (retry outcome or redelivery). */

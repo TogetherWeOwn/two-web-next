@@ -21,7 +21,10 @@ const bot: BotClient = {
   assignRole: notWired("BotClient.assignRole"),
 };
 
-function sqlFor(env: Env & { HYPERDRIVE?: Hyperdrive }, options: postgres.Options<{}> = databaseOptions) {
+function sqlFor(
+  env: Env & { HYPERDRIVE?: Hyperdrive },
+  options: postgres.Options<{}> = databaseOptions,
+) {
   // The wrangler hyperdrive binding is `DB` (S1); `HYPERDRIVE` stays as an
   // accepted alias for environments that predate it.
   const url = databaseUrl(env) || env.HYPERDRIVE?.connectionString;
@@ -34,11 +37,20 @@ function sqlFor(env: Env & { HYPERDRIVE?: Hyperdrive }, options: postgres.Option
 // particular, rejected-late compensation gets a usable new pool, not an ended
 // ledgerSql. A blocked INSERT can finish late, observe the aborted signal and
 // compensate without occupying the next message's ledger/handler connection.
-async function successorSql<T>(env: JobsEnv, work: (sql: ReturnType<typeof sqlFor>) => Promise<T>): Promise<T> {
-  const sql = sqlFor(env, { ...databaseOptions, connect_timeout: 2,
-    connection: { statement_timeout: 5000 } });
-  try { return await work(sql); }
-  finally { await sql.end({ timeout: 1 }).catch(() => {}); }
+async function successorSql<T>(
+  env: JobsEnv,
+  work: (sql: ReturnType<typeof sqlFor>) => Promise<T>,
+): Promise<T> {
+  const sql = sqlFor(env, {
+    ...databaseOptions,
+    connect_timeout: 2,
+    connection: { statement_timeout: 5000 },
+  });
+  try {
+    return await work(sql);
+  } finally {
+    await sql.end({ timeout: 1 }).catch(() => {});
+  }
 }
 
 // waitUntil keeps settlement runnable after ACK/return, but cannot promise
@@ -48,29 +60,48 @@ function successorLifetime(work: Promise<unknown>): Promise<void> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<void>((resolve) => {
     timer = setTimeout(() => {
-      console.warn("sync successor settlement lifetime expired; unsettled ledger rows remain tracked");
+      console.warn(
+        "sync successor settlement lifetime expired; unsettled ledger rows remain tracked",
+      );
       resolve();
     }, 30_000);
   });
-  return Promise.race([work.then(() => {}, () => {}), timeout]).finally(() => clearTimeout(timer));
+  return Promise.race([
+    work.then(
+      () => {},
+      () => {},
+    ),
+    timeout,
+  ]).finally(() => clearTimeout(timer));
 }
 
 /** Web after-commit producer, sharing reconciliation's ledger and unique lock. */
-export async function enqueueSyncEvent(env: Env, message: Extract<QueueMessage, { kind: "sync-event" }>): Promise<boolean> {
+export async function enqueueSyncEvent(
+  env: Env,
+  message: Extract<QueueMessage, { kind: "sync-event" }>,
+): Promise<boolean> {
   if (!env.SYNC_EVENT_QUEUE) throw new Error("SYNC_EVENT_QUEUE is not bound");
   // Autocommit: ledger and lock must be visible before the transport accepts.
   const sql = sqlFor(env);
   try {
     return await dispatchSyncEvent(
       trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(sql)),
-      pgUniqueLock(sql), message.eventKey, message.idempotencyKey, undefined, message.requestId,
+      pgUniqueLock(sql),
+      message.eventKey,
+      message.idempotencyKey,
+      undefined,
+      message.requestId,
     );
   } finally {
     await sql.end({ timeout: 1 });
   }
 }
 
-export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv, ctx?: ExecutionContext): Promise<void> {
+export async function handleQueue(
+  batch: MessageBatch<unknown>,
+  env: JobsEnv,
+  ctx?: ExecutionContext,
+): Promise<void> {
   const sql = sqlFor(env);
   // Promise.race bounds waiting, not SQL execution. Isolate all best-effort
   // ledger/lock traffic from the max:1 handler pool: a timed-out statement can
@@ -79,20 +110,30 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv, ct
   const cleanupSql = sqlFor(env);
   try {
     const ledger = pgQueueLedger(ledgerSql);
-    const successorLedger: QueueLedger = { ...ledger,
+    const successorLedger: QueueLedger = {
+      ...ledger,
       enqueued: (job) => successorSql(env, (sql) => pgQueueLedger(sql).enqueued(job)),
       dequeued: (jobId) => successorSql(env, (sql) => pgQueueLedger(sql).dequeued(jobId)),
     };
     const successorLock: UniqueLock = {
       acquire: (key, ttl) => successorSql(env, (sql) => pgUniqueLock(sql).acquire(key, ttl)),
-      release: (key, leaseToken) => successorSql(env, (sql) => pgUniqueLock(sql).release(key, leaseToken)),
+      release: (key, leaseToken) =>
+        successorSql(env, (sql) => pgUniqueLock(sql).release(key, leaseToken)),
     };
-    await consume(batch, { bot, events: pgEventStore(sql), lock: pgUniqueLock(cleanupSql), ledger,
+    await consume(batch, {
+      bot,
+      events: pgEventStore(sql),
+      lock: pgUniqueLock(cleanupSql),
+      ledger,
       needsSync: pgEventStore(cleanupSql).needsSync,
       dispatchPending: (eventKey, signal) => {
         const work = dispatchSyncEvent(
           trackingQueue(env.SYNC_EVENT_QUEUE, successorLedger, undefined, signal),
-          successorLock, eventKey, undefined, signal);
+          successorLock,
+          eventKey,
+          undefined,
+          signal,
+        );
         ctx?.waitUntil(successorLifetime(work));
         return work;
       },
@@ -108,7 +149,10 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv, ct
   }
 }
 
-export async function handleScheduled(controller: ScheduledController, env: JobsEnv): Promise<void> {
+export async function handleScheduled(
+  controller: ScheduledController,
+  env: JobsEnv,
+): Promise<void> {
   const sql = sqlFor(env);
   // Dispatch commits its ledger row and uniqueness lock before the external
   // queue send. A later reconciliation rollback must not erase accepted jobs,
@@ -125,12 +169,13 @@ export async function handleScheduled(controller: ScheduledController, env: Jobs
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,
       // so parent row locks are released before unrelated external sends.
-      reconcile: () => reconcileEvents({
-        events: pgEventStore(dispatchSql),
-        writeTransaction: (work) => dispatchSql.begin(async (tx) => work(pgEventStore(tx))),
-        queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
-        lock: pgUniqueLock(dispatchSql),
-      }),
+      reconcile: () =>
+        reconcileEvents({
+          events: pgEventStore(dispatchSql),
+          writeTransaction: (work) => dispatchSql.begin(async (tx) => work(pgEventStore(tx))),
+          queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
+          lock: pgUniqueLock(dispatchSql),
+        }),
       prune: (db) => pruneModelTables(pgPruneStores(db)),
     });
   } finally {

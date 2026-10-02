@@ -43,7 +43,11 @@ export function trackingQueue(
         return await queue.send({ ...msg, jobId }, opts);
       } catch (err) {
         await ledger.dequeued(jobId).catch((e: unknown) => {
-          console.warn("queue ledger compensation failed", jobId, e instanceof Error ? e.constructor.name : typeof e);
+          console.warn(
+            "queue ledger compensation failed",
+            jobId,
+            e instanceof Error ? e.constructor.name : typeof e,
+          );
         });
         throw err;
       }

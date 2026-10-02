@@ -17,7 +17,14 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { addGuildMember, authorizeUrl, exchangeCode, failureMeta, fetchUser, isProviderOutage } from "./discord";
+import {
+  addGuildMember,
+  authorizeUrl,
+  exchangeCode,
+  failureMeta,
+  fetchUser,
+  isProviderOutage,
+} from "./discord";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -36,10 +43,20 @@ import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
-import { AUTH_THROTTLE_PER_MINUTE, WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "./throttle";
+import {
+  AUTH_THROTTLE_PER_MINUTE,
+  WRITE_THROTTLE_PER_MINUTE,
+  throttle,
+  throttleGuard,
+} from "./throttle";
 import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
-import { consumeLoginReturn, LOGIN_INTENDED_COOKIE, rememberLoginNext, takeJoinResult } from "./return-journey";
+import {
+  consumeLoginReturn,
+  LOGIN_INTENDED_COOKIE,
+  rememberLoginNext,
+  takeJoinResult,
+} from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { requestLog } from "./request-log";
@@ -47,7 +64,12 @@ import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 import { rulesLastUpdated } from "./rules-last-updated";
 import { authStatus, authStatusScript, clearAuthStatus, enableAuthStatus } from "./auth-status";
-import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding, expiredWriteBanner } from "./write-recovery";
+import {
+  consumeExpiredWrite,
+  flashExpiredWrite,
+  recoveryLanding,
+  expiredWriteBanner,
+} from "./write-recovery";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
@@ -85,9 +107,20 @@ const staticSecurityHeaders = secureHeaders({
   strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
-    imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
+    imgSrc: [
+      "'self'",
+      (c) =>
+        imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS)
+          .map((host) => `https://${host}`)
+          .join(" "),
+    ],
     // Only join reads embed the widget; other routes cannot frame anything.
-    frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com/widget" : "'none'"],
+    frameSrc: [
+      (c) =>
+        c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method)
+          ? "https://discord.com/widget"
+          : "'none'",
+    ],
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     fontSrc: ["'self'"],
@@ -107,16 +140,18 @@ const staticSecurityHeaders = secureHeaders({
   reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
 });
 
-app.use("*", (c, next) => requestLog(c, async () => {
-  try {
-    await staticSecurityHeaders(c, next);
-    await robotsTag(c, async () => {});
-  } catch (err) {
-    // Handler errors already became responses; one thrown by this
-    // post-processing would skip requestLog, so settle the final 500 here.
-    c.res = await internalErrorHandler(err, c);
-  }
-}));
+app.use("*", (c, next) =>
+  requestLog(c, async () => {
+    try {
+      await staticSecurityHeaders(c, next);
+      await robotsTag(c, async () => {});
+    } catch (err) {
+      // Handler errors already became responses; one thrown by this
+      // post-processing would skip requestLog, so settle the final 500 here.
+      c.res = await internalErrorHandler(err, c);
+    }
+  }),
+);
 
 // TrustHosts re-expression (W16: TOG-10110): refuse foreign Host values
 // before routing. Mounted after secureHeaders (refusals leave hardened) and
@@ -187,7 +222,13 @@ async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> 
 async function issueSession(
   c: Context<{ Bindings: Env }>,
   store: SessionStore,
-  row: { userId: string; username: string; avatar: string | null; member: boolean; moderator: boolean },
+  row: {
+    userId: string;
+    username: string;
+    avatar: string | null;
+    member: boolean;
+    moderator: boolean;
+  },
 ): Promise<void> {
   // N6 (TOG-9898): refresh the durable roster row on every sign-in — the
   // legacy updateOrCreate on the Discord id. The /join/callback reaches here
@@ -206,7 +247,10 @@ async function issueSession(
     });
   } catch (err) {
     // Driver messages can carry DSN fragments; the class name is the whole story here.
-    console.warn("roster upsert failed", { user: row.userId, exception: (err as Error)?.constructor?.name ?? "unknown" });
+    console.warn("roster upsert failed", {
+      user: row.userId,
+      exception: (err as Error)?.constructor?.name ?? "unknown",
+    });
   }
   const token = newSessionToken();
   await store.create({
@@ -228,7 +272,10 @@ async function issueSession(
   await enableAuthStatus(c, store, await hashToken(token));
 }
 
-async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
+async function readSession(
+  c: Context<{ Bindings: Env }>,
+  rotateToken = true,
+): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!token || !token.startsWith("two_")) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
@@ -238,7 +285,13 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
   // Abortable calendar fragments validate expiry/revocation but must not delete
   // the browser's current token: an aborted response cannot deliver a replacement.
   if (!rotateToken) {
-    return { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator };
+    return {
+      id: row.userId,
+      username: row.username,
+      avatar: row.avatar,
+      member: row.member,
+      moderator: row.moderator,
+    };
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
   // the old row in the same statement. A replayed cookie finds no row: guest.
@@ -260,7 +313,13 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
     sameSite: "Lax",
     maxAge: SESSION_TTL_SECONDS,
   });
-  return { id: row.userId, username: row.username, avatar: row.avatar, member: row.member, moderator: row.moderator };
+  return {
+    id: row.userId,
+    username: row.username,
+    avatar: row.avatar,
+    member: row.member,
+    moderator: row.moderator,
+  };
 }
 
 // One banner sentence per ordinary-login failure meaning (TOG-10355): denied
@@ -280,7 +339,9 @@ app.get("/", async (c) => {
   // A DB outage must not break the funnel, including session setup. Fail closed to guest.
   const session = await readSession(c).catch(() => {
     // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
-    console.warn("Home session unavailable; serving as guest.", { exception: "SessionReadFailure" });
+    console.warn("Home session unavailable; serving as guest.", {
+      exception: "SessionReadFailure",
+    });
     return null;
   });
   const n = c.req.query("n");
@@ -292,16 +353,34 @@ app.get("/", async (c) => {
   // A failure landing drops a stale success flash instead — the current failure
   // explanation wins over an older journey's success (TOG-10356 review).
   const flashed = await takeJoinResult(c);
-  const joinResult = ["join_failed", "signin_failed", "signin_denied", "signin_unavailable"].includes(notice ?? "") ? null : flashed;
+  const joinResult = [
+    "join_failed",
+    "signin_failed",
+    "signin_denied",
+    "signin_unavailable",
+  ].includes(notice ?? "")
+    ? null
+    : flashed;
   const [upcomingEvents, featured] = await Promise.all([
     loadHomeUpcoming(() => dbFor(c)),
-    dbFor(c).then((db) => db ? listVisibleFeatured(db) : []).catch(() => []),
+    dbFor(c)
+      .then((db) => (db ? listVisibleFeatured(db) : []))
+      .catch(() => []),
   ]);
   c.header("cache-control", "private, no-store");
   return c.html(
-    <Home session={session} notice={notice} joinResult={joinResult} inviteUrl={c.env.DISCORD_INVITE_URL} appUrl={c.env.APP_URL}
-      counts={counts} upcomingEvents={upcomingEvents ?? []} eventsUnavailable={upcomingEvents === null} featured={featured}
-      imageHosts={c.env.FEATURED_IMAGE_HOSTS} />,
+    <Home
+      session={session}
+      notice={notice}
+      joinResult={joinResult}
+      inviteUrl={c.env.DISCORD_INVITE_URL}
+      appUrl={c.env.APP_URL}
+      counts={counts}
+      upcomingEvents={upcomingEvents ?? []}
+      eventsUnavailable={upcomingEvents === null}
+      featured={featured}
+      imageHosts={c.env.FEATURED_IMAGE_HOSTS}
+    />,
   );
 });
 
@@ -321,7 +400,9 @@ app.get("/discord", (c) => {
 for (const path of ["/about", "/faq"] as const) {
   app.get(path, (c) => {
     c.header("cache-control", "public, max-age=3600");
-    return c.html(path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />);
+    return c.html(
+      path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />,
+    );
   });
 }
 
@@ -352,34 +433,44 @@ app.get("/privacy", (c) => {
 // /join/discord + /join/callback run the throttled OAuth round trip with the
 // synchronous bot add. JoinAttempt rows land in Postgres when DATABASE_URL is
 // set; without it the journey degrades to no persistence (never a 500).
-registerJoinRoutes(app, { storeFor, issueSession }, {
-  joinPage: async (c, props) => {
-    // Carrying the join-result flash makes the response viewer-specific:
-    // the static page keeps its shared-cache TTL only when there is nothing
-    // to consume (otherwise a guest could read another member's banner).
-    // Vary stays on every variant: the representation depends on the flash
-    // cookie even when this view has nothing to consume.
-    const joinResult = await takeJoinResult(c);
-    c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=3600");
-    c.header("vary", "Cookie");
-    return c.html(
-      <Join inviteUrl={props.inviteUrl} widgetUrl={props.widgetUrl} next={props.next} appUrl={c.env.APP_URL} joinResult={joinResult} />,
-    );
+registerJoinRoutes(
+  app,
+  { storeFor, issueSession },
+  {
+    joinPage: async (c, props) => {
+      // Carrying the join-result flash makes the response viewer-specific:
+      // the static page keeps its shared-cache TTL only when there is nothing
+      // to consume (otherwise a guest could read another member's banner).
+      // Vary stays on every variant: the representation depends on the flash
+      // cookie even when this view has nothing to consume.
+      const joinResult = await takeJoinResult(c);
+      c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=3600");
+      c.header("vary", "Cookie");
+      return c.html(
+        <Join
+          inviteUrl={props.inviteUrl}
+          widgetUrl={props.widgetUrl}
+          next={props.next}
+          appUrl={c.env.APP_URL}
+          joinResult={joinResult}
+        />,
+      );
+    },
+    recovery: (c, props, status = 200) => {
+      c.header("cache-control", "no-store, private");
+      c.status(status);
+      return c.html(
+        <Recovery
+          title={props.title}
+          message={props.message}
+          retryUrl={props.retryUrl}
+          retryLabel={props.retryLabel}
+          inviteUrl={props.inviteUrl}
+        />,
+      );
+    },
   },
-  recovery: (c, props, status = 200) => {
-    c.header("cache-control", "no-store, private");
-    c.status(status);
-    return c.html(
-      <Recovery
-        title={props.title}
-        message={props.message}
-        retryUrl={props.retryUrl}
-        retryLabel={props.retryLabel}
-        inviteUrl={props.inviteUrl}
-      />,
-    );
-  },
-});
+);
 
 // Sitemap (ports two-web routes/web.php's sitemap closure; crawl set per TOG-7072): published
 // events only. No DB binding yet, so the static entries ship now; the W8 events slice adds the
@@ -432,11 +523,18 @@ app.get("/up", async (c) => {
     if (injected) return injected;
     if (!target) return null;
     try {
-      const client = postgres(target, { max, idle_timeout: 10, connect_timeout: 3, fetch_types: false });
+      const client = postgres(target, {
+        max,
+        idle_timeout: 10,
+        connect_timeout: 3,
+        fetch_types: false,
+      });
       owned.add(client);
       return client;
     } catch (err) {
-      console.warn("Health check could not build the database client.", { exception: err instanceof Error ? err.name : typeof err });
+      console.warn("Health check could not build the database client.", {
+        exception: err instanceof Error ? err.name : typeof err,
+      });
       return null;
     }
   };
@@ -452,7 +550,11 @@ app.get("/up", async (c) => {
     // An injected client owns its own lifecycle.
     for (const sql of owned) {
       const closed = sql.end({ timeout: 0 }).catch(() => {});
-      try { c.executionCtx.waitUntil(closed); } catch { void closed; }
+      try {
+        c.executionCtx.waitUntil(closed);
+      } catch {
+        void closed;
+      }
     }
   }
 });
@@ -504,29 +606,48 @@ app.get("/auth/discord/callback", async (c) => {
   // error_description is never echoed — we render only our own copy.
   const oauthError = c.req.query("error");
   if (oauthError) {
-    return c.redirect(oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed", 302);
+    return c.redirect(
+      oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed",
+      302,
+    );
   }
 
-  if (!code || !state || !expected || state !== expected) return c.redirect("/?n=signin_failed", 302);
+  if (!code || !state || !expected || state !== expected)
+    return c.redirect("/?n=signin_failed", 302);
 
   let accessToken: string;
   let user;
   try {
-    accessToken = await exchangeCode(code, c.env.DISCORD_CLIENT_ID, c.env.DISCORD_CLIENT_SECRET, redirectUri(c.env));
+    accessToken = await exchangeCode(
+      code,
+      c.env.DISCORD_CLIENT_ID,
+      c.env.DISCORD_CLIENT_SECRET,
+      redirectUri(c.env),
+    );
     user = await fetchUser(accessToken);
   } catch (err) {
     // Bounded like the join route: exception class + kind + status, never the
     // message (the token-exchange error body can quote the client secret).
     const meta = failureMeta(err);
-    console.warn("discord sign-in failed", { exception: meta.exception, kind: meta.kind, status: meta.status });
-    return c.redirect(isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed", 302);
+    console.warn("discord sign-in failed", {
+      exception: meta.exception,
+      kind: meta.kind,
+      status: meta.status,
+    });
+    return c.redirect(
+      isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed",
+      302,
+    );
   }
 
   // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and
   // never stored.
-  const join = await addGuildMember(c.env.DISCORD_GUILD_ID, user.id, accessToken, c.env.DISCORD_BOT_TOKEN).catch(
-    () => "failed" as const,
-  );
+  const join = await addGuildMember(
+    c.env.DISCORD_GUILD_ID,
+    user.id,
+    accessToken,
+    c.env.DISCORD_BOT_TOKEN,
+  ).catch(() => "failed" as const);
   if (join === "failed") console.warn("guild auto-join failed", { user: user.id });
 
   // Moderator recompute: roles re-read with the bot token against snowflake IDs
@@ -583,39 +704,53 @@ registerEventRoutes(
   async (c) => readSession(c, false),
 );
 
-app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
-  const store = await storeFor(c);
-  const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (token) {
-    try { await store.revoke(await hashToken(token)); }
-    catch { return c.text("Sign-out temporarily unavailable", 503); }
-  }
-  deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
-  clearAuthStatus(c);
-  await consumeExpiredWrite(c);
-  return c.redirect("/", 303);
-});
+app.post(
+  "/logout",
+  throttle("logout", WRITE_THROTTLE_PER_MINUTE),
+  requestBodyLimit("action"),
+  async (c) => {
+    const store = await storeFor(c);
+    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+    if (token) {
+      try {
+        await store.revoke(await hashToken(token));
+      } catch {
+        return c.text("Sign-out temporarily unavailable", 503);
+      }
+    }
+    deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
+    clearAuthStatus(c);
+    await consumeExpiredWrite(c);
+    return c.redirect("/", 303);
+  },
+);
 
 // Staging-only QA seam. 404 everywhere that is not the staging host with
 // QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post("/auth/qa/:identity", async (c, next) => {
-  if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
-  await next();
-}, throttle("qa-login", AUTH_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
-  const presented = c.req.header(QA_HEADER) ?? "";
-  const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
-  const fixture = qaIdentity(c.req.param("identity") ?? "");
-  if (!ok || !fixture) return c.notFound();
-  const store = await storeFor(c);
-  await issueSession(c, store, {
-    userId: fixture.discordId,
-    username: fixture.username,
-    avatar: null,
-    member: true,
-    moderator: fixture.moderator,
-  });
-  return c.body(null, 204);
-});
+app.post(
+  "/auth/qa/:identity",
+  async (c, next) => {
+    if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
+    await next();
+  },
+  throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
+  requestBodyLimit("action"),
+  async (c) => {
+    const presented = c.req.header(QA_HEADER) ?? "";
+    const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
+    const fixture = qaIdentity(c.req.param("identity") ?? "");
+    if (!ok || !fixture) return c.notFound();
+    const store = await storeFor(c);
+    await issueSession(c, store, {
+      userId: fixture.discordId,
+      username: fixture.username,
+      avatar: null,
+      member: true,
+      moderator: fixture.moderator,
+    });
+    return c.body(null, 204);
+  },
+);
 
 registerAlertProbe(app);
 

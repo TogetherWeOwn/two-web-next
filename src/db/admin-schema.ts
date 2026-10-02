@@ -1,5 +1,19 @@
 import { isNull, sql } from "drizzle-orm";
-import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import {
+  bigint,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  type AnyPgColumn,
+  serial,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -54,7 +68,9 @@ export const events = pgTable(
     recurrenceEndsOn: timestamp("recurrence_ends_on"),
     // The self-reference needs the column type spelled out (drizzle self-FK
     // inference cycle — tsc rejects the bare `() => events.id` form).
-    parentEventId: integer("parent_event_id").references((): AnyPgColumn => events.id, { onDelete: "set null" }),
+    parentEventId: integer("parent_event_id").references((): AnyPgColumn => events.id, {
+      onDelete: "set null",
+    }),
     recurrenceIndex: integer("recurrence_index"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -77,7 +93,9 @@ export const eventSyncAttempts = pgTable(
   "event_sync_attempts",
   {
     idempotencyKey: uuid("idempotency_key").primaryKey(),
-    eventId: integer("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
     revision: bigint("revision", { mode: "number" }).notNull(),
     action: text("action").notNull(),
     payload: jsonb("payload").notNull(),
@@ -86,7 +104,9 @@ export const eventSyncAttempts = pgTable(
     requestAttempts: integer("request_attempts").notNull().default(0),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => [uniqueIndex("event_sync_attempts_pending_idx").on(t.eventId).where(sql`${t.state} = 'pending'`)],
+  (t) => [
+    uniqueIndex("event_sync_attempts_pending_idx").on(t.eventId).where(sql`${t.state} = 'pending'`),
+  ],
 );
 
 export const featuredContents = pgTable(
@@ -225,7 +245,10 @@ export const eventSearchLogs = pgTable(
     resultCount: integer("result_count").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("event_search_logs_zero_idx").on(t.resultCount, t.normalizedQuery), index("event_search_logs_occurred_at_idx").on(t.occurredAt)],
+  (t) => [
+    index("event_search_logs_zero_idx").on(t.resultCount, t.normalizedQuery),
+    index("event_search_logs_occurred_at_idx").on(t.occurredAt),
+  ],
 );
 
 export type Event = typeof events.$inferSelect;

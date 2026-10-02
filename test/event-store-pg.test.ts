@@ -16,7 +16,9 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
     fixture = await createJobsFixture(process.env.DATABASE_URL!, { max: 4 });
     sql = fixture.client;
   });
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
   beforeEach(async () => {
     await sql`delete from rsvps`;
     await sql`delete from activity_log`;
@@ -58,21 +60,37 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
 
   describe("closeFinished", () => {
     it("closes only finished published rows and returns rows changed", async () => {
-      const finished = await seedEvent({ tag: "finished", endsAt: new Date("2026-10-01T11:00:00Z") });
+      const finished = await seedEvent({
+        tag: "finished",
+        endsAt: new Date("2026-10-01T11:00:00Z"),
+      });
       const boundary = await seedEvent({ tag: "boundary", endsAt: NOW });
       const running = await seedEvent({ tag: "running", endsAt: new Date("2026-10-01T13:00:00Z") });
       const cancelled = await seedEvent({
-        tag: "cancelled", status: "cancelled", endsAt: new Date("2026-10-01T11:00:00Z"),
+        tag: "cancelled",
+        status: "cancelled",
+        endsAt: new Date("2026-10-01T11:00:00Z"),
       });
-      const draft = await seedEvent({ tag: "draft", status: "draft", endsAt: new Date("2026-10-01T11:00:00Z") });
-      const already = await seedEvent({ tag: "past", status: "past", endsAt: new Date("2026-10-01T11:00:00Z") });
+      const draft = await seedEvent({
+        tag: "draft",
+        status: "draft",
+        endsAt: new Date("2026-10-01T11:00:00Z"),
+      });
+      const already = await seedEvent({
+        tag: "past",
+        status: "past",
+        endsAt: new Date("2026-10-01T11:00:00Z"),
+      });
       const store = pgEventStore(sql);
       expect(await store.closeFinished(NOW)).toBe(2);
       const statuses = async () =>
         Object.fromEntries(
-          ((await sql`select event_key, status from events`) as { event_key: string; status: string }[]).map(
-            (r) => [r.event_key, r.status],
-          ),
+          (
+            (await sql`select event_key, status from events`) as {
+              event_key: string;
+              status: string;
+            }[]
+          ).map((r) => [r.event_key, r.status]),
         );
       expect(await statuses()).toMatchObject({
         [finished.eventKey]: "past",
@@ -105,9 +123,12 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
       const { id } = await seedParent("series");
       const store = pgEventStore(sql);
       expect(await store.materializeSeries()).toBe(3);
-      const rows = (await sql`select recurrence_index, status, parent_event_id from events order by recurrence_index`) as {
-        recurrence_index: number | null; status: string; parent_event_id: number | null;
-      }[];
+      const rows =
+        (await sql`select recurrence_index, status, parent_event_id from events order by recurrence_index`) as {
+          recurrence_index: number | null;
+          status: string;
+          parent_event_id: number | null;
+        }[];
       expect(rows).toEqual([
         { recurrence_index: 1, status: "published", parent_event_id: null },
         { recurrence_index: 2, status: "draft", parent_event_id: id },
@@ -115,10 +136,14 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
         { recurrence_index: 4, status: "draft", parent_event_id: id },
       ]);
       const audits = (await sql`select subject_id, causer_id, description from activity_log`) as {
-        subject_id: string; causer_id: string | null; description: string;
+        subject_id: string;
+        causer_id: string | null;
+        description: string;
       }[];
       expect(audits).toHaveLength(3);
-      expect(audits.every((a) => a.causer_id === null && a.description === "created event Sunday Squad")).toBe(true);
+      expect(
+        audits.every((a) => a.causer_id === null && a.description === "created event Sunday Squad"),
+      ).toBe(true);
       expect(await store.materializeSeries()).toBe(0); // re-run creates nothing
     });
 
@@ -135,7 +160,8 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
       expect(await store.materializeSeries()).toBe(2); // live indexes 2 and 4 only
       const kept = (await sql`select recurrence_index, status from events
         where parent_event_id = ${live.id} order by recurrence_index`) as {
-        recurrence_index: number; status: string;
+        recurrence_index: number;
+        status: string;
       }[];
       expect(kept).toEqual([
         { recurrence_index: 2, status: "draft" },

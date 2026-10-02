@@ -9,14 +9,34 @@ import { adminSchema, schema, type Db } from "../../src/db/index";
 import { joinAttempts, profiles, users } from "../../src/db/schema";
 
 export function testDatabaseUrl(raw: string, runner = process.env): URL {
-  const refuse = () => { throw new Error("W15 requires agent-testdb or the GitHub CI Postgres service; refusing before connecting"); };
+  const refuse = () => {
+    throw new Error(
+      "W15 requires agent-testdb or the GitHub CI Postgres service; refusing before connecting",
+    );
+  };
   let url: URL;
-  try { url = new URL(raw); } catch { return refuse(); }
-  if (!["postgres:", "postgresql:"].includes(url.protocol) || url.search || url.hash
-    || (url.port && url.port !== "5432") || !/^\/[a-z][a-z0-9_]*$/.test(url.pathname)) return refuse();
-  const agentTest = url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "";
-  const ciService = runner.GITHUB_ACTIONS === "true" && runner.CI === "true"
-    && url.hostname === "localhost" && url.username === "postgres" && url.password === "ci" && url.pathname === "/postgres";
+  try {
+    url = new URL(raw);
+  } catch {
+    return refuse();
+  }
+  if (
+    !["postgres:", "postgresql:"].includes(url.protocol) ||
+    url.search ||
+    url.hash ||
+    (url.port && url.port !== "5432") ||
+    !/^\/[a-z][a-z0-9_]*$/.test(url.pathname)
+  )
+    return refuse();
+  const agentTest =
+    url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "";
+  const ciService =
+    runner.GITHUB_ACTIONS === "true" &&
+    runner.CI === "true" &&
+    url.hostname === "localhost" &&
+    url.username === "postgres" &&
+    url.password === "ci" &&
+    url.pathname === "/postgres";
   if (!agentTest && !ciService) return refuse();
   return url;
 }
@@ -29,31 +49,48 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
   // max stays 1 unless the caller runs lock holders + racing requests on the
   // same pool (W9 RSVP race tests hold a transaction open while the app pool
   // serves concurrent writes through the same scoped client).
-  const options = { max: opts.max ?? 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
-  const admin = postgres(url.href, { ...options, connection: { statement_timeout: 2000, lock_timeout: 1000 } });
+  const options = {
+    max: opts.max ?? 1,
+    port: 5432,
+    connect_timeout: 5,
+    password: () => url.password,
+    onnotice: () => {},
+  };
+  const admin = postgres(url.href, {
+    ...options,
+    connection: { statement_timeout: 2000, lock_timeout: 1000 },
+  });
   const client = postgres(url.href, { ...options, connection: { search_path: schemaName } });
   const db: Db = drizzle(client, { schema: { ...schema, ...adminSchema } });
   let created = false;
   let disposal: Promise<void> | undefined;
-  const dispose = () => disposal ??= (async () => {
-    try {
-      await client.end({ timeout: 1 });
-    } finally {
-      try { if (created) await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`); }
-      finally { await admin.end({ timeout: 1 }); }
-    }
-  })();
+  const dispose = () =>
+    (disposal ??= (async () => {
+      try {
+        await client.end({ timeout: 1 });
+      } finally {
+        try {
+          if (created) await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`);
+        } finally {
+          await admin.end({ timeout: 1 });
+        }
+      }
+    })());
   try {
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
     // Run canonical migrations, including FKs, inside our schema. No public
     // fallback in search_path and no migration journal or writes in public.
-    const migrations = readMigrationFiles({ migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url).href) });
+    const migrations = readMigrationFiles({
+      migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url).href),
+    });
     // One commit for the empty fixture, not one durable commit per statement.
     await client.begin(async (tx) => {
-      for (const migration of migrations) for (const statement of migration.sql) {
-        if (statement.trim()) await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
-      }
+      for (const migration of migrations)
+        for (const statement of migration.sql) {
+          if (statement.trim())
+            await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+        }
     });
   } catch (error) {
     await dispose();

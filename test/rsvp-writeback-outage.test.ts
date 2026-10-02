@@ -18,16 +18,26 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import {
-  RSVP_COPY,
-  RSVP_SYNCED_TESTID,
-  RSVP_SYNCING_TESTID,
-} from "../src/islands/contracts";
+import { RSVP_COPY, RSVP_SYNCED_TESTID, RSVP_SYNCING_TESTID } from "../src/islands/contracts";
 import { pgEventStore } from "../src/jobs/events";
 import { handleSyncEvent } from "../src/jobs/sync-event";
-import { BotTransportError, type BotClient, type EventStore, type QueueMessage } from "../src/jobs/types";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
-import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  BotTransportError,
+  type BotClient,
+  type EventStore,
+  type QueueMessage,
+} from "../src/jobs/types";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 vi.mock("postgres", async () => {
@@ -56,7 +66,14 @@ async function cookieFor(store: SessionStore, userId: string): Promise<string> {
     moderator: false,
     expiresAt: new Date(Date.now() + 3600_000),
   });
-  return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+  return (
+    await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
 }
 
 // Static containment pin: the guard this file wires below refuses non-test
@@ -79,7 +96,10 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
   const store = createMemorySessionStore();
   const sent: QueueMessage[] = [];
   let jobsSql: postgres.Sql;
-  const okSend = async (m: unknown) => { sent.push(m as QueueMessage); return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } }; };
+  const okSend = async (m: unknown) => {
+    sent.push(m as QueueMessage);
+    return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+  };
   const env = {
     APP_URL,
     DISCORD_CLIENT_ID: "client-id",
@@ -88,7 +108,9 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET,
-    get ADMIN_DB() { return db; },
+    get ADMIN_DB() {
+      return db;
+    },
     SESSION_STORE: store,
     DB: { connectionString: "" },
     SYNC_EVENT_QUEUE: { send: okSend },
@@ -105,20 +127,33 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET,
-    get ADMIN_DB() { return db; },
+    get ADMIN_DB() {
+      return db;
+    },
     SESSION_STORE: store,
     DB: { connectionString: "" },
-    SYNC_EVENT_QUEUE: { send: async () => { throw new Error("queue down"); } },
+    SYNC_EVENT_QUEUE: {
+      send: async () => {
+        throw new Error("queue down");
+      },
+    },
   } as unknown as Env;
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
     db = fixture.db;
     const url = testDatabaseUrl(process.env.DATABASE_URL!);
     const realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres")).default;
-    const options = { max: 2, port: 5432, connect_timeout: 5, password: () => url.password,
-      connection: { search_path: fixture.schemaName }, onnotice: () => {} };
+    const options = {
+      max: 2,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+      connection: { search_path: fixture.schemaName },
+      onnotice: () => {},
+    };
     (env as unknown as { DB: { connectionString: string } }).DB.connectionString = url.href;
-    (failingQueueEnv as unknown as { DB: { connectionString: string } }).DB.connectionString = url.href;
+    (failingQueueEnv as unknown as { DB: { connectionString: string } }).DB.connectionString =
+      url.href;
     // Producer pools go to the same disposable schema as the fixture.
     vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}>) => {
       testDatabaseUrl(raw);
@@ -152,8 +187,16 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     call(env, "PUT", key, as, { status });
 
   const HOUR = 3600_000;
-  async function seed(over: Partial<typeof events.$inferInsert> = {}): Promise<{ id: number; key: string }> {
-    const key = `01WB${Math.random().toString(36).slice(2, 14).toUpperCase().replace(/[ILOU]/g, "7")}`.padEnd(26, "0").slice(0, 26);
+  async function seed(
+    over: Partial<typeof events.$inferInsert> = {},
+  ): Promise<{ id: number; key: string }> {
+    const key = `01WB${Math.random()
+      .toString(36)
+      .slice(2, 14)
+      .toUpperCase()
+      .replace(/[ILOU]/g, "7")}`
+      .padEnd(26, "0")
+      .slice(0, 26);
     const [row] = await db
       .insert(events)
       .values({
@@ -169,7 +212,12 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     return { id: row!.id, key };
   }
   const rsvpRow = async (eventId: number, userId: string) =>
-    (await db.select().from(rsvps).where(and(eq(rsvps.eventId, eventId), eq(rsvps.userId, userId))))[0] ?? null;
+    (
+      await db
+        .select()
+        .from(rsvps)
+        .where(and(eq(rsvps.eventId, eventId), eq(rsvps.userId, userId)))
+    )[0] ?? null;
   const eventRow = async (key: string) =>
     (await db.select().from(events).where(eq(events.eventKey, key)))[0]!;
 
@@ -200,7 +248,9 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     // Phase 1 — outage: the member write still commits.
     const res = await put(ev.key, "member-1", "going");
     expect(res.status).toBe(201);
-    expect(await res.json()).toEqual({ data: { status: "going", synced_to_discord_at: null, waitlist_position: null } });
+    expect(await res.json()).toEqual({
+      data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
+    });
     // The write-back was still dispatched; the outage lives consumer-side.
     expect(sent.map((m) => m.kind)).toEqual(["sync-event"]);
     const produced = sent[0] as Extract<QueueMessage, { kind: "sync-event" }>;
@@ -213,9 +263,16 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
 
     // Phase 2 — member view while the retry is outstanding: confirmed seat,
     // pending sync, never a save failure.
-    expect(memberSyncView(saved!.syncedToDiscordAt)).toEqual({ copy: RSVP_COPY.syncing, testid: RSVP_SYNCING_TESTID });
+    expect(memberSyncView(saved!.syncedToDiscordAt)).toEqual({
+      copy: RSVP_COPY.syncing,
+      testid: RSVP_SYNCING_TESTID,
+    });
     expect(RSVP_COPY.syncing).toBe("Saved. Syncing to Discord.");
-    const retry = await handleSyncEvent(produced, 1, { bot, events: store, now: () => new Date(Date.now() + 60_000) });
+    const retry = await handleSyncEvent(produced, 1, {
+      bot,
+      events: store,
+      now: () => new Date(Date.now() + 60_000),
+    });
     expect(retry).toEqual({ retryInSeconds: 10 });
     expect((await rsvpRow(ev.id, "member-1"))!.syncedToDiscordAt).toBeNull();
     expect((await eventRow(ev.key)).discordEventId).toBeNull();
@@ -223,25 +280,39 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     // Phase 3 — recovery: the same row retried through the handler stamps the
     // event mirror and the RSVP, and the member view flips to synced.
     botUp = true;
-    expect(await handleSyncEvent(produced, 2, { bot, events: store, now: () => new Date(Date.now() + 600_000) })).toEqual({ done: true });
+    expect(
+      await handleSyncEvent(produced, 2, {
+        bot,
+        events: store,
+        now: () => new Date(Date.now() + 600_000),
+      }),
+    ).toEqual({ done: true });
     const synced = await rsvpRow(ev.id, "member-1");
     expect(synced!.id).toBe(saved!.id);
     expect(synced!.syncedToDiscordAt).not.toBeNull();
     expect((await eventRow(ev.key)).discordEventId).toBe("1234567890");
-    expect(memberSyncView(synced!.syncedToDiscordAt)).toEqual({ copy: RSVP_COPY.synced, testid: RSVP_SYNCED_TESTID });
+    expect(memberSyncView(synced!.syncedToDiscordAt)).toEqual({
+      copy: RSVP_COPY.synced,
+      testid: RSVP_SYNCED_TESTID,
+    });
   });
 
   it("a failed enqueue still saves the seat as pending (no retry yet)", async () => {
     const ev = await seed();
     const res = await call(failingQueueEnv, "PUT", ev.key, "member-2", { status: "going" });
     expect(res.status).toBe(201);
-    expect(await res.json()).toEqual({ data: { status: "going", synced_to_discord_at: null, waitlist_position: null } });
+    expect(await res.json()).toEqual({
+      data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
+    });
     expect(sent).toHaveLength(0);
     const saved = await rsvpRow(ev.id, "member-2");
     expect(saved).toMatchObject({ status: "going", syncedToDiscordAt: null });
     expect((await eventRow(ev.key)).discordEventId).toBeNull();
     // Pending without any retry outstanding: still "syncing", never the save-failure copy.
-    expect(memberSyncView(saved!.syncedToDiscordAt)).toEqual({ copy: RSVP_COPY.syncing, testid: RSVP_SYNCING_TESTID });
+    expect(memberSyncView(saved!.syncedToDiscordAt)).toEqual({
+      copy: RSVP_COPY.syncing,
+      testid: RSVP_SYNCING_TESTID,
+    });
     expect(RSVP_COPY.failedTitle).toBe("That RSVP didn't save.");
   });
 });

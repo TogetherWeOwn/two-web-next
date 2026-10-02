@@ -32,7 +32,9 @@ export async function reconcileEvents(deps: {
   queue: { send(b: unknown, o?: { delaySeconds?: number }): Promise<unknown> };
   lock: UniqueLock;
   now?: () => Date;
-  writeTransaction?: (work: (events: EventStore) => Promise<ReconcilePreparation>) => Promise<ReconcilePreparation>;
+  writeTransaction?: (
+    work: (events: EventStore) => Promise<ReconcilePreparation>,
+  ) => Promise<ReconcilePreparation>;
 }): Promise<{ closed: number; materialized: number; resynced: number }> {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
@@ -42,14 +44,20 @@ export async function reconcileEvents(deps: {
   // Commit materialization and release parent row locks before external I/O.
   // The enclosing flight still excludes another scheduler throughout dispatch.
   const { closed, materialized, stale } = await (deps.writeTransaction
-    ? deps.writeTransaction(prepare) : prepare(deps.events));
+    ? deps.writeTransaction(prepare)
+    : prepare(deps.events));
   let resynced = 0;
   for (const key of stale) {
     // A carrier can be stranded, delayed or exhausted. Only recover a due
     // request with budget left, always under its original immutable key.
     const pending = await deps.events.pendingSync(key);
-    if (pending && (pending.requestAttempts >= SYNC_EVENT.tries || !pending.nextAttemptAt ||
-      pending.nextAttemptAt > (deps.now ?? (() => new Date()))())) continue;
+    if (
+      pending &&
+      (pending.requestAttempts >= SYNC_EVENT.tries ||
+        !pending.nextAttemptAt ||
+        pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
+    )
+      continue;
     await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
     resynced++; // Laravel counts stale rows, not accepted dispatches
   }
@@ -76,7 +84,10 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * the cutoff goes, cutoff-exact rows survive. Idempotent: a re-run matches
  * nothing and reports zeros.
  */
-export async function pruneModelTables(stores: PruneStores, now: Date = new Date()): Promise<PruneCounts> {
+export async function pruneModelTables(
+  stores: PruneStores,
+  now: Date = new Date(),
+): Promise<PruneCounts> {
   const [accessLog, joinAttempts, idempotencyKeys, searchLog, sessions] = await Promise.all([
     stores.accessLog.pruneOlderThan(cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS)),
     stores.joinAttempts.pruneOlderThan(cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS)),
@@ -93,9 +104,13 @@ export async function pruneModelTables(stores: PruneStores, now: Date = new Date
 export async function runScheduled(
   cron: string,
   flight: SingleFlight,
-  jobs: { reconcile: (db: TxClient) => Promise<unknown>; prune: (db: TxClient) => Promise<unknown> },
+  jobs: {
+    reconcile: (db: TxClient) => Promise<unknown>;
+    prune: (db: TxClient) => Promise<unknown>;
+  },
 ): Promise<boolean> {
-  if (cron === RECONCILE_CRON) return flight("events:reconcile", async (db) => void (await jobs.reconcile(db)));
+  if (cron === RECONCILE_CRON)
+    return flight("events:reconcile", async (db) => void (await jobs.reconcile(db)));
   if (cron === PRUNE_CRON) return flight("model:prune", async (db) => void (await jobs.prune(db)));
   throw new Error(`unknown cron trigger: ${cron}`);
 }

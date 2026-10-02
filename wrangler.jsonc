@@ -24,8 +24,18 @@
     ],
     // Terminal outcomes are acked by the consumer; max_retries is only a backstop above the largest `tries`.
     "consumers": [
-      { "queue": "two-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-      { "queue": "two-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+      {
+        "queue": "two-sync-event",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      },
+      {
+        "queue": "two-internal-action",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      }
     ]
   },
   // Every host, including static requests, must pass the Worker's host guard.
@@ -62,8 +72,18 @@
           { "queue": "two-web-next-production-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
         ],
         "consumers": [
-          { "queue": "two-web-next-production-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-          { "queue": "two-web-next-production-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+          {
+            "queue": "two-web-next-production-sync-event",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "two-web-next-production-internal-action",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
         ]
       },
       // PLACEHOLDER: replace with the separately provisioned production Hyperdrive

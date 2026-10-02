@@ -18,17 +18,19 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("postgres", async (importOriginal) => {
   const { default: original } = await importOriginal<{ default: typeof postgres }>();
-  return { default: (raw: string, options: Record<string, unknown>) => {
-    const url = testDatabaseUrl(raw); // Even the driver double refuses non-test URLs.
-    if (!state.fixture) return original(url.href, { ...options, password: () => url.password });
-    const sql = (parts: TemplateStringsArray, ...values: unknown[]) => {
-      state.queries.push(parts.join(""));
-      if (state.error) return Promise.reject(state.error);
-      return state.fixture!.sql(parts, ...values as postgres.ParameterOrFragment<never>[]);
-    };
-    sql.end = async () => {}; // Fixture owns the transaction/socket, not the request.
-    return sql;
-  } };
+  return {
+    default: (raw: string, options: Record<string, unknown>) => {
+      const url = testDatabaseUrl(raw); // Even the driver double refuses non-test URLs.
+      if (!state.fixture) return original(url.href, { ...options, password: () => url.password });
+      const sql = (parts: TemplateStringsArray, ...values: unknown[]) => {
+        state.queries.push(parts.join(""));
+        if (state.error) return Promise.reject(state.error);
+        return state.fixture!.sql(parts, ...(values as postgres.ParameterOrFragment<never>[]));
+      };
+      sql.end = async () => {}; // Fixture owns the transaction/socket, not the request.
+      return sql;
+    },
+  };
 });
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -45,7 +47,7 @@ const baseEnv: Env = {
 describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", () => {
   let fixture: WebV1Fixture;
   let env: Env;
-  let app: (typeof import("../src/index"))["default"];
+  let app: typeof import("../src/index")["default"];
   let warn: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
@@ -68,27 +70,57 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     // Keep event/featured reads local and separate from the bot-view socket.
     // A counts failure must not take either of these homepage sections down.
     const event: typeof events.$inferSelect = {
-      id: 1, icsSequence: 1n, eventKey: "counts-game-night", title: "Counts fixture game night", game: null, description: null,
-      startsAt: new Date(NOW + 3600_000), endsAt: new Date(NOW + 7200_000), timezone: "UTC", location: "Lobby",
-      capacity: null, status: "published", discordEventId: null, syncRevision: 1, syncedRevision: 0,
-      discordSyncFailedAt: null, discordSyncFailureCode: null,
-      createdBy: null, rsvpOpen: true, recurrenceFrequency: null, recurrenceCount: null,
-      recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: new Date(NOW), updatedAt: new Date(NOW),
+      id: 1,
+      icsSequence: 1n,
+      eventKey: "counts-game-night",
+      title: "Counts fixture game night",
+      game: null,
+      description: null,
+      startsAt: new Date(NOW + 3600_000),
+      endsAt: new Date(NOW + 7200_000),
+      timezone: "UTC",
+      location: "Lobby",
+      capacity: null,
+      status: "published",
+      discordEventId: null,
+      syncRevision: 1,
+      syncedRevision: 0,
+      discordSyncFailedAt: null,
+      discordSyncFailureCode: null,
+      createdBy: null,
+      rsvpOpen: true,
+      recurrenceFrequency: null,
+      recurrenceCount: null,
+      recurrenceEndsOn: null,
+      parentEventId: null,
+      recurrenceIndex: null,
+      createdAt: new Date(NOW),
+      updatedAt: new Date(NOW),
     };
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof event)[];
     const db = drizzle(async (query) => {
       if (query.includes("set_config")) return { rows: [] };
-      if (query.includes('from "events"')) return { rows: [columns.map((key) => {
-        const value = event[key];
-        return value instanceof Date ? value.toISOString() : value;
-      })] };
+      if (query.includes('from "events"'))
+        return {
+          rows: [
+            columns.map((key) => {
+              const value = event[key];
+              return value instanceof Date ? value.toISOString() : value;
+            }),
+          ],
+        };
       if (query.includes('from "rsvps"')) return { rows: [[1, 3]] };
-      if (query.includes('from "featured_contents"')) return { rows: [[1, "Counts fixture news", "Featured fixture", null, null, null]] };
+      if (query.includes('from "featured_contents"'))
+        return { rows: [[1, "Counts fixture news", "Featured fixture", null, null, null]] };
       throw new Error("Unexpected public homepage fixture query");
     }) as unknown as Db;
     Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
-    env = { ...baseEnv, DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
-      ADMIN_DB: db, SESSION_STORE: createMemorySessionStore() } as Env;
+    env = {
+      ...baseEnv,
+      DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
+      ADMIN_DB: db,
+      SESSION_STORE: createMemorySessionStore(),
+    } as Env;
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     app = (await import("../src/index")).default;
@@ -123,13 +155,20 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
 
   it("renders fresh member/online counts and SQL-ordered ranks from the binding", async () => {
     const html = await home();
-    expect(html).toContain('<strong>84</strong> members');
-    expect(html).toContain('<strong>12</strong> online');
-    for (const [rank, value] of [["Prospect", "24"], ["Member", "40"], ["Soldier", "20"],
-      ["Veteran", ""], ["Legend", "unclaimed"]]) {
+    expect(html).toContain("<strong>84</strong> members");
+    expect(html).toContain("<strong>12</strong> online");
+    for (const [rank, value] of [
+      ["Prospect", "24"],
+      ["Member", "40"],
+      ["Soldier", "20"],
+      ["Veteran", ""],
+      ["Legend", "unclaimed"],
+    ]) {
       expect(html).toContain(`<dt>${rank}</dt><dd>${value}</dd>`);
     }
-    const ordered = ["prospect", "member", "soldier", "veteran", "legend"].map((key) => html.indexOf(`data-rank="${key}"`));
+    const ordered = ["prospect", "member", "soldier", "veteran", "legend"].map((key) =>
+      html.indexOf(`data-rank="${key}"`),
+    );
     expect(ordered).toEqual([...ordered].sort((a, b) => a - b));
     expect(state.queries).toHaveLength(2);
     expect(warn).not.toHaveBeenCalled();
@@ -137,30 +176,37 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
 
   it("supports explicit local DATABASE_URL without the binding", async () => {
     env = { ...env, DATABASE_URL: env.DB!.connectionString, DB: undefined };
-    expect(await home()).toContain('<strong>84</strong> members');
+    expect(await home()).toContain("<strong>84</strong> members");
   });
 
   it("keeps a genuine zero member count, and omits zero online", async () => {
     await fixture.sql`UPDATE web_v1.live_counts SET human_member_count = 0, online_count = 0`;
     const html = await home();
-    expect(html).toContain('<strong>0</strong> members');
-    expect(html).not.toContain('</strong> online');
+    expect(html).toContain("<strong>0</strong> members");
+    expect(html).not.toContain("</strong> online");
   });
 
-  it.each([-599_999, 599_999])("renders text timestamps just inside the freshness boundary (%i ms)", async (offset) => {
-    const timestamp = new Date(NOW + offset).toISOString();
-    await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = ${timestamp}::text`;
-    const [row] = await fixture.sql`SELECT counts_updated_at, pg_typeof(counts_updated_at)::text AS type FROM web_v1.live_counts`;
-    expect(row).toEqual({ counts_updated_at: timestamp, type: "text" });
-    expect(await home()).toContain('<strong>84</strong> members');
-  });
+  it.each([-599_999, 599_999])(
+    "renders text timestamps just inside the freshness boundary (%i ms)",
+    async (offset) => {
+      const timestamp = new Date(NOW + offset).toISOString();
+      await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = ${timestamp}::text`;
+      const [row] =
+        await fixture.sql`SELECT counts_updated_at, pg_typeof(counts_updated_at)::text AS type FROM web_v1.live_counts`;
+      expect(row).toEqual({ counts_updated_at: timestamp, type: "text" });
+      expect(await home()).toContain("<strong>84</strong> members");
+    },
+  );
 
-  it.each([-600_000, 600_000])("suppresses text timestamps at the exact stale boundary (%i ms); ranks remain readable", async (offset) => {
-    await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = ${new Date(NOW + offset).toISOString()}::text`;
-    const html = await home();
-    emptyCounts(html);
-    expect(html).toContain('<dt>Member</dt><dd>40</dd>');
-  });
+  it.each([-600_000, 600_000])(
+    "suppresses text timestamps at the exact stale boundary (%i ms); ranks remain readable",
+    async (offset) => {
+      await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = ${new Date(NOW + offset).toISOString()}::text`;
+      const html = await home();
+      emptyCounts(html);
+      expect(html).toContain("<dt>Member</dt><dd>40</dd>");
+    },
+  );
 
   it("degrades invalid timestamp text with HTTP 200", async () => {
     await fixture.sql`UPDATE web_v1.live_counts SET counts_updated_at = 'not-a-timestamp'`;

@@ -6,7 +6,12 @@ import type { EventStore, UniqueLock } from "../src/jobs/types";
 // DB-free pins for the two Laravel-parity rules in reconcileEvents: close-finished runs before the
 // sync pass, and `resynced` counts stale rows rather than accepted dispatches.
 
-type Row = { key: string; status: "draft" | "published" | "past"; endsAt: Date; discordEventId: string | null };
+type Row = {
+  key: string;
+  status: "draft" | "published" | "past";
+  endsAt: Date;
+  discordEventId: string | null;
+};
 
 const NOW = new Date("2026-10-02T12:00:00Z");
 const hour = 3_600_000;
@@ -40,7 +45,9 @@ function fakeEvents(rows: Row[]): EventStore & { calls: string[]; closedAt: Date
     materializeSeries: async () => (calls.push("materialize"), 0),
     staleEventKeys: async () => {
       calls.push("stale");
-      return rows.filter((r) => r.status === "published" && r.discordEventId === null).map((r) => r.key);
+      return rows
+        .filter((r) => r.status === "published" && r.discordEventId === null)
+        .map((r) => r.key);
     },
   };
 }
@@ -56,7 +63,9 @@ function fakeLock(held: string[] = []): UniqueLock & { acquired: string[] } {
   const acquired: string[] = [];
   return {
     acquired,
-    acquire: async (k) => (acquired.push(k), locked.has(k) ? null : (locked.add(k), crypto.randomUUID())),
+    acquire: async (k) => (
+      acquired.push(k), locked.has(k) ? null : (locked.add(k), crypto.randomUUID())
+    ),
     release: async (k) => void locked.delete(k),
   };
 }
@@ -144,9 +153,18 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
       { key: "stale", status: "published", endsAt: upcoming, discordEventId: null },
     ];
 
-    await reconcileEvents({ events: fakeEvents(rows), queue: fakeQueue(), lock: fakeLock(), now: () => NOW });
+    await reconcileEvents({
+      events: fakeEvents(rows),
+      queue: fakeQueue(),
+      lock: fakeLock(),
+      now: () => NOW,
+    });
 
     expect(info).toHaveBeenCalledTimes(1);
-    expect(info).toHaveBeenCalledWith("Event reconcile pass completed.", { closed: 1, materialized: 0, resynced: 1 });
+    expect(info).toHaveBeenCalledWith("Event reconcile pass completed.", {
+      closed: 1,
+      materialized: 0,
+      resynced: 1,
+    });
   });
 });

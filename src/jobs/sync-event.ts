@@ -4,7 +4,10 @@ import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "
 import type { BotClient, EventStore, UniqueLock } from "./types";
 import { safeRequestId } from "../request-log";
 
-export type Outcome = { done: true } | { retryInSeconds: number } | { failed: string; definitive?: true };
+export type Outcome =
+  | { done: true }
+  | { retryInSeconds: number }
+  | { failed: string; definitive?: true };
 
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
@@ -31,7 +34,13 @@ export async function dispatchSyncEvent(
     signal?.throwIfAborted();
     await queue.send(
       // Idempotency stays build-time; correlation rides alongside, never as the key.
-      { kind: "sync-event", eventKey, idempotencyKey, leaseToken, requestId: safeRequestId(requestId) },
+      {
+        kind: "sync-event",
+        eventKey,
+        idempotencyKey,
+        leaseToken,
+        requestId: safeRequestId(requestId),
+      },
       { delaySeconds: SYNC_EVENT.debounceSeconds },
     );
   } catch (err) {
@@ -39,9 +48,13 @@ export async function dispatchSyncEvent(
     // Like terminal cleanup, a wedged DELETE must not hold dispatch hostage.
     // TTL recovers a stuck lease; a late DELETE remains fenced by this token.
     let t: ReturnType<typeof setTimeout>;
-    const timeout = new Promise<void>((resolve) => { t = setTimeout(resolve, LOCK_TIMEOUT_MS); });
+    const timeout = new Promise<void>((resolve) => {
+      t = setTimeout(resolve, LOCK_TIMEOUT_MS);
+    });
     await Promise.race([
-      Promise.resolve().then(() => lock.release(key, leaseToken)).catch(() => {}),
+      Promise.resolve()
+        .then(() => lock.release(key, leaseToken))
+        .catch(() => {}),
       timeout,
     ]).finally(() => clearTimeout(t));
     throw err;
@@ -56,9 +69,10 @@ export async function handleSyncEvent(
   deps: { bot: BotClient; events: EventStore; now?: () => Date },
 ): Promise<Outcome> {
   const now = deps.now ?? (() => new Date());
-  const waiting = (seconds: number = SYNC_EVENT.debounceSeconds): Outcome => attempts >= SYNC_EVENT.tries
-    ? { failed: "waiting carrier exhausted; request remains recoverable" }
-    : { retryInSeconds: seconds };
+  const waiting = (seconds: number = SYNC_EVENT.debounceSeconds): Outcome =>
+    attempts >= SYNC_EVENT.tries
+      ? { failed: "waiting carrier exhausted; request remains recoverable" }
+      : { retryInSeconds: seconds };
   // First send snapshots the debounced row; all recovery uses that exact request.
   const prepared = await deps.events.prepareSync(msg.eventKey, msg.idempotencyKey, now());
   if (!prepared) return { done: true };
@@ -87,14 +101,22 @@ export async function handleSyncEvent(
       ? { failed: "carrier exhausted; unresolved identity retained" }
       : { retryInSeconds: seconds };
   };
-  const backoff = () => backoffFor(SYNC_EVENT.backoffSeconds, Math.max(attempts, attempt.requestAttempts));
+  const backoff = () =>
+    backoffFor(SYNC_EVENT.backoffSeconds, Math.max(attempts, attempt.requestAttempts));
   try {
-    const answer = attempt.action === "event.cancel"
-      ? await deps.bot.cancelEvent(attempt.payload, msg.idempotencyKey)
-      : await deps.bot.upsertEvent(attempt.payload, msg.idempotencyKey);
+    const answer =
+      attempt.action === "event.cancel"
+        ? await deps.bot.cancelEvent(attempt.payload, msg.idempotencyKey)
+        : await deps.bot.upsertEvent(attempt.payload, msg.idempotencyKey);
     if (!answer.ok) {
-      if (!answer.retryable) return { definitive: true,
-        failed: botRefusalReason(`${attempt.action} for ${sanitizeQueueScope(msg.eventKey)}`, answer.code) };
+      if (!answer.retryable)
+        return {
+          definitive: true,
+          failed: botRefusalReason(
+            `${attempt.action} for ${sanitizeQueueScope(msg.eventKey)}`,
+            answer.code,
+          ),
+        };
       return await retry(answer.retryAfterSeconds ?? backoff());
     }
     await deps.events.completeSync(attempt, answer.discordEventId);
@@ -114,8 +136,12 @@ export async function handleSyncEvent(
     // Transport loss and local completion failure are both ambiguous. Never
     // replace their identity even at the carrier/request cap.
     if (e instanceof BotTransportError) return retry(backoff());
-    await deps.events.deferSync(attempt, attempt.requestAttempts >= SYNC_EVENT.tries
-      ? null : new Date(now().getTime() + backoff() * 1000));
+    await deps.events.deferSync(
+      attempt,
+      attempt.requestAttempts >= SYNC_EVENT.tries
+        ? null
+        : new Date(now().getTime() + backoff() * 1000),
+    );
     throw e;
   }
 }

@@ -18,9 +18,13 @@ test("the required check keeps full coverage in isolated serial threads inside m
   // isolated threads must fit inside it, never widen it.
   const budget = Number(check.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
   assert.ok(budget > 0 && budget <= 20, `check timeout-minutes ${budget} exceeds main's 20`);
-  const step = check.match(/      - name: Check \(typecheck \+ coverage gate\)\n([\s\S]*?)(?=      - )/);
-  assert.equal(step?.[1].match(/^        run: (.+)$/m)?.[1],
-    "npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs");
+  const step = check.match(
+    /      - name: Check \(typecheck \+ coverage gate\)\n([\s\S]*?)(?=      - )/,
+  );
+  assert.equal(
+    step?.[1].match(/^        run: (.+)$/m)?.[1],
+    "npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
+  );
   assert.doesNotMatch(step[1], /continue-on-error:|\bif:/);
   const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
   assert.match(config, /include: \["test\/\*\*\/\*\.test\.ts", "test\/\*\*\/\*\.test\.mjs"\]/);
@@ -32,27 +36,48 @@ test("the required check keeps full coverage in isolated serial threads inside m
 // summary must not turn a failed coverage invocation into a passing required gate.
 for (const [label, body, expected] of [
   ["success", "process.exitCode = 0;", 0],
-  ["coverage failure after a passing summary", 'console.log("Tests 2808 passed"); process.exitCode = 7;', 7],
+  [
+    "coverage failure after a passing summary",
+    'console.log("Tests 2808 passed"); process.exitCode = 7;',
+    7,
+  ],
 ]) {
   test(`the full coverage command propagates ${label}`, { timeout: 20000 }, async (t) => {
-    const fixture = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "coverage-command-"));
+    const fixture = await mkdtemp(
+      join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "coverage-command-"),
+    );
     t.after(() => rm(fixture, { recursive: true, force: true }));
     await mkdir(join(fixture, "node_modules/.bin"), { recursive: true });
-    await writeFile(join(fixture, "package.json"), JSON.stringify({
-      private: true, type: "module", scripts: { "test:coverage": manifest.scripts["test:coverage"] },
-    }));
+    await writeFile(
+      join(fixture, "package.json"),
+      JSON.stringify({
+        private: true,
+        type: "module",
+        scripts: { "test:coverage": manifest.scripts["test:coverage"] },
+      }),
+    );
     const cli = join(fixture, "node_modules/.bin/vitest");
-    await writeFile(cli, `#!/usr/bin/env node
+    await writeFile(
+      cli,
+      `#!/usr/bin/env node
 import assert from "node:assert/strict";
 assert.deepEqual(process.argv.slice(2), ${JSON.stringify(args)});
 ${body}
-`);
+`,
+    );
     await chmod(cli, 0o755);
-    const child = spawn("npm", ["run", "--silent", "test:coverage"], { cwd: fixture, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("npm", ["run", "--silent", "test:coverage"], {
+      cwd: fixture,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (data) => { stdout += data; });
-    child.stderr.on("data", (data) => { stderr += data; });
+    child.stdout.on("data", (data) => {
+      stdout += data;
+    });
+    child.stderr.on("data", (data) => {
+      stderr += data;
+    });
     const [code, signal] = await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, signal) => resolve([code, signal]));

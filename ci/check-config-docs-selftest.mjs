@@ -5,7 +5,13 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { getPlatformProxy } from "wrangler";
-import { checkKeys, readDocKeys, readEnvKeys, readWranglerConfig, readWranglerKeys } from "./check-config-docs.mjs";
+import {
+  checkKeys,
+  readDocKeys,
+  readEnvKeys,
+  readWranglerConfig,
+  readWranglerKeys,
+} from "./check-config-docs.mjs";
 
 const inventory = (rows) => `<!-- config-docs:start -->
 | Name | Kind | Environments | Default | Failure behaviour |
@@ -16,12 +22,16 @@ const row = (key) => `| \`${key}\` | var | dev/staging/prod | none | refuses |`;
 const set = (...keys) => new Set(keys);
 
 test("resolves inherited, optional and job keys without comments or nested fields", () => {
-  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "config-selftest-"));
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "config-selftest-"),
+  );
   try {
     const file = join(dir, "env.ts");
     const config = join(dir, "tsconfig.json");
     writeFileSync(config, JSON.stringify({ files: ["env.ts"], compilerOptions: { noLib: true } }));
-    writeFileSync(file, `
+    writeFileSync(
+      file,
+      `
       interface Ingress { readonly INGRESS?: string }
       export type Env = Ingress & {
         APP_URL: string; // PHANTOM?: string;
@@ -30,7 +40,8 @@ test("resolves inherited, optional and job keys without comments or nested field
       };
       export type JobsEnv = Env & { QUEUE: { send(): void }; };
       export type Session = { username: string };
-    `);
+    `,
+    );
     assert.deepEqual(readEnvKeys(file, config), set("INGRESS", "APP_URL", "DB", "QUOTED", "QUEUE"));
     writeFileSync(file, "export type JobsEnv = { QUEUE: string };");
     assert.throws(() => readEnvKeys(file, config), /Missing Env/);
@@ -42,7 +53,8 @@ test("resolves inherited, optional and job keys without comments or nested field
 });
 
 test("parses JSONC, environment-specific vars and nested binding declarations", () => {
-  assert.deepEqual(readWranglerKeys(`{
+  assert.deepEqual(
+    readWranglerKeys(`{
     // ignore { "binding": "COMMENT" }
     "vars": { "APP_URL": "https://example.test/a//b", "TEXT": "literal,}/*kept*/" },
     "hyperdrive": [{ "binding": "DB", "id": "placeholder", }],
@@ -51,25 +63,38 @@ test("parses JSONC, environment-specific vars and nested binding declarations", 
     "env": { "staging": { "vars": { "STAGING_ONLY": "" },
       "assets": { "binding": "ASSETS" } } },
     /* comment */ "assets": { "directory": "./public" },
-  }`), set("APP_URL", "TEXT", "DB", "QUEUE", "STAGING_ONLY", "ASSETS"));
+  }`),
+    set("APP_URL", "TEXT", "DB", "QUEUE", "STAGING_ONLY", "ASSETS"),
+  );
   assert.throws(() => readWranglerKeys("{broken}"), SyntaxError);
 });
 
 test("finds name-based bindings at the root and in named environments", () => {
-  const keys = readWranglerKeys(JSON.stringify({
-    name: "worker-metadata",
-    durable_objects: { bindings: [{ name: "COUNTER", class_name: "Counter" }] },
-    send_email: [{ name: "MAIL", destination_address: "test@example.invalid" }],
-    ratelimits: [{ name: "LIMIT", namespace_id: "1", simple: { limit: 1, period: 60 } }],
-    workflows: [{ binding: "FLOW", name: "workflow-metadata", class_name: "Flow" }],
-    env: { staging: {
-      durable_objects: { bindings: [{ name: "STAGING_COUNTER", class_name: "Counter" }] },
-      send_email: [{ name: "STAGING_MAIL" }],
-      logfwdr: { bindings: [{ name: "LOGS" }] },
-      unsafe: { bindings: [{ name: "UNSAFE", type: "some_type", dev: { plugin: { name: "metadata" } } }] },
-    } },
-  }));
-  assert.deepEqual(keys, set("COUNTER", "MAIL", "LIMIT", "FLOW", "STAGING_COUNTER", "STAGING_MAIL", "LOGS", "UNSAFE"));
+  const keys = readWranglerKeys(
+    JSON.stringify({
+      name: "worker-metadata",
+      durable_objects: { bindings: [{ name: "COUNTER", class_name: "Counter" }] },
+      send_email: [{ name: "MAIL", destination_address: "test@example.invalid" }],
+      ratelimits: [{ name: "LIMIT", namespace_id: "1", simple: { limit: 1, period: 60 } }],
+      workflows: [{ binding: "FLOW", name: "workflow-metadata", class_name: "Flow" }],
+      env: {
+        staging: {
+          durable_objects: { bindings: [{ name: "STAGING_COUNTER", class_name: "Counter" }] },
+          send_email: [{ name: "STAGING_MAIL" }],
+          logfwdr: { bindings: [{ name: "LOGS" }] },
+          unsafe: {
+            bindings: [
+              { name: "UNSAFE", type: "some_type", dev: { plugin: { name: "metadata" } } },
+            ],
+          },
+        },
+      },
+    }),
+  );
+  assert.deepEqual(
+    keys,
+    set("COUNTER", "MAIL", "LIMIT", "FLOW", "STAGING_COUNTER", "STAGING_MAIL", "LOGS", "UNSAFE"),
+  );
   for (const key of keys) {
     assert.deepEqual(checkKeys(set(), set(key), set()), [
       `Wrangler key missing from Env/JobsEnv: ${key}`,
@@ -79,11 +104,13 @@ test("finds name-based bindings at the root and in named environments", () => {
 });
 
 test("collects required secret names at root and in named environments", () => {
-  const keys = readWranglerKeys(JSON.stringify({
-    vars: { APP_URL: "https://example.test" },
-    secrets: { required: ["NEW_SECRET"] },
-    env: { staging: { secrets: { required: ["STAGING_SECRET"] } } },
-  }));
+  const keys = readWranglerKeys(
+    JSON.stringify({
+      vars: { APP_URL: "https://example.test" },
+      secrets: { required: ["NEW_SECRET"] },
+      env: { staging: { secrets: { required: ["STAGING_SECRET"] } } },
+    }),
+  );
   assert.deepEqual(keys, set("APP_URL", "NEW_SECRET", "STAGING_SECRET"));
   // Secret names (never values) are enforced like any other Wrangler key.
   assert.deepEqual(checkKeys(set("APP_URL"), set("NEW_SECRET", "STAGING_SECRET"), set("APP_URL")), [
@@ -104,16 +131,25 @@ test("collects required secret names at root and in named environments", () => {
 });
 
 test("does not interpret JSON var data or deployment metadata as declarations", () => {
-  assert.deepEqual(readWranglerKeys(JSON.stringify({
-    vars: {
-      DATA: { binding: "PHANTOM", name: "NOT_A_BINDING", vars: { NESTED: "value" },
-        durable_objects: { bindings: [{ name: "FAKE_DO" }] },
-        env: { staging: { vars: { FAKE_ENV: "value" } } } },
-    },
-    queues: { consumers: [{ queue: "queue-metadata" }] },
-    migrations: [{ tag: "v1", new_classes: ["CLASS_METADATA"] }],
-    env: { staging: { vars: { OTHER_DATA: [{ binding: "ALSO_PHANTOM" }] } } },
-  })), set("DATA", "OTHER_DATA"));
+  assert.deepEqual(
+    readWranglerKeys(
+      JSON.stringify({
+        vars: {
+          DATA: {
+            binding: "PHANTOM",
+            name: "NOT_A_BINDING",
+            vars: { NESTED: "value" },
+            durable_objects: { bindings: [{ name: "FAKE_DO" }] },
+            env: { staging: { vars: { FAKE_ENV: "value" } } },
+          },
+        },
+        queues: { consumers: [{ queue: "queue-metadata" }] },
+        migrations: [{ tag: "v1", new_classes: ["CLASS_METADATA"] }],
+        env: { staging: { vars: { OTHER_DATA: [{ binding: "ALSO_PHANTOM" }] } } },
+      }),
+    ),
+    set("DATA", "OTHER_DATA"),
+  );
 });
 
 async function withLocalProxy(create, use, remove = rmSync) {
@@ -144,14 +180,19 @@ async function withLocalProxy(create, use, remove = rmSync) {
 test("local proxy scratch is removed on success after disposal", async () => {
   let owned;
   let disposed = false;
-  await withLocalProxy((dir) => {
-    owned = dir;
-    writeFileSync(join(dir, "fixture"), "offline");
-    return { dispose: async () => {
-      assert.ok(existsSync(dir));
-      disposed = true;
-    } };
-  }, () => {});
+  await withLocalProxy(
+    (dir) => {
+      owned = dir;
+      writeFileSync(join(dir, "fixture"), "offline");
+      return {
+        dispose: async () => {
+          assert.ok(existsSync(dir));
+          disposed = true;
+        },
+      };
+    },
+    () => {},
+  );
   assert.equal(disposed, true);
   assert.equal(existsSync(owned), false);
 });
@@ -159,21 +200,37 @@ test("local proxy scratch is removed on success after disposal", async () => {
 test("local proxy scratch is removed after fixture or startup failure", async () => {
   const failure = new Error("fixture/startup failed");
   let owned;
-  await assert.rejects(withLocalProxy((dir) => {
-    owned = dir;
-    writeFileSync(join(dir, "fixture"), "offline");
-    throw failure;
-  }, () => assert.fail("must not use a missing proxy")), (error) => error === failure);
+  await assert.rejects(
+    withLocalProxy(
+      (dir) => {
+        owned = dir;
+        writeFileSync(join(dir, "fixture"), "offline");
+        throw failure;
+      },
+      () => assert.fail("must not use a missing proxy"),
+    ),
+    (error) => error === failure,
+  );
   assert.equal(existsSync(owned), false);
 });
 
 test("local proxy scratch is removed and proxy disposed after assertion failure", async () => {
   let owned;
   let disposed = false;
-  await assert.rejects(withLocalProxy((dir) => {
-    owned = dir;
-    return { dispose: async () => { disposed = true; } };
-  }, () => assert.fail("original assertion")), /original assertion/);
+  await assert.rejects(
+    withLocalProxy(
+      (dir) => {
+        owned = dir;
+        return {
+          dispose: async () => {
+            disposed = true;
+          },
+        };
+      },
+      () => assert.fail("original assertion"),
+    ),
+    /original assertion/,
+  );
   assert.equal(disposed, true);
   assert.equal(existsSync(owned), false);
 });
@@ -181,11 +238,21 @@ test("local proxy scratch is removed and proxy disposed after assertion failure"
 test("local proxy scratch is removed even when disposal rejects", async () => {
   const failure = new Error("dispose rejected");
   let owned;
-  await assert.rejects(withLocalProxy((dir) => {
-    owned = dir;
-    writeFileSync(join(dir, "fixture"), "offline");
-    return { dispose: async () => { throw failure; } };
-  }, () => {}), (error) => error === failure);
+  await assert.rejects(
+    withLocalProxy(
+      (dir) => {
+        owned = dir;
+        writeFileSync(join(dir, "fixture"), "offline");
+        return {
+          dispose: async () => {
+            throw failure;
+          },
+        };
+      },
+      () => {},
+    ),
+    (error) => error === failure,
+  );
   assert.equal(existsSync(owned), false);
 });
 
@@ -194,17 +261,30 @@ test("local proxy teardown preserves assertion, disposal and removal failures", 
   const disposeFailure = new Error("dispose rejected");
   const removeFailure = new Error("remove failed");
   let owned;
-  await assert.rejects(withLocalProxy((dir) => {
-    owned = dir;
-    return { dispose: async () => { throw disposeFailure; } };
-  }, () => { throw assertionFailure; }, (dir, options) => {
-    rmSync(dir, options);
-    throw removeFailure;
-  }), (error) => {
-    assert.ok(error instanceof AggregateError);
-    assert.deepEqual(error.errors, [assertionFailure, disposeFailure, removeFailure]);
-    return true;
-  });
+  await assert.rejects(
+    withLocalProxy(
+      (dir) => {
+        owned = dir;
+        return {
+          dispose: async () => {
+            throw disposeFailure;
+          },
+        };
+      },
+      () => {
+        throw assertionFailure;
+      },
+      (dir, options) => {
+        rmSync(dir, options);
+        throw removeFailure;
+      },
+    ),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [assertionFailure, disposeFailure, removeFailure]);
+      return true;
+    },
+  );
   assert.equal(existsSync(owned), false);
 });
 
@@ -221,21 +301,24 @@ test("local config starts with the passwordless test URL and no Hyperdrive", asy
     assert.notEqual(entry.remote, true);
   }
   const url = "postgres://agent_test@agent-testdb:5432/two_web_next";
-  await withLocalProxy(async (dir) => {
-    // Scratch .dev.vars is test-only; never load the workspace's auth secrets.
-    config.main = resolve(root, config.main);
-    config.assets.directory = resolve(root, config.assets.directory);
-    writeFileSync(join(dir, "wrangler.json"), JSON.stringify(config));
-    writeFileSync(join(dir, ".dev.vars"), `DATABASE_URL=${url}\n`);
-    // https://developers.cloudflare.com/workers/wrangler/api/#getplatformproxy
-    return getPlatformProxy({ configPath: join(dir, "wrangler.json"), persist: false });
-  }, (proxy) => {
-    assert.equal(proxy.env.DATABASE_URL, url);
-    assert.equal(proxy.env.DB, undefined);
-    assert.equal(proxy.env.HYPERDRIVE, undefined);
-    assert.equal(typeof proxy.env.SYNC_EVENT_QUEUE.send, "function");
-    assert.equal(typeof proxy.env.INTERNAL_ACTION_QUEUE.send, "function");
-  });
+  await withLocalProxy(
+    async (dir) => {
+      // Scratch .dev.vars is test-only; never load the workspace's auth secrets.
+      config.main = resolve(root, config.main);
+      config.assets.directory = resolve(root, config.assets.directory);
+      writeFileSync(join(dir, "wrangler.json"), JSON.stringify(config));
+      writeFileSync(join(dir, ".dev.vars"), `DATABASE_URL=${url}\n`);
+      // https://developers.cloudflare.com/workers/wrangler/api/#getplatformproxy
+      return getPlatformProxy({ configPath: join(dir, "wrangler.json"), persist: false });
+    },
+    (proxy) => {
+      assert.equal(proxy.env.DATABASE_URL, url);
+      assert.equal(proxy.env.DB, undefined);
+      assert.equal(proxy.env.HYPERDRIVE, undefined);
+      assert.equal(typeof proxy.env.SYNC_EVENT_QUEUE.send, "function");
+      assert.equal(typeof proxy.env.INTERNAL_ACTION_QUEUE.send, "function");
+    },
+  );
 });
 
 test("requires inventory rows, not incidental mentions in prose", () => {
@@ -249,8 +332,14 @@ test("rejects duplicate rows, blank metadata and malformed inventory markers", (
   assert.throws(() => readDocKeys(inventory(row("DB") + "\n" + row("DB"))), /Duplicate/);
   assert.throws(() => readDocKeys(inventory("| `DB` | binding | dev | | fails |")), /Config rows/);
   assert.throws(() => readDocKeys(inventory("| DB | binding | dev | none | fails |")), /Invalid/);
-  assert.throws(() => readDocKeys(inventory(row("DB")) + "<!-- config-docs:end -->"), /exactly one/);
-  assert.throws(() => readDocKeys("<!-- config-docs:end -->\n<!-- config-docs:start -->"), /Reversed/);
+  assert.throws(
+    () => readDocKeys(inventory(row("DB")) + "<!-- config-docs:end -->"),
+    /exactly one/,
+  );
+  assert.throws(
+    () => readDocKeys("<!-- config-docs:end -->\n<!-- config-docs:start -->"),
+    /Reversed/,
+  );
 });
 
 test("accepts complete documentation", () => {
@@ -258,13 +347,15 @@ test("accepts complete documentation", () => {
 });
 
 test("fails when an optional or inherited Env key is missing", () => {
-  assert.deepEqual(checkKeys(set("APP_URL", "INGRESS"), set(), set("APP_URL")),
-    ["Undocumented Env/JobsEnv key: INGRESS"]);
+  assert.deepEqual(checkKeys(set("APP_URL", "INGRESS"), set(), set("APP_URL")), [
+    "Undocumented Env/JobsEnv key: INGRESS",
+  ]);
 });
 
 test("fails when a removed Env key remains documented", () => {
-  assert.deepEqual(checkKeys(set("APP_URL"), set(), set("APP_URL", "OLD_SECRET")),
-    ["Obsolete doc key (not in Env/JobsEnv): OLD_SECRET"]);
+  assert.deepEqual(checkKeys(set("APP_URL"), set(), set("APP_URL", "OLD_SECRET")), [
+    "Obsolete doc key (not in Env/JobsEnv): OLD_SECRET",
+  ]);
 });
 
 test("fails when Wrangler gains an undeclared or undocumented binding", () => {

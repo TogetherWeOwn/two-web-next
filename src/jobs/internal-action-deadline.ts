@@ -33,7 +33,10 @@ export async function withInternalActionDeadline<T>(
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new BotTransportError(`internal action timed out after ${ms}ms`)), ms);
+    timer = setTimeout(
+      () => reject(new BotTransportError(`internal action timed out after ${ms}ms`)),
+      ms,
+    );
   });
   try {
     return await Promise.race([op, deadline]);

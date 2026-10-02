@@ -6,22 +6,39 @@ import { materializeMissingInstances } from "../admin/store";
 import { SYNC_EVENT } from "./constants";
 import type { EventStore, EventUpsert, SyncAttempt, TxClient } from "./types";
 
-type AttemptRow = { idempotency_key: string; revision: string | number; mirrored_at: Date; state: SyncAttempt["state"];
-  request_attempts: number; next_attempt_at: Date | null }
-  & ({ action: "event.upsert"; payload: EventUpsert } | { action: "event.cancel"; payload: { eventKey: string } });
+type AttemptRow = {
+  idempotency_key: string;
+  revision: string | number;
+  mirrored_at: Date;
+  state: SyncAttempt["state"];
+  request_attempts: number;
+  next_attempt_at: Date | null;
+} & (
+  | { action: "event.upsert"; payload: EventUpsert }
+  | { action: "event.cancel"; payload: { eventKey: string } }
+);
 
 function attemptFrom(row: AttemptRow): SyncAttempt {
   const base = {
-    idempotencyKey: row.idempotency_key, eventKey: row.payload.eventKey,
-    revision: Number(row.revision), mirroredAt: row.mirrored_at, state: row.state,
-    requestAttempts: row.request_attempts, nextAttemptAt: row.next_attempt_at,
+    idempotencyKey: row.idempotency_key,
+    eventKey: row.payload.eventKey,
+    revision: Number(row.revision),
+    mirroredAt: row.mirrored_at,
+    state: row.state,
+    requestAttempts: row.request_attempts,
+    nextAttemptAt: row.next_attempt_at,
   };
-  if (row.action === "event.cancel") return { ...base, action: "event.cancel", payload: row.payload };
-  return { ...base, action: "event.upsert", payload: {
-    ...row.payload,
-    startsAt: new Date(row.payload.startsAt).toISOString(),
-    endsAt: row.payload.endsAt === null ? null : new Date(row.payload.endsAt).toISOString(),
-  } };
+  if (row.action === "event.cancel")
+    return { ...base, action: "event.cancel", payload: row.payload };
+  return {
+    ...base,
+    action: "event.upsert",
+    payload: {
+      ...row.payload,
+      startsAt: new Date(row.payload.startsAt).toISOString(),
+      endsAt: row.payload.endsAt === null ? null : new Date(row.payload.endsAt).toISOString(),
+    },
+  };
 }
 
 /** Durable request snapshot; first claims recheck eligibility, attempted retries are immutable. */
@@ -49,7 +66,8 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
   };
   return {
     async prepareSync(eventKey, idempotencyKey, mirroredAt) {
-      const [cached] = await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
+      const [cached] =
+        await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
         where a.idempotency_key = ${idempotencyKey}::uuid and e.event_key = ${eventKey}`;
       if (cached) return attemptFrom(cached);
       // One atomic snapshot of status/payload/revision. A partial unique index
@@ -131,7 +149,8 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
     },
     needsSync: async (eventKey) => (await staleKeys(eventKey)).length > 0,
     async pendingSync(eventKey) {
-      const [row] = await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
+      const [row] =
+        await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
         where e.event_key = ${eventKey} and a.state = 'pending'`;
       return row ? attemptFrom(row) : null;
     },
@@ -145,19 +164,37 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
       // nested transaction on its reserved postgres.js client.
       // pg-proxy avoids postgres-js Drizzle's global timestamp/JSON parser
       // mutation: snapshot/ledger queries on this client still need native types.
-      const db = drizzle(async (query, params, _method, typings) => ({
-        // Drizzle already JSON-encodes these parameters; native postgres.js
-        // must receive the decoded value to avoid a JSON string audit payload.
-        rows: await (sql as postgres.Sql).unsafe(query, params.map((value, index) =>
-          typings?.[index] === "json" && typeof value === "string" ? JSON.parse(value) : value,
-        ) as never[]).values(),
-      }), { schema });
+      const db = drizzle(
+        async (query, params, _method, typings) => ({
+          // Drizzle already JSON-encodes these parameters; native postgres.js
+          // must receive the decoded value to avoid a JSON string audit payload.
+          rows: await (sql as postgres.Sql)
+            .unsafe(
+              query,
+              params.map((value, index) =>
+                typings?.[index] === "json" && typeof value === "string"
+                  ? JSON.parse(value)
+                  : value,
+              ) as never[],
+            )
+            .values(),
+        }),
+        { schema },
+      );
       // Single-flight excludes other schedulers, not moderator edits. Acquire
       // the same parent row lock as updateEvent before reading occurrence times;
       // a waiting READ COMMITTED select returns the newly committed parent.
-      const parents = await db.select().from(schema.events).where(and(
-        isNotNull(schema.events.recurrenceFrequency), inArray(schema.events.status, ["draft", "published"]),
-      )).orderBy(schema.events.id).for("update");
+      const parents = await db
+        .select()
+        .from(schema.events)
+        .where(
+          and(
+            isNotNull(schema.events.recurrenceFrequency),
+            inArray(schema.events.status, ["draft", "published"]),
+          ),
+        )
+        .orderBy(schema.events.id)
+        .for("update");
       let created = 0;
       // The writer consumes returned rows only, not postgres-js result metadata.
       const writer = db as unknown as Parameters<typeof materializeMissingInstances>[0];

@@ -8,7 +8,11 @@ import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 // Keep the routes, tracking ledger and unique locks real, in the owned schema.
 vi.mock("postgres", async () => {
@@ -54,18 +58,25 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     fixture = await createMemberDataFixture(url.href);
     vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}>) => {
       testDatabaseUrl(raw);
-      return realPostgres(raw, { ...opts, port: 5432, password: () => url.password,
-        connection: { search_path: fixture.schemaName }, onnotice: () => {} });
+      return realPostgres(raw, {
+        ...opts,
+        port: 5432,
+        password: () => url.password,
+        connection: { search_path: fixture.schemaName },
+        onnotice: () => {},
+      });
     }) as typeof postgres);
     env = {
       ...baseEnv,
       DB: { connectionString: url.href },
       ADMIN_DB: fixture.db,
       SESSION_STORE: store,
-      SYNC_EVENT_QUEUE: { send: async (message) => {
-        sent.push(message as SyncEventMessage);
-        return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
-      } },
+      SYNC_EVENT_QUEUE: {
+        send: async (message) => {
+          sent.push(message as SyncEventMessage);
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+        },
+      },
     } as Env;
   });
   afterAll(async () => {
@@ -81,14 +92,26 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     sent.length = 0;
     // Second occurrence of London's autumn fold; retain seconds as well as the instant.
     await fixture.db.insert(events).values({
-      eventKey: EVENT_KEY, title: "Game night", game: "Chess", description: "Bring a board",
-      startsAt: new Date("2026-10-25T01:30:17Z"), endsAt: new Date("2026-10-25T01:50:29Z"),
-      timezone: "Europe/London", location: "Voice", capacity: 8, status: "published",
-      discordEventId: "123456789012345678", createdBy: "event-moderator", rsvpOpen: false,
-      createdAt: new Date("2026-01-01T00:00:00Z"), updatedAt: new Date("2026-01-01T00:00:00Z"),
+      eventKey: EVENT_KEY,
+      title: "Game night",
+      game: "Chess",
+      description: "Bring a board",
+      startsAt: new Date("2026-10-25T01:30:17Z"),
+      endsAt: new Date("2026-10-25T01:50:29Z"),
+      timezone: "Europe/London",
+      location: "Voice",
+      capacity: 8,
+      status: "published",
+      discordEventId: "123456789012345678",
+      createdBy: "event-moderator",
+      rsvpOpen: false,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      updatedAt: new Date("2026-01-01T00:00:00Z"),
     });
     await fixture.db.insert(activityLog).values({
-      description: "created event Game night", subjectType: "Event", subjectId: EVENT_KEY,
+      description: "created event Game night",
+      subjectType: "Event",
+      subjectId: EVENT_KEY,
       causerId: "event-moderator",
     });
   });
@@ -96,18 +119,34 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
   async function cookieFor(moderator = true) {
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "event-moderator", username: "Moderator",
-      avatar: null, member: true, moderator, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId: "event-moderator",
+      username: "Moderator",
+      avatar: null,
+      member: true,
+      moderator,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
+    return (
+      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
   }
 
   async function write(method: "POST" | "PATCH", body: string, contentType = "application/json") {
-    return app.request(method === "POST" ? "/events" : `/events/${EVENT_KEY}`, {
-      method, headers: { cookie: await cookieFor(), origin: APP_URL, "content-type": contentType }, body,
-    }, env);
+    return app.request(
+      method === "POST" ? "/events" : `/events/${EVENT_KEY}`,
+      {
+        method,
+        headers: { cookie: await cookieFor(), origin: APP_URL, "content-type": contentType },
+        body,
+      },
+      env,
+    );
   }
   const patch = (body: unknown) => write("PATCH", JSON.stringify(body));
   const snapshot = async () => ({
@@ -123,13 +162,19 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
   }
 
   for (const method of ["POST", "PATCH"] as const) {
-    it.each(invalidBodies)(`${method} rejects %s without event, audit, or sync writes`, async (_, body) => {
-      const before = await snapshot();
-      const res = await write(method, body);
-      expect(res.status).toBe(422);
-      expect(await res.json()).toEqual({ error: "invalid", fields: { body: "Send a JSON object." } });
-      await expectUnchanged(before);
-    });
+    it.each(invalidBodies)(
+      `${method} rejects %s without event, audit, or sync writes`,
+      async (_, body) => {
+        const before = await snapshot();
+        const res = await write(method, body);
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual({
+          error: "invalid",
+          fields: { body: "Send a JSON object." },
+        });
+        await expectUnchanged(before);
+      },
+    );
   }
 
   it("rejects a malformed mixed-case JSON media type rather than accepting an empty edit", async () => {
@@ -149,7 +194,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     const before = await snapshot();
     const res = await patch({ timezone: "Not/AZone", ...dates });
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: { timezone: "Unknown timezone: Not/AZone." } });
+    expect(await res.json()).toEqual({
+      error: "invalid",
+      fields: { timezone: "Unknown timezone: Not/AZone." },
+    });
     await expectUnchanged(before);
   });
 
@@ -157,21 +205,38 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     const before = await snapshot();
     const res = await patch({ title: "Renamed" });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ data: {
-      title: "Renamed", starts_at: "2026-10-25T01:30:17.000Z", ends_at: "2026-10-25T01:50:29.000Z",
-      timezone: "Europe/London", capacity: 8, rsvp_open: false,
-    } });
+    expect(await res.json()).toMatchObject({
+      data: {
+        title: "Renamed",
+        starts_at: "2026-10-25T01:30:17.000Z",
+        ends_at: "2026-10-25T01:50:29.000Z",
+        timezone: "Europe/London",
+        capacity: 8,
+        rsvp_open: false,
+      },
+    });
     const after = await snapshot();
-    expect(after.events[0]).toEqual({ ...before.events[0], title: "Renamed", updatedAt: after.events[0]!.updatedAt,
-      icsSequence: after.events[0]!.icsSequence, syncRevision: after.events[0]!.syncRevision });
+    expect(after.events[0]).toEqual({
+      ...before.events[0],
+      title: "Renamed",
+      updatedAt: after.events[0]!.updatedAt,
+      icsSequence: after.events[0]!.icsSequence,
+      syncRevision: after.events[0]!.syncRevision,
+    });
     expect(after.events[0]!.icsSequence).toBeGreaterThan(before.events[0]!.icsSequence);
     expect(after.events[0]!.syncRevision).toBeGreaterThan(before.events[0]!.syncRevision);
     expect(after.audit).toHaveLength(before.audit.length + 1);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toEqual({ kind: "sync-event", eventKey: EVENT_KEY,
-      idempotencyKey: expect.any(String), jobId: expect.any(String),
-      leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
-      requestId: expect.any(String) });
+    expect(sent[0]).toEqual({
+      kind: "sync-event",
+      eventKey: EVENT_KEY,
+      idempotencyKey: expect.any(String),
+      jobId: expect.any(String),
+      leaseToken: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+      requestId: expect.any(String),
+    });
     expect(after.jobs).toHaveLength(1);
     expect(after.jobs[0]!.job_id).toBe(sent[0]!.jobId);
     expect(after.locks).toHaveLength(1);
@@ -184,33 +249,56 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     const res = await patch({});
     expect(res.status).toBe(200);
     const after = await snapshot();
-    expect(after.events[0]).toEqual({ ...before.events[0], updatedAt: after.events[0]!.updatedAt, icsSequence: after.events[0]!.icsSequence });
+    expect(after.events[0]).toEqual({
+      ...before.events[0],
+      updatedAt: after.events[0]!.updatedAt,
+      icsSequence: after.events[0]!.icsSequence,
+    });
     expect(after.events[0]!.icsSequence).toBeGreaterThan(before.events[0]!.icsSequence);
     expect(after.audit).toHaveLength(before.audit.length + 1);
-    expect(after.audit.at(-1)!.properties).toEqual({ updatedAt: {
-      before: before.events[0]!.updatedAt.toISOString(), after: after.events[0]!.updatedAt.toISOString(),
-    } });
+    expect(after.audit.at(-1)!.properties).toEqual({
+      updatedAt: {
+        before: before.events[0]!.updatedAt.toISOString(),
+        after: after.events[0]!.updatedAt.toISOString(),
+      },
+    });
     expect(sent).toHaveLength(1);
   });
 
-  it.each([" Europe/London ", "", "   "])("zone %j uses the same normalization/default as form validation", async (timezone) => {
-    const res = await patch({ timezone });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ data: {
-      timezone: "Europe/London", starts_at: "2026-10-25T01:30:17.000Z", ends_at: "2026-10-25T01:50:29.000Z",
-    } });
-  });
+  it.each([" Europe/London ", "", "   "])(
+    "zone %j uses the same normalization/default as form validation",
+    async (timezone) => {
+      const res = await patch({ timezone });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        data: {
+          timezone: "Europe/London",
+          starts_at: "2026-10-25T01:30:17.000Z",
+          ends_at: "2026-10-25T01:50:29.000Z",
+        },
+      });
+    },
+  );
 
   it("a timezone-only PATCH changes the display zone, not the stored instants", async () => {
     const before = await snapshot();
     const res = await patch({ timezone: "America/New_York" });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ data: {
-      timezone: "America/New_York", starts_at: "2026-10-25T01:30:17.000Z", ends_at: "2026-10-25T01:50:29.000Z",
-    } });
+    expect(await res.json()).toMatchObject({
+      data: {
+        timezone: "America/New_York",
+        starts_at: "2026-10-25T01:30:17.000Z",
+        ends_at: "2026-10-25T01:50:29.000Z",
+      },
+    });
     const after = await snapshot();
-    expect(after.events[0]).toEqual({ ...before.events[0], timezone: "America/New_York", updatedAt: after.events[0]!.updatedAt,
-      icsSequence: after.events[0]!.icsSequence, syncRevision: after.events[0]!.syncRevision });
+    expect(after.events[0]).toEqual({
+      ...before.events[0],
+      timezone: "America/New_York",
+      updatedAt: after.events[0]!.updatedAt,
+      icsSequence: after.events[0]!.icsSequence,
+      syncRevision: after.events[0]!.syncRevision,
+    });
     expect(after.events[0]!.icsSequence).toBeGreaterThan(before.events[0]!.icsSequence);
     expect(after.events[0]!.syncRevision).toBeGreaterThan(before.events[0]!.syncRevision);
     expect(sent).toHaveLength(1);
@@ -219,48 +307,74 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
   it("changed fold wall time resolves to the second occurrence while an omitted end retains its instant", async () => {
     const res = await patch({ starts_at: "2026-10-25 01:45" });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ data: {
-      starts_at: "2026-10-25T01:45:00.000Z", ends_at: "2026-10-25T01:50:29.000Z",
-    } });
+    expect(await res.json()).toMatchObject({
+      data: {
+        starts_at: "2026-10-25T01:45:00.000Z",
+        ends_at: "2026-10-25T01:50:29.000Z",
+      },
+    });
     expect(sent).toHaveLength(1);
   });
 
   it.each([
     ["starts_at", "2027-03-28 01:30", "2027-03-28 03:30"],
     ["ends_at", "2027-03-28 00:30", "2027-03-28 01:30"],
-  ] as const)("a spring-forward gap returns the %s field error without writes", async (field, starts_at, ends_at) => {
-    const before = await snapshot();
-    const res = await patch({ starts_at, ends_at });
-    expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: {
-      [field]: "That time never occurred in Europe/London — clocks skipped forward over it. Pick a time outside the gap.",
-    } });
-    await expectUnchanged(before);
-  });
+  ] as const)(
+    "a spring-forward gap returns the %s field error without writes",
+    async (field, starts_at, ends_at) => {
+      const before = await snapshot();
+      const res = await patch({ starts_at, ends_at });
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({
+        error: "invalid",
+        fields: {
+          [field]:
+            "That time never occurred in Europe/London — clocks skipped forward over it. Pick a time outside the gap.",
+        },
+      });
+      await expectUnchanged(before);
+    },
+  );
 
   it("valid spring-transition wall times still resolve with the host-zone DST offsets", async () => {
     const res = await patch({ starts_at: "2027-03-28 00:30", ends_at: "2027-03-28 02:30" });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ data: {
-      starts_at: "2027-03-28T00:30:00.000Z", ends_at: "2027-03-28T01:30:00.000Z",
-    } });
+    expect(await res.json()).toMatchObject({
+      data: {
+        starts_at: "2027-03-28T00:30:00.000Z",
+        ends_at: "2027-03-28T01:30:00.000Z",
+      },
+    });
     expect(sent).toHaveLength(1);
   });
 
   it("form partial edits keep working", async () => {
     const res = await write("PATCH", "title=Form+edit", "application/x-www-form-urlencoded");
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ data: {
-      title: "Form edit", starts_at: "2026-10-25T01:30:17.000Z", ends_at: "2026-10-25T01:50:29.000Z",
-    } });
+    expect(await res.json()).toMatchObject({
+      data: {
+        title: "Form edit",
+        starts_at: "2026-10-25T01:30:17.000Z",
+        ends_at: "2026-10-25T01:50:29.000Z",
+      },
+    });
   });
 
   it("malformed input does not precede the existing moderator permission check", async () => {
     const before = await snapshot();
-    const res = await app.request(`/events/${EVENT_KEY}`, {
-      method: "PATCH", headers: { cookie: await cookieFor(false), origin: APP_URL, "content-type": "application/json" },
-      body: '{"title":',
-    }, env);
+    const res = await app.request(
+      `/events/${EVENT_KEY}`,
+      {
+        method: "PATCH",
+        headers: {
+          cookie: await cookieFor(false),
+          origin: APP_URL,
+          "content-type": "application/json",
+        },
+        body: '{"title":',
+      },
+      env,
+    );
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "forbidden" });
     await expectUnchanged(before);

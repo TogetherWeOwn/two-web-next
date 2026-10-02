@@ -6,12 +6,27 @@ import { pgEventStore } from "../src/jobs/events";
 import { trackingQueue } from "../src/jobs/ledger";
 import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { dispatchSyncEvent } from "../src/jobs/sync-event";
-import { BotTransportError, type BotClient, type EventStore, type QueueMessage, type SyncAttempt } from "../src/jobs/types";
-import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  BotTransportError,
+  type BotClient,
+  type EventStore,
+  type QueueMessage,
+  type SyncAttempt,
+} from "../src/jobs/types";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 const eventKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const delivery = (body: SyncMessage, attempts = 1) => ({ body, attempts, ack: vi.fn(), retry: vi.fn() });
+const delivery = (body: SyncMessage, attempts = 1) => ({
+  body,
+  attempts,
+  ack: vi.fn(),
+  retry: vi.fn(),
+});
 
 // Native SQL and canonically migrated, owned schemas only. The bot/queue are
 // local doubles; preparation, settlement, claims, ledger and recovery are real.
@@ -25,15 +40,23 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
 
   function nativeClient() {
     const url = testDatabaseUrl(process.env.DATABASE_URL!);
-    const client = postgres(url.href, { max: 1, port: 5432, connect_timeout: 5,
-      password: () => url.password, connection: { search_path: fixture!.schemaName }, onnotice: () => {} });
+    const client = postgres(url.href, {
+      max: 1,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+      connection: { search_path: fixture!.schemaName },
+      onnotice: () => {},
+    });
     clients.push(client);
     return client;
   }
   beforeEach(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!);
     if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next") {
-      throw new Error("Event eligibility tests require agent-testdb/two_web_next; refusing before connecting");
+      throw new Error(
+        "Event eligibility tests require agent-testdb/two_web_next; refusing before connecting",
+      );
     }
     fixture = await createMemberDataFixture(url.href);
     clients = [];
@@ -41,7 +64,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
     sql = nativeClient();
     events = pgEventStore(sql);
     sent = [];
-    queue = trackingQueue({ send: async (body) => { sent.push(body as SyncMessage); } }, pgQueueLedger(sql));
+    queue = trackingQueue(
+      {
+        send: async (body) => {
+          sent.push(body as SyncMessage);
+        },
+      },
+      pgQueueLedger(sql),
+    );
   });
   afterEach(async () => {
     await Promise.all(clients?.map((client) => client.end({ timeout: 1 })) ?? []);
@@ -57,21 +87,36 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
   }
   function botDouble() {
     return {
-      upsertEvent: vi.fn<BotClient["upsertEvent"]>(async () => ({ ok: true, requestId: null, discordEventId: "discord-1" })),
-      cancelEvent: vi.fn<BotClient["cancelEvent"]>(async () => ({ ok: true, requestId: null, discordEventId: "discord-1" })),
-      postAnnouncement: vi.fn(), assignRole: vi.fn(),
+      upsertEvent: vi.fn<BotClient["upsertEvent"]>(async () => ({
+        ok: true,
+        requestId: null,
+        discordEventId: "discord-1",
+      })),
+      cancelEvent: vi.fn<BotClient["cancelEvent"]>(async () => ({
+        ok: true,
+        requestId: null,
+        discordEventId: "discord-1",
+      })),
+      postAnnouncement: vi.fn(),
+      assignRole: vi.fn(),
     } satisfies BotClient;
   }
   function deps(bot: BotClient, store = events) {
-    return { bot, events: store, ledger: pgQueueLedger(sql), lock: pgUniqueLock(sql),
-      dispatchPending: (key: string) => dispatchSyncEvent(queue, pgUniqueLock(sql), key) };
+    return {
+      bot,
+      events: store,
+      ledger: pgQueueLedger(sql),
+      lock: pgUniqueLock(sql),
+      dispatchPending: (key: string) => dispatchSyncEvent(queue, pgUniqueLock(sql), key),
+    };
   }
   async function dispatch() {
     expect(await dispatchSyncEvent(queue, pgUniqueLock(sql), eventKey)).toBe(true);
     return sent.at(-1)!;
   }
   const reconcile = () => reconcileEvents({ events, queue, lock: pgUniqueLock(sql) });
-  const makeDue = () => sql`update event_sync_attempts set next_attempt_at = clock_timestamp() - interval '1 second'
+  const makeDue =
+    () => sql`update event_sync_attempts set next_attempt_at = clock_timestamp() - interval '1 second'
     where state = 'pending'`;
 
   for (const settlement of ["success", "refusal"] as const) {
@@ -81,14 +126,24 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         values (${id}, 'test-user', 'going', '2026-01-01T00:00:00Z')`;
       const original = await dispatch();
       const bot = botDouble();
-      if (settlement === "refusal") bot.upsertEvent.mockResolvedValueOnce({ ok: false, code: "action_not_allowed",
-        status: 403, requestId: null, message: "definitively refused", retryable: false, retryAfterSeconds: null });
+      if (settlement === "refusal")
+        bot.upsertEvent.mockResolvedValueOnce({
+          ok: false,
+          code: "action_not_allowed",
+          status: 403,
+          requestId: null,
+          message: "definitively refused",
+          retryable: false,
+          retryAfterSeconds: null,
+        });
       const holder = nativeClient();
       const observer = nativeClient();
       const handlerPid = (await sql`select pg_backend_pid() as pid`)[0]!.pid as number;
       let holdingPid = 0;
       let release!: () => void;
-      const held = new Promise<void>((resolve) => { release = resolve; });
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       const settle = async (work: (txEvents: EventStore) => Promise<void>) => {
         await holder.begin(async (tx) => {
           await work(pgEventStore(tx));
@@ -96,16 +151,21 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
           await held;
         });
       };
-      const originalStore: EventStore = { ...events,
-        completeSync: (attempt, discordId) => settle((txEvents) => txEvents.completeSync(attempt, discordId)),
+      const originalStore: EventStore = {
+        ...events,
+        completeSync: (attempt, discordId) =>
+          settle((txEvents) => txEvents.completeSync(attempt, discordId)),
         failSync: (key) => settle((txEvents) => txEvents.failSync(key)),
       };
       let staleSnapshot: SyncAttempt | undefined;
-      const newKeyStore: EventStore = { ...events, prepareSync: async (...args) => {
-        const prepared = await events.prepareSync(...args);
-        if (prepared && !("waiting" in prepared)) staleSnapshot = prepared;
-        return prepared;
-      } };
+      const newKeyStore: EventStore = {
+        ...events,
+        prepareSync: async (...args) => {
+          const prepared = await events.prepareSync(...args);
+          if (prepared && !("waiting" in prepared)) staleSnapshot = prepared;
+          return prepared;
+        },
+      };
       const first = delivery(original);
       let originalConsumption: Promise<void> | undefined;
       let redundantConsumption: Promise<void> | undefined;
@@ -120,13 +180,17 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         expect(newMessage.idempotencyKey).not.toBe(original.idempotencyKey);
         redundant = delivery(newMessage);
         redundantConsumption = consume({ messages: [redundant] }, deps(bot, newKeyStore));
-        await vi.waitFor(async () => {
-          const [row] = await observer`select pg_blocking_pids(${handlerPid}) as blockers, query, wait_event_type
+        await vi.waitFor(
+          async () => {
+            const [row] =
+              await observer`select pg_blocking_pids(${handlerPid}) as blockers, query, wait_event_type
             from pg_stat_activity where pid = ${handlerPid}`;
-          expect(row!.blockers).toContain(holdingPid);
-          expect(row!.query).toMatch(/insert into event_sync_attempts/i);
-          expect(row!.wait_event_type).toBe("Lock");
-        }, { interval: 10, timeout: 2000 });
+            expect(row!.blockers).toContain(holdingPid);
+            expect(row!.query).toMatch(/insert into event_sync_attempts/i);
+            expect(row!.wait_event_type).toBe("Lock");
+          },
+          { interval: 10, timeout: 2000 },
+        );
         expect(bot.upsertEvent).toHaveBeenCalledOnce();
         release();
         await Promise.all([originalConsumption, redundantConsumption]);
@@ -136,28 +200,45 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       }
       // The waiting INSERT really did return an old dirty snapshot, not a null
       // or conflict result. Its first claim must recheck all current eligibility.
-      expect(staleSnapshot).toMatchObject({ idempotencyKey: redundant!.body.idempotencyKey,
-        state: "pending", requestAttempts: 0 });
+      expect(staleSnapshot).toMatchObject({
+        idempotencyKey: redundant!.body.idempotencyKey,
+        state: "pending",
+        requestAttempts: 0,
+      });
       expect(bot.upsertEvent).toHaveBeenCalledOnce();
       expect(bot.cancelEvent).not.toHaveBeenCalled();
       expect(first.ack).toHaveBeenCalledOnce();
       expect(redundant!.ack).toHaveBeenCalledOnce();
       expect(redundant!.retry).not.toHaveBeenCalled();
-      expect(await sql`select state, request_attempts, next_attempt_at from event_sync_attempts
-        where idempotency_key = ${redundant!.body.idempotencyKey}::uuid`)
-        .toEqual([{ state: "obsolete", request_attempts: 0, next_attempt_at: null }]);
-      expect(await sql`select state, request_attempts from event_sync_attempts
-        where idempotency_key = ${original.idempotencyKey}::uuid`)
-        .toEqual([{ state: settlement === "success" ? "succeeded" : "failed", request_attempts: 1 }]);
-      expect(await sql`select sync_revision = synced_revision as clean, discord_event_id from events`)
-        .toEqual([{ clean: settlement === "success", discord_event_id: settlement === "success" ? "discord-1" : null }]);
+      expect(
+        await sql`select state, request_attempts, next_attempt_at from event_sync_attempts
+        where idempotency_key = ${redundant!.body.idempotencyKey}::uuid`,
+      ).toEqual([{ state: "obsolete", request_attempts: 0, next_attempt_at: null }]);
+      expect(
+        await sql`select state, request_attempts from event_sync_attempts
+        where idempotency_key = ${original.idempotencyKey}::uuid`,
+      ).toEqual([
+        { state: settlement === "success" ? "succeeded" : "failed", request_attempts: 1 },
+      ]);
+      expect(
+        await sql`select sync_revision = synced_revision as clean, discord_event_id from events`,
+      ).toEqual([
+        {
+          clean: settlement === "success",
+          discord_event_id: settlement === "success" ? "discord-1" : null,
+        },
+      ]);
       const [rsvp] = await sql`select synced_to_discord_at from rsvps`;
-      expect(rsvp!.synced_to_discord_at).toEqual(settlement === "success" ? expect.any(Date) : null);
+      expect(rsvp!.synced_to_discord_at).toEqual(
+        settlement === "success" ? expect.any(Date) : null,
+      );
       expect(await events.needsSync(eventKey)).toBe(false);
       expect(await events.staleEventKeys()).toEqual([]);
       expect(await events.pendingSync(eventKey)).toBeNull();
       expect(await sql`select job_id from queue_jobs`).toEqual([]);
-      expect(await sql`select job_id from queue_failed_jobs`).toHaveLength(settlement === "refusal" ? 1 : 0);
+      expect(await sql`select job_id from queue_failed_jobs`).toHaveLength(
+        settlement === "refusal" ? 1 : 0,
+      );
       expect(sent).toHaveLength(2); // retirement never creates another successor
       await consume({ messages: [delivery(redundant!.body, 2)] }, deps(bot));
       expect(bot.upsertEvent).toHaveBeenCalledOnce();
@@ -169,7 +250,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       const id = await seed();
       await sql`update events set synced_revision = sync_revision,
         discord_event_id = ${legacyReason === "missing mapping" ? null : "discord-1"} where id = ${id}`;
-      if (legacyReason === "unmirrored RSVP") await sql`insert into rsvps (event_id, user_id, status)
+      if (legacyReason === "unmirrored RSVP")
+        await sql`insert into rsvps (event_id, user_id, status)
         values (${id}, 'test-user', 'going')`;
       const bot = botDouble();
       const message = delivery(await dispatch());
@@ -204,15 +286,21 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       expect(sent[1]!.idempotencyKey).toBe(original.idempotencyKey);
       await consume({ messages: [delivery(sent[1]!)] }, deps(bot));
       expect(bot.upsertEvent.mock.calls[1]).toEqual([pending.payload, original.idempotencyKey]);
-      expect(await sql`select state, request_attempts from event_sync_attempts
-        where idempotency_key = ${original.idempotencyKey}::uuid`)
-        .toEqual([{ state: "succeeded", request_attempts: 2 }]);
+      expect(
+        await sql`select state, request_attempts from event_sync_attempts
+        where idempotency_key = ${original.idempotencyKey}::uuid`,
+      ).toEqual([{ state: "succeeded", request_attempts: 2 }]);
       expect(sent).toHaveLength(2);
       expect(await events.needsSync(eventKey)).toBe(false);
     });
   }
 
-  for (const control of ["closed upsert", "published upsert", "draft upsert", "closed cancellation"] as const) {
+  for (const control of [
+    "closed upsert",
+    "published upsert",
+    "draft upsert",
+    "closed cancellation",
+  ] as const) {
     it(`recovers an attempted request without a live carrier: ${control}`, async () => {
       const cancellation = control === "closed cancellation";
       const ended = control === "closed upsert" || cancellation;
@@ -228,8 +316,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       expect(first.ack).not.toHaveBeenCalled();
       expect(first.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
       const pending = (await events.pendingSync(eventKey))!;
-      expect(pending).toMatchObject({ state: "pending", requestAttempts: 1,
-        idempotencyKey: original.idempotencyKey, action: cancellation ? "event.cancel" : "event.upsert" });
+      expect(pending).toMatchObject({
+        state: "pending",
+        requestAttempts: 1,
+        idempotencyKey: original.idempotencyKey,
+        action: cancellation ? "event.cancel" : "event.upsert",
+      });
       // Exhaust the still-early carrier, not the request's remaining five tries.
       const exhaustedCarrier = delivery(original, 6);
       await consume({ messages: [exhaustedCarrier] }, frozenDeps);
@@ -244,8 +336,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         status = ${control === "draft upsert" ? "draft" : "published"}`;
       await makeDue();
       expect(await reconcile()).toEqual({ closed: ended ? 1 : 0, materialized: 0, resynced: 1 });
-      expect((await sql`select status from events`)[0]!.status)
-        .toBe(ended ? "past" : control === "draft upsert" ? "draft" : "published");
+      expect((await sql`select status from events`)[0]!.status).toBe(
+        ended ? "past" : control === "draft upsert" ? "draft" : "published",
+      );
       expect(sent).toHaveLength(2);
       const recovered = sent[1]!;
       expect(recovered.idempotencyKey).toBe(original.idempotencyKey);
@@ -256,9 +349,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       expect(recovery.ack).toHaveBeenCalledOnce();
       expect(action).toHaveBeenCalledTimes(2);
       expect(action.mock.calls[1]).toEqual([pending.payload, original.idempotencyKey]);
-      expect(await sql`select state, request_attempts from event_sync_attempts
-        where idempotency_key = ${original.idempotencyKey}::uuid`)
-        .toEqual([{ state: "succeeded", request_attempts: 2 }]);
+      expect(
+        await sql`select state, request_attempts from event_sync_attempts
+        where idempotency_key = ${original.idempotencyKey}::uuid`,
+      ).toEqual([{ state: "succeeded", request_attempts: 2 }]);
       if (ended || control === "draft upsert") {
         expect(await events.needsSync(eventKey)).toBe(false);
         expect(await events.staleEventKeys()).toEqual([]);
@@ -292,22 +386,34 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       // check (including injected scheduler clocks). NULL/capped requests have
       // no automatic recovery eligibility at all.
       expect(await events.needsSync(eventKey)).toBe(blocked === "future deadline");
-      expect(await events.staleEventKeys()).toEqual(blocked === "future deadline" ? [eventKey] : []);
+      expect(await events.staleEventKeys()).toEqual(
+        blocked === "future deadline" ? [eventKey] : [],
+      );
       expect(sent).toHaveLength(1);
       expect(bot.upsertEvent).toHaveBeenCalledOnce();
       expect(await sql`select job_id from queue_jobs`).toEqual([]);
-      expect(await events.pendingSync(eventKey)).toMatchObject({ idempotencyKey: original.idempotencyKey,
-        action: pending.action, payload: pending.payload, requestAttempts: blocked === "six requests" ? 6 : 1 });
+      expect(await events.pendingSync(eventKey)).toMatchObject({
+        idempotencyKey: original.idempotencyKey,
+        action: pending.action,
+        payload: pending.payload,
+        requestAttempts: blocked === "six requests" ? 6 : 1,
+      });
       if (blocked === "future deadline") {
         // The scheduler's injected clock, not database now(), owns the exact
         // due boundary. No rewrite of the durable deadline is needed to recover.
-        expect(await reconcileEvents({ events, queue, lock: pgUniqueLock(sql),
-          now: () => new Date(deadline.getTime() - 1) }))
-          .toEqual({ closed: 0, materialized: 0, resynced: 0 });
+        expect(
+          await reconcileEvents({
+            events,
+            queue,
+            lock: pgUniqueLock(sql),
+            now: () => new Date(deadline.getTime() - 1),
+          }),
+        ).toEqual({ closed: 0, materialized: 0, resynced: 0 });
         expect(sent).toHaveLength(1);
         expect((await events.pendingSync(eventKey))!.nextAttemptAt).toEqual(deadline);
-        expect(await reconcileEvents({ events, queue, lock: pgUniqueLock(sql), now: () => deadline }))
-          .toEqual({ closed: 0, materialized: 0, resynced: 1 });
+        expect(
+          await reconcileEvents({ events, queue, lock: pgUniqueLock(sql), now: () => deadline }),
+        ).toEqual({ closed: 0, materialized: 0, resynced: 1 });
         expect(sent[1]!.idempotencyKey).toBe(original.idempotencyKey);
         const dueDeps = { ...deps(bot), now: () => deadline };
         await consume({ messages: [delivery(sent[1]!)] }, dueDeps);
@@ -321,8 +427,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       it(`never initiates an unattempted ${status} upsert (snapshot=${prepared})`, async () => {
         await seed();
         const original = await dispatch();
-        if (prepared) expect(await events.prepareSync(eventKey, original.idempotencyKey, new Date()))
-          .toMatchObject({ state: "pending", requestAttempts: 0 });
+        if (prepared)
+          expect(
+            await events.prepareSync(eventKey, original.idempotencyKey, new Date()),
+          ).toMatchObject({ state: "pending", requestAttempts: 0 });
         await sql`update events set status = ${status}`;
         expect(await events.needsSync(eventKey)).toBe(false);
         expect(await events.staleEventKeys()).toEqual([]);
@@ -334,11 +442,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         expect(message.retry).not.toHaveBeenCalled();
         expect(bot.upsertEvent).not.toHaveBeenCalled();
         expect(bot.cancelEvent).not.toHaveBeenCalled();
-        expect(await sql`select synced_revision, discord_event_id from events`)
-          .toEqual([{ synced_revision: "0", discord_event_id: null }]);
+        expect(await sql`select synced_revision, discord_event_id from events`).toEqual([
+          { synced_revision: "0", discord_event_id: null },
+        ]);
         expect(await events.pendingSync(eventKey)).toBeNull();
-        if (prepared) expect(await sql`select state, request_attempts from event_sync_attempts`)
-          .toEqual([{ state: "obsolete", request_attempts: 0 }]);
+        if (prepared)
+          expect(await sql`select state, request_attempts from event_sync_attempts`).toEqual([
+            { state: "obsolete", request_attempts: 0 },
+          ]);
         expect(sent).toHaveLength(1);
         expect(await sql`select job_id from queue_jobs`).toEqual([]);
       });

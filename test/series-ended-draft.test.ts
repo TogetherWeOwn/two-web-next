@@ -19,7 +19,11 @@ import { pgEventStore } from "../src/jobs/events";
 import { handleSyncEvent } from "../src/jobs/sync-event";
 import type { BotClient, QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 vi.mock("postgres", async () => {
   const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
@@ -34,7 +38,9 @@ const ACTOR = { id: "moderator", username: "mod" };
 
 describe("series-ended-draft test containment", () => {
   it("refuses a non-test database before constructing a driver", () => {
-    expect(() => testDatabaseUrl("postgres://agent_test@staging.example.test/events", {})).toThrow("refusing before connecting");
+    expect(() => testDatabaseUrl("postgres://agent_test@staging.example.test/events", {})).toThrow(
+      "refusing before connecting",
+    );
   });
 });
 
@@ -52,9 +58,13 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET,
-    get ADMIN_DB() { return fixture.db; },
+    get ADMIN_DB() {
+      return fixture.db;
+    },
     SESSION_STORE: store,
-    get DB() { return { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href }; },
+    get DB() {
+      return { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href };
+    },
     SYNC_EVENT_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
   } as unknown as Env;
 
@@ -66,7 +76,8 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}> = {}) => {
       const safe = testDatabaseUrl(raw);
       return realPostgres(safe.href, {
-        ...opts, password: () => safe.password,
+        ...opts,
+        password: () => safe.password,
         connection: { ...opts.connection, search_path: fixture.schemaName },
       });
     }) as typeof postgres);
@@ -89,52 +100,105 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
   async function cookieFor(userId = ACTOR.id, moderator = true): Promise<string> {
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId, username: userId, avatar: null,
-      member: true, moderator, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId,
+      username: userId,
+      avatar: null,
+      member: true,
+      moderator,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
+    return (
+      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
   }
 
-  async function json(method: string, path: string, body?: unknown, member?: string): Promise<Response> {
-    return app.request(path, {
-      method,
-      headers: {
-        cookie: await cookieFor(member, member === undefined), origin: APP_URL,
-        accept: "application/json", "content-type": "application/json",
+  async function json(
+    method: string,
+    path: string,
+    body?: unknown,
+    member?: string,
+  ): Promise<Response> {
+    return app.request(
+      path,
+      {
+        method,
+        headers: {
+          cookie: await cookieFor(member, member === undefined),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    }, env);
+      env,
+    );
   }
   async function browser(path: string, values?: Record<string, string>): Promise<Response> {
-    return adminApp({ sessionStore: store, db: fixture.db }).request(path, {
-      method: "POST",
-      headers: { cookie: await cookieFor(), origin: APP_URL, "content-type": "application/x-www-form-urlencoded" },
-      body: values === undefined ? undefined : new URLSearchParams(values),
-    }, env);
+    return adminApp({ sessionStore: store, db: fixture.db }).request(
+      path,
+      {
+        method: "POST",
+        headers: {
+          cookie: await cookieFor(),
+          origin: APP_URL,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: values === undefined ? undefined : new URLSearchParams(values),
+      },
+      env,
+    );
   }
   /** An ended-draft weekly series parent with no children yet (index 1). */
   async function seedParent(over: Partial<typeof events.$inferInsert> = {}) {
-    const [row] = await fixture.db.insert(events).values({
-      eventKey: newEventKey(), title: "Sunday Squad",
-      startsAt: new Date(NOW.getTime() - 2 * 3600_000),
-      endsAt: new Date(NOW.getTime() - 1), timezone: "UTC", status: "draft", capacity: 8,
-      recurrenceFrequency: "weekly", recurrenceCount: 3, recurrenceEndsOn: null, recurrenceIndex: 1,
-      createdAt: NOW, updatedAt: NOW, ...over,
-    }).returning();
+    const [row] = await fixture.db
+      .insert(events)
+      .values({
+        eventKey: newEventKey(),
+        title: "Sunday Squad",
+        startsAt: new Date(NOW.getTime() - 2 * 3600_000),
+        endsAt: new Date(NOW.getTime() - 1),
+        timezone: "UTC",
+        status: "draft",
+        capacity: 8,
+        recurrenceFrequency: "weekly",
+        recurrenceCount: 3,
+        recurrenceEndsOn: null,
+        recurrenceIndex: 1,
+        createdAt: NOW,
+        updatedAt: NOW,
+        ...over,
+      })
+      .returning();
     return row!;
   }
   /** An ended-draft child of the given parent (index 2). */
-  async function seedChild(parent: typeof events.$inferSelect, over: Partial<typeof events.$inferInsert> = {}) {
-    const [row] = await fixture.db.insert(events).values({
-      eventKey: newEventKey(), title: parent.title,
-      startsAt: new Date(parent.startsAt.getTime() + 7 * 24 * 3600_000),
-      endsAt: new Date(parent.endsAt.getTime() + 7 * 24 * 3600_000),
-      timezone: parent.timezone, status: "draft", capacity: parent.capacity,
-      parentEventId: parent.id, recurrenceIndex: 2,
-      createdAt: NOW, updatedAt: NOW, ...over,
-    }).returning();
+  async function seedChild(
+    parent: typeof events.$inferSelect,
+    over: Partial<typeof events.$inferInsert> = {},
+  ) {
+    const [row] = await fixture.db
+      .insert(events)
+      .values({
+        eventKey: newEventKey(),
+        title: parent.title,
+        startsAt: new Date(parent.startsAt.getTime() + 7 * 24 * 3600_000),
+        endsAt: new Date(parent.endsAt.getTime() + 7 * 24 * 3600_000),
+        timezone: parent.timezone,
+        status: "draft",
+        capacity: parent.capacity,
+        parentEventId: parent.id,
+        recurrenceIndex: 2,
+        createdAt: NOW,
+        updatedAt: NOW,
+        ...over,
+      })
+      .returning();
     return row!;
   }
   const state = async (key: string) => ({
@@ -142,7 +206,8 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     answers: await fixture.db.select().from(rsvps).orderBy(rsvps.id),
     audits: await fixture.db.select().from(activityLog).orderBy(activityLog.id),
   });
-  const childrenOf = (id: number) => fixture.db.select().from(events).where(eq(events.parentEventId, id));
+  const childrenOf = (id: number) =>
+    fixture.db.select().from(events).where(eq(events.parentEventId, id));
 
   it("POST publish refuses an ended-draft series parent with the legacy message and materialises nothing", async () => {
     const parent = await seedParent();
@@ -166,15 +231,21 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     // The consumer decides the action from the row at send time: cancelled → event.cancel.
     const calls: string[] = [];
     const bot = {
-      cancelEvent: async (p: { eventKey: string }) => (calls.push(`cancel:${p.eventKey}`),
-        { ok: true, requestId: null, discordEventId: "discord-1" }),
-      upsertEvent: async (p: { eventKey: string }) => (calls.push(`upsert:${p.eventKey}`),
-        { ok: true, requestId: null, discordEventId: "discord-1" }),
+      cancelEvent: async (p: { eventKey: string }) => (
+        calls.push(`cancel:${p.eventKey}`),
+        { ok: true, requestId: null, discordEventId: "discord-1" }
+      ),
+      upsertEvent: async (p: { eventKey: string }) => (
+        calls.push(`upsert:${p.eventKey}`),
+        { ok: true, requestId: null, discordEventId: "discord-1" }
+      ),
     } as unknown as BotClient;
     // Own raw pool: drizzle's date serializers on fixture.client reject native Date parameters.
     const sql = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
     try {
-      await expect(handleSyncEvent(sent[0]!, 1, { bot, events: pgEventStore(sql) })).resolves.toEqual({ done: true });
+      await expect(
+        handleSyncEvent(sent[0]!, 1, { bot, events: pgEventStore(sql) }),
+      ).resolves.toEqual({ done: true });
     } finally {
       await sql.end({ timeout: 1 });
     }
