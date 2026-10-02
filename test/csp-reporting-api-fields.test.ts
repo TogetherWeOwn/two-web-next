@@ -34,8 +34,16 @@ const expectedFields = {
 };
 
 const forbiddenBindings = new Set([
-  "DB", "DATABASE_URL", "AGENT_DB", "HYPERDRIVE", "SESSION_STORE", "ROSTER_STORE",
-  "SESSION_SECRET", "DISCORD_CLIENT_SECRET", "DISCORD_BOT_TOKEN", "QA_AUTH_TOKEN",
+  "DB",
+  "DATABASE_URL",
+  "AGENT_DB",
+  "HYPERDRIVE",
+  "SESSION_STORE",
+  "ROSTER_STORE",
+  "SESSION_SECRET",
+  "DISCORD_CLIENT_SECRET",
+  "DISCORD_BOT_TOKEN",
+  "QA_AUTH_TOKEN",
 ]);
 const bindingAccess = vi.fn();
 const env = new Proxy({ APP_URL: "https://next.example.test" } as Env, {
@@ -61,15 +69,19 @@ async function post(body: string | ReadableStream<Uint8Array> | null, sampleRate
       return key === "CSP_REPORT_SAMPLE_RATE" ? sampleRate : Reflect.get(target, key, receiver);
     },
   });
-  const response = await app.request("/csp-reports", {
-    method: "POST",
-    headers: {
-      "content-type": "application/reports+json",
-      cookie: "__Host-two_session=synthetic-forged-session.bad",
+  const response = await app.request(
+    "/csp-reports",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/reports+json",
+        cookie: "__Host-two_session=synthetic-forged-session.bad",
+      },
+      body,
+      ...(body instanceof ReadableStream ? { duplex: "half" } : {}),
     },
-    body,
-    ...(body instanceof ReadableStream ? { duplex: "half" } : {}),
-  }, bindings);
+    bindings,
+  );
   expect(response.status).toBe(204);
   expect(await response.text()).toBe("");
   expect(response.headers.get("cache-control")).toBe("no-store");
@@ -91,31 +103,44 @@ describe("Reporting API CSP fields", () => {
     [{ nested: documentUrl }, envelopeUrl],
     [[documentUrl], envelopeUrl],
     [42, envelopeUrl],
-    ["", ""],
+    ["", null],
     [documentUrl, documentUrl],
   ])("uses a scalar documentURL before the envelope URL (%j)", async (documentURL, expected) => {
     const warn = captureLogs();
     await post(JSON.stringify([report({ ...bodyFields(), documentURL })]));
-    expect(warn.mock.calls).toEqual([["csp.report.violation", { ...expectedFields, document_uri: expected }]]);
+    expect(warn.mock.calls).toEqual([
+      ["csp.report.violation", { ...expectedFields, document_uri: expected }],
+    ]);
   });
 
   it("retains the legacy body.url fallback before the envelope URL", async () => {
     const warn = captureLogs();
     await post(JSON.stringify([report({ blockedURL: "inline", url: documentUrl })]));
-    expect(warn.mock.calls).toEqual([["csp.report.violation", {
-      blocked_uri: "inline", violated_directive: null, document_uri: documentUrl,
-      source_file: null, line_number: null,
-    }]]);
+    expect(warn.mock.calls).toEqual([
+      [
+        "csp.report.violation",
+        {
+          blocked_uri: "inline",
+          violated_directive: null,
+          document_uri: documentUrl,
+          source_file: null,
+          line_number: null,
+        },
+      ],
+    ]);
   });
 
   it("prefers documentURL over the legacy body.url alias", async () => {
     const warn = captureLogs();
-    await post(JSON.stringify([report({ ...bodyFields(), url: "https://next.example.test/legacy" })]));
+    await post(
+      JSON.stringify([report({ ...bodyFields(), url: "https://next.example.test/legacy" })]),
+    );
     expect(warn.mock.calls).toEqual([["csp.report.violation", expectedFields]]);
   });
 
   it.each([undefined, null, {}, [envelopeUrl]].map((value) => [value]))(
-    "keeps body evidence when the envelope URL is missing or non-scalar %j", async (url) => {
+    "keeps body evidence when the envelope URL is missing or non-scalar %j",
+    async (url) => {
       const warn = captureLogs();
       await post(JSON.stringify([{ ...report(), url }]));
       expect(warn.mock.calls).toEqual([["csp.report.violation", expectedFields]]);
@@ -124,39 +149,75 @@ describe("Reporting API CSP fields", () => {
 
   it("keeps classic fields and their precedence when both spellings appear", async () => {
     const warn = captureLogs();
-    await post(JSON.stringify({ "csp-report": {
-      ...bodyFields(),
-      "blocked-uri": "eval",
-      "violated-directive": "script-src",
-      "document-uri": envelopeUrl,
-      "source-file": "https://next.example.test/classic.js",
-      "line-number": 0,
-    } }));
-    expect(warn.mock.calls).toEqual([["csp.report.violation", {
-      blocked_uri: "eval", violated_directive: "script-src", document_uri: envelopeUrl,
-      source_file: "https://next.example.test/classic.js", line_number: 0,
-    }]]);
+    await post(
+      JSON.stringify({
+        "csp-report": {
+          ...bodyFields(),
+          "blocked-uri": "eval",
+          "violated-directive": "script-src",
+          "document-uri": envelopeUrl,
+          "source-file": "https://next.example.test/classic.js",
+          "line-number": 0,
+        },
+      }),
+    );
+    expect(warn.mock.calls).toEqual([
+      [
+        "csp.report.violation",
+        {
+          blocked_uri: "eval",
+          violated_directive: "script-src",
+          document_uri: envelopeUrl,
+          source_file: "https://next.example.test/classic.js",
+          line_number: 0,
+        },
+      ],
+    ]);
   });
 
   it("never logs nested fields, extra body keys or envelope metadata", async () => {
     const warn = captureLogs();
-    await post(JSON.stringify([report({
-      blockedURL: { nested: "probe" }, effectiveDirective: ["script-src"],
-      documentURL: { nested: "probe" }, url: ["probe"],
-      sourceFile: { nested: "probe" }, lineNumber: { nested: 17 },
-      sample: "probe", unknown: { nested: "probe" },
-    }, { nested: "probe" })]));
-    expect(warn.mock.calls).toEqual([["csp.report.violation", {
-      blocked_uri: null, violated_directive: null, document_uri: null,
-      source_file: null, line_number: null,
-    }]]);
+    await post(
+      JSON.stringify([
+        report(
+          {
+            blockedURL: { nested: "probe" },
+            effectiveDirective: ["script-src"],
+            documentURL: { nested: "probe" },
+            url: ["probe"],
+            sourceFile: { nested: "probe" },
+            lineNumber: { nested: 17 },
+            sample: "probe",
+            unknown: { nested: "probe" },
+          },
+          { nested: "probe" },
+        ),
+      ]),
+    );
+    expect(warn.mock.calls).toEqual([
+      [
+        "csp.report.violation",
+        {
+          blocked_uri: null,
+          violated_directive: null,
+          document_uri: null,
+          source_file: null,
+          line_number: null,
+        },
+      ],
+    ]);
   });
 
-  it.each(["17", null, [], {}, true, 1e400].map((value) => [value]))("does not coerce invalid lineNumber %j", async (lineNumber) => {
-    const warn = captureLogs();
-    await post(JSON.stringify([report({ ...bodyFields(), lineNumber })]));
-    expect(warn.mock.calls).toEqual([["csp.report.violation", { ...expectedFields, line_number: null }]]);
-  });
+  it.each(["17", null, [], {}, true, 1e400].map((value) => [value]))(
+    "does not coerce invalid lineNumber %j",
+    async (lineNumber) => {
+      const warn = captureLogs();
+      await post(JSON.stringify([report({ ...bodyFields(), lineNumber })]));
+      expect(warn.mock.calls).toEqual([
+        ["csp.report.violation", { ...expectedFields, line_number: null }],
+      ]);
+    },
+  );
 
   it("rejects non-finite line numbers before serialization", () => {
     for (const lineNumber of [NaN, Infinity, -Infinity]) {
@@ -165,7 +226,8 @@ describe("Reporting API CSP fields", () => {
   });
 
   it.each(["deprecation", "intervention", "network-error", null, {}, []].map((value) => [value]))(
-    "silently ignores an explicitly non-CSP or malformed type %j", async (type) => {
+    "silently ignores an explicitly non-CSP or malformed type %j",
+    async (type) => {
       const warn = captureLogs();
       await post(JSON.stringify([{ ...report(), type }]));
       expect(warn).not.toHaveBeenCalled();
@@ -178,14 +240,18 @@ describe("Reporting API CSP fields", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it.each([null, [], "invalid", 17].map((value) => [value]))("ignores a typed CSP report with malformed body %j", async (body) => {
-    const warn = captureLogs();
-    await post(JSON.stringify([report(body)]));
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each([null, [], "invalid", 17].map((value) => [value]))(
+    "ignores a typed CSP report with malformed body %j",
+    async (body) => {
+      const warn = captureLogs();
+      await post(JSON.stringify([report(body)]));
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(["", "not-json", "null", "[]", "[null]", '{"csp-report":[]}']) (
-    "always answers 204/no-store without logging malformed input %j", async (raw) => {
+  it.each(["", "not-json", "null", "[]", "[null]", '{"csp-report":[]}'])(
+    "always answers 204/no-store without logging malformed input %j",
+    async (raw) => {
       const warn = captureLogs();
       await post(raw);
       expect(warn).not.toHaveBeenCalled();
@@ -196,13 +262,16 @@ describe("Reporting API CSP fields", () => {
     const warn = captureLogs();
     const cancel = vi.fn();
     let pulls = 0;
-    const stream = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(new Uint8Array(MAX_CSP_REPORT_BYTES + 1));
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1;
+          controller.enqueue(new Uint8Array(MAX_CSP_REPORT_BYTES + 1));
+        },
+        cancel,
       },
-      cancel,
-    }, { highWaterMark: 0 });
+      { highWaterMark: 0 },
+    );
     expect(MAX_CSP_REPORT_BYTES).toBe(8192);
     await post(stream);
     expect(pulls).toBe(1);
@@ -212,12 +281,20 @@ describe("Reporting API CSP fields", () => {
 
   it("still answers 204/no-store when the body stream fails", async () => {
     const warn = captureLogs();
-    await post(new ReadableStream({ start(controller) { controller.error(new Error("synthetic abort")); } }));
+    await post(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error("synthetic abort"));
+        },
+      }),
+    );
     expect(warn).not.toHaveBeenCalled();
   });
 
   it("still answers 204/no-store when the logger throws", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => { throw new Error("synthetic logger failure"); });
+    vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("synthetic logger failure");
+    });
     await post(JSON.stringify([report()]));
   });
 

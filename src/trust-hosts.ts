@@ -36,8 +36,11 @@ export function normalizeHost(raw: string | null | undefined): string | null {
   }
   const hostname = match[1];
   if (!hostname) return null;
-  if (hostname.length > 253 || hostname.split(".").some((label) =>
-    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) return null;
+  if (
+    hostname.length > 253 ||
+    hostname.split(".").some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
+  )
+    return null;
   return hostname;
 }
 

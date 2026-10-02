@@ -21,7 +21,8 @@ async function main() {
   for (const key of Object.keys(process.env)) if (key.startsWith("PG")) delete process.env[key];
   // The driver prints some protocol errors (e.g. "Unknown Auth") straight to
   // the console; the only permitted output is the one JSON result below.
-  for (const method of ["log", "info", "warn", "error", "debug", "trace"]) console[method] = () => {};
+  for (const method of ["log", "info", "warn", "error", "debug", "trace"])
+    console[method] = () => {};
   try {
     const { default: postgres } = await import("postgres");
     return await runDbPing({ databaseUrl: process.env.DATABASE_URL, createClient: postgres });

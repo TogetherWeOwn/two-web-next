@@ -8,7 +8,11 @@ import { smoke } from "../bin/smoke.mjs";
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
 const fixtures = {
-  "/up": [200, "application/json", '{"status":"healthy","queue":{"status":"unknown"}}'],
+  "/up": [
+    200,
+    "application/json",
+    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown"}}',
+  ],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
   "/faq": [200, "text/html", "<h1>Frequently asked questions</h1>"],
@@ -18,12 +22,20 @@ const fixtures = {
   "/events/past": [200, "text/html", '<h1 id="past-events-heading">Past events</h1>'],
   "/events.rss": [200, "application/rss+xml", '<rss version="2.0"><channel></channel></rss>'],
   "/events.ics": [200, "text/calendar", "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n"],
-  "/sitemap_index.xml": [200, "application/xml", '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>'],
+  "/sitemap_index.xml": [
+    200,
+    "application/xml",
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>',
+  ],
   "/robots.txt": [200, "text/plain", "User-agent: *\nDisallow:\n"],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
-  "/__smoke_unknown_route__": [404, "text/html", "<title>We cannot find that page — Together We Own</title>"],
+  "/__smoke_unknown_route__": [
+    404,
+    "text/html",
+    "<title>We cannot find that page — Together We Own</title>",
+  ],
 };
 
 async function stub(t, change = () => {}) {
@@ -37,7 +49,8 @@ async function stub(t, change = () => {}) {
     }
     const [status, type, body, location] = fixture;
     const result = {
-      status, body,
+      status,
+      body,
       headers: {
         "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
@@ -54,10 +67,13 @@ async function stub(t, change = () => {}) {
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  t.after(() => new Promise((resolve, reject) => {
-    server.closeAllConnections();
-    server.close((error) => error ? reject(error) : resolve());
-  }));
+  t.after(
+    () =>
+      new Promise((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
   return { url: `http://127.0.0.1:${server.address().port}`, requests };
 }
 
@@ -68,10 +84,16 @@ async function run(url, options = {}) {
 }
 
 async function cli(args) {
-  const child = spawn(process.execPath, ["bin/smoke.mjs", ...args], { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["bin/smoke.mjs", ...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   let output = "";
-  child.stdout.on("data", (chunk) => { output += chunk; });
-  child.stderr.on("data", (chunk) => { output += chunk; });
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    output += chunk;
+  });
   const [code] = await once(child, "exit");
   return { code, output };
 }
@@ -81,13 +103,18 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /16 routes, 0 failed assertions/);
-  assert.deepEqual(requests.map((r) => r.path), Object.keys(fixtures));
+  assert.deepEqual(
+    requests.map((r) => r.path),
+    Object.keys(fixtures),
+  );
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
 });
 
 for (const path of Object.keys(fixtures)) {
   test(`rejects wrong status on ${path} and continues through remaining routes`, async (t) => {
-    const { url, requests } = await stub(t, (route, result) => { if (route === path) result.status = 503; });
+    const { url, requests } = await stub(t, (route, result) => {
+      if (route === path) result.status = 503;
+    });
     const result = await run(url);
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
@@ -103,16 +130,23 @@ for (const [header, path, expected] of [
   ["x-robots-tag", "/__smoke_unknown_route__", "staging X-Robots-Tag noindex/none (unscoped)"],
 ]) {
   test(`rejects missing ${header} on ${path}`, async (t) => {
-    const { url } = await stub(t, (route, result) => { if (route === path) delete result.headers[header]; });
+    const { url } = await stub(t, (route, result) => {
+      if (route === path) delete result.headers[header];
+    });
     const result = await run(url);
     assert.equal(result.ok, false);
-    assert.ok(result.output.includes(`FAIL ${path}: expected ${expected}; actual missing`), result.output);
+    assert.ok(
+      result.output.includes(`FAIL ${path}: expected ${expected}; actual missing`),
+      result.output,
+    );
   });
 }
 
 for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
   test(`rejects a fallback body on ${path}`, async (t) => {
-    const { url } = await stub(t, (route, result) => { if (route === path) result.body = "upstream fallback"; });
+    const { url } = await stub(t, (route, result) => {
+      if (route === path) result.body = "upstream fallback";
+    });
     const result = await run(url);
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected`), result.output);
@@ -123,21 +157,42 @@ for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
 test("rules accepts rendered Rules but rejects rendered Home with the shared footer", async (t) => {
   // In-memory rendering uses local components only: https://esbuild.github.io/api/#write
   const bundle = await build({
-    entryPoints: ["src/pages.tsx"], bundle: true, write: false, format: "esm", platform: "node",
+    entryPoints: ["src/pages.tsx"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
   });
-  const { Home, Rules } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
-  const home = Home({ session: null, notice: null, inviteUrl: "https://discord.gg/fixture",
-    appUrl: "https://example.test", counts: { memberCount: null, onlineCount: null, ranks: [] },
-    upcomingEvents: [], eventsUnavailable: false, featured: [] }).toString();
+  const { Home, Rules } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  const home = Home({
+    session: null,
+    notice: null,
+    inviteUrl: "https://discord.gg/fixture",
+    appUrl: "https://example.test",
+    counts: { memberCount: null, onlineCount: null, ranks: [] },
+    upcomingEvents: [],
+    eventsUnavailable: false,
+    featured: [],
+  }).toString();
   const rules = Rules({ appUrl: "https://example.test", lastUpdated: null }).toString();
   assert.match(home, /<a href="\/rules">House rules<\/a>/);
   assert.match(rules, /id="rules-heading"/);
-  for (const [body, expected] of [[home, false], [rules, true]]) {
-    const { url } = await stub(t, (route, result) => { if (route === "/rules") result.body = body; });
+  for (const [body, expected] of [
+    [home, false],
+    [rules, true],
+  ]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/rules") result.body = body;
+    });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
     if (!expected) {
-      assert.match(result.output, /FAIL \/rules: expected body matching .*rules-heading.*; actual body did not match/);
+      assert.match(
+        result.output,
+        /FAIL \/rules: expected body matching .*rules-heading.*; actual body did not match/,
+      );
       assert.ok(!result.output.includes("PASS /rules"), result.output);
     }
   }
@@ -145,25 +200,52 @@ test("rules accepts rendered Rules but rejects rendered Home with the shared foo
 
 test("past events accepts rendered Archive but rejects rendered Upcoming with archive navigation", async (t) => {
   const bundle = await build({
-    entryPoints: ["src/events/pages.tsx"], bundle: true, write: false, format: "esm", platform: "node",
+    entryPoints: ["src/events/pages.tsx"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
   });
-  const { EventsCalendarPage, PastEventsPage } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+  const { EventsCalendarPage, PastEventsPage } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
   const upcoming = EventsCalendarPage({
-    state: { view: "list", month: "2026-10", q: "", past: false }, upcoming: [], past: [],
-    zone: "UTC", now: new Date("2026-10-01T00:00:00Z"), emptyState: "never", discordFailed: false,
-    member: false, inviteUrl: "https://discord.gg/fixture", appUrl: "https://example.test",
+    state: { view: "list", month: "2026-10", q: "", past: false },
+    upcoming: [],
+    past: [],
+    zone: "UTC",
+    now: new Date("2026-10-01T00:00:00Z"),
+    emptyState: "never",
+    discordFailed: false,
+    member: false,
+    inviteUrl: "https://discord.gg/fixture",
+    appUrl: "https://example.test",
   }).toString();
-  const archive = PastEventsPage({ rows: [], page: 1, hasMore: false, totalPages: 0, appUrl: "https://example.test" }).toString();
+  const archive = PastEventsPage({
+    rows: [],
+    page: 1,
+    hasMore: false,
+    totalPages: 0,
+    appUrl: "https://example.test",
+  }).toString();
   assert.match(upcoming, /Past events/);
   assert.doesNotMatch(upcoming, /id="past-events-heading"/);
   assert.match(archive, /id="past-events-heading"/);
-  for (const [body, expected] of [[upcoming, false], [archive, true]]) {
-    const { url, requests } = await stub(t, (route, result) => { if (route === "/events/past") result.body = body; });
+  for (const [body, expected] of [
+    [upcoming, false],
+    [archive, true],
+  ]) {
+    const { url, requests } = await stub(t, (route, result) => {
+      if (route === "/events/past") result.body = body;
+    });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
     assert.equal(requests.length, 16);
     if (!expected) {
-      assert.match(result.output, /FAIL \/events\/past: expected body matching .*past-events-heading.*; actual body did not match/);
+      assert.match(
+        result.output,
+        /FAIL \/events\/past: expected body matching .*past-events-heading.*; actual body did not match/,
+      );
       assert.ok(!result.output.includes("PASS /events/past"), result.output);
     }
   }
@@ -171,16 +253,37 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
 
 test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes", async (t) => {
   const bundle = await build({
-    entryPoints: ["src/up.ts"], bundle: true, write: false, format: "esm", platform: "node",
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
   });
-  const { upBody } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
   for (const state of ["healthy", "degraded", "unknown", "unconfigured"]) {
-    const body = await upBody(state === "unconfigured" ? null : async () => {
-      if (state === "unknown") throw new Error("fixture outage");
-      const pending = state === "degraded" ? 20 : 0;
-      return { pending, delayed: 0, reserved: 0, total: pending, failed: 0, oldestPendingAgeSeconds: null };
+    const body = await upBody(
+      state === "unconfigured"
+        ? null
+        : async () => {
+            if (state === "unknown") throw new Error("fixture outage");
+            const pending = state === "degraded" ? 20 : 0;
+            return {
+              pending,
+              delayed: 0,
+              reserved: 0,
+              total: pending,
+              failed: 0,
+              oldestPendingAgeSeconds: null,
+            };
+          },
+    );
+    // The envelope's queue slice comes from the real renderer; DB readiness fields are set explicitly.
+    const ready = { ...body, db: "ok", pending_migrations: 0 };
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = JSON.stringify(ready);
     });
-    const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = JSON.stringify(body); });
     const result = await run(url);
     assert.equal(result.ok, true, `${state}: ${result.output}`);
   }
@@ -195,19 +298,32 @@ for (const body of [
   "<html>not JSON</html>",
   '{"status":"healthy"}',
   '{"status":"healthy","queue":{"status":"unexpected"}}',
+  '{"status":"degraded","db":"ok","pending_migrations":1,"queue":{"status":"healthy"}}',
+  '{"status":"healthy","db":"error","pending_migrations":null,"queue":{"status":"healthy"}}',
+  '{"status":"healthy","db":"ok","pending_migrations":"0","queue":{"status":"healthy"}}',
 ]) {
   test(`rejects invalid /up envelope (${body})`, async (t) => {
-    const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = body; });
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = body;
+    });
     const result = await run(url);
     assert.equal(result.ok, false);
-    assert.match(result.output, /FAIL \/up: expected (JSON \/up status and queue.status|valid JSON object)/);
+    assert.match(
+      result.output,
+      /FAIL \/up: expected (JSON \/up db:ok, pending_migrations:0, status and queue.status|valid JSON object)/,
+    );
   });
 }
 
 test("allows degraded /up and guest admin 403", async (t) => {
   const { url } = await stub(t, (route, result) => {
-    if (route === "/up") result.body = '{"status":"degraded","queue":{"status":"degraded"}}';
-    if (route === "/admin") { result.status = 403; delete result.headers.location; }
+    if (route === "/up")
+      result.body =
+        '{"status":"degraded","db":"ok","pending_migrations":0,"queue":{"status":"degraded"}}';
+    if (route === "/admin") {
+      result.status = 403;
+      delete result.headers.location;
+    }
   });
   const result = await run(url);
   assert.equal(result.ok, true, result.output);
@@ -227,7 +343,12 @@ for (const robotsTag of [null, "index, follow", "noindex, nofollow"]) {
     const result = await run(url);
     assert.equal(result.ok, robotsTag === "noindex, nofollow", result.output);
     if (!result.ok) {
-      assert.ok(result.output.includes(`FAIL /admin: expected staging X-Robots-Tag noindex/none (unscoped); actual ${robotsTag ?? "missing"}`), result.output);
+      assert.ok(
+        result.output.includes(
+          `FAIL /admin: expected staging X-Robots-Tag noindex/none (unscoped); actual ${robotsTag ?? "missing"}`,
+        ),
+        result.output,
+      );
       assert.ok(!result.output.includes("PASS /admin"), result.output);
     }
   });
@@ -265,7 +386,10 @@ for (const [robotsTag, expected] of [
     assert.equal(requests.length, 16);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
-        assert.ok(result.output.includes(`FAIL ${path}: expected staging X-Robots-Tag noindex`), result.output);
+        assert.ok(
+          result.output.includes(`FAIL ${path}: expected staging X-Robots-Tag noindex`),
+          result.output,
+        );
         assert.ok(!result.output.includes(`PASS ${path}`), result.output);
       }
     }
@@ -277,7 +401,10 @@ test("non-HTML redirects and guest admin 403 do not require noindex", async (t) 
     if (["/discord", "/profile", "/admin"].includes(route)) {
       result.headers["content-type"] = "text/plain; charset=UTF-8";
       delete result.headers["x-robots-tag"];
-      if (route === "/admin") { result.status = 403; delete result.headers.location; }
+      if (route === "/admin") {
+        result.status = 403;
+        delete result.headers.location;
+      }
     }
   });
   const result = await run(url);
@@ -285,10 +412,15 @@ test("non-HTML redirects and guest admin 403 do not require noindex", async (t) 
 });
 
 test("rejects wrong content type despite successful status and body", async (t) => {
-  const { url } = await stub(t, (route, result) => { if (route === "/events.rss") result.headers["content-type"] = "text/html"; });
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/events.rss") result.headers["content-type"] = "text/html";
+  });
   const result = await run(url);
   assert.equal(result.ok, false);
-  assert.match(result.output, /FAIL \/events.rss: expected Content-Type application\/rss\+xml; actual text\/html/);
+  assert.match(
+    result.output,
+    /FAIL \/events.rss: expected Content-Type application\/rss\+xml; actual text\/html/,
+  );
 });
 
 for (const path of ["/discord", "/profile", "/admin"]) {
@@ -339,24 +471,34 @@ for (const [location, expected] of [
     assert.equal(requests.length, 16);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
-      assert.match(result.output, /FAIL \/discord: expected Location to HTTPS Discord invite; actual unexpected Location/);
+      assert.match(
+        result.output,
+        /FAIL \/discord: expected Location to HTTPS Discord invite; actual unexpected Location/,
+      );
       assert.ok(!result.output.includes("PASS /discord"), result.output);
     }
   });
 }
 
 test("CLI exits nonzero and names expected versus actual on failure", async (t) => {
-  const { url } = await stub(t, (route, result) => { if (route === "/faq") result.status = 500; });
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/faq") result.status = 500;
+  });
   const result = await cli([url]);
   assert.equal(result.code, 1);
   assert.match(result.output, /FAIL \/faq: expected HTTP 200; actual HTTP 500/);
 });
 
 test("bounds stalled response bodies", async (t) => {
-  const { url } = await stub(t, (route, result) => { if (route === "/up") result.body = null; });
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") result.body = null;
+  });
   const result = await run(url, { timeoutMs: 150 });
   assert.equal(result.ok, false);
-  assert.match(result.output, /FAIL \/up: expected HTTP response and body within timeout; actual (TimeoutError|AbortError)/);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected HTTP response and body within timeout; actual (TimeoutError|AbortError)/,
+  );
   assert.match(result.output, /PASS \/__smoke_unknown_route__/);
 });
 
@@ -368,12 +510,21 @@ test("connection failures include route and expected versus actual", async (t) =
   await new Promise((resolve) => server.close(resolve));
   const result = await run(url);
   assert.equal(result.ok, false);
-  assert.match(result.output, /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
+  );
   assert.match(result.output, /16 routes, 16 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
-  for (const url of ["file:///etc/passwd", "https://user:password@example.test", "https://example.test/path", "https://example.test?token=x", "https://example.test#fragment"]) {
+  for (const url of [
+    "file:///etc/passwd",
+    "https://user:password@example.test",
+    "https://example.test/path",
+    "https://example.test?token=x",
+    "https://example.test#fragment",
+  ]) {
     await assert.rejects(smoke(url), /base-url must be an HTTP\(S\) origin/);
   }
   assert.equal((await cli([])).code, 2);

@@ -14,7 +14,12 @@ import app from "./app";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -45,14 +50,21 @@ async function cookieFor(store: SessionStore, moderator: boolean): Promise<strin
   const token = newSessionToken();
   await store.create({
     tokenHash: await hashToken(token),
-    userId: moderator ? "gone-mod" : "gone-member",
+    userId: moderator ? "300000000000000001" : "300000000000000002",
     username: moderator ? "gone-mod" : "gone-member",
     avatar: null,
     member: true,
     moderator,
     expiresAt: new Date(Date.now() + 3600_000),
   });
-  return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+  return (
+    await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
 }
 
 function jsonLdOf(html: string): Record<string, unknown> {
@@ -88,10 +100,34 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
     await db.delete(activityLog);
     await db.delete(events);
     await db.insert(events).values([
-      { eventKey: CANCELLED, title: "Friday night games", status: "cancelled", startsAt: FUTURE_START, endsAt: FUTURE_END },
-      { eventKey: DRAFT, title: "Draft night", status: "draft", startsAt: FUTURE_START, endsAt: FUTURE_END },
-      { eventKey: PUBLISHED, title: "Published night", status: "published", startsAt: FUTURE_START, endsAt: FUTURE_END },
-      { eventKey: PAST, title: "Past night", status: "past", startsAt: PAST_START, endsAt: PAST_END },
+      {
+        eventKey: CANCELLED,
+        title: "Friday night games",
+        status: "cancelled",
+        startsAt: FUTURE_START,
+        endsAt: FUTURE_END,
+      },
+      {
+        eventKey: DRAFT,
+        title: "Draft night",
+        status: "draft",
+        startsAt: FUTURE_START,
+        endsAt: FUTURE_END,
+      },
+      {
+        eventKey: PUBLISHED,
+        title: "Published night",
+        status: "published",
+        startsAt: FUTURE_START,
+        endsAt: FUTURE_END,
+      },
+      {
+        eventKey: PAST,
+        title: "Past night",
+        status: "past",
+        startsAt: PAST_START,
+        endsAt: PAST_END,
+      },
     ]);
   });
 
@@ -100,7 +136,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
       ["guest", {}],
       ["member", auth(false)],
       ["moderator", auth(true)],
-      ["forged cookie", { headers: { cookie: "__Host-two_session=forged" } } ],
+      ["forged cookie", { headers: { cookie: "__Host-two_session=forged" } }],
     ];
     for (const [who, init] of viewers) {
       const res = await apex(`/e/${CANCELLED}`, await init);
@@ -123,7 +159,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
 
   it("keeps the cancelled page free of canonical, share, nav and attendee leaks", async () => {
     const html = await (await apex(`/e/${CANCELLED}`, await auth(true))).text();
-    expect(html).not.toMatch(/rel="canonical"|og:|twitter:|event-join-pitch|event-copy-link|event-pagination|event-attendees|event-ics|event-google-calendar/);
+    expect(html).not.toMatch(
+      /rel="canonical"|og:|twitter:|event-join-pitch|event-copy-link|event-pagination|event-attendees|event-ics|event-google-calendar/,
+    );
   });
 
   it("keeps an unknown event key a 404, not a 410", async () => {
@@ -158,7 +196,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
     expect(hidden.status).toBe(200);
     expect(((await hidden.json()) as { data: unknown[] }).data).toEqual([]);
     const shown = await req(`/events.json?event_key=${DRAFT}`, await auth(true));
-    expect((((await shown.json()) as { data: { event_key: string }[] }).data)[0]?.event_key).toBe(DRAFT);
+    expect(((await shown.json()) as { data: { event_key: string }[] }).data[0]?.event_key).toBe(
+      DRAFT,
+    );
     expect((await req(`/events/${DRAFT}.ics`)).status).toBe(403);
     expect((await req(`/events/${DRAFT}.ics`, await auth(false))).status).toBe(403);
     expect((await req(`/events/${DRAFT}.ics`, await auth(true))).status).toBe(200);

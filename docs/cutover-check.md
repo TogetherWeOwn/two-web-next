@@ -96,8 +96,8 @@ must advertise the target-host callback.
 Parameterized event routes use one published event; `/admin/*` uses `/admin`,
 `/admin/events`, and the guest-guarded legacy bookmarks
 `/admin/events/{key}/edit` and `/admin/featured-contents` (guests 302 to
-`/auth/discord`; the moderator 301s stay behind the guard, and the JSON show
-`/events/{key}` waits on TOG-11155). This is a guest/routing/SEO gate, not an exhaustive admin,
+`/auth/discord`; the moderator 301s stay behind the guard, alongside the
+session-gated JSON 401s on `/events.json` and `/events/{key}`). This is a guest/routing/SEO gate, not an exhaustive admin,
 member, OAuth, write-back, event-state, queue-health or data-parity test. `/up`
 can report unknown/degraded and still prove origin identity. Sitemap checks
 accept the app's nonempty `urlset` (despite the `sitemap_index.xml` name); they

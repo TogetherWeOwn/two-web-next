@@ -1,11 +1,17 @@
-// MemberProfile island binder (TOG-9842, W10 slice 5).
+// MemberProfile island binder (TOG-9842, W10 slice 5; save deadline TOG-11625).
 //
 // Progressive enhancement over the SSR edit form (the no-JS path posts
 // `_method=PATCH` and gets a 303). Budget: exactly one PATCH per save, none
-// on cancel or on client-side validation failure. No polling.
+// on cancel or on client-side validation failure. No polling. One owned
+// client deadline (SAVE_DEADLINE_MS, mirroring PROFILE_SAVE_DEADLINE_MS)
+// covers fetch plus response-body completion: on expiry the binder aborts the
+// owned fetch where AbortController exists, shows uncertain-result feedback
+// with the draft intact, and releases the controls. A late completion after
+// expiry changes nothing; there is no automatic resend.
 // Outcomes: saved → "Profile saved." + re-edit control (or keep a newer draft),
 // focus on the confirmation; Cancel resets to the last accepted values and
-// ignores pending completions. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
+// ignores pending completions, but a newer save waits until the cancelled
+// write settles or its deadline expires. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
 // expired notice with login link, input kept; anything else → save-failed
 // alert, input kept. Copy and testids mirror src/islands/contracts.ts.
 
@@ -17,18 +23,48 @@
   var id = root.getAttribute("data-member-id");
   var edit = root.querySelector('[data-testid="profile-edit-again"]');
   var editControl = root.querySelector('[data-testid="profile-edit-control"]');
-  var inflight = false;
+  // pending: a PATCH is unsettled at the transport level. Cancel neither aborts
+  // nor clears it (abort/ignore is not server rollback), so a newer save cannot
+  // overtake an older write that may still commit. Only settlement or the owned
+  // deadline (the unknown-outcome boundary) releases it. Not solved: cross-tab
+  // races or a write that commits after its deadline.
+  var pending = false;
+  var pendingRequest = 0;
   var generation = 0;
+  // Owned client deadline for one save: fetch plus response-body completion
+  // (TOG-11625; mirrors PROFILE_SAVE_DEADLINE_MS in src/islands/contracts.ts).
+  var SAVE_DEADLINE_MS = 10000;
+  var abortable = typeof AbortController !== "undefined";
+  // The deadline needs both timer globals; harnesses with a partial fake
+  // clock (setTimeout only) get the pre-deadline admission behavior.
+  var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
+  var deadlineTimer = null;
+  var currentAbort = null;
+
+  function clearDeadline() {
+    if (deadlineTimer !== null) {
+      if (canTimeout) clearTimeout(deadlineTimer);
+      deadlineTimer = null;
+    }
+    currentAbort = null;
+  }
+
   var sessionExpired = false;
 
   function expiredNotice() {
     sessionExpired = true;
-    notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
+    notice(
+      "profile-session-expired",
+      "alert",
+      "Your session expired. Your changes are still here.",
+      true,
+    );
   }
-  if (typeof window !== "undefined") window.addEventListener("two:session-expired", function (event) {
-    event.preventDefault();
-    expiredNotice();
-  });
+  if (typeof window !== "undefined")
+    window.addEventListener("two:session-expired", function (event) {
+      event.preventDefault();
+      expiredNotice();
+    });
 
   function accepted(body) {
     // Match the server's normalization; success returns no profile fields.
@@ -91,7 +127,7 @@
     if (tz) {
       try {
         new Intl.DateTimeFormat("en", { timeZone: tz });
-      } catch (x) {
+      } catch {
         e.push("Choose a valid IANA timezone, e.g. Europe/London.");
       }
     }
@@ -109,7 +145,8 @@
     if (loginLink) {
       el.appendChild(document.createTextNode(" "));
       var a = document.createElement("a");
-      a.href = "/auth/recover?next=" + encodeURIComponent(location.pathname + (location.search || ""));
+      a.href =
+        "/auth/recover?next=" + encodeURIComponent(location.pathname + (location.search || ""));
       a.textContent = "Log in with Discord";
       el.appendChild(a);
     }
@@ -121,21 +158,94 @@
     root.querySelectorAll("[data-testid^='profile-']").forEach(function (n) {
       var t = n.getAttribute("data-testid");
       if (t === "profile-session-expired" && sessionExpired) return;
-      if (t === "profile-error" || t === "profile-save-failed" || t === "profile-session-expired" || t === "profile-saved") n.remove();
+      if (
+        t === "profile-error" ||
+        t === "profile-save-failed" ||
+        t === "profile-session-expired" ||
+        t === "profile-saved" ||
+        t === "profile-uncertain"
+      )
+        n.remove();
     });
+  }
+
+  var SAVE_FAILED_COPY = "Could not save your profile. Your changes are still here — try again.";
+  var GENERIC_INVALID_COPY = "Could not save your profile. Check the form and try again.";
+  var ERROR_BOUND = 500;
+
+  function boundError(text) {
+    var chars = Array.from(String(text));
+    return chars.length > ERROR_BOUND ? chars.slice(0, ERROR_BOUND).join("") : chars.join("");
+  }
+
+  function isSavedAck(j) {
+    return !!j && typeof j === "object" && !Array.isArray(j) && j.saved === true;
+  }
+
+  function validationMessages(j) {
+    var out = [];
+    if (j && typeof j === "object" && !Array.isArray(j)) {
+      var bag = j.errors;
+      if (bag && typeof bag === "object" && !Array.isArray(bag)) {
+        Object.keys(bag).forEach(function (k) {
+          var m = bag[k];
+          if (typeof m === "string" && m.trim() !== "") out.push(boundError(m));
+        });
+      }
+    }
+    return out.length ? out : [GENERIC_INVALID_COPY];
+  }
+
+  function saveFailed() {
+    notice("profile-save-failed", "alert", SAVE_FAILED_COPY);
+  }
+
+  function expire(request) {
+    // Deadline expiry is the documented unknown-outcome boundary: the request
+    // is abandoned (aborted where possible) and the pending guard released, so
+    // the member may retry explicitly. This holds for a cancelled write too.
+    if (!pending || request !== pendingRequest) return;
+    var controller = currentAbort;
+    clearDeadline();
+    pending = false;
+    if (controller) {
+      try {
+        controller.abort();
+      } catch {}
+    }
+    // A cancelled write no longer owns feedback: release it silently.
+    if (request !== generation) return;
+    // Bounded uncertain-result feedback: the save did not settle within the
+    // owned deadline. The result may still have gone through, so this is a
+    // role=status notice — never the save-failed alert, never a rollback.
+    // The draft stays intact, nothing is resent, and ownership of feedback
+    // has moved on from this request: focus stays where the member left it.
+    // Invalidate the timed-out request so a late completion can never replace
+    // newer feedback or mutate the accepted baseline.
+    generation++;
+    var old = root.querySelector('[data-testid="profile-uncertain"]');
+    if (old) old.remove();
+    var el = document.createElement("div");
+    el.setAttribute("data-testid", "profile-uncertain");
+    el.setAttribute("role", "status");
+    el.textContent =
+      "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.";
+    form.parentNode.insertBefore(el, form);
   }
 
   function errorList(errors) {
     var old = root.querySelector('[data-testid="profile-error"]');
     if (old) old.remove();
+    var list = Array.isArray(errors) && errors.length ? errors : [GENERIC_INVALID_COPY];
     var alert = document.createElement("div");
     alert.setAttribute("role", "alert");
     alert.setAttribute("tabindex", "-1");
     alert.setAttribute("data-testid", "profile-error");
     var ul = document.createElement("ul");
-    errors.forEach(function (m) {
+    list.forEach(function (m) {
       var li = document.createElement("li");
-      li.textContent = m;
+      // textContent keeps server strings literal; bound above for 422 maps.
+      li.textContent = typeof m === "string" ? boundError(m) : GENERIC_INVALID_COPY;
       ul.appendChild(li);
     });
     alert.appendChild(ul);
@@ -143,19 +253,21 @@
     alert.focus();
   }
 
-  if (edit) edit.addEventListener("click", function () {
-    clearNotices();
-    form.hidden = false;
-    if (editControl) editControl.hidden = true;
-    var heading = root.querySelector('[id="edit-heading"]');
-    if (heading) heading.focus();
-  });
+  if (edit)
+    edit.addEventListener("click", function () {
+      clearNotices();
+      form.hidden = false;
+      if (editControl) editControl.hidden = true;
+      var heading = root.querySelector('[id="edit-heading"]');
+      if (heading) heading.focus();
+    });
 
   form.addEventListener("reset", function () {
     // Cancel discards the draft, not an already accepted server write. A late
-    // completion must neither change this UI nor unlock a newer request.
+    // completion must not change this UI. Cancel does not abort the pending
+    // write (abort is not server rollback): it keeps its owned deadline, and
+    // the guard holds until it settles or expires.
     var cancelled = ++generation;
-    inflight = false;
     sessionExpired = false;
     form.hidden = false;
     if (editControl) editControl.hidden = true;
@@ -169,7 +281,7 @@
 
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
-    if (inflight) return;
+    if (pending) return;
     if (sessionExpired) return expiredNotice();
     var f = form.elements;
     var body = {
@@ -182,39 +294,105 @@
     clearNotices();
     var errs = clientErrors(body.bio, body.games_text, body.timezone);
     if (errs.length) return errorList(errs);
-    inflight = true;
+    pending = true;
     var request = ++generation;
-    fetch("/members/" + encodeURIComponent(id), {
+    pendingRequest = request;
+    // The owned deadline covers the whole write: fetch plus response-body
+    // completion. On expiry the request no longer owns feedback — late
+    // completions are dropped by the generation guard, and the uncertain
+    // notice is the only visible change. No automatic resend, no second
+    // PATCH: the member retries explicitly after the controls release.
+    if (canTimeout) {
+      deadlineTimer = setTimeout(function () {
+        expire(request);
+      }, SAVE_DEADLINE_MS);
+    }
+    var init = {
       method: "PATCH",
       headers: { "content-type": "application/json", accept: "application/json" },
       credentials: "same-origin",
       redirect: "manual",
       body: JSON.stringify(body),
-    })
+    };
+    if (abortable) {
+      currentAbort = new AbortController();
+      init.signal = currentAbort.signal;
+    }
+    fetch("/members/" + encodeURIComponent(id), init)
       .then(function (res) {
         if (request !== generation) return;
-        if (res.ok) {
-          accepted(body);
-          notice("profile-saved", "status", "Profile saved.");
+        if (res.status === 422) {
+          // The owned deadline still covers the response body: keep the
+          // timer until the validation payload completes. A body that
+          // arrives after expiry is dropped by the generation guard.
+          var invalid = function (j) {
+            if (request !== generation) return;
+            errorList(validationMessages(j));
+          };
+          var rejected = function () {
+            if (request !== generation) return;
+            errorList([]);
+          };
+          try {
+            var problems = res.json();
+            if (problems && typeof problems.then === "function")
+              return problems.then(invalid, rejected);
+            invalid(problems);
+          } catch {
+            rejected();
+          }
           return;
         }
-        if (res.status === 422) {
-          return res.json().then(function (j) {
+        if (res.ok) {
+          // The save counts only with the server's explicit acknowledgement.
+          // Any other 2xx body keeps the draft and reports a retryable failure.
+          var admit = function (j) {
             if (request !== generation) return;
-            errorList(Object.keys(j.errors || {}).map(function (k) { return j.errors[k]; }));
-          });
+            if (isSavedAck(j)) {
+              accepted(body);
+              notice("profile-saved", "status", "Profile saved.");
+            } else {
+              saveFailed();
+            }
+          };
+          var unproven = function () {
+            if (request !== generation) return;
+            saveFailed();
+          };
+          try {
+            var ack = res.json();
+            if (ack && typeof ack.then === "function") return ack.then(admit, unproven);
+            admit(ack);
+          } catch {
+            unproven();
+          }
+          return;
         }
-        if (res.status === 401 || res.status === 419 || res.type === "opaqueredirect" || res.status === 302) {
+        if (
+          res.status === 401 ||
+          res.status === 419 ||
+          res.type === "opaqueredirect" ||
+          res.status === 302
+        ) {
           return expiredNotice();
         }
-        notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
+        saveFailed();
       })
-      .catch(function () {
+      .catch(function (err) {
+        // The owned abort ends the request's timeout ownership: the uncertain
+        // notice is already shown (or superseded), so swallow the AbortError.
+        // Every other rejection is a genuine fast failure with input kept.
         if (request !== generation) return;
-        notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
+        if (err && err.name === "AbortError") return;
+        saveFailed();
       })
       .then(function () {
-        if (request === generation) inflight = false;
+        // Settlement owns the transport state, cancelled or not: release the
+        // guard and dispose the deadline. An expired request has already
+        // released both, and a newer request owns them now.
+        if (!pending || pendingRequest !== request) return;
+        pending = false;
+        clearDeadline();
       });
   });
 })();
