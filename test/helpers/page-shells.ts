@@ -55,6 +55,7 @@ export const NON_HTML_READS = [
   "/up",
   "/auth/status", // Bool-only JSON, never an HTML document.
   "/events.json",
+  "/events/:key",
   "/events.ics",
   "/events.rss",
   "/events/:file{.+\\.ics}",

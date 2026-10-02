@@ -155,22 +155,22 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     expect(roundTrips.length).toBe(firstPass);
   });
 
-  it("JSON collection: two round trips at both sizes, going-only counts", async () => {
+  it("JSON collection: three round trips at both sizes, going-only counts", async () => {
     // Standalone-safe: top up to 10 collection-visible rows whatever ran before.
     const existing = await db.select().from(events);
     if (existing.length < 10) await seedEvents(10 - existing.length, "C");
     roundTrips = [];
-    const rows = await listJson(db, { limit: 10, offset: 0, includeDrafts: false });
+    const { rows } = await listJson(db, { limit: 10, offset: 0, includeDrafts: false });
     expect(rows).toHaveLength(10);
-    // One rows SELECT + one batched going aggregate: no per-row queries.
-    expect(roundTrips.length).toBe(2);
+    // One total COUNT + one rows SELECT + one batched going aggregate: no per-row queries.
+    expect(roundTrips.length).toBe(3);
     for (const row of rows) expect(row.goingCount).toBe(3);
     // Growing the collection keeps the count identical: growth is bounded.
     await seedEvents(10, "C2");
     roundTrips = [];
-    const grown = await listJson(db, { limit: 100, offset: 0, includeDrafts: false });
+    const { rows: grown } = await listJson(db, { limit: 100, offset: 0, includeDrafts: false });
     expect(grown.length).toBeGreaterThan(10);
-    expect(roundTrips.length).toBe(2);
+    expect(roundTrips.length).toBe(3);
     for (const row of grown) expect(row.goingCount).toBe(3);
   });
 

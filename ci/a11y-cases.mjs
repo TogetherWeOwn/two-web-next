@@ -35,6 +35,7 @@ export const coverage = {
   "/robots.txt": skip("Plain-text robots policy"),
   "/up": skip("JSON queue health response"),
   "/events.json": skip("Session-gated JSON feed"),
+  "/events/:key": skip("Session-gated JSON event detail; browser guests redirect to sign-in"),
   "/events.ics": skip("Calendar feed, not HTML"),
   "/events.rss": skip("RSS feed, not HTML"),
   "/events/:file{.+\\.ics}": skip("Per-event calendar download, not HTML"),

@@ -78,6 +78,7 @@ const OTHER_READS = [
   "/events",
   "/events/past",
   "/events.json",
+  "/events/:key",
   "/e/:key",
   "/events.ics",
   "/events.rss",
@@ -344,12 +345,21 @@ describe.skipIf(!process.env.DATABASE_URL)(
       },
     );
 
-    it("guest member-adjacent JSON is refused without returning attendees", async () => {
-      const res = await request("/events.json");
-      expect(res.status).toBe(401); // W8 JSON denial, rather than Laravel's login redirect.
-      const body = await res.text();
-      for (const personal of [...PERSONAL_STRINGS, SUBJECT.userId])
-        expect(body).not.toContain(personal);
-    });
+    it.each(["application/json", "text/html"])(
+      "guest %s member-adjacent JSON is refused without returning attendees",
+      async (accept) => {
+        for (const path of ["/events.json", `/events/${EVENT_KEY}`]) {
+          const res = await request(path, { headers: { accept } });
+          expect(res.status).toBe(accept === "text/html" ? 302 : 401);
+          if (accept === "text/html")
+            expect(res.headers.get("location")).toBe(
+              `/auth/discord?next=${encodeURIComponent(path)}`,
+            );
+          const body = await res.text();
+          for (const personal of [...PERSONAL_STRINGS, SUBJECT.userId])
+            expect(body).not.toContain(personal);
+        }
+      },
+    );
   },
 );

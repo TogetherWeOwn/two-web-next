@@ -64,6 +64,14 @@ function fixture(url, phase) {
       body: "",
     };
   }
+  // Pin JSON guest refusal independently of the checker table.
+  if (path === "/events.json" || path === `/events/${eventKey}`) {
+    return {
+      status: 401,
+      headers: { "content-type": "application/json", "cache-control": "private, no-store" },
+      body: '{"error":"unauthenticated"}',
+    };
+  }
   const row = URL_CASES.find(
     (row) => row.path.replace("{key}", eventKey).replace("{user}", "0") === path,
   );
@@ -175,6 +183,37 @@ for (const phase of ["before", "after"]) {
     });
   });
 }
+
+test("event JSON collection and show require guest 401 in both phases", async () => {
+  for (const [pattern, path] of [
+    ["/events.json", "/events.json"],
+    ["/events/{key}", `/events/${eventKey}`],
+  ]) {
+    assert.deepEqual(
+      URL_CASES.find((row) => row.frozen === pattern),
+      { frozen: pattern, path: pattern, status: 401 },
+    );
+    for (const phase of ["before", "after"]) {
+      for (const status of [200, 302, 404]) {
+        const result = await runChecks(options(phase), {
+          freeze,
+          resolver: stubDns(),
+          request: async (url) => {
+            const response = fixture(url, phase);
+            if (new URL(url).hostname === options(phase).target && new URL(url).pathname === path)
+              response.status = status;
+            return { ...response, tlsVerified: true };
+          },
+        });
+        assert.equal(result.ok, false, `${phase} ${path} ${status}`);
+        assert.deepEqual(
+          result.checks.filter((check) => !check.ok).map((check) => check.id),
+          [`url:${path}`],
+        );
+      }
+    }
+  }
+});
 
 test("login alias requires the temporary local no-store redirect in both phases", async () => {
   const path = "/auth/discord/redirect";
