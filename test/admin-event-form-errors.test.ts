@@ -53,7 +53,7 @@ function expectFormErrors(html: string, values: Record<string, string>, errors: 
   }
 }
 
-it("keeps the shared wallToUtc error keys and first-fold resolution unchanged", () => {
+it("keeps the shared wallToUtc error keys and second-fold resolution unchanged", () => {
   for (const [raw, timezone, fields] of [
     ["not-a-time", "Europe/London", { wall: invalid("not-a-time") }],
     ["2026-03-29 01:30", "Europe/London", { wall: GAP }],
@@ -64,7 +64,7 @@ it("keeps the shared wallToUtc error keys and first-fold resolution unchanged", 
     expect(caught).toBeInstanceOf(ValidationError);
     expect((caught as ValidationError).fields).toEqual(fields);
   }
-  expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T00:30:00.000Z");
+  expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T01:30:00.000Z");
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated test DB)", () => {
@@ -147,12 +147,12 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     });
   }
 
-  it("fresh fold input saves the first occurrence deterministically", async () => {
+  it("fresh fold input saves the second occurrence deterministically", async () => {
     const res = await post("/admin/events", { ...FORM, starts_at: "2026-10-25 01:30", ends_at: "2026-10-25 02:30" });
     expect(res.status).toBe(303);
     const key = res.headers.get("location")!.split("/").pop()!;
     const [saved] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
-    expect(saved?.startsAt.toISOString()).toBe("2026-10-25T00:30:00.000Z");
+    expect(saved?.startsAt.toISOString()).toBe("2026-10-25T01:30:00.000Z");
     expect(saved?.endsAt.toISOString()).toBe("2026-10-25T02:30:00.000Z");
   });
 

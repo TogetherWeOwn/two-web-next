@@ -107,7 +107,7 @@ approved account and binding isolation before any remote mutation.
    `two-sync-event` and `two-internal-action` exist, then deploys. The queue-create
    step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
-   ([smoke checker](../bin/smoke.mjs)), covering 16 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 17 public routes: `/up`
    (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
    healthy/degraded/unknown) plus HTML/RSS/iCal/sitemap/robots/redirect/404
    routes with CSP/nosniff/content-type/noindex/redirect assertions; queue
@@ -122,11 +122,128 @@ approved account and binding isolation before any remote mutation.
 
    This deploys the current checkout. Do not run it from an unmerged working
    branch, and do not bypass the Environment gate to clear a blocked CI release.
-   Neither path migrates the live database. Coordinate any separately approved
-   schema change with both bot and web owners using `docs/db-migrations.md`.
+   Neither Worker deploy path migrates the live database. Use the separately
+   approved [Neon migration workflow](#neon-web-schema-migrations-separate-operator-action)
+   before deploying a schema-dependent Worker; coordinate with both bot and web
+   owners using `docs/db-migrations.md`.
 5. Capture the resulting deployment/version IDs and workflow URL. `/up`
    reports only limited queue-ledger evidence (below), not successful private
    persistence. Source behavior and local tests are not proof of live isolation.
+
+### Neon web schema migrations (separate operator action)
+
+[db-migrate.yml](../.github/workflows/db-migrate.yml) is a **remote mutation**,
+not a test or part of the default Worker deployment. This workflow's addition
+([TOG-11161](/TOG/issues/TOG-11161)) does not authorize its execution. No live
+migration or Neon branch creation is performed by its selftest.
+
+**Before enabling or dispatching:**
+
+- Require an approved schema-change window, exact-SHA review and green required
+  CI on the release merged to `main`. Coordinate the shared database with bot
+  and web owners; only web SQL in this repo (including the two grandfathered
+  bootstraps) is applied. Use backward-compatible expand/contract changes so the
+  running Worker and bot tolerate the new schema before the Worker release.
+- Pre-create the matching GitHub Environments, `staging` and `production`.
+  `production` must have required reviewers (recommend prevent-self-review and
+  main-only deployment branches). Do not enable production if that protection
+  is absent. Required reviewers live in repository settings, **not YAML**.
+  Both the shell gate and runner reject non-`main` refs, invalid targets and
+  production unless `PRODUCTION_DEPLOY_ENABLED` is exactly `true` (the same
+  flag used for production Worker deploys). Leave it unset/false until approved.
+- Provision `NEON_STAGING_DATABASE_URL` **only on the staging Environment** and
+  `NEON_PRODUCTION_DATABASE_URL` **only on the production Environment**, using
+  the authorized operator's secret-provisioning path. Verify the intended Neon
+  project/branch/database and direct endpoint out of band; a hostname alone
+  cannot distinguish staging from production. The driver pins port 5432, uses
+  certificate-verified TLS, strips optional `channel_binding=prefer|disable`, and
+  refuses `channel_binding=require` (unsupported by postgres.js) before connecting.
+  Never weaken a required channel-binding policy just to run migrations; stop and
+  coordinate a compatible driver. Never copy credentials to argv, comments, code
+  or logs. No `DATABASE_URL`/Hyperdrive/alternate-secret fallback.
+- GitHub's `secrets` context also resolves repository/organization secrets.
+  Therefore verify the selected name exists at Environment scope before using
+  this workflow; do not rely on an existing repo-scoped backup secret when the
+  Environment copy is missing. The repository backup workflow currently uses
+  `NEON_STAGING_DATABASE_URL` at repo scope; that is **not** migration approval
+  or provisioning. YAML cannot attest a resolved secret's scope. Missing
+  Environment provisioning is a stop, even if a same-named repo secret exists.
+- Verify Neon history retention/PITR eligibility for the target branch and a
+  tested recovery procedure before apply. The summary's timestamp is a recovery
+  reference, **not** a snapshot, a restore drill, or proof PITR is available.
+
+**Operator execution after those gates:** select Actions → `db-migrate` → Run
+workflow, branch `main`, target `staging` or `production`. The job Environment
+matches the target and must clear its configured reviewers before secrets are
+available. The workflow validates migration numbers, then:
+
+1. `plan` reads the canonical SQL/journal and `drizzle.__drizzle_migrations`,
+   lists pending tags and counts in logs/job summary, and performs **no DDL**.
+   This is a journal diff, not a SQL execution rehearsal.
+2. `apply` starts one connection-bound transaction, acquires the web transaction
+   advisory lock, rechecks history, and records the database clock's UTC
+   **pre-migration Neon PITR timestamp** and release SHA in the job summary
+   **before DDL**. Ledger initialization, canonical Drizzle journal SQL and
+   hash/timestamp inserts, and the zero-pending check all run in that transaction.
+   Connection loss fails closed, never reconnects mid-apply; the success receipt
+   is printed only after commit. URLs and raw database/SQL errors are never printed.
+3. Both `apply` and the final `verify` require **zero pending web migrations**.
+   Save the workflow URL, release SHA, timestamp and count with release evidence
+   before the Worker deployment. A successful journal check does not establish
+   bot schema readiness or run staging E2E. Staging E2E at the tested revision
+   remains required before any production deployment.
+
+SQL hashes/timestamps must be an exact prefix of the release journal. Edited,
+gapped, foreign/bot or newer history fails closed; never delete/forge the ledger,
+use `drizzle-kit push`, or automatically baseline existing tables. Empty history
+with pre-existing tables requires owner coordination, not automatic replay.
+Web applies are serialized by a non-cancelling Actions concurrency group and a
+DB advisory lock; bot/manual tools do not automatically share that lock. On
+credential/permission errors, **stop; never try another credential**. Driver
+errors are deliberately redacted; the authorized database operator investigates
+using controlled provider-side evidence. Do not cancel in-flight DDL casually.
+
+**Rollback:** a Worker rollback does not undo schema/data. SQL failure rolls back
+the pending transaction, including ledger initialization on a fresh DB. Existing
+history stays intact. On connection loss, do not infer commit success: re-plan and
+verify under the approved recovery procedure before retrying. After a successful
+but harmful migration, prefer a reviewed forward repair.
+If authorized PITR is required, pause writers and coordinate **both** consumers,
+verify the recorded timestamp is eligible, and use Neon's documented restore
+procedure. Restore can overwrite all databases on the branch and lose later
+writes; retain the prior branch as required by that procedure. Reconcile bot,
+queues and external side effects separately. Do not run an unreviewed down
+migration or assume restoring the Worker restores the database.
+
+**Opt-in deploy hook (off by default):** the workflow exposes `workflow_call`
+with `target` defaulting to `staging`; `deploy.yml` currently does **not** call
+it. A separately reviewed integration may add a reusable-workflow job before
+Worker deploy, then make deploy `needs` that successful job. Use the same merged
+`main` revision, pass `target: staging`, and do not pass/inherit DB secrets:
+this workflow loads its own Environment secrets. Coordinate concurrency so a
+new migration cannot race a schema-dependent release. Never automatically
+couple production apply to a Worker deploy or enable the hook just by merging
+schema SQL.
+
+**Local/CI proof (no Neon/API calls):** `npm run db:migrate:selftest` uses only
+`agent-testdb` (`agent_test`, empty password) or the Actions Postgres service.
+It creates UUID-owned test databases, uses stub Environment URLs, and drops only
+those databases in `finally`. CI supplies `MIGRATION_TEST_DATABASE_URL` for its
+throwaway Postgres. It proves production refusal (including the actual workflow
+shell gate), target/ref/URL isolation, read-only planning, fresh and partial
+apply, Drizzle-ledger compatibility, repeat no-op, history drift/newer/gaps,
+locking (including termination of only its own migration backend while a second
+fixture connection takes the lock), transactional rollback of ledger setup,
+PITR timestamp recording, error redaction, normalized driver options and hostile
+ambient `PGPORT`. It never falls back to a remote URL; any non-test endpoint is
+refused before connecting.
+
+Sources: [GitHub Environment protection and secrets](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
+[Drizzle migration semantics](https://orm.drizzle.team/docs/migrations),
+[Drizzle PostgreSQL ledger format](https://github.com/drizzle-team/drizzle-orm/blob/main/drizzle-orm/src/pg-core/dialect.ts),
+[postgres.js transactions](https://github.com/porsager/postgres#transactions),
+[PostgreSQL advisory-lock lifetime](https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS),
+[Neon branch restore and constraints](https://neon.com/docs/introduction/branch-restore).
 
 ### Worker rollback
 

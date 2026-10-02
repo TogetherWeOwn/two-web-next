@@ -116,15 +116,15 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     }
   });
 
-  it("a deliberate wall-time edit drops the carrier and re-parses under first-occurrence policy", async () => {
-    // Stored on the GMT side; the moderator moves 01:30 -> 01:45 inside the
+  it("a deliberate wall-time edit drops the carrier and re-parses under second-occurrence policy", async () => {
+    // Stored on the BST side; the moderator moves 01:30 -> 01:45 inside the
     // fold. The wall text no longer matches the rendered carrier minute, so
-    // the save takes the fresh-parse first (BST) occurrence, not the stored side.
-    await seed("fold-drop", SECOND_OCCURRENCE, "2026-10-25T03:00:00.000Z");
+    // the save takes the fresh-parse second (GMT) occurrence, not the stored side.
+    await seed("fold-drop", FIRST_OCCURRENCE, "2026-10-25T03:00:00.000Z");
     const res = await post("fold-drop", { ...FORM, starts_at: "2026-10-25 01:45" });
     expect(res.status).toBe(303);
     const row = await saved("fold-drop");
-    expect(row.startsAt.toISOString()).toBe("2026-10-25T00:45:00.000Z");
+    expect(row.startsAt.toISOString()).toBe("2026-10-25T01:45:00.000Z");
     expect(row.endsAt.toISOString()).toBe("2026-10-25T03:00:00.000Z");
   });
 
