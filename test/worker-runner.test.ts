@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 // own startup plumbing) without starting a Worker, touching a database, or
 // using credentials.
 
-async function readProbeConfig(): Promise<{ bindingKind: string; bindingValue: string; raw: string }> {
+async function readProbeConfig(): Promise<{
+  bindingKind: string;
+  bindingValue: string;
+  raw: string;
+}> {
   const fs = await import("node:fs");
   const raw = fs.readFileSync("spike/hyperdrive-semantics/wrangler.probe.jsonc", "utf8");
   const config = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, "")) as {
@@ -96,7 +100,10 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
     }
   }
 
-  async function makeFakes(scratch: string, runnerBody: string): Promise<{ fakeNode: string; fakeWrangler: string }> {
+  async function makeFakes(
+    scratch: string,
+    runnerBody: string,
+  ): Promise<{ fakeNode: string; fakeWrangler: string }> {
     const { fs, path } = await shellDeps();
     const fakeWrangler = path.join(scratch, "fake-wrangler.sh");
     fs.writeFileSync(fakeWrangler, '#!/bin/sh\necho "offline fake wrangler 0.0.0"\n');
@@ -107,11 +114,13 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
     return { fakeNode, fakeWrangler };
   }
 
-  async function withScratchDir(prefix: string, run: (scratch: string) => void | Promise<void>): Promise<void> {
+  async function withScratchDir(
+    prefix: string,
+    run: (scratch: string) => void | Promise<void>,
+  ): Promise<void> {
     const { fs, os, path } = await shellDeps();
-    const base = process.env.PAPERCLIP_RUN_SCRATCH_DIR
-      ?? process.env.PAPERCLIP_SCRATCH_DIR
-      ?? os.tmpdir();
+    const base =
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? os.tmpdir();
     const scratch = fs.mkdtempSync(path.join(base, prefix));
     const errors: unknown[] = [];
     try {
@@ -125,7 +134,8 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
         errors.push(error);
       }
     }
-    if (errors.length > 1) throw new AggregateError(errors, "Wrapper test and scratch cleanup failed");
+    if (errors.length > 1)
+      throw new AggregateError(errors, "Wrapper test and scratch cleanup failed");
     if (errors.length) throw errors[0];
   }
 
@@ -142,32 +152,39 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
     });
   });
 
-  it.each(["assertion", "fixture", "spawn", "read"] as const)("removes scratch after a %s failure", async (failure) => {
-    const { fs, path, proc } = await shellDeps();
-    let owned = "";
-    let original: unknown;
-    const reported = await withScratchDir("wrapper-failure-", async (scratch) => {
-      owned = scratch;
-      try {
-        if (failure === "assertion") expect("actual").toBe("expected");
-        if (failure === "fixture") fs.writeFileSync(path.join(scratch, "missing", "fixture"), "offline");
-        if (failure === "read") fs.readFileSync(path.join(scratch, "missing.pid"), "utf8");
-        if (failure === "spawn") {
-          await new Promise<void>((resolve, reject) => {
-            const child = proc.spawn(path.join(scratch, "missing-executable"));
-            child.on("error", reject);
-            child.on("close", () => resolve());
-          });
+  it.each(["assertion", "fixture", "spawn", "read"] as const)(
+    "removes scratch after a %s failure",
+    async (failure) => {
+      const { fs, path, proc } = await shellDeps();
+      let owned = "";
+      let original: unknown;
+      const reported = await withScratchDir("wrapper-failure-", async (scratch) => {
+        owned = scratch;
+        try {
+          if (failure === "assertion") expect("actual").toBe("expected");
+          if (failure === "fixture")
+            fs.writeFileSync(path.join(scratch, "missing", "fixture"), "offline");
+          if (failure === "read") fs.readFileSync(path.join(scratch, "missing.pid"), "utf8");
+          if (failure === "spawn") {
+            await new Promise<void>((resolve, reject) => {
+              const child = proc.spawn(path.join(scratch, "missing-executable"));
+              child.on("error", reject);
+              child.on("close", () => resolve());
+            });
+          }
+        } catch (error) {
+          original = error;
+          throw error;
         }
-      } catch (error) {
-        original = error;
-        throw error;
-      }
-    }).then(() => undefined, (error: unknown) => error);
-    expect(original).toBeDefined();
-    expect(reported).toBe(original);
-    expect(fs.existsSync(owned)).toBe(false);
-  });
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(original).toBeDefined();
+      expect(reported).toBe(original);
+      expect(fs.existsSync(owned)).toBe(false);
+    },
+  );
 
   it("reaps group children when the runner exits nonzero (offline)", async () => {
     const { proc, fs, path } = await shellDeps();
@@ -252,8 +269,14 @@ describe("runner startup bound (TOG-9680 P2)", () => {
     const mod = await import("../spike/hyperdrive-semantics/runner");
     const result = await mod.runWithWorker({
       timeoutMs: 5000,
-      startWorker: async () => ({ stop: async () => { stopped.push("stopped"); } }),
-      runChecks: async () => { throw new Error("boom"); },
+      startWorker: async () => ({
+        stop: async () => {
+          stopped.push("stopped");
+        },
+      }),
+      runChecks: async () => {
+        throw new Error("boom");
+      },
     });
     expect(result.exitCode).toBe(1);
     expect(stopped).toEqual(["stopped"]);
@@ -265,7 +288,11 @@ describe("runner startup bound (TOG-9680 P2)", () => {
     const mod = await import("../spike/hyperdrive-semantics/runner");
     const result = await mod.runWithWorker({
       timeoutMs: 5000,
-      startWorker: async () => ({ stop: async () => { stopped.push("stopped"); } }),
+      startWorker: async () => ({
+        stop: async () => {
+          stopped.push("stopped");
+        },
+      }),
       runChecks: async () => {},
     });
     expect(result.exitCode).toBe(0);

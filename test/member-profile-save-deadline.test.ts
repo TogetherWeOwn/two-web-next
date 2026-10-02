@@ -12,12 +12,24 @@ const binder = readFileSync("public/islands/member-profile.js", "utf8");
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
 
-type ResponseFixture = { ok: boolean; status: number; type?: string; json?: () => Promise<unknown> };
-const success = () => ({ ok: true, status: 200, json: async () => ({ saved: true, message: "Profile saved." }) });
+type ResponseFixture = {
+  ok: boolean;
+  status: number;
+  type?: string;
+  json?: () => Promise<unknown>;
+};
+const success = () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({ saved: true, message: "Profile saved." }),
+});
 const flush = async (rounds = 5) => {
   for (let i = 0; i < rounds; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 };
@@ -34,12 +46,28 @@ class Element {
   value = "";
   defaultValue = "";
   private text = "";
-  constructor(readonly tag: string, readonly document: { activeElement: Element | null }) {}
-  get textContent(): string { return this.text + this.children.map((child) => child.textContent).join(""); }
-  set textContent(value: string) { this.text = value; this.children = []; }
-  setAttribute(key: string, value: string) { this.attributes[key] = value; }
-  getAttribute(key: string) { return this.attributes[key] ?? null; }
-  appendChild(child: Element) { child.parentNode = this; this.children.push(child); return child; }
+  constructor(
+    readonly tag: string,
+    readonly document: { activeElement: Element | null },
+  ) {}
+  get textContent(): string {
+    return this.text + this.children.map((child) => child.textContent).join("");
+  }
+  set textContent(value: string) {
+    this.text = value;
+    this.children = [];
+  }
+  setAttribute(key: string, value: string) {
+    this.attributes[key] = value;
+  }
+  getAttribute(key: string) {
+    return this.attributes[key] ?? null;
+  }
+  appendChild(child: Element) {
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
   insertBefore(child: Element, before: Element) {
     child.parentNode = this;
     this.children.splice(this.children.indexOf(before), 0, child);
@@ -48,7 +76,9 @@ class Element {
     if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
     this.parentNode = null;
   }
-  focus() { this.document.activeElement = this; }
+  focus() {
+    this.document.activeElement = this;
+  }
   addEventListener(type: string, listener: (event: { preventDefault: () => void }) => void) {
     (this.listeners[type] ??= []).push(listener);
   }
@@ -61,21 +91,34 @@ class Element {
     const attr = selector.match(/^\[([^=\^]+)(\^?=)["']([^"']*)["']\]$/);
     return this.children.flatMap((child) => {
       const matches = attr
-        ? attr[2] === "^=" ? child.getAttribute(attr[1]!)?.startsWith(attr[3]!) : child.getAttribute(attr[1]!) === attr[3]
+        ? attr[2] === "^="
+          ? child.getAttribute(attr[1]!)?.startsWith(attr[3]!)
+          : child.getAttribute(attr[1]!) === attr[3]
         : child.tag === selector;
       return [...(matches ? [child] : []), ...child.querySelectorAll(selector)];
     });
   }
-  querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
+  querySelector(selector: string) {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
 }
 
-interface Timer { id: number; cb: () => void; ms: number; delay: number }
+interface Timer {
+  id: number;
+  cb: () => void;
+  ms: number;
+  delay: number;
+}
 
 function fixture(abortable: boolean) {
   const document = {
     activeElement: null as Element | null,
     createElement: (tag: string): Element => new Element(tag, document),
-    createTextNode: (text: string): Element => { const node = new Element("#text", document); node.textContent = text; return node; },
+    createTextNode: (text: string): Element => {
+      const node = new Element("#text", document);
+      node.textContent = text;
+      return node;
+    },
     querySelector: (selector: string): Element | null => page.querySelector(selector),
   };
   const page = document.createElement("main");
@@ -89,7 +132,7 @@ function fixture(abortable: boolean) {
   const bio = node(page, "p", "profile-bio", "Original bio");
   const games = node(page, "div", "profile-games");
   node(games, "ul").appendChild(document.createTextNode("Chess"));
-  const timezone = node(page, "p", "profile-timezone", "Timezone: UTC");
+  node(page, "p", "profile-timezone", "Timezone: UTC");
   const root = node(page, "section", "profile-edit");
   root.setAttribute("data-island", "member-profile");
   root.setAttribute("data-member-id", "100000000000000001");
@@ -99,18 +142,37 @@ function fixture(abortable: boolean) {
   editControl.hidden = true;
   const edit = node(editControl, "button", "profile-edit-again", "Edit your profile");
   const form = Object.assign(node(root, "form", "profile-form"), {
-    elements: Object.fromEntries(Object.entries({ bio: "Original bio", games_text: "Chess", timezone: "UTC", website: "", formOpenedAt: "1800000000000", _method: "PATCH" }).map(([key, value]) => {
-      const field = node(root.querySelector("form")!, key === "bio" || key === "games_text" ? "textarea" : "input");
-      field.value = field.defaultValue = value;
-      return [key, field];
-    })) as Record<string, Element>,
+    elements: Object.fromEntries(
+      Object.entries({
+        bio: "Original bio",
+        games_text: "Chess",
+        timezone: "UTC",
+        website: "",
+        formOpenedAt: "1800000000000",
+        _method: "PATCH",
+      }).map(([key, value]) => {
+        const field = node(
+          root.querySelector("form")!,
+          key === "bio" || key === "games_text" ? "textarea" : "input",
+        );
+        field.value = field.defaultValue = value;
+        return [key, field];
+      }),
+    ) as Record<string, Element>,
   });
-  const requests: (ReturnType<typeof deferred<ResponseFixture>> & { url: string; init: { signal?: AbortSignal } })[] = [];
+  const requests: (ReturnType<typeof deferred<ResponseFixture>> & {
+    url: string;
+    init: { signal?: AbortSignal };
+  })[] = [];
   const fetch = vi.fn((url: string, init: { signal?: AbortSignal } = {}) => {
     const request = deferred<ResponseFixture>();
     requests.push({ url, init, ...request });
     // Behave like a real fetch: aborting the owned controller rejects.
-    init.signal?.addEventListener("abort", () => request.reject(Object.assign(new Error("Save aborted"), { name: "AbortError" })), { once: true });
+    init.signal?.addEventListener(
+      "abort",
+      () => request.reject(Object.assign(new Error("Save aborted"), { name: "AbortError" })),
+      { once: true },
+    );
     return request.promise;
   });
   const timers: Timer[] = [];
@@ -126,7 +188,12 @@ function fixture(abortable: boolean) {
     if (at >= 0) timers.splice(at, 1);
   };
   const sandbox: Record<string, unknown> = {
-    document, fetch, location: { pathname: "/members/100000000000000001" }, setTimeout, clearTimeout, Intl,
+    document,
+    fetch,
+    location: { pathname: "/members/100000000000000001" },
+    setTimeout,
+    clearTimeout,
+    Intl,
   };
   if (abortable) sandbox.AbortController = AbortController;
   runInNewContext(binder, sandbox);
@@ -135,24 +202,47 @@ function fixture(abortable: boolean) {
   };
   const cancel = () => {
     form.dispatch("reset");
-    Object.values(form.elements).forEach((field) => { field.value = field.defaultValue; });
-    // Drain the focus timer only: a pending write keeps its owned deadline.
-    timers.filter((t) => t.delay < PROFILE_SAVE_DEADLINE_MS).forEach((t) => {
-      timers.splice(timers.indexOf(t), 1);
-      t.cb();
+    Object.values(form.elements).forEach((field) => {
+      field.value = field.defaultValue;
     });
+    // Drain the focus timer only: a pending write keeps its owned deadline.
+    timers
+      .filter((t) => t.delay < PROFILE_SAVE_DEADLINE_MS)
+      .forEach((t) => {
+        timers.splice(timers.indexOf(t), 1);
+        t.cb();
+      });
   };
   const advance = (ms: number) => {
     elapsed += ms;
-    timers.filter((t) => t.ms <= elapsed).sort((a, b) => a.id - b.id).forEach((t) => {
-      const at = timers.indexOf(t);
-      if (at >= 0) timers.splice(at, 1);
-      t.cb();
-    });
+    timers
+      .filter((t) => t.ms <= elapsed)
+      .sort((a, b) => a.id - b.id)
+      .forEach((t) => {
+        const at = timers.indexOf(t);
+        if (at >= 0) timers.splice(at, 1);
+        t.cb();
+      });
   };
   const notice = (id: string) => root.querySelector(`[data-testid="${id}"]`);
   const uncertain = () => notice(PROFILE_UNCERTAIN_TESTID);
-  return { document, root, name, bio, form, edit, editControl, fetch, requests, timers, enter, cancel, advance, notice, uncertain };
+  return {
+    document,
+    root,
+    name,
+    bio,
+    form,
+    edit,
+    editControl,
+    fetch,
+    requests,
+    timers,
+    enter,
+    cancel,
+    advance,
+    notice,
+    uncertain,
+  };
 }
 
 describe("member-profile save deadline", () => {
@@ -175,27 +265,30 @@ describe("member-profile save deadline", () => {
     expect(f.requests[0]!.url).toBe("/members/100000000000000001");
   });
 
-  it.each([true, false])("shows bounded uncertain feedback at the deadline with the draft intact (abortable=%s)", async (abortable) => {
-    const f = fixture(abortable);
-    const focusedBefore = f.document.activeElement;
-    f.enter({ bio: "Hung write" });
-    f.form.dispatch("submit");
-    f.enter({ bio: "Hung write plus newer typing" });
-    f.advance(PROFILE_SAVE_DEADLINE_MS - 1);
-    await flush();
-    expect(f.uncertain()).toBeNull();
-    f.advance(1);
-    await flush();
-    const el = f.uncertain();
-    expect(el?.getAttribute("role")).toBe("status");
-    expect(el?.textContent).toContain(PROFILE_COPY.uncertain);
-    expect(el?.textContent.length).toBeGreaterThan(0);
-    // Draft intact, form still open, single PATCH sent, no focus theft.
-    expect(f.form.elements.bio!.value).toBe("Hung write plus newer typing");
-    expect(f.form.hidden).toBe(false);
-    expect(f.fetch).toHaveBeenCalledTimes(1);
-    expect(f.document.activeElement).toBe(focusedBefore);
-  });
+  it.each([true, false])(
+    "shows bounded uncertain feedback at the deadline with the draft intact (abortable=%s)",
+    async (abortable) => {
+      const f = fixture(abortable);
+      const focusedBefore = f.document.activeElement;
+      f.enter({ bio: "Hung write" });
+      f.form.dispatch("submit");
+      f.enter({ bio: "Hung write plus newer typing" });
+      f.advance(PROFILE_SAVE_DEADLINE_MS - 1);
+      await flush();
+      expect(f.uncertain()).toBeNull();
+      f.advance(1);
+      await flush();
+      const el = f.uncertain();
+      expect(el?.getAttribute("role")).toBe("status");
+      expect(el?.textContent).toContain(PROFILE_COPY.uncertain);
+      expect(el?.textContent.length).toBeGreaterThan(0);
+      // Draft intact, form still open, single PATCH sent, no focus theft.
+      expect(f.form.elements.bio!.value).toBe("Hung write plus newer typing");
+      expect(f.form.hidden).toBe(false);
+      expect(f.fetch).toHaveBeenCalledTimes(1);
+      expect(f.document.activeElement).toBe(focusedBefore);
+    },
+  );
 
   it("never represents the timeout as a server rollback", async () => {
     const f = fixture(true);
@@ -300,72 +393,83 @@ describe("member-profile save deadline", () => {
     expect(f.requests[0]!.init.signal?.aborted).toBe(false);
   });
 
-  it.each(["server", "network"] as const)("settles a fast %s failure without uncertain feedback and allows retry", async (failure) => {
-    const f = fixture(true);
-    f.enter({ bio: "Keep this draft" });
-    f.form.dispatch("submit");
-    if (failure === "network") f.requests[0]!.reject(new Error("offline"));
-    else f.requests[0]!.resolve({ ok: false, status: 503 });
-    await flush();
-    expect(f.notice("profile-save-failed")).not.toBeNull();
-    expect(f.uncertain()).toBeNull();
-    expect(f.timers).toHaveLength(0);
-    expect(f.form.elements.bio!.value).toBe("Keep this draft");
-    f.form.dispatch("submit");
-    f.requests[1]!.resolve(success());
-    await flush();
-    expect(f.notice("profile-save-failed")).toBeNull();
-    expect(f.bio.textContent).toBe("Keep this draft");
-  });
+  it.each(["server", "network"] as const)(
+    "settles a fast %s failure without uncertain feedback and allows retry",
+    async (failure) => {
+      const f = fixture(true);
+      f.enter({ bio: "Keep this draft" });
+      f.form.dispatch("submit");
+      if (failure === "network") f.requests[0]!.reject(new Error("offline"));
+      else f.requests[0]!.resolve({ ok: false, status: 503 });
+      await flush();
+      expect(f.notice("profile-save-failed")).not.toBeNull();
+      expect(f.uncertain()).toBeNull();
+      expect(f.timers).toHaveLength(0);
+      expect(f.form.elements.bio!.value).toBe("Keep this draft");
+      f.form.dispatch("submit");
+      f.requests[1]!.resolve(success());
+      await flush();
+      expect(f.notice("profile-save-failed")).toBeNull();
+      expect(f.bio.textContent).toBe("Keep this draft");
+    },
+  );
 
-  it.each([true, false])("cancel keeps the pending save unaborted: a newer save waits until it settles (abortable=%s)", async (abortable) => {
-    const f = fixture(abortable);
-    f.enter({ bio: "Cancelled write" });
-    f.form.dispatch("submit");
-    f.cancel();
-    expect(f.form.elements.bio!.value).toBe("Original bio");
-    // Abort is not server rollback: the write stays live under its deadline.
-    expect(f.requests[0]!.init.signal?.aborted ?? false).toBe(false);
-    expect(f.timers).toHaveLength(1);
-    f.enter({ bio: "New write" });
-    f.form.dispatch("submit");
-    f.form.dispatch("submit");
-    expect(f.fetch).toHaveBeenCalledOnce();
-    f.requests[0]!.resolve(success());
-    await flush();
-    expect(f.timers).toHaveLength(0);
-    expect(f.bio.textContent).toBe("Original bio");
-    for (const id of [PROFILE_UNCERTAIN_TESTID, "profile-saved", "profile-save-failed"]) expect(f.notice(id)).toBeNull();
-    f.form.dispatch("submit");
-    expect(f.fetch).toHaveBeenCalledTimes(2);
-    f.requests[1]!.resolve(success());
-    await flush();
-    expect(f.bio.textContent).toBe("New write");
-  });
+  it.each([true, false])(
+    "cancel keeps the pending save unaborted: a newer save waits until it settles (abortable=%s)",
+    async (abortable) => {
+      const f = fixture(abortable);
+      f.enter({ bio: "Cancelled write" });
+      f.form.dispatch("submit");
+      f.cancel();
+      expect(f.form.elements.bio!.value).toBe("Original bio");
+      // Abort is not server rollback: the write stays live under its deadline.
+      expect(f.requests[0]!.init.signal?.aborted ?? false).toBe(false);
+      expect(f.timers).toHaveLength(1);
+      f.enter({ bio: "New write" });
+      f.form.dispatch("submit");
+      f.form.dispatch("submit");
+      expect(f.fetch).toHaveBeenCalledOnce();
+      f.requests[0]!.resolve(success());
+      await flush();
+      expect(f.timers).toHaveLength(0);
+      expect(f.bio.textContent).toBe("Original bio");
+      for (const id of [PROFILE_UNCERTAIN_TESTID, "profile-saved", "profile-save-failed"])
+        expect(f.notice(id)).toBeNull();
+      f.form.dispatch("submit");
+      expect(f.fetch).toHaveBeenCalledTimes(2);
+      f.requests[1]!.resolve(success());
+      await flush();
+      expect(f.bio.textContent).toBe("New write");
+    },
+  );
 
-  it.each([true, false])("a cancelled save that never settles releases the guard silently at the deadline (abortable=%s)", async (abortable) => {
-    const f = fixture(abortable);
-    f.enter({ bio: "Hung cancelled write" });
-    f.form.dispatch("submit");
-    f.cancel();
-    f.enter({ bio: "New write" });
-    f.form.dispatch("submit");
-    expect(f.fetch).toHaveBeenCalledOnce();
-    f.advance(PROFILE_SAVE_DEADLINE_MS);
-    await flush();
-    expect(f.requests[0]!.init.signal?.aborted ?? false).toBe(abortable);
-    // The member cancelled that write: no uncertain notice, draft untouched.
-    for (const id of [PROFILE_UNCERTAIN_TESTID, "profile-saved", "profile-save-failed"]) expect(f.notice(id)).toBeNull();
-    expect(f.form.elements.bio!.value).toBe("New write");
-    f.form.dispatch("submit");
-    expect(f.fetch).toHaveBeenCalledTimes(2);
-    // A late completion of the abandoned write changes nothing visible.
-    if (!abortable) f.requests[0]!.resolve(success());
-    f.requests[1]!.resolve(success());
-    await flush();
-    expect(f.bio.textContent).toBe("New write");
-    expect(f.notice("profile-saved")).not.toBeNull();
-  });
+  it.each([true, false])(
+    "a cancelled save that never settles releases the guard silently at the deadline (abortable=%s)",
+    async (abortable) => {
+      const f = fixture(abortable);
+      f.enter({ bio: "Hung cancelled write" });
+      f.form.dispatch("submit");
+      f.cancel();
+      f.enter({ bio: "New write" });
+      f.form.dispatch("submit");
+      expect(f.fetch).toHaveBeenCalledOnce();
+      f.advance(PROFILE_SAVE_DEADLINE_MS);
+      await flush();
+      expect(f.requests[0]!.init.signal?.aborted ?? false).toBe(abortable);
+      // The member cancelled that write: no uncertain notice, draft untouched.
+      for (const id of [PROFILE_UNCERTAIN_TESTID, "profile-saved", "profile-save-failed"])
+        expect(f.notice(id)).toBeNull();
+      expect(f.form.elements.bio!.value).toBe("New write");
+      f.form.dispatch("submit");
+      expect(f.fetch).toHaveBeenCalledTimes(2);
+      // A late completion of the abandoned write changes nothing visible.
+      if (!abortable) f.requests[0]!.resolve(success());
+      f.requests[1]!.resolve(success());
+      await flush();
+      expect(f.bio.textContent).toBe("New write");
+      expect(f.notice("profile-saved")).not.toBeNull();
+    },
+  );
 
   it("cancel after the deadline clears uncertain feedback and stays usable", async () => {
     const f = fixture(true);

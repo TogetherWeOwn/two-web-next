@@ -23,12 +23,19 @@ type Call = { command: string; args: string[]; dbKeys: string[]; cwd: string; ma
 // Preload replaces the runner's child-process boundary before its named imports
 // bind. No nested command executes, even with synthetic DB targets inherited.
 function offline(args: string[] = [], failAt = "", failure = "status") {
-  const scratch = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "offline-check-"));
+  const scratch = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "offline-check-",
+    ),
+  );
   try {
     const trace = join(scratch, "trace.jsonl");
     const preload = join(scratch, "stub-children.mjs");
     writeFileSync(trace, "");
-    writeFileSync(preload, `import childProcess from "node:child_process";
+    writeFileSync(
+      preload,
+      `import childProcess from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 childProcess.spawnSync = (command, args, options) => {
@@ -42,29 +49,51 @@ childProcess.spawnSync = (command, args, options) => {
   return { status: 0, signal: null };
 };
 syncBuiltinESMExports();
-`);
+`,
+    );
     const result = spawnSync(process.execPath, ["--import", preload, entry, ...args], {
       encoding: "utf8",
       timeout: 5000,
-      env: { ...process.env, ...dbTargets, OFFLINE_TRACE: trace, OFFLINE_MARKER: "preserved", OFFLINE_FAIL_AT: failAt, OFFLINE_FAILURE: failure },
+      env: {
+        ...process.env,
+        ...dbTargets,
+        OFFLINE_TRACE: trace,
+        OFFLINE_MARKER: "preserved",
+        OFFLINE_FAIL_AT: failAt,
+        OFFLINE_FAILURE: failure,
+      },
     });
     expect(result.error).toBeUndefined();
     const rows = readFileSync(trace, "utf8").trim();
-    return { status: result.status, output: result.stdout + result.stderr, calls: (rows ? rows.split("\n").map(line => JSON.parse(line)) : []) as Call[] };
+    return {
+      status: result.status,
+      output: result.stdout + result.stderr,
+      calls: (rows ? rows.split("\n").map((line) => JSON.parse(line)) : []) as Call[],
+    };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
 
 describe("fixture-only check command (stub children, no SQL/network)", () => {
-  it("routes its fixed exclusion only to Vitest and preserves all six check stages", () => {
+  it("routes its fixed exclusion only to Vitest and preserves all seven check stages", () => {
     const result = offline();
     expect(result.status, result.output).toBe(0);
     expect(result.calls.map(({ command, args }) => ({ command, args }))).toEqual([
+      { command: "npm", args: ["run", "lint"] },
       { command: "npm", args: ["run", "typecheck"] },
       { command: "npm", args: ["run", "config:check"] },
       { command: "npm", args: ["run", "test", "--", "--exclude", "test/review-p1-verify.test.ts"] },
-      { command: process.execPath, args: ["--test", ...readdirSync("ci").filter(file => file.startsWith("a11y-") && file.endsWith(".test.mjs")).sort().map(file => `ci/${file}`)] },
+      {
+        command: process.execPath,
+        args: [
+          "--test",
+          ...readdirSync("ci")
+            .filter((file) => file.startsWith("a11y-") && file.endsWith(".test.mjs"))
+            .sort()
+            .map((file) => `ci/${file}`),
+        ],
+      },
       { command: "npm", args: ["run", "test:cutover"] },
       { command: "npm", args: ["run", "test:smoke"] },
     ]);
@@ -73,7 +102,7 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
   it("unsets inherited SQL targets and W1_AGENT_TESTDB opt-in for every child but keeps unrelated environment", () => {
     const result = offline();
     expect(result.status, result.output).toBe(0);
-    expect(result.calls).toHaveLength(6);
+    expect(result.calls).toHaveLength(7);
     for (const call of result.calls) {
       expect(call.dbKeys).toEqual([]);
       expect(call.marker).toBe("preserved");
@@ -81,22 +110,29 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
     }
   });
 
-  it.each([["--exclude", "test/admin.test.ts"], ["--coverage"], ["--", "--exclude", "test/review-p1-verify.test.ts"]])("rejects extra arguments rather than exposing a skip facility: %j", (...args) => {
+  it.each([
+    ["--exclude", "test/admin.test.ts"],
+    ["--coverage"],
+    ["--", "--exclude", "test/review-p1-verify.test.ts"],
+  ])("rejects extra arguments rather than exposing a skip facility: %j", (...args) => {
     const result = offline(args);
     expect(result.status).toBe(1);
     expect(result.calls).toEqual([]);
     expect(result.output).toContain("does not accept arguments");
   });
 
-  it.each(["typecheck", "config:check", "test", "--test", "test:cutover", "test:smoke"])("stops at a failed %s stage and preserves its exit status", (stage) => {
-    const result = offline([], stage);
-    expect(result.status, result.output).toBe(7);
-    expect(result.calls.at(-1)?.args).toContain(stage);
-    expect(result.output).not.toContain("Fixture-only checks passed");
-  });
+  it.each(["lint", "typecheck", "config:check", "test", "--test", "test:cutover", "test:smoke"])(
+    "stops at a failed %s stage and preserves its exit status",
+    (stage) => {
+      const result = offline([], stage);
+      expect(result.status, result.output).toBe(7);
+      expect(result.calls.at(-1)?.args).toContain(stage);
+      expect(result.output).not.toContain("Fixture-only checks passed");
+    },
+  );
 
   it.each(["error", "signal"])("fails closed on a child %s", (failure) => {
-    const result = offline([], "typecheck", failure);
+    const result = offline([], "lint", failure);
     expect(result.status, result.output).toBe(1);
     expect(result.calls).toHaveLength(1);
     expect(result.output).not.toContain("Fixture-only checks passed");
@@ -107,13 +143,17 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.output).toContain("Fixture-only checks passed");
     expect(result.output).toContain("limited evidence");
-    expect(result.output).toContain("not a substitute for exact-head CI with service-container DB coverage");
+    expect(result.output).toContain(
+      "not a substitute for exact-head CI with service-container DB coverage",
+    );
   });
 
   it("documents the tested package entry point without changing the full check", () => {
     const { scripts } = JSON.parse(readFileSync("package.json", "utf8"));
     expect(scripts["check:offline"]).toBe("node ci/offline-check.mjs");
-    expect(scripts.check).toBe("npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:smoke && npm run e2e:safety");
+    expect(scripts.check).toBe(
+      "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:shadow && npm run test:smoke && npm run e2e:safety",
+    );
     const runbook = readFileSync("docs/runbook.md", "utf8");
     expect(runbook).toContain("npm run check:offline");
     expect(runbook).not.toContain("npm run check -- -- --exclude");
