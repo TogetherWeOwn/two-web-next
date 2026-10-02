@@ -299,12 +299,23 @@ test("workflow wires the tested gate before both mutations and preserves staging
 test("main CI runs are never cancelled in progress, so their success can reach staging", () => {
   // A cancel request marks the run cancelled even when every job then succeeds,
   // and the deploy trigger above rejects a cancelled conclusion.
+  // Main pushes each keep their own group (per-SHA, same shape as pr-gates.yml),
+  // while PR pushes share one group per PR number (TOG-11811 queue economy).
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
-  const block = ci.match(/^concurrency:\n  group: ci-\$\{\{ github\.ref \}\}\n  cancel-in-progress: \$\{\{ (.+) \}\}\n/m);
-  assert(block, "ci.yml concurrency must group by ref and compute cancel-in-progress per ref");
-  const cancels = new Function("github", `return ${block[1]}`);
-  assert.equal(cancels({ ref: "refs/heads/main" }), false);
-  for (const ref of ["refs/pull/7/merge", "refs/heads/release-please--branches--main", "refs/heads/topic"]) {
-    assert.equal(cancels({ ref }), true, ref);
-  }
+  const block = ci.match(/^concurrency:\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ (.+) \}\}\n  cancel-in-progress: true\n/m);
+  assert(block, "ci.yml concurrency must group per-PR-or-SHA with cancel-in-progress");
+  // GitHub expression dereference is null-safe (missing pull_request reads as
+  // null); emulate that with optional chaining so main-push contexts evaluate.
+  const expr = block[1].replaceAll("github.event.pull_request.number", "github.event.pull_request?.number");
+  const keyOf = new Function("github", `return (${expr});`);
+  // Main push: distinct SHAs get distinct groups, so no run cancels another.
+  assert.notEqual(
+    keyOf({ event: {}, sha: "aaa" }),
+    keyOf({ event: {}, sha: "bbb" }),
+  );
+  // PR pushes for the same PR share a group, so superseded pushes still cancel.
+  assert.equal(
+    keyOf({ event: { pull_request: { number: 7 } }, sha: "aaa" }),
+    keyOf({ event: { pull_request: { number: 7 } }, sha: "bbb" }),
+  );
 });

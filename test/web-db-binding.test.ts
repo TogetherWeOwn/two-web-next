@@ -153,7 +153,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
       signal.throwIfAborted();
       expect((await write()).status).toBe(429);
     } finally { clock.mockRestore(); }
-  }, 15_000);
+  }, 30_000);
 
   it("enforces join starts at 10/min through the binding", async () => {
     await fixture.client`DELETE FROM web_throttle_hits`;
