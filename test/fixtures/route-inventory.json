@@ -33,6 +33,7 @@
   { "method": "GET", "path": "/events.json", "auth": "session" },
   { "method": "GET", "path": "/events.rss", "auth": "public" },
   { "method": "GET", "path": "/events/:file{.+\\.ics}", "auth": "public-draft-moderator" },
+  { "method": "GET", "path": "/events/:key", "auth": "session" },
   { "method": "GET", "path": "/events/past", "auth": "public" },
   { "method": "GET", "path": "/faq", "auth": "public" },
   { "method": "GET", "path": "/join", "auth": "public" },

@@ -285,13 +285,16 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
 export async function listJson(
   db: Db,
   opts: { limit: number; offset: number; includeDrafts: boolean; eventKey?: string },
-): Promise<PublicEvent[]> {
+): Promise<{ rows: PublicEvent[]; total: number }> {
   const visible = opts.includeDrafts ? sql`true` : inArray(events.status, ["published", "cancelled", "past"]);
   const match = opts.eventKey === undefined ? undefined : eq(events.eventKey, opts.eventKey);
-  const rows = await db.select().from(events).where(and(visible, match)).orderBy(desc(events.startsAt)).limit(opts.limit).offset(opts.offset);
+  const predicate = and(visible, match);
+  const [total] = await db.select({ n: count() }).from(events).where(predicate);
+  const rows = await db.select().from(events).where(predicate).orderBy(asc(events.startsAt), asc(events.id)).limit(opts.limit).offset(opts.offset);
   // `eventJson` serializes both boundaries unguarded (`toISOString()`), so a
   // poison row would 500 the whole member collection instead of dropping out.
-  return withGoing(db, rows.filter(isRenderableEventWindow));
+  // Like `listPast`, the total still counts it so page boundaries stay stable.
+  return { rows: await withGoing(db, rows.filter(isRenderableEventWindow)), total: Number(total?.n ?? 0) };
 }
 
 export async function sitemapEvents(db: Db): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
