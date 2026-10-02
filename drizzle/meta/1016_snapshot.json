@@ -1,6 +1,6 @@
 {
   "id": "797243a8-4fe2-45fe-a99d-0cc0bbcf5074",
-  "prevId": "2c244e22-9b9c-4ec1-8772-fa849a6aa970",
+  "prevId": "714bd08d-9889-4a70-a875-ba617b9b355f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -395,142 +395,6 @@
           "columns": [
             "grant_id",
             "key"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.agent_events": {
-      "name": "agent_events",
-      "schema": "",
-      "columns": {
-        "event_key": {
-          "name": "event_key",
-          "type": "varchar(26)",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "agent_grant_id": {
-          "name": "agent_grant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "proof_marker": {
-          "name": "proof_marker",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "agent_version": {
-          "name": "agent_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "status": {
-          "name": "status",
-          "type": "varchar(16)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'draft'"
-        },
-        "title": {
-          "name": "title",
-          "type": "varchar(100)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "game": {
-          "name": "game",
-          "type": "varchar(100)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "description": {
-          "name": "description",
-          "type": "varchar(1000)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "starts_at": {
-          "name": "starts_at",
-          "type": "varchar(16)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ends_at": {
-          "name": "ends_at",
-          "type": "varchar(16)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "timezone": {
-          "name": "timezone",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "location": {
-          "name": "location",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "capacity": {
-          "name": "capacity",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "agent_events_agent_grant_id_agent_event_grants_id_fk": {
-          "name": "agent_events_agent_grant_id_agent_event_grants_id_fk",
-          "tableFrom": "agent_events",
-          "tableTo": "agent_event_grants",
-          "columnsFrom": [
-            "agent_grant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "agent_events_agent_grant_id_unique": {
-          "name": "agent_events_agent_grant_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "agent_grant_id"
-          ]
-        },
-        "agent_events_proof_marker_unique": {
-          "name": "agent_events_proof_marker_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "proof_marker"
           ]
         }
       },
@@ -1268,6 +1132,25 @@
           "primaryKey": false,
           "notNull": true,
           "default": "0"
+        },
+        "agent_grant_id": {
+          "name": "agent_grant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "proof_marker": {
+          "name": "proof_marker",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_version": {
+          "name": "agent_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
         }
       },
       "indexes": {
@@ -1357,6 +1240,19 @@
           ],
           "onDelete": "set null",
           "onUpdate": "no action"
+        },
+        "events_agent_grant_id_agent_event_grants_id_fk": {
+          "name": "events_agent_grant_id_agent_event_grants_id_fk",
+          "tableFrom": "events",
+          "tableTo": "agent_event_grants",
+          "columnsFrom": [
+            "agent_grant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1373,6 +1269,20 @@
           "nullsNotDistinct": false,
           "columns": [
             "discord_event_id"
+          ]
+        },
+        "events_agent_grant_id_unique": {
+          "name": "events_agent_grant_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "agent_grant_id"
+          ]
+        },
+        "events_proof_marker_unique": {
+          "name": "events_proof_marker_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "proof_marker"
           ]
         }
       },
