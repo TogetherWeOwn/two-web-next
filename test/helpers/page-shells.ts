@@ -13,7 +13,7 @@ export const MEMBER_ID = "100000000000000001";
 export const EVENT_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 export const HTML_READS = [
-  "/", "/about", "/faq", "/rules", "/privacy", "/join", "/join/callback",
+  "/", "/about", "/faq", "/rules", "/privacy", "/join", "/join/callback", "/auth/recover",
   "/events", "/events/past", "/e/:key", "/profile", "/members/:user",
   "/admin", "/admin/events", "/admin/events/new", "/admin/events/:key",
   "/admin/featured", "/admin/featured/new", "/admin/featured/:id", "/admin/join-attempts", "/admin/join-attempts/:id",
@@ -25,8 +25,8 @@ export const NON_HTML_READS = [
   "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect",
   "/admin/events/create", "/admin/events/:key/edit", "/admin/featured-contents",
   "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
-  "/sitemap_index.xml", "/robots.txt", "/up",
-  "/events.json", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
+  "/sitemap_index.xml", "/robots.txt", "/up", "/auth/status", // Bool-only JSON, never an HTML document.
+  "/events.json", "/events/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 
 export const concretePath = (pattern: string) => pattern
@@ -57,7 +57,7 @@ export function pageShellFixture(status = "published") {
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "users"')) {
       return { rows: params.includes(MEMBER_ID)
-        ? [[MEMBER_ID, "Fixture member", null, "A local bio.", ["Chess"], "UTC", now.toISOString()]] : [] };
+        ? [[MEMBER_ID, MEMBER_ID, "Fixture member", null, "A local bio.", ["Chess"], "UTC", now.toISOString()]] : [] };
     }
     if (sql.includes('from "events"')) {
       if (sql.includes('"events"."id" <>')) return { rows: [] }; // No neighboring/related fixture rows.

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { auditCases, auditDatabaseUrl, assertNoViolations, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { coverage as documentCoverage } from "./a11y-cases.mjs";
 import { loadAuditWorkerRoutes } from "./a11y-test-worker.mjs";
 
 const coverage = {
@@ -23,6 +24,16 @@ test("derive cases from registered GETs, deduplicate middleware and omit non-GET
 test("new static GETs are audited automatically; new parameterized GETs require fixtures", () => {
   assert(auditCases([...routes, { method: "GET", path: "/new-page" }], coverage).some((entry) => entry.path === "/new-page"));
   assert.throws(() => auditCases([...routes, { method: "GET", path: "/new-page/:id" }], coverage), /missing=\/new-page/);
+});
+
+test("event JSON reads are explicitly classified as non-documents, not HTML success pages", () => {
+  const paths = ["/events.json", "/events/:key"];
+  const entries = Object.fromEntries(paths.map((path) => [path, documentCoverage[path]]));
+  for (const entry of Object.values(entries)) {
+    assert.equal(entry.skip, true);
+    assert.match(entry.reason, /Session-gated JSON/);
+  }
+  assert.deepEqual(auditCases(paths.map((path) => ({ method: "GET", path })), entries), []);
 });
 
 test("removed routes and unexplained exclusions fail", () => {
@@ -103,6 +114,34 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
     const execution = spawnSync("bash", ["-c", guard[1]], { env: { A11Y_RESULT: result } });
     assert.equal(execution.status, result === "success" ? 0 : 1, `Audit result ${result || "missing"}`);
+  }
+});
+
+test("the required CI job has a bounded coverage allowance without relaxing its gates", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  assert(check, "Required check job must exist");
+  assert.match(check.split("\n    steps:\n")[0], /\n    timeout-minutes: 40\n/);
+  assert.match(check, /\n      - run: npm ci\n/);
+  const steps = check.split(/\n      - /).slice(1);
+  for (const command of [
+    "npm run deps:audit:selftest",
+    "npm run deps:audit",
+    "timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads",
+    "npm run test:smoke",
+    "npm run db:migrate",
+    "npm run config:check",
+    "npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs",
+    "npm run test:cutover",
+    "bash ci/neon-backup-selftest.sh",
+    "bash ci/check-migration-numbers.sh",
+    "node --test ci/production-deploy-gate.test.mjs",
+    "npx wrangler deploy --dry-run --outdir dist",
+    "npx wrangler deploy --dry-run --env production --outdir dist-production",
+  ]) {
+    const step = steps.find((entry) => entry.split("\n").includes(`        run: ${command}`));
+    assert(step, `Required gate missing: ${command}`);
+    assert.doesNotMatch(step, /^        (?:if|continue-on-error):/m, `Required gate must not be bypassed: ${command}`);
   }
 });
 

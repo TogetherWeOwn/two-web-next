@@ -843,6 +843,49 @@ function browser(entry = "/events") {
 }
 
 describe("EventsCalendar shipped binder request/state drift", () => {
+  it("swaps the native past control with drawer navigation without replacing the search input", async () => {
+    const src = calendar([eventRow({ title: "Jam" })], [], okSource());
+    const opened = await (await src.request("/events?past=1")).text();
+    const closed = await (await src.request("/events")).text();
+    const actions = (html: string) => html.match(/<span data-cal-zone="actions">([\s\S]*?)<\/span>/)![1]!;
+    expect(actions(opened)).toBe('<input type="hidden" name="past" value="1"/>');
+    expect(actions(closed)).toBe("");
+    const b = browser();
+    const input = b.input;
+    input.focus();
+    b.clickLink("/events?past=1");
+    b.finish(0, "opened", { past: "1", actions: [actions(opened)] });
+    await b.settle();
+    expect(b.zones.actions.childNodes).toEqual([actions(opened)]);
+    expect(b.input).toBe(input);
+    expect(input.focused).toBe(true);
+    b.clickLink("/events");
+    b.finish(1, "closed", { actions: [] });
+    await b.settle();
+    expect(b.zones.actions.childNodes).toEqual([]);
+    expect(b.input).toBe(input);
+    expect(input.focused).toBe(true);
+  });
+
+  it.each([
+    { entry: "/events?view=calendar&month=2030-02&past=1&page=7&extra=bad", past: true },
+    { entry: "/events?view=calendar&month=2030-02", past: false },
+    { entry: "/events?view=list&month=2030-02&past=0&q=old", past: false },
+    { entry: "/events?view=bad&month=bad&past=true", past: false },
+  ])("drops view/month on changed and blank enhanced searches from $entry", ({ entry, past }) => {
+    const b = browser(entry);
+    for (const query of ["raid & friends", "", "   "]) {
+      b.input.value = query;
+      b.submit();
+      const url = new URL(b.requests.at(-1)!.url, APP_URL);
+      expect([...url.searchParams.keys()].sort()).toEqual([
+        ...(query.trim() ? ["q"] : []), ...(past ? ["past"] : []),
+      ].sort());
+      expect(url.searchParams.get("q")).toBe(query.trim() ? query : null);
+      expect(url.searchParams.getAll("past")).toEqual(past ? ["1"] : []);
+    }
+  });
+
   it("adds and removes Clear in a swapped form-actions zone without replacing the focused input", async () => {
     const src = calendar([eventRow({ title: "Jam" })], [], okSource());
     const initial = await (await src.request("/events")).text();

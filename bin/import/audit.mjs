@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import postgres from 'postgres';
 
@@ -15,6 +16,11 @@ export function parseOptions(args) {
   };
 }
 
+function validIdentifier(value) {
+  // trim also rejects a final newline, which JavaScript's $ anchor permits.
+  return typeof value === 'string' && value === value.trim() && /^[a-z_][a-z0-9_]{0,62}$/.test(value);
+}
+
 export function databaseConfig(env) {
   for (const name of ['LEGACY_DATABASE_URL', 'DATABASE_URL']) {
     if (!env[name]) throw new Error('missing_database_configuration');
@@ -29,7 +35,7 @@ export function databaseConfig(env) {
   const legacySchema = env.LEGACY_DATABASE_SCHEMA || 'public';
   const targetSchema = env.DATABASE_SCHEMA || 'public';
   for (const schema of [legacySchema, targetSchema]) {
-    if (!/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('invalid_schema');
+    if (!validIdentifier(schema)) throw new Error('invalid_schema');
   }
   if (env.LEGACY_DATABASE_URL === env.DATABASE_URL && legacySchema === targetSchema) {
     throw new Error('source_equals_target');
@@ -86,12 +92,27 @@ const TABLES = [
 ];
 
 function identifier(value) {
-  if (!/^[a-z_][a-z0-9_]*$/.test(value)) throw new Error('invalid_identifier');
+  // ASCII names fit PostgreSQL's 63-byte limit: unequal schemas cannot alias
+  // through identifier truncation and bypass the same-schema identity probe.
+  if (!validIdentifier(value)) throw new Error('invalid_identifier');
   return `"${value}"`;
 }
 
 function tableName(schema, name) {
   return `${identifier(schema)}.${identifier(name)}`;
+}
+
+async function assertSeparateDatabase(source, destination) {
+  // Advisory locks identify the effective database-local lock domain without
+  // privileged server metadata or trusting URL/database-name equality. Probe
+  // these exact transactions so transaction-pooling proxies cannot switch the
+  // sessions between the check and import. Locks release on transaction exit.
+  const key = randomBytes(8).readBigInt64BE().toString();
+  const [held] = await source`SELECT pg_try_advisory_xact_lock(${key}::bigint) AS acquired`;
+  if (held?.acquired !== true) throw new Error('source_identity_unavailable');
+  const [probe] = await destination`SELECT pg_try_advisory_xact_lock(${key}::bigint) AS acquired`;
+  // An alias, collision, denied probe or incomplete result must fail closed.
+  if (probe?.acquired !== true) throw new Error('destination_identity_unavailable');
 }
 
 export async function importAudit({ legacy, target, legacySchema = 'public', targetSchema = 'public',
@@ -106,14 +127,19 @@ export async function importAudit({ legacy, target, legacySchema = 'public', tar
   // still advance sequences or invoke triggers).
   await legacy.begin('isolation level repeatable read read only', async (source) => {
     await source`SET LOCAL TIME ZONE 'UTC'`;
-    const ownershipTable = tableName(legacySchema, 'events');
-    const [ownership] = enableGrants ? await source`
-      SELECT EXISTS (SELECT 1 FROM pg_attribute
-        WHERE attrelid = to_regclass(${ownershipTable}) AND attname = 'agent_grant_id'
-          AND atttypid = 'uuid'::regtype AND NOT attisdropped) AS available
-    ` : [{ available: false }];
+    // Timestamp text must use the same unambiguous format at both boundaries,
+    // including when callers supply clients with hostile session defaults.
+    await source`SET LOCAL DateStyle TO 'ISO, YMD'`;
     await target.begin(dryRun ? 'isolation level repeatable read read only' : '', async (dest) => {
       await dest`SET LOCAL TIME ZONE 'UTC'`;
+      await dest`SET LOCAL DateStyle TO 'ISO, YMD'`;
+      if (legacySchema === targetSchema) await assertSeparateDatabase(source, dest);
+      const ownershipTable = tableName(legacySchema, 'events');
+      const [ownership] = enableGrants ? await source`
+        SELECT EXISTS (SELECT 1 FROM pg_attribute
+          WHERE attrelid = to_regclass(${ownershipTable}) AND attname = 'agent_grant_id'
+            AND atttypid = 'uuid'::regtype AND NOT attisdropped) AS available
+      ` : [{ available: false }];
       if (!dryRun) {
         // Also protects sequence alignment against concurrent default-id INSERTs.
         const names = TABLES.map((t) => tableName(targetSchema, t.name)).join(', ');

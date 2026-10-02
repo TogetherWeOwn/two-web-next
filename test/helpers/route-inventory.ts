@@ -21,14 +21,14 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     else if (path === "/profile" && registrations.has("ALL /profile")) auth = "member";
     else if (path.startsWith("/members/") && registrations.has("ALL /members/*")) {
       auth = method === "PATCH" || method === "POST" ? "member-owner" : "member";
-    } else if (path === "/events.json") auth = "session";
+    } else if (path === "/events.json" || (method === "GET" && path === "/events/:key")) auth = "session";
     else if (path === "/e/:key" || path === "/events/:file{.+\\.ics}") auth = "public-draft-moderator";
     else if (path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE")) auth = "member-decoy";
     else if ((path === "/events" && method === "POST") || (path === "/events/:key" && method === "PATCH") ||
       (method === "POST" && (path === "/events/:key/publish" || path === "/events/:key/cancel" ||
         path === "/events/:key/rsvp-pause" || path === "/events/:key/rsvp-reopen"))) auth = "moderator";
     else if (path === "/api/agent-events") auth = "machine-bearer";
-    else if (path === "/auth/qa/:identity") auth = "staging-token";
+    else if (path === "/auth/qa/:identity" || path === "/__probe/alert") auth = "staging-token";
     else if (path === "/auth/discord/callback" || path === "/join/callback") auth = "oauth-state";
     return { method, path, auth };
   });

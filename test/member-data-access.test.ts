@@ -215,32 +215,40 @@ describe.skipIf(!process.env.DATABASE_URL)("member data access (real recorder on
     expect(await rows()).toHaveLength(0);
   });
 
-  it("isolates cleanup, failure DDL and disposal from another fixture's rows and constraints", async () => {
-    const sibling = await createMemberDataFixture(process.env.DATABASE_URL!);
-    try {
-      expect(sibling.schemaName).not.toBe(fixture.schemaName);
-      await seed(db);
-      await seed(sibling.db);
-      await recordAccess(sibling.db, entry());
-      const rollback = new Error("rollback isolated DDL");
-      await db.transaction(async (tx) => {
-        await tx.execute(sql`alter table member_data_access_logs drop column subject_count`);
-        throw rollback;
-      }).catch((error: unknown) => { if (error !== rollback) throw error; });
-      await fixture.reset();
-      expect(await db.select().from(users)).toHaveLength(0);
-      expect(await sibling.db.select().from(users)).toHaveLength(4);
-      expect(await sibling.db.select().from(memberDataAccessLogs)).toHaveLength(1);
-      const targets = await sibling.db.execute(sql`
-        select distinct target.relnamespace::regnamespace::text as schema_name
-        from pg_constraint fk join pg_class source on source.oid = fk.conrelid
-        join pg_class target on target.oid = fk.confrelid
-        where fk.contype = 'f' and source.relnamespace = current_schema()::regnamespace`);
-      expect(targets.map((target) => target.schema_name)).toEqual([sibling.schemaName]);
-    } finally { await sibling.dispose(); }
-    expect(await db.execute(sql`select 1 from pg_namespace where nspname = ${sibling.schemaName}`)).toHaveLength(0);
-    await seed(db); // Disposing a sibling did not drop our tables or FKs.
-    expect(await db.select().from(users)).toHaveLength(4);
+  describe("sibling fixture isolation", () => {
+    let sibling: MemberDataFixture | undefined;
+    // Provisioning canonical migrations has its own bounded setup budget.
+    // Disposal remains in the test because its isolation is being asserted.
+    beforeAll(async () => { sibling = await createMemberDataFixture(process.env.DATABASE_URL!); }, 30_000);
+    afterAll(async () => { await sibling?.dispose(); }, 30_000);
+
+    it("isolates cleanup, failure DDL and disposal from another fixture's rows and constraints", async () => {
+      const other = sibling!;
+      try {
+        expect(other.schemaName).not.toBe(fixture.schemaName);
+        await seed(db);
+        await seed(other.db);
+        await recordAccess(other.db, entry());
+        const rollback = new Error("rollback isolated DDL");
+        await db.transaction(async (tx) => {
+          await tx.execute(sql`alter table member_data_access_logs drop column subject_count`);
+          throw rollback;
+        }).catch((error: unknown) => { if (error !== rollback) throw error; });
+        await fixture.reset();
+        expect(await db.select().from(users)).toHaveLength(0);
+        expect(await other.db.select().from(users)).toHaveLength(4);
+        expect(await other.db.select().from(memberDataAccessLogs)).toHaveLength(1);
+        const targets = await other.db.execute(sql`
+          select distinct target.relnamespace::regnamespace::text as schema_name
+          from pg_constraint fk join pg_class source on source.oid = fk.conrelid
+          join pg_class target on target.oid = fk.confrelid
+          where fk.contype = 'f' and source.relnamespace = current_schema()::regnamespace`);
+        expect(targets.map((target) => target.schema_name)).toEqual([other.schemaName]);
+      } finally { await other.dispose(); }
+      expect(await db.execute(sql`select 1 from pg_namespace where nspname = ${other.schemaName}`)).toHaveLength(0);
+      await seed(db); // Disposing a sibling did not drop our tables or FKs.
+      expect(await db.select().from(users)).toHaveLength(4);
+    });
   });
 
   it("the access table stores identifiers/metadata only, not another copy of member contents", async () => {

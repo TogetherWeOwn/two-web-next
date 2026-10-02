@@ -34,7 +34,9 @@ function expectFieldError(run: () => unknown, field: string): void {
 
 // Known 2026 transitions, including southern-hemisphere and half-hour DST.
 // gapWall is the first nonexistent minute; foldFirst is the earlier UTC
-// occurrence of the first repeated minute. No transition detection via SUT.
+// occurrence of the first repeated minute. A fresh parse takes the later
+// (second) occurrence, matching legacy/Carbon (TOG-11669).
+// No transition detection via SUT.
 const TRANSITIONS = [
   { zone: "Europe/London", gapWall: "2026-03-29 01:00", foldFirst: "2026-10-25T00:00:00Z", width: 60 },
   { zone: "Europe/Berlin", gapWall: "2026-03-29 02:00", foldFirst: "2026-10-25T00:00:00Z", width: 60 },
@@ -91,19 +93,19 @@ describe("seeded admin event validation properties", () => {
         expectFieldError(() => wallToUtc(wall, transition.zone), "wall");
         expectFieldError(() => parseEventForm({ ...FORM, timezone: transition.zone, starts_at: wall }, {
           startsAtUtc: "2026-01-01T12:00:00Z",
-        }), "wall");
+        }), "starts_at");
       }), { ...OPTIONS, examples: [[0], [transition.width - 1]] });
     });
 
-    it(`${transition.zone}: chooses the first fold occurrence and preserves an untouched second occurrence`, () => {
+    it(`${transition.zone}: chooses the second fold occurrence and preserves an untouched first occurrence`, () => {
       fc.assert(fc.property(fc.integer({ min: 0, max: transition.width - 1 }), (minute) => {
         const first = Date.parse(transition.foldFirst) + minute * MINUTE;
         const second = first + transition.width * MINUTE;
         const wall = wallAt(first, transition.zone);
         expect(wallAt(second, transition.zone)).toBe(wall);
-        expect(wallToUtc(wall, transition.zone).getTime()).toBe(first);
-        expect(wallToUtc(wall, transition.zone).getTime()).toBe(first);
-        const captured = new Date(second + 17_000).toISOString();
+        expect(wallToUtc(wall, transition.zone).getTime()).toBe(second);
+        expect(wallToUtc(wall, transition.zone).getTime()).toBe(second);
+        const captured = new Date(first + 17_000).toISOString();
         const parsed = parseEventForm({
           ...FORM, timezone: transition.zone, starts_at: wall.replace(" ", "T"),
           ends_at: wallAt(second + 2 * 60 * MINUTE, transition.zone),
@@ -113,10 +115,10 @@ describe("seeded admin event validation properties", () => {
         // of the fold; end ordering must use the preserved UTC carriers.
         const sameWall = { ...FORM, timezone: transition.zone, starts_at: wall, ends_at: wall };
         expect(parseEventForm(sameWall, {
-          startsAtUtc: new Date(first).toISOString(), endsAtUtc: captured,
-        }).endsAtUtc.getTime()).toBe(second + 17_000);
+          startsAtUtc: captured, endsAtUtc: new Date(second).toISOString(),
+        }).endsAtUtc.getTime()).toBe(second);
         expectFieldError(() => parseEventForm(sameWall, {
-          startsAtUtc: captured, endsAtUtc: new Date(first).toISOString(),
+          startsAtUtc: new Date(second).toISOString(), endsAtUtc: captured,
         }), "ends_at");
       }), { ...OPTIONS, examples: [[0], [transition.width - 1]] });
     });

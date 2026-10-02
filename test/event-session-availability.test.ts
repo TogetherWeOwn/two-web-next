@@ -71,7 +71,7 @@ describe("guest event pages with unavailable session storage", () => {
   it("a usable signed token still resolves storage and fails closed on session DDL failure", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await request(await signedCookie("two_test-token"));
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(503);
     expect(await res.text()).not.toContain(SUBJECT.username);
     expect(connect).toHaveBeenCalledTimes(1);
     expect(ddl).toHaveBeenCalledTimes(1);

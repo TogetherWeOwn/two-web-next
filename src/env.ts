@@ -26,6 +26,8 @@ export type Env = AgentEventsEnv & {
   DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
+  INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
   MEMBER_ACCESS_LOG_ENFORCE?: string;
   // CSP violation sink (TOG-10107): fraction of valid reports (0.0–1.0)
   // written to the log. Unset or unparseable falls back to 1.0 (log
@@ -58,6 +60,7 @@ export type Session = {
 // W14: agent-events ingress. Postgres comes through a Hyperdrive binding in the worker; tests
 // and `wrangler dev` inject a connection string via the same shape (agent-testdb only).
 export type AgentEventsEnv = {
+  AGENT_DB?: { connectionString: string };
   // Optional signed bot observation configuration; missing values fail closed.
   BOT_ENDPOINT_URL?: string;
   BOT_KEY_ID?: string;

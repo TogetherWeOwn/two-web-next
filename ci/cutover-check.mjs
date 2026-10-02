@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { headerIndexingRules } from './robots-directives.mjs';
 
 const exec = promisify(execFile);
 export const ORIGIN_HEADER = 'x-two-origin';
@@ -30,6 +31,7 @@ export const URL_CASES = [
   { frozen: '/events/past', path: '/events/past', status: 200, html: true, indexable: false },
   { frozen: '/e/{key}', path: '/e/{key}', status: 200, html: true, indexable: true },
   { frozen: '/events.json', path: '/events.json', status: 401 },
+  { frozen: '/events/{key}', path: '/events/{key}', status: 401 },
   { frozen: '.ics', path: '/events.ics', status: 200 },
   { frozen: '.ics', path: '/events/{key}.ics', status: 200 },
   { frozen: '.rss', path: '/events.rss', status: 200 },
@@ -193,23 +195,8 @@ function absoluteOn(value, origin) {
   try { const url = new URL(value); return url.origin === origin && !url.username && !url.password; }
   catch { return false; }
 }
-// Directive names, not values: max-image-preview: none does not mean noindex.
-// Source: https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag
-const valuedDirectives = new Set(['max-snippet', 'max-image-preview', 'max-video-preview', 'unavailable_after']);
 function indexingRules(header, html) {
-  const rules = [];
-  for (const field of Array.isArray(header) ? header : [header ?? '']) {
-    let crawler = '*';
-    for (let token of field.toLowerCase().split(',')) {
-      token = token.trim();
-      const scope = token.match(/^([\w*-]+):\s*(.*)$/);
-      if (scope && !valuedDirectives.has(scope[1])) {
-        crawler = scope[1];
-        token = scope[2];
-      }
-      if (['noindex', 'none'].includes(token)) rules.push({ crawler, source: 'header' });
-    }
-  }
+  const rules = headerIndexingRules(header);
   for (const tag of tags(html, 'meta')) {
     const name = tag.name?.toLowerCase();
     if (!['robots', 'googlebot', 'googlebot-news', 'bingbot'].includes(name)) continue;

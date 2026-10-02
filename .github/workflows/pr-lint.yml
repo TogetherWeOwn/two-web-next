@@ -41,53 +41,27 @@ env:
 jobs:
   pr-lint:
     name: pr-lint
-    runs-on: [self-hosted, two-selfhosted]
+    # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-lint') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 5
+    env:
+      # Metadata lint needs the immutable PR head, not a regenerated merge ref
+      # whose base can differ from the event snapshot. Push/dispatch keep their SHA.
+      PR_LINT_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_LINT_CHECKOUT_SHA }}
 
       - name: Resolve PR title/body
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Passed via env (not inlined into the script) so titles/bodies
-          # containing quotes can't break shell parsing.
-          EVENT_TITLE: ${{ github.event.pull_request.title }}
-          EVENT_BODY: ${{ github.event.pull_request.body }}
-          EVENT_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ inputs.pr_number }}
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Validating release PR #$PR_NUMBER via the API."
-            TITLE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json title --jq .title)
-            BODY=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
-            AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json author --jq .author.login)
-            # The default checkout is the dispatch ref (the release branch
-            # head = the PR head), which is the SHA required checks match on.
-            EVENT=pull_request
-          else
-            TITLE="$EVENT_TITLE"
-            BODY="$EVENT_BODY"
-            AUTHOR="$EVENT_AUTHOR"
-            EVENT='${{ github.event_name }}'
-          fi
-          {
-            echo "title<<PR_EOF"
-            echo "$TITLE"
-            echo "PR_EOF"
-            echo "body<<PR_EOF"
-            echo "$BODY"
-            echo "PR_EOF"
-            echo "author=$AUTHOR"
-            echo "event=$EVENT"
-          } >> "$GITHUB_OUTPUT"
+        run: python3 ci/pr-lint-output.py resolve
 
       - name: Check title, body and commits
         env:
-          EVENT: ${{ steps.pr.outputs.event }}
-          TITLE: ${{ steps.pr.outputs.title }}
-          BODY: ${{ steps.pr.outputs.body }}
-          AUTHOR: ${{ steps.pr.outputs.author }}
+          PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
           COMMITS: ${{ toJSON(github.event.commits) }}
-        run: python3 ci/check-pr-conventions.py
+        run: python3 ci/pr-lint-output.py check

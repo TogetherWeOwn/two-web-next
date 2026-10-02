@@ -68,15 +68,19 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
 export function pgUniqueLock(sql: TxClient | Sql): UniqueLock {
   return {
     async acquire(key, ttlSeconds) {
+      const leaseToken = crypto.randomUUID();
       const rows = await sql`
-        insert into job_unique_locks (key, expires_at) values (${key}, clock_timestamp() + make_interval(secs => ${ttlSeconds}))
-        on conflict (key) do update set expires_at = clock_timestamp() + make_interval(secs => ${ttlSeconds})
+        insert into job_unique_locks (key, expires_at, owner_token)
+        values (${key}, clock_timestamp() + make_interval(secs => ${ttlSeconds}), ${leaseToken}::uuid)
+        on conflict (key) do update set
+          expires_at = clock_timestamp() + make_interval(secs => ${ttlSeconds}),
+          owner_token = excluded.owner_token
           where job_unique_locks.expires_at < clock_timestamp()
-        returning key`;
-      return rows.length > 0;
+        returning owner_token`;
+      return rows[0]?.owner_token ?? null;
     },
-    async release(key) {
-      await sql`delete from job_unique_locks where key = ${key}`;
+    async release(key, leaseToken) {
+      await sql`delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid`;
     },
   };
 }
@@ -119,10 +123,19 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
       await sql`delete from queue_jobs where job_id = ${jobId}::uuid`;
     },
     async failed(jobId, kind, key, reason) {
-      await sql.begin(async (tx) => {
+      await sql.begin("isolation level read committed", async (tx) => {
+        // Fence one dispatch even before the additive unique constraint lands.
+        // Keep the insert separate: after waiting for the lock, READ COMMITTED
+        // takes a fresh snapshot and sees the preceding delivery's commit.
+        // https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS
+        // https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED
+        await tx`select pg_advisory_xact_lock(hashtextextended('queue-failed:' || ${jobId}::uuid::text, 0))`;
         await tx`
           insert into queue_failed_jobs (job_id, kind, key, reason)
-          values (${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)})`;
+          select ${jobId}::uuid, ${kind}, ${key}, ${reason.slice(0, 2000)}
+          where not exists (select 1 from queue_failed_jobs where job_id = ${jobId}::uuid)`;
+        // A redelivery keeps the first failure, but still retires any live row.
+        // Insert errors abort this transaction before delete; none are swallowed.
         await tx`delete from queue_jobs where job_id = ${jobId}::uuid`;
       });
     },
@@ -145,15 +158,18 @@ export type QueueDepth = {
  * counted even when claimed, same as legacy). Throws on driver/table error — the
  * caller maps that to `queue.status: unknown`, never a 500.
  */
-export async function pgQueueDepth(sql: Sql): Promise<QueueDepth> {
+export async function pgQueueDepth(sql: Sql | postgres.TransactionSql): Promise<QueueDepth> {
+  // Health setup precedes this statement inside a transaction. now() would
+  // freeze availability at BEGIN; use one measurement-time clock instead.
+  // https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT
   const [row] = await sql`
     select
-      count(*) filter (where available_at <= now() and reserved_at is null)::int as pending,
-      count(*) filter (where available_at > now())::int as delayed,
+      count(*) filter (where available_at <= statement_timestamp() and reserved_at is null)::int as pending,
+      count(*) filter (where available_at > statement_timestamp())::int as delayed,
       count(*) filter (where reserved_at is not null)::int as reserved,
       count(*)::int as total,
       (select count(*)::int from queue_failed_jobs) as failed,
-      extract(epoch from now() - (min(created_at) filter (where available_at <= now() and reserved_at is null)))::int
+      extract(epoch from statement_timestamp() - (min(created_at) filter (where available_at <= statement_timestamp() and reserved_at is null)))::int
         as oldest_pending_age_seconds
     from queue_jobs`;
   if (!row) throw new Error("queue depth query returned no row");

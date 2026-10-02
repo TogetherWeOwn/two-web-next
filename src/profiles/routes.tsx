@@ -16,19 +16,23 @@
 // Session seam mirrors the admin guard: a row read, never a rotation.
 
 import { getSignedCookie } from "hono/cookie";
+import { enableAuthStatus } from "../auth-status";
 import { type Context, type Next, Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { dbFor, type EnvWithAdminDb } from "../admin/db";
+import { requestBodyLimit } from "../body-limit";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
-import { memberAccessLog, type AccessDecl, type AccessSink } from "../access-log";
-import { rateLimitExceeded } from "../errors";
+import { type AccessDecl, type AccessSink } from "../access-log";
+import { bufferedMemberHtml, bufferedMemberText, declareMemberResult, memberReadBoundary } from "../member-reads";
+import { NotFoundPage, rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
+import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
-import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
+import { PROFILE_COPY, PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { createDbProfileStore, type ProfileStore } from "./store";
 import { validateProfile } from "./validation";
@@ -37,6 +41,11 @@ import { MEMBER_STATS_BUDGET_MS, memberStatsWithBudget, readMemberStats, readOwn
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
 const SESSION_COOKIE = "__Host-two_session";
 const SNOWFLAKE = /^\d{10,25}$/;
+// UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
+// username, avatar, member…) refuses the whole write: no body key can name
+// another member or a roster column past the owner check.
+const WRITABLE_FIELDS = new Set(["bio", "games", "games_text", "timezone", PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD]);
+const UNSUPPORTED_FIELDS = "Only your bio, games and timezone can be changed.";
 
 type Verdict = Awaited<ReturnType<typeof checkJoinThrottle>>;
 
@@ -57,6 +66,10 @@ const migratedThrottle = new Set<string>();
 
 export function profilesApp(deps: ProfileDeps = {}) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+  app.onError((error, c) => {
+    console.error("Profile request failed; refusing contents.", { exception: error.constructor.name });
+    return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
+  });
 
   const storeFor = async (c: { env: Env }): Promise<ProfileStore | null> => {
     if (deps.store) return deps.store;
@@ -93,20 +106,31 @@ export function profilesApp(deps: ProfileDeps = {}) {
 
   // Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed).
   const gate = async (c: Ctx, next: Next) => {
+    c.header("cache-control", "private, no-store");
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    if (!token) return c.redirect("/auth/discord", 302);
+    // Guest: record where they were headed (legacy url.intended), then into
+    // the site OAuth flow — the callback returns them here after sign-in.
+    if (!token) return bounceToLogin(c);
     let viewer: Viewer | null = null;
     try {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
       if (!sessions) throw new Error("no session store");
       const row = await sessions.get(await hashToken(token));
-      if (row) viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
+      if (row) {
+        viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
+        if (row.member && c.req.method === "GET") await enableAuthStatus(c, sessions, await hashToken(token));
+      }
     } catch (err) {
-      console.error("profiles could not resolve the session; refusing.", { error: String(err) });
+      // Bounded like every other session-failure log: class name only — driver
+      // messages can carry DSN fragments (TOG-10355).
+      console.error("profiles could not resolve the session; refusing.", {
+        exception: err instanceof Error ? err.constructor.name : "unknown",
+      });
       return c.text("Profiles temporarily unavailable", 503);
     }
-    // A cookie whose row is gone (revoked/expired/rotated) is a guest.
-    if (!viewer) return c.redirect("/auth/discord", 302);
+    // A cookie whose row is gone (revoked/expired/rotated) is a guest — same
+    // intended-page bounce so the round trip lands them back here.
+    if (!viewer) return bounceToLogin(c);
     if (!viewer.member) return c.text("Forbidden", 403);
     c.set("viewerId", viewer.id);
     c.set("viewer", viewer);
@@ -118,53 +142,76 @@ export function profilesApp(deps: ProfileDeps = {}) {
   // would gate every route in the worker.
   for (const path of ["/profile", "/members/*"]) {
     app.use(path, gate);
-    app.use(path, memberAccessLog(sinkFor));
+    app.use(path, async (c, next) => {
+      if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
+      await memberReadBoundary(c, {
+        viewer: c.get("viewer").id, resource: "profile", action: "view",
+        route: path === "/profile" ? "profile" : "profiles.show",
+      }, async (entry) => {
+        const sink = await sinkFor(c);
+        if (!sink) throw new Error("no access-log sink");
+        return sink(entry);
+      }, next);
+      // Refused contents must leave the one-shot confirmation pending.
+      if (c.res.status === 200) await takeJoinResult(c);
+    });
   }
 
-  const render = async (c: Ctx, id: string, routeName: string) => {
-    if (!SNOWFLAKE.test(id)) return c.notFound();
+  const render = async (c: Ctx, id: string) => {
+    if (!SNOWFLAKE.test(id)) return bufferedMemberHtml(c, <NotFoundPage />, 404);
     const store = await storeFor(c);
-    if (!store) return c.text("Profiles temporarily unavailable", 503);
+    if (!store) return bufferedMemberText(c, "Profiles temporarily unavailable", 503);
     const member = await store.find(id);
-    if (!member) return c.notFound();
+    // Borrowed non-SQL stores declare retrieved keys, never the requested id.
+    declareMemberResult(member ? [member.id] : []);
+    if (!member) return bufferedMemberHtml(c, <NotFoundPage />, 404);
     const viewer = c.get("viewer");
-    // Stats and milestones belong to this same member: the existing declaration
-    // covers all three reads, without duplicating subjects or audit rows.
-    c.set("access", { resource: "profile", action: "view", route: routeName, subjects: [member.id] });
+    const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
-    return c.html(<ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} />);
+    return bufferedMemberHtml(c, <ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} joinResult={joinResult} />);
   };
 
-  app.get("/profile", (c) => render(c, c.get("viewer").id, "profile"));
-  app.get("/members/:user", (c) => render(c, c.req.param("user"), "profiles.show"));
+  app.get("/profile", (c) => render(c, c.get("viewer").id));
+  app.get("/members/:user", (c) => render(c, c.req.param("user")));
+
+  const admitWrite = async (c: Ctx, next: Next) => {
+    const viewer = c.get("viewer");
+    const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(() => ({ limited: false }) as Verdict);
+    if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
+    // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
+    const id = c.req.param("user") ?? "";
+    if (!SNOWFLAKE.test(id) || viewer.id !== id) return c.text("Forbidden", 403);
+    await next();
+  };
 
   const patch = async (c: Ctx, forced?: Record<string, unknown>) => {
     const id = c.req.param("user") ?? "";
-    const viewer = c.get("viewer");
-    const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(() => ({ limited: false }) as Verdict);
-    if (verdict.limited) {
-      return rateLimitExceeded(c, verdict.retryAfter);
-    }
-    // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
-    if (!SNOWFLAKE.test(id) || viewer.id !== id) return c.text("Forbidden", 403);
     const store = await storeFor(c);
     if (!store) return c.text("Profiles temporarily unavailable", 503);
     const member = await store.find(id);
     if (!member) return c.notFound();
 
     let input: Record<string, unknown>;
+    let isJson = false;
     try {
       if (forced) input = forced;
-      else if ((c.req.header("content-type") ?? "").includes("application/json")) input = (await c.req.json()) as Record<string, unknown>;
+      else if ((c.req.header("content-type") ?? "").includes("application/json")) {
+        isJson = true;
+        input = (await c.req.json()) as Record<string, unknown>;
+      }
       else input = { ...(await c.req.parseBody({ all: true })) };
     } catch {
       return c.text("Bad request", 400);
     }
     if (typeof input !== "object" || input === null || Array.isArray(input)) return c.text("Bad request", 400);
-    // `games` must be present (legacy `present|array`); a form without it is a blank list.
-    if (input.games === undefined && input.games_text === undefined) input.games = [];
+    // `games` must be present (legacy `present|array`). Only a plain form
+    // submission treats absence as a blank list; JSON must say so with `games: []`,
+    // otherwise an omitted key would silently wipe the stored list.
+    if (!isJson && input.games === undefined && input.games_text === undefined) input.games = [];
 
-    const result = validateProfile(input);
+    const result = Object.keys(input).every((key) => WRITABLE_FIELDS.has(key))
+      ? validateProfile(input)
+      : { ok: false as const, errors: { fields: UNSUPPORTED_FIELDS } };
     if (!result.ok) {
       if ((c.req.header("accept") ?? "").includes("application/json")) return c.json({ errors: result.errors }, 422);
       c.status(422);
@@ -177,7 +224,13 @@ export function profilesApp(deps: ProfileDeps = {}) {
           errors={result.errors}
           values={{
             bio: typeof input.bio === "string" ? input.bio : "",
-            games_text: typeof input.games_text === "string" ? input.games_text : "",
+            // Round-trip whichever representation was sent; games_text wins.
+            games_text:
+              typeof input.games_text === "string"
+                ? input.games_text
+                : Array.isArray(input.games)
+                  ? input.games.filter((g): g is string => typeof g === "string").join("\n")
+                  : "",
             timezone: typeof input.timezone === "string" ? input.timezone : "",
           }}
         />,
@@ -199,9 +252,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
     return c.redirect(`/members/${id}`, 303);
   };
 
-  app.patch("/members/:user", (c) => patch(c));
+  app.patch("/members/:user", admitWrite, requestBodyLimit("form"), (c) => patch(c));
   // Plain HTML forms cannot PATCH: the edit form posts `_method=PATCH`.
-  app.post("/members/:user", async (c) => {
+  app.post("/members/:user", admitWrite, requestBodyLimit("form"), async (c) => {
     const ct = c.req.header("content-type") ?? "";
     if (ct.includes("application/x-www-form-urlencoded") || ct.includes("multipart/form-data")) {
       const body = await c.req.parseBody({ all: true }).catch(() => null);
