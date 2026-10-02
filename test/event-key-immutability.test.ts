@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -41,7 +41,7 @@ const baseEnv: Env = {
 describe.skipIf(!process.env.DATABASE_URL)("event key immutability (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  const sent: QueueMessage[] = [];
   let env: Env;
 
   beforeAll(async () => {
@@ -50,37 +50,65 @@ describe.skipIf(!process.env.DATABASE_URL)("event key immutability (agent-testdb
       ...baseEnv,
       ADMIN_DB: fixture.db,
       SESSION_STORE: store,
-      EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
+      SYNC_EVENT_QUEUE: {
+        send: async (message: unknown) => {
+          sent.push(message as QueueMessage);
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+        },
+      },
     } as unknown as Env;
   });
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   beforeEach(async () => {
     await fixture.reset();
     sent.length = 0;
     await fixture.db.insert(events).values({
-      eventKey: EVENT_KEY, title: "Game night",
-      startsAt: new Date(STARTS_ISO), endsAt: new Date(ENDS_ISO),
-      timezone: "Europe/London", status: "draft",
+      eventKey: EVENT_KEY,
+      title: "Game night",
+      startsAt: new Date(STARTS_ISO),
+      endsAt: new Date(ENDS_ISO),
+      timezone: "Europe/London",
+      status: "draft",
     });
   });
 
   async function cookieFor(moderator = true) {
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "key-immutability-mod", username: "Moderator",
-      avatar: null, member: true, moderator, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId: "key-immutability-mod",
+      username: "Moderator",
+      avatar: null,
+      member: true,
+      moderator,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
+    return (
+      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
   }
 
-  const jsonHeaders = async () => ({ cookie: await cookieFor(), origin: APP_URL, "content-type": "application/json" });
-  const post = (body: unknown) => jsonHeaders().then((headers) =>
-    app.request("/events", { method: "POST", headers, body: JSON.stringify(body) }, env));
-  const patch = (key: string, body: unknown) => jsonHeaders().then((headers) =>
-    app.request(`/events/${key}`, { method: "PATCH", headers, body: JSON.stringify(body) }, env));
+  const jsonHeaders = async () => ({
+    cookie: await cookieFor(),
+    origin: APP_URL,
+    "content-type": "application/json",
+  });
+  const post = (body: unknown) =>
+    jsonHeaders().then((headers) =>
+      app.request("/events", { method: "POST", headers, body: JSON.stringify(body) }, env),
+    );
+  const patch = (key: string, body: unknown) =>
+    jsonHeaders().then((headers) =>
+      app.request(`/events/${key}`, { method: "PATCH", headers, body: JSON.stringify(body) }, env),
+    );
   const snapshot = async () => ({
     events: await fixture.db.select().from(events),
     audit: await fixture.db.select().from(activityLog),
@@ -107,17 +135,20 @@ describe.skipIf(!process.env.DATABASE_URL)("event key immutability (agent-testdb
   it.each([
     ["event_key", { event_key: FORGED_KEY }],
     ["eventKey", { eventKey: FORGED_KEY }],
-  ])("PATCH with a forged %s is refused and the row stays under the original key", async (_, forged) => {
-    const before = await snapshot();
-    const res = await patch(EVENT_KEY, forged);
-    expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: { event_key: KEY_ERROR } });
-    await expectUnchanged(before);
-    const row = await stored(EVENT_KEY);
-    expect(row?.eventKey).toBe(EVENT_KEY);
-    expect(row?.title).toBe("Game night");
-    expect(await stored(FORGED_KEY)).toBeUndefined();
-  });
+  ])(
+    "PATCH with a forged %s is refused and the row stays under the original key",
+    async (_, forged) => {
+      const before = await snapshot();
+      const res = await patch(EVENT_KEY, forged);
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: "invalid", fields: { event_key: KEY_ERROR } });
+      await expectUnchanged(before);
+      const row = await stored(EVENT_KEY);
+      expect(row?.eventKey).toBe(EVENT_KEY);
+      expect(row?.title).toBe("Game night");
+      expect(await stored(FORGED_KEY)).toBeUndefined();
+    },
+  );
 
   it("an ordinary title PATCH still succeeds and leaves the key alone", async () => {
     const res = await patch(EVENT_KEY, { title: "Renamed" });
@@ -128,16 +159,21 @@ describe.skipIf(!process.env.DATABASE_URL)("event key immutability (agent-testdb
 
   it("real SQL rejects a duplicate event_key with the unique constraint", async () => {
     const row = {
-      eventKey: DUP_KEY, title: "First holder",
-      startsAt: new Date(STARTS_ISO), endsAt: new Date(ENDS_ISO),
-      timezone: "Europe/London", status: "draft",
+      eventKey: DUP_KEY,
+      title: "First holder",
+      startsAt: new Date(STARTS_ISO),
+      endsAt: new Date(ENDS_ISO),
+      timezone: "Europe/London",
+      status: "draft",
     };
     await fixture.db.insert(events).values(row);
     const before = await fixture.db.select().from(events);
     let caught: unknown;
     try {
       await fixture.db.insert(events).values({ ...row, title: "Second holder" });
-    } catch (err) { caught = err; }
+    } catch (err) {
+      caught = err;
+    }
     // Drizzle wraps the Postgres error: code and constraint live on .cause.
     const cause = (caught as { cause?: unknown })?.cause;
     expect(cause).toMatchObject({ code: "23505", constraint_name: "events_event_key_unique" });

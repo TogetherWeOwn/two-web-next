@@ -35,7 +35,10 @@ function toFailedJob(row: Record<string, unknown>): FailedJob {
  * Bounded newest-first inspect over `queue_failed_jobs`. Read-only: listing
  * never mutates the dead letter, so repeated inspection is safe mid-incident.
  */
-export async function listFailedJobs(sql: Sql, opts?: { kind?: string; limit?: number }): Promise<FailedJob[]> {
+export async function listFailedJobs(
+  sql: Sql,
+  opts?: { kind?: string; limit?: number },
+): Promise<FailedJob[]> {
   const limit = Math.min(Math.max(opts?.limit ?? DEFAULT_LIST_LIMIT, 1), MAX_LIST_LIMIT);
   // Table names cannot be parameterized, but the kind value can — the two
   // static statements differ only in the filter, never in shape.

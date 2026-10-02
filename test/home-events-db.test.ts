@@ -1,26 +1,42 @@
 // Server-side cancellation proof: agent-testdb or the CI service container only.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listHomeUpcoming } from "../src/events/reads";
-import { createMemberDataFixture, testDatabaseUrl } from "./helpers/member-data-db";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 const raw = process.env.DATABASE_URL;
 const url = raw ? testDatabaseUrl(raw).href : undefined;
 
 describe.skipIf(!url)("homepage read cancellation (isolated test DB)", () => {
-  it.each(["events", "rsvps"] as const)("cancels the read blocked on %s and leaves no lock-waiting backend", async (table) => {
-    // Trace setup separately from the protected read; never log connection or row data.
-    const started = Date.now();
-    const trace = (phase: string) => console.info("Home cancellation phase", { table, phase, elapsedMs: Date.now() - started });
-    trace("fixture:start");
+  let fixture: MemberDataFixture | undefined;
+  // Schema creation/migrations and disposal have their own bounded lifecycle;
+  // they must not consume the cancellation test's unchanged five-second limit.
+  beforeEach(async () => {
     // The shared fixture validates before connecting and pins the password/port.
     // Two connections let the lock holder and read race inside our own schema.
-    const fixture = await createMemberDataFixture(url!, { max: 2 });
-    trace("fixture:ready");
-    const { client, db, schemaName } = fixture;
-    const eventKey = `home-timeout-${crypto.randomUUID()}`;
-    try {
+    fixture = await createMemberDataFixture(url!, { max: 2 });
+  }, 30_000);
+  afterEach(async () => {
+    await fixture?.dispose();
+    fixture = undefined;
+  }, 30_000);
+
+  it.each(["events", "rsvps"] as const)(
+    "cancels the read blocked on %s and leaves no lock-waiting backend",
+    async (table) => {
+      // Trace setup separately from the protected read; never log connection or row data.
+      const started = Date.now();
+      const trace = (phase: string) =>
+        console.info("Home cancellation phase", { table, phase, elapsedMs: Date.now() - started });
+      trace("fixture:ready");
+      const { client, db, schemaName } = fixture!;
+      const eventKey = `home-timeout-${crypto.randomUUID()}`;
+      trace("event:seeding");
       await client`insert into events (event_key, title, starts_at, ends_at, status)
-        values (${eventKey}, 'Home timeout fixture', '2070-01-01T18:00:00Z', '2070-01-01T20:00:00Z', 'published')`;
+      values (${eventKey}, 'Home timeout fixture', '2070-01-01T18:00:00Z', '2070-01-01T20:00:00Z', 'published')`;
       trace("event:seeded");
       await client.begin(async (locker) => {
         trace("locker:started");
@@ -34,21 +50,18 @@ describe.skipIf(!url)("homepage read cancellation (isolated test DB)", () => {
         trace("reader:cancelled");
         expect(Date.now() - t0).toBeLessThan(1500);
         const [active] = await locker`select count(*)::int as n from pg_stat_activity a
-          join pg_locks l on l.pid = a.pid
-          where a.datname = current_database() and a.state = 'active' and a.wait_event_type = 'Lock'
-          and l.relation = to_regclass(${`${schemaName}.${table}`}) and not l.granted and a.pid <> pg_backend_pid()`;
+        join pg_locks l on l.pid = a.pid
+        where a.datname = current_database() and a.state = 'active' and a.wait_event_type = 'Lock'
+        and l.relation = to_regclass(${`${schemaName}.${table}`}) and not l.granted and a.pid <> pg_backend_pid()`;
         expect(active!.n).toBe(0);
         trace("reader:no-waiter");
       });
       trace("locker:released");
       // LOCAL settings must not leak into the pooled connection's next request.
-      const [settings] = await client`select current_setting('lock_timeout') as lock, current_setting('statement_timeout') as statement`;
+      const [settings] =
+        await client`select current_setting('lock_timeout') as lock, current_setting('statement_timeout') as statement`;
       expect(settings).toMatchObject({ lock: "0", statement: "0" });
       trace("settings:restored");
-    } finally {
-      trace("fixture:disposing");
-      await fixture.dispose();
-      trace("fixture:disposed");
-    }
-  });
+    },
+  );
 });
