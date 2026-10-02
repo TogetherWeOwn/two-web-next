@@ -212,10 +212,22 @@ describe("featured form image guidance (local fixtures)", () => {
     const store = createMemorySessionStore();
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "111111111111111111", username: "mod", avatar: null,
-      member: true, moderator: true, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId: "111111111111111111",
+      username: "mod",
+      avatar: null,
+      member: true,
+      moderator: true,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    const cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+    const cookie = (
+      await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
     const res = await adminApp(store).request("/featured/1", { headers: { cookie } }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
