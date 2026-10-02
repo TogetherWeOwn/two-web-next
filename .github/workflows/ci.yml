@@ -14,9 +14,18 @@ permissions:
   # The scope job lists the PR's changed files via the API.
   pull-requests: read
 
+# Runs on main are never cancelled in progress: a cancel request marks the run
+# cancelled even when every job then succeeds, and the staging deploy trigger
+# rejects a cancelled conclusion. That left 54 of 60 main runs cancelled on
+# 2026-10-02 and staging never deployed. The group stays per ref, so main runs
+# are serialized (finish in push order; a newer pending run replaces an older
+# pending one before it starts), and an older SHA can never finish after, and
+# deploy over, a newer one. PR pushes still cancel superseded runs (TOG-11811
+# queue economy). test/ci-concurrency.test.ts and the staging gate selftest pin
+# this.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose
