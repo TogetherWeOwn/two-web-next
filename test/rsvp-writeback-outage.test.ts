@@ -6,30 +6,45 @@
 // failing bot transport still commits the seat with a null sync stamp and a
 // pending member view, then the same row retried through the real
 // handleSyncEvent stamps the event mirror + RSVP and flips the view to
-// synced. Uses the current EVENT_SYNC_QUEUE/enqueue seam only; SYNC_EVENT_QUEUE
+// synced. Uses the tracked SYNC_EVENT_QUEUE producer (TOG-10815);
 // routing (TOG-10815), commit-before-dispatch (:140) and real-mirror timing
 // (:141) stay out of scope.
 // Live against agent-testdb (skipped without DATABASE_URL). Never point this
 // at anything but a test container.
-import { randomUUID } from "node:crypto";
 import { serializeSigned } from "hono/utils/cookie";
-import { and, eq, lte } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { and, eq } from "drizzle-orm";
+import postgres from "postgres";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
-import {
-  RSVP_COPY,
-  RSVP_SYNCED_TESTID,
-  RSVP_SYNCING_TESTID,
-} from "../src/islands/contracts";
+import { RSVP_COPY, RSVP_SYNCED_TESTID, RSVP_SYNCING_TESTID } from "../src/islands/contracts";
+import { pgEventStore } from "../src/jobs/events";
 import { handleSyncEvent } from "../src/jobs/sync-event";
-import { BotTransportError, type BotClient, type EventStore } from "../src/jobs/types";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
-import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  BotTransportError,
+  type BotClient,
+  type EventStore,
+  type QueueMessage,
+} from "../src/jobs/types";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
+
 const APP_URL = "https://next.example.test";
 
 // Member-visible sync state derives from the persisted stamp, never from the
@@ -51,7 +66,14 @@ async function cookieFor(store: SessionStore, userId: string): Promise<string> {
     moderator: false,
     expiresAt: new Date(Date.now() + 3600_000),
   });
-  return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+  return (
+    await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
 }
 
 // Static containment pin: the guard this file wires below refuses non-test
@@ -72,7 +94,12 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
   let fixture: MemberDataFixture;
   let db: MemberDataFixture["db"];
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  const sent: QueueMessage[] = [];
+  let jobsSql: postgres.Sql;
+  const okSend = async (m: unknown) => {
+    sent.push(m as QueueMessage);
+    return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+  };
   const env = {
     APP_URL,
     DISCORD_CLIENT_ID: "client-id",
@@ -81,9 +108,12 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET,
-    get ADMIN_DB() { return db; },
+    get ADMIN_DB() {
+      return db;
+    },
     SESSION_STORE: store,
-    EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+    DB: { connectionString: "" },
+    SYNC_EVENT_QUEUE: { send: okSend },
   } as unknown as Env;
   // Queue-down variant: enqueue throws, so the write must still commit and the
   // reconcile pass owns the redispatch (enqueue never throws by contract).
@@ -97,13 +127,39 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET,
-    get ADMIN_DB() { return db; },
+    get ADMIN_DB() {
+      return db;
+    },
     SESSION_STORE: store,
-    EVENT_SYNC_QUEUE: { send: async () => { throw new Error("queue down"); } },
+    DB: { connectionString: "" },
+    SYNC_EVENT_QUEUE: {
+      send: async () => {
+        throw new Error("queue down");
+      },
+    },
   } as unknown as Env;
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
     db = fixture.db;
+    const url = testDatabaseUrl(process.env.DATABASE_URL!);
+    const realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres")).default;
+    const options = {
+      max: 2,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+      connection: { search_path: fixture.schemaName },
+      onnotice: () => {},
+    };
+    (env as unknown as { DB: { connectionString: string } }).DB.connectionString = url.href;
+    (failingQueueEnv as unknown as { DB: { connectionString: string } }).DB.connectionString =
+      url.href;
+    // Producer pools go to the same disposable schema as the fixture.
+    vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}>) => {
+      testDatabaseUrl(raw);
+      return realPostgres(raw, { ...opts, ...options });
+    }) as typeof postgres);
+    jobsSql = realPostgres(url.href, options);
   });
 
   const call = async (
@@ -131,8 +187,16 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     call(env, "PUT", key, as, { status });
 
   const HOUR = 3600_000;
-  async function seed(over: Partial<typeof events.$inferInsert> = {}): Promise<{ id: number; key: string }> {
-    const key = `01WB${Math.random().toString(36).slice(2, 14).toUpperCase().replace(/[ILOU]/g, "7")}`.padEnd(26, "0").slice(0, 26);
+  async function seed(
+    over: Partial<typeof events.$inferInsert> = {},
+  ): Promise<{ id: number; key: string }> {
+    const key = `01WB${Math.random()
+      .toString(36)
+      .slice(2, 14)
+      .toUpperCase()
+      .replace(/[ILOU]/g, "7")}`
+      .padEnd(26, "0")
+      .slice(0, 26);
     const [row] = await db
       .insert(events)
       .values({
@@ -148,40 +212,16 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     return { id: row!.id, key };
   }
   const rsvpRow = async (eventId: number, userId: string) =>
-    (await db.select().from(rsvps).where(and(eq(rsvps.eventId, eventId), eq(rsvps.userId, userId))))[0] ?? null;
+    (
+      await db
+        .select()
+        .from(rsvps)
+        .where(and(eq(rsvps.eventId, eventId), eq(rsvps.userId, userId)))
+    )[0] ?? null;
   const eventRow = async (key: string) =>
     (await db.select().from(events).where(eq(events.eventKey, key)))[0]!;
 
-  // Test-local real-SQL EventStore: find reads the published row, recordMirrored
-  // persists discord_event_id and stamps only RSVPs updated at or before the
-  // mirror instant (the src/jobs/types.ts contract).
-  const realStore = (): EventStore => ({
-    find: async (eventKey: string) => {
-      const row = await eventRow(eventKey);
-      if (!row || row.status !== "published") return null;
-      return {
-        eventKey,
-        payload: {
-          eventKey,
-          name: row.title,
-          startsAt: row.startsAt.toISOString(),
-          endsAt: row.endsAt.toISOString(),
-          location: row.location ?? "",
-          description: row.description,
-        },
-        mirrored: true,
-      };
-    },
-    recordMirrored: async (eventKey: string, discordEventId: string, mirroredAt: Date) => {
-      const row = await eventRow(eventKey);
-      await db.update(events).set({ discordEventId, updatedAt: mirroredAt }).where(eq(events.id, row.id));
-      await db.update(rsvps).set({ syncedToDiscordAt: mirroredAt })
-        .where(and(eq(rsvps.eventId, row.id), lte(rsvps.updatedAt, mirroredAt)));
-    },
-    closeFinished: async () => 0,
-    materializeSeries: async () => 0,
-    staleEventKeys: async () => [],
-  });
+  const realStore = (): EventStore => pgEventStore(jobsSql);
 
   beforeEach(async () => {
     await fixture.client`delete from web_throttle_hits`;
@@ -189,12 +229,13 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     sent.length = 0;
   });
   afterAll(async () => {
+    vi.mocked(postgres).mockReset();
+    await jobsSql?.end({ timeout: 1 });
     await fixture?.dispose();
   });
 
   it("bot outage saves the seat as pending, recovery stamps the same row synced", async () => {
     const ev = await seed();
-    const idempotencyKey = randomUUID();
     let botUp = false;
     const bot = {
       upsertEvent: async () => {
@@ -207,10 +248,13 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     // Phase 1 — outage: the member write still commits.
     const res = await put(ev.key, "member-1", "going");
     expect(res.status).toBe(201);
-    expect(await res.json()).toEqual({ data: { status: "going", synced_to_discord_at: null, waitlist_position: null } });
+    expect(await res.json()).toEqual({
+      data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
+    });
     // The write-back was still dispatched; the outage lives consumer-side.
-    expect(sent.map((m) => m.action)).toEqual(["event.upsert"]);
-    expect(sent[0]!.eventKey).toBe(ev.key);
+    expect(sent.map((m) => m.kind)).toEqual(["sync-event"]);
+    const produced = sent[0] as Extract<QueueMessage, { kind: "sync-event" }>;
+    expect(produced.eventKey).toBe(ev.key);
 
     // Seat persisted, no stamp anywhere: no false mirror.
     const saved = await rsvpRow(ev.id, "member-1");
@@ -219,9 +263,16 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
 
     // Phase 2 — member view while the retry is outstanding: confirmed seat,
     // pending sync, never a save failure.
-    expect(memberSyncView(saved!.syncedToDiscordAt)).toEqual({ copy: RSVP_COPY.syncing, testid: RSVP_SYNCING_TESTID });
+    expect(memberSyncView(saved!.syncedToDiscordAt)).toEqual({
+      copy: RSVP_COPY.syncing,
+      testid: RSVP_SYNCING_TESTID,
+    });
     expect(RSVP_COPY.syncing).toBe("Saved. Syncing to Discord.");
-    const retry = await handleSyncEvent({ eventKey: ev.key, idempotencyKey }, 1, { bot, events: store });
+    const retry = await handleSyncEvent(produced, 1, {
+      bot,
+      events: store,
+      now: () => new Date(Date.now() + 60_000),
+    });
     expect(retry).toEqual({ retryInSeconds: 10 });
     expect((await rsvpRow(ev.id, "member-1"))!.syncedToDiscordAt).toBeNull();
     expect((await eventRow(ev.key)).discordEventId).toBeNull();
@@ -229,25 +280,39 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp write-back outage (agent-testdb
     // Phase 3 — recovery: the same row retried through the handler stamps the
     // event mirror and the RSVP, and the member view flips to synced.
     botUp = true;
-    expect(await handleSyncEvent({ eventKey: ev.key, idempotencyKey }, 2, { bot, events: store })).toEqual({ done: true });
+    expect(
+      await handleSyncEvent(produced, 2, {
+        bot,
+        events: store,
+        now: () => new Date(Date.now() + 600_000),
+      }),
+    ).toEqual({ done: true });
     const synced = await rsvpRow(ev.id, "member-1");
     expect(synced!.id).toBe(saved!.id);
     expect(synced!.syncedToDiscordAt).not.toBeNull();
     expect((await eventRow(ev.key)).discordEventId).toBe("1234567890");
-    expect(memberSyncView(synced!.syncedToDiscordAt)).toEqual({ copy: RSVP_COPY.synced, testid: RSVP_SYNCED_TESTID });
+    expect(memberSyncView(synced!.syncedToDiscordAt)).toEqual({
+      copy: RSVP_COPY.synced,
+      testid: RSVP_SYNCED_TESTID,
+    });
   });
 
   it("a failed enqueue still saves the seat as pending (no retry yet)", async () => {
     const ev = await seed();
     const res = await call(failingQueueEnv, "PUT", ev.key, "member-2", { status: "going" });
     expect(res.status).toBe(201);
-    expect(await res.json()).toEqual({ data: { status: "going", synced_to_discord_at: null, waitlist_position: null } });
+    expect(await res.json()).toEqual({
+      data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
+    });
     expect(sent).toHaveLength(0);
     const saved = await rsvpRow(ev.id, "member-2");
     expect(saved).toMatchObject({ status: "going", syncedToDiscordAt: null });
     expect((await eventRow(ev.key)).discordEventId).toBeNull();
     // Pending without any retry outstanding: still "syncing", never the save-failure copy.
-    expect(memberSyncView(saved!.syncedToDiscordAt)).toEqual({ copy: RSVP_COPY.syncing, testid: RSVP_SYNCING_TESTID });
+    expect(memberSyncView(saved!.syncedToDiscordAt)).toEqual({
+      copy: RSVP_COPY.syncing,
+      testid: RSVP_SYNCING_TESTID,
+    });
     expect(RSVP_COPY.failedTitle).toBe("That RSVP didn't save.");
   });
 });

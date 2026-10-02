@@ -4,7 +4,9 @@ import type { Env } from "../src/env";
 
 // Local outage fixture: never constructs a connection or reads any database.
 vi.mock("postgres", () => ({
-  default: vi.fn(() => { throw new Error("database unavailable"); }),
+  default: vi.fn(() => {
+    throw new Error("database unavailable");
+  }),
 }));
 
 const env: Env = {

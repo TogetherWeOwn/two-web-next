@@ -8,6 +8,7 @@
 
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
+import { databaseUnavailable } from "./errors";
 
 export type AccessDecl = {
   resource: string;
@@ -66,7 +67,7 @@ export function memberAccessLog(sink: (c: { env: Env }) => Promise<AccessSink | 
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
       if (enforceOn(c.env)) {
-        c.res = c.text("Member data is temporarily unavailable.", 503);
+        c.res = await databaseUnavailable(c);
         c.header("cache-control", "private, no-store");
       }
     }

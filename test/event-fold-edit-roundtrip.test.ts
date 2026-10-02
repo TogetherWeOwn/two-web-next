@@ -25,8 +25,14 @@ const WALL = "2026-10-25 01:30";
 const FIRST_OCCURRENCE = "2026-10-25T00:30:00.000Z";
 const SECOND_OCCURRENCE = "2026-10-25T01:30:00.000Z";
 const FORM = {
-  title: "Fold night", game: "Chess", description: "Boards out", location: "Voice", capacity: "8",
-  starts_at: WALL, ends_at: "2026-10-25 03:00", timezone: "Europe/London",
+  title: "Fold night",
+  game: "Chess",
+  description: "Boards out",
+  location: "Voice",
+  capacity: "8",
+  starts_at: WALL,
+  ends_at: "2026-10-25 03:00",
+  timezone: "Europe/London",
 };
 
 function inputValue(html: string, name: string): string {
@@ -52,45 +58,87 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "300000000000000003", username: "mod", avatar: null,
-      member: true, moderator: true, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId: "300000000000000003",
+      username: "mod",
+      avatar: null,
+      member: true,
+      moderator: true,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    cookie = (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
+    cookie = (
+      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
     env = {
-      APP_URL, SESSION_SECRET, DISCORD_CLIENT_ID: "client-id", DISCORD_CLIENT_SECRET: "client-secret",
-      DISCORD_GUILD_ID: "guild", DISCORD_INVITE_URL: "https://discord.gg/invite", DISCORD_BOT_TOKEN: "bot-token",
+      APP_URL,
+      SESSION_SECRET,
+      DISCORD_CLIENT_ID: "client-id",
+      DISCORD_CLIENT_SECRET: "client-secret",
+      DISCORD_GUILD_ID: "guild",
+      DISCORD_INVITE_URL: "https://discord.gg/invite",
+      DISCORD_BOT_TOKEN: "bot-token",
       ADMIN_DB: fixture.db,
     } as Env;
-    app = new Hono<{ Bindings: Env }>().use("*", sameOrigin)
+    app = new Hono<{ Bindings: Env }>()
+      .use("*", sameOrigin)
       .route("/admin", adminApp({ sessionStore: store, db: fixture.db }));
   });
-  afterAll(async () => { await fixture?.dispose(); });
-  beforeEach(async () => { await fixture.reset(); });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
+  beforeEach(async () => {
+    await fixture.reset();
+  });
 
   const seed = (key: string, startsAt: string, endsAt: string) =>
     fixture.db.insert(events).values({
-      eventKey: key, title: "Fold night", timezone: "Europe/London", status: "draft",
-      startsAt: new Date(startsAt), endsAt: new Date(endsAt),
+      eventKey: key,
+      title: "Fold night",
+      timezone: "Europe/London",
+      status: "draft",
+      startsAt: new Date(startsAt),
+      endsAt: new Date(endsAt),
     });
   const saved = async (key: string) =>
     (await fixture.db.select().from(events).where(eq(events.eventKey, key)))[0]!;
-  const post = (key: string, values: Record<string, string>) => app.request(APP_URL + `/admin/events/${key}`, {
-    method: "POST", headers: { cookie, origin: APP_URL }, body: new URLSearchParams(values),
-  }, env);
+  const post = (key: string, values: Record<string, string>) =>
+    app.request(
+      APP_URL + `/admin/events/${key}`,
+      {
+        method: "POST",
+        headers: { cookie, origin: APP_URL },
+        body: new URLSearchParams(values),
+      },
+      env,
+    );
 
   // GET the real edit page, resubmit its rendered wall text unchanged: the
   // stored instant must survive byte-for-byte on either side of the fold.
-  for (const [side, stored] of [["first (BST)", FIRST_OCCURRENCE], ["second (GMT)", SECOND_OCCURRENCE]] as const) {
+  for (const [side, stored] of [
+    ["first (BST)", FIRST_OCCURRENCE],
+    ["second (GMT)", SECOND_OCCURRENCE],
+  ] as const) {
     it(`unchanged edit-route save preserves the ${side} occurrence`, async () => {
       const key = `fold-keep-${stored === FIRST_OCCURRENCE ? "bst" : "gmt"}`;
       await seed(key, stored, "2026-10-25T03:00:00.000Z");
-      const page = await app.request(APP_URL + `/admin/events/${key}`, { headers: { cookie } }, env);
+      const page = await app.request(
+        APP_URL + `/admin/events/${key}`,
+        { headers: { cookie } },
+        env,
+      );
       expect(page.status).toBe(200);
       const html = await page.text();
       expect(inputValue(html, "starts_at")).toBe(WALL);
-      const res = await post(key, { ...FORM, starts_at: inputValue(html, "starts_at"), ends_at: inputValue(html, "ends_at") });
+      const res = await post(key, {
+        ...FORM,
+        starts_at: inputValue(html, "starts_at"),
+        ends_at: inputValue(html, "ends_at"),
+      });
       expect(res.status).toBe(303);
       const row = await saved(key);
       expect(row.startsAt.toISOString()).toBe(stored);
@@ -105,10 +153,18 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
       ["fold-ms-bst", "2026-10-25T00:30:27.125Z"],
       ["fold-ms-gmt", "2026-10-25T01:30:27.125Z"],
     ] as const) {
-      const page = await app.request(APP_URL + `/admin/events/${key}`, { headers: { cookie } }, env);
+      const page = await app.request(
+        APP_URL + `/admin/events/${key}`,
+        { headers: { cookie } },
+        env,
+      );
       expect(page.status).toBe(200);
       const html = await page.text();
-      const res = await post(key, { ...FORM, starts_at: inputValue(html, "starts_at"), ends_at: inputValue(html, "ends_at") });
+      const res = await post(key, {
+        ...FORM,
+        starts_at: inputValue(html, "starts_at"),
+        ends_at: inputValue(html, "ends_at"),
+      });
       expect(res.status).toBe(303);
       const row = await saved(key);
       expect(row.startsAt.toISOString()).toBe(starts);
@@ -116,15 +172,15 @@ describe.skipIf(!process.env.DATABASE_URL)("fold edit-route round-trip (isolated
     }
   });
 
-  it("a deliberate wall-time edit drops the carrier and re-parses under first-occurrence policy", async () => {
-    // Stored on the GMT side; the moderator moves 01:30 -> 01:45 inside the
+  it("a deliberate wall-time edit drops the carrier and re-parses under second-occurrence policy", async () => {
+    // Stored on the BST side; the moderator moves 01:30 -> 01:45 inside the
     // fold. The wall text no longer matches the rendered carrier minute, so
-    // the save takes the fresh-parse first (BST) occurrence, not the stored side.
-    await seed("fold-drop", SECOND_OCCURRENCE, "2026-10-25T03:00:00.000Z");
+    // the save takes the fresh-parse second (GMT) occurrence, not the stored side.
+    await seed("fold-drop", FIRST_OCCURRENCE, "2026-10-25T03:00:00.000Z");
     const res = await post("fold-drop", { ...FORM, starts_at: "2026-10-25 01:45" });
     expect(res.status).toBe(303);
     const row = await saved("fold-drop");
-    expect(row.startsAt.toISOString()).toBe("2026-10-25T00:45:00.000Z");
+    expect(row.startsAt.toISOString()).toBe("2026-10-25T01:45:00.000Z");
     expect(row.endsAt.toISOString()).toBe("2026-10-25T03:00:00.000Z");
   });
 

@@ -107,6 +107,66 @@ def command(args):
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout.strip()
 
 
+def diagnostic_field(value, kind):
+    if value is None:
+        return "[missing]"
+    if kind == "number":
+        return value if type(value) is int and 0 < value <= 2**53 - 1 else "[invalid]"
+    if kind == "event":
+        return value if isinstance(value, str) and value in (
+            "push", "pull_request", "workflow_dispatch") else "[invalid]"
+    if not isinstance(value, str):
+        return "[invalid]"
+    if kind == "sha" and len(value) == 40 and re.fullmatch(r"[0-9a-f]{40}", value):
+        return value
+    if kind == "repository" and len(value) <= 140 and re.fullmatch(
+            r"[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}", value):
+        return value.casefold()
+    return "[invalid]"
+
+
+def diagnostic_lookup(value, *keys):
+    for key in keys:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def binding_diagnostic(event_name, repository, workflow_sha, checked_sha, parents,
+                       event, pull_request, number):
+    # Evidence only: never serialize arbitrary event/metadata/error values.
+    snapshot = diagnostic_lookup(event, "pull_request")
+    fields = {
+        "event": (event_name, "event"),
+        "requested_pr_number": (number, "number"),
+        "event_pr_number": (diagnostic_lookup(event, "number"), "number"),
+        "event_snapshot_pr_number": (diagnostic_lookup(snapshot, "number"), "number"),
+        "api_pr_number": (diagnostic_lookup(pull_request, "number"), "number"),
+        "workflow_repository": (repository, "repository"),
+        "event_repository": (diagnostic_lookup(event, "repository", "full_name"), "repository"),
+        "event_base_repository": (diagnostic_lookup(snapshot, "base", "repo", "full_name"), "repository"),
+        "event_head_repository": (diagnostic_lookup(snapshot, "head", "repo", "full_name"), "repository"),
+        "api_base_repository": (diagnostic_lookup(pull_request, "base", "repo", "full_name"), "repository"),
+        "api_head_repository": (diagnostic_lookup(pull_request, "head", "repo", "full_name"), "repository"),
+        "workflow_sha": (workflow_sha, "sha"),
+        "checked_sha": (checked_sha, "sha"),
+        "event_head_sha": (diagnostic_lookup(snapshot, "head", "sha"), "sha"),
+        "api_head_sha": (diagnostic_lookup(pull_request, "head", "sha"), "sha"),
+        "event_base_sha": (diagnostic_lookup(snapshot, "base", "sha"), "sha"),
+        "api_base_sha": (diagnostic_lookup(pull_request, "base", "sha"), "sha"),
+    }
+    record = {"diagnostic": "pr.binding_failed"}
+    record.update({key: diagnostic_field(value, kind) for key, (value, kind) in fields.items()})
+    record["parent_count"] = len(parents)
+    record["first_parent_sha"] = diagnostic_field(parents[0] if parents else None, "sha")
+    record["second_parent_sha"] = diagnostic_field(parents[1] if len(parents) > 1 else None, "sha")
+    line = json.dumps(record, ensure_ascii=True, separators=(",", ":"))
+    if len(line) > 2048:
+        line = '{"diagnostic":"pr.binding_failed","status":"[oversized]"}'
+    print(line, file=sys.stderr)
+
+
 def main():
     event_name = os.environ["GITHUB_EVENT_NAME"]
     if event_name == "push":
@@ -127,22 +187,30 @@ def main():
         # One REST snapshot includes identity, current state/head and metadata;
         # separate gh title/body/author requests could mix different revisions.
         pull_request = json.loads(command(["gh", "api", f"repos/{repository}/pulls/{number}"]))
-        # The metadata-only job pins PR checkout to the immutable event head.
-        # Binding below still checks that pin against the event and live API head;
-        # push/dispatch and older merge-ref callers retain GITHUB_SHA binding.
-        checkout_sha = os.environ.get("PR_LINT_CHECKOUT_SHA", os.environ["GITHUB_SHA"])
-        if "PR_LINT_CHECKOUT_SHA" in os.environ:
-            expected = (event.get("pull_request", {}).get("head", {}).get("sha")
-                        if event_name == "pull_request" else os.environ["GITHUB_SHA"])
-            require(checkout_sha == expected, "Checkout pin differs from the event revision")
-        require(re.fullmatch(r"[0-9a-f]{40}", checkout_sha) and checked_sha == checkout_sha,
-                "Checkout does not match the workflow SHA")
-        merge_commit = None
-        if event_name == "pull_request" and checkout_sha != pull_request.get("head", {}).get("sha"):
-            merge_commit = json.loads(command([
-                "gh", "api", f"repos/{repository}/git/commits/{checkout_sha}"]))
-        metadata = resolve_metadata(event_name, repository, checkout_sha, checked_sha, parents,
-                                    event, pull_request, dispatch_number, merge_commit)
+        try:
+            # The metadata-only job pins PR checkout to the immutable event head.
+            # Binding below still checks that pin against the event and live API head;
+            # push/dispatch and older merge-ref callers retain GITHUB_SHA binding.
+            checkout_sha = os.environ.get("PR_LINT_CHECKOUT_SHA", os.environ["GITHUB_SHA"])
+            if "PR_LINT_CHECKOUT_SHA" in os.environ:
+                expected = (event.get("pull_request", {}).get("head", {}).get("sha")
+                            if event_name == "pull_request" else os.environ["GITHUB_SHA"])
+                require(checkout_sha == expected, "Checkout pin differs from the event revision")
+            require(re.fullmatch(r"[0-9a-f]{40}", checkout_sha) and checked_sha == checkout_sha,
+                    "Checkout does not match the workflow SHA")
+            merge_commit = None
+            if event_name == "pull_request" and checkout_sha != pull_request.get("head", {}).get("sha"):
+                merge_commit = json.loads(command([
+                    "gh", "api", f"repos/{repository}/git/commits/{checkout_sha}"]))
+            metadata = resolve_metadata(event_name, repository, checkout_sha, checked_sha, parents,
+                                        event, pull_request, dispatch_number, merge_commit)
+        except (ValueError, KeyError, TypeError, AttributeError, subprocess.CalledProcessError):
+            try:
+                binding_diagnostic(event_name, repository, os.environ.get("GITHUB_SHA"),
+                                   checked_sha, parents, event, pull_request, number)
+            except OSError:
+                pass  # A failed diagnostic write must not replace the original rejection.
+            raise
     print(json.dumps(metadata))
 
 

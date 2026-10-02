@@ -1,6 +1,10 @@
-import type { Sql } from 'postgres';
+import type { Sql } from "postgres";
 
-export interface FieldMapping { name: string; legacy: string; next: string }
+export interface FieldMapping {
+  name: string;
+  legacy: string;
+  next: string;
+}
 export interface TableMapping {
   name: string;
   legacy: { from: string; where?: string };
@@ -31,12 +35,20 @@ export interface VerificationReport {
   detailLimit: number;
   tables: TableReport[];
 }
-export class VerificationError extends Error { code: string; constructor(code: string) }
+export class VerificationError extends Error {
+  code: string;
+  constructor(code: string);
+}
 export function quoteIdentifier(value: string): string;
 export function validateMap(map: unknown): TableMapping[];
 export function compareKeys(a: string[], b: string[]): number;
+export function assertDistinctDatabases(legacyRaw: string, nextRaw: string): void;
 export function verify(options: {
-  legacy: Sql; next: Sql; map: TableMapping[]; batchSize?: number; detailLimit?: number;
+  legacy: Sql;
+  next: Sql;
+  map: TableMapping[];
+  batchSize?: number;
+  detailLimit?: number;
 }): Promise<VerificationReport>;
 export function renderMarkdown(report: VerificationReport): string;
 export function main(args?: string[], env?: NodeJS.ProcessEnv): Promise<number>;
