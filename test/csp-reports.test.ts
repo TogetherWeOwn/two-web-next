@@ -281,7 +281,7 @@ describe("cspReportLogFields", () => {
       blocked_uri: null,
       violated_directive: null,
       document_uri: null,
-      source_file: "x",
+      source_file: null,
       line_number: null,
     });
   });
