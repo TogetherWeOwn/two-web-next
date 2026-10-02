@@ -650,7 +650,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(guest.headers.get("cache-control")).toBe("public, max-age=60");
     expect(guest.headers.get("vary")?.toLowerCase()).toContain("cookie");
     const html = await guest.text();
-    expect(html).toContain('href="/auth/discord?next=%2Fevents" data-testid="signin"');
+    expect(html).toContain('href="/join/discord?next=%2Fevents" data-testid="signin"');
     expect(html).toContain("Sign in with Discord");
 
     const store = createMemorySessionStore();

@@ -87,7 +87,8 @@ import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { feedUrl, googleCalendarUrl, webcalUrl } from "./feeds";
-import type { EventAttendee, EventLink, EventNeighbors, PublicEvent } from "./reads";
+import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
+import { RsvpButton } from "./rsvp-button";
 
 const fmt = (d: Date, tz: string): string => {
   try {
@@ -580,7 +581,8 @@ export const EventPage: FC<{
   session?: Session | null;
   joinResult?: JoinResult | null;
   waitlistPosition?: number | null;
-}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, joinResult, waitlistPosition }) => {
+  member?: boolean; answer?: ViewerRsvp | null; returnTo?: string;
+}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, joinResult, waitlistPosition, member = false, answer = null, returnTo }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -629,10 +631,13 @@ export const EventPage: FC<{
           <ul>{attendees.map((attendee) => (
             <li><a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a></li>
           ))}</ul>
+          <p>Attendees shown at page load. <a href={path} data-testid="event-attendees-refresh">Refresh attendees</a>.</p>
         </section>
       ) : null}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/going-count.js" defer />
+      <RsvpButton e={e} member={member} answer={answer} waitlistPosition={waitlistPosition} returnTo={returnTo ?? path} />
+      <script src="/islands/rsvp-button.js" defer />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
       {neighbors.previous || neighbors.next ? (
         <nav aria-label="More events" data-testid="event-pagination">
@@ -676,11 +681,13 @@ export const EventPage: FC<{
   );
 };
 
-export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonLd }) => (
+export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string; returnTo?: string }> = ({ e, jsonLd, returnTo }) => (
   <Shell title={e.title} robots="noindex, nofollow">
     <p class="notice" data-testid="event-cancelled">Cancelled</p>
     <h1>{e.title}</h1>
     <p>This event was cancelled</p>
+    <RsvpButton e={e} member={false} answer={null} returnTo={returnTo ?? `/e/${e.eventKey}`} />
+    <script src="/islands/rsvp-button.js" defer />
     <p><a href="/events">See upcoming events</a></p>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>

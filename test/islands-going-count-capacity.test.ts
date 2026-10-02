@@ -73,11 +73,15 @@ function browser(...badges: Badge[]) {
   const listeners: ((event: { detail: Detail }) => void)[] = [];
   const requests: { url: string; init: { headers: Record<string, string> }; read: PendingRead }[] = [];
   runInContext(binder, createContext({
+    CustomEvent: class { constructor(public type: string, public options: { detail: unknown }) {} get detail() { return this.options.detail; } },
     document: {
       addEventListener(type: string, listener: (event: { detail: Detail }) => void) {
         expect(type).toBe(EVENT);
         listeners.push(listener);
       },
+      // The merged binder restores the refreshed broadcast the rsvp-button
+      // island consumes; the stub lets that path execute without asserting it.
+      dispatchEvent() { return true; },
       querySelectorAll(selector: string) {
         expect(selector).toBe(MOUNT);
         return badges;
