@@ -19,39 +19,77 @@ const COOKIE = "__Host-two_session";
 // Mounted app, fixture-backed Drizzle reads and the real signed-cookie boundary; no external I/O.
 function fixture(status: "draft" | "published" = "draft") {
   const row: typeof events.$inferSelect = {
-    id: 1, eventKey: KEY, title: "Private draft chess night", game: "Chess",
-    description: "Moderator-only planning details", startsAt: new Date("2099-01-10T20:00:00Z"),
-    endsAt: new Date("2099-01-10T22:00:00Z"), timezone: "UTC", location: "Private voice channel",
-    capacity: 10, status, rsvpOpen: true, discordEventId: null,
-    discordSyncFailedAt: null, discordSyncFailureCode: null, createdBy: null,
-    recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-    parentEventId: null, recurrenceIndex: null, icsSequence: 0n,
-    createdAt: new Date("2026-10-01T00:00:00Z"), updatedAt: new Date("2026-10-01T00:00:00Z"),
+    id: 1,
+    eventKey: KEY,
+    title: "Private draft chess night",
+    game: "Chess",
+    description: "Moderator-only planning details",
+    startsAt: new Date("2099-01-10T20:00:00Z"),
+    endsAt: new Date("2099-01-10T22:00:00Z"),
+    timezone: "UTC",
+    location: "Private voice channel",
+    capacity: 10,
+    status,
+    rsvpOpen: true,
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    createdBy: null,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    icsSequence: 0n,
+    createdAt: new Date("2026-10-01T00:00:00Z"),
+    updatedAt: new Date("2026-10-01T00:00:00Z"),
   };
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
-  const values = columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key]);
+  const values = columns.map((key) =>
+    row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key],
+  );
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "events"') && sql.includes('"event_key" =')) {
       return { rows: params[0] === KEY ? [values] : [] };
     }
     if (sql.includes('from "events"') && sql.includes('"status" in')) {
       const now = new Date(params[params.length - 1] as string);
-      return { rows: params.slice(0, -1).includes(row.status) && row.endsAt >= now ? [values] : [] };
+      return {
+        rows: params.slice(0, -1).includes(row.status) && row.endsAt >= now ? [values] : [],
+      };
     }
     throw new Error(`Unexpected fixture query: ${sql}`);
   });
   const store = createMemorySessionStore();
-  const env = { APP_URL, SESSION_SECRET: SECRET, SESSION_STORE: store, ADMIN_DB: db as unknown as Db } as unknown as Env;
+  const env = {
+    APP_URL,
+    SESSION_SECRET: SECRET,
+    SESSION_STORE: store,
+    ADMIN_DB: db as unknown as Db,
+  } as unknown as Env;
   return {
-    row, store,
+    row,
+    store,
     async session(moderator = true, expired = false, signingSecret = SECRET) {
       const token = newSessionToken();
       const tokenHash = await hashToken(token);
-      await store.create({ tokenHash, userId: moderator ? "moderator" : "member", username: "fixture",
-        avatar: null, member: true, moderator, expiresAt: new Date(Date.now() + (expired ? -1000 : 3600_000)) });
-      const cookie = (await serializeSigned(COOKIE, token, signingSecret, {
-        path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-      })).split(";")[0]!;
+      await store.create({
+        tokenHash,
+        userId: moderator ? "moderator" : "member",
+        username: "fixture",
+        avatar: null,
+        member: true,
+        moderator,
+        expiresAt: new Date(Date.now() + (expired ? -1000 : 3600_000)),
+      });
+      const cookie = (
+        await serializeSigned(COOKIE, token, signingSecret, {
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        })
+      ).split(";")[0]!;
       return { cookie, tokenHash };
     },
     request(cookie?: string, etag?: string, path = PATH) {
@@ -68,7 +106,11 @@ async function validator(body: string) {
   return `"${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}"`;
 }
 
-async function replacement(response: Response, source: ReturnType<typeof fixture>, consumed: { cookie: string; tokenHash: string }) {
+async function replacement(
+  response: Response,
+  source: ReturnType<typeof fixture>,
+  consumed: { cookie: string; tokenHash: string },
+) {
   expect(await source.store.get(consumed.tokenHash)).toBeNull();
   const cookies = response.headers.getSetCookie();
   expect(cookies).toHaveLength(2);
@@ -86,7 +128,11 @@ async function replacement(response: Response, source: ReturnType<typeof fixture
   const token = (await parseSigned(cookie, SECRET, COOKIE))[COOKIE];
   expect(typeof token).toBe("string");
   const tokenHash = await hashToken(token as string);
-  expect(await source.store.get(tokenHash)).toMatchObject({ userId: "moderator", member: true, moderator: true });
+  expect(await source.store.get(tokenHash)).toMatchObject({
+    userId: "moderator",
+    member: true,
+    moderator: true,
+  });
   return { cookie, tokenHash };
 }
 
@@ -112,7 +158,10 @@ describe("draft ICS rotated session delivery (fixture-only)", () => {
     expect(first.headers.get("cache-control")).toBe("max-age=300, private");
     const current = await replacement(first, source, original);
     await expectForbidden(await source.request(original.cookie, etag));
-    const statusOnly = first.headers.getSetCookie().find((cookie) => cookie.startsWith(`${AUTH_STATUS_COOKIE}=`))!.split(";")[0]!;
+    const statusOnly = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${AUTH_STATUS_COOKIE}=`))!
+      .split(";")[0]!;
     await expectForbidden(await source.request(statusOnly, etag));
 
     const unchanged = await source.request(current.cookie, etag);
@@ -146,42 +195,62 @@ describe("draft ICS rotated session delivery (fixture-only)", () => {
   });
 
   it.each(["guest", "member", "expired moderator", "forged moderator"] as const)(
-    "refuses a matching draft validator before 304 for a %s", async (actor) => {
+    "refuses a matching draft validator before 304 for a %s",
+    async (actor) => {
       const source = fixture();
       const etag = await validator(eventIcs(source.row, APP_URL));
-      const visitor = actor === "guest" ? undefined : await source.session(
-        actor !== "member", actor === "expired moderator",
-        actor === "forged moderator" ? "different-test-signing-secret-at-least-32-bytes" : SECRET,
-      );
+      const visitor =
+        actor === "guest"
+          ? undefined
+          : await source.session(
+              actor !== "member",
+              actor === "expired moderator",
+              actor === "forged moderator"
+                ? "different-test-signing-secret-at-least-32-bytes"
+                : SECRET,
+            );
       const response = await source.request(visitor?.cookie, etag);
       await expectForbidden(response);
       if (actor !== "member") expect(response.headers.get("set-cookie")).toBeNull();
-      if (actor === "forged moderator") expect(await source.store.get(visitor!.tokenHash)).toMatchObject({ moderator: true });
+      if (actor === "forged moderator")
+        expect(await source.store.get(visitor!.tokenHash)).toMatchObject({ moderator: true });
     },
   );
 
-  it.each([PATH, "/events.ics", "/events.rss"])("keeps public 200/304 sessionless with or without a signed cookie at %s", async (path) => {
-    const source = fixture("published");
-    const moderator = await source.session();
-    const body = path === "/events.rss" ? eventsRss([source.row], APP_URL, source.row.updatedAt)
-      : path === "/events.ics" ? eventsIcsCollection([source.row], APP_URL) : eventIcs(source.row, APP_URL);
-    const etag = await validator(body);
-    for (const cookie of [undefined, moderator.cookie]) {
-      const first = await source.request(cookie, undefined, path);
-      expect(first.status).toBe(200);
-      expect(await first.text()).toBe(body);
-      expect(first.headers.get("etag")).toBe(etag);
-      expect(first.headers.get("content-type")).toBe(path === "/events.rss"
-        ? "application/rss+xml; charset=utf-8" : "text/calendar; charset=utf-8");
-      expect(first.headers.get("cache-control")).toBe(`max-age=300, ${path === PATH ? "private" : "public"}`);
-      expect(first.headers.get("set-cookie")).toBeNull();
-      const unchanged = await source.request(cookie, etag, path);
-      expect(unchanged.status).toBe(304);
-      expect(await unchanged.text()).toBe("");
-      expect(unchanged.headers.get("etag")).toBe(etag);
-      expect(unchanged.headers.get("cache-control")).toBe(first.headers.get("cache-control"));
-      expect(unchanged.headers.get("set-cookie")).toBeNull();
-      expect(await source.store.get(moderator.tokenHash)).toMatchObject({ moderator: true });
-    }
-  });
+  it.each([PATH, "/events.ics", "/events.rss"])(
+    "keeps public 200/304 sessionless with or without a signed cookie at %s",
+    async (path) => {
+      const source = fixture("published");
+      const moderator = await source.session();
+      const body =
+        path === "/events.rss"
+          ? eventsRss([source.row], APP_URL, source.row.updatedAt)
+          : path === "/events.ics"
+            ? eventsIcsCollection([source.row], APP_URL)
+            : eventIcs(source.row, APP_URL);
+      const etag = await validator(body);
+      for (const cookie of [undefined, moderator.cookie]) {
+        const first = await source.request(cookie, undefined, path);
+        expect(first.status).toBe(200);
+        expect(await first.text()).toBe(body);
+        expect(first.headers.get("etag")).toBe(etag);
+        expect(first.headers.get("content-type")).toBe(
+          path === "/events.rss"
+            ? "application/rss+xml; charset=utf-8"
+            : "text/calendar; charset=utf-8",
+        );
+        expect(first.headers.get("cache-control")).toBe(
+          `max-age=300, ${path === PATH ? "private" : "public"}`,
+        );
+        expect(first.headers.get("set-cookie")).toBeNull();
+        const unchanged = await source.request(cookie, etag, path);
+        expect(unchanged.status).toBe(304);
+        expect(await unchanged.text()).toBe("");
+        expect(unchanged.headers.get("etag")).toBe(etag);
+        expect(unchanged.headers.get("cache-control")).toBe(first.headers.get("cache-control"));
+        expect(unchanged.headers.get("set-cookie")).toBeNull();
+        expect(await source.store.get(moderator.tokenHash)).toMatchObject({ moderator: true });
+      }
+    },
+  );
 });

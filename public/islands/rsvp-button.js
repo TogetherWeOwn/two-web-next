@@ -52,7 +52,7 @@
     guestCta: "Log in with Discord",
     cancelled: "Cancelled",
     draft: "Not published yet",
-    past: "This one has been and gone"
+    past: "This one has been and gone",
   };
 
   var TESTID = {
@@ -74,7 +74,7 @@
     failed: "rsvp-failed",
     unknown: "rsvp-unknown",
     refresh: "rsvp-refresh",
-    sessionExpired: "rsvp-session-expired"
+    sessionExpired: "rsvp-session-expired",
   };
 
   function throttleWaitCopy(retryAfterSeconds) {
@@ -120,14 +120,15 @@
     var next;
     try {
       next = decodeURIComponent(raw.slice(at + marker.length));
-    } catch (e) {
+    } catch {
       return fallback;
     }
     return "/join/discord?next=" + encodeURIComponent(next);
   }
   var loginUrl = safeLoginUrl(
     root.getAttribute("data-login-url"),
-    "/join/discord?next=" + encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/")
+    "/join/discord?next=" +
+      encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/"),
   );
   var url = "/events/" + encodeURIComponent(eventKey) + "/rsvp";
 
@@ -135,7 +136,15 @@
   var inflight = null;
 
   function clearOutcome() {
-    [TESTID.rateLimited, TESTID.failed, TESTID.sessionExpired, TESTID.closed, TESTID.syncing, TESTID.synced, TESTID.syncFailed].forEach(function (t) {
+    [
+      TESTID.rateLimited,
+      TESTID.failed,
+      TESTID.sessionExpired,
+      TESTID.closed,
+      TESTID.syncing,
+      TESTID.synced,
+      TESTID.syncFailed,
+    ].forEach(function (t) {
       var n = root.querySelector('[data-testid="' + t + '"]');
       if (n && n.parentNode) n.parentNode.removeChild(n);
       else if (n && n.remove) n.remove();
@@ -178,7 +187,8 @@
     if (button) {
       button.disabled = !!on;
       if (on && busyText) {
-        if (!button.getAttribute("data-label")) button.setAttribute("data-label", button.textContent);
+        if (!button.getAttribute("data-label"))
+          button.setAttribute("data-label", button.textContent);
         button.textContent = busyText;
       } else if (!on && button.getAttribute("data-label")) {
         button.textContent = button.getAttribute("data-label");
@@ -200,7 +210,13 @@
 
   function syncNote(syncedAt, syncFailed) {
     var old = root.querySelector(
-      '[data-testid="' + TESTID.syncing + '"],[data-testid="' + TESTID.synced + '"],[data-testid="' + TESTID.syncFailed + '"]'
+      '[data-testid="' +
+        TESTID.syncing +
+        '"],[data-testid="' +
+        TESTID.synced +
+        '"],[data-testid="' +
+        TESTID.syncFailed +
+        '"]',
     );
     if (old) {
       if (old.parentNode) old.parentNode.removeChild(old);
@@ -248,7 +264,9 @@
       var nodes;
       try {
         nodes = root.querySelectorAll('[data-testid="' + t + '"]');
-      } catch (e) { nodes = null; }
+      } catch {
+        nodes = null;
+      }
       if (nodes && nodes.length !== undefined) {
         for (var i = 0; i < nodes.length; i++) sources.push(nodes[i]);
       } else {
@@ -320,7 +338,11 @@
       var staleClaim = root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]');
       if (staleClaim) staleClaim.remove();
     }
-    if (root.getAttribute("data-full") !== "true" && root.getAttribute("data-paused") !== "true" && !root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]')) {
+    if (
+      root.getAttribute("data-full") !== "true" &&
+      root.getAttribute("data-paused") !== "true" &&
+      !root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]')
+    ) {
       var claim = document.createElement("button");
       claim.setAttribute("type", "submit");
       claim.setAttribute("name", "status");
@@ -352,7 +374,9 @@
   function unknownOutcome(button) {
     setBusy(false, button);
     root.setAttribute("data-outcome-unknown", "true");
-    root.querySelectorAll("[data-action]").forEach(function (control) { control.disabled = true; });
+    root.querySelectorAll("[data-action]").forEach(function (control) {
+      control.disabled = true;
+    });
     var el = notice(TESTID.unknown, "alert", COPY.unknown, false, true);
     el.appendChild(document.createTextNode(" "));
     var link = document.createElement("a");
@@ -365,13 +389,22 @@
   var pendingCapacity = null;
 
   function reconcileCapacity(detail) {
-    if (detail.eventKey !== eventKey || root.getAttribute("data-outcome-unknown") === "true") return;
-    if (!Number.isSafeInteger(detail.goingCount) || detail.goingCount < 0 ||
-        (detail.capacity !== null && (!Number.isSafeInteger(detail.capacity) || detail.capacity < 1))) return;
+    if (detail.eventKey !== eventKey || root.getAttribute("data-outcome-unknown") === "true")
+      return;
+    if (
+      !Number.isSafeInteger(detail.goingCount) ||
+      detail.goingCount < 0 ||
+      (detail.capacity !== null && (!Number.isSafeInteger(detail.capacity) || detail.capacity < 1))
+    )
+      return;
     // Accepted reads may settle during a later write. Keep only the latest
     // snapshot, without changing the controls or requested intent mid-flight.
     if (root.getAttribute("aria-busy") === "true") {
-      pendingCapacity = { eventKey: eventKey, goingCount: detail.goingCount, capacity: detail.capacity };
+      pendingCapacity = {
+        eventKey: eventKey,
+        goingCount: detail.goingCount,
+        capacity: detail.capacity,
+      };
       return;
     }
     pendingCapacity = null;
@@ -380,7 +413,9 @@
     if (detail.capacity === null) root.removeAttribute("data-capacity");
     else root.setAttribute("data-capacity", detail.capacity);
     if (root.getAttribute("data-paused") === "true") return;
-    var join = root.querySelector('[data-testid="' + TESTID.going + '"],[data-testid="' + TESTID.waitlistJoin + '"]');
+    var join = root.querySelector(
+      '[data-testid="' + TESTID.going + '"],[data-testid="' + TESTID.waitlistJoin + '"]',
+    );
     var position = root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
     if (join) {
       join.setAttribute("data-testid", full ? TESTID.waitlistJoin : TESTID.going);
@@ -399,7 +434,9 @@
       claim.setAttribute("data-action", "going");
       claim.textContent = COPY.waitlistClaim;
       controls.appendChild(claim);
-      claim.addEventListener("click", function (ev) { onAction("going", claim, ev); });
+      claim.addEventListener("click", function (ev) {
+        onAction("going", claim, ev);
+      });
     }
     var message = root.querySelector('[data-testid="' + TESTID.full + '"]');
     if (full && (join || position)) {
@@ -419,9 +456,16 @@
 
   function paintWithdrawn() {
     var conf = root.querySelector(
-      '[data-testid="' + TESTID.confirmed + '"],[data-testid="' + TESTID.waitlistPosition + '"]'
+      '[data-testid="' + TESTID.confirmed + '"],[data-testid="' + TESTID.waitlistPosition + '"]',
     );
-    [TESTID.waitlistClaim, TESTID.waitlistLeave, TESTID.withdraw, TESTID.syncing, TESTID.synced, TESTID.syncFailed].forEach(function (t) {
+    [
+      TESTID.waitlistClaim,
+      TESTID.waitlistLeave,
+      TESTID.withdraw,
+      TESTID.syncing,
+      TESTID.synced,
+      TESTID.syncFailed,
+    ].forEach(function (t) {
       var n = root.querySelector('[data-testid="' + t + '"]');
       if (n && n.parentNode) n.parentNode.removeChild(n);
     });
@@ -443,16 +487,21 @@
     join.textContent = full ? COPY.waitlistJoin : COPY.cta;
     if (conf && conf.parentNode) conf.parentNode.replaceChild(join, conf);
     else controls.appendChild(join);
-    join.addEventListener("click", function (ev) { onAction(join.getAttribute("data-action"), join, ev); });
+    join.addEventListener("click", function (ev) {
+      onAction(join.getAttribute("data-action"), join, ev);
+    });
     focusTestid([TESTID.going, TESTID.waitlistJoin]);
   }
 
   function broadcast(state) {
     try {
       document.dispatchEvent(
-        new CustomEvent(EVENT, { detail: { eventKey: eventKey, viewerState: state }, bubbles: true })
+        new CustomEvent(EVENT, {
+          detail: { eventKey: eventKey, viewerState: state },
+          bubbles: true,
+        }),
       );
-    } catch (e) {
+    } catch {
       /* a missing CustomEvent is a missing badge listener, never a failed write */
     }
   }
@@ -462,7 +511,7 @@
       var h = res.headers && res.headers.get ? res.headers.get("Retry-After") : null;
       var n = Math.ceil(Number(h));
       return Number.isFinite(n) && n >= 1 ? n : null;
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -472,7 +521,7 @@
     if (res.status === 401 || res.status === 419) return true;
     try {
       if (res.type === "opaqueredirect" || res.status === 302) return true;
-    } catch (e) {}
+    } catch {}
     return false;
   }
 
@@ -501,167 +550,193 @@
       method: method,
       headers: { "content-type": "application/json", accept: "application/json" },
       credentials: "same-origin",
-      redirect: "manual"
+      redirect: "manual",
     };
     if (!isWithdraw) init.body = JSON.stringify({ status: action });
-    fetch(url, init).then(
-      function (res) {
-        if (controller && inflight !== controller) return;
-        if (res.ok) {
-          if (isWithdraw) {
-            if (res.status !== 204) return unknownOutcome(button);
+    fetch(url, init)
+      .then(
+        function (res) {
+          if (controller && inflight !== controller) return;
+          if (res.ok) {
+            if (isWithdraw) {
+              if (res.status !== 204) return unknownOutcome(button);
+              setBusy(false, button);
+              paintWithdrawn();
+              broadcast(viewerState("withdraw"));
+              return;
+            }
+            // A committed write with no readable answer is not a failed write
+            // or a confirmed seat. Recover through SSR, never guess or resend.
+            if ((res.status !== 200 && res.status !== 201) || typeof res.json !== "function") {
+              return unknownOutcome(button);
+            }
+            try {
+              return res.json().then(
+                function (j) {
+                  if (inflight !== controller) return;
+                  var d = j && j.data;
+                  if (!d || (d.status !== "going" && d.status !== "waitlisted"))
+                    return unknownOutcome(button);
+                  setBusy(false, button);
+                  // The FIFO service may settle a going request as waitlisted.
+                  if (d.status === "waitlisted") {
+                    root.setAttribute("data-full", "true");
+                    paintWaitlisted(d.waitlist_position);
+                  } else {
+                    paintConfirmed();
+                  }
+                  broadcast(viewerState(d.status));
+                  syncNote(d.synced_to_discord_at || null, !!d.sync_failed);
+                },
+                function () {
+                  if (inflight === controller) unknownOutcome(button);
+                },
+              );
+            } catch {
+              return unknownOutcome(button);
+            }
+          }
+          if (sessionExpiredResponse(res)) {
+            controller.refused = true;
             setBusy(false, button);
-            paintWithdrawn();
-            broadcast(viewerState("withdraw"));
+            notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, true);
             return;
           }
-          // A committed write with no readable answer is not a failed write
-          // or a confirmed seat. Recover through SSR, never guess or resend.
-          if ((res.status !== 200 && res.status !== 201) || typeof res.json !== "function") {
-            return unknownOutcome(button);
-          }
-          try {
-            return res.json().then(
-              function (j) {
-                if (inflight !== controller) return;
-                var d = j && j.data;
-                if (!d || (d.status !== "going" && d.status !== "waitlisted")) return unknownOutcome(button);
-                setBusy(false, button);
-                // The FIFO service may settle a going request as waitlisted.
-                if (d.status === "waitlisted") {
-                  root.setAttribute("data-full", "true");
-                  paintWaitlisted(d.waitlist_position);
-                } else {
-                  paintConfirmed();
-                }
-                broadcast(viewerState(d.status));
-                syncNote(d.synced_to_discord_at || null, !!d.sync_failed);
-              },
-              function () { if (inflight === controller) unknownOutcome(button); }
+          if (res.status === 429) {
+            controller.refused = true;
+            setBusy(false, button);
+            notice(
+              TESTID.rateLimited,
+              "status",
+              throttleWaitCopy(retryAfterSeconds(res)),
+              false,
+              false,
             );
-          } catch (e) {
-            return unknownOutcome(button);
+            return;
           }
-        }
-        if (sessionExpiredResponse(res)) {
-          controller.refused = true;
-          setBusy(false, button);
-          notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, true);
-          return;
-        }
-        if (res.status === 429) {
-          controller.refused = true;
-          setBusy(false, button);
-          notice(TESTID.rateLimited, "status", throttleWaitCopy(retryAfterSeconds(res)), false, false);
-          return;
-        }
-        if (res.status === 403) {
-          // Stale page (ended/paused/cancelled while open): reload into the
-          // fresh SSR so the clock-ended hole stays shut. No native confirm.
-          // A non-member 403 ({error:"forbidden"}) is not stale — show the
-          // failure alert instead of reload-looping the same SSR controls.
-          var reloadClosed = function () {
-            if (controller && inflight !== controller) return;
-            setBusy(false, button);
-            if (typeof location !== "undefined" && location.reload) location.reload();
-            else notice(TESTID.closed, "status", COPY.past, false, false);
-          };
-          if (res.json) {
-            try {
-              return res.json().then(
-                function (j) {
-                  if (controller && inflight !== controller) return;
-                  if (j && j.error === "forbidden") {
-                    controller.refused = true;
-                    setBusy(false, button);
-                    notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
-                  } else {
+          if (res.status === 403) {
+            // Stale page (ended/paused/cancelled while open): reload into the
+            // fresh SSR so the clock-ended hole stays shut. No native confirm.
+            // A non-member 403 ({error:"forbidden"}) is not stale — show the
+            // failure alert instead of reload-looping the same SSR controls.
+            var reloadClosed = function () {
+              if (controller && inflight !== controller) return;
+              setBusy(false, button);
+              if (typeof location !== "undefined" && location.reload) location.reload();
+              else notice(TESTID.closed, "status", COPY.past, false, false);
+            };
+            if (res.json) {
+              try {
+                return res.json().then(
+                  function (j) {
+                    if (controller && inflight !== controller) return;
+                    if (j && j.error === "forbidden") {
+                      controller.refused = true;
+                      setBusy(false, button);
+                      notice(
+                        TESTID.failed,
+                        "alert",
+                        COPY.failedTitle + " " + COPY.failedAction,
+                        false,
+                        false,
+                      );
+                    } else {
+                      reloadClosed();
+                    }
+                  },
+                  function () {
                     reloadClosed();
-                  }
-                },
-                function () { reloadClosed(); }
-              );
-            } catch (e) { reloadClosed(); }
-          } else {
-            reloadClosed();
-          }
-          return;
-        }
-        if (res.status === 409) {
-          // 409 carries the authoritative cap ({capacity} in JSON); DOM
-          // data-capacity is the fallback when the body is unreadable.
-          var paintFull = function (capNum) {
-            if (controller && inflight !== controller) return;
-            setBusy(false, button);
-            var msg = COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
-            var old = root.querySelector('[data-testid="' + TESTID.full + '"]');
-            if (!old) {
-              old = document.createElement("p");
-              old.setAttribute("role", "status");
-              old.setAttribute("data-testid", TESTID.full);
-              old.setAttribute("tabindex", "-1");
-              controls.appendChild(old);
+                  },
+                );
+              } catch {
+                reloadClosed();
+              }
+            } else {
+              reloadClosed();
             }
-            old.textContent = msg;
-            root.setAttribute("data-full", "true");
-            var claim = root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]');
-            if (claim) claim.remove();
-            var going = root.querySelector('[data-testid="' + TESTID.going + '"]');
-            if (going) {
-              going.setAttribute("data-testid", TESTID.waitlistJoin);
-              going.setAttribute("data-action", "waitlisted");
-              going.setAttribute("value", "waitlisted");
-              going.textContent = COPY.waitlistJoin;
-            }
-            if (old.focus) old.focus();
-          };
-          var domRaw = root.getAttribute("data-capacity");
-          var domNum = domRaw === null || domRaw === "" ? NaN : Number(domRaw);
-          if (res.json) {
-            try {
-              return res.json().then(
-                function (j) {
-                  if (controller && inflight !== controller) return;
-                  var c = j ? (j.capacity !== undefined ? Number(j.capacity) : NaN) : NaN;
-                  paintFull(Number.isFinite(c) ? c : domNum);
-                },
-                function () { paintFull(domNum); }
-              );
-            } catch (e) { paintFull(domNum); }
-          } else {
-            paintFull(domNum);
+            return;
           }
-          return;
+          if (res.status === 409) {
+            // 409 carries the authoritative cap ({capacity} in JSON); DOM
+            // data-capacity is the fallback when the body is unreadable.
+            var paintFull = function (capNum) {
+              if (controller && inflight !== controller) return;
+              setBusy(false, button);
+              var msg = COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
+              var old = root.querySelector('[data-testid="' + TESTID.full + '"]');
+              if (!old) {
+                old = document.createElement("p");
+                old.setAttribute("role", "status");
+                old.setAttribute("data-testid", TESTID.full);
+                old.setAttribute("tabindex", "-1");
+                controls.appendChild(old);
+              }
+              old.textContent = msg;
+              root.setAttribute("data-full", "true");
+              var claim = root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]');
+              if (claim) claim.remove();
+              var going = root.querySelector('[data-testid="' + TESTID.going + '"]');
+              if (going) {
+                going.setAttribute("data-testid", TESTID.waitlistJoin);
+                going.setAttribute("data-action", "waitlisted");
+                going.setAttribute("value", "waitlisted");
+                going.textContent = COPY.waitlistJoin;
+              }
+              if (old.focus) old.focus();
+            };
+            var domRaw = root.getAttribute("data-capacity");
+            var domNum = domRaw === null || domRaw === "" ? NaN : Number(domRaw);
+            if (res.json) {
+              try {
+                return res.json().then(
+                  function (j) {
+                    if (controller && inflight !== controller) return;
+                    var c = j ? (j.capacity !== undefined ? Number(j.capacity) : NaN) : NaN;
+                    paintFull(Number.isFinite(c) ? c : domNum);
+                  },
+                  function () {
+                    paintFull(domNum);
+                  },
+                );
+              } catch {
+                paintFull(domNum);
+              }
+            } else {
+              paintFull(domNum);
+            }
+            return;
+          }
+          controller.refused = res.status >= 400 && res.status < 500;
+          setBusy(false, button);
+          // Failure keeps the control enabled and focus stays put (null focus
+          // target, TOG-6956): the alert announces without stealing focus.
+          notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
+        },
+        function () {
+          if (controller && inflight !== controller) return;
+          // No response cannot prove refusal or cancel a delivered transaction.
+          unknownOutcome(button);
+        },
+      )
+      .finally(function () {
+        // Keep ownership through body parsing; header arrival is not completion.
+        if (inflight === controller) {
+          inflight = null;
+          var snapshot = pendingCapacity;
+          pendingCapacity = null;
+          // Only a refused write can reuse the earlier accepted allocation.
+          // Success owns a newer refresh; unknown/closed/full outcomes must not
+          // be reopened by a pre-settlement snapshot.
+          if (controller.refused && snapshot) reconcileCapacity(snapshot);
         }
-        controller.refused = res.status >= 400 && res.status < 500;
-        setBusy(false, button);
-        // Failure keeps the control enabled and focus stays put (null focus
-        // target, TOG-6956): the alert announces without stealing focus.
-        notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
-      },
-      function () {
-        if (controller && inflight !== controller) return;
-        // No response cannot prove refusal or cancel a delivered transaction.
-        unknownOutcome(button);
-      }
-    ).finally(function () {
-      // Keep ownership through body parsing; header arrival is not completion.
-      if (inflight === controller) {
-        inflight = null;
-        var snapshot = pendingCapacity;
-        pendingCapacity = null;
-        // Only a refused write can reuse the earlier accepted allocation.
-        // Success owns a newer refresh; unknown/closed/full outcomes must not
-        // be reopened by a pre-settlement snapshot.
-        if (controller.refused && snapshot) reconcileCapacity(snapshot);
-      }
-    });
+      });
   }
 
-  if (controls !== root) controls.addEventListener("submit", function (ev) {
-    var button = ev.submitter || root.querySelector("[data-action]");
-    onAction(button ? button.getAttribute("data-action") : null, button, ev);
-  });
+  if (controls !== root)
+    controls.addEventListener("submit", function (ev) {
+      var button = ev.submitter || root.querySelector("[data-action]");
+      onAction(button ? button.getAttribute("data-action") : null, button, ev);
+    });
   var buttons = root.querySelectorAll("[data-action]");
   for (var i = 0; i < buttons.length; i++) {
     (function (b) {

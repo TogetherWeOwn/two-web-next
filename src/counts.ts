@@ -34,8 +34,12 @@ function count(value: unknown): number | null {
 
 function liveCounts(row: Row | undefined): LiveCounts {
   const raw = row?.counts_updated_at;
-  const updatedAt = raw instanceof Date ? raw.getTime()
-    : typeof raw === "string" && raw.trim() ? Date.parse(raw) : NaN;
+  const updatedAt =
+    raw instanceof Date
+      ? raw.getTime()
+      : typeof raw === "string" && raw.trim()
+        ? Date.parse(raw)
+        : NaN;
   // Carbon's diff is absolute: far-future snapshots are stale too. Exactly
   // ten minutes is stale. Unlike legacy's "as of" display, this slice hides
   // stale numerals per the homepage acceptance criterion.
@@ -67,7 +71,10 @@ function cachedRead<T>(key: string, fallback: T, read: (sql: postgres.Sql) => Pr
         return await Promise.race([
           read(sql),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error("CountsReadTimeout")), COUNTS_READ_TIMEOUT_MS);
+            timer = setTimeout(
+              () => reject(new Error("CountsReadTimeout")),
+              COUNTS_READ_TIMEOUT_MS,
+            );
           }),
         ]);
       } finally {
@@ -91,13 +98,17 @@ function cachedRead<T>(key: string, fallback: T, read: (sql: postgres.Sql) => Pr
   };
 }
 
-const readLive = cachedRead<LiveCounts>("counts.live", { memberCount: null, onlineCount: null }, async (sql) => {
-  const rows = await sql<Row[]>`
+const readLive = cachedRead<LiveCounts>(
+  "counts.live",
+  { memberCount: null, onlineCount: null },
+  async (sql) => {
+    const rows = await sql<Row[]>`
     SELECT human_member_count, online_count, counts_updated_at
     FROM web_v1.live_counts LIMIT 1
   `;
-  return liveCounts(rows[0]);
-});
+    return liveCounts(rows[0]);
+  },
+);
 
 const readRanks = cachedRead<Rank[]>("counts.ranks", [], async (sql) => {
   const rows = await sql<Row[]>`
@@ -105,7 +116,9 @@ const readRanks = cachedRead<Rank[]>("counts.ranks", [], async (sql) => {
     FROM web_v1.rank_counts ORDER BY rank_order
   `;
   return rows.map((row) => ({
-    key: String(row.rank_key), label: String(row.rank_label), memberCount: count(row.member_count),
+    key: String(row.rank_key),
+    label: String(row.rank_label),
+    memberCount: count(row.member_count),
   }));
 });
 
