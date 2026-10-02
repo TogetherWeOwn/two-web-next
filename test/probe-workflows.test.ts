@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SYSOP_MODERATOR_ROLE_ID as SYSOP } from "../src/probes/check-moderators";
+// @ts-expect-error Standalone tooling has no declaration file.
+import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const deploy = read(".github/workflows/deploy.yml");
@@ -69,6 +71,191 @@ describe("source-managed moderator deployment preflight", () => {
       expect(result.stderr).toMatch(/cannot read a valid Wrangler config/);
     },
   );
+
+  it("reads a named environment with no fallback to the top level", () => {
+    const envProbe = (text: string, env: string, extra: string[] = []) => {
+      const dir = temp();
+      try {
+        const path = join(dir, "wrangler.jsonc");
+        writeFileSync(path, text);
+        return spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "./bin/ts-hook.mjs",
+            "bin/check-moderators.mjs",
+            `--config=${path}`,
+            `--env=${env}`,
+            "--require-configured",
+            "--json",
+            ...extra,
+          ],
+          {
+            encoding: "utf8",
+            timeout: 30_000,
+            env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: "SySOp" },
+          },
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    // Production env configured: passes even when the process value is garbage.
+    const ok = envProbe(
+      `{"vars": {}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}}}}`,
+      "production",
+    );
+    expect(ok.status).toBe(0);
+    expect(JSON.parse(ok.stdout)).toMatchObject({ failures: 0, ok: true });
+    // Production env missing the var fails even when the top level has it:
+    // Wrangler does not inherit top-level vars, so a fallback would lie.
+    const noFallback = envProbe(
+      `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}, "env": {"production": {"vars": {}}}}`,
+      "production",
+    );
+    expect(noFallback.status).toBe(1);
+    expect(JSON.parse(noFallback.stdout)).toMatchObject({ ok: false });
+    // No env block at all: the named env is unknown in that config, so it is
+    // a usage error (exit 2), never a probe pass. The deploy step still fails.
+    const noEnv = envProbe(`{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}}`, "production");
+    expect(noEnv.status).toBe(2);
+    expect(noEnv.stdout).toBe("");
+    expect(noEnv.stderr).toMatch(/unknown environment/);
+    // A wrong production value fails even with a valid top level.
+    const wrong = envProbe(
+      `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "SySOp"}}}}`,
+      "production",
+    );
+    expect(wrong.status).toBe(1);
+    expect(JSON.parse(wrong.stdout)).toMatchObject({ ok: false });
+  });
+
+  it("refuses an unknown environment without echoing config", () => {
+    const dir = temp();
+    try {
+      const path = join(dir, "wrangler.jsonc");
+      writeFileSync(
+        path,
+        `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}}}}`,
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./bin/ts-hook.mjs",
+          "bin/check-moderators.mjs",
+          `--config=${path}`,
+          "--env=staging",
+          "--require-configured",
+          "--json",
+        ],
+        {
+          encoding: "utf8",
+          timeout: 30_000,
+          env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: SYSOP },
+        },
+      );
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toMatch(/unknown environment/);
+      expect(result.stderr).not.toContain(SYSOP);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires --config alongside --env and leaves top-level reads unchanged", () => {
+    // --env without --config is a usage error, never a probe result.
+    const bare = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./bin/ts-hook.mjs",
+        "bin/check-moderators.mjs",
+        "--env=production",
+        "--require-configured",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: SYSOP },
+      },
+    );
+    expect(bare.status).toBe(2);
+    expect(bare.stderr).toMatch(/--env=<name> requires/);
+    // Empty --env value is the same usage error.
+    const empty = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./bin/ts-hook.mjs",
+        "bin/check-moderators.mjs",
+        "--config=wrangler.jsonc",
+        "--env=",
+        "--require-configured",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: SYSOP },
+      },
+    );
+    expect(empty.status).toBe(2);
+    // Top-level behaviour is unchanged: --config without --env still reads
+    // top-level vars and ignores named environments.
+    const dir = temp();
+    try {
+      const path = join(dir, "wrangler.jsonc");
+      writeFileSync(
+        path,
+        `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "SySOp"}}}}`,
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./bin/ts-hook.mjs",
+          "bin/check-moderators.mjs",
+          `--config=${path}`,
+          "--require-configured",
+          "--json",
+        ],
+        {
+          encoding: "utf8",
+          timeout: 30_000,
+          env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: "SySOp" },
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ failures: 0, ok: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gates production on the production-env moderator value before any deploy", () => {
+    const production = read(".github/workflows/deploy-production.yml");
+    const prodScripts = JSON.parse(read("package.json")).scripts;
+    expect(prodScripts["check:worker-moderators-production"]).toContain(
+      "--config=wrangler.jsonc --env=production --require-configured",
+    );
+    expect(production).toContain("run: npm run check:worker-moderators-production");
+    // The moderator preflight runs after the credentials check and before
+    // the first Cloudflare mutation (shared step order: gate → dry-run →
+    // credentials → moderator preflight → deploy → /up smoke).
+    const prodGate = production.indexOf("run: npm run check:worker-moderators-production");
+    expect(prodGate).toBeGreaterThan(-1);
+    expect(prodGate).toBeGreaterThan(
+      production.indexOf("run: node ci/production-deploy-gate.mjs --credentials"),
+    );
+    expect(prodGate).toBeLessThan(production.indexOf("run: npx wrangler deploy --env production"));
+    expect(production).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
+    // env.production declares the same approved SySOp role; Wrangler does not
+    // inherit top-level vars, so this entry is the one production boots with.
+    const parsed = readWranglerConfig(read("wrangler.jsonc"));
+    expect(parsed.env?.production?.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(SYSOP);
+    expect(parsed.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(SYSOP);
+  });
 
   it("checks the same explicit source config before all Cloudflare mutations", () => {
     const scripts = JSON.parse(read("package.json")).scripts;
