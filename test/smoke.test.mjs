@@ -46,7 +46,12 @@ const fixtures = {
 async function stub(t, change = () => {}) {
   const requests = [];
   const server = createServer((request, response) => {
-    requests.push({ path: request.url, method: request.method, cookie: request.headers.cookie, host: request.headers.host });
+    requests.push({
+      path: request.url,
+      method: request.method,
+      cookie: request.headers.cookie,
+      host: request.headers.host,
+    });
     const fixture = fixtures[request.url];
     if (!fixture) {
       response.writeHead(500).end("Unexpected request");
@@ -166,24 +171,40 @@ for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
 
 test("rejects a foreign robots Sitemap host without leaking the body", async (t) => {
   const { url } = await stub(t, (route, result) => {
-    if (route === "/robots.txt") result.body = "User-agent: *\nDisallow:\nSitemap: https://togetherweown.com/sitemap_index.xml\n";
+    if (route === "/robots.txt")
+      result.body =
+        "User-agent: *\nDisallow:\nSitemap: https://togetherweown.com/sitemap_index.xml\n";
   });
   const result = await run(url);
   assert.equal(result.ok, false);
-  assert.match(result.output, /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/);
-  assert.ok(!result.output.includes("togetherweown.com"), result.output);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+  assert.doesNotMatch(result.output, /togetherweown\.com/);
 });
 
 test("rejects foreign sitemap locs and an empty sitemap", async (t) => {
   for (const [body, expected] of [
-    ['<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://togetherweown.com/</loc></url></urlset>', "same-origin sitemap locs"],
-    ['<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>', "at least one sitemap <loc>"],
+    [
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://togetherweown.com/</loc></url></urlset>',
+      "same-origin sitemap locs",
+    ],
+    [
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>',
+      "at least one sitemap <loc>",
+    ],
   ]) {
-    const { url } = await stub(t, (route, result) => { if (route === "/sitemap_index.xml") result.body = body; });
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/sitemap_index.xml") result.body = body;
+    });
     const result = await run(url);
     assert.equal(result.ok, false, body);
-    assert.ok(result.output.includes(`FAIL /sitemap_index.xml: expected ${expected}`), result.output);
-    assert.ok(!result.output.includes("togetherweown.com"), result.output);
+    assert.ok(
+      result.output.includes(`FAIL /sitemap_index.xml: expected ${expected}`),
+      result.output,
+    );
+    assert.doesNotMatch(result.output, /togetherweown\.com/);
   }
 });
 

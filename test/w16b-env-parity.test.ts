@@ -42,19 +42,25 @@ const LEGACY_STATIC_HEADERS: Record<string, string> = {
 function directives(res: Response): Record<string, string> {
   const csp = res.headers.get("content-security-policy");
   expect(csp).not.toBeNull();
-  return Object.fromEntries(csp!.split(";").map((part) => {
-    const [name, ...sources] = part.trim().split(/\s+/);
-    return [name, sources.join(" ")];
-  }));
+  return Object.fromEntries(
+    csp!.split(";").map((part) => {
+      const [name, ...sources] = part.trim().split(/\s+/);
+      return [name, sources.join(" ")];
+    }),
+  );
 }
 
 describe("row 3: robots + sitemap diverge per environment", () => {
   it("staging robots names the staging host; production names the apex", async () => {
     const stagingRobots = await (await app.request("/robots.txt", {}, staging)).text();
-    expect(stagingRobots).toBe(`User-agent: *\nDisallow:\nSitemap: ${STAGING_APP_URL}/sitemap_index.xml\n`);
+    expect(stagingRobots).toBe(
+      `User-agent: *\nDisallow:\nSitemap: ${STAGING_APP_URL}/sitemap_index.xml\n`,
+    );
     expect(stagingRobots).not.toContain(PROD_APP_URL);
     const prodRobots = await (await app.request("/robots.txt", {}, production)).text();
-    expect(prodRobots).toBe(`User-agent: *\nDisallow:\nSitemap: ${PROD_APP_URL}/sitemap_index.xml\n`);
+    expect(prodRobots).toBe(
+      `User-agent: *\nDisallow:\nSitemap: ${PROD_APP_URL}/sitemap_index.xml\n`,
+    );
     // Legacy parity note: legacy routes/web.php also emits allow-shaped
     // `Disallow:` in every env — the staging crawl bar is the noindex header
     // layer below, not the robots body.
@@ -146,9 +152,13 @@ describe("row 18: CSP deltas from legacy, each pinned with its reason", () => {
     // auth-acceptance suite proves still revokes (GET cannot revoke).
     const signedIn = Home({
       session: { id: "fixture", username: "parity", avatar: null, member: true, moderator: false },
-      notice: null, inviteUrl: "https://discord.gg/configured", appUrl: STAGING_APP_URL,
+      notice: null,
+      inviteUrl: "https://discord.gg/configured",
+      appUrl: STAGING_APP_URL,
       counts: { memberCount: null, onlineCount: null, ranks: [] },
-      upcomingEvents: [], eventsUnavailable: false, featured: [],
+      upcomingEvents: [],
+      eventsUnavailable: false,
+      featured: [],
     })!.toString();
     expect(signedIn).toContain('<form method="post" action="/logout">');
   });
@@ -176,7 +186,9 @@ describe("row 18: CSP deltas from legacy, each pinned with its reason", () => {
     const csp = directives(await app.request("/join", {}, staging));
     expect(csp).not.toHaveProperty("upgrade-insecure-requests");
     for (const sources of Object.values(csp)) {
-      expect(sources.split(/\s+/).some((s) => s === "http:" || s.startsWith("http://"))).toBe(false);
+      expect(sources.split(/\s+/).some((s) => s === "http:" || s.startsWith("http://"))).toBe(
+        false,
+      );
     }
   });
 
@@ -195,7 +207,11 @@ describe("row 18: CSP deltas from legacy, each pinned with its reason", () => {
 
 describe("row 18: trusted-host slice pins", () => {
   it("unknown hosts are refused with the branded 404, never a redirect or echo", async () => {
-    const res = await app.request(`${STAGING_APP_URL}/`, { headers: { host: "evil.example.test" } }, staging);
+    const res = await app.request(
+      `${STAGING_APP_URL}/`,
+      { headers: { host: "evil.example.test" } },
+      staging,
+    );
     expect(res.status).toBe(404);
     expect(res.headers.get("location")).toBeNull();
     const body = await res.text();
@@ -205,18 +221,39 @@ describe("row 18: trusted-host slice pins", () => {
   });
 
   it("staging never accepts the apex host and vice versa", async () => {
-    expect((await app.request(`${STAGING_APP_URL}/up`, { headers: { host: "togetherweown.com" } }, staging)).status).toBe(404);
-    expect((await app.request(`${PROD_APP_URL}/up`, { headers: { host: "next.togetherweown.com" } }, production)).status).toBe(404);
+    expect(
+      (
+        await app.request(
+          `${STAGING_APP_URL}/up`,
+          { headers: { host: "togetherweown.com" } },
+          staging,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await app.request(
+          `${PROD_APP_URL}/up`,
+          { headers: { host: "next.togetherweown.com" } },
+          production,
+        )
+      ).status,
+    ).toBe(404);
   });
 
   it("session cookies stay host-only: __Host- prefix, no Domain", async () => {
-    const login = await app.request("/auth/qa/qa-member", {
-      method: "POST",
-      headers: { origin: STAGING_APP_URL, "X-TWO-QA-Auth": "test-only-qa-token" },
-    }, { ...staging, QA_AUTH_TOKEN: "test-only-qa-token" });
+    const login = await app.request(
+      "/auth/qa/qa-member",
+      {
+        method: "POST",
+        headers: { origin: STAGING_APP_URL, "X-TWO-QA-Auth": "test-only-qa-token" },
+      },
+      { ...staging, QA_AUTH_TOKEN: "test-only-qa-token" },
+    );
     expect(login.status).toBe(204);
     const cookie = login.headers.getSetCookie().find((c) => c.startsWith("__Host-two_session="))!;
-    for (const flag of ["Path=/", "Secure", "HttpOnly", "SameSite=Lax"]) expect(cookie).toContain(flag);
+    for (const flag of ["Path=/", "Secure", "HttpOnly", "SameSite=Lax"])
+      expect(cookie).toContain(flag);
     expect(cookie).not.toMatch(/Domain=/i);
   });
 });
