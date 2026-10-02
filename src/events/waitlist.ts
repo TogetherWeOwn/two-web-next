@@ -1,15 +1,17 @@
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { keyedMemberRead } from "../member-reads";
 import { rsvps, type Event } from "../db/admin-schema";
 
+type SeatWriter = Pick<PgDatabase<PgQueryResultHKT>, "select" | "update">;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 export const CAPACITY_BELOW_GOING =
   "Capacity cannot be lower than the number of members already going.";
 
 /** Call behind the event's FOR UPDATE lock, like every seat-changing write. */
-export async function goingCount(tx: Tx, eventId: number): Promise<number> {
+export async function goingCount(tx: Pick<SeatWriter, "select">, eventId: number): Promise<number> {
   const [tally] = await tx
     .select({ n: count() })
     .from(rsvps)
@@ -62,7 +64,7 @@ export async function lockWaitlist(tx: Tx, eventId: number): Promise<void> {
  * A paused/closed event freezes the line. Reset mirror stamps; the caller queues the event
  * write-back after commit, covering both its own write and every promoted answer. */
 export async function promoteWaitlist(
-  tx: Tx,
+  tx: SeatWriter,
   ev: Event,
   clock: () => Date = () => new Date(),
 ): Promise<void> {

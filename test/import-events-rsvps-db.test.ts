@@ -50,7 +50,8 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
     // A pre-existing natural key with a different local ID proves FK remapping.
     await target`insert into events (id, event_key, title, starts_at, ends_at)
       values (500, ${parentKey}, 'Before import', '2026-10-18T19:00:00Z', '2026-10-18T21:00:00Z')`;
-  });
+    // Owned-schema DDL can exceed the default hook budget on shared CI runners.
+  }, 30_000);
 
   afterAll(async () => {
     await Promise.all([legacy?.end(), target?.end()]);
@@ -376,7 +377,9 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
       }
       expect(await target`select * from events order by id`).toEqual(before);
       expect(await target`select * from rsvps`).toHaveLength(0);
-      expect(await target`select * from agent_events`).toHaveLength(0);
+      expect(
+        await target`select * from events where agent_grant_id is not null or proof_marker is not null`,
+      ).toHaveLength(0);
       expect(await target`select * from agent_event_grants`).toHaveLength(0);
     },
   );
