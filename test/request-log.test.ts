@@ -102,7 +102,7 @@ describe("structured request logs (local fixtures only)", () => {
     router.get("/events/new", (c) => c.text("form"));
     router.get("/events/skip", (_c, next) => next());
     router.get("/events/:key", (c) => c.text("event"));
-    for (const [path, route] of [["/events/new", "/events/new"], ["/events/skip", "/events/:key"], ["/events/abc", "/events/:key"]]) {
+    for (const [path, route] of [["/events/new", "/events/new"], ["/events/skip", "/events/:key"], ["/events/abc", "/events/:key"]] as const) {
       log.mockClear();
       expect((await router.request(path)).status).toBe(200);
       expect(logs(log)).toEqual([expect.objectContaining({ route, status: 200 })]);
