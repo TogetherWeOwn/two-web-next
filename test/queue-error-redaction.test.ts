@@ -28,7 +28,14 @@ function deps(ledger?: QueueLedger): {
     find: async () => ({
       eventKey: "e1",
       mirrored: true,
-      payload: { eventKey: "e1", name: "n", startsAt: "s", endsAt: null, location: "l", description: null },
+      payload: {
+        eventKey: "e1",
+        name: "n",
+        startsAt: "s",
+        endsAt: null,
+        location: "l",
+        description: null,
+      },
     }),
     recordMirrored: async () => {},
     closeFinished: async () => 0,
@@ -86,11 +93,21 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const d = deps();
     const bot = {
       postAnnouncement: async () => ({
-        ok: false, code: "action_not_allowed", status: 403, requestId: null,
-        message: `refused: ${TOK} ${SQL} ${PII}`, retryable: false, retryAfterSeconds: null,
+        ok: false,
+        code: "action_not_allowed",
+        status: 403,
+        requestId: null,
+        message: `refused: ${TOK} ${SQL} ${PII}`,
+        retryable: false,
+        retryAfterSeconds: null,
       }),
     } as unknown as BotClient;
-    const m = msg({ kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" }, jobId: "j1" });
+    const m = msg({
+      kind: "announcement",
+      idempotencyKey: "k",
+      action: { channelKey: "c", body: "b" },
+      jobId: "j1",
+    });
     await consume({ messages: [m] }, { ...d, bot });
     expect(m.ack).toHaveBeenCalledOnce();
     const failing = failingLines(lines);
@@ -103,16 +120,28 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     });
     leakFree(lines, d.failedReasons);
     // The ledger keeps the same bounded classification (not the raw message).
-    expect(d.failedReasons).toEqual(["The bot refused announcement.post with `action_not_allowed`"]);
+    expect(d.failedReasons).toEqual([
+      "The bot refused announcement.post with `action_not_allowed`",
+    ]);
   });
 
   it("a thrown BotTerminalError alerts as its class, never its message", async () => {
     const lines = capture();
     const d = deps();
     const bot = {
-      postAnnouncement: async () => { throw new BotTerminalError(`missing secret ${TOK} ${PII}`); },
+      postAnnouncement: async () => {
+        throw new BotTerminalError(`missing secret ${TOK} ${PII}`);
+      },
     } as unknown as BotClient;
-    const m = msg({ kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" }, jobId: "j2" }, 2);
+    const m = msg(
+      {
+        kind: "announcement",
+        idempotencyKey: "k",
+        action: { channelKey: "c", body: "b" },
+        jobId: "j2",
+      },
+      2,
+    );
     await consume({ messages: [m] }, { ...d, bot });
     expect(m.ack).toHaveBeenCalledOnce();
     expect(failingLines(lines)).toMatchObject([{ exception: "BotTerminalError" }]);
@@ -123,11 +152,20 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const lines = capture();
     const d = deps();
     const bot = {
-      postAnnouncement: async () => { throw new TypeError(`boom ${SQL} ${TOK}\nforged-line`); },
-      upsertEvent: async () => { throw new RangeError(`range ${PII}\nforged-line`); },
+      postAnnouncement: async () => {
+        throw new TypeError(`boom ${SQL} ${TOK}\nforged-line`);
+      },
+      upsertEvent: async () => {
+        throw new RangeError(`range ${PII}\nforged-line`);
+      },
     } as unknown as BotClient;
     const a = msg(
-      { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" }, jobId: "j3" },
+      {
+        kind: "announcement",
+        idempotencyKey: "k",
+        action: { channelKey: "c", body: "b" },
+        jobId: "j3",
+      },
       CALL_INTERNAL_ACTION.tries,
     );
     const s = msg(
@@ -142,8 +180,16 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     expect(failing[0]).toMatchObject({ exception: "TypeError" });
     expect(failing[1]).toMatchObject({ exception: "RangeError" });
     // No second log line per message, and the throw path keeps job identity + attempts.
-    expect(failing[0]).toMatchObject({ queue: "two-internal-action", job: "CallInternalAction", attempts: CALL_INTERNAL_ACTION.tries });
-    expect(failing[1]).toMatchObject({ queue: "two-sync-event", job: "SyncEventToDiscord", attempts: SYNC_EVENT.tries });
+    expect(failing[0]).toMatchObject({
+      queue: "two-internal-action",
+      job: "CallInternalAction",
+      attempts: CALL_INTERNAL_ACTION.tries,
+    });
+    expect(failing[1]).toMatchObject({
+      queue: "two-sync-event",
+      job: "SyncEventToDiscord",
+      attempts: SYNC_EVENT.tries,
+    });
     leakFree(lines, d.failedReasons);
     // Every captured diagnostics line is single-line: hostile newlines never split the log.
     for (const line of lines) expect(line).not.toContain("\nforged-line");
@@ -154,8 +200,13 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const d = deps();
     const bot = {
       upsertEvent: async () => ({
-        ok: false, code: "forbidden\ninject", status: 403, requestId: null,
-        message: `denied: ${TOK} ${PII}`, retryable: false, retryAfterSeconds: null,
+        ok: false,
+        code: "forbidden\ninject",
+        status: 403,
+        requestId: null,
+        message: `denied: ${TOK} ${PII}`,
+        retryable: false,
+        retryAfterSeconds: null,
       }),
     } as unknown as BotClient;
     const m = msg({ kind: "sync-event", eventKey: SPLIT, idempotencyKey: "k", jobId: "j5" });
@@ -174,20 +225,28 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const lines = capture();
     const ledger: QueueLedger = {
       enqueued: async () => {},
-      reserved: async () => { throw new Error(`ledger down ${SQL} ${TOK}`); },
+      reserved: async () => {
+        throw new Error(`ledger down ${SQL} ${TOK}`);
+      },
       released: async () => {},
       dequeued: async () => {},
-      failed: async () => { throw new Error(`ledger failed write ${PII}`); },
+      failed: async () => {
+        throw new Error(`ledger failed write ${PII}`);
+      },
     };
     const lock: UniqueLock = {
       acquire: async () => "lease",
-      release: async () => { throw new Error(`lock DELETE failed ${SQL}\nforged-line`); },
+      release: async () => {
+        throw new Error(`lock DELETE failed ${SQL}\nforged-line`);
+      },
     };
     const store = deps().events;
     // An escaping throw (not a transport wait, which the handler absorbs into
     // a "gave up" outcome) to exercise the consumer's throw path end to end.
     const bot = {
-      upsertEvent: async () => { throw new TypeError(`boom ${SQL} ${TOK}\nforged-line`); },
+      upsertEvent: async () => {
+        throw new TypeError(`boom ${SQL} ${TOK}\nforged-line`);
+      },
     } as unknown as BotClient;
     const leaseToken = "11111111-1111-4111-8111-111111111111";
     const m = msg(
@@ -208,7 +267,9 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     // Lock/ledger diagnostics use the structured class shape, not raw error text
     // (the lock stub throws a plain Error whose message carries SQL + a token).
     expect(lines.filter((l) => l.includes("queue lock release failed"))).toHaveLength(1);
-    expect(lines.filter((l) => l.includes("queue lock release failed"))[0]).toContain('"exception":"Error"');
+    expect(lines.filter((l) => l.includes("queue lock release failed"))[0]).toContain(
+      '"exception":"Error"',
+    );
     expect(lines.filter((l) => l.includes("queue ledger reserved failed"))).toHaveLength(1);
     expect(lines.filter((l) => l.includes("job threw"))).toHaveLength(1);
     for (const line of lines) expect(line).not.toContain("\nforged-line");
@@ -218,11 +279,19 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const d = deps();
     const retryable = {
       postAnnouncement: async () => ({
-        ok: false, code: "slow_down", status: 429, requestId: null,
-        message: `calm down: ${TOK}`, retryable: true, retryAfterSeconds: 7,
+        ok: false,
+        code: "slow_down",
+        status: 429,
+        requestId: null,
+        message: `calm down: ${TOK}`,
+        retryable: true,
+        retryAfterSeconds: 7,
       }),
     } as unknown as BotClient;
-    const attempt = msg({ kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } }, 1);
+    const attempt = msg(
+      { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } },
+      1,
+    );
     await consume({ messages: [attempt] }, { ...d, bot: retryable });
     expect(attempt.retry).toHaveBeenCalledExactlyOnceWith({ delaySeconds: 7 });
     expect(attempt.ack).not.toHaveBeenCalled();
@@ -231,12 +300,22 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const d2 = deps();
     const terminal = {
       postAnnouncement: async () => ({
-        ok: false, code: "slow_down", status: 429, requestId: null,
-        message: `still calm: ${PII}`, retryable: true, retryAfterSeconds: null,
+        ok: false,
+        code: "slow_down",
+        status: 429,
+        requestId: null,
+        message: `still calm: ${PII}`,
+        retryable: true,
+        retryAfterSeconds: null,
       }),
     } as unknown as BotClient;
     const last = msg(
-      { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" }, jobId: "j7" },
+      {
+        kind: "announcement",
+        idempotencyKey: "k",
+        action: { channelKey: "c", body: "b" },
+        jobId: "j7",
+      },
       CALL_INTERNAL_ACTION.tries,
     );
     await consume({ messages: [last] }, { ...d2, bot: terminal });

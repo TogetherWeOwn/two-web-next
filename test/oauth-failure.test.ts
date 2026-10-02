@@ -21,7 +21,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { createMemorySessionStore } from "../src/sessions";
-import { DiscordError, exchangeCode, failureMeta, fetchUser, isProviderOutage } from "../src/discord";
+import {
+  DiscordError,
+  exchangeCode,
+  failureMeta,
+  fetchUser,
+  isProviderOutage,
+} from "../src/discord";
 import type { EnvWithJoin } from "../src/join/route";
 import type { Sql } from "../src/sessions";
 import type { Env } from "../src/env";
@@ -70,7 +76,8 @@ function stubFetch(handler: (url: string) => Response | Promise<Response>) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) => {
-      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.href;
+      const url =
+        typeof input === "string" ? input : input instanceof Request ? input.url : input.href;
       calls.push(url);
       return handler(url);
     }),
@@ -94,7 +101,12 @@ function fakeSql() {
     }
     if (head.includes("DELETE FROM web_throttle_hits")) return [];
     if (head.includes("INSERT INTO join_attempts")) {
-      attempts.push({ outcome: values[0], source: values[1], requestId: values[2], discordId: values[3] });
+      attempts.push({
+        outcome: values[0],
+        source: values[1],
+        requestId: values[2],
+        discordId: values[3],
+      });
       return [];
     }
     throw new Error(`fakeSql: unexpected statement: ${head.slice(0, 80)}`);
@@ -121,20 +133,32 @@ async function joinRoundTrip(e: Env, handler: (url: string) => Response | Promis
   const calls = stubFetch(handler);
   const start = await app.request("/join/discord", {}, e);
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
-  const res = await app.request(`/join/callback?code=abc&state=${state}`, {
-    headers: { cookie: cookiesFrom(start) },
-  }, e);
+  const res = await app.request(
+    `/join/callback?code=abc&state=${state}`,
+    {
+      headers: { cookie: cookiesFrom(start) },
+    },
+    e,
+  );
   return { logs, calls, res, html: await res.text() };
 }
 
-async function loginRoundTrip(e: Env, handler: (url: string) => Response | Promise<Response>, query = "code=abc") {
+async function loginRoundTrip(
+  e: Env,
+  handler: (url: string) => Response | Promise<Response>,
+  query = "code=abc",
+) {
   const logs = captureLogs();
   const calls = stubFetch(handler);
   const start = await app.request("/auth/discord", {}, e);
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
-  const res = await app.request(`/auth/discord/callback?${query}&state=${state}`, {
-    headers: { cookie: cookiesFrom(start) },
-  }, e);
+  const res = await app.request(
+    `/auth/discord/callback?${query}&state=${state}`,
+    {
+      headers: { cookie: cookiesFrom(start) },
+    },
+    e,
+  );
   return { logs, calls, res };
 }
 
@@ -144,14 +168,17 @@ function stubSignInDiscord(token = TOK, putStatus = 201) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.href;
+      const url =
+        typeof input === "string" ? input : input instanceof Request ? input.url : input.href;
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
       calls.push({ url, method });
       if (url.endsWith("/oauth2/token")) return Response.json({ access_token: token });
       if (url.endsWith("/users/@me"))
         return Response.json({ id: "42", username: "rick", global_name: "Rick", avatar: null });
-      if (url.includes("/members/42") && method === "PUT") return new Response(null, { status: putStatus });
-      if (url.includes("/members/42")) return Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" });
+      if (url.includes("/members/42") && method === "PUT")
+        return new Response(null, { status: putStatus });
+      if (url.includes("/members/42"))
+        return Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" });
       return new Response("unexpected", { status: 500 });
     }),
   );
@@ -165,13 +192,20 @@ afterEach(() => {
 
 // A 200 body is never asked for a code — only 4xx bodies are parsed.
 const invalidGrant = (status: number) =>
-  new Response(JSON.stringify({ error: "invalid_grant", error_description: `refresh ${TOK} revoked` }), { status });
+  new Response(
+    JSON.stringify({ error: "invalid_grant", error_description: `refresh ${TOK} revoked` }),
+    { status },
+  );
 
-const exchange = () => exchangeCode("code", "client-id", SECRET, "https://next.example.test/auth/discord/callback");
+const exchange = () =>
+  exchangeCode("code", "client-id", SECRET, "https://next.example.test/auth/discord/callback");
 
 describe("exchange failure classification (legacy JoinCallbackFailureTest contract)", () => {
   it("classifies 400 + invalid_grant as expired_grant and never quotes the body", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => invalidGrant(400)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => invalidGrant(400)),
+    );
     const err = await exchange().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DiscordError);
     const discordError = err as DiscordError;
@@ -185,22 +219,41 @@ describe("exchange failure classification (legacy JoinCallbackFailureTest contra
   it.each([
     ["401 with an invalid_grant body is provider_reject", invalidGrant(401), "provider_reject"],
     ["403 with an invalid_grant body is provider_reject", invalidGrant(403), "provider_reject"],
-    ["503 with an invalid_grant body is an outage — status governs", invalidGrant(503), "provider_outage"],
+    [
+      "503 with an invalid_grant body is an outage — status governs",
+      invalidGrant(503),
+      "provider_outage",
+    ],
     [
       "other 400 bodies (invalid_client) are provider_reject",
       new Response(JSON.stringify({ error: "invalid_client" }), { status: 400 }),
       "provider_reject",
     ],
-    ["unparseable 400 bodies are provider_reject", new Response(`<html>err</html>`, { status: 400 }), "provider_reject"],
-    ["non-object JSON 400 bodies are provider_reject", new Response('"invalid_grant"', { status: 400 }), "provider_reject"],
+    [
+      "unparseable 400 bodies are provider_reject",
+      new Response(`<html>err</html>`, { status: 400 }),
+      "provider_reject",
+    ],
+    [
+      "non-object JSON 400 bodies are provider_reject",
+      new Response('"invalid_grant"', { status: 400 }),
+      "provider_reject",
+    ],
     [
       "429 is rate_limited whatever the body says",
       new Response(JSON.stringify({ error: "invalid_grant" }), { status: 429 }),
       "rate_limited",
     ],
-    ["a 200 without a token field is provider_reject", new Response("{}", { status: 200 }), "provider_reject"],
+    [
+      "a 200 without a token field is provider_reject",
+      new Response("{}", { status: 200 }),
+      "provider_reject",
+    ],
   ] as [string, Response, DiscordError["kind"]][])("%s", async (_name, response, kind) => {
-    vi.stubGlobal("fetch", vi.fn(async () => response));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
     const err = (await exchange().catch((e: unknown) => e)) as DiscordError;
     expect(err).toBeInstanceOf(DiscordError);
     expect(err.kind).toBe(kind);
@@ -232,7 +285,11 @@ describe("exchange failure classification (legacy JoinCallbackFailureTest contra
         response: { body: `{"access_token":"${TOK}"}`, headers: { "x-leak": TOK } },
       }),
     });
-    expect(failureMeta(leaky)).toEqual({ exception: "SecretLeakError", kind: "unknown", status: null });
+    expect(failureMeta(leaky)).toEqual({
+      exception: "SecretLeakError",
+      kind: "unknown",
+      status: null,
+    });
     leakFree(failureMeta(leaky));
     expect(failureMeta(undefined)).toEqual({ exception: "unknown", kind: "unknown", status: null });
   });
@@ -253,20 +310,57 @@ describe("exchange failure classification (legacy JoinCallbackFailureTest contra
 // user lookups, including stream errors whose message/cause carry credentials.
 const malformedUserAnswers: [string, () => Response][] = [
   ["invalid JSON", () => new Response(`not JSON ${TOK} ${SECRET}`, { status: 200 })],
-  ["body-read failure", () => new Response(new ReadableStream({
-    start(controller) {
-      controller.error(new Error(`read failed ${TOK}`, { cause: new Error(`nested ${SECRET}`) }));
-    },
-  }), { status: 200 })],
+  [
+    "body-read failure",
+    () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(
+              new Error(`read failed ${TOK}`, { cause: new Error(`nested ${SECRET}`) }),
+            );
+          },
+        }),
+        { status: 200 },
+      ),
+  ],
   ["null", () => Response.json(null)],
   ["array", () => Response.json([])],
   ["string", () => Response.json(TOK)],
   ["missing fields", () => Response.json({ diagnostic: SECRET })],
-  ["invalid id", () => Response.json({ id: 42, username: "member", global_name: null, avatar: null })],
-  ["empty id", () => Response.json({ id: "", username: "member", global_name: null, avatar: null })],
-  ["invalid username", () => Response.json({ id: "42", username: { diagnostic: TOK }, global_name: null, avatar: null })],
-  ["invalid display name", () => Response.json({ id: "42", username: "member", global_name: { diagnostic: SECRET }, avatar: null })],
-  ["invalid avatar", () => Response.json({ id: "42", username: "member", global_name: null, avatar: { diagnostic: TOK } })],
+  [
+    "invalid id",
+    () => Response.json({ id: 42, username: "member", global_name: null, avatar: null }),
+  ],
+  [
+    "empty id",
+    () => Response.json({ id: "", username: "member", global_name: null, avatar: null }),
+  ],
+  [
+    "invalid username",
+    () =>
+      Response.json({ id: "42", username: { diagnostic: TOK }, global_name: null, avatar: null }),
+  ],
+  [
+    "invalid display name",
+    () =>
+      Response.json({
+        id: "42",
+        username: "member",
+        global_name: { diagnostic: SECRET },
+        avatar: null,
+      }),
+  ],
+  [
+    "invalid avatar",
+    () =>
+      Response.json({
+        id: "42",
+        username: "member",
+        global_name: null,
+        avatar: { diagnostic: TOK },
+      }),
+  ],
 ];
 
 const userLookupAnswer = (answer: () => Response) => (url: string) => {
@@ -278,48 +372,73 @@ const userLookupAnswer = (answer: () => Response) => (url: string) => {
 const rejectedUserMeta = { exception: "DiscordError", kind: "provider_reject", status: 200 };
 
 describe("malformed HTTP-200 user responses stay inside callback recovery", () => {
-  it.each(malformedUserAnswers)("fetchUser rejects %s with bounded facts and no cause", async (_name, answer) => {
-    vi.stubGlobal("fetch", vi.fn(async () => answer()));
-    const err = await fetchUser(TOK).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(DiscordError);
-    const discordError = err as DiscordError;
-    expect(failureMeta(discordError)).toEqual(rejectedUserMeta);
-    expect(discordError.step).toBe("fetch_user");
-    expect(discordError.message).toBe("discord fetch_user failed with HTTP 200");
-    expect(discordError.providerCode).toBeNull();
-    expect(discordError.cause).toBeUndefined();
-    leakFree(discordError, discordError.message);
-  });
+  it.each(malformedUserAnswers)(
+    "fetchUser rejects %s with bounded facts and no cause",
+    async (_name, answer) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => answer()),
+      );
+      const err = await fetchUser(TOK).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(DiscordError);
+      const discordError = err as DiscordError;
+      expect(failureMeta(discordError)).toEqual(rejectedUserMeta);
+      expect(discordError.step).toBe("fetch_user");
+      expect(discordError.message).toBe("discord fetch_user failed with HTTP 200");
+      expect(discordError.providerCode).toBeNull();
+      expect(discordError.cause).toBeUndefined();
+      leakFree(discordError, discordError.message);
+    },
+  );
 
-  it.each(malformedUserAnswers)("join contains %s and records exactly one failure", async (_name, answer) => {
-    const { fake, env: e } = isolatedJoin();
-    const { logs, calls, res, html } = await joinRoundTrip(e, userLookupAnswer(answer));
-    expect(res.status).toBe(503);
-    expect(html).toContain("Discord is unreachable");
-    expect(html).not.toContain("approval expired");
-    expect(calls.map((url) => new URL(url).pathname)).toEqual(["/api/v10/oauth2/token", "/api/v10/users/@me"]);
-    expect(logs).toEqual([{ level: "warn", args: [
-      "discord token exchange failed on the join journey",
-      { ...rejectedUserMeta, source: null, outcome: "error" },
-    ] }]);
-    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId: null, discordId: null }]);
-    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
-    leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
-  });
+  it.each(malformedUserAnswers)(
+    "join contains %s and records exactly one failure",
+    async (_name, answer) => {
+      const { fake, env: e } = isolatedJoin();
+      const { logs, calls, res, html } = await joinRoundTrip(e, userLookupAnswer(answer));
+      expect(res.status).toBe(503);
+      expect(html).toContain("Discord is unreachable");
+      expect(html).not.toContain("approval expired");
+      expect(calls.map((url) => new URL(url).pathname)).toEqual([
+        "/api/v10/oauth2/token",
+        "/api/v10/users/@me",
+      ]);
+      expect(logs).toEqual([
+        {
+          level: "warn",
+          args: [
+            "discord token exchange failed on the join journey",
+            { ...rejectedUserMeta, source: null, outcome: "error" },
+          ],
+        },
+      ]);
+      expect(fake.attempts).toEqual([
+        { outcome: "error", source: null, requestId: null, discordId: null },
+      ]);
+      expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+      leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
+    },
+  );
 
-  it.each(malformedUserAnswers)("login contains %s and redirects without issuing a session", async (_name, answer) => {
-    const { fake, env: e } = isolatedJoin();
-    const { logs, calls, res } = await loginRoundTrip(e, userLookupAnswer(answer));
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/?n=signin_failed");
-    expect(calls.map((url) => new URL(url).pathname)).toEqual(["/api/v10/oauth2/token", "/api/v10/users/@me"]);
-    expect(logs).toEqual([{ level: "warn", args: ["discord sign-in failed", rejectedUserMeta] }]);
-    expect(fake.attempts).toEqual([]);
-    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
-    const html = await (await app.request("/?n=signin_failed", {}, e)).text();
-    expect(html).toContain("Sign in with Discord");
-    leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
-  });
+  it.each(malformedUserAnswers)(
+    "login contains %s and redirects without issuing a session",
+    async (_name, answer) => {
+      const { fake, env: e } = isolatedJoin();
+      const { logs, calls, res } = await loginRoundTrip(e, userLookupAnswer(answer));
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe("/?n=signin_failed");
+      expect(calls.map((url) => new URL(url).pathname)).toEqual([
+        "/api/v10/oauth2/token",
+        "/api/v10/users/@me",
+      ]);
+      expect(logs).toEqual([{ level: "warn", args: ["discord sign-in failed", rejectedUserMeta] }]);
+      expect(fake.attempts).toEqual([]);
+      expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+      const html = await (await app.request("/?n=signin_failed", {}, e)).text();
+      expect(html).toContain("Sign in with Discord");
+      leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
+    },
+  );
 });
 
 describe("join callback: expired recovery versus outage 503", () => {
@@ -345,7 +464,9 @@ describe("join callback: expired recovery versus outage 503", () => {
     });
 
     // The funnel row is the legacy enum's error row; its four columns carry no secret.
-    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId: null, discordId: null }]);
+    expect(fake.attempts).toEqual([
+      { outcome: "error", source: null, requestId: null, discordId: null },
+    ]);
     leakFree(html, logs, fake.attempts, res.headers.getSetCookie());
   });
 
@@ -355,19 +476,30 @@ describe("join callback: expired recovery versus outage 503", () => {
     [429, "rate_limited"],
     [500, "provider_outage"],
     [503, "provider_outage"],
-  ] as [number, DiscordError["kind"]][])("HTTP %i with invalid_grant cannot select expired join recovery", async (status, kind) => {
-    const { fake, env: e } = isolatedJoin();
-    const { logs, calls, res, html } = await joinRoundTrip(e, () => invalidGrant(status));
-    expect(res.status).toBe(503);
-    expect(html).toContain("Discord is unreachable");
-    expect(html).not.toContain("approval expired");
-    expect(calls).toHaveLength(1); // no user lookup or guild mutation after a rejected exchange
-    const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
-    expect(exchangeLine).toHaveLength(1);
-    expect(exchangeLine[0]!.args[1]).toEqual({ exception: "DiscordError", kind, outcome: "error", status, source: null });
-    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId: null, discordId: null }]);
-    leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
-  });
+  ] as [number, DiscordError["kind"]][])(
+    "HTTP %i with invalid_grant cannot select expired join recovery",
+    async (status, kind) => {
+      const { fake, env: e } = isolatedJoin();
+      const { logs, calls, res, html } = await joinRoundTrip(e, () => invalidGrant(status));
+      expect(res.status).toBe(503);
+      expect(html).toContain("Discord is unreachable");
+      expect(html).not.toContain("approval expired");
+      expect(calls).toHaveLength(1); // no user lookup or guild mutation after a rejected exchange
+      const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
+      expect(exchangeLine).toHaveLength(1);
+      expect(exchangeLine[0]!.args[1]).toEqual({
+        exception: "DiscordError",
+        kind,
+        outcome: "error",
+        status,
+        source: null,
+      });
+      expect(fake.attempts).toEqual([
+        { outcome: "error", source: null, requestId: null, discordId: null },
+      ]);
+      leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
+    },
+  );
 
   it("transport failure with the token inside the raw message: 503, bounded log", async () => {
     const { env: e } = isolatedJoin();
@@ -377,7 +509,11 @@ describe("join callback: expired recovery versus outage 503", () => {
     expect(res.status).toBe(503);
     expect(html).toContain("Discord is unreachable");
     const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
-    expect(exchangeLine[0]!.args[1]).toMatchObject({ exception: "DiscordError", kind: "transport_failure", outcome: "error" });
+    expect(exchangeLine[0]!.args[1]).toMatchObject({
+      exception: "DiscordError",
+      kind: "transport_failure",
+      outcome: "error",
+    });
     leakFree(html, logs);
   });
 
@@ -393,7 +529,11 @@ describe("join callback: expired recovery versus outage 503", () => {
     });
     const { logs, res, html } = await joinRoundTrip(e, () => {
       const hostile = {} as Response;
-      Object.defineProperty(hostile, "ok", { get() { throw leaky; } });
+      Object.defineProperty(hostile, "ok", {
+        get() {
+          throw leaky;
+        },
+      });
       return hostile;
     });
     expect(res.status).toBe(503);
@@ -416,7 +556,9 @@ describe("join callback: expired recovery versus outage 503", () => {
     const res = await app.request("/join/callback?code=abc&state=forged", {}, e);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Join link expired");
-    expect(logs.filter((l) => JSON.stringify(l.args).includes("join journey"))[0]!.args[1]).toMatchObject({
+    expect(
+      logs.filter((l) => JSON.stringify(l.args).includes("join journey"))[0]!.args[1],
+    ).toMatchObject({
       exception: "InvalidState",
       outcome: "expired",
     });
@@ -460,7 +602,11 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
     const signLine = logs.filter((l) => JSON.stringify(l.args).includes("sign-in failed"));
     expect(signLine).toHaveLength(1);
-    expect(signLine[0]!.args[1]).toEqual({ exception: "DiscordError", kind: "expired_grant", status: 400 });
+    expect(signLine[0]!.args[1]).toEqual({
+      exception: "DiscordError",
+      kind: "expired_grant",
+      status: 400,
+    });
     leakFree(logs, res.headers.get("location"));
   });
 
@@ -497,9 +643,13 @@ describe("adjacent auth log paths stay bounded", () => {
     const calls = stubSignInDiscord(TOK, 201);
     const start = await app.request("/auth/discord", {}, e);
     const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
-    const res = await app.request(`/auth/discord/callback?code=abc&state=${state}`, {
-      headers: { cookie: cookiesFrom(start) },
-    }, e);
+    const res = await app.request(
+      `/auth/discord/callback?code=abc&state=${state}`,
+      {
+        headers: { cookie: cookiesFrom(start) },
+      },
+      e,
+    );
     expect(res.headers.get("location")).toBe("/?n=joined"); // roster failure never blocks sign-in
     expect(calls.some((c) => c.method === "PUT" && c.url.includes("/members/42"))).toBe(true);
     const rosterLine = logs.filter((l) => JSON.stringify(l.args).includes("roster upsert failed"));
@@ -516,9 +666,13 @@ describe("adjacent auth log paths stay bounded", () => {
     stubSignInDiscord();
     const start = await app.request("/auth/discord", {}, signedIn);
     const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
-    const login = await app.request(`/auth/discord/callback?code=abc&state=${state}`, {
-      headers: { cookie: cookiesFrom(start) },
-    }, signedIn);
+    const login = await app.request(
+      `/auth/discord/callback?code=abc&state=${state}`,
+      {
+        headers: { cookie: cookiesFrom(start) },
+      },
+      signedIn,
+    );
     const cookie = cookiesFrom(login);
     expect(cookie).toContain("__Host-two_session=");
 
@@ -527,10 +681,15 @@ describe("adjacent auth log paths stay bounded", () => {
       throw new Error(`connect ECONNREFUSED postgres://bot:${SECRET}@db.internal:5432/two`);
     };
     const logs = captureLogs();
-    const res = await app.request("/profile", { headers: { cookie } }, { ...env, SESSION_STORE: throwing } as Env);
+    const res = await app.request("/profile", { headers: { cookie } }, {
+      ...env,
+      SESSION_STORE: throwing,
+    } as Env);
     expect(res.status).toBe(503);
     expect(await res.text()).toContain("Profiles temporarily unavailable");
-    const gateLine = logs.filter((l) => JSON.stringify(l.args).includes("could not resolve the session"));
+    const gateLine = logs.filter((l) =>
+      JSON.stringify(l.args).includes("could not resolve the session"),
+    );
     expect(gateLine).toHaveLength(1);
     expect(gateLine[0]!.args[1]).toEqual({ exception: "Error" });
     leakFree(logs);

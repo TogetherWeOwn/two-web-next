@@ -39,16 +39,22 @@ export async function recordSearch(
   const normalized = normalizeQuery(raw);
   if (normalized === null) return;
   const warn = (exception: string) =>
-    console.warn("Event search unavailable for logging; serving results without recording.", { exception });
+    console.warn("Event search unavailable for logging; serving results without recording.", {
+      exception,
+    });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const write = (async () => {
     try {
       await db.transaction(async (tx) => {
         // Transaction-scoped: lock waits and the statement itself are cancelled by Postgres, freeing the connection.
-        await nonSensitiveRead("timeouts", () => tx.execute(
-          sql`select set_config('lock_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true)`,
-        ));
-        await tx.insert(eventSearchLogs).values({ normalizedQuery: normalized, resultCount: Math.max(0, resultCount) });
+        await nonSensitiveRead("timeouts", () =>
+          tx.execute(
+            sql`select set_config('lock_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true)`,
+          ),
+        );
+        await tx
+          .insert(eventSearchLogs)
+          .values({ normalizedQuery: normalized, resultCount: Math.max(0, resultCount) });
       });
     } catch (err) {
       warn(err instanceof Error ? err.constructor.name : typeof err);
@@ -90,21 +96,29 @@ export async function topZeroResultSearches(
     try {
       return await db.transaction(async (tx) => {
         // Transaction-scoped: lock waits and the statement itself are cancelled by Postgres, freeing the connection.
-        await nonSensitiveRead("timeouts", () => tx.execute(
-          sql`select set_config('lock_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true)`,
-        ));
-        const rows = await nonSensitiveRead("search-widget", () => tx
-          .select({
-            query: eventSearchLogs.normalizedQuery,
-            searches: count(),
-            lastSearchedAt: max(eventSearchLogs.occurredAt),
-          })
-          .from(eventSearchLogs)
-          .where(eq(eventSearchLogs.resultCount, 0))
-          .groupBy(eventSearchLogs.normalizedQuery)
-          .orderBy(desc(count()), asc(eventSearchLogs.normalizedQuery))
-          .limit(Math.max(1, limit)));
-        return rows.map((r) => ({ query: r.query, searches: Number(r.searches), lastSearchedAt: r.lastSearchedAt! }));
+        await nonSensitiveRead("timeouts", () =>
+          tx.execute(
+            sql`select set_config('lock_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LOG_DB_TIMEOUT_MS}ms`}, true)`,
+          ),
+        );
+        const rows = await nonSensitiveRead("search-widget", () =>
+          tx
+            .select({
+              query: eventSearchLogs.normalizedQuery,
+              searches: count(),
+              lastSearchedAt: max(eventSearchLogs.occurredAt),
+            })
+            .from(eventSearchLogs)
+            .where(eq(eventSearchLogs.resultCount, 0))
+            .groupBy(eventSearchLogs.normalizedQuery)
+            .orderBy(desc(count()), asc(eventSearchLogs.normalizedQuery))
+            .limit(Math.max(1, limit)),
+        );
+        return rows.map((r) => ({
+          query: r.query,
+          searches: Number(r.searches),
+          lastSearchedAt: r.lastSearchedAt!,
+        }));
       });
     } catch {
       return undefined;

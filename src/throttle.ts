@@ -35,10 +35,17 @@ export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql 
   return sql;
 }
 
-const clientKey = (c: Context) => c.req.header("cf-connecting-ip") ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "anon";
+const clientKey = (c: Context) =>
+  c.req.header("cf-connecting-ip") ??
+  c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
+  "anon";
 
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
-export async function throttleGuard(c: Context<{ Bindings: Env }>, name: string, max: number): Promise<Response | null> {
+export async function throttleGuard(
+  c: Context<{ Bindings: Env }>,
+  name: string,
+  max: number,
+): Promise<Response | null> {
   const verdict = await throttleStore(c)
     .then((sql) => checkJoinThrottle(sql, `${name}:${clientKey(c)}`, max))
     .catch(() => ({ limited: false }) as const);

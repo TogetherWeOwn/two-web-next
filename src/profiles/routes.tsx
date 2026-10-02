@@ -25,18 +25,34 @@ import { requestBodyLimit } from "../body-limit";
 import { sessionStoreFor } from "../admin/guard";
 import { recordAccess } from "../admin/store";
 import { type AccessDecl, type AccessSink } from "../access-log";
-import { bufferedMemberHtml, bufferedMemberText, declareMemberResult, memberReadBoundary } from "../member-reads";
+import {
+  bufferedMemberHtml,
+  bufferedMemberText,
+  declareMemberResult,
+  memberReadBoundary,
+} from "../member-reads";
 import { NotFoundPage, rateLimitExceeded } from "../errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
 import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
-import { PROFILE_COPY, PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD, profileTrapTripped } from "../islands/contracts";
+import {
+  PROFILE_COPY,
+  PROFILE_HONEY_FIELD,
+  PROFILE_OPENED_AT_FIELD,
+  profileTrapTripped,
+} from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { createDbProfileStore, type ProfileStore } from "./store";
 import { validateProfile } from "./validation";
-import { MEMBER_STATS_BUDGET_MS, memberStatsWithBudget, readMemberStats, readOwnedMemberStats, type MemberStatsSource } from "./stats";
+import {
+  MEMBER_STATS_BUDGET_MS,
+  memberStatsWithBudget,
+  readMemberStats,
+  readOwnedMemberStats,
+  type MemberStatsSource,
+} from "./stats";
 
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
 const SESSION_COOKIE = "__Host-two_session";
@@ -44,7 +60,14 @@ const SNOWFLAKE = /^\d{10,25}$/;
 // UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
 // username, avatar, member…) refuses the whole write: no body key can name
 // another member or a roster column past the owner check.
-const WRITABLE_FIELDS = new Set(["bio", "games", "games_text", "timezone", PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD]);
+const WRITABLE_FIELDS = new Set([
+  "bio",
+  "games",
+  "games_text",
+  "timezone",
+  PROFILE_HONEY_FIELD,
+  PROFILE_OPENED_AT_FIELD,
+]);
 const UNSUPPORTED_FIELDS = "Only your bio, games and timezone can be changed.";
 
 type Verdict = Awaited<ReturnType<typeof checkJoinThrottle>>;
@@ -67,7 +90,9 @@ const migratedThrottle = new Set<string>();
 export function profilesApp(deps: ProfileDeps = {}) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
   app.onError((error, c) => {
-    console.error("Profile request failed; refusing contents.", { exception: error.constructor.name });
+    console.error("Profile request failed; refusing contents.", {
+      exception: error.constructor.name,
+    });
     return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
   });
 
@@ -76,17 +101,25 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const db = await dbFor(c);
     return db ? createDbProfileStore(db) : null;
   };
-  const statsFor = (c: Ctx, id: string) => memberStatsWithBudget(deps.stats ?? (async (memberId, signal) => {
-    // Injected fixtures/clients are borrowed, never shut down by this request.
-    const injected = (c.env as EnvWithAdminDb).ADMIN_DB;
-    if (injected) return readMemberStats(injected, memberId, signal);
-    const url = databaseUrl(c.env);
-    if (!url) return null;
-    signal.throwIfAborted();
-    // Also bound server-side execution if the connection disappears mid-query.
-    const client = postgres(url, { ...databaseOptions, connection: { statement_timeout: MEMBER_STATS_BUDGET_MS } });
-    return readOwnedMemberStats(drizzle(client), memberId, signal);
-  }), id);
+  const statsFor = (c: Ctx, id: string) =>
+    memberStatsWithBudget(
+      deps.stats ??
+        (async (memberId, signal) => {
+          // Injected fixtures/clients are borrowed, never shut down by this request.
+          const injected = (c.env as EnvWithAdminDb).ADMIN_DB;
+          if (injected) return readMemberStats(injected, memberId, signal);
+          const url = databaseUrl(c.env);
+          if (!url) return null;
+          signal.throwIfAborted();
+          // Also bound server-side execution if the connection disappears mid-query.
+          const client = postgres(url, {
+            ...databaseOptions,
+            connection: { statement_timeout: MEMBER_STATS_BUDGET_MS },
+          });
+          return readOwnedMemberStats(drizzle(client), memberId, signal);
+        }),
+      id,
+    );
   const sinkFor = async (c: { env: Env }): Promise<AccessSink | null> => {
     if (deps.accessLog) return deps.accessLog;
     const db = await dbFor(c);
@@ -117,8 +150,14 @@ export function profilesApp(deps: ProfileDeps = {}) {
       if (!sessions) throw new Error("no session store");
       const row = await sessions.get(await hashToken(token));
       if (row) {
-        viewer = { id: row.userId, username: row.username, member: row.member, moderator: row.moderator };
-        if (row.member && c.req.method === "GET") await enableAuthStatus(c, sessions, await hashToken(token));
+        viewer = {
+          id: row.userId,
+          username: row.username,
+          member: row.member,
+          moderator: row.moderator,
+        };
+        if (row.member && c.req.method === "GET")
+          await enableAuthStatus(c, sessions, await hashToken(token));
       }
     } catch (err) {
       // Bounded like every other session-failure log: class name only — driver
@@ -144,14 +183,21 @@ export function profilesApp(deps: ProfileDeps = {}) {
     app.use(path, gate);
     app.use(path, async (c, next) => {
       if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
-      await memberReadBoundary(c, {
-        viewer: c.get("viewer").id, resource: "profile", action: "view",
-        route: path === "/profile" ? "profile" : "profiles.show",
-      }, async (entry) => {
-        const sink = await sinkFor(c);
-        if (!sink) throw new Error("no access-log sink");
-        return sink(entry);
-      }, next);
+      await memberReadBoundary(
+        c,
+        {
+          viewer: c.get("viewer").id,
+          resource: "profile",
+          action: "view",
+          route: path === "/profile" ? "profile" : "profiles.show",
+        },
+        async (entry) => {
+          const sink = await sinkFor(c);
+          if (!sink) throw new Error("no access-log sink");
+          return sink(entry);
+        },
+        next,
+      );
       // Refused contents must leave the one-shot confirmation pending.
       if (c.res.status === 200) await takeJoinResult(c);
     });
@@ -168,7 +214,16 @@ export function profilesApp(deps: ProfileDeps = {}) {
     const viewer = c.get("viewer");
     const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
-    return bufferedMemberHtml(c, <ProfilePage member={member} stats={stats} isOwner={viewer.id === member.id} appUrl={c.env.APP_URL} joinResult={joinResult} />);
+    return bufferedMemberHtml(
+      c,
+      <ProfilePage
+        member={member}
+        stats={stats}
+        isOwner={viewer.id === member.id}
+        appUrl={c.env.APP_URL}
+        joinResult={joinResult}
+      />,
+    );
   };
 
   app.get("/profile", (c) => render(c, c.get("viewer").id));
@@ -176,7 +231,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
 
   const admitWrite = async (c: Ctx, next: Next) => {
     const viewer = c.get("viewer");
-    const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(() => ({ limited: false }) as Verdict);
+    const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(
+      () => ({ limited: false }) as Verdict,
+    );
     if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
     // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
     const id = c.req.param("user") ?? "";
@@ -198,12 +255,12 @@ export function profilesApp(deps: ProfileDeps = {}) {
       else if ((c.req.header("content-type") ?? "").includes("application/json")) {
         isJson = true;
         input = (await c.req.json()) as Record<string, unknown>;
-      }
-      else input = { ...(await c.req.parseBody({ all: true })) };
+      } else input = { ...(await c.req.parseBody({ all: true })) };
     } catch {
       return c.text("Bad request", 400);
     }
-    if (typeof input !== "object" || input === null || Array.isArray(input)) return c.text("Bad request", 400);
+    if (typeof input !== "object" || input === null || Array.isArray(input))
+      return c.text("Bad request", 400);
     // `games` must be present (legacy `present|array`). Only a plain form
     // submission treats absence as a blank list; JSON must say so with `games: []`,
     // otherwise an omitted key would silently wipe the stored list.
@@ -213,7 +270,8 @@ export function profilesApp(deps: ProfileDeps = {}) {
       ? validateProfile(input)
       : { ok: false as const, errors: { fields: UNSUPPORTED_FIELDS } };
     if (!result.ok) {
-      if ((c.req.header("accept") ?? "").includes("application/json")) return c.json({ errors: result.errors }, 422);
+      if ((c.req.header("accept") ?? "").includes("application/json"))
+        return c.json({ errors: result.errors }, 422);
       c.status(422);
       return c.html(
         <ProfilePage

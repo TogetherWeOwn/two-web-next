@@ -68,8 +68,12 @@ describe("shell head", () => {
     const html = await (await app.request("/", {}, env)).text();
     expect(html).toContain('<meta name="theme-color" content="#151720"');
     expect(html).toContain('<link rel="manifest" href="/site.webmanifest"');
-    expect(html).toContain('<link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192"');
-    expect(html).toContain('<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180"');
+    expect(html).toContain(
+      '<link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192"',
+    );
+    expect(html).toContain(
+      '<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180"',
+    );
   });
 
   it("leaves carry the same head links", async () => {
@@ -86,7 +90,9 @@ describe("branded error handlers on a scratch app", () => {
     const scratchApp = new Hono();
     scratchApp.notFound((c) => notFoundHandler(c));
     scratchApp.onError((err, c) => internalErrorHandler(err, c));
-    scratchApp.get("/throttled", (c) => rateLimitExceeded(c, Number(c.req.query("retry_after") ?? 60)));
+    scratchApp.get("/throttled", (c) =>
+      rateLimitExceeded(c, Number(c.req.query("retry_after") ?? 60)),
+    );
     scratchApp.get("/down", maintenanceHandler("https://discord.gg/invite"));
     scratchApp.get("/boom", () => {
       throw new Error("kaboom with secret internals");
