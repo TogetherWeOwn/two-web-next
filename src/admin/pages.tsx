@@ -4,6 +4,7 @@
 
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { cloneElement, isValidElement } from "hono/jsx";
 import type { Actor } from "./guard";
 import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
 import { FeaturedContentItem, SkipLink } from "../pages";
@@ -365,14 +366,37 @@ type FieldProps = {
   children: (id: string) => unknown;
 };
 
-const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
+/**
+ * Merge association tokens, dropping exact duplicates so re-wiring is idempotent.
+ */
+const mergeDescribedBy = (existing: unknown, added: string): string => {
+  const tokens = [...String(existing ?? "").split(/\s+/), ...added.split(/\s+/)].filter(Boolean);
+  return [...new Set(tokens)].join(" ");
+};
+
+/**
+ * Shared admin field wrapper. Field owns hint/error association: it mints ids
+ * for its hint and error nodes and merges them into the child input's
+ * `aria-describedby` (appended after any inline wiring, never clobbering it),
+ * plus `aria-invalid` when an error is present. Consumers pass a bare control.
+ */
+export const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
   const err = errors[name];
   const id = `f-${name.replace(/[^a-z0-9]+/gi, "-")}`;
+  const owned = [hint ? `${id}-hint` : "", err ? `${id}-error` : ""].filter(Boolean).join(" ");
+  const node = children(id);
+  const control =
+    owned && isValidElement(node)
+      ? cloneElement(node, {
+          "aria-invalid": err ? "true" : undefined,
+          "aria-describedby": mergeDescribedBy(node.props["aria-describedby"], owned),
+        })
+      : node;
   return (
     <div class="field">
       <label for={id}>{label}</label>
-      {children(id)}
-      {hint ? <p class="hint">{hint}</p> : null}
+      {control}
+      {hint ? <p id={`${id}-hint`} class="hint">{hint}</p> : null}
       {err ? (
         <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>
           {err}
@@ -408,23 +432,19 @@ export const EventFormPage: FC<{
         <form method="post" action={action} data-event-editor=""
           data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required
-              aria-invalid={errors.title ? "true" : undefined} aria-describedby={errors.title ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100}
-              aria-invalid={errors.game ? "true" : undefined} aria-describedby={errors.game ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
             {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
           </Field>
           <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required
-              aria-invalid={errors.starts_at ? "true" : undefined} aria-describedby={errors.starts_at ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />}
           </Field>
           <Field name="ends_at" label="Ends (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required
-              aria-invalid={errors.ends_at ? "true" : undefined} aria-describedby={errors.ends_at ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required />}
           </Field>
           <Field
             name="timezone"
@@ -432,12 +452,10 @@ export const EventFormPage: FC<{
             errors={errors}
             hint="The IANA zone the wall time above is typed in. Storage is UTC."
           >
-            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"}
-              aria-invalid={errors.timezone ? "true" : undefined} aria-describedby={errors.timezone ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255}
-              aria-invalid={errors.location ? "true" : undefined} aria-describedby={errors.location ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
