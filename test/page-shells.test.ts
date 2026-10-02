@@ -93,7 +93,7 @@ it.each([
   const response = await app.request(`${env.APP_URL}${path}`, {}, env);
   expect(response.status).toBe(200);
   const header = (await response.text()).match(/<header\b[^>]*>(.*?)<\/header>/)![1]!;
-  expect(header).toContain(`href="/auth/discord?next=${encodeURIComponent(next)}" data-testid="signin"`);
+  expect(header).toContain(`href="/join/discord?next=${encodeURIComponent(next)}" data-testid="signin"`);
 });
 
 it("keeps event detail outside the schedule-only theme", async () => {

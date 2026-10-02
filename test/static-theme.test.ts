@@ -56,7 +56,7 @@ it("keeps versioned privacy HTML and the rules date unchanged inside the content
 it("keeps the join targets, guarded return path, widget and fallback in the auth layout", async () => {
   const next = "/events?month=2026-10";
   const html = await (await app.request(`/join?next=${encodeURIComponent(next)}`, {}, env)).text();
-  expect(html).toMatch(/href="\/auth\/discord"[^>]*data-testid="signin"/);
+  expect(html).toMatch(/href="\/join\/discord"[^>]*data-testid="signin"/);
   expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(next)}"`);
   expect(html).toContain('href="https://discord.gg/fixture" data-testid="join-invite"');
   expect(html).toContain('title="TWO Discord server preview"');
