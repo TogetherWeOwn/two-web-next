@@ -138,8 +138,15 @@
     {
       "idx": 19,
       "version": "7",
-      "when": 1790856000003,
-      "tag": "1018_event-sync-revisions",
+      "when": 1790902431105,
+      "tag": "1018_audit-immutability",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790902431106,
+      "tag": "1019_event-sync-revisions",
       "breakpoints": true
     }
   ]

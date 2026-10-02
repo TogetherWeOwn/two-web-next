@@ -38,6 +38,7 @@ import {
   memberDataAccessLogs,
 } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
@@ -197,8 +198,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
   });
 
   beforeEach(async () => {
-    await db.delete(memberDataAccessLogs);
-    await db.delete(activityLog);
+    await clearAuditRows(db, ["member_data_access_logs", "activity_log"]);
     await db.delete(events);
     await db.delete(featuredContents);
     cookie = await cookieFor(store, { userId: modId, username: "mod", moderator: true });
@@ -207,8 +207,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
 
   afterEach(async () => {
     vi.useRealTimers();
-    await db.delete(memberDataAccessLogs);
-    await db.delete(activityLog);
+    await clearAuditRows(db, ["member_data_access_logs", "activity_log"]);
     await db.delete(events);
     await db.delete(featuredContents);
   });

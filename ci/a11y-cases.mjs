@@ -92,6 +92,8 @@ export const coverage = {
   "/e/:key": {
     cases: [
       { path: `/e/${event}` },
+      { path: `/e/${event}`, identity: "member", state: "going" },
+      { path: "/e/01J00000000000000000000019", identity: "member", state: "waitlisted" },
       { path: `/e/${cancelled}`, status: 410 },
       { path: `/e/${draft}`, identity: "moderator" },
       { path: "/e/invalid-key", status: 404 },

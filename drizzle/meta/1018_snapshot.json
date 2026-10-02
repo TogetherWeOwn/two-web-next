@@ -1,5 +1,5 @@
 {
-  "id": "03d9f507-114f-4dac-a3e7-43eb5f365573",
+  "id": "06182e61-6da0-4bcf-a235-19c9091cf6c7",
   "prevId": "c2c560bc-5ee5-4408-b5d5-5a3be3aab65e",
   "version": "7",
   "dialect": "postgresql",
@@ -100,9 +100,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "agent_event_audits_event_key_idx": {
           "name": "agent_event_audits_event_key_idx",
@@ -115,24 +115,24 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "agent_event_audits_grant_id_agent_event_grants_id_fk": {
           "name": "agent_event_audits_grant_id_agent_event_grants_id_fk",
           "tableFrom": "agent_event_audits",
-          "tableTo": "agent_event_grants",
           "columnsFrom": [
             "grant_id"
           ],
+          "tableTo": "agent_event_grants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       },
       "compositePrimaryKeys": {},
@@ -221,9 +221,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -231,10 +231,10 @@
       "uniqueConstraints": {
         "agent_event_grants_verifier_hash_unique": {
           "name": "agent_event_grants_verifier_hash_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "verifier_hash"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -283,9 +283,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -367,35 +367,35 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "agent_event_idempotency_keys_grant_id_agent_event_grants_id_fk": {
           "name": "agent_event_idempotency_keys_grant_id_agent_event_grants_id_fk",
           "tableFrom": "agent_event_idempotency_keys",
-          "tableTo": "agent_event_grants",
           "columnsFrom": [
             "grant_id"
           ],
+          "tableTo": "agent_event_grants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "agent_event_idempotency_grant_key": {
           "name": "agent_event_idempotency_grant_key",
-          "nullsNotDistinct": false,
           "columns": [
             "grant_id",
             "key"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -506,32 +506,32 @@
         "agent_events_agent_grant_id_agent_event_grants_id_fk": {
           "name": "agent_events_agent_grant_id_agent_event_grants_id_fk",
           "tableFrom": "agent_events",
-          "tableTo": "agent_event_grants",
           "columnsFrom": [
             "agent_grant_id"
           ],
+          "tableTo": "agent_event_grants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "agent_events_agent_grant_id_unique": {
           "name": "agent_events_agent_grant_id_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "agent_grant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         },
         "agent_events_proof_marker_unique": {
           "name": "agent_events_proof_marker_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "proof_marker"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -629,9 +629,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "join_attempts_outcome_index": {
           "name": "join_attempts_outcome_index",
@@ -644,9 +644,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -654,10 +654,10 @@
       "uniqueConstraints": {
         "join_attempts_legacy_id_unique": {
           "name": "join_attempts_legacy_id_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "legacy_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -764,10 +764,10 @@
       "uniqueConstraints": {
         "queue_failed_jobs_job_id_unique": {
           "name": "queue_failed_jobs_job_id_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "job_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -918,9 +918,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -1022,9 +1022,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -1088,9 +1088,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "event_search_logs_occurred_at_idx": {
           "name": "event_search_logs_occurred_at_idx",
@@ -1103,9 +1103,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -1113,10 +1113,10 @@
       "uniqueConstraints": {
         "event_search_logs_legacy_id_unique": {
           "name": "event_search_logs_legacy_id_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "legacy_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -1200,20 +1200,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "sync_revision": {
-          "name": "sync_revision",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "synced_revision": {
-          "name": "synced_revision",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         },
         "discord_sync_failed_at": {
           "name": "discord_sync_failed_at",
@@ -1310,9 +1296,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "events_parent_event_id_idx": {
           "name": "events_parent_event_id_idx",
@@ -1325,9 +1311,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "events_ends_at_index": {
           "name": "events_ends_at_index",
@@ -1340,9 +1326,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "events_starts_at_id_index": {
           "name": "events_starts_at_id_index",
@@ -1361,41 +1347,41 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "events_parent_event_id_events_id_fk": {
           "name": "events_parent_event_id_events_id_fk",
           "tableFrom": "events",
-          "tableTo": "events",
           "columnsFrom": [
             "parent_event_id"
           ],
+          "tableTo": "events",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "events_event_key_unique": {
           "name": "events_event_key_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "event_key"
-          ]
+          ],
+          "nullsNotDistinct": false
         },
         "events_discord_event_id_unique": {
           "name": "events_discord_event_id_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "discord_event_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -1513,9 +1499,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -1523,10 +1509,10 @@
       "uniqueConstraints": {
         "featured_contents_legacy_id_unique": {
           "name": "featured_contents_legacy_id_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "legacy_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -1611,9 +1597,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "member_access_occurred_idx": {
           "name": "member_access_occurred_idx",
@@ -1626,9 +1612,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {},
@@ -1705,9 +1691,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "rsvps_event_id_status_index": {
           "name": "rsvps_event_id_status_index",
@@ -1726,9 +1712,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "rsvps_unsynced_event_id_index": {
           "name": "rsvps_unsynced_event_id_index",
@@ -1741,139 +1727,38 @@
             }
           ],
           "isUnique": false,
-          "where": "\"rsvps\".\"synced_to_discord_at\" is null",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"rsvps\".\"synced_to_discord_at\" is null",
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "rsvps_event_id_events_id_fk": {
           "name": "rsvps_event_id_events_id_fk",
           "tableFrom": "rsvps",
-          "tableTo": "events",
           "columnsFrom": [
             "event_id"
           ],
+          "tableTo": "events",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "rsvps_event_user_unique": {
           "name": "rsvps_event_user_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "event_id",
             "user_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.event_sync_attempts": {
-      "name": "event_sync_attempts",
-      "schema": "",
-      "columns": {
-        "idempotency_key": {
-          "name": "idempotency_key",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "event_id": {
-          "name": "event_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "revision": {
-          "name": "revision",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "action": {
-          "name": "action",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "payload": {
-          "name": "payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "mirrored_at": {
-          "name": "mirrored_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "request_attempts": {
-          "name": "request_attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "next_attempt_at": {
-          "name": "next_attempt_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "event_sync_attempts_pending_idx": {
-          "name": "event_sync_attempts_pending_idx",
-          "columns": [
-            {
-              "expression": "event_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
           ],
-          "isUnique": true,
-          "where": "\"event_sync_attempts\".\"state\" = 'pending'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
+          "nullsNotDistinct": false
         }
       },
-      "foreignKeys": {
-        "event_sync_attempts_event_id_events_id_fk": {
-          "name": "event_sync_attempts_event_id_events_id_fk",
-          "tableFrom": "event_sync_attempts",
-          "tableTo": "events",
-          "columnsFrom": [
-            "event_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1881,10 +1766,10 @@
   },
   "enums": {},
   "schemas": {},
+  "views": {},
   "sequences": {},
   "roles": {},
   "policies": {},
-  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

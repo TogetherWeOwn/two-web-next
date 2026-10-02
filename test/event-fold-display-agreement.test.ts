@@ -156,7 +156,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(page.status).toBe(200);
         const html = await page.text();
         const time = html.match(
-          new RegExp(`<p>\\s*<time datetime="${iso}">([^<]*)</time>\\s*</p>`),
+          new RegExp(`<dd>\\s*<time datetime="${iso}">([^<]*)</time>\\s*</dd>`),
         );
         expect(time, "show-page <time> carries the stored instant").not.toBeNull();
         // Visible text is the host-zone wall clock of that instant.

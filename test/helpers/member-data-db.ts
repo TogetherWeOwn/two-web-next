@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { activityLog, events, memberDataAccessLogs, rsvps } from "../../src/db/admin-schema";
+import { events, rsvps } from "../../src/db/admin-schema";
 import { adminSchema, schema, type Db } from "../../src/db/index";
 import { joinAttempts, profiles, users } from "../../src/db/schema";
+import { clearAuditRows } from "./audit-rows";
 
 export function testDatabaseUrl(raw: string, runner = process.env): URL {
   const refuse = () => {
@@ -99,8 +100,7 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
   const reset = async () => {
     if (disposal) throw new Error("W15 fixture is disposed");
     // Deliberately no arbitrary Db argument: only this scoped pool can clean.
-    await db.delete(memberDataAccessLogs);
-    await db.delete(activityLog);
+    await clearAuditRows(db, ["member_data_access_logs", "activity_log"]);
     await db.delete(rsvps);
     await db.delete(profiles);
     await db.delete(joinAttempts);
