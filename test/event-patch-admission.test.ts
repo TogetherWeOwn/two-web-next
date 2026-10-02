@@ -170,7 +170,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     expect(sent).toHaveLength(1);
     expect(sent[0]).toEqual({ kind: "sync-event", eventKey: EVENT_KEY,
       idempotencyKey: expect.any(String), jobId: expect.any(String),
-      leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) });
+      leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+      requestId: expect.any(String) });
     expect(after.jobs).toHaveLength(1);
     expect(after.jobs[0]!.job_id).toBe(sent[0]!.jobId);
     expect(after.locks).toHaveLength(1);

@@ -90,11 +90,14 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     sent.length = 0;
   }
 
-  async function assertTracked(eventKeys: string[]) {
+  async function assertTracked(eventKeys: string[], requestId?: string) {
     // The carrier contains identity only; action/payload are chosen at consumption.
+    // requestId is optional route correlation (#89): HTTP routes stamp it,
+    // while adminApp and direct dispatches omit it (pass undefined).
     expect(sent).toEqual(eventKeys.map((eventKey) => ({
       body: { kind: "sync-event", eventKey, idempotencyKey: expect.any(String), jobId: expect.any(String),
-        leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i) },
+        leaseToken: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+        requestId },
       options: { delaySeconds: 10 },
     })));
     for (const { body } of sent) {
@@ -123,7 +126,9 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
   }
   async function request(path: string, userId: string | null, method = "GET", body?: unknown, moderator = false, extra: Record<string, string> = {}) {
-    return app.request(path, { method, headers: { origin: APP_URL, "content-type": "application/json",
+    // Every HTTP write carries a cf-ray so the tracked carrier pins the
+    // request correlation (#89); direct dispatches omit it.
+    return app.request(path, { method, headers: { origin: APP_URL, "content-type": "application/json", "cf-ray": "0123456789abcdef-LHR",
       ...(userId ? { cookie: await cookieFor(userId, moderator) } : {}), ...extra },
       body: body === undefined ? undefined : JSON.stringify(body) }, env);
   }
@@ -150,6 +155,9 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     return ev;
   }
   async function adminEdit(ev: typeof events.$inferSelect, capacity: number | null) {
+    // Standalone adminApp mounts no requestLog, so c.get("requestId") is
+    // undefined and the dispatch omits correlation (safeRequestId(undefined)
+    // is undefined). Live-mounted /admin inherits the outer requestLog.
     return adminApp({ sessionStore: store, db }).request(`/events/${ev.eventKey}`, {
       method: "POST", headers: { cookie: await cookieFor("moderator", true), origin: APP_URL },
       body: new URLSearchParams({ title: ev.title, timezone: "UTC", starts_at: "2099-01-01T20:00",
@@ -172,7 +180,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(await waitlistPosition(db, ev.id, "absent")).toBeNull();
     const [hit] = await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:waiter'`;
     expect(hit!.n).toBe(2);
-    await assertTracked([ev.eventKey]); // Re-answers in one burst share a tracked carrier.
+    await assertTracked([ev.eventKey], "0123456789abcdef-LHR"); // Re-answers in one burst share a tracked carrier.
   });
 
   it("a stale-view explicit waitlist answer takes a vacant seat before a newcomer", async () => {
@@ -198,7 +206,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     const line = await rows(ev.id);
     expect(line.map((r) => [r.userId, r.status])).toEqual([["head", "going"], ["newcomer", "waitlisted"]]);
     expect(line[0]!.syncedToDiscordAt).toBeNull();
-    await assertTracked([ev.eventKey]);
+    await assertTracked([ev.eventKey], "0123456789abcdef-LHR");
   });
 
   it.each(["new", "older-maybe"])("%s waiter uses the DB clock rather than a skewed/truncated Worker clock", async (kind) => {
@@ -228,7 +236,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(after[1]!.syncedToDiscordAt).toEqual(before[2]!.syncedToDiscordAt);
     expect(await waitlistPosition(db, ev.id, "waiter-1")).toBeNull();
     expect(await waitlistPosition(db, ev.id, "waiter-2")).toBe(1);
-    await assertTracked([ev.eventKey]);
+    await assertTracked([ev.eventKey], "0123456789abcdef-LHR");
     const [hit] = await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:waiter-1'`;
     expect(hit!.n).toBe(1); // Automatic promotion spends no member attempt.
   });
@@ -292,13 +300,13 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(line.map((r) => r.status)).toEqual(["going", "going", "going", "waitlisted"]);
     expect(line.slice(1, 3).every((r) => r.syncedToDiscordAt === null)).toBe(true);
     expect(line[3]!.syncedToDiscordAt).not.toBeNull();
-    const [firstDelivery] = await assertTracked([ev.eventKey]);
+    const [firstDelivery] = await assertTracked([ev.eventKey], surface === "admin" ? undefined : "0123456789abcdef-LHR");
     await completeQueuedDeliveries();
     const unlimited = surface === "json" ? await patch(ev.eventKey, null) : await adminEdit(ev, null);
     expect(unlimited.status).toBe(surface === "json" ? 200 : 303);
     line = await rows(ev.id);
     expect(line.every((r) => r.status === "going")).toBe(true);
-    const [nextDelivery] = await assertTracked([ev.eventKey]);
+    const [nextDelivery] = await assertTracked([ev.eventKey], surface === "admin" ? undefined : "0123456789abcdef-LHR");
     expect(nextDelivery!.jobId).not.toBe(firstDelivery!.jobId);
     expect(nextDelivery!.idempotencyKey).not.toBe(firstDelivery!.idempotencyKey);
   });
@@ -318,7 +326,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(shifted!.startsAt.toISOString()).toBe("2099-01-09T20:00:00.000Z");
     expect(shifted!.endsAt.toISOString()).toBe("2099-01-09T22:00:00.000Z");
     expect(shifted!.capacity).toBe(1);
-    await assertTracked([ev.eventKey, child.eventKey]);
+    await assertTracked([ev.eventKey, child.eventKey], "0123456789abcdef-LHR");
   });
 
   it.each(["json", "admin"])("%s refuses a cap below Going with a field error and no mutation", async (surface) => {
