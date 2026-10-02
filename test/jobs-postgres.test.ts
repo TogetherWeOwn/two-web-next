@@ -48,33 +48,40 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await a;
   });
 
-  it("flight body queries run on the reserved tx (no max:1 deadlock)", async () => {
-    // The outer pool has one connection held by the flight; prune queries
-    // must use its reserved client. Dispatch uses a separate autocommit pool.
-    const single = await createJobsFixture(process.env.DATABASE_URL!, { max: 1 });
-    const { migrate } = await import("../src/sessions");
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
+  describe("reserved transaction", () => {
+    let single: JobsFixture | undefined;
+    beforeAll(async () => {
+      // Keep schema/session migration outside the test's deadlock budget.
+      single = await createJobsFixture(process.env.DATABASE_URL!, { max: 1 });
+      const { migrate } = await import("../src/sessions");
       await migrate(single.client as unknown as Parameters<typeof migrate>[0]);
-      const ran = await Promise.race([
-        pgSingleFlight(single.client)(own("prune"), async (db) => {
-          const stores = pgPruneStores(db);
-          const lock = pgUniqueLock(db);
-          for (const table of [stores.accessLog, stores.joinAttempts, stores.idempotencyKeys, stores.searchLog]) {
-            expect(await table.pruneOlderThan(new Date(0))).toBe(0);
-          }
-          expect(await stores.sessions.sweepExpired(new Date())).toBe(0);
-          expect(await lock.acquire(own("prune-tx"), 60)).toBe(true);
-        }),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error("deadlock: body stalled on max:1 pool")), 3000);
-        }),
-      ]);
-      expect(ran).toBe(true);
-    } finally {
-      clearTimeout(timeout);
-      await single.dispose();
-    }
+    });
+    afterAll(async () => { await single?.dispose(); });
+
+    it("flight body queries run on the reserved tx (no max:1 deadlock)", async () => {
+      // The outer pool has one connection held by the flight; prune queries
+      // must use its reserved client. Dispatch uses a separate autocommit pool.
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const ran = await Promise.race([
+          pgSingleFlight(single!.client)(own("prune"), async (db) => {
+            const stores = pgPruneStores(db);
+            const lock = pgUniqueLock(db);
+            for (const table of [stores.accessLog, stores.joinAttempts, stores.idempotencyKeys, stores.searchLog]) {
+              expect(await table.pruneOlderThan(new Date(0))).toBe(0);
+            }
+            expect(await stores.sessions.sweepExpired(new Date())).toBe(0);
+            expect(await lock.acquire(own("prune-tx"), 60)).toEqual(expect.any(String));
+          }),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error("deadlock: body stalled on max:1 pool")), 3000);
+          }),
+        ]);
+        expect(ran).toBe(true);
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
   });
 
   it("unique lock: one winner, expiry frees it, release frees it", async () => {
@@ -83,17 +90,19 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     const wins = await Promise.all([1, 2, 3, 4].map(() => lock.acquire(key, 300)));
     expect(wins.filter(Boolean)).toHaveLength(1);
     await sql`update job_unique_locks set expires_at = now() - interval '1 second' where key = ${key}`;
-    expect(await lock.acquire(key, 300)).toBe(true); // expired row is taken over
-    await lock.release(key);
-    expect(await lock.acquire(key, 300)).toBe(true);
-    await lock.release(key);
+    const replacement = await lock.acquire(key, 300); // expired row is taken over
+    expect(replacement).toEqual(expect.any(String));
+    await lock.release(key, replacement!);
+    const next = await lock.acquire(key, 300);
+    expect(next).toEqual(expect.any(String));
+    await lock.release(key, next!);
   });
 
   it("new locks get their full TTL even in an old transaction", async () => {
     await sql.begin(async (tx) => {
       await tx`select pg_sleep(0.2)`;
       const key = own("fresh-ttl");
-      expect(await pgUniqueLock(tx).acquire(key, 1)).toBe(true);
+      expect(await pgUniqueLock(tx).acquire(key, 1)).toEqual(expect.any(String));
       const [row] = await tx`select extract(epoch from expires_at - clock_timestamp())::float as remaining
         from job_unique_locks where key = ${key}`;
       expect(row!.remaining).toBeGreaterThan(0.9);
@@ -105,7 +114,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await sql`insert into job_unique_locks (key, expires_at) values (${key}, clock_timestamp() + interval '0.1 second')`;
     await sql.begin(async (tx) => {
       await tx`select pg_sleep(0.2)`;
-      expect(await pgUniqueLock(tx).acquire(key, 1)).toBe(true);
+      expect(await pgUniqueLock(tx).acquire(key, 1)).toEqual(expect.any(String));
       const [row] = await tx`select extract(epoch from expires_at - clock_timestamp())::float as remaining
         from job_unique_locks where key = ${key}`;
       expect(row!.remaining).toBeGreaterThan(0.9);

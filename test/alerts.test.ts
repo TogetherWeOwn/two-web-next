@@ -60,6 +60,18 @@ describe("rate limit", () => {
     expect(fingerprintOf(new BoomError(), "/join")).toBe("BoomError@/join");
   });
 
+  it("includes a safe request ID without making it part of the fingerprint", () => {
+    const lines: string[] = [];
+    const opts = { limiter: new AlertRateLimit(), sink: (line: string) => void lines.push(line) };
+    const req = { method: "POST", route: "/join", requestId: "0123456789abcdef-LHR" };
+    expect(alertRequestError(new BoomError(), req, opts)).toBe(true);
+    expect(alertRequestError(new BoomError(), { ...req, requestId: "fedcba9876543210-LHR" }, opts)).toBe(false);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ request_id: req.requestId, fingerprint: "BoomError@/join" });
+    alertRequestError(new BoomError(), { ...req, route: "/other", requestId: "bearer-secret" }, opts);
+    expect(lines[1]).not.toContain("bearer-secret");
+    expect(JSON.parse(lines[1]!)).not.toHaveProperty("request_id");
+  });
+
   it("stays bounded", () => {
     const rl = new AlertRateLimit(ALERT_WINDOW_MS, () => 1);
     for (let i = 0; i < 2000; i++) rl.allow(`f${i}`);
@@ -90,7 +102,7 @@ describe("app wiring", () => {
 });
 
 describe("queue.failing", () => {
-  const lock: UniqueLock = { acquire: async () => true, release: async () => {} };
+  const lock: UniqueLock = { acquire: async () => "test-lease", release: async () => {} };
   const events = {} as EventStore;
   const ledger = { released: async () => {}, dequeued: async () => {}, failed: async () => {} } as unknown as QueueLedger;
   const msg = (body: unknown, attempts: number) => ({ body, attempts, ack() {}, retry() {} });
@@ -100,6 +112,8 @@ describe("queue.failing", () => {
 
   it("logs connection/queue/job/attempts/exception on a terminal failure", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Class-only (TOG-11627): the terminal message can carry secrets, so the
+    // alert carries the error class, never its text.
     const bot = { postAnnouncement: async () => { throw new BotTerminalError("missing secret"); } } as unknown as BotClient;
     await consume({ messages: [msg(ann, 2)] }, { bot, events, lock, ledger });
     expect(failingLines(spy)).toEqual([
@@ -110,7 +124,7 @@ describe("queue.failing", () => {
         queue: "two-internal-action",
         job: "CallInternalAction",
         attempts: 2,
-        exception: "missing secret",
+        exception: "BotTerminalError",
       },
     ]);
   });
@@ -129,7 +143,7 @@ describe("queue.failing", () => {
     const boom = () => { throw new TypeError("x"); };
     const store = { find: boom } as unknown as EventStore;
     await consume(
-      { messages: [msg({ kind: "sync-event", eventKey: "e1" }, SYNC_EVENT.tries)] },
+      { messages: [msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, SYNC_EVENT.tries)] },
       { bot: {} as BotClient, events: store, lock, ledger },
     );
     expect(failingLines(spy)).toMatchObject([{ queue: "two-sync-event", job: "SyncEventToDiscord" }]);

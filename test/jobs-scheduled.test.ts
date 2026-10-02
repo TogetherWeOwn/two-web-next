@@ -23,7 +23,7 @@ vi.mock(import("../src/jobs/cron"), async (importOriginal) => {
     ...actual,
     reconcileEvents: (deps: Parameters<typeof actual.reconcileEvents>[0]) => actual.reconcileEvents({
       ...deps,
-      events: { ...deps.events, closeFinished: async () => 0, staleEventKeys: async () => state.keys },
+      events: { ...deps.events, closeFinished: async () => 0, materializeSeries: async () => 0, staleEventKeys: async () => state.keys },
     }),
   };
 });
@@ -95,7 +95,8 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
       const ledger = pgQueueLedger(sql);
       await ledger.reserved(message.jobId!);
       await ledger.dequeued(message.jobId!);
-      await pgUniqueLock(sql).release(uniqueKey("first"));
+      expect(message.kind).toBe("sync-event");
+      if (message.kind === "sync-event") await pgUniqueLock(sql).release(uniqueKey("first"), message.leaseToken!);
       consumed = true;
     });
     await handleScheduled(controller(RECONCILE_CRON), env);

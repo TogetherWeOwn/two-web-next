@@ -9,3 +9,6 @@ coverage/
 e2e/.dev.vars
 playwright-report/
 test-results/
+artifacts/
+dist-tail/
+__pycache__/
