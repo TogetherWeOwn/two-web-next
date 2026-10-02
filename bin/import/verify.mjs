@@ -47,6 +47,27 @@ export function validateMap(map) {
   return map;
 }
 
+// Static same-database refusal: normalized host/port/dbname compare. This runs
+// on validated URLs before the map loads and before any connection opens, so a
+// same-DB invocation can never read-only report MATCH. Usernames, passwords and
+// query parameters never distinguish one database from another. DNS aliases can
+// still resolve distinct strings to one database; the importers pair this with
+// a live lock-domain probe, while verify stays a pure URL-identity check.
+export function assertDistinctDatabases(legacyRaw, nextRaw) {
+  const endpoint = (raw) => {
+    const url = new URL(raw);
+    if (!['postgres:', 'postgresql:'].includes(url.protocol)) fail('invalid_connection_environment');
+    return JSON.stringify([url.hostname.toLowerCase(), url.port || '5432',
+      decodeURIComponent(url.pathname)]);
+  };
+  try {
+    if (endpoint(legacyRaw) === endpoint(nextRaw)) fail('same_database');
+  } catch (error) {
+    if (error instanceof VerificationError) throw error;
+    fail('invalid_connection_environment');
+  }
+}
+
 function projection(table, side) {
   const keys = table.keys.map((f, i) => `(${f[side]})::text COLLATE "C" AS k${i}`);
   // Keep SQL NULL distinct from JSON null with a discriminator per field.
@@ -213,7 +234,9 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     const map = validateMap(options.mapPath ? JSON.parse(await readFile(options.mapPath, 'utf8')) :
       defaultTableMap(options));
     // Notices and driver errors can contain SQL values/URLs. Never print them.
-    const connect = (raw) => {
+    // Validate both endpoints before refusing or connecting: per-parameter
+    // channel-binding errors must win over the same-database refusal.
+    const parse = (raw) => {
       const url = new URL(raw);
       if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname ||
           !url.username || url.pathname.length < 2) fail('invalid_connection_environment');
@@ -223,12 +246,19 @@ export async function main(args = process.argv.slice(2), env = process.env) {
       if (binding.includes('require')) fail('unsupported_channel_binding_required');
       if (binding.some((value) => !['prefer', 'disable'].includes(value))) fail('invalid_channel_binding');
       url.searchParams.delete('channel_binding');
-      return postgres(url.href, { max: 1, prepare: false, connect_timeout: 10, onnotice: () => {},
+      return url;
+    };
+    const legacyUrl = parse(env.LEGACY_DATABASE_URL);
+    const nextUrl = parse(env.DATABASE_URL);
+    // Refuse before opening any connection: pointed at one database twice,
+    // verify would read-only report MATCH.
+    assertDistinctDatabases(legacyUrl.href, nextUrl.href);
+    const connect = (url) =>
+      postgres(url.href, { max: 1, prepare: false, connect_timeout: 10, onnotice: () => {},
         host: url.hostname, port: Number(url.port || 5432), user: decodeURIComponent(url.username),
         database: decodeURIComponent(url.pathname.slice(1)), password: () => decodeURIComponent(url.password) });
-    };
-    legacy = connect(env.LEGACY_DATABASE_URL);
-    next = connect(env.DATABASE_URL);
+    legacy = connect(legacyUrl);
+    next = connect(nextUrl);
     const report = await verify({ legacy, next, map, ...options });
     const json = JSON.stringify(report, null, 2) + '\n';
     const markdown = renderMarkdown(report);

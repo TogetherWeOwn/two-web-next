@@ -35,6 +35,7 @@ export class VerificationError extends Error { code: string; constructor(code: s
 export function quoteIdentifier(value: string): string;
 export function validateMap(map: unknown): TableMapping[];
 export function compareKeys(a: string[], b: string[]): number;
+export function assertDistinctDatabases(legacyRaw: string, nextRaw: string): void;
 export function verify(options: {
   legacy: Sql; next: Sql; map: TableMapping[]; batchSize?: number; detailLimit?: number;
 }): Promise<VerificationReport>;
