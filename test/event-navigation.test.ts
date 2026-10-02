@@ -193,9 +193,9 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("vary")).toBe("Cookie");
     expect(f.queries).toHaveLength(8); // Event/count, viewer answer/position, attendees and three navigation reads.
-    const viewerAnswers = f.queries.filter((q) => q.sql.includes('select "status", "synced_to_discord_at"'));
+    const viewerAnswers = f.queries.filter((q) => q.sql.includes('select "user_id", "status", "synced_to_discord_at"'));
     expect(viewerAnswers).toHaveLength(1);
-    expect(viewerAnswers[0]!.params).toContain("viewer");
+    expect(viewerAnswers[0]!.params).toContain("100000000000000001");
     expect(f.queries.filter((q) => q.sql.includes("row_number() over"))).toHaveLength(1);
     expect(f.queries.filter((q) => q.sql.includes('inner join "users"'))).toHaveLength(1);
   });

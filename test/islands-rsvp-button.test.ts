@@ -235,7 +235,11 @@ describe("rsvp-button clock-ended + pause + focus + return path", () => {
 });
 
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const viewer: Session = { id: "member-one", username: "one", avatar: null, member: true, moderator: false };
+// Member-read boundary (#145) declarations require Discord-snowflake viewer
+// ids; non-digit ids are refused with a 503 before any assertion runs.
+const VIEWER_ONE = "420000000000000042";
+const VIEWER_TWO = "420000000000000043";
+const viewer: Session = { id: VIEWER_ONE, username: "one", avatar: null, member: true, moderator: false };
 function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<string, ViewerRsvp> = {}, protectWrites = false) {
   const startsAt = new Date("2030-01-01T20:00:00Z");
   const event: typeof events.$inferSelect = {
@@ -254,8 +258,19 @@ function page(over: Partial<typeof events.$inferSelect> = {}, answers: Record<st
     if (sql.includes("isfinite(") || sql.includes("row_number()")) return { rows: [] };
     if (sql.includes('from "events"')) return { rows: [cols.map((k) => event[k] instanceof Date ? event[k].toISOString() : event[k])] };
     if (sql.includes('group by')) return { rows: [[event.id, 4]] };
+    // The member-only attendees projection joins users and is empty in this
+    // fixture; without this arm it would fall through to the answer lookup.
+    if (sql.includes('inner join "users"')) return { rows: [] };
     const answer = answers[String(params[1])];
-    return { rows: params[0] === event.id && answer ? [[answer.status, answer.syncedToDiscordAt?.toISOString() ?? null]] : [] };
+    if (params[0] !== event.id || !answer) return { rows: [] };
+    // The keyed viewer-answer projection selects (user_id, status,
+    // synced_to_discord_at). Drizzle's pg-proxy mapper reads positional
+    // columns while the boundary's owner projection reads the named owner
+    // key, so the row carries both shapes; the key must be the session
+    // snowflake or the boundary refuses the response with a 503.
+    const userId = String(params[1]);
+    const synced = answer.syncedToDiscordAt?.toISOString() ?? null;
+    return { rows: [Object.assign([userId, answer.status, synced], { userId, status: answer.status, syncedToDiscordAt: synced })] };
   });
   let who: Session | null = null;
   let authReads = 0;
@@ -347,16 +362,17 @@ describe("rsvp-button SSR/server drift", () => {
   it("never serves another member's answer and marks personalized HTML uncacheable", async () => {
     const p = page({}, { [viewer.id]: { status: "going", syncedToDiscordAt: null } });
     p.as(viewer); const first = await p.request(); expect(mount(await first.text())).toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
-    p.as({ ...viewer, id: "member-two" }); const second = await p.request();
+    p.as({ ...viewer, id: VIEWER_TWO }); const second = await p.request();
     expect(mount(await second.text())).not.toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
     expect(second.headers.get("cache-control")).toBe("private, no-store");
     // Viewer-answer reads stay keyed on the session user (they select the
     // sync stamp); the member-only attendees projection (merged from main)
     // joins users and reads by event + status, never another member's answer.
     const viewerReads = p.queries.filter((q) => q.sql.includes('"synced_to_discord_at"'));
-    expect(viewerReads.map((q) => q.params)).toEqual([[42, "member-one"], [42, "member-two"]]);
+    expect(viewerReads.map((q) => q.params)).toEqual([[42, VIEWER_ONE], [42, VIEWER_TWO]]);
     const attendeeReads = p.queries.filter((q) => q.sql.includes('inner join "users"'));
-    expect(attendeeReads.map((q) => q.params)).toEqual([[42, "going"], [42, "going"]]);
+    // The member-only attendees projection excludes nameless rows in SQL.
+    expect(attendeeReads.map((q) => q.params)).toEqual([[42, "going", ""], [42, "going", ""]]);
   });
 
   it.each(["going", "waitlisted", "withdraw"] as const)("no-JS %s submits a real form, shares the JSON service and returns to the event", async (status) => {
@@ -372,8 +388,10 @@ describe("rsvp-button SSR/server drift", () => {
     const res = await p.request(action!, { method: "POST", headers: { origin: "https://next.example.test" }, body: new URLSearchParams({ status }) });
     expect(res.status).toBe(303); expect(res.headers.get("location")).toBe(`/e/${KEY}`);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
-    if (status === "withdraw") { expect(remove).toHaveBeenCalledWith(p.db, KEY, viewer.id); expect(write).not.toHaveBeenCalled(); }
-    else { expect(write).toHaveBeenCalledWith(p.db, KEY, viewer.id, status); expect(remove).not.toHaveBeenCalled(); }
+    // The route passes the boundary-observed db (memberReadDb proxy over the
+    // same pool), so pin the write routing (key, user, status), not db identity.
+    if (status === "withdraw") { expect(remove.mock.calls[0]?.slice(1)).toEqual([KEY, viewer.id]); expect(write).not.toHaveBeenCalled(); }
+    else { expect(write.mock.calls[0]?.slice(1)).toEqual([KEY, viewer.id, status]); expect(remove).not.toHaveBeenCalled(); }
   });
 
   it("no-JS failures preserve status, throttle copy and an actionable recovery link", async () => {
