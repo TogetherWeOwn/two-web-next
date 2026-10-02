@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SYSOP_MODERATOR_ROLE_ID as SYSOP } from "../src/probes/check-moderators";
+// @ts-expect-error Standalone tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 
 const read = (path: string) => readFileSync(path, "utf8");
