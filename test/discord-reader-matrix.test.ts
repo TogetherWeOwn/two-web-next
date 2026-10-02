@@ -39,13 +39,18 @@ function mountedCalendar() {
   const db = drizzle(async () => ({ rows: [] }));
   // Search analytics uses a transaction; the pg-proxy fixture has no real SQL.
   Object.assign(db, {
-    transaction: async (fn: (tx: Db) => Promise<void>) => fn({
-      execute: async () => {},
-      insert: () => ({ values: async () => {} }),
-    } as unknown as Db),
+    transaction: async (fn: (tx: Db) => Promise<void>) =>
+      fn({
+        execute: async () => {},
+        insert: () => ({ values: async () => {} }),
+      } as unknown as Db),
   });
   const app = new Hono<{ Bindings: Env }>();
-  registerEventRoutes(app, async () => null, async () => null);
+  registerEventRoutes(
+    app,
+    async () => null,
+    async () => null,
+  );
   return { app, bindings: { ...env, ADMIN_DB: db as unknown as Db } as Env };
 }
 
@@ -56,16 +61,20 @@ describe("Discord transient reader matrix", () => {
   });
 
   it("filters rows with invalid id, time or name and keeps healthy siblings", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json([
-      event(),
-      event({ id: "", name: "Nameless id" }),
-      event({ id: 42, name: "Numeric id" }),
-      event({ id: "bad-start", scheduled_start_time: "not-a-time" }),
-      event({ id: "bad-end", scheduled_end_time: "invalid" }),
-      event({ id: "blank-name", name: "   " }),
-      event({ id: "empty-name", name: "" }),
-      event({ id: "null-name", name: null }),
-    ]));
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        Response.json([
+          event(),
+          event({ id: "", name: "Nameless id" }),
+          event({ id: 42, name: "Numeric id" }),
+          event({ id: "bad-start", scheduled_start_time: "not-a-time" }),
+          event({ id: "bad-end", scheduled_end_time: "invalid" }),
+          event({ id: "blank-name", name: "   " }),
+          event({ id: "empty-name", name: "" }),
+          event({ id: "null-name", name: null }),
+        ]),
+      );
     const source = liveDiscordEventsSource(env);
     const rows = await source.upcoming(NOW);
     expect(rows.map((row) => row.discordId)).toEqual(["1545955994972987422"]);
@@ -96,8 +105,11 @@ describe("Discord transient reader matrix", () => {
     ["null", "null"],
     ["object", '{"message":"nope"}'],
   ])("reports an invalid %s payload as a failed read", async (_label, body) => {
-    const fetch = vi.spyOn(globalThis, "fetch")
-      .mockImplementation(async () => new Response(body, { headers: { "content-type": "application/json" } }));
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () => new Response(body, { headers: { "content-type": "application/json" } }),
+      );
     const source = liveDiscordEventsSource(env);
     expect(await source.upcoming(NOW)).toEqual([]);
     expect(source.lastReadFailed()).toBe(true);
