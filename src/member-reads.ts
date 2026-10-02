@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context, Next } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AccessDecl, AccessSink } from "./access-log";
+import { isDatabaseUnavailable } from "./db/errors";
 
 type Capture = {
   subjects: Set<string>;
@@ -96,16 +97,31 @@ export function bufferedMemberText(c: Context, body: string, status: ContentfulS
 
 type ReadDeclaration = Omit<AccessDecl, "subjects"> & { viewer: string | null };
 
+/** Renders the caller's sanitized outage envelope (branded HTML or negotiated JSON). */
+export type UnavailableResponse = (c: Context) => Response | Promise<Response>;
+
+// Refused contents never leave the boundary. A classified outage or a failed
+// audit write renders the caller's outage envelope; any other refusal stays
+// the plain contract refusal, so a programming error is never relabelled as
+// a database outage. Either way the reason is never in the body.
+async function refuse(c: Context, unavailable?: UnavailableResponse): Promise<void> {
+  c.res = unavailable ? await unavailable(c) : c.text("Member data is temporarily unavailable.", 503);
+  c.header("cache-control", "private, no-store");
+}
+
 export async function memberReadBoundary(
   c: Context,
   declaration: ReadDeclaration | (() => ReadDeclaration | undefined),
   write: AccessSink,
   next: Next,
+  unavailable?: UnavailableResponse,
 ): Promise<void> {
   const capture: Capture = { subjects: new Set(), failed: false, pending: 0 };
   await captures.run(capture, async () => {
-    try { await next(); } catch { capture.failed = true; }
+    let thrown: unknown;
+    try { await next(); } catch (error) { thrown = error; capture.failed = true; }
     if (c.error) capture.failed = true;
+    const outage = isDatabaseUnavailable(thrown ?? c.error);
     const declared = typeof declaration === "function" ? declaration() : declaration;
     // Anonymous event pages may return explicitly classified public data only.
     // null is deliberate; missing/invalid viewers never authorize member data.
@@ -113,8 +129,7 @@ export async function memberReadBoundary(
     // Classification is tied to this exact response. A later stream (declared
     // or not) cannot borrow an earlier buffered response's approval.
     if (capture.failed || capture.pending !== 0 || capture.response !== c.res) {
-      c.res = c.text("Member data is temporarily unavailable.", 503);
-      c.header("cache-control", "private, no-store");
+      await refuse(c, outage ? unavailable : undefined);
       return;
     }
     // Hono header() clones a finalized Response; classify before changing it.
@@ -133,8 +148,8 @@ export async function memberReadBoundary(
       console.error("Member read audit failed; refusing contents.", {
         exception: error instanceof Error ? error.constructor.name : "unknown",
       });
-      c.res = c.text("Member data is temporarily unavailable.", 503);
-      c.header("cache-control", "private, no-store");
+      // The audit store is unavailable for this read: an outage, not a contract bug.
+      await refuse(c, unavailable);
     }
   });
 }

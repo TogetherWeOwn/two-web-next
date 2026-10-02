@@ -48,7 +48,10 @@ const adminForm = "title=Outage+fixture&timezone=UTC&starts_at=2030-01-01T12%3A0
 const MATRIX: Case[] = [
   ...["/", "/about", "/faq", "/rules", "/privacy", "/join"].map((route) => ({ method: "GET", route, status: 200 })),
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
-  ...["/sitemap_index.xml", "/robots.txt", "/up"].map((route) => ({ method: "GET", route, status: 200 })),
+  ...["/sitemap_index.xml", "/robots.txt"].map((route) => ({ method: "GET", route, status: 200 })),
+  // Main #111: a failed DB ping is a readiness failure, so /up answers 503
+  // with the sanitized readiness body instead of a false healthy 200.
+  { method: "GET", route: "/up", status: 503, format: "json" },
   { method: "GET", route: "/auth/discord", status: 302, location: "https://discord.com/oauth2/authorize" },
   { method: "GET", route: "/auth/discord/redirect", status: 302, location: "/auth/discord" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
@@ -103,7 +106,8 @@ const MATRIX: Case[] = [
 // the stale-tab auth-status script and the expired-write banner (main #239
 // added the last two). Profile paths carry three registrations each: the
 // session gate, the join-result consumer, and the mandatory access log.
-const MIDDLEWARE = ["ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*", "ALL /members/*"];
+// Profiles: session gate + keyed read boundary per path (main #145).
+const MIDDLEWARE = ["ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /*", "ALL /admin/*", "ALL /profile", "ALL /profile", "ALL /members/*", "ALL /members/*"];
 function assertInventory(router: { routes: { method: string; path: string }[] }): void {
   const endpoints = router.routes.filter((r) => r.method !== "ALL").map((r) => `${r.method} ${r.path}`);
   const expected = MATRIX.filter((r) => r.method !== "ALL").map((r) => `${r.method} ${r.route}`);
@@ -166,6 +170,7 @@ async function assertResponse(res: Response, row: Case): Promise<void> {
   }
   if (row.route === "/discord") expect.soft(res.headers.get("cache-control")).toContain("no-store");
   if (row.route === "/up") {
+    expect.soft(JSON.parse(body)).toMatchObject({ db: "error", pending_migrations: null });
     expect.soft(JSON.parse(body).queue).toMatchObject({ status: "unknown", pending: null, reserved: null, failed: null });
   }
   if (row.route === "/" && row.status === 200) {

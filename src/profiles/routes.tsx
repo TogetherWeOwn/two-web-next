@@ -64,6 +64,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
   app.onError((error, c) => {
     console.error("Profile request failed; refusing contents.", { exception: error.constructor.name });
+    // Writes have no read boundary: a classified outage gets the shared
+    // envelope here. Reads are replaced by the boundary either way.
+    if (isDatabaseUnavailable(error)) return databaseUnavailable(c);
     return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
   });
 
@@ -122,7 +125,10 @@ export function profilesApp(deps: ProfileDeps = {}) {
       console.error("profiles could not resolve the session; refusing.", {
         exception: err instanceof Error ? err.constructor.name : "unknown",
       });
-      return databaseUnavailable(c);
+      // Same private cache policy as every other response from this slice.
+      c.res = await databaseUnavailable(c);
+      c.header("cache-control", "private, no-store");
+      return c.res;
     }
     // A cookie whose row is gone (revoked/expired/rotated) is a guest — same
     // intended-page bounce so the round trip lands them back here.
@@ -147,7 +153,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
         const sink = await sinkFor(c);
         if (!sink) throw new Error("no access-log sink");
         return sink(entry);
-      }, next);
+      }, next, databaseUnavailable);
       // Refused contents must leave the one-shot confirmation pending.
       if (c.res.status === 200) await takeJoinResult(c);
     });
@@ -156,7 +162,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
   const render = async (c: Ctx, id: string) => {
     if (!SNOWFLAKE.test(id)) return bufferedMemberHtml(c, <NotFoundPage />, 404);
     const store = await storeFor(c);
-    if (!store) return databaseUnavailable(c);
+    if (!store) return bufferedMemberText(c, "Profiles temporarily unavailable", 503);
     const member = await store.find(id);
     // Borrowed non-SQL stores declare retrieved keys, never the requested id.
     declareMemberResult(member ? [member.id] : []);

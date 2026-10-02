@@ -41,8 +41,9 @@ than legacy framework 500 pages. These are assertions, not waivers: a current
 500 or an unbranded browser error fails the matrix and requires a follow-up.
 Admin create forms expose no member subjects and can remain 200 with a local
 valid-session fixture; losing the production session store must still refuse
-access with 503. `/up` is liveness, not readiness: it stays 200 and
-reports unavailable queue depth as `unknown`. Session lookup failure is not a
+access with 503. `/up` reports readiness (main #111): a failed DB ping answers
+503 with `db: "error"`, no migration count and queue depth `unknown`, never
+driver details. Session lookup failure is not a
 valid authenticated identity; protected routes may therefore redirect to
 login (or reject a machine request) before reaching their DB-dependent handler.
 The matrix separates that production session-failure path from authorized
@@ -58,6 +59,10 @@ including causes wrapped by Drizzle. It never classifies by message text, and
 SQL syntax/constraint failures and ordinary programming errors retain 500.
 The shared error boundary and profile-save/ingress catches use this classifier;
 existing session and mandatory-audit guards retain their fail-closed policy.
+The keyed member-read boundary (admin reads, profiles, event pages) renders the
+same envelope when the observed handler fails with a classified outage or the
+audit write fails; every other refusal (contract violation, unclassified error)
+stays its plain 503. Neither path serves the buffered member contents.
 The 503 envelope is branded HTML for browsers and sanitized JSON for JSON
 callers, private/no-store and varied on Accept. Negotiated routes compare the
 quality of HTML and JSON using the most-specific matching media range; an

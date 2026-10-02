@@ -13,7 +13,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
-import { NotFoundPage, rateLimitExceeded } from "../errors";
+import { databaseUnavailable, NotFoundPage, rateLimitExceeded } from "../errors";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
@@ -332,7 +332,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         return bufferedMemberHtml(c, <EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
       };
       await render();
-    });
+    }, databaseUnavailable);
     // Consume only after the keyed boundary allows a visible response.
     if (c.res.status === 200) await takeJoinResult(c);
     return c.res;

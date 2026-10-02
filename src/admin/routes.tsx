@@ -55,7 +55,6 @@ import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
 import { isDatabaseUnavailable } from "../db/errors";
-import { databaseUnavailable } from "../errors";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listJoinAttempts, listRoster } from "./reads";
 import { parseRecurrenceForm } from "./recurrence";
@@ -144,7 +143,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (id === null) return errorPage(c, 404, "Featured content not found");
       return legacyRedirect(c, `/admin/featured/${id}`, "featured_contents", "admin.featured.legacy-edit");
     } catch (err) {
-      if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
+      // The guard's read boundary renders the shared outage envelope.
+      if (isDatabaseUnavailable(err)) throw err;
       return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     }
   });

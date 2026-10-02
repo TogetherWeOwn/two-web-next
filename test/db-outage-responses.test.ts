@@ -148,8 +148,11 @@ describe("profile failures after a successful session and data read", () => {
   async function fixture() {
     const sessions = createMemorySessionStore();
     const cookie = await cookieFor(sessions, MEMBER);
+    // Main #145: self-reads name no other member and write no audit row, so
+    // the unaudited read is another member's profile, not /profile.
     const store = createMemoryProfileStore([
       { id: MEMBER.userId, username: MEMBER.username, avatar: null, bio: "private profile fixture", games: [], timezone: null },
+      { id: MODERATOR.userId, username: MODERATOR.username, avatar: null, bio: "private profile fixture", games: [], timezone: null },
     ]);
     const profile = profilesApp({
       sessionStore: sessions, store, throttle: async () => ({ limited: false }),
@@ -159,7 +162,7 @@ describe("profile failures after a successful session and data read", () => {
   }
   it.each(["text/html", "application/json"])("refuses an unaudited read with a negotiated %s 503, never the finalized profile", async (accept) => {
     const { cookie, profile } = await fixture();
-    const res = await profile.request("/profile", { headers: { cookie, accept } }, env);
+    const res = await profile.request(`/members/${MODERATOR.userId}`, { headers: { cookie, accept } }, env);
     expect(res.status).toBe(503);
     expect(res.headers.get("content-type")).toContain(accept);
     expect(res.headers.get("cache-control")).toContain("no-store");
@@ -171,7 +174,7 @@ describe("profile failures after a successful session and data read", () => {
   it.each(["text/html, application/json;q=0", "text/html;q=1, application/json;q=0.1"])(
     "honors HTML preference when replacing an unaudited profile: %s", async (accept) => {
       const { cookie, profile } = await fixture();
-      const res = await profile.request("/profile", { headers: { cookie, accept } }, env);
+      const res = await profile.request(`/members/${MODERATOR.userId}`, { headers: { cookie, accept } }, env);
       expect(res.status).toBe(503);
       expect(res.headers.get("content-type")).toContain("text/html");
       expect(res.headers.get("cache-control")).toContain("no-store");

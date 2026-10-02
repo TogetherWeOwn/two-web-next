@@ -28,7 +28,7 @@ import { getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
-import { databaseUnavailable } from "../errors";
+import { databaseUnavailable, notFoundHandler } from "../errors";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
 import {
@@ -42,7 +42,6 @@ import {
 import { dbFor } from "./db";
 import { recordAccess } from "./store";
 import { memberReadBoundary } from "../member-reads";
-import { notFoundHandler } from "../errors";
 
 export type Actor = { id: string; username: string };
 
@@ -147,7 +146,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         // Only this guard matched. Render here: Hono's single-middleware path
         // otherwise reassigns/clones a finalized not-found buffer after next().
         else await notFoundHandler(c);
-      });
+      }, databaseUnavailable);
     } else {
       await next();
     }
