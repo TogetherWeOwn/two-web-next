@@ -29,6 +29,13 @@ export function testDatabaseUrl(raw: string, runner = process.env): URL {
     !/^\/[a-z][a-z0-9_]*$/.test(url.pathname)
   )
     return refuse();
+  // TOG-12549: refuse production/controller-looking database names even on the
+  // test host, and the per-worktree prefix without its numeric suffix. Green
+  // CI and agent-testdb runs use postgres/two_web_next/w15_* or suffixed
+  // two_web_next_tog12345, none of which match.
+  const dbName = url.pathname.slice(1).toLowerCase();
+  if (dbName === "prod" || dbName === "production" || dbName === "controller") return refuse();
+  if (dbName === "two_web_next_tog") return refuse();
   const agentTest =
     url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "";
   const ciService =
