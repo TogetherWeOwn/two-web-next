@@ -19,8 +19,10 @@ const kit = readWranglerConfig(read("web/wrangler.jsonc"));
 const main = readWranglerConfig(read("wrangler.jsonc"));
 const jobsEntry = read("src/jobs-worker.ts");
 
-const queueNames = (config: { queues?: { producers?: { queue: string }[]; consumers?: { queue: string }[] } }, key: "producers" | "consumers") =>
-  (config.queues?.[key] ?? []).map((entry) => entry.queue);
+const queueNames = (
+  config: { queues?: { producers?: { queue: string }[]; consumers?: { queue: string }[] } },
+  key: "producers" | "consumers",
+) => (config.queues?.[key] ?? []).map((entry) => entry.queue);
 const bindings = (config: { queues?: { producers?: { binding: string }[] } }) =>
   (config.queues?.producers ?? []).map((entry) => entry.binding);
 const hyperdriveId = (config: { hyperdrive?: { id: string }[] }) => config.hyperdrive?.[0]?.id;

@@ -1,22 +1,33 @@
 <script lang="ts">
-  import { fmt } from "../../../src/events/pages";
-  import type { PublicEvent } from "../../../src/events/reads";
-  import { goingCountText } from "../../../src/islands/contracts";
+import { fmt } from "../../../src/events/pages";
+import type { PublicEvent } from "../../../src/events/reads";
+import { goingCountText } from "../../../src/islands/contracts";
 
-  // Same markup contract as Card in src/events/pages.tsx, including the
-  // schedule-row chrome and the month/day date badge.
-  let { e }: { e: PublicEvent } = $props();
+// Same markup contract as Card in src/events/pages.tsx, including the
+// schedule-row chrome and the month/day date badge.
+let { e }: { e: PublicEvent } = $props();
 
-  function dateParts(date: Date, zone: string): { month?: string; day?: string } {
-    let parts: Intl.DateTimeFormatPart[];
-    try {
-      parts = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", timeZone: zone }).formatToParts(date);
-    } catch {
-      parts = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", timeZone: "UTC" }).formatToParts(date);
-    }
-    return { month: parts.find((p) => p.type === "month")?.value, day: parts.find((p) => p.type === "day")?.value };
+function dateParts(date: Date, zone: string): { month?: string; day?: string } {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", {
+      day: "2-digit",
+      month: "short",
+      timeZone: zone,
+    }).formatToParts(date);
+  } catch {
+    parts = new Intl.DateTimeFormat("en-GB", {
+      day: "2-digit",
+      month: "short",
+      timeZone: "UTC",
+    }).formatToParts(date);
   }
-  const badge = $derived(dateParts(e.startsAt, e.timezone));
+  return {
+    month: parts.find((p) => p.type === "month")?.value,
+    day: parts.find((p) => p.type === "day")?.value,
+  };
+}
+const badge = $derived(dateParts(e.startsAt, e.timezone));
 </script>
 
 <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>

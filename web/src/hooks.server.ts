@@ -17,7 +17,10 @@ export const handle: Handle = async ({ event, resolve }) => {
   const response = await resolve(event);
   if (event.route.id === HONO_ROUTE) return response;
 
-  for (const [name, value] of securityHeadersFor({ path: event.url.pathname, method: event.request.method }, env.FEATURED_IMAGE_HOSTS)) {
+  for (const [name, value] of securityHeadersFor(
+    { path: event.url.pathname, method: event.request.method },
+    env.FEATURED_IMAGE_HOSTS,
+  )) {
     response.headers.set(name, value);
   }
   const contentType = response.headers.get("content-type") ?? "";

@@ -64,6 +64,14 @@
       "formatter": { "lineWidth": 140 }
     },
     {
+      "includes": ["web/src/**/*.svelte"],
+      "linter": {
+        "rules": {
+          "correctness": { "noUnusedVariables": "off" }
+        }
+      }
+    },
+    {
       "includes": ["spike/hyperdrive-semantics/staging-checks.ts"],
       "linter": {
         "rules": {

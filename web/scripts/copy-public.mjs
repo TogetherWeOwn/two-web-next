@@ -14,6 +14,7 @@ const dest = join(web, ".svelte-kit", "cloudflare");
 if (!existsSync(dest)) throw new Error(`${dest} is missing: run vite build first`);
 // Kit owns its own output; a public/ file with the same name is a bug, not an override.
 const clashes = readdirSync(src).filter((name) => existsSync(join(dest, name)));
-if (clashes.length > 0) throw new Error(`public/ entries clash with Kit output: ${clashes.join(", ")}`);
+if (clashes.length > 0)
+  throw new Error(`public/ entries clash with Kit output: ${clashes.join(", ")}`);
 cpSync(src, dest, { recursive: true });
 console.log(`copied ${readdirSync(src).length} public/ entries into ${dest}`);

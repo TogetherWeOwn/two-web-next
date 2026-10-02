@@ -90,7 +90,9 @@ export function securityHeadersFor(
   featuredImageHosts?: string,
 ): Array<[string, string]> {
   const framed = request.path === "/join" && ["GET", "HEAD"].includes(request.method);
-  const images = imageHosts(featuredImageHosts).map((host) => `https://${host}`).join(" ");
+  const images = imageHosts(featuredImageHosts)
+    .map((host) => `https://${host}`)
+    .join(" ");
   const csp = [
     ["default-src", "'self'"],
     ["img-src", "'self'", images],
@@ -102,7 +104,9 @@ export function securityHeadersFor(
     ["form-action", "'self'"],
     ["report-uri", CSP_REPORT_ENDPOINT],
     ["report-to", CSP_REPORT_GROUP],
-  ].map((directive) => directive.join(" ")).join("; ");
+  ]
+    .map((directive) => directive.join(" "))
+    .join("; ");
   return [
     ["Cross-Origin-Resource-Policy", "same-origin"],
     ["Cross-Origin-Opener-Policy", "same-origin"],

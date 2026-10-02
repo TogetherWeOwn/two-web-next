@@ -45,8 +45,18 @@
           { "queue": "two-web-jobs-preview-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
         ],
         "consumers": [
-          { "queue": "two-web-jobs-preview-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-          { "queue": "two-web-jobs-preview-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+          {
+            "queue": "two-web-jobs-preview-sync-event",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "two-web-jobs-preview-internal-action",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
         ]
       },
       "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],

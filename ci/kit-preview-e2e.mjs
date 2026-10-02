@@ -36,7 +36,9 @@ const APP_URL = "https://kit-parity.invalid";
 const worktree = fileURLToPath(root);
 async function buildHonoBundle(scratch, outfile) {
   const entry = join(scratch, "kit-e2e-hono-entry.mjs");
-  writeFileSync(entry, `
+  writeFileSync(
+    entry,
+    `
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import app from ${JSON.stringify(join(worktree, "test/app.ts"))};
@@ -71,10 +73,16 @@ export function archive(total, appUrl) {
   const env = { APP_URL: appUrl, ADMIN_DB: db };
   return { rows, request: (path) => app.request(path, {}, env) };
 }
-`);
+`,
+  );
   await build({
-    entryPoints: [entry], bundle: true, platform: "node", format: "esm",
-    outfile, jsx: "automatic", logLevel: "warning",
+    entryPoints: [entry],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    outfile,
+    jsx: "automatic",
+    logLevel: "warning",
     absWorkingDir: worktree,
     nodePaths: [join(worktree, "node_modules"), join(worktree, "web/node_modules")],
   });
@@ -85,32 +93,41 @@ export function archive(total, appUrl) {
 // the web tsconfig imports map, relative src/* through the worktree.
 async function buildKitBundle(scratch, outfile) {
   const entry = join(scratch, "kit-e2e-entry.mjs");
-  writeFileSync(entry, `
+  writeFileSync(
+    entry,
+    `
 import { render } from "svelte/server";
 import Page from ${JSON.stringify(join(worktree, "web/src/routes/events/past/+page.svelte"))};
 export function renderPage(data) {
   const { head, body } = render(Page, { props: { data } });
   return "<head>" + head + "</head><body>" + body + "</body>";
 }
-`);
+`,
+  );
   await build({
-    entryPoints: [entry], bundle: true, platform: "node", format: "esm",
-    outfile, logLevel: "warning",
+    entryPoints: [entry],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    outfile,
+    logLevel: "warning",
     absWorkingDir: worktree,
     nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
     alias: { "#lib": fileURLToPath(new URL("../web/src/lib/", import.meta.url)) },
-    plugins: [{
-      name: "kit-e2e-svelte-ssr",
-      setup(plugin) {
-        plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
-          const source = readFileSync(args.path, "utf8");
-          const { js } = compile(source, { generate: "server", dev: false, filename: args.path });
-          // Compiled output keeps the component's relative imports (../../..),
-          // so resolve them from the component's own directory, not web/src.
-          return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
-        });
+    plugins: [
+      {
+        name: "kit-e2e-svelte-ssr",
+        setup(plugin) {
+          plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+            const source = readFileSync(args.path, "utf8");
+            const { js } = compile(source, { generate: "server", dev: false, filename: args.path });
+            // Compiled output keeps the component's relative imports (../../..),
+            // so resolve them from the component's own directory, not web/src.
+            return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
+          });
+        },
       },
-    }],
+    ],
   });
 }
 
@@ -134,16 +151,18 @@ function stripHydrationMarkers(html) {
 // Page-owned serialization the two frameworks legitimately emit differently;
 // the archive section contract itself must be identical.
 function normalize(html) {
-  return stripHydrationMarkers(html)
-    // Boolean-attribute serialization differs per framework (bare, ="",
-    // ="true"); the contract is presence, pinned separately by expectArchive.
-    .replace(/=(?:""|"true")(?=[\s>])/g, "")
-    // `>` escaping is serializer-owned (Hono emits &gt;, Svelte a bare >);
-    // the security-relevant escapes (&amp;, &lt;, quotes) are pinned exactly.
-    .replace(/&gt;/g, ">")
-    // Inter-tag whitespace is a serializer choice, not a contract.
-    .replace(/>\s+</g, "><")
-    .trim();
+  return (
+    stripHydrationMarkers(html)
+      // Boolean-attribute serialization differs per framework (bare, ="",
+      // ="true"); the contract is presence, pinned separately by expectArchive.
+      .replace(/=(?:""|"true")(?=[\s>])/g, "")
+      // `>` escaping is serializer-owned (Hono emits &gt;, Svelte a bare >);
+      // the security-relevant escapes (&amp;, &lt;, quotes) are pinned exactly.
+      .replace(/&gt;/g, ">")
+      // Inter-tag whitespace is a serializer choice, not a contract.
+      .replace(/>\s+</g, "><")
+      .trim()
+  );
 }
 
 // The theme stylesheets hang every rule off the <body> class, so the Kit
@@ -160,14 +179,26 @@ function check(label, condition, detail = "") {
 }
 
 function expectArchive(html, { keys, pager }) {
-  check("section renders with the archive testids",
-    html.includes('data-testid="past-events"') && html.includes('data-testid="past-events-list"'));
+  check(
+    "section renders with the archive testids",
+    html.includes('data-testid="past-events"') && html.includes('data-testid="past-events-list"'),
+  );
   const found = [...html.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);
-  check("event keys render newest-first", JSON.stringify(found) === JSON.stringify(keys), `got ${JSON.stringify(found)}`);
+  check(
+    "event keys render newest-first",
+    JSON.stringify(found) === JSON.stringify(keys),
+    `got ${JSON.stringify(found)}`,
+  );
   check("never indexes", html.includes('<meta name="robots" content="noindex, follow"'));
-  check("island script is the shared binder", html.includes('<script src="/islands/past-events.js"'));
+  check(
+    "island script is the shared binder",
+    html.includes('<script src="/islands/past-events.js"'),
+  );
   for (const href of pager) check(`pager links ${href}`, html.includes(`href="${href}"`));
-  check("no RSVP surface", !html.includes("/rsvp") && !html.match(/data-testid="(?:rsvp-|waitlist-|event-going-count)/));
+  check(
+    "no RSVP surface",
+    !html.includes("/rsvp") && !html.match(/data-testid="(?:rsvp-|waitlist-|event-going-count)/),
+  );
 }
 
 async function unitParity() {
@@ -198,7 +229,10 @@ async function unitParity() {
       const honoHtml = await res.text();
       const pageSize = 20;
       const totalPages = Math.ceil(total / pageSize);
-      const keys = page > totalPages ? [] : rows.slice((page - 1) * pageSize, page * pageSize).map((r) => r.eventKey);
+      const keys =
+        page > totalPages
+          ? []
+          : rows.slice((page - 1) * pageSize, page * pageSize).map((r) => r.eventKey);
       console.log(`--- Hono ${path} ---`);
       expectArchive(honoHtml, { keys, pager });
 
@@ -208,21 +242,40 @@ async function unitParity() {
       // rows must carry the mapped shape, not the raw column.
       const kitRows = keys.map((key) => {
         const row = rows.find((r) => r.eventKey === key);
-        return { eventKey: row.eventKey, title: row.title, game: row.game, startsAt: new Date(row.startsAt), timezone: row.timezone, goingCount: 0, capacity: row.capacity };
+        return {
+          eventKey: row.eventKey,
+          title: row.title,
+          game: row.game,
+          startsAt: new Date(row.startsAt),
+          timezone: row.timezone,
+          goingCount: 0,
+          capacity: row.capacity,
+        };
       });
       const kitHtml = renderPage({
-        rows: kitRows, page, hasMore: page === 1 && total > pageSize,
-        totalPages, appUrl: APP_URL,
+        rows: kitRows,
+        page,
+        hasMore: page === 1 && total > pageSize,
+        totalPages,
+        appUrl: APP_URL,
       });
       console.log(`--- Kit ${path} ---`);
       expectArchive(kitHtml, { keys, pager });
 
       const same = normalize(sectionOf(honoHtml)) === normalize(sectionOf(kitHtml));
-      check(`${path}: archive section is byte-identical (modulo boolean serialization)`, same, "section HTML differs");
+      check(
+        `${path}: archive section is byte-identical (modulo boolean serialization)`,
+        same,
+        "section HTML differs",
+      );
       // renderPage has no document shell; the Kit <body> comes from app.html.
       const honoBody = bodyClassOf(honoHtml);
       const kitBody = bodyClassOf(appShell);
-      check(`${path}: app.html body carries Hono's theme class`, honoBody !== null && kitBody === honoBody, `Hono ${JSON.stringify(honoBody)}, Kit ${JSON.stringify(kitBody)}`);
+      check(
+        `${path}: app.html body carries Hono's theme class`,
+        honoBody !== null && kitBody === honoBody,
+        `Hono ${JSON.stringify(honoBody)}, Kit ${JSON.stringify(kitBody)}`,
+      );
       if (!same && process.env.KIT_E2E_DUMP) {
         const { writeFileSync } = await import("node:fs");
         writeFileSync(process.env.KIT_E2E_DUMP + "-hono.html", sectionOf(honoHtml));
@@ -237,13 +290,25 @@ async function unitParity() {
 async function previewParity(kitBase, honoBase) {
   for (const base of [kitBase, honoBase]) {
     const url = new URL(base);
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-      throw new Error("preview base must be an HTTP(S) origin without credentials, path, query or fragment");
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      throw new Error(
+        "preview base must be an HTTP(S) origin without credentials, path, query or fragment",
+      );
     }
   }
   for (const path of ["/events/past", "/events/past?page=2"]) {
-    const [kitRes, honoRes] = await Promise.all([kitBase, honoBase].map((base) =>
-      fetch(new URL(path, base), { redirect: "manual", signal: AbortSignal.timeout(15_000) })));
+    const [kitRes, honoRes] = await Promise.all(
+      [kitBase, honoBase].map((base) =>
+        fetch(new URL(path, base), { redirect: "manual", signal: AbortSignal.timeout(15_000) }),
+      ),
+    );
     check(`Kit ${path}: HTTP 200`, kitRes.status === 200, `got ${kitRes.status}`);
     check(`Hono ${path}: HTTP 200`, honoRes.status === 200, `got ${honoRes.status}`);
     if (kitRes.status !== 200 || honoRes.status !== 200) continue;
@@ -255,20 +320,33 @@ async function previewParity(kitBase, honoBase) {
     check(`${path}: preview sections match staging`, same, "section HTML differs");
     const kitBody = bodyClassOf(kitHtml);
     const honoBody = bodyClassOf(honoHtml);
-    check(`${path}: preview body carries the staging theme class`, honoBody !== null && kitBody === honoBody, `Hono ${JSON.stringify(honoBody)}, Kit ${JSON.stringify(kitBody)}`);
+    check(
+      `${path}: preview body carries the staging theme class`,
+      honoBody !== null && kitBody === honoBody,
+      `Hono ${JSON.stringify(honoBody)}, Kit ${JSON.stringify(kitBody)}`,
+    );
   }
   // /api/* still reaches the unchanged Hono app through the Kit catch-all.
   const apiRes = await fetch(new URL("/api/agent-events", kitBase), {
-    method: "POST", redirect: "manual", signal: AbortSignal.timeout(15_000),
-    headers: { "content-type": "application/json" }, body: "{}",
+    method: "POST",
+    redirect: "manual",
+    signal: AbortSignal.timeout(15_000),
+    headers: { "content-type": "application/json" },
+    body: "{}",
   });
-  check("Kit /api/* reaches Hono (ingress refuses without credentials)", [401, 403, 404].includes(apiRes.status), `got ${apiRes.status}`);
+  check(
+    "Kit /api/* reaches Hono (ingress refuses without credentials)",
+    [401, 403, 404].includes(apiRes.status),
+    `got ${apiRes.status}`,
+  );
 }
 
 const kitPreview = process.env.KIT_PREVIEW_URL;
 const honoPreview = process.env.HONO_PREVIEW_URL;
-if ((kitPreview ?? null) === null !== (honoPreview ?? null) === null) {
-  console.error("kit-preview-e2e: set both KIT_PREVIEW_URL and HONO_PREVIEW_URL, or neither (unit mode)");
+if ((((kitPreview ?? null) === null) !== (honoPreview ?? null)) === null) {
+  console.error(
+    "kit-preview-e2e: set both KIT_PREVIEW_URL and HONO_PREVIEW_URL, or neither (unit mode)",
+  );
   process.exitCode = 2;
 } else if (kitPreview && honoPreview) {
   await previewParity(kitPreview, honoPreview);

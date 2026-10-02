@@ -1,26 +1,26 @@
 <script lang="ts">
-  import EventCard from "#lib/EventCard.svelte";
-  import Shell from "#lib/Shell.svelte";
-  import {
-    PAST_EVENTS_COPY,
-    PAST_EVENTS_EMPTY_TESTID,
-    PAST_EVENTS_ISLAND,
-    PAST_EVENTS_LIST_TESTID,
-    PAST_EVENTS_OUT_OF_RANGE_TESTID,
-    PAST_EVENTS_TESTID,
-    pastEventsOutOfRangeCopy,
-    pastEventsUrl,
-  } from "../../../../../src/islands/contracts";
-  import { canonicalUrl } from "../../../../../src/seo";
-  import type { PageProps } from "./$types";
+import EventCard from "#lib/EventCard.svelte";
+import Shell from "#lib/Shell.svelte";
+import {
+  PAST_EVENTS_COPY,
+  PAST_EVENTS_EMPTY_TESTID,
+  PAST_EVENTS_ISLAND,
+  PAST_EVENTS_LIST_TESTID,
+  PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_TESTID,
+  pastEventsOutOfRangeCopy,
+  pastEventsUrl,
+} from "../../../../../src/islands/contracts";
+import { canonicalUrl } from "../../../../../src/seo";
+import type { PageProps } from "./$types";
 
-  // Markup contract of PastEventsPage (src/events/pages.tsx): the island
-  // script, test ids and copy are shared, so the existing E2E and island apply.
-  let { data }: PageProps = $props();
-  const { rows, page, hasMore, totalPages, appUrl } = $derived(data);
-  const destination = $derived(pastEventsUrl(page));
-  // A component-level <script> is Svelte's own; the island tag is emitted as markup.
-  const island = '<script src="/islands/past-events.js" defer></' + "script>";
+// Markup contract of PastEventsPage (src/events/pages.tsx): the island
+// script, test ids and copy are shared, so the existing E2E and island apply.
+let { data }: PageProps = $props();
+const { rows, page, hasMore, totalPages, appUrl } = $derived(data);
+const destination = $derived(pastEventsUrl(page));
+// A component-level <script> is Svelte's own; the island tag is emitted as markup.
+const island = '<script src="/islands/past-events.js" defer></' + "script>";
 </script>
 
 <Shell

@@ -16,7 +16,11 @@
   // Every request reaches the Worker first, so public/ files (copied in by
   // scripts/copy-public.mjs) pass the Hono host guard and headers. Kit's own
   // /_app/* output is still served by the adapter before hooks run.
-  "assets": { "directory": ".svelte-kit/cloudflare", "binding": "ASSETS", "run_worker_first": true },
+  "assets": {
+    "directory": ".svelte-kit/cloudflare",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
   // Producers only, onto the jobs preview Worker's own queues (wrangler.jobs.jsonc
   // env.preview), so a web write here is consumed by two-web-jobs-preview.
   "queues": {

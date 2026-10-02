@@ -1,34 +1,36 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
-  import { loginUrl } from "../../../src/islands/contracts";
+import type { Snippet } from "svelte";
+import { loginUrl } from "../../../src/islands/contracts";
 
-  // Svelte twin of the Hono Layout + schedule Shell (src/pages.tsx,
-  // src/events/pages.tsx) for the archive page: same head tags in the same
-  // order, same skip link, same schedule header/main/footer chrome.
-  let {
-    title,
-    canonical,
-    robots,
-    description,
-    shareTitle,
-    loginReturnTo = null,
-    headerCenter,
-    children,
-  }: {
-    title: string;
-    canonical?: string;
-    robots?: string;
-    description?: string | null;
-    shareTitle?: string;
-    loginReturnTo?: string | null;
-    headerCenter?: Snippet;
-    children: Snippet;
-  } = $props();
+// Svelte twin of the Hono Layout + schedule Shell (src/pages.tsx,
+// src/events/pages.tsx) for the archive page: same head tags in the same
+// order, same skip link, same schedule header/main/footer chrome.
+let {
+  title,
+  canonical,
+  robots,
+  description,
+  shareTitle,
+  loginReturnTo = null,
+  headerCenter,
+  children,
+}: {
+  title: string;
+  canonical?: string;
+  robots?: string;
+  description?: string | null;
+  shareTitle?: string;
+  loginReturnTo?: string | null;
+  headerCenter?: Snippet;
+  children: Snippet;
+} = $props();
 
-  const SITE_NAME = "Together We Own";
-  const fullTitle = $derived(`${title} — ${SITE_NAME}`);
-  const share = $derived(shareTitle ?? `${title} — ${SITE_NAME}`);
-  const shareDescription = $derived(description || "Together We Own: a close-knit adult gaming community, founded 1998.");
+const SITE_NAME = "Together We Own";
+const fullTitle = $derived(`${title} — ${SITE_NAME}`);
+const share = $derived(shareTitle ?? `${title} — ${SITE_NAME}`);
+const shareDescription = $derived(
+  description || "Together We Own: a close-knit adult gaming community, founded 1998.",
+);
 </script>
 
 <svelte:head>
