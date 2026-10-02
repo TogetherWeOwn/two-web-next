@@ -42,7 +42,7 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   have fixture coverage; the general human throttle currently needs an explicit
   `DATABASE_URL` (the Hyperdrive-only path does not enforce it).
 - Worker queue/scheduler scaffolding: retries, locking, queue ledger,
-  `events:reconcile`, retention pruning and always-200 `/up`.
+  `events:reconcile`, retention pruning and readiness `/up` (503 on DB/schema failure).
   Bot/Discord adapters are still reject-all stubs; the separate event write-back
   queue is not bound. These are not a claim of end-to-end live bot parity.
 
@@ -129,8 +129,8 @@ npm run dev -- --config wrangler.local.jsonc --local
 Keep `.dev.vars` on the passwordless test URL above. The checked-in local config
 uses `APP_URL=http://localhost:8787`, local Queue names and no remote bindings;
 set public Discord IDs only for an authorized test application/guild. Do not
-use real guild sign-in as a test fixture. `/up` is the liveness signal (always
-200, queue health folded in, no auth); use the SQL suites for database
+use real guild sign-in as a test fixture. `/up` is the readiness signal (503 on DB
+unreachable or pending web migrations; queue-only trouble stays 200; no auth); use the SQL suites for database
 verification. This exercises direct Postgres, not Hyperdrive pooling. Miniflare requires a nonempty password for a Hyperdrive
 local connection string, so the passwordless authorized URL cannot be used as
 that override. **Do not invent a password or substitute credentials.** Never
@@ -163,9 +163,8 @@ gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
 The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
 Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
 on every response and staging noindex on returned HTML (the application's header
-contract). `/up` checks HTTP 200 and the expected health envelope for DB-tolerant
-liveness, not DB-free, database readiness or cutover proof: degraded or unknown
-queue health does not fail deployment. Redirects are not followed; each
+contract). `/up` requires HTTP 200 with `db:ok` and `pending_migrations:0` (DB/schema
+readiness); degraded or unknown queue health alone does not fail deployment. Redirects are not followed; each
 request/body has a 5-second timeout. A failure names the route and expected versus
 actual result and fails the deploy job after six attempts. That workflow remains
 staging-only; the separate production workflow below stays disabled until
@@ -222,9 +221,8 @@ API access, unset/false flag or any other ref fails closed. Both gate jobs inher
 The deploy job uses that Environment, checks the gate again after approval, and
 deploys the dispatch SHA with `wrangler deploy --env production`. It does not
 create resources or run migrations/tests on production. Its `/up` smoke requires
-HTTP 200 and the supported health envelope, accepting degraded/unknown queue
-states like staging. `/up` may read queue metrics from the configured database;
-it is DB-tolerant liveness, not DB-free, database readiness or cutover proof.
+HTTP 200 with `db:ok` and `pending_migrations:0`, accepting degraded/unknown queue
+states like staging.
 The smoke runs only after a separately authorized production deployment; no
 production probe is performed by delivering or testing this template.
 
@@ -327,6 +325,8 @@ npm run check:worker-moderators                   # source deployment preflight
 npm run check:moderators -- --require-configured   # process-env fixture/local probe
 npm run smoke:internal-action -- \
   --discord-id=<snowflake> --role-key=<key> --channel-key=<throwaway>
+APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
+  --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
 The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
@@ -344,6 +344,15 @@ The live smoke runs manually via the `staging-smoke` workflow on
 to a throwaway channel and creates a real staging event). Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
 Both probes are fixture-tested in `check` without real secrets.
+
+The CallInternalAction drill (`drill:internal-action`) ports the remaining
+drill-only half of `docs/parity.md` §6: production web never dispatches
+CallInternalAction, so instead of a web route it drives the real queued
+producers and `handleCallInternalAction` (attempts=1) directly against staging.
+It refuses both the production bot host and the production web apex (`APP_URL`
+is mandatory and `https://togetherweown.com` is refused), performs a real
+staging role.assign and posts a real announcement to a throwaway channel, and
+never upserts events. Fixture-tested in `check` without real secrets.
 
 These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
