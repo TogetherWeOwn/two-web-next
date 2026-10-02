@@ -295,3 +295,16 @@ test("workflow wires the tested gate before both mutations and preserves staging
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
 });
+
+test("main CI runs are never cancelled in progress, so their success can reach staging", () => {
+  // A cancel request marks the run cancelled even when every job then succeeds,
+  // and the deploy trigger above rejects a cancelled conclusion.
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const block = ci.match(/^concurrency:\n  group: ci-\$\{\{ github\.ref \}\}\n  cancel-in-progress: \$\{\{ (.+) \}\}\n/m);
+  assert(block, "ci.yml concurrency must group by ref and compute cancel-in-progress per ref");
+  const cancels = new Function("github", `return ${block[1]}`);
+  assert.equal(cancels({ ref: "refs/heads/main" }), false);
+  for (const ref of ["refs/pull/7/merge", "refs/heads/release-please--branches--main", "refs/heads/topic"]) {
+    assert.equal(cancels({ ref }), true, ref);
+  }
+});
