@@ -696,11 +696,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(page.status).toBe(200);
     const header = (await page.text()).match(/<header\b[^>]*>(.*?)<\/header>/)![1]!;
     const loginHref = header.match(/href="([^"]+)" data-testid="signin"/)![1]!;
-    expect(loginHref).toBe(`/auth/discord?next=${encodeURIComponent(next)}`);
+    expect(loginHref).toBe(`/join/discord?next=${encodeURIComponent(next)}`);
 
     mockDiscord();
-    const start = await startLogin(env, new URL(loginHref, APP_URL).search);
-    const callback = await finishLogin(env, start.state, start.jar);
+    const start = await app.request(loginHref, {}, env);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const callback = await app.request(`/join/callback?code=abc&state=${state}`, {
+      headers: { cookie: sendJar(jarFrom(start)) },
+    }, env);
     expect(callback.headers.get("location")).toBe(next);
   });
 
