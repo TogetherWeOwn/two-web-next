@@ -26,7 +26,7 @@ export const NON_HTML_READS = [
   "/admin/events/create", "/admin/events/:key/edit", "/admin/featured-contents",
   "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
   "/sitemap_index.xml", "/robots.txt", "/up", "/auth/status", // Bool-only JSON, never an HTML document.
-  "/events.json", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
+  "/events.json", "/events/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 
 export const concretePath = (pattern: string) => pattern

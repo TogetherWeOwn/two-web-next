@@ -26,7 +26,7 @@ const SECRET = "test-session-secret-at-least-32-bytes-long";
 const binder = readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8");
 
 // Real Drizzle queries and Hono rendering; all data is local, no DB connection.
-function fixture(over: Partial<typeof events.$inferSelect> = {}, newerEvents = 0) {
+function fixture(over: Partial<typeof events.$inferSelect> = {}, earlierEvents = 0) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
     id: 1, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
@@ -40,9 +40,9 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, newerEvents = 0
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
   const encode = (event: typeof row) => columns.map((key) =>
     event[key] instanceof Date ? (event[key] as Date).toISOString() : event[key]);
-  const newer = Array.from({ length: newerEvents }, (_, i) => ({
+  const earlier = Array.from({ length: earlierEvents }, (_, i) => ({
     ...row, id: i + 2, eventKey: String(i + 2).padStart(26, "0"),
-    startsAt: new Date(start.getTime() + (i + 1) * 86400_000),
+    startsAt: new Date(start.getTime() - (i + 1) * 86400_000),
   })).reverse();
   const queries: string[] = [];
   let going = 3;
@@ -50,14 +50,18 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, newerEvents = 0
     queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
     if (sql.includes('from "rsvps"')) return { rows: [[row.id, going]] };
-    if (sql.includes('order by "events"."starts_at" desc limit')) {
-      // Model the collection WHERE before LIMIT, not an already-filtered response.
-      let selected = [...newer, row];
+    if (sql.includes('from "events"') && (sql.startsWith("select count(*)")
+      || sql.includes('order by "events"."starts_at" asc, "events"."id" asc limit'))) {
+      // Model the same WHERE for the total and rows, before LIMIT/OFFSET.
+      let selected = [...earlier, row];
       if (params.includes("published")) selected = selected.filter((event) => event.status !== "draft");
       const keyParameter = sql.match(/"event_key" = \$(\d+)/)?.[1];
       if (keyParameter) selected = selected.filter((event) => event.eventKey === params[Number(keyParameter) - 1]);
+      if (sql.startsWith("select count(*)")) return { rows: [[selected.length]] };
       const limitParameter = sql.match(/limit \$(\d+)/)?.[1];
-      if (limitParameter) selected = selected.slice(0, Number(params[Number(limitParameter) - 1]));
+      const offsetParameter = sql.match(/offset \$(\d+)/)?.[1];
+      const offset = offsetParameter ? Number(params[Number(offsetParameter) - 1]) : 0;
+      if (limitParameter) selected = selected.slice(offset, offset + Number(params[Number(limitParameter) - 1]));
       return { rows: selected.map(encode) };
     }
     if (sql.includes('"event_key" =')) return { rows: [encode(row)] };
@@ -261,9 +265,10 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     const source = fixture({}, 25);
     const cookie = await source.cookie();
     const firstPage = await source.request(cookie, "/events.json");
-    const firstRows = (await firstPage.json() as { data: { event_key: string }[] }).data;
-    expect(firstRows).toHaveLength(20);
-    expect(firstRows.some((row) => row.event_key === KEY)).toBe(false);
+    const firstBody = await firstPage.json() as { data: { event_key: string }[]; meta: { total: number } };
+    expect(firstBody.data).toHaveLength(20);
+    expect(firstBody.data.some((row) => row.event_key === KEY)).toBe(false);
+    expect(firstBody.meta.total).toBe(26);
     const b = browser(await (await source.request()).text());
     source.setGoing(4);
     b.broadcast(KEY, "going");
@@ -285,13 +290,16 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     const member = await source.cookie();
     const hidden = await source.request(member, url);
     expect(hidden.status).toBe(200);
-    expect((await hidden.json() as { data: unknown[] }).data).toEqual([]);
+    const hiddenBody = await hidden.json() as { data: unknown[]; meta: { total: number } };
+    expect(hiddenBody.data).toEqual([]);
+    expect(hiddenBody.meta.total).toBe(0);
     const shown = await source.request(await source.cookie(true), url);
     expect(shown.status).toBe(200);
     expect(shown.headers.get("cache-control")).toBe("private, no-cache");
     expect(shown.headers.get("etag")).toBeTruthy();
-    const body = await shown.json() as { data: Record<string, unknown>[] };
+    const body = await shown.json() as { data: Record<string, unknown>[]; meta: { total: number } };
     expect(body.data).toHaveLength(1);
+    expect(body.meta.total).toBe(1);
     expect(body.data[0]).toMatchObject({ event_key: KEY, going_count: 3 });
     for (const privateField of ["attendees", "user_id", "session", "token"]) {
       expect(body.data[0]).not.toHaveProperty(privateField);
