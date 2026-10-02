@@ -11,8 +11,9 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { JOIN_RETENTION_DAYS, joinFunnelStats } from "../src/admin/reads";
-import { activityLog, events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
+import { events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { joinAttempts, users } from "../src/db/schema";
 import type { Env } from "../src/env";
@@ -89,8 +90,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin reads (agent-testdb)", () => {
   let cookie = "";
 
   const clean = async () => {
-    await db.delete(memberDataAccessLogs);
-    await db.delete(activityLog);
+    await clearAuditRows(db, ["member_data_access_logs", "activity_log"]);
     await db.delete(rsvps);
     await db.delete(events);
     await db.delete(joinAttempts);

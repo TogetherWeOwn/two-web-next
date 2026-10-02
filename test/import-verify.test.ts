@@ -333,7 +333,12 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     expect(JSON.stringify(report)).not.toContain("private-bio");
     // Changing only a remapped relationship must fail the row hash.
     await admin.unsafe(`UPDATE ${n}.events SET parent_event_id=NULL WHERE id=200`);
-    await admin.unsafe(`UPDATE ${n}.member_data_access_logs SET subject_user_ids='["43"]' WHERE id=1`);
+    // Audit rows are append-only (1018): only the owner, with the guard off, can tamper.
+    await admin.begin(async (tx) => {
+      await tx.unsafe(`ALTER TABLE ${n}.member_data_access_logs DISABLE TRIGGER member_data_access_logs_append_only`);
+      await tx.unsafe(`UPDATE ${n}.member_data_access_logs SET subject_user_ids='["43"]' WHERE id=1`);
+      await tx.unsafe(`ALTER TABLE ${n}.member_data_access_logs ENABLE TRIGGER member_data_access_logs_append_only`);
+    });
     const changed = await verify({ legacy, next, map: baseline, batchSize: 1 });
     expect(changed.tables.find((t) => t.table === "events")!.mismatchKeys).toEqual([["child"]]);
     expect(changed.tables.find((t) => t.table === "member_data_access_logs")!.mismatchKeys).toEqual([["1"]]);

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import app from "./app";
 import { DEFAULT_CONFIG, validateFields } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
 
 const state = vi.hoisted(() => ({
@@ -74,7 +75,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
     state.schema = fixture.schemaName;
   });
   beforeEach(async () => {
-    await sql`DELETE FROM agent_event_audits`;
+    await clearAuditRows(sql, ["agent_event_audits"]);
     await sql`DELETE FROM agent_event_grants`;
     await sql`DELETE FROM agent_event_hits`;
     const [grant] = await sql`INSERT INTO agent_event_grants (agent_id, company_id, guild_id, verifier_hash)

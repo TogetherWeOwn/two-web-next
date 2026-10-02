@@ -6,6 +6,7 @@ import { parseFeaturedForm, ValidationError } from "../src/admin/validation";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import { activityLog, featuredContents } from "../src/db/admin-schema";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const rejected = [
@@ -73,7 +74,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured position create/edit (isola
   });
   afterAll(async () => { await fixture?.dispose(); });
   beforeEach(async () => {
-    await fixture.db.delete(activityLog);
+    await clearAuditRows(fixture.db, ["activity_log"]);
     await fixture.db.delete(featuredContents);
     const store = createMemorySessionStore();
     const token = newSessionToken();

@@ -223,7 +223,9 @@ describe.skipIf(!process.env.DATABASE_URL)("successful replay audit receipts (is
     const locked = new Promise<void>((resolve) => { signal = resolve; });
     const rollback = new Error("fixture lock rollback");
     const holder = sql.begin(async (tx) => {
-      if (lockedResource === "grant") await tx`DELETE FROM agent_event_grants WHERE id = ${c.grantId}`;
+      // The grant row lock a provisioning DELETE would take. The DELETE itself is
+      // refused once audits reference the grant (append-only audits, 1018).
+      if (lockedResource === "grant") await tx`SELECT id FROM agent_event_grants WHERE id = ${c.grantId} FOR UPDATE`;
       else await tx`LOCK TABLE agent_event_audits IN ACCESS EXCLUSIVE MODE`;
       signal();
       await held;

@@ -11,7 +11,8 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
-import { activityLog, events, rsvps } from "../src/db/admin-schema";
+import { events, rsvps } from "../src/db/admin-schema";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
 import {
@@ -116,7 +117,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
 
   beforeEach(async () => {
     await db.delete(rsvps);
-    await db.delete(activityLog);
+    await clearAuditRows(db, ["activity_log"]);
     await db.delete(events);
     sent.length = 0;
   });
