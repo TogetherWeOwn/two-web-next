@@ -215,6 +215,9 @@ jobs:
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run test:cutover
+      - name: Shadow-compare selftest (loopback only)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run test:shadow
       - name: Coverage job summary
         if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
@@ -249,6 +252,9 @@ jobs:
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/production-deploy-gate.test.mjs
+      - name: Production secrets preflight selftest (stubbed wrangler, no secrets or network)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/check-production-secrets.test.mjs
       - name: Build (wrangler dry run)
         if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --outdir dist

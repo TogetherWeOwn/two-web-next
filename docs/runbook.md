@@ -5,7 +5,8 @@ Start here for releases, queue incidents and database recovery; use
 [log-line alerts](runbook-alerts.md) for fingerprints and
 [shared Postgres](db-migrations.md) for migration ownership and backup policy.
 The [parity matrix](parity.md) records what is implemented versus still missing.
-Cutover/DNS changes are outside this runbook.
+The production cutover and its DNS changes are outside this runbook; only the
+staging rollback and DNS flip-back rehearsal is covered here.
 
 ## Safety and escalation
 
@@ -245,6 +246,25 @@ Use the explicit known-good version recorded before the release. Do not accept
 Wrangler's implicit previous-version default in a concurrent release incident.
 Keep required resources/bindings in place; never delete a queue to roll back.
 
+#### Production (one-click workflow)
+
+[.github/workflows/rollback-production.yml](../.github/workflows/rollback-production.yml)
+is the one-click production rollback: Actions → `rollback-production` → Run
+workflow, branch `main`, `version_id` set to the recorded known-good Worker
+Version ID. It reuses the same request gate
+(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`),
+the same `production` Environment approval (required reviewers, no
+self-review) and the same production-only Cloudflare credentials as a deploy,
+then runs `wrangler rollback <version_id> --name two-web-next-production`
+followed by the same `/up` smoke. The `version_id` input must be a lowercase
+Worker Version UUID and travels inputs → `env:` only, never through
+expression interpolation in a shell block. A rollback does **not** undo
+Postgres migrations, data writes, Discord side effects, queue messages or
+external-resource changes; keep the release workflow from redeploying the bad
+head. Record the rollback deployment and previous/current version IDs.
+
+#### Staging (manual)
+
 ```bash
 (
   set -euo pipefail
@@ -261,18 +281,211 @@ Worker's routes/domains. It does **not** undo Postgres migrations, data writes,
 Discord side effects, queue messages or external-resource changes. Check schema
 compatibility first; keep the release workflow from redeploying the bad head.
 Record the rollback deployment and previous/current version IDs. Do not claim a
-rollback was rehearsed unless there is an execution receipt.
+rollback was rehearsed unless there is an execution receipt; the staging
+receipt is in the rehearsal record below.
 
 Official references: [Wrangler rollback](https://developers.cloudflare.com/workers/wrangler/commands/workers/#rollback)
 and [rollback limits](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/#limits)
 (last 100 published versions; resource/class-lifecycle changes can prevent it).
 
+### Staging rehearsal: Worker rollback and DNS flip-back
+
+Staging only: host `next.togetherweown.com`, Worker `two-web-next`. Never run
+these steps against `togetherweown.com`, `www` or `two-web-next-production`;
+the production flip belongs to the W17 cutover card. Every command marked
+REMOTE MUTATION changes staging traffic for about 10 seconds.
+
+Credentials stay in the environment, never on argv. The rollback half needs
+Workers Scripts edit (`CLOUDFLARE_API_TOKEN`). The DNS half also needs Zone
+DNS edit on `togetherweown.com` plus Workers custom-domain edit (`CF_TOKEN`
+below). The deploy token has **no** DNS edit: on 2026-10-02 a record create
+returned `10000 Authentication error`. On any such error, stop and use the
+`Operator:` card; do not try another token.
+
+Shared helpers for one shell session (`RUN_DIR` is a private scratch
+directory; `cfapi` reads its token from `CF_TOKEN` and fails on API errors):
+
+```bash
+export RUN_DIR="$(mktemp -d)" CF_ACC="<account id>" CF_ZONE="<togetherweown.com zone id>"
+cfapi() { # usage: cfapi METHOD PATH [JSON]
+  node -e 'const [m,p,b]=process.argv.slice(1);
+    fetch("https://api.cloudflare.com/client/v4"+p,{method:m,body:b,headers:{
+      authorization:"Bearer "+process.env.CF_TOKEN,"content-type":"application/json"}})
+    .then(r=>r.json()).then(d=>{if(!d.success){console.error(JSON.stringify(d.errors));process.exit(1)}
+      console.log(JSON.stringify(d.result))})' "$@"
+}
+probe() { # one line per second: epoch-ms, HTTP status, X-TWO-Origin (blank if absent)
+  local i=0
+  while :; do
+    i=$((i + 1))
+    printf '%s %s\n' "$(date +%s%3N)" "$(curl -s -o /dev/null -D - --max-time 5 \
+      "https://next.togetherweown.com/up?rehearsal=$i" | tr -d '\r' |
+      awk 'NR==1{s=$2} tolower($1)=="x-two-origin:"{o=$2} END{print s, o}')"
+    sleep 1
+  done
+}
+served_versions() { # usage: served_versions FROM_MS TO_MS -> version switches, oldest first
+  CF_TOKEN="$CLOUDFLARE_API_TOKEN" cfapi POST "/accounts/$CF_ACC/workers/observability/telemetry/query" \
+    "{\"queryId\":\"rehearsal\",\"view\":\"events\",\"limit\":100,\"timeframe\":{\"from\":$1,\"to\":$2},
+      \"parameters\":{\"filters\":[{\"key\":\"\$metadata.service\",\"operation\":\"eq\",
+      \"type\":\"string\",\"value\":\"two-web-next\"}]}}" |
+  node -e 'const e=JSON.parse(require("fs").readFileSync(0)).events.events
+      .map(x=>[x.timestamp,x.$workers?.scriptVersion?.id]).sort((a,b)=>a[0]-b[0]);
+    let p;for(const[t,v]of e)if(v!==p){console.log(new Date(t).toISOString(),v);p=v}
+    console.log("events",e.length)'
+}
+```
+
+The telemetry query returns only the newest 100 events. Keep each window to
+40 seconds or less while one probe runs, and check the event count.
+
+**Worker rollback (N+1 to N and back)**
+
+1. Confirm that no deploy is running or queued:
+   `gh run list --workflow deploy.yml --limit 3`. A deploy during the
+   rehearsal overwrites the rollback.
+2. Record the versions from
+   `npx --no-install wrangler deployments list --name two-web-next --json`.
+   N+1 is the active version and N is the previous deployment's version. Map
+   each version to its commit with the `Current Version ID:` line in its deploy
+   job log; deploys are not tagged yet.
+3. Baseline: `node bin/smoke.mjs https://next.togetherweown.com | tee "$RUN_DIR/smoke-base.log"`.
+   Record any existing failures. The rehearsal compares against this
+   baseline; it does not require it to be green.
+4. In a second terminal, start the probe loop:
+   `probe | tee "$RUN_DIR/probe-rollback.log"`.
+5. Roll back, with timestamps:
+
+   ```bash
+   (
+     set -euo pipefail
+     : "${N_VERSION:?}"
+     # REMOTE MUTATION: staging Worker only.
+     echo "T0 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+     npx --no-install wrangler rollback "$N_VERSION" --name two-web-next \
+       -m "staging rollback rehearsal" -y
+     echo "T1 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+   )
+   ```
+
+6. Prove that N serves. After 60 seconds, run
+   `served_versions $((T0 - 4000)) $((T0 + 36000))`, then a second window
+   that starts 36 seconds after T0. Record three intervals from T0: the first
+   request served by N, the point after which no N+1 request appears
+   (settled), and the number of non-200 probes. Then run N's own smoke; the
+   HEAD smoke can expect an `/up` shape that N does not have yet:
+
+   ```bash
+   (
+     set -euo pipefail
+     : "${N_SHA:?}"
+     mkdir -p "$RUN_DIR/n" && git archive "$N_SHA" bin ci | tar -x -C "$RUN_DIR/n"
+     node "$RUN_DIR/n/bin/smoke.mjs" https://next.togetherweown.com | tee "$RUN_DIR/smoke-n.log"
+   )
+   ```
+
+   Run `served_versions` over the smoke window. Every event must show N.
+7. Roll forward with `wrangler rollback "$N1_VERSION"` (the same block as
+   step 5), prove N+1 the same way, then repeat the step 3 smoke. The result
+   must match the baseline. Confirm that `wrangler deployments list` shows
+   both rehearsal deployments with their messages.
+
+**DNS flip to the legacy target and back**
+
+8. Record the starting state and the legacy target:
+
+   ```bash
+   (
+     set -euo pipefail
+     cfapi GET "/accounts/$CF_ACC/workers/domains?hostname=next.togetherweown.com" | tee "$RUN_DIR/cd-before.json"
+     cfapi GET "/zones/$CF_ZONE/dns_records?name=next.togetherweown.com" | tee "$RUN_DIR/dns-before.json"
+     cfapi GET "/zones/$CF_ZONE/dns_records?name=staging.togetherweown.com" | tee "$RUN_DIR/legacy.json"
+   )
+   ```
+
+   Expect one custom domain (`service` `two-web-next`) and one read-only
+   proxied `AAAA 100::` record owned by the Worker. Set `CD_ID`,
+   `LEGACY_A` and `LEGACY_AAAA` from these files. The legacy records are
+   proxied with `ttl` 1 (auto).
+9. Run `probe | tee "$RUN_DIR/probe-dns.log"` in the second terminal. The
+   signal is the `two-web-next` marker on `/up`, which only Next sends.
+10. Flip to legacy. Between the two calls the host has no record, so keep
+    them in one block:
+
+    ```bash
+    (
+      set -euo pipefail
+      : "${CD_ID:?}" "${LEGACY_A:?}" "${LEGACY_AAAA:?}"
+      rec() { printf '{"type":"%s","name":"next.togetherweown.com","content":"%s","proxied":true,"ttl":1,"comment":"staging flip-back rehearsal"}' "$1" "$2"; }
+      # REMOTE MUTATION: staging host only.
+      echo "D0 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+      cfapi DELETE "/accounts/$CF_ACC/workers/domains/$CD_ID"
+      cfapi POST "/zones/$CF_ZONE/dns_records" "$(rec A "$LEGACY_A")"
+      cfapi POST "/zones/$CF_ZONE/dns_records" "$(rec AAAA "$LEGACY_AAAA")"
+      echo "D1 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+    )
+    ```
+
+11. Record the time from D0 to the first probe without the marker, and to the
+    start of 10 consecutive probes without it. Also record the status that
+    the legacy edge returns. Legacy Traefik has no router for `next.*`, so a
+    404 or 5xx is expected and is not an app failure.
+12. Flip back. Delete the rehearsal records, then re-attach the custom domain:
+
+    ```bash
+    (
+      set -euo pipefail
+      # REMOTE MUTATION: staging host only.
+      echo "B0 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+      cfapi GET "/zones/$CF_ZONE/dns_records?name=next.togetherweown.com" |
+        node -e 'for (const r of JSON.parse(require("fs").readFileSync(0)))
+          if (r.comment === "staging flip-back rehearsal") console.log(r.id)' |
+        while read -r id; do cfapi DELETE "/zones/$CF_ZONE/dns_records/$id"; done
+      cfapi PUT "/accounts/$CF_ACC/workers/domains" \
+        "{\"hostname\":\"next.togetherweown.com\",\"service\":\"two-web-next\",\"environment\":\"production\",\"zone_id\":\"$CF_ZONE\"}"
+      echo "B1 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+    )
+    ```
+
+    If the `PUT` fails, `npx --no-install wrangler triggers deploy` re-applies
+    the custom domain from `wrangler.jsonc` without uploading code. If that
+    also fails, staging has no record: escalate on the incident card at once.
+13. Record the time from B0 to the first probe with the marker, and to the
+    start of 10 consecutive probes with it. Repeat the step 3 smoke; it must
+    match the baseline.
+14. Read back as in step 8. Expect exactly one custom domain and only the
+    Worker's read-only record. The custom-domain ID can change.
+15. Post the timings, version IDs, smoke results and discrepancies on the W16
+    card, and keep `$RUN_DIR` until the card is closed.
+
+Rehearsal record:
+
+| Date (UTC) | Step | Command | First request on target | Settled | Non-200 probes |
+|---|---|---|---|---|---|
+| 2026-10-02 00:53 | rollback `62871bf4` (8cb9cff) to `60663623` (0515ef4) | 5.2 s | +8.9 s | +12.3 s | 0 of 150 |
+| 2026-10-02 00:55 | roll forward `60663623` to `62871bf4` | 5.5 s | +6.6 s | +10.7 s | 0 of 90 |
+| pending | DNS flip to legacy and back | needs a DNS-edit principal | | | |
+
+Notes from the 2026-10-02 run:
+
+- Both versions send the same `/up` marker, so only telemetry
+  (`$workers.scriptVersion.id`) proves which version served a request.
+  Requests from one client alternated between versions for about 4 seconds
+  before they settled.
+- The HEAD smoke failed the same 9 assertions on both versions: `/events`,
+  `/events.rss` and `/events.ics` returned 500, and `/up` lacked the fields
+  that HEAD expects. N's own smoke passed `/up` and failed only the 8
+  events assertions. The failures were present before the rehearsal.
+- For proxied records, resolvers only ever receive Cloudflare anycast
+  addresses (`ttl` 1, auto). The DNS flip therefore depends on how fast
+  Cloudflare applies edge configuration, not on resolver TTL expiry.
+
 ## Read `/up` without mistaking liveness for readiness
 
 `GET /robots.txt` is DB-free and can check local Worker startup; it does not
 prove deployment readiness. `/health` and `/healthz` are removed (404).
-`GET /up` is **readiness**: a read-only DB ping and web migration-ledger read,
-plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
+`GET /up` is **readiness**: a required-secret presence check, a read-only DB
+ping and web migration-ledger read, plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
 
 DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty
@@ -313,6 +526,16 @@ Sources: [PostgreSQL statement/lock timeouts](https://www.postgresql.org/docs/cu
 | DB reachable, N web migrations missing | 503 | `ok` | N | `degraded` |
 | DB reachable, ledger read fails/times out | 503 | `ok` | `null` | `degraded` |
 | No usable DB configuration, failed/hung ping | 503 | `error` | `null` | `degraded` |
+
+**Required secrets.** `SESSION_SECRET`, `DISCORD_CLIENT_SECRET` and
+`DISCORD_BOT_TOKEN` must be present and nonempty (whitespace-only counts as
+empty). If any is missing, `/up` answers 503 with top-level `status: degraded`
+and `config: "missing"`, alongside the DB and queue fields above. The body never
+names the secret; the Worker log line `Health check found required Worker
+secrets missing.` lists the missing names only, never values. A ready Worker's
+body has no `config` key. This is a presence check only: a wrong value still
+reports ready and fails at sign-in. Fix by setting the secret (an Operator step
+for staging/production), not by weakening the probe.
 
 Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready**:
 
@@ -397,7 +620,7 @@ below, not its older `/up` row, define these outcomes.
 | `/events/:key/rsvp` (PUT/DELETE) | Session/transaction failure **500 HTML**; missing event DB **503 JSON**, auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
 | `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution failure **503**; subsequent read/save failure **500**. Missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
 | Implemented `/admin` routes | Session resolution failure **503**, later resource/dashboard query failure **500**; missing resource DB **503**. Default required access-log failure gives **503**; guest **302**, non-moderator **403**. |
-| `/api/agent-events` (POST) | Separate `AGENT_DB`: disabled **404**, enabled without binding **503**, service DB failure **500 JSON** `internal_error`. Browser `DB` failure alone need not affect this ingress. |
+| `/api/agent-events` (POST) | Shared web database (`AGENT_DB` when bound, else `DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without any source **503**, service DB failure **500 JSON** `internal_error` (or **503** `ingress_unavailable` when the database is unreachable). No connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
 
 Sources: [src/index.tsx](../src/index.tsx), [join routes](../src/join/route.ts),
 [event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx),

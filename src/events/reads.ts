@@ -87,7 +87,7 @@ function calendarVisible(opts: CalendarReadOpts): SQL | undefined {
   return clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : and(...clauses);
 }
 
-/** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). */
+/** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). Equal starts break ties by id for a deterministic total order. */
 export async function listUpcoming(
   db: Db,
   now = new Date(),
@@ -97,7 +97,7 @@ export async function listUpcoming(
     .select()
     .from(events)
     .where(and(calendarVisible(opts), finiteEventWindow, gte(events.endsAt, now)))
-    .orderBy(asc(events.startsAt));
+    .orderBy(asc(events.startsAt), asc(events.id));
   return withGoing(db, rows.filter(isRenderableEventWindow));
 }
 
