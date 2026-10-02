@@ -391,7 +391,7 @@ describe("security headers per route class", () => {
     // instead a branded HTML refusal and must carry the noindex header.
     const preview = { ...env, APP_URL: "https://preview.example.test" };
     const json = await app.request("/up", {}, preview);
-    expect(json.status).toBe(200);
+    expect(json.status).toBe(503); // trusted host, but the fixture has no DB
     expect(json.headers.get("content-type")).toContain("application/json");
     expect(json.headers.get("X-Robots-Tag")).toBeNull();
     const refused = await rawApp.request("https://preview.example.test/up", {}, apex);
