@@ -148,6 +148,8 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
+        run: node --test ci/staging-deploy-gate-selftest.mjs
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
         run: npm run test:cutover
       - name: Coverage job summary

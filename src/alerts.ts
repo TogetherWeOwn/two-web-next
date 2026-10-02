@@ -45,10 +45,18 @@ export function fingerprintOf(err: unknown, route: string): string {
  */
 export class AlertRateLimit {
   private readonly last = new Map<string, number>();
+  private readonly windowMs: number;
+  private readonly now: Clock;
+  // Plain assignments (no parameter properties): bin/*.mjs operator scripts
+  // run under node's type-stripping, which rejects parameter properties, and
+  // this class sits in the drill/smoke import closure (TOG-11706).
   constructor(
-    private readonly windowMs = ALERT_WINDOW_MS,
-    private readonly now: Clock = Date.now,
-  ) {}
+    windowMs = ALERT_WINDOW_MS,
+    now: Clock = Date.now,
+  ) {
+    this.windowMs = windowMs;
+    this.now = now;
+  }
 
   /** True when this fingerprint may alert now; records the alert. */
   allow(fingerprint: string): boolean {
