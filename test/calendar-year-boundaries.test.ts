@@ -38,6 +38,8 @@ function calendarFixture(startsAt: Date, zone?: string) {
   const past: typeof events.$inferSelect = {
     id: 1,
     icsSequence: 1n,
+    syncRevision: 1,
+    syncedRevision: 0,
     eventKey: "zone-fixture",
     title: "Past zone fixture",
     game: null,
@@ -51,6 +53,9 @@ function calendarFixture(startsAt: Date, zone?: string) {
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     createdBy: null,
     rsvpOpen: true,
     recurrenceFrequency: null,

@@ -11,8 +11,10 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { agentEventGrants } from "./schema";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
 // events (+ corrections + recurrence + rsvp_open), featured_contents (+
@@ -50,8 +52,18 @@ export const events = pgTable(
     capacity: integer("capacity"),
     status: text("status").notNull().default("draft"),
     discordEventId: text("discord_event_id").unique(),
+    // Database triggers advance this outbox revision with event/RSVP writes.
+    syncRevision: bigint("sync_revision", { mode: "number" }).notNull().default(1),
+    syncedRevision: bigint("synced_revision", { mode: "number" }).notNull().default(0),
     discordSyncFailedAt: timestamp("discord_sync_failed_at", { withTimezone: true }),
     discordSyncFailureCode: text("discord_sync_failure_code"),
+    // Machine ownership shares the public/admin event row. Null for human events;
+    // a grant can own only one proof event. Deleting a grant preserves the event.
+    agentGrantId: uuid("agent_grant_id")
+      .unique()
+      .references(() => agentEventGrants.id, { onDelete: "set null" }),
+    proofMarker: text("proof_marker").unique(),
+    agentVersion: integer("agent_version").notNull().default(1),
     createdBy: text("created_by"),
     // Pause flag (TOG-8725): a published event stays visible while taking no
     // new answers. Default true so every row written by a caller that does
@@ -79,6 +91,29 @@ export const events = pgTable(
     index("events_parent_event_id_idx").on(t.parentEventId),
     index("events_ends_at_index").on(t.endsAt),
     index("events_starts_at_id_index").on(t.startsAt, t.id),
+  ],
+);
+
+// An attempted request is immutable for the lifetime of its idempotency key.
+// One pending attempt per event also orders requests when retries outlive the
+// debounce lock. Keep settled snapshots so late redelivery cannot replay edits.
+export const eventSyncAttempts = pgTable(
+  "event_sync_attempts",
+  {
+    idempotencyKey: uuid("idempotency_key").primaryKey(),
+    eventId: integer("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    revision: bigint("revision", { mode: "number" }).notNull(),
+    action: text("action").notNull(),
+    payload: jsonb("payload").notNull(),
+    mirroredAt: timestamp("mirrored_at", { withTimezone: true }).notNull(),
+    state: text("state").notNull().default("pending"),
+    requestAttempts: integer("request_attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("event_sync_attempts_pending_idx").on(t.eventId).where(sql`${t.state} = 'pending'`),
   ],
 );
 

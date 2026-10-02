@@ -189,7 +189,7 @@ describe("queue.failing", () => {
     const boom = () => {
       throw new TypeError("x");
     };
-    const store = { find: boom } as unknown as EventStore;
+    const store = { prepareSync: boom, failSync: async () => {} } as unknown as EventStore;
     await consume(
       {
         messages: [

@@ -14,12 +14,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import { buildSyncMessage, type SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { RSVP_COPY, RSVP_SYNCED_TESTID, RSVP_SYNCING_TESTID } from "../src/islands/contracts";
 import { SYNC_EVENT } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import { toQueueMessage } from "../src/jobs/envelope";
-import { pgEventStore } from "../src/jobs/event-store-pg";
+import { pgEventStore } from "../src/jobs/events";
 import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { BotTransportError, type BotClient } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -28,6 +28,13 @@ import {
   testDatabaseUrl,
   type MemberDataFixture,
 } from "./helpers/member-data-db";
+
+// Only transport and pool construction are substituted: the web producer must
+// land its ledger/lock rows in the fixture schema, never the shared public one.
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -47,9 +54,21 @@ const memberAnswer = (row: { status: string; syncedToDiscordAt: Date | null }) =
   };
 };
 
+type SyncCarrier = Extract<QueueMessage, { kind: "sync-event" }>;
+
+// Producers now enqueue the W13 carrier directly; the W8 SyncMessage shape below
+// is what in-flight pre-integration carriers look like on the wire. The mapping
+// contract (same key, cancel/inconsistent carriers refused) is unchanged.
+const w8upsert = (eventKey: string, idempotencyKey = "11111111-1111-4111-8111-111111111111") => ({
+  dedupeKey: eventKey,
+  eventKey,
+  action: "event.upsert",
+  idempotencyKey,
+});
+
 describe("W8 write-back carrier reaches the sync-event job", () => {
-  it("maps the producer's event.upsert SyncMessage with its idempotency key unchanged", () => {
-    const carrier = buildSyncMessage("01WBCARRIER000000000000000", "published")!;
+  it("maps the producer's event.upsert carrier with its idempotency key unchanged", () => {
+    const carrier = w8upsert("01WBCARRIER000000000000000");
     expect(toQueueMessage(structuredClone(carrier))).toEqual({
       kind: "sync-event",
       eventKey: carrier.eventKey,
@@ -58,9 +77,9 @@ describe("W8 write-back carrier reaches the sync-event job", () => {
   });
 
   it("leaves event.cancel and inconsistent carriers unrecognized", () => {
-    const upsert = buildSyncMessage("01WBCARRIER000000000000000", "published")!;
+    const upsert = w8upsert("01WBCARRIER000000000000000");
     // A sync-event for a cancelled row would ask the bot to upsert it.
-    expect(toQueueMessage(buildSyncMessage("01WBCARRIER000000000000000", "cancelled"))).toBeNull();
+    expect(toQueueMessage({ ...upsert, action: "event.cancel" })).toBeNull();
     expect(toQueueMessage({ ...upsert, dedupeKey: "another-event" })).toBeNull();
     expect(toQueueMessage({ ...upsert, idempotencyKey: null })).toBeNull();
     // A kind is judged by the W13 shape alone, never re-read as a W8 carrier.
@@ -83,7 +102,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     // (see test/helpers/jobs-db.ts), so the adapters get their own raw pool on the same schema.
     let jobsSql: postgres.Sql;
     const store = createMemorySessionStore();
-    const sent: SyncMessage[] = [];
+    const sent: SyncCarrier[] = [];
     const env = {
       APP_URL,
       SESSION_SECRET,
@@ -96,21 +115,32 @@ describe.skipIf(!process.env.DATABASE_URL)(
       get ADMIN_DB() {
         return db;
       },
-      EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+      SYNC_EVENT_QUEUE: { send: async (m: SyncCarrier) => void sent.push(m) },
     } as unknown as Env;
 
     beforeAll(async () => {
       fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 4 });
       db = fixture.db;
       const url = testDatabaseUrl(process.env.DATABASE_URL!);
-      jobsSql = postgres(url.href, {
+      const options = {
         max: 2,
         port: 5432,
         connect_timeout: 5,
         password: () => url.password,
         connection: { search_path: fixture.schemaName },
         onnotice: () => {},
-      });
+      };
+      const realPostgres = await vi
+        .importActual<{ default: typeof postgres }>("postgres")
+        .then((m) => m.default);
+      vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}>) => {
+        testDatabaseUrl(raw);
+        return realPostgres(raw, { ...opts, ...options });
+      }) as typeof postgres);
+      jobsSql = postgres(url.href, options);
+      // The route producer opens its own pool via sqlFor(env): point it at the
+      // same fixture schema through the DB binding, never the public schema.
+      (env as Record<string, unknown>).DB = { connectionString: url.href };
     });
     beforeEach(async () => {
       await fixture.reset();
@@ -194,7 +224,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       ack(): void;
       retry(o?: { delaySeconds?: number }): void;
     };
-    const deliver = async (body: SyncMessage, attempts: number, bot: BotClient) => {
+    const deliver = async (body: SyncCarrier, attempts: number, bot: BotClient) => {
       const m: Delivery = {
         body: structuredClone(body),
         attempts,
@@ -252,11 +282,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       });
       expect(sent).toHaveLength(1);
       const carrier = sent[0]!;
-      expect(carrier).toMatchObject({
-        eventKey: ev.eventKey,
-        dedupeKey: ev.eventKey,
-        action: "event.upsert",
-      });
+      expect(carrier).toMatchObject({ eventKey: ev.eventKey, kind: "sync-event" });
       const saved = await rsvpRow(ev.id, "member-1");
 
       // Delivery 1, bot down: released for the backoff, never failed, never acked.
@@ -278,7 +304,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       });
       expect(await pgEventStore(jobsSql).staleEventKeys()).toEqual([ev.eventKey]);
 
-      // Delivery 2, bot back: the producer's key rides the redelivery.
+      // Delivery 2, bot back: the queue redelivers after the backoff, so the
+      // deferred attempt is due again; the producer's key rides the redelivery.
+      await jobsSql`update event_sync_attempts set next_attempt_at = now() - interval '1 second'`;
       const second = await deliver(carrier, 2, botUp);
       expect(asked).toEqual([carrier.idempotencyKey, carrier.idempotencyKey]);
       expect(second.acked).toBe(true);
@@ -311,11 +339,23 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(asked).toEqual([carrier.idempotencyKey]);
       expect(last.acked).toBe(true);
       expect(last.retried).toBeNull();
+      // The durable failure keeps the unresolved identity (recovery replays it);
+      // the queue.failing alert carries the same exception for paging.
       expect(error).toHaveBeenCalledWith(
         "job failed",
         "sync-event",
-        `gave up after ${SYNC_EVENT.tries} attempts`,
+        "carrier exhausted; unresolved identity retained",
       );
+      const critical = vi
+        .mocked(console.error)
+        .mock.calls.filter(([line]) => String(line).startsWith('{"level":"critical"'));
+      expect(critical).toHaveLength(1);
+      expect(JSON.parse(String(critical[0]![0]))).toMatchObject({
+        event: "queue.failing",
+        job: "SyncEventToDiscord",
+        attempts: SYNC_EVENT.tries,
+        exception: "carrier exhausted; unresolved identity retained",
+      });
 
       // The give-up is the queue's, not the member's: the seat stands, unstamped, unmirrored.
       const row = await rsvpRow(ev.id, "member-2");

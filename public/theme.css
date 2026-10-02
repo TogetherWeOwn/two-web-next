@@ -1,4 +1,4 @@
-/* Base theme for home, profiles, static, join and recovery. */
+/* Base theme for home, events, profiles, static, join and recovery. */
 @font-face { font-family: Display; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/display-latin-500.woff2') format('woff2'); }
 @font-face { font-family: Display; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/display-latin-700.woff2') format('woff2'); }
 .base-theme {

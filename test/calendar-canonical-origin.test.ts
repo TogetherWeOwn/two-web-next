@@ -27,6 +27,8 @@ function expectMetadata(html: string, path: string) {
 const event: PublicEvent = {
   id: 1,
   icsSequence: 1n,
+  syncRevision: 1,
+  syncedRevision: 0,
   eventKey: "chess-night",
   title: "Chess night",
   game: "Chess",
@@ -42,6 +44,9 @@ const event: PublicEvent = {
   discordEventId: null,
   discordSyncFailedAt: null,
   discordSyncFailureCode: null,
+  agentGrantId: null,
+  proofMarker: null,
+  agentVersion: 1,
   createdBy: null,
   recurrenceFrequency: null,
   recurrenceCount: null,

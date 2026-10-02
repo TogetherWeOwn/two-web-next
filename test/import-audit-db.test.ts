@@ -10,6 +10,7 @@ import {
   testDatabaseUrl,
   type MemberDataFixture,
 } from "./helpers/member-data-db";
+import { AUDIT_TABLES, truncateLiftingAuditGuard } from "./helpers/audit-rows";
 import { DEFAULT_CONFIG, handleAgentEvent } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 // @ts-expect-error Standalone operator CLI has no declaration file.
@@ -77,8 +78,11 @@ suite("audit import into the migrated Next schema (disposable test DB only)", ()
 
   beforeEach(async () => {
     // Only the schemas created by this suite are mutable. The application
-    // import itself never truncates, deletes, updates or disables triggers.
-    await fixture.client.unsafe(
+    // import itself never truncates, deletes, updates or disables triggers;
+    // this owner-only reset lifts the audit TRUNCATE guard (drizzle/1018).
+    await truncateLiftingAuditGuard(
+      fixture.client,
+      AUDIT_TABLES,
       `TRUNCATE ${names.map((n) => `"${n}"`).join(", ")} RESTART IDENTITY CASCADE`,
     );
     await legacy.unsafe(`UPDATE "${sourceSchema}".agent_event_grants SET verifier_hash = repeat('a', 64)
@@ -506,10 +510,10 @@ suite("audit import into the migrated Next schema (disposable test DB only)", ()
       expect(rows[0]!.disabled_at).not.toBeNull(); // Already consumed in legacy.
       expect(rows[1]!.disabled_at).not.toBeNull(); // Disabled in legacy.
       expect(rows[2]!.disabled_at).toBeNull(); // Proven unused.
-      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      expect(await fixture.client`SELECT event_key FROM events`).toEqual([]);
       const denied = await create(spentToken, "fresh-spent-key");
       expect(denied).toMatchObject({ status: 403, body: { reason: "grant_disabled" } });
-      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      expect(await fixture.client`SELECT event_key FROM events`).toEqual([]);
       expect(
         await fixture.client`SELECT key FROM agent_event_idempotency_keys WHERE key = 'fresh-spent-key'`,
       ).toEqual([]);
@@ -560,7 +564,7 @@ suite("audit import into the migrated Next schema (disposable test DB only)", ()
           status: 403,
           body: { reason: "grant_disabled" },
         });
-        expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+        expect(await fixture.client`SELECT event_key FROM events`).toEqual([]);
         expect(
           await fixture.client`SELECT key FROM agent_event_idempotency_keys WHERE key IN ('fresh-history-key', 'synthetic-spent-old-key')`,
         ).toEqual([]);
@@ -581,7 +585,7 @@ suite("audit import into the migrated Next schema (disposable test DB only)", ()
         status: 403,
         body: { reason: "grant_disabled" },
       });
-      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      expect(await fixture.client`SELECT event_key FROM events`).toEqual([]);
     } finally {
       await legacy.unsafe(
         `ALTER TABLE "${sourceSchema}".events RENAME COLUMN unknown_ownership TO agent_grant_id`,
