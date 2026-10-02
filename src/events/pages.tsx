@@ -364,7 +364,7 @@ export const EventsCalendarPage: FC<{
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
   return (
-    <Shell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on.">
+    <Shell title="Events" canonical={canonicalUrl(appUrl, "/events")} shareTitle="Events — Together We Own" description="Game nights, tournaments and whatever else the community puts on.">
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
