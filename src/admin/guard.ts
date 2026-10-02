@@ -31,6 +31,7 @@ import type { Env } from "../env";
 import { databaseUnavailable, notFoundHandler } from "../errors";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
+import { enableAuthStatus } from "../auth-status";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -118,20 +119,34 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     const dbOverride = isStore(overrides) ? undefined : overrides?.db;
 
     let actor: Actor | null = null;
+    // A bearer with no live row (expired/revoked/rotated) is an expired
+    // guest, not a forbidden member: writes recover, reads re-authenticate.
+    let expiredGuest = false;
+    let sessions: SessionStore | null = null;
     try {
       const resolved = sessionOverride ?? (await sessionStoreFor(c));
       if (!resolved) throw new Error("admin needs a session store; refusing to decide without one");
+      sessions = resolved;
       const row = await resolved.get(await hashToken(token));
       // Signed in, not a moderator: 403, not a login loop (TOG-54).
       if (row?.moderator) actor = { id: row.userId, username: row.username };
+      else if (!row) expiredGuest = true;
     } catch (err) {
       console.error("admin guard could not resolve the session; refusing.", {
         exception: err instanceof Error ? err.name : "unknown",
       });
       return databaseUnavailable(c);
     }
-    if (!actor) return c.text("Forbidden", 403);
+    if (!actor) {
+      if (expiredGuest) return bounceToLogin(c);
+      return c.text("Forbidden", 403);
+    }
     c.set("adminActor", actor);
+    // Moderator reads run the tab-sync probe, so an expiry mid-edit raises
+    // two:session-expired and the form island can keep the draft reachable.
+    if (c.req.method === "GET" && sessions) {
+      await enableAuthStatus(c, sessions, await hashToken(token));
+    }
 
     if (c.req.method === "GET" || c.req.method === "HEAD") {
       // Every admin read is observed, including a query added to an existing
