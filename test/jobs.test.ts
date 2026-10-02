@@ -9,7 +9,7 @@ import {
 import { consume } from "../src/jobs/consumer";
 import { reconcileEvents, runScheduled, type SingleFlight } from "../src/jobs/cron";
 import { trackingQueue } from "../src/jobs/ledger";
-import { dispatchSyncEvent, uniqueKey } from "../src/jobs/sync-event";
+import { dispatchSyncEvent, handleSyncEvent, uniqueKey } from "../src/jobs/sync-event";
 import { BotTransportError } from "../src/jobs/types";
 import type {
   BotClient,
@@ -68,8 +68,23 @@ function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[
   const mirrored: string[] = [];
   return {
     mirrored,
-    find: async () => ({ eventKey: "e1", payload, mirrored: true }),
-    recordMirrored: async (_k, id) => void mirrored.push(id),
+    prepareSync: async (_eventKey, idempotencyKey, mirroredAt) => ({
+      eventKey: "e1",
+      idempotencyKey,
+      mirroredAt,
+      revision: 1,
+      state: "pending",
+      requestAttempts: 0,
+      nextAttemptAt: new Date(0),
+      action: "event.upsert",
+      payload,
+    }),
+    claimSync: async (attempt) => ({ ...attempt, requestAttempts: attempt.requestAttempts + 1 }),
+    deferSync: async () => {},
+    completeSync: async (_attempt, id) => void mirrored.push(id),
+    failSync: async () => {},
+    needsSync: async () => false,
+    pendingSync: async () => null,
     closeFinished: async () => 0,
     materializeSeries: async () => 0,
     staleEventKeys: async () => [],
@@ -164,6 +179,93 @@ describe("SyncEventToDiscord", () => {
     expect(b.retried).toBeUndefined();
   });
 
+  for (const exhausted of [false, true]) {
+    it(`retries a failed explicit deadline write unchanged, including the exhausted null deadline (${exhausted})`, async () => {
+      const start = 1_000_000;
+      let clock = start;
+      const error = new Error("retry deadline unavailable");
+      const deferSync = vi
+        .fn<EventStore["deferSync"]>()
+        .mockImplementationOnce(async () => {
+          clock += 5000;
+          throw error;
+        })
+        .mockResolvedValue(undefined);
+      const events = store({
+        deferSync,
+        claimSync: async (attempt) => ({ ...attempt, requestAttempts: exhausted ? 6 : 1 }),
+      });
+      const bot = {
+        upsertEvent: vi.fn(async () => fail({ retryAfterSeconds: 42 })),
+      } as unknown as BotClient;
+      await expect(
+        handleSyncEvent({ eventKey: "e1", idempotencyKey: "same-key" }, 1, {
+          bot,
+          events,
+          now: () => new Date(clock),
+        }),
+      ).rejects.toBe(error);
+      const deadline = exhausted ? null : new Date(start + 42_000);
+      expect(deferSync.mock.calls.map(([, at]) => at)).toEqual([deadline, deadline]);
+      expect(
+        deferSync.mock.calls.map(([attempt]) => ({
+          key: attempt.idempotencyKey,
+          requests: attempt.requestAttempts,
+        })),
+      ).toEqual(Array(2).fill({ key: "same-key", requests: exhausted ? 6 : 1 }));
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      expect(events.mirrored).toEqual([]);
+    });
+  }
+
+  for (const exhausted of [false, true]) {
+    it(`carries the known absolute wait after two failed writes without renewing an exhausted request (${exhausted})`, async () => {
+      const start = 1_000_000;
+      let clock = start;
+      const error = new Error("retry result unavailable");
+      const deferSync = vi.fn<EventStore["deferSync"]>().mockImplementation(async () => {
+        clock += 5000;
+        throw error;
+      });
+      const events = store({
+        deferSync,
+        claimSync: async (attempt) => ({
+          ...attempt,
+          requestAttempts: exhausted ? 6 : 1,
+          nextAttemptAt: null,
+        }),
+      });
+      const bot = {
+        upsertEvent: vi.fn(async () => fail({ retryAfterSeconds: 42 })),
+      } as unknown as BotClient;
+      const carrier = msg({
+        kind: "sync-event",
+        eventKey: "e1",
+        idempotencyKey: "same-key",
+        jobId: "job",
+      });
+      const ledger = memLedger();
+      await consume(
+        { messages: [carrier] },
+        { bot, events, ledger, lock: memLock(), now: () => new Date(clock) },
+      );
+      expect(deferSync.mock.calls.map(([, at]) => at)).toEqual(
+        Array(2).fill(exhausted ? null : new Date(start + 42_000)),
+      );
+      expect(
+        deferSync.mock.calls.map(([attempt]) => ({
+          key: attempt.idempotencyKey,
+          requests: attempt.requestAttempts,
+        })),
+      ).toEqual(Array(2).fill({ key: "same-key", requests: exhausted ? 6 : 1 }));
+      expect(carrier.retried).toBe(exhausted ? undefined : 32);
+      expect(carrier.acked).toBe(exhausted);
+      expect(ledger.rows.get("job")!.state).toBe(exhausted ? "failed" : "released");
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      expect(events.mirrored).toEqual([]);
+    });
+  }
+
   it("duplicate delivery reuses the key and replays the original answer, mirroring once", async () => {
     const seen = new Map<string, string>();
     let created = 0;
@@ -190,7 +292,7 @@ describe("SyncEventToDiscord", () => {
       { messages: [m1] },
       {
         bot: noBot,
-        events: store({ find: async () => null }),
+        events: store({ prepareSync: async () => null }),
         lock: memLock(),
         ledger: memLedger(),
       },
@@ -199,7 +301,7 @@ describe("SyncEventToDiscord", () => {
       { messages: [m2] },
       {
         bot: noBot,
-        events: store({ find: async () => ({ eventKey: "e1", payload, mirrored: false }) }),
+        events: store({ prepareSync: async () => null }),
         lock: memLock(),
         ledger: memLedger(),
       },
@@ -375,6 +477,141 @@ describe("queue ledger (N3)", () => {
       await p;
       expect(m1.acked).toBe(true);
       expect(m2.acked).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a hung successor ledger is bounded, and its late insert never sends after expiry", async () => {
+    vi.useFakeTimers();
+    try {
+      let unblock!: () => void;
+      const occupied = new Promise<void>((resolve) => {
+        unblock = resolve;
+      });
+      const rows = new Set<string>();
+      const ledger: QueueLedger = {
+        enqueued: vi.fn(async ({ jobId }) => {
+          await occupied;
+          rows.add(jobId);
+        }),
+        reserved: async () => occupied,
+        released: async () => {},
+        dequeued: async (id) => {
+          await occupied;
+          rows.delete(id);
+        },
+        failed: async () => {},
+      };
+      const send = vi.fn(async () => {});
+      const lock = memLock();
+      const bot = {
+        upsertEvent: vi.fn(async () => ({ ok: true, requestId: null, discordEventId: "d1" })),
+      } as unknown as BotClient;
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" });
+      const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" });
+      const p = consume(
+        { messages: [first, second] },
+        {
+          bot,
+          events: store({ needsSync: async (key) => key === "e1" }),
+          lock,
+          ledger,
+          dispatchPending: (key, signal) =>
+            dispatchSyncEvent(
+              trackingQueue({ send }, ledger, undefined, signal),
+              lock,
+              key,
+              undefined,
+              signal,
+            ),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      await p;
+      expect(first.acked && second.acked).toBe(true);
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(2);
+      expect(ledger.enqueued).toHaveBeenCalledOnce();
+      expect(send).not.toHaveBeenCalled();
+      unblock(); // the timed-out insert may actually complete after ACK
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).not.toHaveBeenCalled();
+      expect(rows.size).toBe(0); // late insert compensated, not phantom depth
+      expect(lock.held.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an already-started successor send that completes late retains its ledger row", async () => {
+    vi.useFakeTimers();
+    try {
+      let accepted!: () => void;
+      const transport = new Promise<void>((resolve) => {
+        accepted = resolve;
+      });
+      const send = vi.fn(() => transport);
+      const lock = memLock();
+      const ledger = memLedger();
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1", jobId: "j1" });
+      const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2", jobId: "j2" });
+      const bot = {
+        upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }),
+      } as unknown as BotClient;
+      const p = consume(
+        { messages: [first, second] },
+        {
+          bot,
+          lock,
+          ledger,
+          events: store({ needsSync: async (key) => key === "e1" }),
+          dispatchPending: (key, signal) =>
+            dispatchSyncEvent(
+              trackingQueue({ send }, ledger, undefined, signal),
+              lock,
+              key,
+              undefined,
+              signal,
+            ),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(first.acked && second.acked).toBe(true);
+      expect(send).toHaveBeenCalledOnce();
+      expect(ledger.rows.size).toBe(1);
+      accepted();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ledger.rows.size).toBe(1); // acceptance is ambiguous until its consumer settles it
+      expect(lock.held.has(uniqueKey("e1"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a hung dirty check cannot hold terminal ACK or later messages", async () => {
+    vi.useFakeTimers();
+    try {
+      const first = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k1" });
+      const second = msg({ kind: "sync-event", eventKey: "e2", idempotencyKey: "k2" });
+      const dispatchPending = vi.fn(async () => {});
+      const bot = {
+        upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }),
+      } as unknown as BotClient;
+      const p = consume(
+        { messages: [first, second] },
+        {
+          bot,
+          lock: memLock(),
+          ledger: memLedger(),
+          dispatchPending,
+          events: store({ needsSync: () => new Promise<boolean>(() => {}) }),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      await p;
+      expect(first.acked && second.acked).toBe(true);
+      expect(dispatchPending).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

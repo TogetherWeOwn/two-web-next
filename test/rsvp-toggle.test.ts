@@ -4,15 +4,28 @@
 // route-inventory: POST /admin/events/:key/rsvp-reopen
 // Moderator pause/reopen uses the member RSVP lock and the existing sync seam.
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import postgres from "postgres";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { setRsvpOpen } from "../src/admin/store";
 import { newEventKey, ValidationError } from "../src/admin/validation";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import { uniqueKey } from "../src/jobs/sync-event";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
+
+// Keep the tracked producer real; native clients must stay in the owned schema.
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
+type SyncEventMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -97,25 +110,78 @@ describe.skipIf(!process.env.DATABASE_URL)(
   "RSVP pause/reopen (isolated agent-testdb schema)",
   () => {
     let fixture: MemberDataFixture;
-    const sent: SyncMessage[] = [];
+    let realPostgres: typeof postgres;
+    const sent: SyncEventMessage[] = [];
     const env = {
       ...baseEnv,
       get ADMIN_DB() {
         return fixture.db;
       },
-      EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+      get DB() {
+        return { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href };
+      },
+      SYNC_EVENT_QUEUE: {
+        send: async (m: SyncEventMessage, options?: { delaySeconds?: number }) => {
+          expect(options).toEqual({ delaySeconds: 10 });
+          sent.push(m);
+        },
+      },
     } as unknown as Env;
     beforeAll(async () => {
+      realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres")).default;
+      vi.mocked(postgres).mockImplementation(realPostgres);
       fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 10 });
+      vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}> = {}) => {
+        const safe = testDatabaseUrl(raw);
+        return realPostgres(safe.href, {
+          ...opts,
+          password: () => safe.password,
+          connection: { ...opts.connection, search_path: fixture.schemaName },
+        });
+      }) as typeof postgres);
     });
     beforeEach(async () => {
       await fixture.reset();
       await fixture.client`delete from web_throttle_hits`;
+      await completeQueuedDeliveries();
       sent.length = 0;
     });
     afterAll(async () => {
+      if (realPostgres) vi.mocked(postgres).mockImplementation(realPostgres);
       await fixture?.dispose();
     });
+
+    async function completeQueuedDeliveries() {
+      // Model completed deliveries, not just an empty queue-double capture: the
+      // tracked producer's unique lock otherwise absorbs the next logical write.
+      await fixture.client`delete from queue_jobs`;
+      await fixture.client`delete from job_unique_locks`;
+    }
+
+    async function assertTracked(eventKey: string) {
+      const delivery = sent.at(-1)!;
+      expect(delivery).toEqual({
+        kind: "sync-event",
+        eventKey,
+        idempotencyKey: expect.any(String),
+        jobId: expect.any(String),
+        leaseToken: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+        requestId: expect.any(String),
+      });
+      const [job] =
+        await fixture.client`select job_id, kind, key, available_at > created_at as delayed from queue_jobs`;
+      expect(job).toEqual({
+        job_id: delivery.jobId,
+        kind: "sync-event",
+        key: uniqueKey(eventKey),
+        delayed: true,
+      });
+      expect(await fixture.client`select key, owner_token from job_unique_locks`).toEqual([
+        { key: uniqueKey(eventKey), owner_token: delivery.leaseToken },
+      ]);
+    }
 
     const seed = async (over: Partial<typeof events.$inferInsert> = {}) => {
       const [row] = await fixture.db
@@ -151,6 +217,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const row = await seed();
       const path = `/events/${row.eventKey}`;
       expect((await request(`${path}/rsvp`, "PUT", false, { status: "going" })).status).toBe(201);
+      await completeQueuedDeliveries();
       sent.length = 0;
       const pause = await request(`${path}/rsvp-pause`);
       expect(pause.status).toBe(200);
@@ -171,6 +238,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(afterRepeat!.updatedAt).toEqual(beforeRepeat!.updatedAt);
       expect(sent).toHaveLength(1);
       expect(await audits()).toHaveLength(1);
+      await assertTracked(row.eventKey);
+      await completeQueuedDeliveries();
       const reopen = await request(`${path}/rsvp-reopen`);
       expect(reopen.status).toBe(200);
       expect(await reopen.json()).toMatchObject({
@@ -182,9 +251,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
         data: { rsvp_open: true, going_count: 1 },
       });
       expect(sent).toHaveLength(2);
-      expect(sent.every((m) => m.eventKey === row.eventKey && m.action === "event.upsert")).toBe(
-        true,
-      );
+      expect(sent.every((m) => m.eventKey === row.eventKey && m.kind === "sync-event")).toBe(true);
+      await assertTracked(row.eventKey);
       expect(sent[0]!.idempotencyKey).not.toBe(sent[1]!.idempotencyKey);
       expect((await audits()).map((a) => a.properties)).toEqual([
         { rsvpOpen: { before: true, after: false } },
@@ -248,6 +316,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(
           (await fixture.db.select().from(rsvps)).every((r) => r.status === "waitlisted"),
         ).toBe(true);
+        await completeQueuedDeliveries();
         sent.length = 0;
         const reopen = await request(`${prefix}/${row.eventKey}/rsvp-reopen`);
         expect(reopen.status).toBe(prefix === "/events" ? 200 : 303);
@@ -266,7 +335,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(repeat.status).toBe(prefix === "/events" ? 200 : 303);
         expect(await fixture.db.select().from(rsvps)).toEqual(answers);
         expect(sent).toHaveLength(1);
-        expect(sent[0]).toMatchObject({ eventKey: row.eventKey, action: "event.upsert" });
+        await assertTracked(row.eventKey);
         expect(await audits()).toHaveLength(2);
       },
     );
@@ -382,6 +451,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       );
       expect((await request(`/admin/events/${row.eventKey}/rsvp-pause`)).status).toBe(303);
       expect(sent).toHaveLength(1);
+      await completeQueuedDeliveries();
       expect((await request(`/admin/events/${row.eventKey}/rsvp-reopen`)).status).toBe(303);
       expect(sent).toHaveLength(2);
       for (const over of [

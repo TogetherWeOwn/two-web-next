@@ -8,11 +8,20 @@ import { randomUUID } from "node:crypto";
 import { serializeSigned } from "hono/utils/cookie";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
+
+// RSVP transaction/race tests isolate dispatch; event-writeback.test.ts proves
+// the real W13 producer, ledger and unique lock with a queue double.
+vi.mock("../src/jobs/worker", () => ({
+  enqueueSyncEvent: async (env: Env, message: QueueMessage) => {
+    await env.SYNC_EVENT_QUEUE!.send(message, { delaySeconds: 10 });
+    return true;
+  },
+}));
 import {
   createMemorySessionStore,
   hashToken,
@@ -72,7 +81,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   let client: ReturnType<typeof postgres>;
   let db: MemberDataFixture["db"];
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  const sent: QueueMessage[] = [];
   const env = {
     APP_URL,
     DISCORD_CLIENT_ID: "client-id",
@@ -85,7 +94,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       return db;
     },
     SESSION_STORE: store,
-    EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+    SYNC_EVENT_QUEUE: { send: async (m: QueueMessage) => void sent.push(m) },
   } as unknown as Env;
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 20 });
@@ -239,7 +248,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(await rows(ev.id)).toHaveLength(1);
     expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
     expect(await rows(ev.id)).toHaveLength(0);
-    expect(sent.map((m) => m.action)).toEqual(["event.upsert", "event.upsert", "event.upsert"]);
+    expect(sent.map((m) => m.kind)).toEqual(["sync-event", "sync-event", "sync-event"]);
   });
 
   it("withdraw is quiet without a row or an event, and never touches another member's row", async () => {
@@ -757,23 +766,32 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       expect((await put(ev.key, who, "going")).status).toBe(201);
       await client`delete from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
       let release!: () => void;
+      let ready!: () => void;
       const held = new Promise<void>((r) => (release = r));
+      const acquired = new Promise<void>((r) => (ready = r));
       const holder = client.begin(async (tx) => {
         await tx`select id from rsvps where event_id = ${ev.id} and user_id = ${who} for update`;
+        ready();
         await held;
       });
-      await new Promise((r) => setTimeout(r, 200));
+      await acquired;
       const pending = verb === "DELETE" ? call("DELETE", ev.key, who) : put(ev.key, who, "maybe");
-      await new Promise((r) => setTimeout(r, 1200));
-      const [tr] = await client`select clock_timestamp() as t`;
-      release();
-      await holder;
+      let releasedAt!: Date;
+      try {
+        expect(await waitForLock('%from "rsvps"%for update%')).toBe(true);
+        const [tr] = await client`select clock_timestamp() as t`;
+        releasedAt = new Date(tr!.t);
+      } finally {
+        release();
+        await holder;
+        await pending;
+      }
       expect((await pending).status).toBeLessThan(300);
       const [hit] =
         await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
-      expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
+      expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(releasedAt.getTime());
     }
-  });
+  }, 30_000);
   // Runs last (named zz_): after every delete, raw throttle statement and
   // lock holder in this file, the objects outside the owned schema must be
   // intact — the executable proof that cleanup stayed scoped. Two halves:

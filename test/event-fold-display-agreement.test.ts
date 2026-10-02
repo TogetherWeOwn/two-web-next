@@ -16,7 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -47,7 +47,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
     let env: Env;
     // Late-bound clock: the default captures the real Date.now before the fake.
     const store = createMemorySessionStore(() => Date.now());
-    const sent: SyncMessage[] = [];
+    // The queue is incidental here (never asserted); the binding name must still
+    // match what the producers read so writes exercise the real enqueue path.
+    const sent: Extract<QueueMessage, { kind: "sync-event" }>[] = [];
 
     beforeAll(async () => {
       fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
@@ -61,7 +63,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
         DISCORD_BOT_TOKEN: "bot-token",
         ADMIN_DB: fixture.db,
         SESSION_STORE: store,
-        EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
+        SYNC_EVENT_QUEUE: {
+          send: async (message: Extract<QueueMessage, { kind: "sync-event" }>) =>
+            void sent.push(message),
+        },
       } as unknown as Env;
     });
     afterAll(async () => {
@@ -151,7 +156,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(page.status).toBe(200);
         const html = await page.text();
         const time = html.match(
-          new RegExp(`<p>\\s*<time datetime="${iso}">([^<]*)</time>\\s*</p>`),
+          new RegExp(`<dd>\\s*<time datetime="${iso}">([^<]*)</time>\\s*</dd>`),
         );
         expect(time, "show-page <time> carries the stored instant").not.toBeNull();
         // Visible text is the host-zone wall clock of that instant.

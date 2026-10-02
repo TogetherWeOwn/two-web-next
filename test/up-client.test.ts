@@ -33,33 +33,39 @@ const clientWithEnd = (options: Parameters<typeof healthSql>[0] = {}) =>
 describe("/up database selection (offline)", () => {
   afterEach(() => factory.mockReset());
 
+  // The queue producers/consumer select DATABASE_URL first (src/jobs/worker.ts),
+  // so the ledger /up counts is the one they write: one client, never the binding.
   it.each([true, false])(
-    "readiness follows DATABASE_URL, not the opposite DB binding health (web down: %s)",
+    "readiness and queue follow DATABASE_URL, not the DB binding (web down: %s)",
     async (webDown) => {
-      const web = clientWithEnd({ ping: webDown ? new Error("web unavailable") : undefined });
-      const binding = clientWithEnd({
-        ping: webDown ? undefined : new Error("binding unavailable"),
-        queue: webDown ? [queueRow] : new Error("binding unavailable"),
+      const web = clientWithEnd({
+        ping: webDown ? new Error("web unavailable") : undefined,
+        queue: [queueRow],
       });
+      const binding = clientWithEnd({ queue: [queueRow] });
       factory.mockImplementation((url) => (url === webUrl ? web : binding));
       const res = await app.request("/up", {}, { ...env, DATABASE_URL: webUrl });
       expect(res.status).toBe(webDown ? 503 : 200);
       expect(await res.json()).toMatchObject({
         db: webDown ? "error" : "ok",
         pending_migrations: webDown ? null : 0,
-        queue: webDown
-          ? { status: "degraded", ...queueRow, warn_at: 20, critical_at: 100, detail: null }
-          : { status: "unknown", pending: null, total: null, detail: null },
+        queue: { status: "degraded", ...queueRow, warn_at: 20, critical_at: 100, detail: null },
       });
-      expect(factory.mock.calls.map(([url]) => url)).toEqual([webUrl, env.DB!.connectionString]);
+      expect(factory).toHaveBeenCalledExactlyOnceWith(webUrl, {
+        max: 2,
+        idle_timeout: 10,
+        connect_timeout: 3,
+        fetch_types: false,
+      });
       expect(web.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
-      expect(binding.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
+      expect(binding.end).not.toHaveBeenCalled();
     },
   );
 
-  it("counts the selected web ledger even when the binding ledger is fully migrated", async () => {
+  it("counts the selected web ledger and its queue, not the binding's", async () => {
     const web = clientWithEnd({
       migrations: WEB_MIGRATIONS.slice(1).map(({ when }) => ({ created_at: String(when) })),
+      queue: [{ ...queueRow, pending: 3, total: 3 }],
     });
     const binding = clientWithEnd({ queue: [queueRow] });
     factory.mockImplementation((url) => (url === webUrl ? web : binding));
@@ -68,7 +74,7 @@ describe("/up database selection (offline)", () => {
     expect(await res.json()).toMatchObject({
       db: "ok",
       pending_migrations: 1,
-      queue: { pending: 25 },
+      queue: { pending: 3 },
     });
   });
 
@@ -83,35 +89,18 @@ describe("/up database selection (offline)", () => {
     expect(await res.json()).toMatchObject({
       db: "error",
       pending_migrations: null,
-      queue: { pending: 25 },
+      queue: { status: "unknown", pending: null, detail: "queue ledger is not configured." },
     });
-    expect(factory.mock.calls.map(([url]) => url)).toEqual(["not a url", env.DB!.connectionString]);
-    expect(binding.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
+    expect(factory.mock.calls.map(([url]) => url)).toEqual(["not a url"]);
+    expect(binding.end).not.toHaveBeenCalled();
   });
 
-  it("a malformed queue binding does not fail a ready selected web database", async () => {
-    const web = clientWithEnd();
-    factory.mockImplementation((url) => {
-      if (url === webUrl) return web;
-      throw new Error("malformed queue binding");
-    });
-    const res = await app.request("/up", {}, { ...env, DATABASE_URL: webUrl });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({
-      db: "ok",
-      pending_migrations: 0,
-      queue: { status: "unknown", detail: "queue ledger is not configured." },
-    });
-    expect(web.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
-  });
-
-  it("separate hung DB and queue clients still answer at 3 s without waiting for either cleanup", async () => {
+  it("a hung DB ping and hung queue read on the selected client still answer at 3 s", async () => {
     vi.useFakeTimers();
     const never = () => new Promise<Record<string, unknown>[]>(() => {});
-    const web = Object.assign(healthSql({ ping: never }), { end: vi.fn(never) });
-    const binding = Object.assign(healthSql({ queue: never }), { end: vi.fn(never) });
+    const web = Object.assign(healthSql({ ping: never, queue: never }), { end: vi.fn(never) });
     const waitUntil = vi.fn();
-    factory.mockImplementation((url) => (url === webUrl ? web : binding));
+    factory.mockReturnValue(web);
     try {
       const response = app.request(
         "/up",
@@ -127,12 +116,12 @@ describe("/up database selection (offline)", () => {
         pending_migrations: null,
         queue: { status: "unknown" },
       });
-      expect(factory).toHaveBeenCalledTimes(2);
-      for (const [, options] of factory.mock.calls)
-        expect(options).toMatchObject({ max: 1, connect_timeout: 3 });
+      expect(factory).toHaveBeenCalledExactlyOnceWith(
+        webUrl,
+        expect.objectContaining({ max: 2, connect_timeout: 3 }),
+      );
       expect(web.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
-      expect(binding.end).toHaveBeenCalledExactlyOnceWith({ timeout: 0 });
-      expect(waitUntil).toHaveBeenCalledTimes(2);
+      expect(waitUntil).toHaveBeenCalledOnce();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
