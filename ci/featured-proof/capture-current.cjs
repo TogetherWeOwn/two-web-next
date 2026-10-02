@@ -139,12 +139,15 @@ async function main() {
               const header = page.locator('thead th').nth(column.index);
               await header.evaluate(el => {
                 const region = el.closest('[data-testid="featured-table-scroll"]');
-                region.scrollLeft += el.getBoundingClientRect().left - region.getBoundingClientRect().left;
+                // Snap to a whole device pixel: identical geometry recorded scrollLeft 548
+                // vs 549 across runs, flipping the 0.5px edge check without moving the column.
+                region.scrollLeft = Math.round(region.scrollLeft + el.getBoundingClientRect().left - region.getBoundingClientRect().left);
               });
               check(`${column.name} column reachable inside scroll region`, await header.evaluate(el => {
                 const region = el.closest('[data-testid="featured-table-scroll"]').getBoundingClientRect();
                 const rect = el.getBoundingClientRect();
-                return rect.left >= region.left - 0.5 && rect.right <= region.right + 0.5;
+                const tolerancePx = 1.5;
+                return rect.left >= region.left - tolerancePx && rect.right <= region.right + tolerancePx;
               }));
               const filename = `list-${column.name}-${viewport.width}x${viewport.height}.png`;
               await page.screenshot({ path: path.join(output, filename), fullPage: true });

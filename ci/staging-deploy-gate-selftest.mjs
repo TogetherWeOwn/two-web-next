@@ -532,7 +532,12 @@ test("workflow wires the tested gate before both mutations and preserves staging
   );
   assert.match(workflow, /github.event.workflow_run.conclusion == 'success'/);
   assert.match(workflow, /contents: read\n  actions: read/);
-  assert.match(workflow, /runs-on: \[self-hosted, two-selfhosted\]/);
+  assert.ok(
+    workflow.includes(
+      "runs-on: ${{ github.event.repository.private && fromJSON('[\"self-hosted\",\"two-selfhosted\"]') || 'ubuntu-latest' }}",
+    ),
+    "Private repo deploys on the self-hosted fleet; public repo on GitHub-hosted",
+  );
   assert.match(workflow, /container:\n      image: node:24-bookworm/);
   assert.match(
     workflow,

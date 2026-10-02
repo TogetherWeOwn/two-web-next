@@ -146,6 +146,7 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
 }
 
 export const feedUrl = (appUrl: string) => `${feedBase(appUrl)}/events.ics`;
+export const rssUrl = (appUrl: string) => `${feedBase(appUrl)}/events.rss`;
 export const webcalUrl = (appUrl: string) => feedUrl(appUrl).replace(/^https?:\/\//, "webcal://");
 
 /** RFC3986 query encoding, like PHP_QUERY_RFC3986. */

@@ -15,11 +15,27 @@ export function contentExpectations(scenario) {
       })),
     ];
   }
+  if (scenario.route === "/e/:key" && scenario.status === 200) {
+    return [
+      {
+        selector: ".event-hero h1",
+        attributes: { "data-waitlist-position": scenario.state === "waitlisted" ? "1" : "" },
+      },
+      {
+        selector: '[data-testid="event-attendees"]',
+        count: scenario.identity === "guest" || scenario.identity === "moderator" ? 0 : 1,
+      },
+      {
+        selector: '[data-testid="event-join-pitch"]',
+        count: scenario.identity === "guest" ? 1 : 0,
+      },
+    ];
+  }
   if (["/__a11y/404", "/__a11y/404-empty"].includes(scenario.route)) {
     const empty = scenario.route === "/__a11y/404-empty";
     const suggestions = '[data-testid="error-event-suggestions"]';
     return [
-      { selector: `${suggestions} .card`, count: empty ? 0 : 1 },
+      { selector: `${suggestions} .card`, count: empty ? 0 : 2 },
       ...(empty
         ? [
             {
@@ -28,10 +44,14 @@ export function contentExpectations(scenario) {
             },
           ]
         : [
+            { selector: `${suggestions} .card > a`, count: 2 },
             {
-              selector: `${suggestions} .card > a`,
+              selector: `${suggestions} .card > a[href="/e/01J00000000000000000000015"]`,
               text: "Friday night games",
-              attributes: { href: "/e/01J00000000000000000000015" },
+            },
+            {
+              selector: `${suggestions} .card > a[href="/e/01J00000000000000000000019"]`,
+              text: "Full co-op night",
             },
           ]),
       { selector: ".error-events-search input", attributes: { name: "q" } },

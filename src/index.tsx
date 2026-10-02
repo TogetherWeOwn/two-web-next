@@ -26,6 +26,7 @@ import {
   isProviderOutage,
 } from "./discord";
 import { databaseOptions, databaseUrl } from "./db/connection";
+import { isDatabaseUnavailable } from "./db/errors";
 import { migrateRoster, upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
@@ -58,7 +59,7 @@ import {
   takeJoinResult,
 } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
+import { configReadiness, upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
@@ -303,7 +304,10 @@ async function readSession(
       ...row,
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
     })
-    .catch(() => false);
+    .catch((err) => {
+      if (isDatabaseUnavailable(err)) throw err;
+      return false;
+    });
   if (!rotated) return null;
   await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
@@ -337,11 +341,15 @@ const NOTICES = new Set([
 
 app.get("/", async (c) => {
   // A DB outage must not break the funnel, including session setup. Fail closed to guest.
-  const session = await readSession(c).catch(() => {
+  let sessionUnavailable = false;
+  const session = await readSession(c).catch((err) => {
+    // Keep the opaque session-failure fallback, not named non-outage exceptions.
+    if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
     // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
     console.warn("Home session unavailable; serving as guest.", {
       exception: "SessionReadFailure",
     });
+    sessionUnavailable = true;
     return null;
   });
   const n = c.req.query("n");
@@ -371,6 +379,7 @@ app.get("/", async (c) => {
   return c.html(
     <Home
       session={session}
+      sessionUnavailable={sessionUnavailable}
       notice={notice}
       joinResult={joinResult}
       inviteUrl={c.env.DISCORD_INVITE_URL}
@@ -503,8 +512,9 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
-// `GET /up` — session-free DB/schema readiness plus the existing queue signal.
-// DB/ledger failure or pending web migrations answers 503; queue-only degraded
+// `GET /up` — session-free DB/schema and secret-presence readiness plus the
+// existing queue signal. A missing required secret, DB/ledger failure or
+// pending web migrations answers 503; queue-only degraded
 // or unknown remains 200. `no-store` so a monitor never reads a stale response.
 // Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
@@ -547,6 +557,7 @@ app.get("/up", async (c) => {
     const body = await upBody(
       queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null,
       sql,
+      configReadiness(c.env),
     );
     return c.json(body, upHttpStatus(body));
   } finally {
@@ -714,12 +725,18 @@ app.post(
   throttle("logout", WRITE_THROTTLE_PER_MINUTE),
   requestBodyLimit("action"),
   async (c) => {
-    const store = await storeFor(c);
+    // The route-scoped same-origin guard runs before throttling or session storage.
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+    // No bearer: nothing to revoke — clear cookies and leave without touching
+    // session storage (stays 303 when the store is down; main #239 pins the
+    // authoritative 503 only for a presented token whose revocation fails).
     if (token) {
       try {
+        const store = await storeFor(c);
         await store.revoke(await hashToken(token));
       } catch {
+        // Authoritative, not best-effort: a failed revocation must not clear
+        // this browser's cookie as if the server row were gone.
         return c.text("Sign-out temporarily unavailable", 503);
       }
     }

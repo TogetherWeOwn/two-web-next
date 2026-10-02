@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // TOG-11811: runners are the throughput ceiling, so a superseded PR push must
-// cancel its own runs. Deploy and release runs must never be cancelled midway.
+// cancel its own runs. Deploy, rollback and release runs must never be cancelled midway.
 const dir = ".github/workflows";
 const workflows = readdirSync(dir)
   .filter((name) => name.endsWith(".yml"))
@@ -24,8 +24,8 @@ describe("workflow concurrency", () => {
     expect(pr.filter(({ text }) => !cancels(text)).map(({ name }) => name)).toEqual([]);
   });
 
-  it("never cancels deploy or release runs", () => {
-    const protectedRuns = workflows.filter(({ name }) => /^(deploy|release)/.test(name));
+  it("never cancels deploy, rollback or release runs", () => {
+    const protectedRuns = workflows.filter(({ name }) => /^(deploy|rollback|release)/.test(name));
     expect(protectedRuns.length).toBeGreaterThan(1);
     expect(
       protectedRuns
