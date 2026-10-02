@@ -4,20 +4,16 @@ import type { JobsEnv } from "../env";
 import { migrate as migrateSessions, type Sql as SessionSql } from "../sessions";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
+import { pgEventStore } from "./event-store-pg";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
-import type { BotClient, EventStore } from "./types";
+import type { BotClient } from "./types";
 
-// The events tables (W8) and the Rust bot client (ADR pending) do not exist yet. Until
-// they do these adapters refuse loudly: a queue message must retry, never be acked as done by a stub.
+// The Rust bot client (ADR pending) does not exist yet. Until it does this
+// adapter refuses loudly: a queue message must retry, never be acked as done
+// by a stub. The EventStore below is the real pg adapter (TOG-11660); an
+// unconfigured DB still fails loudly out of sqlFor, never acks.
 const notWired = (what: string) => () => Promise.reject(new Error(`${what} not wired yet`));
-const events: EventStore = {
-  find: notWired("EventStore.find"),
-  recordMirrored: notWired("EventStore.recordMirrored"),
-  closeFinished: notWired("EventStore.closeFinished"),
-  materializeSeries: notWired("EventStore.materializeSeries"),
-  staleEventKeys: notWired("EventStore.staleEventKeys"),
-};
 const bot: BotClient = {
   upsertEvent: notWired("BotClient.upsertEvent"),
   postAnnouncement: notWired("BotClient.postAnnouncement"),
@@ -43,7 +39,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
   try {
     await consume(batch, {
       bot,
-      events,
+      events: pgEventStore(sql),
       lock: pgUniqueLock(sql),
       ledger: pgQueueLedger(ledgerSql),
       probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
@@ -73,11 +69,12 @@ export async function handleScheduled(
     // advisory-lock transaction.
     await migrateSessions(sql as unknown as SessionSql);
     await runScheduled(controller.cron, pgSingleFlight(sql), {
-      // Prune queries use the reserved client (outer max:1 pool would deadlock).
-      // Reconcile's dispatch side effects use an independent autocommit pool.
-      reconcile: () =>
+      // Prune and reconcile-event queries use the reserved client (outer
+      // max:1 pool would deadlock). Reconcile's dispatch side effects use an
+      // independent autocommit pool.
+      reconcile: (db) =>
         reconcileEvents({
-          events,
+          events: pgEventStore(db),
           queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
           lock: pgUniqueLock(dispatchSql),
         }),

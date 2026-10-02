@@ -15,8 +15,9 @@ type Sql = ReturnType<typeof postgres>;
  * series materialisation re-expresses `materializeMissingInstances`
  * (src/admin/store.ts) on raw rows instead of reusing it.
  *
- * No wiring here: `src/jobs/worker.ts` keeps its not-wired stubs until the
- * follow-up lands after PR #68.
+ * Wired in `src/jobs/worker.ts` (TOG-12444): both the queue consumer and the
+ * scheduled reconcile pass build their store from this adapter. The BotClient
+ * there stays a loud stub until its own slice lands.
  */
 export function pgEventStore(sql: TxClient | Sql): EventStore {
   return {
