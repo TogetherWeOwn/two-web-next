@@ -76,6 +76,10 @@
     {
       "path": "drizzle/1017_queue_failed_job_identity.sql",
       "sha256": "0d9ff9974410a51c700904c24b2e1e5cb178287048a5053b2e70541abf4ac6b5"
+    },
+    {
+      "path": "drizzle/1018_audit-immutability.sql",
+      "sha256": "faf1591b387c3f515d6627e36c3f9085ed6248b2a98b16cb9bd77bd1ae119866"
     }
   ]
 }
