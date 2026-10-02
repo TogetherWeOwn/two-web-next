@@ -58,6 +58,8 @@ describe("mounted route same-origin audit", () => {
       { method: "POST", path: "/csp-reports" },
     ]);
     expect(guarded.length).toBeGreaterThan(0);
+    // The QA alert probe is a guarded write, not a machine-ingress exemption.
+    expect(guarded).toContainEqual({ method: "POST", path: "/__probe/alert" });
   });
 
   it("detects an unsafe handler registered before the guard", () => {

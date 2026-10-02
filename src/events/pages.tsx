@@ -1,5 +1,5 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
-import { Layout } from "../pages";
+import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
 import {
   CALENDAR_DAY_TESTID,
@@ -45,7 +45,6 @@ import {
   EVENTS_SEARCH_STATUS_TESTID,
   EVENTS_SEARCH_TESTID,
   EVENTS_SUBSCRIBE_TESTID,
-  EVENTS_SUBSCRIBE_URL,
   EVENTS_VIEW_CALENDAR_TESTID,
   EVENTS_VIEW_GROUP_LABEL,
   EVENTS_VIEW_LIST_TESTID,
@@ -87,8 +86,9 @@ import { loginUrl } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
-import { googleCalendarUrl } from "./feeds";
-import type { EventAttendee, EventLink, EventNeighbors, PublicEvent } from "./reads";
+import { feedUrl, googleCalendarUrl, webcalUrl } from "./feeds";
+import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
+import { RsvpButton } from "./rsvp-button";
 
 const fmt = (d: Date, tz: string): string => {
   try {
@@ -128,16 +128,42 @@ const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: 
   </Layout>
 );
 
+const ScheduleShell: FC<PropsWithChildren<{
+  title: string; canonical: string; description?: string; robots?: string; member?: boolean; loginReturnTo?: string | null;
+}>> = ({ title, canonical, description, robots, member, loginReturnTo, children }) => (
+  <Layout title={`${title} — Together We Own`} canonical={canonical} shareDescription={description} robots={robots} theme="schedule">
+    <SiteHeader active="events" loginReturnTo={loginReturnTo}>
+      {member ? <a class="btn" href="/discord">Open Discord</a> : undefined}
+    </SiteHeader>
+    <main class="events-page" id="main" tabindex={-1}>{children}</main>
+    <SiteFooter />
+  </Layout>
+);
+
+const ScheduleDate: FC<{ date: Date; zone: string }> = ({ date, zone }) => {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", timeZone: zone }).formatToParts(date);
+  } catch {
+    parts = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", timeZone: "UTC" }).formatToParts(date);
+  }
+  return (
+    <span class="schedule-date" aria-hidden="true">
+      <span>{parts.find((p) => p.type === "month")?.value}</span>
+      <strong>{parts.find((p) => p.type === "day")?.value}</strong>
+    </span>
+  );
+};
+
 const Card: FC<{ e: PublicEvent }> = ({ e }) => (
-  <li data-testid="event-card" data-event-key={e.eventKey}>
-    <h2>
-      <a href={`/e/${e.eventKey}`}>{e.title}</a>
-    </h2>
-    <p>
-      <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
-      {e.game ? ` · ${e.game}` : ""}
-    </p>
-    <p>{goingCountText(e.goingCount, e.capacity)}</p>
+  <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
+    <ScheduleDate date={e.startsAt} zone={e.timezone} />
+    <div class="schedule-info">
+      <h2><a href={`/e/${e.eventKey}`}>{e.title}</a></h2>
+      <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time></p>
+      {e.game ? <p>{e.game}</p> : null}
+    </div>
+    <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
   </li>
 );
 
@@ -167,40 +193,31 @@ const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; i
   const transient = isTransient(e);
   return (
     <li>
-      <article id={`event-${rowKey(e)}`} data-event-key={rowKey(e)} data-testid={EVENT_CARD_TESTID} tabindex={-1}>
-        <h3>{transient ? rowTitle(e) : <a href={`/e/${e.eventKey}`}>{rowTitle(e)}</a>}</h3>
-        {!transient && e.game ? <p>{e.game}</p> : null}
-        {!transient && e.status === "draft" ? <span data-testid={EVENT_DRAFT_TESTID}>Draft</span> : null}
-        {!transient && e.status === "cancelled" ? <span data-testid={EVENT_CANCELLED_TESTID}>Cancelled</span> : null}
-        {!transient ? (
-          <span data-testid="event-going-count">{goingCountText(e.goingCount, e.capacity)}</span>
-        ) : null}
-        <p>
-          <time datetime={e.startsAt.toISOString()}>{cardTimeLabel(e.startsAt, tz)}</time>
-          {e.endsAt ? <>{" · "}<span>{wallTimeHm(e.endsAt, tz)}</span></> : null}
-          {" "}
-          <span>{tz}</span>
-          {rowLocation(e) ? (
-            <>
-              {" · "}
-              <span>{rowLocation(e)}</span>
-            </>
+      <article class="schedule-row" id={`event-${rowKey(e)}`} data-event-key={rowKey(e)} data-testid={EVENT_CARD_TESTID} tabindex={-1}>
+        <ScheduleDate date={e.startsAt} zone={tz} />
+        <div class="schedule-info">
+          <h3>{transient ? rowTitle(e) : <a href={`/e/${e.eventKey}`}>{rowTitle(e)}</a>}</h3>
+          {!transient && e.game ? <p>{e.game}</p> : null}
+          {!transient && e.status === "draft" ? <span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>Draft</span> : null}
+          {!transient && e.status === "cancelled" ? <span class="schedule-badge" data-testid={EVENT_CANCELLED_TESTID}>Cancelled</span> : null}
+          <p>
+            <time datetime={e.startsAt.toISOString()}>{cardTimeLabel(e.startsAt, tz)}</time>
+            {e.endsAt ? <>{" · "}<span>{wallTimeHm(e.endsAt, tz)}</span></> : null}
+            {" "}<span>{tz}</span>
+            {rowLocation(e) ? <>{" · "}<span>{rowLocation(e)}</span></> : null}
+          </p>
+          {e.description ? <p>{e.description}</p> : null}
+        </div>
+        <div class="schedule-actions">
+          {!transient ? (
+            <span class="schedule-attendance" data-testid="event-going-count">{goingCountText(e.goingCount, e.capacity)}</span>
           ) : null}
-        </p>
-        {e.description ? <p>{e.description}</p> : null}
-        {isPast ? null : transient ? (
-          <p>
-            <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>
-              {EVENTS_EMPTY_COPY.discordRsvp}
-            </a>
-          </p>
-        ) : member ? null : (
-          <p>
-            <a href={loginUrl(loginReturnTo)} data-testid="signin">
-              {EVENTS_EMPTY_COPY.signIn}
-            </a>
-          </p>
-        )}
+          {isPast ? null : transient ? (
+            <a href={inviteUrl} data-testid={EVENT_DISCORD_RSVP_TESTID}>{EVENTS_EMPTY_COPY.discordRsvp}</a>
+          ) : member ? null : (
+            <a href={loginUrl(loginReturnTo)} data-testid="signin">{EVENTS_EMPTY_COPY.signIn}</a>
+          )}
+        </div>
       </article>
     </li>
   );
@@ -274,8 +291,8 @@ const MonthGrid: FC<{ state: CalendarState; weeks: CalendarDay<CalRow>[][]; zone
   weeks,
   zone,
 }) => (
-  <div>
-    <p>
+  <div class="schedule-month">
+    <p class="schedule-month-nav">
       <a href={calendarUrl({ ...state, month: addCalendarMonth(state.month, -1) })} aria-label={CALENDAR_PREV_LABEL}>
         ←
       </a>{" "}
@@ -365,7 +382,7 @@ export const EventsCalendarPage: FC<{
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
   return (
-    <Shell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on.">
+    <ScheduleShell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on." member={member} loginReturnTo={loginReturnTo}>
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
@@ -375,9 +392,12 @@ export const EventsCalendarPage: FC<{
         data-load-error={EVENTS_CALENDAR_FETCH_FAILED}
         aria-labelledby="events-heading"
       >
-        <h1 id="events-heading" tabindex={-1}>
-          Events
-        </h1>
+        <div class="schedule-heading">
+          <p class="strap">Community schedule</p>
+          <h1 id="events-heading" tabindex={-1}>Events</h1>
+          <p>Game nights, tournaments and whatever else the community puts on.</p>
+          {!member ? <a class="btn" href={loginReturnTo ? `/join?next=${encodeURIComponent(loginReturnTo)}` : "/join"}>Join the Discord</a> : null}
+        </div>
         {/* One-shot join confirmation (legacy join_result): /events is the
             join landing when the CTA carried next=/events. Renders outside the
             island zones so fragment swaps never swallow it. */}
@@ -399,7 +419,7 @@ export const EventsCalendarPage: FC<{
         </p>
 
         <div data-cal-zone="head">
-          <div role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
+          <div class="schedule-views" role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
             <a
               href={calendarUrl({ ...state, view: "list" })}
               aria-current={state.view === "list" ? "page" : undefined}
@@ -419,9 +439,11 @@ export const EventsCalendarPage: FC<{
             <a href="/events/past" data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>
               {EVENTS_EMPTY_COPY.pastArchive}
             </a>{" "}
-            <a href={EVENTS_SUBSCRIBE_URL} data-testid={EVENTS_SUBSCRIBE_TESTID}>
+            <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
               {EVENTS_EMPTY_COPY.subscribe}
-            </a>
+            </a>{" "}
+            <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>{" "}
+            <a href="/events.rss">RSS feed</a>
           </p>
         </div>
 
@@ -440,6 +462,7 @@ export const EventsCalendarPage: FC<{
             aria-label={EVENTS_SEARCH_LABEL}
             data-testid={EVENTS_SEARCH_TESTID}
           />
+          <button class="btn" type="submit">Search</button>
           <span data-cal-zone="actions">
             {state.past ? <input type="hidden" name="past" value="1" /> : null}
             {searching ? (
@@ -505,14 +528,18 @@ export const EventsCalendarPage: FC<{
         <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }} />
       </section>
       <script src="/islands/events-calendar.js" defer />
-    </Shell>
+    </ScheduleShell>
   );
 };
 
 export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string }> = ({ rows, page, hasMore, totalPages, appUrl }) => (
-  <Shell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} robots="noindex, follow">
+  <ScheduleShell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} description="Look back at the community’s game nights and tournaments." robots="noindex, follow" loginReturnTo={pastEventsUrl(page)}>
     <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
-      <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
+      <div class="schedule-heading">
+        <p class="strap">The archive</p>
+        <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
+        <p>Game nights we’ve shared. Find the next one in the upcoming schedule.</p>
+      </div>
       <div data-archive-state>
         {rows.length === 0 ? (
           totalPages === 0 ? (
@@ -536,7 +563,7 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
       <p role="status" data-archive-feedback></p>
     </section>
     <script src="/islands/past-events.js" defer />
-  </Shell>
+  </ScheduleShell>
 );
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
@@ -554,7 +581,8 @@ export const EventPage: FC<{
   session?: Session | null;
   joinResult?: JoinResult | null;
   waitlistPosition?: number | null;
-}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, joinResult, waitlistPosition }) => {
+  member?: boolean; answer?: ViewerRsvp | null; returnTo?: string;
+}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, joinResult, waitlistPosition, member = false, answer = null, returnTo }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   return (
@@ -603,10 +631,13 @@ export const EventPage: FC<{
           <ul>{attendees.map((attendee) => (
             <li><a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a></li>
           ))}</ul>
+          <p>Attendees shown at page load. <a href={path} data-testid="event-attendees-refresh">Refresh attendees</a>.</p>
         </section>
       ) : null}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/going-count.js" defer />
+      <RsvpButton e={e} member={member} answer={answer} waitlistPosition={waitlistPosition} returnTo={returnTo ?? path} />
+      <script src="/islands/rsvp-button.js" defer />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
       {neighbors.previous || neighbors.next ? (
         <nav aria-label="More events" data-testid="event-pagination">
@@ -650,11 +681,13 @@ export const EventPage: FC<{
   );
 };
 
-export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonLd }) => (
+export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string; returnTo?: string }> = ({ e, jsonLd, returnTo }) => (
   <Shell title={e.title} robots="noindex, nofollow">
     <p class="notice" data-testid="event-cancelled">Cancelled</p>
     <h1>{e.title}</h1>
     <p>This event was cancelled</p>
+    <RsvpButton e={e} member={false} answer={null} returnTo={returnTo ?? `/e/${e.eventKey}`} />
+    <script src="/islands/rsvp-button.js" defer />
     <p><a href="/events">See upcoming events</a></p>
     <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>

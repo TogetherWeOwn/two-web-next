@@ -247,6 +247,25 @@ export async function listRelatedEvents(
   return rows.filter((event) => Number.isFinite(event.startsAt.getTime()));
 }
 
+/** Viewer answer for the RSVP island (TOG-9839 slice 2): the caller's own row
+ * only — keyed on the session user, never another member's. Null when the
+ * viewer has not answered. Waitlist copy uses the null-position fallback:
+ * there is no position column and no waitlist-count query. */
+export type ViewerRsvp = { status: string; syncedToDiscordAt: Date | null };
+export async function getViewerRsvp(db: Db, eventId: number, userId: string): Promise<ViewerRsvp | null> {
+  // Keyed like every other member projection: inside main's keyed-read
+  // boundary (#145) the observer consumes the single permitted query and
+  // attributes the caller's own user_id before the response is released.
+  // The where-clause pins the row to the session user, so a populated
+  // viewers' list contains exactly the caller and the boundary's subject
+  // accounting matches the caller's own key.
+  const [row] = await keyedMemberRead(() => db
+    .select({ userId: rsvps.userId, status: rsvps.status, syncedToDiscordAt: rsvps.syncedToDiscordAt })
+    .from(rsvps)
+    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.userId, userId))));
+  return row ? { status: row.status, syncedToDiscordAt: row.syncedToDiscordAt } : null;
+}
+
 export type EventAttendee = { id: string; name: string };
 
 /** Member-only projection, never part of PublicEvent or the feeds/JSON. */
@@ -266,13 +285,16 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
 export async function listJson(
   db: Db,
   opts: { limit: number; offset: number; includeDrafts: boolean; eventKey?: string },
-): Promise<PublicEvent[]> {
+): Promise<{ rows: PublicEvent[]; total: number }> {
   const visible = opts.includeDrafts ? sql`true` : inArray(events.status, ["published", "cancelled", "past"]);
   const match = opts.eventKey === undefined ? undefined : eq(events.eventKey, opts.eventKey);
-  const rows = await db.select().from(events).where(and(visible, match)).orderBy(desc(events.startsAt)).limit(opts.limit).offset(opts.offset);
+  const predicate = and(visible, match);
+  const [total] = await db.select({ n: count() }).from(events).where(predicate);
+  const rows = await db.select().from(events).where(predicate).orderBy(asc(events.startsAt), asc(events.id)).limit(opts.limit).offset(opts.offset);
   // `eventJson` serializes both boundaries unguarded (`toISOString()`), so a
   // poison row would 500 the whole member collection instead of dropping out.
-  return withGoing(db, rows.filter(isRenderableEventWindow));
+  // Like `listPast`, the total still counts it so page boundaries stay stable.
+  return { rows: await withGoing(db, rows.filter(isRenderableEventWindow)), total: Number(total?.n ?? 0) };
 }
 
 export async function sitemapEvents(db: Db): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {

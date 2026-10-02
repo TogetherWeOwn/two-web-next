@@ -1,0 +1,33 @@
+name: backup-bootstrap-selftest
+
+on:
+  pull_request:
+    paths:
+      - bin/backup-bootstrap.sh
+      - ci/backup-bootstrap-selftest
+      - .github/workflows/neon-backup.yml
+      - .github/workflows/backup-bootstrap-selftest.yml
+  push:
+    branches: [main]
+    paths:
+      - bin/backup-bootstrap.sh
+      - ci/backup-bootstrap-selftest
+      - .github/workflows/neon-backup.yml
+      - .github/workflows/backup-bootstrap-selftest.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bootstrap-selftest:
+    runs-on: [self-hosted, two-selfhosted]
+    container: python:3.13-bookworm
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Offline PGDG bootstrap regressions (no secrets or host provisioning)
+        run: python3 ci/backup-bootstrap-selftest

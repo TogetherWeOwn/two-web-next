@@ -58,11 +58,9 @@ describe("wall time → UTC (legacy EventTimezoneTest)", () => {
     expect(wallToUtc("2026-03-29 02:00", "Europe/London").toISOString()).toBe("2026-03-29T01:00:00.000Z");
   });
 
-  it("resolves an autumn fold to the first (BST) occurrence under the current Next policy", () => {
-    // Main's seeded properties (#64) select the earliest round-tripping instant.
-    // Legacy pinned the second (GMT) occurrence; that parity divergence remains
-    // explicit in the acceptance ledger, not waived by this adapted assertion.
-    expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T00:30:00.000Z");
+  it("resolves an autumn fold to the second (GMT) occurrence like legacy", () => {
+    // Legacy EventTimezoneTest pins 2026-10-25 01:30 -> 01:30:00 UTC (TOG-11669).
+    expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T01:30:00.000Z");
   });
 
   it("rejects impossible calendar dates instead of rolling them over", () => {
@@ -119,8 +117,8 @@ describe("event form floor (legacy EventCapacityFloorTest, form rules)", () => {
     // the fold survives an unchanged resubmit.
     expect(form("2026-10-25T01:30:00.000Z").startsAtUtc.toISOString()).toBe("2026-10-25T01:30:00.000Z"); // GMT side
     expect(form("2026-10-25T00:30:00.000Z").startsAtUtc.toISOString()).toBe("2026-10-25T00:30:00.000Z"); // BST side
-    // Without a carrier (create) current Next selects the first, BST occurrence.
-    expect(form().startsAtUtc.toISOString()).toBe("2026-10-25T00:30:00.000Z");
+    // Without a carrier (create) the fresh parse takes the second, GMT occurrence.
+    expect(form().startsAtUtc.toISOString()).toBe("2026-10-25T01:30:00.000Z");
   });
 });
 
