@@ -59,6 +59,8 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     recurrenceIndex: null,
     createdAt: start,
     updatedAt: new Date("2026-07-01T12:00:00Z"),
+    syncRevision: 1,
+    syncedRevision: 0,
     ...overrides,
   };
 }

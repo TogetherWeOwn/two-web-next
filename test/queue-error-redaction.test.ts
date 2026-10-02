@@ -24,20 +24,32 @@ function deps(ledger?: QueueLedger): {
   failedReasons: string[];
 } {
   const failedReasons: string[] = [];
-  const store: EventStore = {
-    find: async () => ({
+  const attempt = {
+    idempotencyKey: "k",
+    eventKey: "e1",
+    revision: 1,
+    action: "event.upsert" as const,
+    payload: {
       eventKey: "e1",
-      mirrored: true,
-      payload: {
-        eventKey: "e1",
-        name: "n",
-        startsAt: "s",
-        endsAt: null,
-        location: "l",
-        description: null,
-      },
-    }),
-    recordMirrored: async () => {},
+      name: "n",
+      startsAt: "s",
+      endsAt: null,
+      location: "l",
+      description: null,
+    },
+    mirroredAt: new Date(0),
+    state: "pending" as const,
+    requestAttempts: 0,
+    nextAttemptAt: new Date(0),
+  };
+  const store: EventStore = {
+    prepareSync: async () => attempt,
+    claimSync: async () => attempt,
+    completeSync: async () => {},
+    deferSync: async () => {},
+    failSync: async () => {},
+    needsSync: async () => false,
+    pendingSync: async () => null,
     closeFinished: async () => 0,
     materializeSeries: async () => 0,
     staleEventKeys: async () => [],

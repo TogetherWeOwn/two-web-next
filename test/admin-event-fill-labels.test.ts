@@ -83,6 +83,8 @@ function row(over: Partial<EventListRow> & { eventKey: string }): EventListRow {
     createdAt: at,
     updatedAt: at,
     icsSequence: 0n,
+    syncRevision: 0,
+    syncedRevision: 0,
     goingCount: 0,
     ...rest,
   };

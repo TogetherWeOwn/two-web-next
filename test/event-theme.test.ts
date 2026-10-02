@@ -36,6 +36,8 @@ const e: PublicEvent = {
   recurrenceIndex: null,
   createdAt: start,
   updatedAt: start,
+  syncRevision: 1,
+  syncedRevision: 0,
 };
 const props = {
   e,

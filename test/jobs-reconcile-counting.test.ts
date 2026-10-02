@@ -25,8 +25,16 @@ function fakeEvents(rows: Row[]): EventStore & { calls: string[]; closedAt: Date
   return {
     calls,
     closedAt,
-    find: async () => null,
-    recordMirrored: async () => {},
+    // Durable-store surface the counting pins never touch: neutral stubs.
+    // pendingSync must resolve null (no pending request) so every stale row
+    // dispatches under a fresh key, exactly what the resynced counts assert.
+    prepareSync: async () => null,
+    completeSync: async () => {},
+    claimSync: async () => null,
+    deferSync: async () => {},
+    failSync: async () => {},
+    needsSync: async () => false,
+    pendingSync: async () => null,
     closeFinished: async (now) => {
       calls.push("close");
       closedAt.push(now);

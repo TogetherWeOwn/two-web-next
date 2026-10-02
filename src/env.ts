@@ -2,6 +2,9 @@ import type { QueueMessage } from "./jobs/types";
 
 export type Env = AgentEventsEnv & {
   APP_URL: string;
+  // Event writes use the same W13 queue as scheduled reconciliation. Optional
+  // only for local/test environments without a transport.
+  SYNC_EVENT_QUEUE?: Pick<Queue<QueueMessage>, "send">;
   // Worker-first static assets: fetched only after the host guard admits the request.
   ASSETS?: Pick<Fetcher, "fetch">;
   DISCORD_CLIENT_ID: string;

@@ -33,6 +33,8 @@ function eventRow(n: number): typeof events.$inferSelect {
   return {
     id: n,
     icsSequence: 1n,
+    syncRevision: 0,
+    syncedRevision: 0,
     eventKey: `archive-${n}`,
     title: `Past game ${n}`,
     game: "Chess",

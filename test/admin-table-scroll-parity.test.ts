@@ -35,6 +35,8 @@ const eventRow: EventRow = {
   parentEventId: null,
   recurrenceIndex: null,
   icsSequence: 0n,
+  syncRevision: 0,
+  syncedRevision: 0,
   rsvpOpen: true,
   createdBy: null,
   createdAt: at,

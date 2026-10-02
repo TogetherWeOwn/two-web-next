@@ -15,6 +15,8 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
   return {
     id: 1,
     icsSequence: 1n,
+    syncRevision: 1,
+    syncedRevision: 0,
     eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
     title: "Chess night",
     game: "Chess",
