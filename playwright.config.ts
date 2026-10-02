@@ -18,13 +18,16 @@ export default defineConfig({
     serviceWorkers: "block",
     // Browser routing doesn't re-intercept server-side redirect hops. A dead
     // proxy makes every non-loopback destination fail closed, even on redirects.
-    launchOptions: { args: ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=localhost;127.0.0.1;[::1]"] },
+    launchOptions: {
+      args: ["--proxy-server=http://127.0.0.1:9", "--proxy-bypass-list=localhost;127.0.0.1;[::1]"],
+    },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "npx wrangler dev --config e2e/wrangler.jsonc --local --local-protocol https --ip localhost --port 8787",
+    command:
+      "npx wrangler dev --config e2e/wrangler.jsonc --local --local-protocol https --ip localhost --port 8787",
     url: "https://localhost:8787/up",
     ignoreHTTPSErrors: true,
     reuseExistingServer: false,

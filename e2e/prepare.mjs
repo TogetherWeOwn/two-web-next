@@ -9,8 +9,16 @@ const qaToken = randomBytes(32).toString("hex");
 const sessionSecret = randomBytes(32).toString("hex");
 // Fresh non-production signing material for this runner, never repo secrets.
 process.stdout.write(`::add-mask::${qaToken}\n::add-mask::${sessionSecret}\n`);
-await writeFile(new URL(".dev.vars", import.meta.url), [
-  `DATABASE_URL=${database}`, `QA_AUTH_TOKEN=${qaToken}`, `SESSION_SECRET=${sessionSecret}`,
-  "DISCORD_CLIENT_SECRET=e2e-unused-client-secret", "DISCORD_BOT_TOKEN=e2e-unused-bot-token", "",
-].join("\n"), { mode: 0o600 });
+await writeFile(
+  new URL(".dev.vars", import.meta.url),
+  [
+    `DATABASE_URL=${database}`,
+    `QA_AUTH_TOKEN=${qaToken}`,
+    `SESSION_SECRET=${sessionSecret}`,
+    "DISCORD_CLIENT_SECRET=e2e-unused-client-secret",
+    "DISCORD_BOT_TOKEN=e2e-unused-bot-token",
+    "",
+  ].join("\n"),
+  { mode: 0o600 },
+);
 await appendFile(process.env.GITHUB_ENV, `E2E_QA_TOKEN=${qaToken}\n`);

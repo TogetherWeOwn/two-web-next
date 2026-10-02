@@ -20,7 +20,12 @@ globalThis.fetch = async (input, init) => {
     if (request.method === "GET" && url.pathname === "/api/v10/users/@me") {
       // fetchUser rejects a missing global_name (TOG-206 hardening); mirror
       // the auth-worker fixture shape exactly.
-      return Response.json({ id: "900000000000001398", username: "E2E Discord Member", global_name: "E2E Discord Member", avatar: null });
+      return Response.json({
+        id: "900000000000001398",
+        username: "E2E Discord Member",
+        global_name: "E2E Discord Member",
+        avatar: null,
+      });
     }
     if (url.pathname === "/api/v10/guilds/326474832151838730/members/900000000000001398") {
       if (request.method === "PUT") return new Response(null, { status: 204 });
@@ -40,7 +45,11 @@ export default {
       return Response.redirect("https://discord.com/__e2e/egress-canary", 302);
     }
     const db = new URL(env.DATABASE_URL ?? "");
-    if (db.hostname !== "127.0.0.1" || db.pathname !== "/two_web_next" || db.username !== "agent_test") {
+    if (
+      db.hostname !== "127.0.0.1" ||
+      db.pathname !== "/two_web_next" ||
+      db.username !== "agent_test"
+    ) {
       throw new Error("E2E database must be the disposable CI service");
     }
 
@@ -51,10 +60,19 @@ export default {
     const headers = new Headers(request.headers);
     if (headers.get("origin") === localOrigin) headers.set("origin", STAGING_APP_URL);
     const virtual = new URL(url.pathname + url.search, STAGING_APP_URL);
-    const mapped = new Request(virtual, { method: request.method, headers, body: request.body, redirect: "manual" });
-    return worker.fetch(mapped, {
-      ...env,
-      DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-    } as JobsEnv, ctx);
+    const mapped = new Request(virtual, {
+      method: request.method,
+      headers,
+      body: request.body,
+      redirect: "manual",
+    });
+    return worker.fetch(
+      mapped,
+      {
+        ...env,
+        DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+      } as JobsEnv,
+      ctx,
+    );
   },
 };
