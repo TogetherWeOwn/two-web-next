@@ -16,7 +16,7 @@ export const ALERT_ROUTES = new Set([
   "/admin/featured-contents", "/admin/featured-contents/:id/edit", "/admin/featured-contents/create",
   "/admin/join-attempts", "/admin/join-attempts/:id",
   "/api/agent-events", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect", "/auth/qa/:identity", "/auth/recover", "/auth/status",
-  "/__probe/alert", "/csp-reports", "/discord", "/e/:key", "/events", "/events.ics",
+  "/__probe/alert", "/csp-reports", "/discord", "/e/:key", "/e/:key/rsvp", "/events", "/events.ics",
   "/events.json", "/events.rss", "/events/:file{.+\\.ics}", "/events/past", "/events/:key",
   "/events/:key/cancel", "/events/:key/publish", "/events/:key/rsvp", "/events/:key/rsvp-pause",
   "/events/:key/rsvp-reopen", "/faq", "/join", "/join/callback", "/join/discord", "/logout",

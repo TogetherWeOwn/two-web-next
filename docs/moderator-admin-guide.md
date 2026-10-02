@@ -282,7 +282,7 @@ sections when their data is available:
 
 A missing section is not proof of zero incidents: failing/slow optional funnel
 or missed-search reads can omit their section while the dashboard remains
-available. Both reads run concurrently with a 500 ms budget each; that optional
+available. Both reads start together with a 1.5 s budget; that optional
 widget behavior does not relax authorization or access-log enforcement.
 Missing database configuration is different: normal signed-in session resolution
 and admin access are unavailable, not just the widgets. A signed-session request

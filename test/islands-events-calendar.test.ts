@@ -304,7 +304,9 @@ describe("EventsCalendar review regressions", () => {
     const html = await (await calendar([eventRow()], [], okSource()).request(`/events?view=${view}`)).text();
     expect(html).not.toContain("aria-pressed");
     expect(html).toContain(`aria-current="page" data-testid="events-view-${view}"`);
-    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+    // Primary navigation also marks Events current; each navigation set has one active link.
+    const views = html.match(/<div[^>]*aria-label="How to show the events"[^>]*>(.*?)<\/div>/)![1]!;
+    expect(views.match(/aria-current="page"/g)).toHaveLength(1);
   });
 
   it("suppresses both the visible and live search miss when the read fails", async () => {

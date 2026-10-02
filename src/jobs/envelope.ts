@@ -1,4 +1,5 @@
 import { validProbeId } from "../alert-probe-error";
+import { safeRequestId } from "../request-log";
 import type { QueueMessage } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -48,5 +49,7 @@ export function toQueueMessage(value: unknown): QueueMessage | null {
   if (!isRecord(value) || "kind" in value) return null;
   if (value.action !== "event.upsert" || typeof value.eventKey !== "string"
     || value.dedupeKey !== value.eventKey || typeof value.idempotencyKey !== "string") return null;
-  return { kind: "sync-event", eventKey: value.eventKey, idempotencyKey: value.idempotencyKey };
+  // Keep only a well-formed originating request ID for queue.failing correlation.
+  const requestId = safeRequestId(value.requestId);
+  return { kind: "sync-event", eventKey: value.eventKey, idempotencyKey: value.idempotencyKey, ...(requestId ? { requestId } : {}) };
 }
