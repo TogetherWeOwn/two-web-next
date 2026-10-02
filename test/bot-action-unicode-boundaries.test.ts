@@ -1,6 +1,10 @@
 import { createHash, createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { InvalidActionRequestError, announcementPayload, eventUpsertPayload } from "../src/bot/actions";
+import {
+  InvalidActionRequestError,
+  announcementPayload,
+  eventUpsertPayload,
+} from "../src/bot/actions";
 import { encodeCanonicalJson, signInternalAction } from "../src/bot/signer";
 
 // Local fixtures only: no bot client, environment credentials, network or database.
@@ -61,8 +65,8 @@ const alphabets = [
   {
     label: "mixed ASCII/BMP/astral",
     value: (limit: number) => "Aé🚀".repeat(Math.floor(limit / 3)) + "A".repeat(limit % 3),
-    codeUnits: (limit: number) => 4 * Math.floor(limit / 3) + limit % 3,
-    bytes: (limit: number) => 7 * Math.floor(limit / 3) + limit % 3,
+    codeUnits: (limit: number) => 4 * Math.floor(limit / 3) + (limit % 3),
+    bytes: (limit: number) => 7 * Math.floor(limit / 3) + (limit % 3),
   },
 ];
 

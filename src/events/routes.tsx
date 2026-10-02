@@ -5,7 +5,15 @@
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
-import { NotFoundError, createEvent, getEvent, recordAccess, setRsvpOpen, transitionEvent, updateEvent } from "../admin/store";
+import {
+  NotFoundError,
+  createEvent,
+  getEvent,
+  recordAccess,
+  setRsvpOpen,
+  transitionEvent,
+  updateEvent,
+} from "../admin/store";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { notFoundSuggestions } from "./suggestions";
 import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
@@ -38,7 +46,24 @@ import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { eventKeyAllowed } from "./keys";
-import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, getEventNeighbors, getEventRow, getPublicEvent, listCalendarPast, listFeed, listGoingAttendees, listJson, listPast, listRelatedEvents, listUpcoming, normalizePastPage, persistedDiscordIds, withGoingCount, type PublicEvent } from "./reads";
+import {
+  JSON_DEFAULT_LIMIT,
+  JSON_MAX_LIMIT,
+  getEventNeighbors,
+  getEventRow,
+  getPublicEvent,
+  listCalendarPast,
+  listFeed,
+  listGoingAttendees,
+  listJson,
+  listPast,
+  listRelatedEvents,
+  listUpcoming,
+  normalizePastPage,
+  persistedDiscordIds,
+  withGoingCount,
+  type PublicEvent,
+} from "./reads";
 
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
@@ -68,8 +93,14 @@ function jsonLd(e: PublicEvent, appUrl: string): string {
     name: e.title,
     startDate: e.startsAt.toISOString(),
     endDate: e.endsAt.toISOString(),
-    eventStatus: e.status === "cancelled" ? "https://schema.org/EventCancelled" : "https://schema.org/EventScheduled",
-    location: { "@type": "VirtualLocation", url: e.location && /^https?:/.test(e.location) ? e.location : appUrl },
+    eventStatus:
+      e.status === "cancelled"
+        ? "https://schema.org/EventCancelled"
+        : "https://schema.org/EventScheduled",
+    location: {
+      "@type": "VirtualLocation",
+      url: e.location && /^https?:/.test(e.location) ? e.location : appUrl,
+    },
     ...(e.description ? { description: e.description } : {}),
     url: canonicalUrl(appUrl, `/e/${e.eventKey}`),
   };
@@ -88,16 +119,27 @@ async function sha256Etag(body: string): Promise<string> {
 }
 
 /** Strong validator over the bytes; preserve queued headers, but never read or issue a session here. */
-async function feedResponse(c: Ctx, body: string, headers: Record<string, string>): Promise<Response> {
+async function feedResponse(
+  c: Ctx,
+  body: string,
+  headers: Record<string, string>,
+): Promise<Response> {
   const etag = await sha256Etag(body);
   const inm = c.req.header("if-none-match");
-  if (inm && (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))) {
+  if (
+    inm &&
+    (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))
+  ) {
     return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }
   return c.body(body, 200, { ...headers, etag });
 }
 
-async function calendarFeedResponse(c: Ctx, build: () => string, headers: Record<string, string>): Promise<Response> {
+async function calendarFeedResponse(
+  c: Ctx,
+  build: () => string,
+  headers: Record<string, string>,
+): Promise<Response> {
   try {
     return feedResponse(c, build(), headers);
   } catch (error) {
@@ -106,13 +148,19 @@ async function calendarFeedResponse(c: Ctx, build: () => string, headers: Record
   }
 }
 
-export function registerEventRoutes(app: App, readSession: SessionReader, readFragmentSession: SessionReader): void {
+export function registerEventRoutes(
+  app: App,
+  readSession: SessionReader,
+  readFragmentSession: SessionReader,
+): void {
   const unavailable = (c: Ctx) => c.text("Events temporarily unavailable", 503);
 
   app.get("/events", async (c) => {
     const db = await dbFor(c);
     if (!db) return unavailable(c);
-    const session = await (c.req.header("x-two-island") === "events-calendar" ? readFragmentSession(c) : readSession(c));
+    const session = await (c.req.header("x-two-island") === "events-calendar"
+      ? readFragmentSession(c)
+      : readSession(c));
     const now = new Date();
 
     // Resolve the URL state. A search forces the list view (a month grid that
@@ -136,11 +184,17 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const discordRows = await discord.upcoming(now);
     // Probe only candidate identities, without search/draft/time/pagination
     // predicates. A filtered canonical row must never become a stale transient.
-    const persistedIds = await persistedDiscordIds(db, discordRows.map((t) => t.discordId));
+    const persistedIds = await persistedDiscordIds(
+      db,
+      discordRows.map((t) => t.discordId),
+    );
     const term = (match ?? "").toLowerCase();
-    const transients = dedupeTransients(discordRows, persistedIds).filter((t) =>
-      (t.endsAt === null || t.endsAt >= now) &&
-      (term === "" || t.title.toLowerCase().includes(term) || (t.description ?? "").toLowerCase().includes(term)),
+    const transients = dedupeTransients(discordRows, persistedIds).filter(
+      (t) =>
+        (t.endsAt === null || t.endsAt >= now) &&
+        (term === "" ||
+          t.title.toLowerCase().includes(term) ||
+          (t.description ?? "").toLowerCase().includes(term)),
     );
     const discordFailed = discord.lastReadFailed();
     const upcoming = mergeCalendarRows(localUpcoming, transients);
@@ -153,7 +207,14 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // this month. An unparseable month is a page, never a 500.
     const month =
       parseCalendarMonth(c.req.query("month")) ??
-      parseCalendarMonth(upcoming[0] ? wallMonth(upcoming[0].startsAt, "discordId" in upcoming[0] ? zone : upcoming[0].timezone) : null) ??
+      parseCalendarMonth(
+        upcoming[0]
+          ? wallMonth(
+              upcoming[0].startsAt,
+              "discordId" in upcoming[0] ? zone : upcoming[0].timezone,
+            )
+          : null,
+      ) ??
       currentCalendarMonth(now);
 
     const state = { view, month, q, past };
@@ -188,7 +249,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const island = c.req.header("x-two-island") === "events-calendar";
     const joinResult = island ? null : await takeJoinResult(c);
     // Search analytics must run per request, not only on shared-cache misses.
-    c.header("cache-control", session || searching || joinResult ? "private, no-store" : "public, max-age=60");
+    c.header(
+      "cache-control",
+      session || searching || joinResult ? "private, no-store" : "public, max-age=60",
+    );
     if (searching) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
     // Guest sign-in links carry this page as ?next= so the OAuth round trip
@@ -226,7 +290,15 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
     const { rows, hasMore, totalPages } = await listPast(db, page);
     c.header("cache-control", "public, max-age=300");
-    return c.html(<PastEventsPage rows={rows} page={page} hasMore={hasMore} totalPages={totalPages} appUrl={c.env.APP_URL} />);
+    return c.html(
+      <PastEventsPage
+        rows={rows}
+        page={page}
+        hasMore={hasMore}
+        totalPages={totalPages}
+        appUrl={c.env.APP_URL}
+      />,
+    );
   });
 
   app.get("/events.json", async (c) => {
@@ -236,13 +308,29 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "", 10);
-    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, JSON_MAX_LIMIT) : JSON_DEFAULT_LIMIT;
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(limitRaw, JSON_MAX_LIMIT)
+        : JSON_DEFAULT_LIMIT;
     const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
     const eventKey = c.req.query("event_key");
-    if (eventKey !== undefined && !eventKeyAllowed(eventKey, c.env.APP_URL)) return c.json({ error: "invalid_event_key" }, 422);
-    const rows = await listJson(db, { limit, offset: (page - 1) * limit, includeDrafts: session.moderator, eventKey });
-    const positions = await waitlistPositions(db, rows.map((row) => row.id), session.id);
-    const data = rows.map((row) => ({ ...eventJson(row), waitlist_position: positions.get(row.id) ?? null }));
+    if (eventKey !== undefined && !eventKeyAllowed(eventKey, c.env.APP_URL))
+      return c.json({ error: "invalid_event_key" }, 422);
+    const rows = await listJson(db, {
+      limit,
+      offset: (page - 1) * limit,
+      includeDrafts: session.moderator,
+      eventKey,
+    });
+    const positions = await waitlistPositions(
+      db,
+      rows.map((row) => row.id),
+      session.id,
+    );
+    const data = rows.map((row) => ({
+      ...eventJson(row),
+      waitlist_position: positions.get(row.id) ?? null,
+    }));
     const body = JSON.stringify({ data, page, limit });
     const etag = await etagFor(body);
     c.header("cache-control", "private, no-cache");
@@ -297,41 +385,69 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // Observe the entire existing handler, not only the attendee helper. An
     // anonymous viewer can release classified public records, never member keys.
     c.header("vary", "Cookie");
-    await memberReadBoundary(c, () => ({ viewer, resource: "member", action: "list", route: "events.page" }), async (entry) => {
-      const db = await dbFor(c);
-      if (!db) throw new Error("Event audit database unavailable");
-      return recordAccess(db, entry);
-    }, async () => {
-      const notFound = async () => {
-        c.header("x-robots-tag", "noindex, nofollow");
-        return bufferedMemberHtml(c, <NotFoundPage suggestions={await notFoundSuggestions(c.env)} />, 404);
-      };
-      const render = async () => {
-        const key = c.req.param("key") ?? "";
-        if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
+    await memberReadBoundary(
+      c,
+      () => ({ viewer, resource: "member", action: "list", route: "events.page" }),
+      async (entry) => {
         const db = await dbFor(c);
-        if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
-        const e = await getPublicEvent(db, key);
-        if (!e) return notFound();
-        if (e.status === "cancelled") {
+        if (!db) throw new Error("Event audit database unavailable");
+        return recordAccess(db, entry);
+      },
+      async () => {
+        const notFound = async () => {
           c.header("x-robots-tag", "noindex, nofollow");
-          return bufferedMemberHtml(c, <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />, 410);
-        }
-        const session = await readSession(c);
-        viewer = session?.id ?? null;
-        if (e.status === "draft" && !session?.moderator) return bufferedMemberText(c, "Forbidden", 403);
-        if (e.status === "draft" || e.status === "past") c.header("x-robots-tag", "noindex, nofollow");
-        const joinResult = await readJoinResult(c);
-        const [neighbors, related, attendees, position] = await Promise.all([
-          getEventNeighbors(db, e),
-          listRelatedEvents(db, e),
-          session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
-          session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
-        ]);
-        return bufferedMemberHtml(c, <EventPage e={e} neighbors={neighbors} related={related} attendees={attendees} appUrl={c.env.APP_URL} jsonLd={jsonLd(e, c.env.APP_URL)} session={session} joinResult={joinResult} waitlistPosition={position} />);
-      };
-      await render();
-    });
+          return bufferedMemberHtml(
+            c,
+            <NotFoundPage suggestions={await notFoundSuggestions(c.env)} />,
+            404,
+          );
+        };
+        const render = async () => {
+          const key = c.req.param("key") ?? "";
+          if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
+          const db = await dbFor(c);
+          if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
+          const e = await getPublicEvent(db, key);
+          if (!e) return notFound();
+          if (e.status === "cancelled") {
+            c.header("x-robots-tag", "noindex, nofollow");
+            return bufferedMemberHtml(
+              c,
+              <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />,
+              410,
+            );
+          }
+          const session = await readSession(c);
+          viewer = session?.id ?? null;
+          if (e.status === "draft" && !session?.moderator)
+            return bufferedMemberText(c, "Forbidden", 403);
+          if (e.status === "draft" || e.status === "past")
+            c.header("x-robots-tag", "noindex, nofollow");
+          const joinResult = await readJoinResult(c);
+          const [neighbors, related, attendees, position] = await Promise.all([
+            getEventNeighbors(db, e),
+            listRelatedEvents(db, e),
+            session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+            session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+          ]);
+          return bufferedMemberHtml(
+            c,
+            <EventPage
+              e={e}
+              neighbors={neighbors}
+              related={related}
+              attendees={attendees}
+              appUrl={c.env.APP_URL}
+              jsonLd={jsonLd(e, c.env.APP_URL)}
+              session={session}
+              joinResult={joinResult}
+              waitlistPosition={position}
+            />,
+          );
+        };
+        await render();
+      },
+    );
     // Consume only after the keyed boundary allows a visible response.
     if (c.res.status === 200) await takeJoinResult(c);
     return c.res;
@@ -346,7 +462,10 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return session;
   }
 
-  const moderatorGate: MiddlewareHandler<{ Bindings: Env; Variables: { eventModerator: Session } }> = async (c, next) => {
+  const moderatorGate: MiddlewareHandler<{
+    Bindings: Env;
+    Variables: { eventModerator: Session };
+  }> = async (c, next) => {
     // The session reader uses only bindings/cookies, not this gate's variables.
     const who = await moderator(c as unknown as Ctx);
     if (who instanceof Response) return who;
@@ -370,7 +489,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
   async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
     // Event edits must not turn malformed/non-object JSON into an empty PATCH.
     // Keep the RSVP trap's permissive body parsing independent of this admission.
-    if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json")) return body(c);
+    if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json"))
+      return body(c);
     const input: unknown = await c.req.json().catch(() => null);
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new ValidationError({ body: "Send a JSON object." });
@@ -378,92 +498,138 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     return input as Record<string, unknown>;
   }
 
-  const invalid = (c: Pick<Ctx, "json">, err: ValidationError) => c.json({ error: "invalid", fields: err.fields }, 422);
+  const invalid = (c: Pick<Ctx, "json">, err: ValidationError) =>
+    c.json({ error: "invalid", fields: err.fields }, 422);
 
-  app.post("/events", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
-    const who = c.get("eventModerator");
-    const db = await dbFor(c);
-    if (!db) return c.json({ error: "db_unavailable" }, 503);
-    try {
-      const { row } = await createEvent(db, { id: who.id, username: who.username }, parseEventForm(await eventBody(c)));
-      return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
-    } catch (err) {
-      if (err instanceof ValidationError) return invalid(c, err);
-      throw err;
-    }
-  });
-
-  app.patch("/events/:key", throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("json"), async (c) => {
-    const who = c.get("eventModerator");
-    const db = await dbFor(c);
-    if (!db) return c.json({ error: "db_unavailable" }, 503);
-    const key = c.req.param("key");
-    const existing = await getEvent(db, key);
-    if (!existing) return c.json({ error: "not_found" }, 404);
-    try {
-      // PATCH: unspecified fields keep their stored value.
-      const patch = await eventBody(c);
-      const merged = {
-        title: existing.title,
-        game: existing.game,
-        description: existing.description,
-        timezone: existing.timezone,
-        location: existing.location,
-        capacity: existing.capacity,
-        ...patch,
-      } as Record<string, unknown>;
-      // Match parseEventForm's zone default before deriving omitted wall times.
-      const tz = typeof merged.timezone === "string" ? merged.timezone.trim() || "Europe/London" : "Europe/London";
-      if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
-      const wall = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(d);
-      merged.starts_at ??= wall(existing.startsAt);
-      merged.ends_at ??= wall(existing.endsAt);
-      const input = parseEventForm(merged, {
-        startsAtUtc: existing.startsAt.toISOString(),
-        endsAtUtc: existing.endsAt.toISOString(),
-      });
-      const { row, writeBack, childWriteBacks } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
-      if (writeBack) await dispatchWriteBack(c.env, writeBack);
-      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
-      const updated = await getPublicEvent(db, row.eventKey);
-      return c.json({ data: eventJson(updated!) });
-    } catch (err) {
-      if (err instanceof ValidationError) return invalid(c, err);
-      if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
-      throw err;
-    }
-  });
-
-  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
-    app.post(`/events/:key/${action}`, throttle("event-write", WRITE_THROTTLE_PER_MINUTE), moderatorGate, requestBodyLimit("action"), async (c) => {
+  app.post(
+    "/events",
+    throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
+    moderatorGate,
+    requestBodyLimit("json"),
+    async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       try {
-        const actor = { id: who.id, username: who.username };
-        const key = c.req.param("key");
-        const { row, writeBack } = action === "rsvp-pause" || action === "rsvp-reopen"
-          ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
-          : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
+        const { row } = await createEvent(
+          db,
+          { id: who.id, username: who.username },
+          parseEventForm(await eventBody(c)),
+        );
+        return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
+      } catch (err) {
+        if (err instanceof ValidationError) return invalid(c, err);
+        throw err;
+      }
+    },
+  );
+
+  app.patch(
+    "/events/:key",
+    throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
+    moderatorGate,
+    requestBodyLimit("json"),
+    async (c) => {
+      const who = c.get("eventModerator");
+      const db = await dbFor(c);
+      if (!db) return c.json({ error: "db_unavailable" }, 503);
+      const key = c.req.param("key");
+      const existing = await getEvent(db, key);
+      if (!existing) return c.json({ error: "not_found" }, 404);
+      try {
+        // PATCH: unspecified fields keep their stored value.
+        const patch = await eventBody(c);
+        const merged = {
+          title: existing.title,
+          game: existing.game,
+          description: existing.description,
+          timezone: existing.timezone,
+          location: existing.location,
+          capacity: existing.capacity,
+          ...patch,
+        } as Record<string, unknown>;
+        // Match parseEventForm's zone default before deriving omitted wall times.
+        const tz =
+          typeof merged.timezone === "string"
+            ? merged.timezone.trim() || "Europe/London"
+            : "Europe/London";
+        if (!isKnownTimezone(tz))
+          throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
+        const wall = (d: Date) =>
+          new Intl.DateTimeFormat("sv-SE", {
+            timeZone: tz,
+            dateStyle: "short",
+            timeStyle: "short",
+          }).format(d);
+        merged.starts_at ??= wall(existing.startsAt);
+        merged.ends_at ??= wall(existing.endsAt);
+        const input = parseEventForm(merged, {
+          startsAtUtc: existing.startsAt.toISOString(),
+          endsAtUtc: existing.endsAt.toISOString(),
+        });
+        const { row, writeBack, childWriteBacks } = await updateEvent(
+          db,
+          { id: who.id, username: who.username },
+          key,
+          input,
+        );
         if (writeBack) await dispatchWriteBack(c.env, writeBack);
-        return c.json({ data: eventJson(await withGoingCount(db, row)) });
+        for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
+        const updated = await getPublicEvent(db, row.eventKey);
+        return c.json({ data: eventJson(updated!) });
       } catch (err) {
         if (err instanceof ValidationError) return invalid(c, err);
         if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
         throw err;
       }
-    });
+    },
+  );
+
+  for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
+    app.post(
+      `/events/:key/${action}`,
+      throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
+      moderatorGate,
+      requestBodyLimit("action"),
+      async (c) => {
+        const who = c.get("eventModerator");
+        const db = await dbFor(c);
+        if (!db) return c.json({ error: "db_unavailable" }, 503);
+        try {
+          const actor = { id: who.id, username: who.username };
+          const key = c.req.param("key");
+          const { row, writeBack } =
+            action === "rsvp-pause" || action === "rsvp-reopen"
+              ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
+              : await transitionEvent(
+                  db,
+                  actor,
+                  key,
+                  action === "publish" ? "published" : "cancelled",
+                );
+          if (writeBack) await dispatchWriteBack(c.env, writeBack);
+          return c.json({ data: eventJson(await withGoingCount(db, row)) });
+        } catch (err) {
+          if (err instanceof ValidationError) return invalid(c, err);
+          if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+          throw err;
+        }
+      },
+    );
   }
 
   // ---- RSVP (member writes, W9) ---------------------------------------------------
   // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
   // DELETE 204 always (quiet), any other verb 405. One shared 12/min budget per member.
-  const rsvpBody = (a: RsvpAnswer) => ({ data: {
-    status: a.status,
-    synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null,
-    waitlist_position: a.waitlistPosition,
-  } });
-  const closed = (c: Ctx, why: string) => c.json({ reason: "event_not_open", why, message: "This event is not taking RSVPs." }, 403);
+  const rsvpBody = (a: RsvpAnswer) => ({
+    data: {
+      status: a.status,
+      synced_to_discord_at: a.syncedToDiscordAt?.toISOString() ?? null,
+      waitlist_position: a.waitlistPosition,
+    },
+  });
+  const closed = (c: Ctx, why: string) =>
+    c.json({ reason: "event_not_open", why, message: "This event is not taking RSVPs." }, 403);
 
   async function member(c: Ctx): Promise<Session | Response> {
     // Non-rotating: concurrent writes with one cookie must all authenticate.
@@ -480,13 +646,22 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // without touching limiter, auth or DB, and logs nothing. Present non-string
     // values count as filled (fail-closed); absent/empty inputs are genuine.
     if (rsvpTrapTripped(input)) {
-      return c.json(rsvpBody({ status: isRsvpStatus(input.status) ? input.status : "going", syncedToDiscordAt: null, waitlistPosition: null }), 201);
+      return c.json(
+        rsvpBody({
+          status: isRsvpStatus(input.status) ? input.status : "going",
+          syncedToDiscordAt: null,
+          waitlistPosition: null,
+        }),
+        201,
+      );
     }
     const who = await member(c);
     if (who instanceof Response) return who;
-    if (!isRsvpStatus(input.status)) return c.json({ error: "invalid", fields: { status: ["status is invalid"] } }, 422);
+    if (!isRsvpStatus(input.status))
+      return c.json({ error: "invalid", fields: { status: ["status is invalid"] } }, 422);
     // Accepted, then refused: answering for the caller instead would look like it worked.
-    if (input.user_id !== undefined && String(input.user_id) !== who.id) return c.json({ error: "forbidden" }, 403);
+    if (input.user_id !== undefined && String(input.user_id) !== who.id)
+      return c.json({ error: "forbidden" }, 403);
     const key = c.req.param("key");
     if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
@@ -512,7 +687,9 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     // value must not mask a filled sibling or a filled body decoy, and a
     // non-string body value trips like a filled string.
     const queryHoney = c.req.queries(RSVP_HONEY_FIELD);
-    const bodyHoney = (await body(c).catch(() => ({} as Record<string, unknown>)))[RSVP_HONEY_FIELD];
+    const bodyHoney = (await body(c).catch(() => ({}) as Record<string, unknown>))[
+      RSVP_HONEY_FIELD
+    ];
     if (rsvpHoneyFilled(queryHoney) || rsvpHoneyFilled(bodyHoney)) return c.body(null, 204);
     const who = await member(c);
     if (who instanceof Response) return who;

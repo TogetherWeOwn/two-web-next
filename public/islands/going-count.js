@@ -54,7 +54,9 @@
     // fails. An older completion must never replace the last good state.
     var request = {};
     latest.set(key, request);
-    fetch(URL + "?event_key=" + encodeURIComponent(key), { headers: { accept: "application/json" } })
+    fetch(URL + "?event_key=" + encodeURIComponent(key), {
+      headers: { accept: "application/json" },
+    })
       .then(function (res) {
         if (!res.ok) throw new Error("events " + res.status);
         return res.json();
@@ -73,8 +75,12 @@
         // keep this refresh on the SSR cap. Any other malformed capacity
         // rejects the row as a whole, like a malformed count.
         var fromSnapshot = row.capacity !== undefined;
-        if (fromSnapshot && row.capacity !== null &&
-            (!Number.isSafeInteger(row.capacity) || row.capacity < 1)) return;
+        if (
+          fromSnapshot &&
+          row.capacity !== null &&
+          (!Number.isSafeInteger(row.capacity) || row.capacity < 1)
+        )
+          return;
         var snapshotCapacity = fromSnapshot ? row.capacity : null;
         nodes.forEach(function (node) {
           var capacity;

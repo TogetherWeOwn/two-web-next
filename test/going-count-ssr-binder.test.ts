@@ -23,25 +23,50 @@ const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const PATH = `/e/${KEY}`;
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 
-const binder = readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8");
+const binder = readFileSync(
+  new NodeURL("../public/islands/going-count.js", import.meta.url),
+  "utf8",
+);
 
 // Real Drizzle queries and Hono rendering; all data is local, no DB connection.
 function fixture(over: Partial<typeof events.$inferSelect> = {}, newerEvents = 0) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
-    id: 1, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
-    startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC",
-    location: "The lobby & voice channel", capacity: 10, status: "published", rsvpOpen: true,
-    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    createdBy: null, icsSequence: 0n, recurrenceFrequency: null, recurrenceCount: null,
-    recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
+    id: 1,
+    eventKey: KEY,
+    title: "Chess night",
+    game: "Chess",
+    description: "Bring a friend & a board.",
+    startsAt: start,
+    endsAt: new Date("2030-01-10T22:00:00Z"),
+    timezone: "UTC",
+    location: "The lobby & voice channel",
+    capacity: 10,
+    status: "published",
+    rsvpOpen: true,
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    createdBy: null,
+    icsSequence: 0n,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: start,
+    updatedAt: start,
     ...over,
   };
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
-  const encode = (event: typeof row) => columns.map((key) =>
-    event[key] instanceof Date ? (event[key] as Date).toISOString() : event[key]);
+  const encode = (event: typeof row) =>
+    columns.map((key) =>
+      event[key] instanceof Date ? (event[key] as Date).toISOString() : event[key],
+    );
   const newer = Array.from({ length: newerEvents }, (_, i) => ({
-    ...row, id: i + 2, eventKey: String(i + 2).padStart(26, "0"),
+    ...row,
+    id: i + 2,
+    eventKey: String(i + 2).padStart(26, "0"),
     startsAt: new Date(start.getTime() + (i + 1) * 86400_000),
   })).reverse();
   const queries: string[] = [];
@@ -53,9 +78,11 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, newerEvents = 0
     if (sql.includes('order by "events"."starts_at" desc limit')) {
       // Model the collection WHERE before LIMIT, not an already-filtered response.
       let selected = [...newer, row];
-      if (params.includes("published")) selected = selected.filter((event) => event.status !== "draft");
+      if (params.includes("published"))
+        selected = selected.filter((event) => event.status !== "draft");
       const keyParameter = sql.match(/"event_key" = \$(\d+)/)?.[1];
-      if (keyParameter) selected = selected.filter((event) => event.eventKey === params[Number(keyParameter) - 1]);
+      if (keyParameter)
+        selected = selected.filter((event) => event.eventKey === params[Number(keyParameter) - 1]);
       const limitParameter = sql.match(/limit \$(\d+)/)?.[1];
       if (limitParameter) selected = selected.slice(0, Number(params[Number(limitParameter) - 1]));
       return { rows: selected.map(encode) };
@@ -72,14 +99,28 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, newerEvents = 0
   } as unknown as Env;
   return {
     queries,
-    setGoing: (value: number) => { going = value; },
+    setGoing: (value: number) => {
+      going = value;
+    },
     async cookie(moderator = false) {
       const token = newSessionToken();
-      await store.create({ tokenHash: await hashToken(token), userId: "member", username: "member", avatar: null,
-        member: true, moderator, expiresAt: new Date(Date.now() + 3600_000) });
-      return (await serializeSigned("__Host-two_session", token, SECRET, {
-        path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-      })).split(";")[0]!;
+      await store.create({
+        tokenHash: await hashToken(token),
+        userId: "member",
+        username: "member",
+        avatar: null,
+        member: true,
+        moderator,
+        expiresAt: new Date(Date.now() + 3600_000),
+      });
+      return (
+        await serializeSigned("__Host-two_session", token, SECRET, {
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        })
+      ).split(";")[0]!;
     },
     request(cookie?: string, path = PATH) {
       return app.request(path, cookie ? { headers: { cookie } } : {}, env);
@@ -98,11 +139,11 @@ describe("Event page going-count SSR wiring", () => {
     expect(html).toContain('data-capacity="10"');
     expect(html).toContain('role="status" data-testid="event-going-count"');
     expect(html).toContain("<span data-count>3 of 10 going</span>");
-    expect(html).toContain('data-spots>7 of 10 spots left</span>');
+    expect(html).toContain("data-spots>7 of 10 spots left</span>");
     const badge = html.match(/<span data-count>[\s\S]*?<\/p>/)?.[0];
     expect(badge?.replace(/<[^>]*>/g, "")).toBe("3 of 10 going · 7 of 10 spots left");
     // Silent on first render: the announcement node exists but is empty.
-    expect(html).toContain('data-announcement></span>');
+    expect(html).toContain("data-announcement></span>");
   });
 
   it("renders the uncapped badge without a spots line", async () => {
@@ -167,15 +208,20 @@ function mountFromSsr(html: string) {
 function browser(html: string, ...additionalHtml: string[]) {
   const badges = [mountFromSsr(html), ...additionalHtml.map(mountFromSsr)];
   const { mount, count, announcement, spots } = badges[0]!;
-  const listeners: ((event: { detail: { eventKey?: string; viewerState?: string } }) => void)[] = [];
+  const listeners: ((event: { detail: { eventKey?: string; viewerState?: string } }) => void)[] =
+    [];
   const requests: PendingRequest[] = [];
   const documentEl = new Node();
   const documentStub = {
     documentElement: documentEl,
-    addEventListener: (type: string, listener: (event: { detail: { eventKey?: string; viewerState?: string } }) => void) => {
+    addEventListener: (
+      type: string,
+      listener: (event: { detail: { eventKey?: string; viewerState?: string } }) => void,
+    ) => {
       if (type === "going-count-updated") listeners.push(listener);
     },
-    querySelectorAll: (selector: string) => (selector === '[data-island="going-count"]' ? badges.map((badge) => badge.mount) : []),
+    querySelectorAll: (selector: string) =>
+      selector === '[data-island="going-count"]' ? badges.map((badge) => badge.mount) : [],
   };
   const evalBinder = () =>
     runInNewContext(binder, {
@@ -194,7 +240,20 @@ function browser(html: string, ...additionalHtml: string[]) {
     ok: true,
     json: async () => rows,
   });
-  return { mount, count, announcement, spots, badges, listeners, requests, broadcast, settle, evalBinder, okJson, documentEl };
+  return {
+    mount,
+    count,
+    announcement,
+    spots,
+    badges,
+    listeners,
+    requests,
+    broadcast,
+    settle,
+    evalBinder,
+    okJson,
+    documentEl,
+  };
 }
 
 describe("GoingCount shipped binder over real SSR markup", () => {
@@ -238,15 +297,17 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     b.broadcast(KEY, "none");
     expect(b.requests).toHaveLength(2);
     expect(b.requests.map((request) => request.url)).toEqual([
-      `/events.json?event_key=${KEY}`, `/events.json?event_key=${KEY}`,
+      `/events.json?event_key=${KEY}`,
+      `/events.json?event_key=${KEY}`,
     ]);
     b.requests[1]!.resolve(b.okJson([{ event_key: KEY, going_count: 2 }]));
     await b.settle();
-    const values = () => b.badges.map((badge) => ({
-      count: badge.count.textContent,
-      spots: badge.spots?.textContent,
-      announcement: badge.announcement.textContent,
-    }));
+    const values = () =>
+      b.badges.map((badge) => ({
+        count: badge.count.textContent,
+        spots: badge.spots?.textContent,
+        announcement: badge.announcement.textContent,
+      }));
     const newest = [
       { count: "2 of 10 going", spots: "8 of 10 spots left", announcement: "RSVP removed. " },
       { count: "2 of 4 going", spots: "2 of 4 spots left", announcement: "RSVP removed. " },
@@ -261,7 +322,7 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     const source = fixture({}, 25);
     const cookie = await source.cookie();
     const firstPage = await source.request(cookie, "/events.json");
-    const firstRows = (await firstPage.json() as { data: { event_key: string }[] }).data;
+    const firstRows = ((await firstPage.json()) as { data: { event_key: string }[] }).data;
     expect(firstRows).toHaveLength(20);
     expect(firstRows.some((row) => row.event_key === KEY)).toBe(false);
     const b = browser(await (await source.request()).text());
@@ -270,7 +331,9 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     expect(b.requests).toHaveLength(1);
     const response = await source.request(cookie, b.requests[0]!.url);
     expect(response.status).toBe(200);
-    expect(source.queries.some((sql) => /"event_key" = \$\d+\) order by .* limit/.test(sql))).toBe(true);
+    expect(source.queries.some((sql) => /"event_key" = \$\d+\) order by .* limit/.test(sql))).toBe(
+      true,
+    );
     b.requests[0]!.resolve({ ok: response.ok, json: () => response.json() });
     await b.settle();
     expect(b.count.textContent).toBe("4 of 10 going");
@@ -285,12 +348,12 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     const member = await source.cookie();
     const hidden = await source.request(member, url);
     expect(hidden.status).toBe(200);
-    expect((await hidden.json() as { data: unknown[] }).data).toEqual([]);
+    expect(((await hidden.json()) as { data: unknown[] }).data).toEqual([]);
     const shown = await source.request(await source.cookie(true), url);
     expect(shown.status).toBe(200);
     expect(shown.headers.get("cache-control")).toBe("private, no-cache");
     expect(shown.headers.get("etag")).toBeTruthy();
-    const body = await shown.json() as { data: Record<string, unknown>[] };
+    const body = (await shown.json()) as { data: Record<string, unknown>[] };
     expect(body.data).toHaveLength(1);
     expect(body.data[0]).toMatchObject({ event_key: KEY, going_count: 3 });
     for (const privateField of ["attendees", "user_id", "session", "token"]) {
@@ -299,7 +362,7 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     expect((await source.request(member, "/events.json?event_key=invalid")).status).toBe(422);
     const missing = await source.request(member, `/events.json?event_key=${"0".repeat(26)}`);
     expect(missing.status).toBe(200);
-    expect((await missing.json() as { data: unknown[] }).data).toEqual([]);
+    expect(((await missing.json()) as { data: unknown[] }).data).toEqual([]);
   });
 
   it("ignores broadcasts for other event keys without a request", async () => {

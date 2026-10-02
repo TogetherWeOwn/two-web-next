@@ -34,7 +34,9 @@ export type SyncMessage = {
 };
 
 /** The queue producer binding (Cloudflare Queues). Optional until the queue is provisioned. */
-export type SyncQueue = { send(message: SyncMessage, options?: { delaySeconds?: number }): Promise<void> };
+export type SyncQueue = {
+  send(message: SyncMessage, options?: { delaySeconds?: number }): Promise<void>;
+};
 
 export function actionFor(status: EventStatus): SyncAction | null {
   if (status === "published") return "event.upsert";
@@ -50,7 +52,9 @@ export function buildSyncMessage(eventKey: string, status: EventStatus): SyncMes
 }
 
 export function nextBackoffSeconds(attempt: number): number {
-  return SYNC_BACKOFF_SECONDS[attempt - 1] ?? SYNC_BACKOFF_SECONDS[SYNC_BACKOFF_SECONDS.length - 1]!;
+  return (
+    SYNC_BACKOFF_SECONDS[attempt - 1] ?? SYNC_BACKOFF_SECONDS[SYNC_BACKOFF_SECONDS.length - 1]!
+  );
 }
 
 type EnvWithQueue = Env & { EVENT_SYNC_QUEUE?: SyncQueue };
@@ -60,18 +64,28 @@ type EnvWithQueue = Env & { EVENT_SYNC_QUEUE?: SyncQueue };
  * it logs the due sync so a transition without a carrier is visible, never silent.
  * Never throws: the row is committed and correct, the reconcile pass (W13) is the backstop.
  */
-export async function enqueueEventSync(env: Env, eventKey: string, status: EventStatus): Promise<SyncMessage | null> {
+export async function enqueueEventSync(
+  env: Env,
+  eventKey: string,
+  status: EventStatus,
+): Promise<SyncMessage | null> {
   const message = buildSyncMessage(eventKey, status);
   if (!message) return null;
   const queue = (env as EnvWithQueue).EVENT_SYNC_QUEUE;
   if (!queue) {
-    console.warn("event write-back due but EVENT_SYNC_QUEUE is not bound", { eventKey, action: message.action });
+    console.warn("event write-back due but EVENT_SYNC_QUEUE is not bound", {
+      eventKey,
+      action: message.action,
+    });
     return message;
   }
   try {
     await queue.send(message, { delaySeconds: SYNC_DEBOUNCE_SECONDS });
   } catch (err) {
-    console.error("event write-back enqueue failed; reconcile will re-dispatch", { eventKey, error: String(err) });
+    console.error("event write-back enqueue failed; reconcile will re-dispatch", {
+      eventKey,
+      error: String(err),
+    });
   }
   return message;
 }

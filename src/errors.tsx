@@ -13,53 +13,97 @@ const NOINDEX = "noindex, nofollow";
 
 const JOIN_HREF = "/auth/discord";
 
-const ErrorShell: FC<PropsWithChildren<{
-  code: string;
-  title: string;
-  headerCta?: { href: string; label: string };
-  supportingContent?: PropsWithChildren["children"];
-}>> = ({ code, title, headerCta, supportingContent, children }) => (
-  <RecoveryShell code={code} title={title} headingId="error-heading" robots={NOINDEX} headerCta={headerCta} supportingContent={supportingContent}>
+const ErrorShell: FC<
+  PropsWithChildren<{
+    code: string;
+    title: string;
+    headerCta?: { href: string; label: string };
+    supportingContent?: PropsWithChildren["children"];
+  }>
+> = ({ code, title, headerCta, supportingContent, children }) => (
+  <RecoveryShell
+    code={code}
+    title={title}
+    headingId="error-heading"
+    robots={NOINDEX}
+    headerCta={headerCta}
+    supportingContent={supportingContent}
+  >
     {children}
   </RecoveryShell>
 );
 
 // 404 recovery stays available even when the optional event lookup fails.
 export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestions = [] }) => (
-  <ErrorShell code="404" title="We cannot find that page" supportingContent={
-    <section class="recovery-events" aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
-      <h2 id="error-events-heading">Happening soon</h2>
-      {suggestions.length ? (
-        <ul class="facts">
-          {suggestions.map((event) => (
-            <li class="card">
-              <a href={`/e/${encodeURIComponent(event.key)}`} data-testid="error-event-suggestion">{event.title}</a>
-              <p>
-                <time datetime={event.startsAt.toISOString()}>{event.startsAt.toISOString().slice(0, 16).replace("T", " ")} UTC</time>
-                {event.location ? <> · {event.location}</> : null}
-              </p>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p data-testid="error-events-empty">Nothing is on the calendar right now — check back soon.</p>
-      )}
-      <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
-      <form action="/events" method="get" role="search" class="error-events-search">
-        <label for="error-events-search">Search events</label>
-        <div>
-          <input id="error-events-search" name="q" type="search" placeholder="Search events…" autocomplete="off" data-testid="error-events-search" />
-          <button type="submit" class="btn" data-testid="error-events-search-submit">Search events</button>
-        </div>
-      </form>
-    </section>
-  }>
+  <ErrorShell
+    code="404"
+    title="We cannot find that page"
+    supportingContent={
+      <section
+        class="recovery-events"
+        aria-labelledby="error-events-heading"
+        data-testid="error-event-suggestions"
+      >
+        <h2 id="error-events-heading">Happening soon</h2>
+        {suggestions.length ? (
+          <ul class="facts">
+            {suggestions.map((event) => (
+              <li class="card">
+                <a
+                  href={`/e/${encodeURIComponent(event.key)}`}
+                  data-testid="error-event-suggestion"
+                >
+                  {event.title}
+                </a>
+                <p>
+                  <time datetime={event.startsAt.toISOString()}>
+                    {event.startsAt.toISOString().slice(0, 16).replace("T", " ")} UTC
+                  </time>
+                  {event.location ? <> · {event.location}</> : null}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p data-testid="error-events-empty">
+            Nothing is on the calendar right now — check back soon.
+          </p>
+        )}
+        <p>
+          <a href="/events" data-testid="error-all-events">
+            Browse all events
+          </a>
+        </p>
+        <form action="/events" method="get" role="search" class="error-events-search">
+          <label for="error-events-search">Search events</label>
+          <div>
+            <input
+              id="error-events-search"
+              name="q"
+              type="search"
+              placeholder="Search events…"
+              autocomplete="off"
+              data-testid="error-events-search"
+            />
+            <button type="submit" class="btn" data-testid="error-events-search-submit">
+              Search events
+            </button>
+          </div>
+        </form>
+      </section>
+    }
+  >
     <p class="lead">
-      The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
+      The link may be old or mistyped, or the page may have moved. The lobby is still open — come in
+      and say hello.
     </p>
     <p class="recovery-actions">
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
-      <a href="/" data-testid="error-home">Back to the homepage</a>
+      <a class="btn" href={JOIN_HREF} data-testid="error-join">
+        Join with Discord
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
     </p>
   </ErrorShell>
 );
@@ -69,12 +113,16 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
 export const InternalErrorPage: FC = () => (
   <ErrorShell code="500" title="Something broke on our side">
     <p class="lead">
-      It is not you. We have logged the failure and the team will take a look. Try again in a minute — the lobby is
-      not going anywhere.
+      It is not you. We have logged the failure and the team will take a look. Try again in a minute
+      — the lobby is not going anywhere.
     </p>
     <p class="recovery-actions">
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
-      <a href="/" data-testid="error-home">Back to the homepage</a>
+      <a class="btn" href={JOIN_HREF} data-testid="error-join">
+        Join with Discord
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
     </p>
   </ErrorShell>
 );
@@ -83,11 +131,16 @@ export const InternalErrorPage: FC = () => (
 export const RateLimitedPage: FC = () => (
   <ErrorShell code="429" title="Slow down a little">
     <p class="lead">
-      You have made a lot of requests in a short time. Wait a moment and try again — the lobby is not going anywhere.
+      You have made a lot of requests in a short time. Wait a moment and try again — the lobby is
+      not going anywhere.
     </p>
     <p class="recovery-actions">
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
-      <a href="/" data-testid="error-home">Back to the homepage</a>
+      <a class="btn" href={JOIN_HREF} data-testid="error-join">
+        Join with Discord
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
     </p>
   </ErrorShell>
 );
@@ -95,7 +148,9 @@ export const RateLimitedPage: FC = () => (
 export const PayloadTooLargePage: FC = () => (
   <ErrorShell code="413" title="That request is too large">
     <p class="lead">Reduce the size of your request and try again.</p>
-    <p><a href="/">Back to the homepage</a></p>
+    <p>
+      <a href="/">Back to the homepage</a>
+    </p>
   </ErrorShell>
 );
 
@@ -109,22 +164,30 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
     headerCta={{ href: inviteUrl, label: "Open Discord" }}
   >
     <p class="lead">
-      The site is down for a minute of maintenance. The Discord server never closes — come in through the invite and
-      we will see you there.
+      The site is down for a minute of maintenance. The Discord server never closes — come in
+      through the invite and we will see you there.
     </p>
     <p class="recovery-actions">
-      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
-      <a href="/" data-testid="error-retry">Try again</a>
+      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
+        Use the Discord invite instead
+      </a>{" "}
+      <a href="/" data-testid="error-retry">
+        Try again
+      </a>
     </p>
   </ErrorShell>
 );
 
 // Host refusals use only this shell, never the optional DB lookup.
-export function notFoundResponse(c: Context, suggestions: SuggestedEvent[] = []): Response | Promise<Response> {
+export function notFoundResponse(
+  c: Context,
+  suggestions: SuggestedEvent[] = [],
+): Response | Promise<Response> {
   if (memberReadActive()) {
     // Only this known shell classifies a missing route; arbitrary 404 responses
     // and prior queries still must satisfy the ordinary read boundary.
-    if (c.get("adminActor")) c.set("access", { resource: "not-found", action: "view", route: "admin.not-found" });
+    if (c.get("adminActor"))
+      c.set("access", { resource: "not-found", action: "view", route: "admin.not-found" });
     return bufferedMemberHtml(c, <NotFoundPage suggestions={suggestions} />, 404);
   }
   c.header("cache-control", "no-store, private");
@@ -178,13 +241,21 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
 export function payloadTooLarge(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   c.status(413);
-  if (c.req.path.startsWith("/api/") || (c.req.header("accept") ?? "").includes("application/json")) {
-    return c.json({ reason: "payload_too_large", message: "Reduce the size of your request and try again." });
+  if (
+    c.req.path.startsWith("/api/") ||
+    (c.req.header("accept") ?? "").includes("application/json")
+  ) {
+    return c.json({
+      reason: "payload_too_large",
+      message: "Reduce the size of your request and try again.",
+    });
   }
   return c.html(<PayloadTooLargePage />);
 }
 
-export function maintenanceHandler(inviteUrl: string): (c: Context) => Response | Promise<Response> {
+export function maintenanceHandler(
+  inviteUrl: string,
+): (c: Context) => Response | Promise<Response> {
   return (c) => {
     c.header("cache-control", "no-store, private");
     c.status(503);

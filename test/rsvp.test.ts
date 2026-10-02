@@ -13,9 +13,18 @@ import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import type { SyncMessage } from "../src/events/sync";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 import { RSVP_RATE_LIMIT } from "../src/islands/contracts";
-import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -31,7 +40,14 @@ async function cookieFor(store: SessionStore, userId: string): Promise<string> {
     moderator: false,
     expiresAt: new Date(Date.now() + 3600_000),
   });
-  return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+  return (
+    await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
 }
 
 // Static containment pin: the guard this file wires below refuses non-test
@@ -65,7 +81,9 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET,
-    get ADMIN_DB() { return db; },
+    get ADMIN_DB() {
+      return db;
+    },
     SESSION_STORE: store,
     EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
   } as unknown as Env;
@@ -76,7 +94,13 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   });
 
   // Sessions rotate on each authenticated view, so every request mints a fresh cookie.
-  const call = async (method: string, key: string, as: string | null, body?: unknown, extra: Record<string, string> = {}) =>
+  const call = async (
+    method: string,
+    key: string,
+    as: string | null,
+    body?: unknown,
+    extra: Record<string, string> = {},
+  ) =>
     app.request(
       `/events/${key}/rsvp`,
       {
@@ -92,20 +116,42 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       },
       env,
     );
-  const put = (key: string, as: string | null, status: unknown = "going", extra: Record<string, unknown> = {}) => call("PUT", key, as, { status, ...extra });
+  const put = (
+    key: string,
+    as: string | null,
+    status: unknown = "going",
+    extra: Record<string, unknown> = {},
+  ) => call("PUT", key, as, { status, ...extra });
 
   const HOUR = 3600_000;
-  async function seed(over: Partial<typeof events.$inferInsert> = {}): Promise<{ id: number; key: string }> {
-    const key = `01W9${Math.random().toString(36).slice(2, 14).toUpperCase().replace(/[ILOU]/g, "7")}`.padEnd(26, "0").slice(0, 26);
+  async function seed(
+    over: Partial<typeof events.$inferInsert> = {},
+  ): Promise<{ id: number; key: string }> {
+    const key = `01W9${Math.random()
+      .toString(36)
+      .slice(2, 14)
+      .toUpperCase()
+      .replace(/[ILOU]/g, "7")}`
+      .padEnd(26, "0")
+      .slice(0, 26);
     const [row] = await db
       .insert(events)
-      .values({ eventKey: key, title: "Race night", startsAt: new Date(Date.now() + HOUR), endsAt: new Date(Date.now() + 2 * HOUR), status: "published", ...over })
+      .values({
+        eventKey: key,
+        title: "Race night",
+        startsAt: new Date(Date.now() + HOUR),
+        endsAt: new Date(Date.now() + 2 * HOUR),
+        status: "published",
+        ...over,
+      })
       .returning();
     return { id: row!.id, key };
   }
   const rows = (eventId: number) => db.select().from(rsvps).where(eq(rsvps.eventId, eventId));
   const state = async (eventId: number) => {
-    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [
+      { n: number },
+    ];
     return { rows: (await rows(eventId)).length, hits: n };
   };
 
@@ -123,14 +169,24 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   let fixedExisted = false;
   let fixedRows: { id: number; note: string | null }[] = [];
   const fixedExists = async () => {
-    const [r] = (await sentinelAdmin`select to_regclass('public.w9_sentinel_proof') as r`) as unknown as { r: string | null }[];
+    const [r] =
+      (await sentinelAdmin`select to_regclass('public.w9_sentinel_proof') as r`) as unknown as {
+        r: string | null;
+      }[];
     return r!.r !== null;
   };
   beforeAll(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!);
-    sentinelAdmin = postgres(url.href, { max: 1, port: 5432, connect_timeout: 5, password: () => url.password });
+    sentinelAdmin = postgres(url.href, {
+      max: 1,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+    });
     fixedExisted = await fixedExists();
-    if (fixedExisted) fixedRows = (await sentinelAdmin`select id, note from w9_sentinel_proof order by id`) as unknown as typeof fixedRows;
+    if (fixedExisted)
+      fixedRows =
+        (await sentinelAdmin`select id, note from w9_sentinel_proof order by id`) as unknown as typeof fixedRows;
     await sentinelAdmin.unsafe(`CREATE TABLE "${ownedSentinel}" (id int primary key, note text)`);
     ownedSentinelCreated = true;
     await sentinelAdmin.unsafe(`INSERT INTO "${ownedSentinel}" VALUES (1, 'untouched')`);
@@ -155,10 +211,14 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   it("guest 401, foreign origin 403, bad status 422, other verbs 405, someone else's user_id 403", async () => {
     const ev = await seed();
     expect((await put(ev.key, null)).status).toBe(401);
-    expect((await call("PUT", ev.key, "u1", { status: "going" }, { origin: "https://evil.test" })).status).toBe(403);
+    expect(
+      (await call("PUT", ev.key, "u1", { status: "going" }, { origin: "https://evil.test" }))
+        .status,
+    ).toBe(403);
     expect((await put(ev.key, "u1", "attending")).status).toBe(422);
     expect((await call("PUT", ev.key, "u1", {})).status).toBe(422);
-    for (const m of ["GET", "POST", "PATCH"]) expect((await call(m, ev.key, "u1")).status).toBe(405);
+    for (const m of ["GET", "POST", "PATCH"])
+      expect((await call(m, ev.key, "u1")).status).toBe(405);
     expect((await put(ev.key, "u1", "going", { user_id: "u2" })).status).toBe(403);
     expect(await rows(ev.id)).toHaveLength(0);
   });
@@ -167,11 +227,15 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const ev = await seed();
     const first = await put(ev.key, "u1", "going");
     expect(first.status).toBe(201);
-    expect(await first.json()).toEqual({ data: { status: "going", synced_to_discord_at: null, waitlist_position: null } });
+    expect(await first.json()).toEqual({
+      data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
+    });
     await db.update(rsvps).set({ syncedToDiscordAt: new Date() });
     const again = await put(ev.key, "u1", "maybe");
     expect(again.status).toBe(200);
-    expect(await again.json()).toEqual({ data: { status: "maybe", synced_to_discord_at: null, waitlist_position: null } });
+    expect(await again.json()).toEqual({
+      data: { status: "maybe", synced_to_discord_at: null, waitlist_position: null },
+    });
     expect(await rows(ev.id)).toHaveLength(1);
     expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
     expect(await rows(ev.id)).toHaveLength(0);
@@ -192,8 +256,15 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const cases = {
       draft: await seed({ status: "draft" }),
       cancelled: await seed({ status: "cancelled" }),
-      past: await seed({ status: "past", endsAt: new Date(Date.now() - HOUR), startsAt: new Date(Date.now() - 2 * HOUR) }),
-      ended: await seed({ endsAt: new Date(Date.now() - HOUR), startsAt: new Date(Date.now() - 2 * HOUR) }),
+      past: await seed({
+        status: "past",
+        endsAt: new Date(Date.now() - HOUR),
+        startsAt: new Date(Date.now() - 2 * HOUR),
+      }),
+      ended: await seed({
+        endsAt: new Date(Date.now() - HOUR),
+        startsAt: new Date(Date.now() - 2 * HOUR),
+      }),
       paused: await seed({ rsvpOpen: false }),
     };
     for (const [name, ev] of Object.entries(cases)) {
@@ -204,7 +275,10 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect((await put("01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1")).status).toBe(404);
     expect((await call("DELETE", cases.cancelled.key, "u1")).status).toBe(204);
     // Refused writes did not spend the budget.
-    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:u1'`) as unknown as [{ n: number }];
+    const [{ n }] =
+      (await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:u1'`) as unknown as [
+        { n: number },
+      ];
     expect(n).toBe(1);
   });
 
@@ -217,9 +291,19 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(decoy.status).toBe(201);
     expect(await decoy.text()).toBe(real);
     expect(await rows(ev.id)).toHaveLength(0);
-    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [
+      { n: number },
+    ];
     expect(n).toBe(0);
-    expect((await app.request(`/events/${ev.key}/rsvp?website=x`, { method: "DELETE", headers: { origin: APP_URL } }, env)).status).toBe(204);
+    expect(
+      (
+        await app.request(
+          `/events/${ev.key}/rsvp?website=x`,
+          { method: "DELETE", headers: { origin: APP_URL } },
+          env,
+        )
+      ).status,
+    ).toBe(204);
   });
 
   it("honeypot fail-closed: a present non-string PUT decoy writes no row and spends no hit", async () => {
@@ -231,7 +315,9 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(decoy.status).toBe(201);
     expect(await decoy.text()).toBe(real);
     expect(await rows(ev.id)).toHaveLength(0);
-    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [
+      { n: number },
+    ];
     expect(n).toBe(0);
   });
 
@@ -243,14 +329,21 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       `/events/${ev.key}/rsvp?website=`,
       {
         method: "DELETE",
-        headers: { cookie: await cookieFor(store, "u1"), origin: APP_URL, accept: "application/json", "content-type": "application/json" },
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
         body: JSON.stringify({ website: "spam" }),
       },
       env,
     );
     expect(res.status).toBe(204);
     expect(await rows(ev.id)).toHaveLength(1);
-    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [
+      { n: number },
+    ];
     expect(n).toBe(0);
   });
 
@@ -264,7 +357,12 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       `/events/${ev.key}/rsvp?website=&website=spam`,
       {
         method: "DELETE",
-        headers: { cookie: await cookieFor(store, "u1"), origin: APP_URL, accept: "application/json", "content-type": "application/json" },
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
       },
       env,
     );
@@ -280,7 +378,12 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       `/events/${ev.key}/rsvp`,
       {
         method: "PUT",
-        headers: { cookie: await cookieFor(store, "u1"), origin: APP_URL, accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
         body: "status=going&website=spam&website=",
       },
       env,
@@ -297,7 +400,12 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       `/events/${ev.key}/rsvp?website=`,
       {
         method: "DELETE",
-        headers: { cookie: await cookieFor(store, "u1"), origin: APP_URL, accept: "application/json", "content-type": "Application/Json" },
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "Application/Json",
+        },
         body: JSON.stringify({ website: true }),
       },
       env,
@@ -312,19 +420,26 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(await rows(ev.id)).toHaveLength(1);
     expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
     expect(await rows(ev.id)).toHaveLength(0);
-    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [{ n: number }];
+    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits`) as unknown as [
+      { n: number },
+    ];
     expect(n).toBe(2);
   });
 
   it("the 13th write inside a minute is the one 429 shape with Retry-After, for either verb", async () => {
     const ev = await seed();
-    for (let i = 0; i < RSVP_RATE_LIMIT.maxAttempts; i++) expect((await put(ev.key, "u1", i % 2 ? "maybe" : "going")).status).toBeLessThan(300);
+    for (let i = 0; i < RSVP_RATE_LIMIT.maxAttempts; i++)
+      expect((await put(ev.key, "u1", i % 2 ? "maybe" : "going")).status).toBeLessThan(300);
     const limited = await put(ev.key, "u1");
     expect(limited.status).toBe(429);
     const retry = Number(limited.headers.get("retry-after"));
     expect(retry).toBeGreaterThanOrEqual(1);
     expect(retry).toBeLessThanOrEqual(60);
-    expect(await limited.json()).toEqual({ reason: "rate_limited", message: `Too many requests. Try again in ${retry} seconds.`, retry_after: retry });
+    expect(await limited.json()).toEqual({
+      reason: "rate_limited",
+      message: `Too many requests. Try again in ${retry} seconds.`,
+      retry_after: retry,
+    });
     expect((await call("DELETE", ev.key, "u1")).status).toBe(429);
     // The budget is per member: someone else is unaffected.
     expect((await put(ev.key, "u2")).status).toBe(201);
@@ -345,7 +460,11 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
 
   it("hammering: 40 concurrent writes by one member let exactly 12 through", async () => {
     const ev = await seed();
-    const res = await Promise.all(Array.from({ length: 40 }, (_, i) => (i % 3 ? put(ev.key, "u1") : call("DELETE", ev.key, "u1"))));
+    const res = await Promise.all(
+      Array.from({ length: 40 }, (_, i) =>
+        i % 3 ? put(ev.key, "u1") : call("DELETE", ev.key, "u1"),
+      ),
+    );
     const codes = res.map((r) => r.status);
     expect(codes.filter((c) => c === 429)).toHaveLength(40 - RSVP_RATE_LIMIT.maxAttempts);
     expect(codes.filter((c) => c !== 429)).toHaveLength(RSVP_RATE_LIMIT.maxAttempts);
@@ -354,9 +473,13 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
 
   it("capacity race: 14 members chase 3 seats, exactly 3 go and the rest are waitlisted", async () => {
     const ev = await seed({ capacity: 3 });
-    const res = await Promise.all(Array.from({ length: 14 }, (_, i) => put(ev.key, `racer-${i}`, "going")));
+    const res = await Promise.all(
+      Array.from({ length: 14 }, (_, i) => put(ev.key, `racer-${i}`, "going")),
+    );
     expect(res.every((r) => r.status === 201)).toBe(true);
-    const answers = await Promise.all(res.map(async (r) => await r.json() as { data: { status: string } }));
+    const answers = await Promise.all(
+      res.map(async (r) => (await r.json()) as { data: { status: string } }),
+    );
     expect(answers.filter((a) => a.data.status === "going")).toHaveLength(3);
     expect(answers.filter((a) => a.data.status === "waitlisted")).toHaveLength(11);
     expect((await rows(ev.id)).filter((r) => r.status === "going")).toHaveLength(3);
@@ -384,7 +507,10 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   it("a cancel racing the last seat never leaves a going row behind a refused 201", async () => {
     const ev = await seed({ capacity: 5 });
     const cancel = client`update events set status = 'cancelled' where id = ${ev.id}`;
-    const res = await Promise.all([cancel, ...Array.from({ length: 8 }, (_, i) => put(ev.key, `c-${i}`, "going"))]);
+    const res = await Promise.all([
+      cancel,
+      ...Array.from({ length: 8 }, (_, i) => put(ev.key, `c-${i}`, "going")),
+    ]);
     const writes = res.slice(1) as Response[];
     const ok = writes.filter((r) => r.status === 201).length;
     expect((await rows(ev.id)).length).toBe(ok);
@@ -396,7 +522,16 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     const go = () =>
       app.request(
         `/events/${ev.key}/rsvp`,
-        { method: "PUT", headers: { cookie, origin: APP_URL, accept: "application/json", "content-type": "application/json" }, body: JSON.stringify({ status: "going" }) },
+        {
+          method: "PUT",
+          headers: {
+            cookie,
+            origin: APP_URL,
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ status: "going" }),
+        },
         env,
       );
     const codes = (await Promise.all([go(), go(), go()])).map((r) => r.status).sort();
@@ -409,7 +544,9 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     for (let i = 0; i < RSVP_RATE_LIMIT.maxAttempts; i++) {
       const res = await put(ev.key, "u-full", "going");
       expect(res.status).toBe(i === 0 ? 201 : 200);
-      expect(await res.json()).toEqual({ data: { status: "waitlisted", synced_to_discord_at: null, waitlist_position: 1 } });
+      expect(await res.json()).toEqual({
+        data: { status: "waitlisted", synced_to_discord_at: null, waitlist_position: 1 },
+      });
     }
     expect((await put(ev.key, "u-full", "waitlisted")).status).toBe(429);
   });
@@ -484,7 +621,8 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     await holder;
     const codes = (await Promise.all([...dels, ...puts])).map((r) => r.status);
     expect(codes.filter((c) => c === 429)).toHaveLength(12);
-    const [nr] = await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:dq'`;
+    const [nr] =
+      await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:dq'`;
     const n = nr!.n;
     expect(n).toBe(12);
   });
@@ -492,7 +630,10 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   const waitForLock = async (pattern: string): Promise<boolean> => {
     const deadline = Date.now() + 5000;
     for (;;) {
-      const [w] = (await client`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query like ${pattern}`) as unknown as [{ n: number }];
+      const [w] =
+        (await client`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query like ${pattern}`) as unknown as [
+          { n: number },
+        ];
       if (w!.n > 0) return true;
       if (Date.now() > deadline) return false;
       await new Promise((r) => setTimeout(r, 20));
@@ -520,7 +661,10 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     await holder;
     expect((await pending).status).toBe(403);
     expect((await rows(ev.id)).map((r) => r.status)).toEqual(["going"]);
-    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`) as unknown as [{ n: number }];
+    const [{ n }] =
+      (await client`select count(*)::int as n from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`) as unknown as [
+        { n: number },
+      ];
     expect(n).toBe(0);
   });
   it("the global prune runs before the hit is stamped: a write queued behind prune keeps a fresh budget", async () => {
@@ -541,7 +685,8 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     release();
     await holder;
     expect((await pending).status).toBe(201);
-    const [hit] = await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
+    const [hit] =
+      await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
     expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
     await client`delete from web_throttle_hits where bucket = 'unrelated-expired-bucket'`;
   });
@@ -565,7 +710,10 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     await holder;
     expect((await pending).status).toBe(403);
     expect(await rows(ev.id)).toHaveLength(0);
-    const [{ n }] = (await client`select count(*)::int as n from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`) as unknown as [{ n: number }];
+    const [{ n }] =
+      (await client`select count(*)::int as n from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`) as unknown as [
+        { n: number },
+      ];
     expect(n).toBe(0);
     await client`delete from web_throttle_hits where bucket = 'unrelated-expired-hold'`;
   });
@@ -588,7 +736,8 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       release();
       await holder;
       expect((await pending).status).toBeLessThan(300);
-      const [hit] = await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
+      const [hit] =
+        await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
       expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
     }
   });
@@ -605,16 +754,22 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
   // snapshot and read. Vitest runs tests in file order, so this is the final
   // DB test.
   it("zz_sentinel: the owned proof and any pre-existing fixed table survive the whole suite", async () => {
-    const orows = (await sentinelAdmin.unsafe(`SELECT note FROM "${ownedSentinel}" WHERE id = 1`)) as unknown as { note: string }[];
+    const orows = (await sentinelAdmin.unsafe(
+      `SELECT note FROM "${ownedSentinel}" WHERE id = 1`,
+    )) as unknown as { note: string }[];
     expect(orows[0]!.note).toBe("untouched");
     // The suite did its work inside the owned schema: its tables exist there.
-    const srows = (await sentinelAdmin`select count(*)::int as n from pg_tables where schemaname = ${fixture.schemaName} and tablename in ('events', 'rsvps', 'web_throttle_hits')`) as unknown as { n: number }[];
+    const srows =
+      (await sentinelAdmin`select count(*)::int as n from pg_tables where schemaname = ${fixture.schemaName} and tablename in ('events', 'rsvps', 'web_throttle_hits')`) as unknown as {
+        n: number;
+      }[];
     expect(srows[0]!.n).toBe(3);
     // The fixed shared name is exactly as setup found it — never created,
     // reused or dropped by this suite.
     expect(await fixedExists()).toBe(fixedExisted);
     if (fixedExisted) {
-      const now = (await sentinelAdmin`select id, note from w9_sentinel_proof order by id`) as unknown as typeof fixedRows;
+      const now =
+        (await sentinelAdmin`select id, note from w9_sentinel_proof order by id`) as unknown as typeof fixedRows;
       expect(now).toEqual(fixedRows);
     }
   });

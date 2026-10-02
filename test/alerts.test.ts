@@ -1,7 +1,14 @@
 import { HTTPException } from "hono/http-exception";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ALERT_WINDOW_MS, AlertRateLimit, alertQueueFailing, alertRequestError, fingerprintOf, shouldReport } from "../src/alerts";
+import {
+  ALERT_WINDOW_MS,
+  AlertRateLimit,
+  alertQueueFailing,
+  alertRequestError,
+  fingerprintOf,
+  shouldReport,
+} from "../src/alerts";
 import { registerErrorHandlers } from "../src/errors";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
@@ -33,7 +40,9 @@ describe("rate limit", () => {
     const req = { method: "GET", route: "/a" };
     expect(alertRequestError(new BoomError("x"), req, { limiter: rl, sink })).toBe(true);
     expect(alertRequestError(new BoomError("y"), req, { limiter: rl, sink })).toBe(false);
-    expect(alertRequestError(new BoomError("y"), { method: "GET", route: "/b" }, { limiter: rl, sink })).toBe(true);
+    expect(
+      alertRequestError(new BoomError("y"), { method: "GET", route: "/b" }, { limiter: rl, sink }),
+    ).toBe(true);
     t += ALERT_WINDOW_MS - 1;
     expect(alertRequestError(new BoomError("z"), req, { limiter: rl, sink })).toBe(false);
     t += 1;
@@ -43,10 +52,14 @@ describe("rate limit", () => {
 
   it("emits one single-line JSON critical with the class@route fingerprint and no message", () => {
     const lines: string[] = [];
-    alertRequestError(new BoomError("secret INSERT values"), { method: "POST", route: "/join" }, {
-      limiter: new AlertRateLimit(),
-      sink: (l) => void lines.push(l),
-    });
+    alertRequestError(
+      new BoomError("secret INSERT values"),
+      { method: "POST", route: "/join" },
+      {
+        limiter: new AlertRateLimit(),
+        sink: (l) => void lines.push(l),
+      },
+    );
     expect(lines[0]).not.toContain("\n");
     expect(lines[0]).not.toContain("secret");
     expect(JSON.parse(lines[0]!)).toEqual({
@@ -78,7 +91,8 @@ describe("app wiring", () => {
     app.get("/wiring-forbidden", () => {
       throw new HTTPException(403);
     });
-    const alerts = () => err.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"error.alert"'));
+    const alerts = () =>
+      err.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('"error.alert"'));
 
     expect((await app.request("/wiring-boom")).status).toBe(500);
     expect((await app.request("/wiring-boom")).status).toBe(500);
@@ -92,17 +106,28 @@ describe("app wiring", () => {
 describe("queue.failing", () => {
   const lock: UniqueLock = { acquire: async () => "test-lease", release: async () => {} };
   const events = {} as EventStore;
-  const ledger = { released: async () => {}, dequeued: async () => {}, failed: async () => {} } as unknown as QueueLedger;
+  const ledger = {
+    released: async () => {},
+    dequeued: async () => {},
+    failed: async () => {},
+  } as unknown as QueueLedger;
   const msg = (body: unknown, attempts: number) => ({ body, attempts, ack() {}, retry() {} });
   const ann = { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } };
   const failingLines = (spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] =>
-    spy.mock.calls.map((c) => String(c[0])).filter((l: string) => l.includes('"queue.failing"')).map((l: string) => JSON.parse(l));
+    spy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((l: string) => l.includes('"queue.failing"'))
+      .map((l: string) => JSON.parse(l));
 
   it("logs connection/queue/job/attempts/exception on a terminal failure", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     // Class-only (TOG-11627): the terminal message can carry secrets, so the
     // alert carries the error class, never its text.
-    const bot = { postAnnouncement: async () => { throw new BotTerminalError("missing secret"); } } as unknown as BotClient;
+    const bot = {
+      postAnnouncement: async () => {
+        throw new BotTerminalError("missing secret");
+      },
+    } as unknown as BotClient;
     await consume({ messages: [msg(ann, 2)] }, { bot, events, lock, ledger });
     expect(failingLines(spy)).toEqual([
       {
@@ -119,27 +144,50 @@ describe("queue.failing", () => {
 
   it("a redeliverable throw alerts only on the final attempt", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const bot = { postAnnouncement: async () => { throw new TypeError("boom"); } } as unknown as BotClient;
-    await consume({ messages: [msg(ann, CALL_INTERNAL_ACTION.tries - 1)] }, { bot, events, lock, ledger });
+    const bot = {
+      postAnnouncement: async () => {
+        throw new TypeError("boom");
+      },
+    } as unknown as BotClient;
+    await consume(
+      { messages: [msg(ann, CALL_INTERNAL_ACTION.tries - 1)] },
+      { bot, events, lock, ledger },
+    );
     expect(failingLines(spy)).toHaveLength(0);
-    await consume({ messages: [msg(ann, CALL_INTERNAL_ACTION.tries)] }, { bot, events, lock, ledger });
-    expect(failingLines(spy)).toMatchObject([{ attempts: CALL_INTERNAL_ACTION.tries, exception: "TypeError" }]);
+    await consume(
+      { messages: [msg(ann, CALL_INTERNAL_ACTION.tries)] },
+      { bot, events, lock, ledger },
+    );
+    expect(failingLines(spy)).toMatchObject([
+      { attempts: CALL_INTERNAL_ACTION.tries, exception: "TypeError" },
+    ]);
   });
 
   it("sync-event failures name the sync queue and job", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const boom = () => { throw new TypeError("x"); };
+    const boom = () => {
+      throw new TypeError("x");
+    };
     const store = { find: boom } as unknown as EventStore;
     await consume(
-      { messages: [msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, SYNC_EVENT.tries)] },
+      {
+        messages: [
+          msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, SYNC_EVENT.tries),
+        ],
+      },
       { bot: {} as BotClient, events: store, lock, ledger },
     );
-    expect(failingLines(spy)).toMatchObject([{ queue: "two-sync-event", job: "SyncEventToDiscord" }]);
+    expect(failingLines(spy)).toMatchObject([
+      { queue: "two-sync-event", job: "SyncEventToDiscord" },
+    ]);
   });
 
   it("alertQueueFailing writes one JSON line", () => {
     const lines: string[] = [];
-    alertQueueFailing({ connection: "c", queue: "q", job: "J", attempts: 1, exception: "e" }, (l) => void lines.push(l));
+    alertQueueFailing(
+      { connection: "c", queue: "q", job: "J", attempts: 1, exception: "e" },
+      (l) => void lines.push(l),
+    );
     expect(lines).toHaveLength(1);
   });
 });

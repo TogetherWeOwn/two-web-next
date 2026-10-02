@@ -31,8 +31,14 @@ export class BotTransportError extends Error {}
 export class BotTerminalError extends Error {}
 
 export interface BotClient {
-  upsertEvent(p: EventUpsert, idempotencyKey: string): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
-  postAnnouncement(a: Announcement, idempotencyKey: string): Promise<BotSuccess<{ messageId: string; replayed: boolean }> | BotFailure>;
+  upsertEvent(
+    p: EventUpsert,
+    idempotencyKey: string,
+  ): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
+  postAnnouncement(
+    a: Announcement,
+    idempotencyKey: string,
+  ): Promise<BotSuccess<{ messageId: string; replayed: boolean }> | BotFailure>;
   assignRole(r: RoleAssignment): Promise<BotSuccess<{ outcome: string }> | BotFailure>;
 }
 
@@ -89,7 +95,13 @@ export interface UniqueLock {
 
 export type QueueMessage =
   // Optional only for pre-fencing messages: those finish without releasing a lock (TTL recovers it).
-  | { kind: "sync-event"; eventKey: string; idempotencyKey: string; leaseToken?: string; jobId?: string }
+  | {
+      kind: "sync-event";
+      eventKey: string;
+      idempotencyKey: string;
+      leaseToken?: string;
+      jobId?: string;
+    }
   | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
   | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
   | { kind: "alert-probe"; probeId?: string; jobId?: never };
@@ -104,7 +116,12 @@ export type QueueMessage =
  */
 export interface QueueLedger {
   /** A message was accepted by the queue. `availableAt` includes the debounce delay. */
-  enqueued(job: { jobId: string; kind: string; key: string | null; availableAt: Date }): Promise<void>;
+  enqueued(job: {
+    jobId: string;
+    kind: string;
+    key: string | null;
+    availableAt: Date;
+  }): Promise<void>;
   /** A consumer picked the message up. */
   reserved(jobId: string): Promise<void>;
   /** The message went back to the queue (retry outcome or redelivery). */

@@ -3,7 +3,10 @@ import { URL as NodeURL } from "node:url";
 import { createContext, runInContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
-const binder = readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8");
+const binder = readFileSync(
+  new NodeURL("../public/islands/going-count.js", import.meta.url),
+  "utf8",
+);
 const MOUNT = '[data-island="going-count"]';
 const EVENT = "going-count-updated";
 
@@ -15,7 +18,9 @@ class TextTarget {
     this.value = initial;
   }
 
-  get textContent() { return this.value; }
+  get textContent() {
+    return this.value;
+  }
   set textContent(value: string) {
     this.value = value;
     this.writes.push(value);
@@ -28,13 +33,23 @@ class Badge {
   announcement = new TextTarget("");
 
   constructor(key: string, capacity: string = "4") {
-    this.attributes = new Map([["data-island", "going-count"], ["data-event-key", key], ["data-capacity", capacity]]);
+    this.attributes = new Map([
+      ["data-island", "going-count"],
+      ["data-event-key", key],
+      ["data-capacity", capacity],
+    ]);
     this.count = new TextTarget(capacity ? `2 of ${capacity} going` : "2 going");
   }
 
-  getAttribute(name: string) { return this.attributes.get(name) ?? null; }
-  setAttribute(name: string, value: string) { this.attributes.set(name, value); }
-  removeAttribute(name: string) { this.attributes.delete(name); }
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
+  }
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
+  }
+  removeAttribute(name: string) {
+    this.attributes.delete(name);
+  }
   querySelector(selector: string) {
     if (selector === "[data-count]") return this.count;
     if (selector === "[data-announcement]") return this.announcement;
@@ -51,7 +66,10 @@ interface ReadResponse {
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
 
@@ -63,28 +81,35 @@ type PendingRead = ReturnType<typeof deferred<ReadResponse>>;
 // implementation, real network, database or shared document is involved.
 function browser(...badges: Badge[]) {
   const listeners: ((event: { detail: Detail }) => void)[] = [];
-  const requests: { url: string; init: { headers: Record<string, string> }; read: PendingRead }[] = [];
-  runInContext(binder, createContext({
-    document: {
-      addEventListener(type: string, listener: (event: { detail: Detail }) => void) {
-        expect(type).toBe(EVENT);
-        listeners.push(listener);
+  const requests: { url: string; init: { headers: Record<string, string> }; read: PendingRead }[] =
+    [];
+  runInContext(
+    binder,
+    createContext({
+      document: {
+        addEventListener(type: string, listener: (event: { detail: Detail }) => void) {
+          expect(type).toBe(EVENT);
+          listeners.push(listener);
+        },
+        querySelectorAll(selector: string) {
+          expect(selector).toBe(MOUNT);
+          return badges;
+        },
       },
-      querySelectorAll(selector: string) {
-        expect(selector).toBe(MOUNT);
-        return badges;
+      fetch(url: string, init: { headers: Record<string, string> }) {
+        const read = deferred<ReadResponse>();
+        requests.push({ url, init, read });
+        return read.promise;
       },
-    },
-    fetch(url: string, init: { headers: Record<string, string> }) {
-      const read = deferred<ReadResponse>();
-      requests.push({ url, init, read });
-      return read.promise;
-    },
-  }), { filename: "public/islands/going-count.js" });
+    }),
+    { filename: "public/islands/going-count.js" },
+  );
 
   return {
     requests,
-    broadcast(detail: Detail) { listeners.forEach((listener) => listener({ detail })); },
+    broadcast(detail: Detail) {
+      listeners.forEach((listener) => listener({ detail }));
+    },
     async respond(index: number, body: unknown) {
       requests[index]!.read.resolve({ ok: true, status: 200, json: async () => body });
       await settle();
@@ -103,8 +128,16 @@ const rows = (key: string, count: number) => [{ event_key: key, going_count: cou
 async function fail(b: ReturnType<typeof browser>, index: number, failure: string) {
   const read = b.requests[index]!.read;
   if (failure === "network") read.reject(new Error("offline"));
-  else if (failure === "http") read.resolve({ ok: false, status: 500, json: async () => rows("a", 99) });
-  else if (failure === "json") read.resolve({ ok: true, status: 200, json: async () => { throw new Error("invalid JSON"); } });
+  else if (failure === "http")
+    read.resolve({ ok: false, status: 500, json: async () => rows("a", 99) });
+  else if (failure === "json")
+    read.resolve({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error("invalid JSON");
+      },
+    });
   else read.resolve({ ok: true, status: 200, json: async () => ({ data: rows("other", 99) }) });
   await settle();
 }
@@ -166,23 +199,26 @@ describe("GoingCount distributed binder refresh ownership", () => {
     expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
   });
 
-  it.each(failures)("keeps the last good state when newest B fails (%s) and older A succeeds", async (failure) => {
-    const badge = new Badge("a");
-    const b = browser(badge);
-    b.broadcast({ eventKey: "a", viewerState: "going" });
-    await b.respond(0, rows("a", 3));
-    b.broadcast({ eventKey: "a", viewerState: "waitlisted" });
-    b.broadcast({ eventKey: "a", viewerState: "none" });
-    await fail(b, 2, failure);
-    await b.respond(1, rows("a", 4));
-    expect(badge.count.textContent).toBe("3 of 4 going");
-    expect(badge.announcement.writes).toEqual(["You're going. "]);
-    // A later successful operation can still recover from the failed read.
-    b.broadcast({ eventKey: "a", viewerState: "none" });
-    await b.respond(3, rows("a", 1));
-    expect(badge.count.textContent).toBe("1 of 4 going");
-    expect(badge.announcement.writes).toEqual(["You're going. ", "RSVP removed. "]);
-  });
+  it.each(failures)(
+    "keeps the last good state when newest B fails (%s) and older A succeeds",
+    async (failure) => {
+      const badge = new Badge("a");
+      const b = browser(badge);
+      b.broadcast({ eventKey: "a", viewerState: "going" });
+      await b.respond(0, rows("a", 3));
+      b.broadcast({ eventKey: "a", viewerState: "waitlisted" });
+      b.broadcast({ eventKey: "a", viewerState: "none" });
+      await fail(b, 2, failure);
+      await b.respond(1, rows("a", 4));
+      expect(badge.count.textContent).toBe("3 of 4 going");
+      expect(badge.announcement.writes).toEqual(["You're going. "]);
+      // A later successful operation can still recover from the failed read.
+      b.broadcast({ eventKey: "a", viewerState: "none" });
+      await b.respond(3, rows("a", 1));
+      expect(badge.count.textContent).toBe("1 of 4 going");
+      expect(badge.announcement.writes).toEqual(["You're going. ", "RSVP removed. "]);
+    },
+  );
 
   it.each(failures)("ignores stale A's failure (%s) after B succeeds", async (failure) => {
     const badge = new Badge("a");
@@ -215,7 +251,11 @@ describe("GoingCount distributed binder refresh ownership", () => {
     expect(b.requests).toHaveLength(2);
     await b.respond(1, rows("a", 1));
     await b.respond(0, rows("a", 3));
-    expect(badges.map((badge) => badge.count.textContent)).toEqual(["1 of 4 going", "1 of 8 going", "1 going"]);
+    expect(badges.map((badge) => badge.count.textContent)).toEqual([
+      "1 of 4 going",
+      "1 of 8 going",
+      "1 going",
+    ]);
     for (const badge of badges) expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
     expect(other.count.writes).toEqual([]);
     expect(other.announcement.writes).toEqual([]);

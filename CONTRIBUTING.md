@@ -83,8 +83,40 @@ cutover. `feat!` / `BREAKING CHANGE` bumps major (minor while `0.x`).
 npm ci
 cp .dev.vars.example .dev.vars   # fill in locally; never commit
 npm run dev
-npm run check                    # typecheck + tests
+npm run format                   # formatting only; never rewrites lint violations
+npm run lint                     # read-only Biome lint + format gate
+npm run check                    # lint + format + typecheck + config drift + tests
 ```
+
+Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
+[`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both
+lint and formatting. `npm run format` only formats; it does not apply lint fixes
+or reorder imports. `npm run check` runs this gate; CI runs it before typecheck
+and coverage, alongside the configuration drift check, and proves rejection
+of debugger statements, unused variables, floating promises and bad formatting
+with `bash ci/biome-selftest.sh`.
+
+The rule set is deliberately opt-in (`preset: none`): basic correctness checks,
+unused variables and floating promises, not opinionated style or accessibility
+rewrites. Generated Drizzle metadata, the npm lockfile and build/dependency
+outputs are excluded. The existing island scripts retain narrow compatibility
+exceptions: `events-calendar.js` permits the unused catch variable `e`,
+`member-profile.js` permits `x`, and those files plus `past-events.js` disable
+`noFloatingPromises` for their existing fire-and-forget handlers. The staging spike
+`staging-checks.ts` disables only `noUnsafeFinally` for its existing fail-closed
+cleanup-verification throw in `finally`; its control flow remains unchanged.
+All other files keep the selected rules. Tightening these exceptions is separate
+behavioral work.
+The two standalone importer tests (`import-audit.test.ts` and
+`import-events-rsvps.test.ts`) use a 140-column formatter override to keep their
+existing `@ts-expect-error` imports on one line; wrapping would detach the directive
+from TypeScript's module diagnostic. `public/styles.css` and `ci/a11y.mjs` are not
+formatted because existing regression tests assert exact stylesheet bytes and
+source-order substrings. `ci/featured-proof/**` also retains its immutable,
+hash-verified proof inputs byte-for-byte. Their content, hashes and regression
+assertions remain unchanged. These formatter exemptions disable neither lint nor
+typecheck.
+Configuration options follow the [Biome configuration reference](https://biomejs.dev/reference/configuration/).
 
 Never commit secrets, `.dev.vars` or `node_modules/`. See
 [README.md](README.md) for the full configuration reference.
