@@ -717,8 +717,7 @@ export const PastEventsPage: FC<{
         <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
           {EVENTS_EMPTY_COPY.subscribe}
         </a>{" "}
-        <a href={rssUrl(appUrl)}>RSS feed</a>{" "}
-        <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
+        <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
       </p>
       <div data-archive-state>
         {rows.length === 0 ? (
