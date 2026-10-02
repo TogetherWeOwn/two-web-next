@@ -28,16 +28,22 @@ describe("runbook diagnostic and homepage contract", () => {
     const retirement = health.split("\n\n").find((paragraph) => retired.every((path) => paragraph.includes(`\`${path}\``)));
     expect(retirement).toMatch(/retired[\s\S]*404/);
     for (const path of retired) {
-      expect(rows.some((row) => row.split("|")[1]!.includes(`\`${path}\``))).toBe(false);
+      // An outage-table row may list them, but only as ordinary 404s.
+      for (const row of rows.filter((line) => line.split("|")[1]!.includes(`\`${path}\``))) {
+        expect(row).toMatch(/\*\*404\*\*/);
+        expect(row).not.toMatch(/\b(200|503)\b/);
+      }
     }
   });
 
-  it("keeps liveness and unknown queue evidence separate from readiness", () => {
-    expect(health).toMatch(/always returns \*\*200\*\*/);
-    expect(health).toMatch(/liveness[^.]*not[^.]*readiness/);
+  it("documents shipped /up readiness separately from DB-free startup and queue evidence", () => {
+    expect(health).toMatch(/`GET \/up` is \*\*readiness\*\*/);
+    expect(health).not.toMatch(/always returns \*\*200\*\*/);
+    expect(health).toMatch(/`GET \/robots\.txt` is DB-free[^.]*startup/);
+    expect(health).toContain("HTTP 200 + `db:ok` + `pending_migrations:0`");
     expect(health).toContain("healthy + unknown");
     expect(health).toContain("lack of evidence");
-    expect(routeRow("/up")).toMatch(/\*\*200\*\*.*`unknown`.*not readiness/);
+    expect(routeRow("/up")).toMatch(/\*\*503\*\* `db:error`, `pending_migrations:null`.*`unknown`/);
   });
 
   it("distinguishes the guest homepage fallback from unavailable private writes", () => {
@@ -49,8 +55,9 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(outage).toMatch(/public\s+fallback[^.]*not[^.]*private[^.]*writes/i);
   });
 
-  it("labels readiness and broader outage PRs as pending rather than shipped", () => {
-    expect(health).toMatch(/Pending[^\n]*\[#111\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/111\)/);
+  it("cites shipped readiness and keeps the broader outage PR pending", () => {
+    expect(health).toMatch(/Readiness shipped in \[#111\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/111\)/);
+    expect(health).not.toMatch(/Pending[^\n]*#111/);
     expect(outage).toMatch(/Pending[^\n]*\[#92\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/92\)/);
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);

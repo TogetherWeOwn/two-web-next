@@ -163,34 +163,83 @@ paths: GET returns ordinary **404**, not health or DB evidence. The generic 404
 page may try optional event suggestions and tolerates their DB failure; it is
 not a DB-free diagnostic. See [retired-route fixtures](../test/db-ping.test.ts).
 
-`GET /up` always returns **200**, with `Cache-Control: no-store` and no
-session/auth lookup. This is HTTP liveness, **not DB/schema readiness**. Read its
-JSON, not just HTTP status. The current response has only `status` and `queue`;
-there is no DB ping or pending-migration result. Do not use a live DB-backed
-`/up` as a test; use approved incident evidence and the existing offline tools:
+`GET /robots.txt` is DB-free and can check local Worker startup; it does not
+prove deployment readiness.
+`GET /up` is **readiness**: a read-only DB ping and web migration-ledger read,
+plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
+lookup, and no cookies. No migration is run or repaired by this endpoint.
+
+DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty
+`DATABASE_URL`, otherwise `DB.connectionString`. If that selected database fails,
+readiness fails; it never substitutes the other target. The queue retains its
+existing `DB.connectionString ?? DATABASE_URL` selection. When both reads select
+the same URL, they share a two-slot client; otherwise each uses a one-slot client
+and is independently measured and cleaned up within the same response deadline.
+
+The journal (`drizzle/meta/_journal.json`) is embedded in the Worker at build
+time. Only web tags `1000–1999` are checked against exact `created_at` timestamps
+in `drizzle.__drizzle_migrations`; bot rows and grandfathered `0000/0001` tags do
+not participate. A newer bot row or later web row cannot hide an earlier missing
+web migration. An empty ledger counts all bundled web migrations as pending; a
+missing, unreadable or malformed ledger reports `null`, never a false zero.
+Volatile `clock_timestamp()` in both DB queries avoids Hyperdrive query caching.
+
+DB ping + ledger share a **3-second response deadline**, running in parallel with
+the existing 3-second queue deadline. Each ping, ledger and queue read runs in a
+short read-only transaction with transaction-local **1-second statement** and
+**750-ms lock** limits. After connection acquisition, these limits shrink to the
+remaining response budget (with a 250-ms margin). After timeout setup succeeds,
+the installed statement limit must still fit the remaining budget, otherwise
+no read starts. This also covers a delayed setup reply, without an unbounded
+retry/reset loop. Server limits abort active work even when disconnect alone
+would leave a lock-waiting backend. Request-owned clients close without waiting to drain;
+injected clients retain their own lifecycle. No session/global settings or
+migrations are changed. Exception messages, SQL and credentials are never
+returned/logged by this health path.
+
+Sources: [PostgreSQL statement/lock timeouts](https://www.postgresql.org/docs/current/runtime-config-client.html#RUNTIME-CONFIG-CLIENT-STATEMENT),
+[Hyperdrive transaction-scoped SET](https://developers.cloudflare.com/hyperdrive/concepts/connection-pooling/),
+[Postgres.js transactions](https://github.com/porsager/postgres#transactions).
+
+| DB/schema outcome | HTTP | `db` | `pending_migrations` | Top-level `status` |
+| --- | --- | --- | --- | --- |
+| DB reachable, every bundled web migration applied | 200 | `ok` | `0` | Queue-derived `healthy` / `degraded` |
+| DB reachable, N web migrations missing | 503 | `ok` | N | `degraded` |
+| DB reachable, ledger read fails/times out | 503 | `ok` | `null` | `degraded` |
+| No usable DB configuration, failed/hung ping | 503 | `error` | `null` | `degraded` |
+
+Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready**:
+
+| Queue ledger outcome | Top-level `status` when DB/schema ready | `queue.status` / measurements |
+| --- | --- | --- |
+| Read succeeds, `pending < 20` | `healthy` | `healthy`, measured values |
+| `pending >= 20` (including `>= 100`) | `degraded` | `degraded`, measured values |
+| Read rejects or reaches a server/response limit | `healthy` | `unknown`, all six measurements `null`, `detail: null` |
+| No usable queue client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
+
+The deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`** and the
+existing queue envelope. HTTP 503 (including pending migrations) fails the deploy;
+queue-only `unknown` does not. The workflow's `Apply test migrations` step affects
+only disposable CI Postgres, **not the staging schema**. A failed readiness smoke
+requires a recorded, authorized staging schema/rollback action, not weakening the
+probe or running migrations through `/up`.
+
+Tests use offline fixtures or owned schemas on agent-testdb/CI Postgres. Authorized
+staging E2E is allowed after verifying the staging target/binding; never use
+production DBs or credentials for tests. The contract is [src/up.ts](../src/up.ts):
 
 ```bash
 env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
   npm run test -- test/up.test.ts test/deploy-smoke.test.ts \
     test/db-ping.test.ts test/runbook-diagnostics.test.ts
+DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
+  npm run test -- test/up-db.test.ts
 ```
 
-Source snapshot: [main `7bbaa53`](https://github.com/TogetherWeOwn/two-web-next/tree/7bbaa53a5f953fbec44ccc40ec22073cb6137aff)
-(2026-10-01), [current health implementation](../src/up.ts) and
-[deploy smoke](../.github/workflows/deploy.yml).
-Pending [#111](https://github.com/TogetherWeOwn/two-web-next/pull/111), inspected at
-[`614b712`](https://github.com/TogetherWeOwn/two-web-next/commit/614b712dec3bb98b0f5c355b69ef4bea98fb4cd4),
-proposes DB/schema readiness (`db: ok|error`, `pending_migrations`, HTTP 503 on
-DB/schema/pending-migration failure, smoke failing anything but `db:ok` /
-`pending_migrations:0`). It is **not shipped in this snapshot**;
-reconcile this section with its merged contract before relying on those fields.
-
-| Ledger outcome | Top-level `status` | `queue.status` / measurements |
-| --- | --- | --- |
-| Read succeeds, `pending < 20` | `healthy` | `healthy`, measured values |
-| `pending >= 20` (including `>= 100`) | `degraded` | `degraded`, measured values |
-| Read rejects or takes over 3 seconds | `healthy` | `unknown`, all six measurements `null`, `detail: null` |
-| No usable client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
+Readiness shipped in [#111](https://github.com/TogetherWeOwn/two-web-next/pull/111)
+([`ad22be7`](https://github.com/TogetherWeOwn/two-web-next/commit/ad22be7)); this section
+matches main [`eed3c8b`](https://github.com/TogetherWeOwn/two-web-next/tree/eed3c8b8976986d6aeb7f97e1b656d7bbbaf85c7)
+(2026-10-02). Source: [Drizzle migration log defaults](https://orm.drizzle.team/docs/drizzle-kit-migrate#applied-migrations-log-in-the-database).
 
 `warn_at: 20` and `critical_at: 100` are reported thresholds; the implementation
 has **no separate critical status**. `failed`, `delayed`, `reserved` or `total`
@@ -199,7 +248,10 @@ recovery, zero backlog or a drain gate. There is no last-known-good measurement.
 
 Measurements from [src/jobs/postgres.ts](../src/jobs/postgres.ts):
 
-- `pending`: `available_at <= now()` and no reservation.
+- `pending`: `available_at <= statement_timestamp()` and no reservation. All
+  availability/age expressions share the aggregate's statement-start clock,
+  not the earlier timeout-setup transaction's `BEGIN` time. See
+  [PostgreSQL current-time functions](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT).
 - `delayed`: future `available_at`; `reserved`: non-null `reserved_at`.
   These can overlap, so their sum need not equal `total`.
 - `total`: live ledger rows; `failed`: cumulative failed-history rows, not a
@@ -213,10 +265,12 @@ Do not remove the binding or inject an alternate credential to mask a configured
 outage: **missing configuration is not the same as an unreachable database**.
 Normal web stores prefer `DATABASE_URL`, otherwise `DB.connectionString`
 ([src/db/connection.ts](../src/db/connection.ts)); failure does not try the
-other connection. `/up` queue measurement prefers `DB`, then `DATABASE_URL`;
-jobs prefer `HYPERDRIVE`, then `DB`, then `DATABASE_URL`. A successful public
-fallback is **not** evidence that private reads or writes are available; do not
-relax their authentication, persistence or required-audit gates.
+other connection. `/up` DB/schema readiness uses that same web-store selection;
+only its queue slice prefers `DB`, then `DATABASE_URL`. Jobs prefer `HYPERDRIVE`,
+then `DB`, then `DATABASE_URL`. A successful public fallback is **not** evidence
+that private reads or writes are available; do not relax their authentication,
+persistence or required-audit gates. Never test production; staging E2E needs
+verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
@@ -227,10 +281,11 @@ below, not its older `/up` row, define these outcomes.
 | Route(s) | Configured database outage behavior |
 | --- | --- |
 | `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join` (GET) | Stay **200**, DB-free. |
-| `/up` (GET) | Stays **200**, queue becomes `unknown`; not readiness. |
+| `/up` (GET) | **503** `db:error`, `pending_migrations:null`; queue becomes `unknown`. A reachable DB with unreadable/pending web migrations is also 503 (`db:ok`). |
 | `/sitemap_index.xml` (GET) | Stays **200** with static entries; event lookup failure is caught. |
 | `/discord`, `/auth/discord` (GET) | Stay **302** to invite / OAuth start, DB-free. |
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |
+| `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
 | `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
 | `/auth/discord/callback` (GET) | Session create/store failure **500**; roster-write-only failure is caught. Invalid state/Discord exchange failure redirects **302** before persistence. |
 | `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
@@ -248,7 +303,7 @@ Sources: [src/index.tsx](../src/index.tsx), [join routes](../src/join/route.ts),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
 [error handler](../src/errors.tsx). The homepage fallback is already present at
-[`7bbaa53`, `src/index.tsx:271–277`](https://github.com/TogetherWeOwn/two-web-next/blob/7bbaa53a5f953fbec44ccc40ec22073cb6137aff/src/index.tsx#L271-L277),
+[`eed3c8b`, `src/index.tsx:271–277`](https://github.com/TogetherWeOwn/two-web-next/blob/eed3c8b8976986d6aeb7f97e1b656d7bbbaf85c7/src/index.tsx#L271-L277),
 not conditional on an unmerged outage fix. Offline evidence:
 [session/event failure fixtures](../test/home-events.test.ts),
 [counts failure fixtures](../test/home-counts.test.ts) and
