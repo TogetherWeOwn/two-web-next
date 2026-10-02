@@ -252,6 +252,9 @@ jobs:
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/production-deploy-gate.test.mjs
+      - name: Production secrets preflight selftest (stubbed wrangler, no secrets or network)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/check-production-secrets.test.mjs
       - name: Build (wrangler dry run)
         if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --outdir dist

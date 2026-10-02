@@ -80,6 +80,10 @@
     {
       "path": "drizzle/1018_audit-immutability.sql",
       "sha256": "7dc14b470a68bc3a8a308af47f7216fdde32badf8bf5c23e3ccce2428f12e627"
+    },
+    {
+      "path": "drizzle/1019_shared-agent-events.sql",
+      "sha256": "c9b0f5a4006fcb646cf6a1d15a2d3c3d3bf618861d2eea4becf98e89d95ef773"
     }
   ]
 }
