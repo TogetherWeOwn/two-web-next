@@ -25,7 +25,7 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     command: "npx wrangler dev --config e2e/wrangler.jsonc --local --local-protocol https --ip localhost --port 8787",
-    url: "https://localhost:8787/health",
+    url: "https://localhost:8787/up",
     ignoreHTTPSErrors: true,
     reuseExistingServer: false,
     timeout: 90_000,

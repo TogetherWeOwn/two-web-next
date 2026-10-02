@@ -255,6 +255,6 @@ describe("internal-action-drill CLI", () => {
   it("is wired as drill:internal-action without touching check or CI scripts", () => {
     const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
     expect(scripts["drill:internal-action"]).toBe("node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs");
-    expect(scripts.check).toBe("npm run typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:smoke");
+    expect(scripts.check).toBe("npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:smoke && npm run e2e:safety");
   });
 });

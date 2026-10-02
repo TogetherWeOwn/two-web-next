@@ -18,7 +18,9 @@ globalThis.fetch = async (input, init) => {
       return Response.json({ access_token: "e2e-member-token" });
     }
     if (request.method === "GET" && url.pathname === "/api/v10/users/@me") {
-      return Response.json({ id: "900000000000001398", username: "E2E Discord Member", avatar: null });
+      // fetchUser rejects a missing global_name (TOG-206 hardening); mirror
+      // the auth-worker fixture shape exactly.
+      return Response.json({ id: "900000000000001398", username: "E2E Discord Member", global_name: "E2E Discord Member", avatar: null });
     }
     if (url.pathname === "/api/v10/guilds/326474832151838730/members/900000000000001398") {
       if (request.method === "PUT") return new Response(null, { status: 204 });

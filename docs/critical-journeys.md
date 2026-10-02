@@ -1,10 +1,11 @@
 # Critical browser journeys
 
-The browser smoke suite runs **only in GitHub Actions on `ubuntu-latest`**.
+The browser smoke suite runs **only in GitHub Actions on Linux** (private
+repo: self-hosted runners, job container — never `ubuntu-latest`).
 Never install/run Playwright browsers on the controller. `npm run check` only
 checks the specs' types, safety guards and existing Vitest tests; it does not
 launch a browser. The Playwright config, fixture preparation and seeding refuse
-non-GitHub-hosted Linux execution.
+non-Actions execution.
 
 | Journey | Spec | Evidence required |
 | --- | --- | --- |
@@ -60,8 +61,8 @@ synchronization.
 ## Running and inspecting evidence
 
 - Locally/controller: `env -u DATABASE_URL npm run check` (no live SQL/browser).
-- On the GitHub-hosted runner: `npm run e2e` after prepare, migrations, seed and
-  `npx playwright install --with-deps chromium`.
+- On the self-hosted runner container: `npm run e2e` after prepare, migrations,
+  seed and `npx playwright install --with-deps chromium`.
 - Chromium only, one worker, fresh browser context per spec, zero retries.
 - On failure, the job uploads `test-results/` traces/screenshots and the HTML
   `playwright-report/` under `e2e-failure-<run>-<attempt>` for seven days.
