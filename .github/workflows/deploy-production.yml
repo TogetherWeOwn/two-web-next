@@ -69,6 +69,15 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Require production Worker secrets (names only, before any deploy)
+        # Lists secret NAMES via wrangler and refuses on any missing required
+        # name. Values are never read or printed; unreadable output fails
+        # closed. Runs after the credentials check and before the moderator
+        # preflight and the first deploy.
+        run: node ci/check-production-secrets.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Moderator role-config preflight (production env, before any deploy)
         # Read env.production.vars only: Wrangler does not inherit top-level
         # vars into named environments. Fails closed when the production env
