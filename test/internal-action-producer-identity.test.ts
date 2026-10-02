@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dispatchAnnouncement, dispatchRoleAssign, handleCallInternalAction } from "../src/jobs/call-internal-action";
+import {
+  dispatchAnnouncement,
+  dispatchRoleAssign,
+  handleCallInternalAction,
+} from "../src/jobs/call-internal-action";
 import type { BotClient, QueueMessage } from "../src/jobs/types";
 
 const ANN_KEY_1 = "11111111-1111-4111-8111-111111111111";
@@ -113,7 +117,9 @@ describe("internal-action producer identity", () => {
           return Promise.reject(new Error("queue down"));
         },
       };
-      await expect(dispatchAnnouncement(queue, { channelKey: "c", body: "b" })).rejects.toThrow("queue down");
+      await expect(dispatchAnnouncement(queue, { channelKey: "c", body: "b" })).rejects.toThrow(
+        "queue down",
+      );
       expect(calls).toBe(1);
 
       let roleCalls = 0;
@@ -123,7 +129,9 @@ describe("internal-action producer identity", () => {
           return Promise.reject(new Error("queue down"));
         },
       };
-      await expect(dispatchRoleAssign(roleQueue, { userId: "u", roleKey: "r" })).rejects.toThrow("queue down");
+      await expect(dispatchRoleAssign(roleQueue, { userId: "u", roleKey: "r" })).rejects.toThrow(
+        "queue down",
+      );
       expect(roleCalls).toBe(1);
     } finally {
       spy.mockRestore();

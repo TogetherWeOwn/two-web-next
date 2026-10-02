@@ -44,7 +44,9 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path planner (agent-testdb)", ()
     await client`analyze events`;
     await client`analyze rsvps`;
   });
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   /** Default planner: no forced settings, unlike the sibling suite. */
   async function plan(statement: string, params: (string | number)[] = []): Promise<string> {
@@ -65,7 +67,10 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path planner (agent-testdb)", ()
     );
     expectIndexedOn(
       "rsvps",
-      await plan("select event_id, count(*) from rsvps where event_id in ($1, $2) and status = 'going' group by event_id", [eventId, 1]),
+      await plan(
+        "select event_id, count(*) from rsvps where event_id in ($1, $2) and status = 'going' group by event_id",
+        [eventId, 1],
+      ),
     );
   });
 
@@ -73,8 +78,11 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path planner (agent-testdb)", ()
     for (const limit of ["limit 5", ""]) {
       expectIndexedOn(
         "rsvps",
-        await plan(`select id from rsvps where event_id = $1 and status = 'waitlisted'
-          order by created_at, coalesce(legacy_id, id), id ${limit} for update`, [eventId]),
+        await plan(
+          `select id from rsvps where event_id = $1 and status = 'waitlisted'
+          order by created_at, coalesce(legacy_id, id), id ${limit} for update`,
+          [eventId],
+        ),
       );
     }
   });
@@ -82,23 +90,31 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path planner (agent-testdb)", ()
   it("picks the composite RSVP index for Next's batched waitlist-position window", async () => {
     expectIndexedOn(
       "rsvps",
-      await plan(`select event_id, position from (
+      await plan(
+        `select event_id, position from (
         select event_id, user_id, row_number() over (
           partition by event_id order by created_at, coalesce(legacy_id, id), id)::int as position
         from rsvps where event_id in ($1, $2) and status = 'waitlisted'
-        ) line where user_id = $3`, [eventId, 1, "member1"]),
+        ) line where user_id = $3`,
+        [eventId, 1, "member1"],
+      ),
     );
     expectIndexedOn(
       "rsvps",
-      await plan(`select count(*) from rsvps where event_id = $1 and status = 'waitlisted'
-        and (created_at < $2 or (created_at = $2 and id <= $3))`, [eventId, NOW, 1]),
+      await plan(
+        `select count(*) from rsvps where event_id = $1 and status = 'waitlisted'
+        and (created_at < $2 or (created_at = $2 and id <= $3))`,
+        [eventId, NOW, 1],
+      ),
     );
   });
 
   it("picks the partial RSVP index for the legacy unsynced event probe", async () => {
     expectIndexedOn(
       "rsvps",
-      await plan("select * from rsvps where event_id = $1 and synced_to_discord_at IS NULL", [eventId]),
+      await plan("select * from rsvps where event_id = $1 and synced_to_discord_at IS NULL", [
+        eventId,
+      ]),
     );
   });
 
@@ -106,7 +122,10 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path planner (agent-testdb)", ()
     for (const limit of ["", "limit 20"]) {
       expectIndexedOn(
         "events",
-        await plan(`select * from events where ends_at >= $1 and status <> 'draft' order by starts_at ${limit}`, [NOW]),
+        await plan(
+          `select * from events where ends_at >= $1 and status <> 'draft' order by starts_at ${limit}`,
+          [NOW],
+        ),
       );
     }
   });
@@ -114,22 +133,34 @@ describe.skipIf(!process.env.DATABASE_URL)("hot-path planner (agent-testdb)", ()
   it("picks starts_at/id for the calendar past drawer and paginated archive", async () => {
     expectIndexedOn(
       "events",
-      await plan("select * from events where ends_at < $1 and status <> 'draft' order by starts_at desc, id desc limit 20", [NOW]),
+      await plan(
+        "select * from events where ends_at < $1 and status <> 'draft' order by starts_at desc, id desc limit 20",
+        [NOW],
+      ),
     );
     expectIndexedOn(
       "events",
-      await plan(`select * from events where status = 'past' or (status = 'published' and ends_at < $1)
-        order by starts_at desc, id desc limit 21 offset 20`, [NOW]),
+      await plan(
+        `select * from events where status = 'past' or (status = 'published' and ends_at < $1)
+        order by starts_at desc, id desc limit 21 offset 20`,
+        [NOW],
+      ),
     );
   });
 
   it("picks starts_at/id for both directions of the legacy neighbour shape", async () => {
-    for (const [comparison, direction] of [[">", "asc"], ["<", "desc"]]) {
+    for (const [comparison, direction] of [
+      [">", "asc"],
+      ["<", "desc"],
+    ]) {
       expectIndexedOn(
         "events",
-        await plan(`select id from events where status <> 'draft' and status <> 'cancelled'
+        await plan(
+          `select id from events where status <> 'draft' and status <> 'cancelled'
           and (starts_at ${comparison} $1 or (starts_at = $1 and id ${comparison} $2))
-          order by starts_at ${direction}, id ${direction} limit 1`, [NOW, eventId]),
+          order by starts_at ${direction}, id ${direction} limit 1`,
+          [NOW, eventId],
+        ),
       );
     }
   });

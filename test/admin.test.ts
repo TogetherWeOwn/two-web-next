@@ -31,13 +31,23 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { dispatchWriteBack } from "../src/admin/writeback";
-import { activityLog, events, featuredContents, memberDataAccessLogs } from "../src/db/admin-schema";
+import {
+  activityLog,
+  events,
+  featuredContents,
+  memberDataAccessLogs,
+} from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
 
@@ -93,7 +103,15 @@ describe("admin guard pins (memory store, no DB)", () => {
     const app = adminApp(store);
     const cookie = await cookieFor(store, PLEB);
     const headers = { cookie };
-    for (const path of ["/", "/events", "/events/new", "/events/abc", "/featured", "/featured/new", "/featured/1"]) {
+    for (const path of [
+      "/",
+      "/events",
+      "/events/new",
+      "/events/abc",
+      "/featured",
+      "/featured/new",
+      "/featured/1",
+    ]) {
       const res = await app.request(path, { headers }, env);
       expect(res.status, `GET ${path}`).toBe(403);
     }
@@ -125,12 +143,18 @@ describe("admin guard pins (memory store, no DB)", () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store, MOD);
     // Same-origin is an outer-app concern, not part of panel authorization.
-    const mounted = new Hono<{ Bindings: Env }>().use("*", sameOrigin).route("/admin", adminApp(store));
-    const res = await mounted.request("/admin/events", {
-      method: "POST",
-      headers: { cookie, origin: "https://evil.test" },
-      body: new URLSearchParams({ title: "x" }),
-    }, env);
+    const mounted = new Hono<{ Bindings: Env }>()
+      .use("*", sameOrigin)
+      .route("/admin", adminApp(store));
+    const res = await mounted.request(
+      "/admin/events",
+      {
+        method: "POST",
+        headers: { cookie, origin: "https://evil.test" },
+        body: new URLSearchParams({ title: "x" }),
+      },
+      env,
+    );
     expect(res.status).toBe(403);
   });
 
@@ -161,7 +185,10 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
   let cookie = "";
   // Sessions resolve through the memory store; admin tables through an isolated schema.
   const liveEnv = () => ({ ...env, ADMIN_DB: db }) as Env;
-  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
   afterAll(() => fixture?.dispose());
 
   const form = (fields: Record<string, string>) => ({
@@ -204,7 +231,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       liveEnv(),
     );
     expect(create.status).toBe(303);
-    const key = new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop()!;
+    const key = new URL(create.headers.get("location")!, "https://x.test").pathname
+      .split("/")
+      .pop()!;
 
     const [draft] = await db.select().from(events).where(eq(events.eventKey, key));
     expect(draft?.status).toBe("draft");
@@ -227,7 +256,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       liveEnv(),
     );
     expect(publish.status).toBe(303);
-    expect(dispatchWriteBack).toHaveBeenCalledWith(expect.anything(), { eventKey: key, status: "published" });
+    expect(dispatchWriteBack).toHaveBeenCalledWith(
+      expect.anything(),
+      { eventKey: key, status: "published" },
+      undefined,
+    );
 
     const cancel = await app().request(
       `/events/${key}/cancel`,
@@ -235,7 +268,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       liveEnv(),
     );
     expect(cancel.status).toBe(303);
-    expect(dispatchWriteBack).toHaveBeenCalledWith(expect.anything(), { eventKey: key, status: "cancelled" });
+    expect(dispatchWriteBack).toHaveBeenCalledWith(
+      expect.anything(),
+      { eventKey: key, status: "cancelled" },
+      undefined,
+    );
 
     const [final] = await db.select().from(events).where(eq(events.eventKey, key));
     expect(final?.status).toBe("cancelled");
@@ -255,16 +292,26 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
   });
 
   it("invalid event input re-renders the form with field errors (422)", async () => {
-    const res = await app().request("/events", form({ title: "", starts_at: "nope", ends_at: "nope" }), liveEnv());
+    const res = await app().request(
+      "/events",
+      form({ title: "", starts_at: "nope", ends_at: "nope" }),
+      liveEnv(),
+    );
     expect(res.status).toBe(422);
     const html = await res.text();
     expect(html).toContain("Give the event a title.");
   });
 
   it("featured CRUD: create → publish toggle → reorder → delete, audited", async () => {
-    const create = await app().request("/featured", form({ title: "Slot one", body: "Hello", position: "2" }), liveEnv());
+    const create = await app().request(
+      "/featured",
+      form({ title: "Slot one", body: "Hello", position: "2" }),
+      liveEnv(),
+    );
     expect(create.status).toBe(303);
-    const id = Number(new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop());
+    const id = Number(
+      new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop(),
+    );
 
     const update = await app().request(
       `/featured/${id}`,
@@ -282,7 +329,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       liveEnv(),
     );
     expect(del.status).toBe(303);
-    expect(await db.select().from(featuredContents).where(eq(featuredContents.id, id))).toHaveLength(0);
+    expect(
+      await db.select().from(featuredContents).where(eq(featuredContents.id, id)),
+    ).toHaveLength(0);
 
     const audits = await db.select().from(activityLog);
     expect(audits).toHaveLength(3);
@@ -327,7 +376,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(list.status).toBe(200);
     const listHtml = await list.text();
     expect(listHtml).toContain(`href="/admin/featured/${id}">${fields.title}</a>`);
-    expect(listHtml).toContain(`data-testid="featured-status-${id}"><span class="featured-status featured-status-scheduled" data-status="scheduled">scheduled</span></td>`);
+    expect(listHtml).toContain(
+      `data-testid="featured-status-${id}"><span class="featured-status featured-status-scheduled" data-status="scheduled">scheduled</span></td>`,
+    );
     expect(listHtml).toContain(`data-testid="featured-position-${id}">2</td>`);
     expect(listHtml).toContain("2026-11-04T09:05:00.000Z");
     expect(listHtml).toContain("2026-11-04T11:15:00.000Z");
@@ -347,7 +398,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(editHtml).toContain(`name="image_alt" type="text" value="${fields.image_alt}"`);
     expect(editHtml).toMatch(/name="is_published"[^>]*checked/);
     expect(editHtml).toContain('name="position" type="text" inputmode="numeric" value="2"');
-    expect(editHtml).toContain(`name="starts_at" type="text" value="${fields.starts_at}:00.000000"`);
+    expect(editHtml).toContain(
+      `name="starts_at" type="text" value="${fields.starts_at}:00.000000"`,
+    );
     expect(editHtml).toContain(`name="ends_at" type="text" value="${fields.ends_at}:00.000000"`);
     expect(await db.select().from(activityLog)).toEqual(auditsBeforeReads);
     expect(dispatchWriteBack).not.toHaveBeenCalled();
@@ -372,7 +425,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(logs).toHaveLength(0);
 
     // The same read as a non-moderator 403s and logs nothing new.
-    const plebCookie = await cookieFor(store, { userId: "pleb-live", username: "pleb", moderator: false });
+    const plebCookie = await cookieFor(store, {
+      userId: "pleb-live",
+      username: "pleb",
+      moderator: false,
+    });
     const denied = await app().request("/events", { headers: { cookie: plebCookie } }, liveEnv());
     expect(denied.status).toBe(403);
     expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);

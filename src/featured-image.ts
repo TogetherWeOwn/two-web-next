@@ -12,9 +12,12 @@ export function featuredImageAllowed(raw: string, appUrl: string, imageHosts?: s
   try {
     const image = new URL(raw, appUrl);
     const site = new URL(appUrl);
-    return !image.username && !image.password
-      && (image.protocol === "http:" || image.protocol === "https:")
-      && (image.origin === site.origin || isFeaturedImageUrl(raw, imageHosts));
+    return (
+      !image.username &&
+      !image.password &&
+      (image.protocol === "http:" || image.protocol === "https:") &&
+      (image.origin === site.origin || isFeaturedImageUrl(raw, imageHosts))
+    );
   } catch {
     return false;
   }

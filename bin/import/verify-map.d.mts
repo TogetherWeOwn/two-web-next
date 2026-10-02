@@ -1,4 +1,6 @@
-import type { TableMapping } from './verify.mjs';
+import type { TableMapping } from "./verify.mjs";
 export function defaultTableMap(options?: {
-  legacySchema?: string; nextSchema?: string; cutoff?: string;
+  legacySchema?: string;
+  nextSchema?: string;
+  cutoff?: string;
 }): TableMapping[];

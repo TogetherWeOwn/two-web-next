@@ -23,7 +23,11 @@ import { trackingQueue } from "../src/jobs/ledger";
 import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { dispatchSyncEvent, handleSyncEvent, uniqueKey } from "../src/jobs/sync-event";
 import type { BotClient, EventStore } from "../src/jobs/types";
-import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 // Static containment pin: the guard below refuses non-test URLs before any
 // driver exists. Always runs, needs no database.
@@ -57,8 +61,15 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
   function sqlStore(): EventStore {
     const sql = raw;
     type Row = {
-      id: number; event_key: string; title: string; starts_at: Date; ends_at: Date | null;
-      location: string | null; description: string | null; status: string; discord_event_id: string | null;
+      id: number;
+      event_key: string;
+      title: string;
+      starts_at: Date;
+      ends_at: Date | null;
+      location: string | null;
+      description: string | null;
+      status: string;
+      discord_event_id: string | null;
     };
     return {
       find: async (eventKey) => {
@@ -66,7 +77,9 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
           description, status, discord_event_id from events where event_key = ${eventKey}`) as unknown as Row[];
         if (!row) return null;
         const unsynced = (await sql`select 1 as one from rsvps
-          where event_id = ${row.id} and synced_to_discord_at is null limit 1`) as unknown as { one: number }[];
+          where event_id = ${row.id} and synced_to_discord_at is null limit 1`) as unknown as {
+          one: number;
+        }[];
         return {
           eventKey: row.event_key,
           payload: {
@@ -77,11 +90,15 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
             location: row.location ?? "",
             description: row.description,
           },
-          mirrored: row.status === "published" && (row.discord_event_id === null || unsynced.length > 0),
+          mirrored:
+            row.status === "published" && (row.discord_event_id === null || unsynced.length > 0),
         };
       },
       recordMirrored: async (eventKey, discordEventId, mirroredAt) => {
-        const [row] = (await sql`select id from events where event_key = ${eventKey}`) as unknown as { id: number }[];
+        const [row] =
+          (await sql`select id from events where event_key = ${eventKey}`) as unknown as {
+            id: number;
+          }[];
         if (!row) return;
         await sql`update events set discord_event_id = ${discordEventId} where id = ${row.id}`;
         // The interface stamps only answers written at or before the mirror instant.
@@ -97,8 +114,12 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
   function carrier(body: unknown, attempts = 1) {
     const m = { body, attempts, acked: false, retried: undefined as number | "now" | undefined };
     return Object.assign(m, {
-      ack() { m.acked = true; },
-      retry(o?: { delaySeconds?: number }) { m.retried = o?.delaySeconds ?? "now"; },
+      ack() {
+        m.acked = true;
+      },
+      retry(o?: { delaySeconds?: number }) {
+        m.retried = o?.delaySeconds ?? "now";
+      },
     });
   }
 
@@ -126,7 +147,10 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
   async function dispatchAfterCommit(eventKey: string): Promise<unknown[]> {
     const captured: unknown[] = [];
     const dispatched = await dispatchSyncEvent(
-      trackingQueue({ send: async (body: unknown) => void captured.push(body) }, pgQueueLedger(raw)),
+      trackingQueue(
+        { send: async (body: unknown) => void captured.push(body) },
+        pgQueueLedger(raw),
+      ),
       pgUniqueLock(raw),
       eventKey,
     );
@@ -150,8 +174,12 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 20 });
     const url = testDatabaseUrl(process.env.DATABASE_URL!);
     raw = postgres(url.href, {
-      max: 5, port: 5432, connect_timeout: 5, password: () => url.password,
-      connection: { search_path: fixture.schemaName }, onnotice: () => {},
+      max: 5,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+      connection: { search_path: fixture.schemaName },
+      onnotice: () => {},
     });
   });
   beforeEach(async () => {
@@ -165,8 +193,11 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
     botCalls = [];
   });
   afterAll(async () => {
-    try { await raw?.end({ timeout: 1 }); }
-    finally { await fixture?.dispose(); }
+    try {
+      await raw?.end({ timeout: 1 });
+    } finally {
+      await fixture?.dispose();
+    }
   });
 
   it("a rolled-back RSVP leaves no row, ledger enrolment or lock; its stray carrier consumes to nothing", async () => {
@@ -202,9 +233,10 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
     expect(botCalls).toHaveLength(0);
     expect(await raw`select job_id from queue_jobs`).toHaveLength(0);
     expect(await raw`select id from queue_failed_jobs`).toHaveLength(0);
-    const [row] = (await raw`select discord_event_id from events where event_key = ${key}`) as unknown as {
-      discord_event_id: string | null;
-    }[];
+    const [row] =
+      (await raw`select discord_event_id from events where event_key = ${key}`) as unknown as {
+        discord_event_id: string | null;
+      }[];
     expect(row!.discord_event_id).toBe("discord-seed-1");
   });
 
@@ -215,7 +247,10 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
 
     const captured = await dispatchAfterCommit(key);
     // The enrolment is durable before any consumer runs, under the sync key.
-    const jobs = (await raw`select job_id, key from queue_jobs`) as unknown as { job_id: string; key: string }[];
+    const jobs = (await raw`select job_id, key from queue_jobs`) as unknown as {
+      job_id: string;
+      key: string;
+    }[];
     expect(jobs).toHaveLength(1);
     expect(jobs[0]!.key).toBe(uniqueKey(key));
 
@@ -228,13 +263,15 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
     expect(await raw`select job_id from queue_jobs`).toHaveLength(0);
     expect(await raw`select key from job_unique_locks`).toHaveLength(0);
     // ... and stamps the mirror on the event and its answer.
-    const [ev] = (await raw`select discord_event_id from events where event_key = ${key}`) as unknown as {
-      discord_event_id: string | null;
-    }[];
+    const [ev] =
+      (await raw`select discord_event_id from events where event_key = ${key}`) as unknown as {
+        discord_event_id: string | null;
+      }[];
     expect(ev!.discord_event_id).toBe("discord-cbd-1");
-    const [answer] = (await raw`select synced_to_discord_at from rsvps where event_id = ${id}`) as unknown as {
-      synced_to_discord_at: Date | null;
-    }[];
+    const [answer] =
+      (await raw`select synced_to_discord_at from rsvps where event_id = ${id}`) as unknown as {
+        synced_to_discord_at: Date | null;
+      }[];
     expect(answer!.synced_to_discord_at).not.toBeNull();
   });
 
@@ -242,8 +279,12 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
     const { key, id } = await seed("published");
     let release!: () => void;
     let ready!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    const readyPromise = new Promise<void>((resolve) => { ready = resolve; });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const readyPromise = new Promise<void>((resolve) => {
+      ready = resolve;
+    });
     const txPromise = raw.begin(async (tx) => {
       await tx`insert into rsvps (event_id, user_id, status) values (${id}, 'early-member', 'going')`;
       ready();
@@ -254,11 +295,10 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
       // The uncommitted answer is invisible at READ COMMITTED: nothing is
       // stale, so the handler drops the message without calling the bot.
       expect((await sqlStore().find(key))!.mirrored).toBe(false);
-      const outcome = await handleSyncEvent(
-        { eventKey: key, idempotencyKey: "early-key" },
-        1,
-        { bot: bot(), events: sqlStore() },
-      );
+      const outcome = await handleSyncEvent({ eventKey: key, idempotencyKey: "early-key" }, 1, {
+        bot: bot(),
+        events: sqlStore(),
+      });
       expect(outcome).toEqual({ done: true });
       expect(botCalls).toHaveLength(0);
     } finally {
@@ -270,15 +310,21 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
     const m = await consumeOnce({ kind: "sync-event", eventKey: key, idempotencyKey: "late-key" });
     expect(m.acked).toBe(true);
     expect(botCalls).toHaveLength(1);
-    const [answer] = (await raw`select synced_to_discord_at from rsvps where event_id = ${id}`) as unknown as {
-      synced_to_discord_at: Date | null;
-    }[];
+    const [answer] =
+      (await raw`select synced_to_discord_at from rsvps where event_id = ${id}`) as unknown as {
+        synced_to_discord_at: Date | null;
+      }[];
     expect(answer!.synced_to_discord_at).not.toBeNull();
   });
 
   it("a committed publish dispatches after commit and the real consumer mirrors it", async () => {
     const { key } = await seed("draft");
-    const { row, writeBack } = await transitionEvent(fixture.db, { id: "moderator", username: "mod" }, key, "published");
+    const { row, writeBack } = await transitionEvent(
+      fixture.db,
+      { id: "moderator", username: "mod" },
+      key,
+      "published",
+    );
     expect(row.status).toBe("published");
     expect(writeBack).toEqual({ eventKey: key, status: "published" });
 
@@ -289,9 +335,10 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
     expect(botCalls).toHaveLength(1);
     expect(botCalls[0]!.payload).toMatchObject({ eventKey: key, name: "Commit night" });
     expect(await raw`select job_id from queue_jobs`).toHaveLength(0);
-    const [ev] = (await raw`select discord_event_id from events where event_key = ${key}`) as unknown as {
-      discord_event_id: string | null;
-    }[];
+    const [ev] =
+      (await raw`select discord_event_id from events where event_key = ${key}`) as unknown as {
+        discord_event_id: string | null;
+      }[];
     expect(ev!.discord_event_id).toBe("discord-cbd-1");
   });
 });

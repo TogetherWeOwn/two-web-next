@@ -11,9 +11,14 @@ import { joinFunnelStats } from "./reads";
 
 /** Parity pin: the legacy JoinFunnelStats widget caches its aggregate for 60 s. */
 export const FUNNEL_CACHE_TTL_MS = 60_000;
-/** Read deadline: the optional widget must never hold the dashboard (a locked table would wait forever). */
-export const FUNNEL_READ_DEADLINE_MS = 500;
-/** DB-side cap below the response deadline so Postgres cancels a lock-blocked SELECT server-side. */
+/**
+ * Read deadline: the optional widget must never hold the dashboard (a locked table would wait forever).
+ * It must also outlast the DB-side cap with room for connect, BEGIN and the other widget's
+ * transaction on the shared one-connection pool: a deadline that fires while the capped SELECT
+ * is still pending leaves a counted read open, and the member-read boundary refuses the page.
+ */
+export const FUNNEL_READ_DEADLINE_MS = 1500;
+/** DB-side cap well below the response deadline so Postgres cancels a lock-blocked SELECT server-side. */
 export const FUNNEL_DB_TIMEOUT_MS = 400;
 
 type Funnel = Record<string, number>;
@@ -39,9 +44,11 @@ let publishedFill = 0;
  */
 async function funnelRead(db: Db): Promise<Funnel> {
   return db.transaction(async (tx) => {
-    await nonSensitiveRead("timeouts", () => tx.execute(
-      sql`select set_config('lock_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true)`,
-    ));
+    await nonSensitiveRead("timeouts", () =>
+      tx.execute(
+        sql`select set_config('lock_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true)`,
+      ),
+    );
     return joinFunnelStats(tx);
   });
 }
