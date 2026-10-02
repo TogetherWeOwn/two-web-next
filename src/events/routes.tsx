@@ -34,7 +34,6 @@ import {
   mergeCalendarRows,
   parseCalendarMonth,
   parseCalendarView,
-  loginUrl,
   wallMonth,
   calendarZone,
   currentCalendarMonth,
