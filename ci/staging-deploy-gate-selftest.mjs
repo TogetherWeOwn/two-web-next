@@ -571,3 +571,39 @@ test("workflow wires the tested gate before both mutations and preserves staging
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
 });
+
+test("main CI runs are never cancelled in progress and finish in push order", () => {
+  // A cancel request marks the run cancelled even when every job then succeeds,
+  // and the deploy trigger above rejects a cancelled conclusion. The group stays
+  // per ref so main runs are serialized: an older SHA cannot finish after, and
+  // deploy over, a newer one.
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const block = ci.match(/^concurrency:\n  group: (.+)\n  cancel-in-progress: \$\{\{ (.+) \}\}\n/m);
+  assert(
+    block,
+    "ci.yml concurrency must group per-PR-or-ref and exempt main from cancel-in-progress",
+  );
+  // GitHub expression dereference is null-safe (missing pull_request reads as
+  // null); emulate that with optional chaining so main-push contexts evaluate.
+  const nullSafe = (expr) =>
+    expr.replaceAll("github.event.pull_request.number", "github.event.pull_request?.number");
+  const groupOf = new Function(
+    "github",
+    `return \`${nullSafe(block[1]).replaceAll("${{ ", "${").replaceAll(" }}", "}")}\`;`,
+  );
+  const cancelsOf = new Function("github", `return (${nullSafe(block[2])});`);
+  const main = (sha) => ({ workflow: "ci", event: {}, ref: "refs/heads/main", sha });
+  const pr = (number, ref) => ({
+    workflow: "ci",
+    event: { pull_request: { number } },
+    ref,
+    sha: "x",
+  });
+  // Main pushes share one group (serialized, in order) and are never cancelled.
+  assert.equal(groupOf(main("aaa")), groupOf(main("bbb")));
+  assert.equal(cancelsOf(main("aaa")), false);
+  // PR pushes for the same PR share a group and cancel superseded runs.
+  assert.equal(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(7, "refs/pull/7/merge")));
+  assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));
+  assert.equal(cancelsOf(pr(7, "refs/pull/7/merge")), true);
+});

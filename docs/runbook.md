@@ -671,11 +671,14 @@ binding/DB recovery to the Director and authorized custodian; never credential-h
 ## Queue containment, drain and failed-job replay
 
 **Current implementation gate:** [src/jobs/worker.ts](../src/jobs/worker.ts)
-uses a real event store but a `notWired` BotClient adapter. The configured W13
-consumers cannot currently perform successful live bot work. Do not resume delivery or
-replay real messages until the Director has accepted a reviewed adapter fix and
-local acceptance evidence. Queue depth falling under these stubs can mean retry
-exhaustion and terminal acknowledgement, not successful draining.
+sends through the signed bot client (`botClientFor`). An environment without
+`BOT_ENDPOINT_URL`, `BOT_KEY_ID` and `BOT_SHARED_SECRET` fails every bot job
+terminally (`BotTerminalError`, a `queue.failing` alert, no bot request): queue
+depth falling there means terminal failure, not successful draining. Check the
+three bindings are present before resuming delivery or replaying real messages;
+provisioning them is an Operator step. `event.cancel` is also opt-in on the bot
+(`TWO_INTERNAL_ALLOW_EVENT_CANCEL`); without it a cancelled-event sync is a
+definitive `action_not_allowed` refusal.
 
 For an authorized queue incident, contain delivery without deleting messages:
 
