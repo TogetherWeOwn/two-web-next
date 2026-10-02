@@ -264,6 +264,37 @@ describe("legacy featured edit identity (local SQL fixtures)", () => {
     },
   );
 
+  it.each([undefined, "*/*", "text/html", "application/json"])(
+    "sanitizes classified lookup outages with Accept %s",
+    async (accept) => {
+      const { store, env, query } = featuredFixture([]);
+      const cookie = await cookieFor(store, true);
+      for (const method of ["GET", "HEAD"]) {
+        query.mockRejectedValueOnce(
+          Object.assign(new Error("private connection details"), { code: "ECONNREFUSED" }),
+        );
+        const res = await request("/admin/featured-contents/1/edit", env, {
+          method,
+          headers: { cookie, ...(accept ? { accept } : {}) },
+        });
+        expect(res.status).toBe(503);
+        expect(res.headers.get("location")).toBeNull();
+        expect(res.headers.get("set-cookie")).toBeNull();
+        expect(res.headers.get("cache-control")).toBe("private, no-store");
+        expect(res.headers.get("vary")).toContain("Accept");
+        expect(res.headers.get("content-type")).toContain(
+          accept === "application/json" ? "application/json" : "text/html",
+        );
+        const body = await res.text();
+        expect(body).not.toMatch(/private|ECONNREFUSED/);
+        if (method === "HEAD") expect(body).toBe("");
+        else if (accept === "application/json")
+          expect(JSON.parse(body)).toMatchObject({ error: "db_unavailable" });
+        else expect(body).toContain('<a class="brand" href="/"');
+      }
+    },
+  );
+
   it("503s when no database binding is configured", async () => {
     const store = createMemorySessionStore();
     const env: Env & { SESSION_STORE: SessionStore } = {
