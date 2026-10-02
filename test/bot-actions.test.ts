@@ -25,17 +25,21 @@ const UUID = "9f1c0a2b-3d4e-5f60-7182-93a4b5c6d7e8";
 
 describe("role.assign", () => {
   it("builds the documented payload, by key and never by role id", () => {
-    expect(roleAssignPayload({ discordId: "900000000000009999", roleKey: "rocketleague" })).toEqual({
-      action: "role.assign",
-      discord_id: "900000000000009999",
-      role_key: "rocketleague",
-    });
+    expect(roleAssignPayload({ discordId: "900000000000009999", roleKey: "rocketleague" })).toEqual(
+      {
+        action: "role.assign",
+        discord_id: "900000000000009999",
+        role_key: "rocketleague",
+      },
+    );
   });
 
   it.each(["everyone", "<@900000000000009999>", "", "999999999999999999999", "9000000000000099ab"])(
     "refuses a discord id that is not a snowflake: %j",
     (discordId) => {
-      expect(() => roleAssignPayload({ discordId, roleKey: "rocketleague" })).toThrow(InvalidActionRequestError);
+      expect(() => roleAssignPayload({ discordId, roleKey: "rocketleague" })).toThrow(
+        InvalidActionRequestError,
+      );
     },
   );
 
@@ -64,15 +68,22 @@ describe("announcement.post", () => {
     ["no body", "qa-throwaway", ""],
     ["blank body", "qa-throwaway", "  \n "],
     ["body over 2000 characters", "qa-throwaway", "a".repeat(2001)],
-  ])("refuses an announcement that breaks the documented limits (%s)", (_label, channelKey, body) => {
-    expect(() => announcementPayload({ channelKey, body })).toThrow(InvalidActionRequestError);
-  });
+  ])(
+    "refuses an announcement that breaks the documented limits (%s)",
+    (_label, channelKey, body) => {
+      expect(() => announcementPayload({ channelKey, body })).toThrow(InvalidActionRequestError);
+    },
+  );
 
   it("accepts a body exactly on the 2000 character limit and counts characters not bytes", () => {
     // 2000 multi-byte characters is 4000 bytes. Counting bytes would refuse an
     // announcement Discord accepts.
-    expect(announcementPayload({ channelKey: "qa-throwaway", body: "é".repeat(2000) }).body).toHaveLength(2000);
-    expect(announcementPayload({ channelKey: "qa-throwaway", body: "a".repeat(2000) }).body).toHaveLength(2000);
+    expect(
+      announcementPayload({ channelKey: "qa-throwaway", body: "é".repeat(2000) }).body,
+    ).toHaveLength(2000);
+    expect(
+      announcementPayload({ channelKey: "qa-throwaway", body: "a".repeat(2000) }).body,
+    ).toHaveLength(2000);
   });
 });
 
@@ -138,8 +149,14 @@ describe("event.upsert", () => {
   it.each([
     ["name over 100 characters", { name: "a".repeat(101) }],
     ["description over 1000 characters", { description: "a".repeat(1001) }],
-    ["ends_at before starts_at", { startsAt: new Date("2026-09-01T19:00:00Z"), endsAt: new Date("2026-09-01T18:00:00Z") }],
-    ["ends_at equal to starts_at", { startsAt: new Date("2026-09-01T18:00:00Z"), endsAt: new Date("2026-09-01T18:00:00Z") }],
+    [
+      "ends_at before starts_at",
+      { startsAt: new Date("2026-09-01T19:00:00Z"), endsAt: new Date("2026-09-01T18:00:00Z") },
+    ],
+    [
+      "ends_at equal to starts_at",
+      { startsAt: new Date("2026-09-01T18:00:00Z"), endsAt: new Date("2026-09-01T18:00:00Z") },
+    ],
     ["blank name", { name: "   " }],
     ["blank event key", { eventKey: "" }],
     ["blank location", { location: "   " }],

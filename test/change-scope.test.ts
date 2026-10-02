@@ -19,12 +19,18 @@ function scope(rows: string[][], expected = rows.length, cwd = repo) {
   writeFileSync(list, rows.map((row) => `${row.join("\t")}\n`).join(""));
   // The ceiling keeps git from finding a repository above the fixture root.
   const env = { ...process.env, GIT_CEILING_DIRECTORIES: dirname(repo) };
-  const result = spawnSync("bash", [script, list, String(expected)], { cwd, env, encoding: "utf8" });
+  const result = spawnSync("bash", [script, list, String(expected)], {
+    cwd,
+    env,
+    encoding: "utf8",
+  });
   return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr };
 }
 
 beforeEach(() => {
-  const root = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "change-scope-"));
+  const root = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "change-scope-"),
+  );
   repo = join(root, "repo");
   const files: Record<string, string> = {
     "README.md": "# readme\n",
@@ -46,11 +52,22 @@ afterEach(() => rmSync(dirname(repo), { recursive: true, force: true }));
 
 describe("change-scope gate", () => {
   it("fast-passes prose that nothing reads", () => {
-    expect(scope([["docs/guide.md", ""], ["README.md", ""], ["docs/new.md", ""]]).stdout).toBe("docs_only=true");
+    expect(
+      scope([
+        ["docs/guide.md", ""],
+        ["README.md", ""],
+        ["docs/new.md", ""],
+      ]).stdout,
+    ).toBe("docs_only=true");
   });
 
   it("runs the suite for any code path", () => {
-    expect(scope([["docs/guide.md", ""], ["src/app.ts", ""]]).stdout).toBe("docs_only=false");
+    expect(
+      scope([
+        ["docs/guide.md", ""],
+        ["src/app.ts", ""],
+      ]).stdout,
+    ).toBe("docs_only=false");
   });
 
   it("counts the old name of a rename", () => {
@@ -93,7 +110,11 @@ describe("check job", () => {
     const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
     const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
     expect(steps.length).toBeGreaterThan(10);
-    const unguarded = steps.filter((step) => !step.includes("Docs-only fast pass") && !step.includes("needs.scope.outputs.docs_only != 'true'"));
+    const unguarded = steps.filter(
+      (step) =>
+        !step.includes("Docs-only fast pass") &&
+        !step.includes("needs.scope.outputs.docs_only != 'true'"),
+    );
     expect(unguarded.map((step) => step.split("\n")[0])).toEqual([]);
   });
 });

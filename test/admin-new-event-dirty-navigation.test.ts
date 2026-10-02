@@ -5,10 +5,17 @@ import { EventFormPage } from "../src/admin/pages";
 import { eventEditorBrowser } from "./helpers/admin-event-editor";
 
 const NEW = {
-  title: "Game night", game: "Chess", description: "Boards out",
-  starts_at: "2030-01-01 18:00", ends_at: "2030-01-01 19:00",
-  timezone: "Europe/London", location: "Voice", capacity: "8",
-  recurrence_frequency: "", recurrence_count: "", recurrence_ends_on: "",
+  title: "Game night",
+  game: "Chess",
+  description: "Boards out",
+  starts_at: "2030-01-01 18:00",
+  ends_at: "2030-01-01 19:00",
+  timezone: "Europe/London",
+  location: "Voice",
+  capacity: "8",
+  recurrence_frequency: "",
+  recurrence_count: "",
+  recurrence_ends_on: "",
 };
 
 const form = (values: Record<string, string> = {}, errors: Record<string, string> = {}) =>
@@ -22,14 +29,26 @@ describe("admin new-event dirty navigation", () => {
     expect(html).not.toContain("data-event-draft");
   });
 
-  it.each(["search", "sort"] as const)("lets an unchanged new form leave via %s without a prompt", (kind) => {
-    const b = eventEditorBrowser({ initial: NEW });
-    expect(b.navigate(kind).preventDefault).not.toHaveBeenCalled();
-  });
+  it.each(["search", "sort"] as const)(
+    "lets an unchanged new form leave via %s without a prompt",
+    (kind) => {
+      const b = eventEditorBrowser({ initial: NEW });
+      expect(b.navigate(kind).preventDefault).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
-    "title", "game", "description", "starts_at", "ends_at", "timezone", "location", "capacity",
-    "recurrence_frequency", "recurrence_count", "recurrence_ends_on",
+    "title",
+    "game",
+    "description",
+    "starts_at",
+    "ends_at",
+    "timezone",
+    "location",
+    "capacity",
+    "recurrence_frequency",
+    "recurrence_count",
+    "recurrence_ends_on",
   ])("tracks %s and allows navigation after reverting the new draft", (field) => {
     const b = eventEditorBrowser({ initial: NEW });
     const initial = b.values.get(field)!;

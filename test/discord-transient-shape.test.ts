@@ -36,13 +36,18 @@ function mountedCalendar() {
   const db = drizzle(async () => ({ rows: [] }));
   // Search analytics uses a transaction; the pg-proxy fixture has no real SQL.
   Object.assign(db, {
-    transaction: async (fn: (tx: Db) => Promise<void>) => fn({
-      execute: async () => {},
-      insert: () => ({ values: async () => {} }),
-    } as unknown as Db),
+    transaction: async (fn: (tx: Db) => Promise<void>) =>
+      fn({
+        execute: async () => {},
+        insert: () => ({ values: async () => {} }),
+      } as unknown as Db),
   });
   const app = new Hono<{ Bindings: Env }>();
-  registerEventRoutes(app, async () => null, async () => null);
+  registerEventRoutes(
+    app,
+    async () => null,
+    async () => null,
+  );
   return { app, bindings: { ...env, ADMIN_DB: db as unknown as Db } as Env };
 }
 

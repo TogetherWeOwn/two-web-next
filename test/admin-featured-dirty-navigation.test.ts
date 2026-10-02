@@ -8,17 +8,31 @@ import { eventEditorBrowser } from "./helpers/admin-event-editor";
 const now = new Date("2026-09-30T20:00:00Z");
 const appUrl = "https://next.example.test";
 const saved: FeaturedRow = {
-  id: 1, legacyId: null, title: "Friday games", body: "Bring a friend.",
-  url: "https://example.test/games", imageUrl: "https://cdn.discordapp.com/photo.jpg",
+  id: 1,
+  legacyId: null,
+  title: "Friday games",
+  body: "Bring a friend.",
+  url: "https://example.test/games",
+  imageUrl: "https://cdn.discordapp.com/photo.jpg",
   imageAlt: "Friends playing together",
-  isPublished: true, position: 0, startsAt: null, endsAt: null, createdBy: "moderator",
-  createdAt: now, updatedAt: now,
+  isPublished: true,
+  position: 0,
+  startsAt: null,
+  endsAt: null,
+  createdBy: "moderator",
+  createdAt: now,
+  updatedAt: now,
 };
 
 const DRAFT = {
-  title: "Friday games", body: "Bring a friend.", url: "https://example.test/games",
-  image_url: "https://cdn.discordapp.com/photo.jpg", image_alt: "Friends playing together",
-  position: "0", starts_at: "", ends_at: "",
+  title: "Friday games",
+  body: "Bring a friend.",
+  url: "https://example.test/games",
+  image_url: "https://cdn.discordapp.com/photo.jpg",
+  image_alt: "Friends playing together",
+  position: "0",
+  starts_at: "",
+  ends_at: "",
 };
 
 const renderNew = (values: Record<string, unknown> = {}, errors: Record<string, string> = {}) =>
@@ -42,23 +56,27 @@ describe("admin featured dirty navigation", () => {
     expect(html).toContain('data-testid="featured-preview"');
   });
 
-  it.each(["search", "sort"] as const)("lets an unchanged featured draft leave via %s without a prompt", (kind) => {
-    const b = eventEditorBrowser({ initial: DRAFT });
-    expect(b.navigate(kind).preventDefault).not.toHaveBeenCalled();
-  });
+  it.each(["search", "sort"] as const)(
+    "lets an unchanged featured draft leave via %s without a prompt",
+    (kind) => {
+      const b = eventEditorBrowser({ initial: DRAFT });
+      expect(b.navigate(kind).preventDefault).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each([
-    "title", "body", "url", "image_url", "image_alt", "position", "starts_at", "ends_at",
-  ])("tracks %s and allows navigation after reverting the featured draft", (field) => {
-    const b = eventEditorBrowser({ initial: DRAFT });
-    const initial = b.values.get(field)!;
-    b.values.set(field, `${initial} changed`);
-    const departure = b.navigate("sort");
-    expect(departure.preventDefault).toHaveBeenCalledOnce();
-    expect(departure.returnValue).toBe("");
-    b.values.set(field, initial);
-    expect(b.navigate("search").preventDefault).not.toHaveBeenCalled();
-  });
+  it.each(["title", "body", "url", "image_url", "image_alt", "position", "starts_at", "ends_at"])(
+    "tracks %s and allows navigation after reverting the featured draft",
+    (field) => {
+      const b = eventEditorBrowser({ initial: DRAFT });
+      const initial = b.values.get(field)!;
+      b.values.set(field, `${initial} changed`);
+      const departure = b.navigate("sort");
+      expect(departure.preventDefault).toHaveBeenCalledOnce();
+      expect(departure.returnValue).toBe("");
+      b.values.set(field, initial);
+      expect(b.navigate("search").preventDefault).not.toHaveBeenCalled();
+    },
+  );
 
   it("prompts on leaving a dirty featured draft and staying preserves the values", () => {
     const b = eventEditorBrowser({ initial: DRAFT });

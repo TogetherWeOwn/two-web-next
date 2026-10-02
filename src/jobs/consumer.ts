@@ -1,5 +1,6 @@
 import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
+import { safeRequestId } from "../request-log";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
@@ -14,25 +15,56 @@ const LEDGER_TIMEOUT_MS = 2000;
 // secondAck=0, whole batch lost).
 const LOCK_TIMEOUT_MS = 2000;
 
-type Msg = { body: unknown; attempts: number; ack(): void; retry(o?: { delaySeconds?: number }): void };
+type Msg = {
+  body: unknown;
+  attempts: number;
+  ack(): void;
+  retry(o?: { delaySeconds?: number }): void;
+};
 
 // Legacy identity of each job, for the queue.failing alert line (ports Queue::failing fields).
 const JOBS = {
   "alert-probe": { queue: "two-internal-action", job: "AlertProbe", tries: 1 },
   "sync-event": { queue: "two-sync-event", job: "SyncEventToDiscord", tries: SYNC_EVENT.tries },
-  announcement: { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
-  "role-assign": { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
+  announcement: {
+    queue: "two-internal-action",
+    job: "CallInternalAction",
+    tries: CALL_INTERNAL_ACTION.tries,
+  },
+  "role-assign": {
+    queue: "two-internal-action",
+    job: "CallInternalAction",
+    tries: CALL_INTERNAL_ACTION.tries,
+  },
 } as const;
 
-function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: string, probeId?: string) {
+function alertFailing(
+  kind: QueueMessage["kind"],
+  attempts: number,
+  exception: string,
+  ids: { probeId?: string; requestId?: string },
+) {
   const j = JOBS[kind];
-  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception, probeId });
+  alertQueueFailing({
+    connection: "cloudflare-queues",
+    queue: j.queue,
+    job: j.job,
+    attempts,
+    exception,
+    ...ids,
+  });
 }
 
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
 export async function consume(
   batch: { messages: readonly Msg[] },
-  deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger; probeEnabled?: boolean },
+  deps: {
+    bot: BotClient;
+    events: EventStore;
+    lock: UniqueLock;
+    ledger: QueueLedger;
+    probeEnabled?: boolean;
+  },
 ): Promise<void> {
   for (const m of batch.messages) {
     const body = toQueueMessage(m.body);
@@ -43,6 +75,7 @@ export async function consume(
       m.ack();
       continue;
     }
+    const requestId = safeRequestId(body.requestId);
     const jobId = typeof body.jobId === "string" ? body.jobId : null;
     const key = body.kind === "sync-event" ? uniqueKey(body.eventKey) : null;
     // Ledger transitions are best-effort: a stale ledger row is a visible backlog
@@ -82,7 +115,10 @@ export async function consume(
       return Promise.race([
         // Class-only: lock errors can carry SQL or connection secrets.
         deps.lock.release(key, body.leaseToken).catch((e: unknown) =>
-          console.warn("queue lock release failed", sanitizeQueueScope(key), { exception: queueExceptionClass(e) })),
+          console.warn("queue lock release failed", sanitizeQueueScope(key), {
+            exception: queueExceptionClass(e),
+          }),
+        ),
         timeout,
       ]).finally(() => clearTimeout(t));
     };
@@ -96,9 +132,10 @@ export async function consume(
         if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
         outcome = { done: true }; // A delayed staging probe cannot page in production.
       } else {
-        outcome = body.kind === "sync-event"
-          ? await handleSyncEvent(body, m.attempts, deps)
-          : await handleCallInternalAction(body, m.attempts, deps.bot);
+        outcome =
+          body.kind === "sync-event"
+            ? await handleSyncEvent(body, m.attempts, deps)
+            : await handleCallInternalAction(body, m.attempts, deps.bot);
       }
     } catch (e) {
       // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
@@ -108,15 +145,21 @@ export async function consume(
       console.error("job threw", body.kind, { exception: queueExceptionClass(e) });
       // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
       if (m.attempts >= JOBS[body.kind].tries) {
-        alertFailing(body.kind, m.attempts, queueExceptionClass(e),
-          e instanceof AlertProbeError ? e.probeId : undefined);
+        alertFailing(body.kind, m.attempts, queueExceptionClass(e), {
+          probeId: e instanceof AlertProbeError ? e.probeId : undefined,
+          requestId,
+        });
         // Out of tries: a terminal failure, not a phantom pending row — and not
         // a retry either. The job already spent its tries (the transport's
         // max_retries is only a backstop above this cap), so ack it and free
         // the sync lock instead of requeueing a message the ledger just buried
         // (which would run again with no live depth accounting and stack up
         // duplicate failure rows).
-        if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, queueExceptionClass(e)));
+        if (jobId)
+          await bounded(
+            "failed",
+            deps.ledger.failed(jobId, body.kind, key, queueExceptionClass(e)),
+          );
         if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
         m.ack();
       } else {
@@ -127,13 +170,16 @@ export async function consume(
     }
     if ("retryInSeconds" in outcome) {
       if (jobId)
-        await bounded("released", deps.ledger.released(jobId, new Date(Date.now() + outcome.retryInSeconds * 1000)));
+        await bounded(
+          "released",
+          deps.ledger.released(jobId, new Date(Date.now() + outcome.retryInSeconds * 1000)),
+        );
       m.retry({ delaySeconds: outcome.retryInSeconds });
       continue;
     }
     if ("failed" in outcome) {
       console.error("job failed", body.kind, outcome.failed);
-      alertFailing(body.kind, m.attempts, outcome.failed);
+      alertFailing(body.kind, m.attempts, outcome.failed, { requestId });
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
