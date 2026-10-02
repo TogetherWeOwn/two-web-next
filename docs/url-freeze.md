@@ -32,7 +32,7 @@ route-level 403/410 for `/e/{key}` land with W8; `crawlableEvents` in
 |---|---|
 | `/events`, `/events/past` | W8 |
 | `/e/{key}` | W8 |
-| `/events.json` | W8 |
+| `/events.json`, `/events/{key}` (JSON) | W8 + [TOG-11155](/TOG/issues/TOG-11155) |
 | `.ics` / `.rss` feeds | W9 |
 | `/profile`, `/members/{user}` | W7 |
 | `/admin/*` | W11–W12 |
@@ -138,8 +138,9 @@ to an error page, on the Next candidate in both phases.
   session, no cookie, no cache, no database read in their path. Zero-query
   tests pin this (ports `DiscordFunnelTest` / `AboutPageTest` /
   `FaqPageTest`).
-- One URL, one media type: `/events` (HTML) vs `/events.json`, `/e/{key}`
-  (HTML) vs `/events/{key}.ics`. Never content-negotiate.
+- One URL, one success media type: `/events` and `/e/{key}` (HTML),
+  `/events.json` and `/events/{key}` (JSON), `/events/{key}.ics` (calendar).
+  JSON reads redirect browser guests to sign-in, but never render HTML success bodies.
 - `robots.txt` is a route, never a static file in `public/` (TOG-7071).
 - Staging advertises its own host in sitemap/robots via `APP_URL`.
 
@@ -188,7 +189,8 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /e/:key` | public-draft-moderator | events: legacy `/e/{event}` |
 | `GET /events` | public | events: calendar |
 | `GET /events.ics` | public | event-feeds: subscription |
-| `GET /events.json` | session | events: authenticated JSON |
+| `GET /events.json` | session | events: paginated JSON; JSON guest 401 / browser guest guarded OAuth 302 |
+| `GET /events/:key` | session | events: JSON show; draft moderator-only, cancelled 410, private ETag/304 |
 | `GET /events.rss` | public | event-feeds: RSS |
 | `GET /events/:file{.+\.ics}` | public-draft-moderator | event-feeds: legacy `/events/{event}.ics` |
 | `GET /events/past` | public | events: archive |
