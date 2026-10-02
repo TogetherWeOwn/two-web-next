@@ -91,7 +91,7 @@ describe("Reporting API CSP fields", () => {
     [{ nested: documentUrl }, envelopeUrl],
     [[documentUrl], envelopeUrl],
     [42, envelopeUrl],
-    ["", ""],
+    ["", null],
     [documentUrl, documentUrl],
   ])("uses a scalar documentURL before the envelope URL (%j)", async (documentURL, expected) => {
     const warn = captureLogs();
