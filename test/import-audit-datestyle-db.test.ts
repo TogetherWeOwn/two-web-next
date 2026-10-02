@@ -4,6 +4,7 @@ import { URL } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from './helpers/member-data-db';
+import { AUDIT_TABLES, truncateLiftingAuditGuard } from './helpers/audit-rows';
 // @ts-expect-error Standalone operator CLI has no declaration file.
 import { importAudit } from '../bin/import/audit.mjs';
 
@@ -56,7 +57,9 @@ suite('audit import DateStyle boundary (disposable test DB only)', () => {
   });
 
   beforeEach(async () => {
-    await fixture.client.unsafe(`TRUNCATE ${tables.map((name) => `"${name}"`).join(', ')} RESTART IDENTITY CASCADE`);
+    // Owner-only reset of this suite's schema; lifts the audit TRUNCATE guard (drizzle/1018).
+    await truncateLiftingAuditGuard(fixture.client, AUDIT_TABLES,
+      `TRUNCATE ${tables.map((name) => `"${name}"`).join(', ')} RESTART IDENTITY CASCADE`);
   });
 
   const run = (dryRun = true) => importAudit({

@@ -6,6 +6,7 @@ import { fileURLToPath, URL } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from './helpers/member-data-db';
+import { AUDIT_TABLES, truncateLiftingAuditGuard } from './helpers/audit-rows';
 import { DEFAULT_CONFIG, handleAgentEvent } from '../src/agent-events/service';
 import { sha256Hex } from '../src/bot/signer';
 // @ts-expect-error Standalone operator CLI has no declaration file.
@@ -57,8 +58,10 @@ suite('audit import into the migrated Next schema (disposable test DB only)', ()
 
   beforeEach(async () => {
     // Only the schemas created by this suite are mutable. The application
-    // import itself never truncates, deletes, updates or disables triggers.
-    await fixture.client.unsafe(`TRUNCATE ${names.map((n) => `"${n}"`).join(', ')} RESTART IDENTITY CASCADE`);
+    // import itself never truncates, deletes, updates or disables triggers;
+    // this owner-only reset lifts the audit TRUNCATE guard (drizzle/1018).
+    await truncateLiftingAuditGuard(fixture.client, AUDIT_TABLES,
+      `TRUNCATE ${names.map((n) => `"${n}"`).join(', ')} RESTART IDENTITY CASCADE`);
     await legacy.unsafe(`UPDATE "${sourceSchema}".agent_event_grants SET verifier_hash = repeat('a', 64)
       WHERE id = '22222222-2222-4222-8222-222222222222'`);
   });

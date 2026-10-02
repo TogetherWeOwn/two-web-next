@@ -9,16 +9,26 @@ import type { Db } from "../../src/db/index";
 export const AUDIT_TABLES = ["agent_event_audits", "member_data_access_logs", "activity_log"] as const;
 export type AuditTable = (typeof AUDIT_TABLES)[number];
 
-/** Owner-only reset of audit rows, resolved through the client's search_path. */
-export async function clearAuditRows(client: postgres.Sql | Db, tables: readonly AuditTable[] = AUDIT_TABLES) {
-  const statements = tables.flatMap((t) => [
-    `ALTER TABLE "${t}" DISABLE TRIGGER "${t}_no_truncate"`,
-    `TRUNCATE "${t}"`,
-    `ALTER TABLE "${t}" ENABLE TRIGGER "${t}_no_truncate"`,
-  ]);
+/**
+ * Owner-only: runs one TRUNCATE statement with the guard on `guarded` lifted,
+ * re-enabled before commit. Names resolve through the client's search_path.
+ */
+export async function truncateLiftingAuditGuard(
+  client: postgres.Sql | Db, guarded: readonly AuditTable[], truncate: string,
+) {
+  const statements = [
+    ...guarded.map((t) => `ALTER TABLE "${t}" DISABLE TRIGGER "${t}_no_truncate"`),
+    truncate,
+    ...guarded.map((t) => `ALTER TABLE "${t}" ENABLE TRIGGER "${t}_no_truncate"`),
+  ];
   if ("transaction" in client) {
     await client.transaction(async (tx) => { for (const s of statements) await tx.execute(raw.raw(s)); });
   } else {
     await client.begin(async (tx) => { for (const s of statements) await tx.unsafe(s); });
   }
+}
+
+/** Owner-only reset of audit rows. */
+export async function clearAuditRows(client: postgres.Sql | Db, tables: readonly AuditTable[] = AUDIT_TABLES) {
+  await truncateLiftingAuditGuard(client, tables, `TRUNCATE ${tables.map((t) => `"${t}"`).join(", ")}`);
 }
