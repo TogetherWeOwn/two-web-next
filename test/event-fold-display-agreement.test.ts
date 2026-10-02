@@ -1,6 +1,6 @@
 // route-inventory: GET /e/:key
 // route-inventory: GET /events.json
-// route-inventory: GET /events/:file.ics
+// route-inventory: GET /events/:file{.+\.ics}
 // route-inventory: GET /events.ics
 // DST-paired cross-surface agreement for Europe/London 2026 (TOG-11669):
 // legacy Feature/Events/EventTimezoneDisplayTest.php, narrowed to the spring
