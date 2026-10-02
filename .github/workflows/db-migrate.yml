@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   migrate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     timeout-minutes: 15
     # Required reviewers, prevent-self-review and main-only branch policy must
     # be configured in Settings > Environments before enabling this workflow.

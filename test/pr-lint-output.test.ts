@@ -179,15 +179,17 @@ describe("unchanged convention policy and workflow gates", () => {
     expect(bad.output).toContain("::error title=Commit on main::");
   });
 
-  it("retains the required check name, metadata sources, hosted runners and read-only permissions", () => {
+  it("retains the required check name, metadata sources, visibility-routed runners and read-only permissions", () => {
     const resolve = step("Resolve PR title/body");
     expect(resolve.run).toBe("python3 ci/pr-lint-output.py resolve");
     expect(readFileSync(helper, "utf8")).toContain('with_name("resolve-pr-metadata.py")');
     expect(resolve.text).toContain("          PR_NUMBER: ${{ inputs.pr_number }}\n");
     expect(workflow).toContain("    name: pr-lint\n");
-    // Hosted Linux is the default; CI_OVERFLOW_* repo vars may select an overflow runner.
-    expect(workflow).toContain(`|| '["ubuntu-latest"]') }}\n`);
-    expect(workflow).not.toContain("self-hosted");
+    // Self-hosted only while private (the org runner group refuses public repos);
+    // CI_OVERFLOW_* repo vars may select an overflow runner.
+    expect(workflow).toContain(
+      `|| (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}\n`,
+    );
     expect(workflow.match(/^permissions:\n((?:  .*\n)+)/m)?.[1]).toBe("  contents: read\n  pull-requests: read\n");
   });
 });

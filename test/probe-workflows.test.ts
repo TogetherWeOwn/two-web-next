@@ -69,10 +69,10 @@ describe("source-managed moderator deployment preflight", () => {
 });
 
 describe("staging smoke workflow safety", () => {
-  it("uses GitHub-hosted Linux with a job-private container", () => {
-    expect(smoke).toContain("runs-on: ubuntu-latest\n");
+  it("uses approved self-hosted labels with a job-private container", () => {
+    expect(smoke).toContain("runs-on: [self-hosted, two-selfhosted]");
     expect(smoke).toContain("image: node:24-bookworm");
-    expect(smoke).not.toContain("self-hosted");
+    expect(smoke).not.toContain("ubuntu-latest");
   });
 
   it("matches the documented vars/secrets namespaces", () => {

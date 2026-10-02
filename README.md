@@ -340,7 +340,7 @@ successful deployment**. Blank config remains a valid local revocation state,
 but unapproved extra roles (including duplicates) fail the probe.
 
 The live smoke runs manually via the `staging-smoke` workflow on
-GitHub-hosted `ubuntu-latest` in a job container (it posts a real announcement
+`[self-hosted, two-selfhosted]` in a job container (it posts a real announcement
 to a throwaway channel and creates a real staging event). Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
 Both probes are fixture-tested in `check` without real secrets.

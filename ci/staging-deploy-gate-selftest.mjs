@@ -279,7 +279,7 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.match(workflow, /github.event.workflow_run.head_repository.full_name == github.repository/);
   assert.match(workflow, /github.event.workflow_run.conclusion == 'success'/);
   assert.match(workflow, /contents: read\n  actions: read/);
-  assert.match(workflow, /runs-on: ubuntu-latest\n/);
+  assert.match(workflow, /runs-on: \[self-hosted, two-selfhosted\]/);
   assert.match(workflow, /container:\n      image: node:24-bookworm/);
   assert.match(workflow, /environment:\n      name: staging\n      url: https:\/\/next.togetherweown.com/);
   assert.match(workflow, /name: Smoke test staging/);

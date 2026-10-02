@@ -54,7 +54,7 @@ jobs:
   pr-lint:
     name: pr-lint
     # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-lint') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-lint') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     env:
       # Metadata lint needs the immutable PR head, not a regenerated merge ref
@@ -91,7 +91,7 @@ jobs:
     needs: pr-lint
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'gitleaks') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'gitleaks') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

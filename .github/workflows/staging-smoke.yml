@@ -37,7 +37,7 @@ concurrency:
 jobs:
   internal-action-smoke:
     name: internal-action-smoke
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, two-selfhosted]
     container:
       image: node:24-bookworm
     timeout-minutes: 10

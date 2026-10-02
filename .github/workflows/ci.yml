@@ -28,7 +28,7 @@ jobs:
   scope:
     name: scope
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
@@ -56,13 +56,14 @@ jobs:
     name: a11y
     needs: scope
     if: needs.scope.outputs.docs_only != 'true'
-    # Overflow switch (TOG ops, 2026-10-01): runs on GitHub-hosted ubuntu-latest
-    # unless repo vars CI_OVERFLOW_RUNNER (JSON runs-on), CI_OVERFLOW_JOBS (JSON
-    # job ids) and CI_OVERFLOW_EVENTS (JSON event names) all select this job.
-    # The repo is public and the org's self-hosted group refuses public repos, so
-    # a self-hosted default never starts (TOG-12340); hosted Linux is free here.
-    # Deleting CI_OVERFLOW_RUNNER returns to the hosted default without a PR.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["ubuntu-latest"]') }}
+    # Overflow switch (TOG ops, 2026-10-01): repo vars CI_OVERFLOW_RUNNER (JSON
+    # runs-on, e.g. ["ubuntu-latest"]), CI_OVERFLOW_JOBS (JSON job ids) and
+    # CI_OVERFLOW_EVENTS (JSON event names) together route this job without a PR.
+    # Unselected, it follows repo visibility: the org's two-selfhosted runner group
+    # refuses public repos (TOG-12326), so GitHub-hosted Linux while public and the
+    # self-hosted fleet while private. Private repo: hosted minutes come from the
+    # included allowance; an rbx1 guard reverts at 45k.
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     timeout-minutes: 25
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -124,7 +125,7 @@ jobs:
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
     # runners, so 20m cancelled green runs (TOG-12177). Keep the job bounded; the
     # seeded property suite retains its hard 10s limit.
@@ -154,8 +155,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: needs.scope.outputs.docs_only != 'true'
         with:
-          # Migration history needs the base commit; fresh hosted workspaces
-          # lack it.
+          # Migration history needs the base commit; fresh (hosted/overflow)
+          # workspaces lack it, unlike reused self-hosted ones.
           fetch-depth: 0
       - name: Job-private localhost:5432 forward to the Postgres service
         if: needs.scope.outputs.docs_only != 'true'
