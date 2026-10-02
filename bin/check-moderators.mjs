@@ -21,7 +21,11 @@ const args = new Set(process.argv.slice(2));
 const configs = [...args].filter((a) => a.startsWith("--config="));
 const envs = [...args].filter((a) => a.startsWith("--env="));
 const unknown = [...args].filter(
-  (a) => a !== "--require-configured" && a !== "--json" && !a.startsWith("--config=") && !a.startsWith("--env="),
+  (a) =>
+    a !== "--require-configured" &&
+    a !== "--json" &&
+    !a.startsWith("--config=") &&
+    !a.startsWith("--env="),
 );
 if (unknown.length > 0) {
   console.error(`check-moderators: unknown option(s): ${unknown.join(" ")}`);
@@ -33,7 +37,12 @@ if (envs.length > 0) {
   // Named-environment read: --env requires exactly one --config, and reads
   // env.<name>.vars only. Never fall back to top-level vars or to an
   // independent process/CI value.
-  if (configs.length !== 1 || configs[0] === "--config=" || envs.length !== 1 || envs[0] === "--env=") {
+  if (
+    configs.length !== 1 ||
+    configs[0] === "--config=" ||
+    envs.length !== 1 ||
+    envs[0] === "--env="
+  ) {
     console.error("check-moderators: --env=<name> requires exactly one nonempty --config=<path>");
     process.exit(2);
   }
@@ -43,7 +52,9 @@ if (envs.length > 0) {
     const config = readWranglerConfig(readFileSync(configs[0].slice("--config=".length), "utf8"));
     named = config.env?.[envName];
   } catch {
-    console.error("check-moderators: cannot read a valid Wrangler config with a string moderator var");
+    console.error(
+      "check-moderators: cannot read a valid Wrangler config with a string moderator var",
+    );
     process.exit(2);
   }
   if (!named || typeof named !== "object") {
@@ -52,7 +63,9 @@ if (envs.length > 0) {
   }
   raw = named.vars?.DISCORD_MODERATOR_ROLE_IDS;
   if (raw !== undefined && typeof raw !== "string") {
-    console.error("check-moderators: cannot read a valid Wrangler config with a string moderator var");
+    console.error(
+      "check-moderators: cannot read a valid Wrangler config with a string moderator var",
+    );
     process.exit(2);
   }
 } else if (configs.length > 0) {
