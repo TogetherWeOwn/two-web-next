@@ -29,7 +29,7 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
       (method === "POST" && (path === "/events/:key/publish" || path === "/events/:key/cancel" ||
         path === "/events/:key/rsvp-pause" || path === "/events/:key/rsvp-reopen"))) auth = "moderator";
     else if (path === "/api/agent-events") auth = "machine-bearer";
-    else if (path === "/auth/qa/:identity") auth = "staging-token";
+    else if (path === "/auth/qa/:identity" || path === "/__probe/alert") auth = "staging-token";
     else if (path === "/auth/discord/callback" || path === "/join/callback") auth = "oauth-state";
     return { method, path, auth };
   });

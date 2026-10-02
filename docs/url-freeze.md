@@ -215,6 +215,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /up` | public | up: always-200 queue health |
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
+| `POST /__probe/alert` | staging-token | alerts: QA-only request + poison-job drill; expected 500, no production seam |
 | `POST /admin/events` | moderator | admin: draft create |
 | `POST /admin/events/:key` | moderator | admin: update |
 | `POST /admin/events/:key/cancel` | moderator | admin: cancel |
