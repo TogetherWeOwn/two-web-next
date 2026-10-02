@@ -61,7 +61,7 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: null, recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
     parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
-    ...overrides,
+    syncRevision: 1, syncedRevision: 0, ...overrides,
   };
 }
 
