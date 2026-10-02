@@ -24,8 +24,7 @@ import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
 import type { Env } from "../src/env";
 import { env as baseEnv } from "./helpers/member-data";
 
-const root = new URL("../", import.meta.url);
-const read = (path: string): string => readFileSync(new URL(path, root), "utf8");
+const read = (path: string): string => readFileSync(path, "utf8");
 
 // Web entry surface: the card's named files plus the sibling families a
 // future route could hide dispatch in. src/env.ts is deliberately excluded:
@@ -37,7 +36,7 @@ const WEB_DIRS = ["src/events", "src/admin", "src/profiles", "src/join", "src/ag
 function webFiles(): string[] {
   const out: string[] = [...WEB_ROOT_FILES];
   const walk = (dir: string): void => {
-    for (const entry of readdirSync(new URL(dir, root), { withFileTypes: true })) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const rel = `${dir}${entry.name}`;
       if (entry.isDirectory()) walk(`${rel}/`);
       else if (entry.isFile() && (rel.endsWith(".ts") || rel.endsWith(".tsx"))) out.push(rel);
@@ -50,7 +49,7 @@ function webFiles(): string[] {
 function srcFiles(): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
-    for (const entry of readdirSync(new URL(dir, root), { withFileTypes: true })) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const rel = `${dir}${entry.name}`;
       if (entry.isDirectory()) walk(`${rel}/`);
       else if (entry.isFile() && (rel.endsWith(".ts") || rel.endsWith(".tsx"))) out.push(rel);
