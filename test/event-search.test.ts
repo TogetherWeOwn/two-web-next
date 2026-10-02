@@ -5,7 +5,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { eventSearchLogs, events } from "../src/db/admin-schema";
-import type { Db } from "../src/db/index";
+import { createDb, type Db } from "../src/db/index";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { matchQuery, normalizeQuery, recordSearch, topZeroResultSearches } from "../src/events/search-log";
@@ -221,6 +221,35 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
       });
     } finally {
       await locker.end();
+    }
+  });
+
+  it("serves /admin 200 when a loaded host delays the widget transactions before their DB-side caps (TOG-12177)", async () => {
+    // CI flake on shared runners: the dashboard's two optional reads share one pooled
+    // connection, so a slow funnel transaction pushed the lock-blocked search SELECT past
+    // the client deadline; the still-pending read then made the member-read boundary
+    // refuse the whole dashboard. Delay each transaction's start as a loaded host would.
+    const slow = createDb(process.env.DATABASE_URL!);
+    // memberReadDb rebuilds the database from this session, so delay it here.
+    const session = (slow as unknown as { session: { transaction: (...args: unknown[]) => Promise<unknown> } }).session;
+    const begin = session.transaction.bind(session);
+    session.transaction = async (...args: unknown[]) => {
+      await new Promise((r) => setTimeout(r, 250));
+      return begin(...args);
+    };
+    const locker = postgres(process.env.DATABASE_URL!, { max: 1 });
+    try {
+      await locker.begin(async (tx) => {
+        await tx`lock table event_search_logs in access exclusive mode`;
+        const t0 = Date.now();
+        const mod = await app.request("/admin", { headers: { cookie: await cookieFor(store, true) } }, { ...env, ADMIN_DB: slow } as Env);
+        expect(mod.status).toBe(200);
+        expect(Date.now() - t0).toBeLessThan(2000);
+        expect(await mod.text()).not.toContain('data-testid="top-zero-searches"');
+      });
+    } finally {
+      await locker.end();
+      await slow.$client.end();
     }
   });
 

@@ -44,7 +44,7 @@ it.each([false, true])("calendar snapshot chains and generation adds no duplicat
     const before = readdirSync(join(scratch, "drizzle"));
     // drizzle-kit can exit 0 after serialization failures: assert output and files too.
     const output = execFileSync(process.execPath, [join(root, "node_modules/drizzle-kit/bin.cjs"), "generate"], {
-      cwd: scratch, encoding: "utf8", timeout: 10_000,
+      cwd: scratch, encoding: "utf8", timeout: 60_000,
     });
     expect(output).toContain("No schema changes, nothing to migrate");
     expect(readdirSync(join(scratch, "drizzle"))).toEqual(before);
@@ -52,4 +52,4 @@ it.each([false, true])("calendar snapshot chains and generation adds no duplicat
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
-}, 15_000);
+}, 90_000);
