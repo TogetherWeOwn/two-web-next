@@ -21,7 +21,9 @@ import type { QueueMessage } from "../src/jobs/types";
 // Carrier integration (real ledger/unique lock) lives in event-writeback.test.ts.
 // This suite covers message construction and public route behavior in isolation.
 vi.mock("../src/jobs/worker", () => ({
-  enqueueSyncEvent: async (env: Env, message: QueueMessage) => {
+  // Mirrors the real signature: the producer only ever emits the sync-event
+  // variant, so the jobId spread stays assignable now alert-probe exists.
+  enqueueSyncEvent: async (env: Env, message: Extract<QueueMessage, { kind: "sync-event" }>) => {
     await env.SYNC_EVENT_QUEUE!.send({ ...message, jobId: crypto.randomUUID() }, { delaySeconds: 10 });
     return true;
   },
@@ -101,13 +103,15 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
   });
   afterAll(async () => { await fixture?.dispose(); });
   const store = createMemorySessionStore();
-  const sent: QueueMessage[] = [];
+  // Routes only enqueue the sync-event variant; narrowing keeps idempotencyKey
+  // readable now the alert-probe variant (no idempotency key) exists.
+  const sent: Extract<QueueMessage, { kind: "sync-event" }>[] = [];
   const env = {
     ...baseEnv,
     get ADMIN_DB() { return db; },
     SESSION_STORE: store,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-    SYNC_EVENT_QUEUE: { send: async (m: QueueMessage) => void sent.push(m) },
+    SYNC_EVENT_QUEUE: { send: async (m: Extract<QueueMessage, { kind: "sync-event" }>) => void sent.push(m) },
   } as unknown as Env;
   // Sessions rotate on every authenticated view (a replayed cookie is a guest), so each
   // request mints a fresh cookie.

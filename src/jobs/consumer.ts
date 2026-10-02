@@ -1,7 +1,8 @@
 import { alertQueueFailing } from "../alerts";
+import { AlertProbeError } from "../alert-probe-error";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
-import { isQueueMessage } from "./envelope";
+import { toQueueMessage } from "./envelope";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { SyncRetryPersistenceError } from "./types";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
@@ -18,14 +19,15 @@ type Msg = { body: unknown; attempts: number; ack(): void; retry(o?: { delaySeco
 
 // Legacy identity of each job, for the queue.failing alert line (ports Queue::failing fields).
 const JOBS = {
+  "alert-probe": { queue: "two-internal-action", job: "AlertProbe", tries: 1 },
   "sync-event": { queue: "two-sync-event", job: "SyncEventToDiscord", tries: SYNC_EVENT.tries },
   announcement: { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
   "role-assign": { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
 } as const;
 
-function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: string) {
+function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: string, probeId?: string) {
   const j = JOBS[kind];
-  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception });
+  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception, probeId });
 }
 
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
@@ -34,11 +36,12 @@ export async function consume(
   deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger;
     now?: () => Date;
     needsSync?: EventStore["needsSync"];
-    dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown> },
+    dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
+    probeEnabled?: boolean },
 ): Promise<void> {
   for (const m of batch.messages) {
-    const body = m.body;
-    if (!isQueueMessage(body)) {
+    const body = toQueueMessage(m.body);
+    if (!body) {
       // Bad carriers cannot recover on retry. Do not trust their ledger/lock
       // identifiers or log their payload; discard only this message.
       console.warn("queue malformed message discarded");
@@ -105,10 +108,16 @@ export async function consume(
 
     let outcome: Outcome;
     try {
-      outcome =
-        body.kind === "sync-event"
+      if (body.kind === "alert-probe") {
+        // Poison only the synthetic job, only when the runtime's QA gate is on.
+        // No ledger fixture, bot request, event mutation or uniqueness lock.
+        if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
+        outcome = { done: true }; // A delayed staging probe cannot page in production.
+      } else {
+        outcome = body.kind === "sync-event"
           ? await handleSyncEvent(body, m.attempts, deps)
           : await handleCallInternalAction(body, m.attempts, deps.bot);
+      }
     } catch (e) {
       if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
         // Carry the known wait on this delivery, but only a committed result can
@@ -126,9 +135,8 @@ export async function consume(
         console.error("job threw", body.kind, { exception: queueExceptionClass(e) });
         // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
         if (m.attempts >= JOBS[body.kind].tries) {
-          // An unexpected/exhausted carrier says nothing definitive about the
-          // remote request. Keep any pending snapshot; only retire this ledger.
-          alertFailing(body.kind, m.attempts, queueExceptionClass(e));
+          alertFailing(body.kind, m.attempts, queueExceptionClass(e),
+            e instanceof AlertProbeError ? e.probeId : undefined);
           // Out of tries: a terminal failure, not a phantom pending row — and not
           // a retry either. The job already spent its tries (the transport's
           // max_retries is only a backstop above this cap), so ack it and free

@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
+import { qaEnabled } from "../qa";
 import { migrate as migrateSessions, type Sql as SessionSql } from "../sessions";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
@@ -95,6 +96,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv, ct
         ctx?.waitUntil(successorLifetime(work));
         return work;
       },
+      probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
     });
   } finally {
     // Force-close timed-out best-effort SQL without holding the invocation open.

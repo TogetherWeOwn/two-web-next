@@ -52,7 +52,7 @@ remains outside that optimization; exact-head CI is still required.
 | Wall → UTC → wall | Minute instants in 2020–2035; runtime IANA zone list plus UTC; independent `Intl` h23 renderer | Both space and T naive separators; fractional-offset and southern zones are in the domain |
 | Zone / wall shape | Generated unknown identifiers and embedded Z/offset/zone suffixes | Field-specific `ValidationError`, not any exception |
 | Spring gaps rejected | Generated minute within known 2026 transitions | London, Berlin, New York, Sydney, Lord Howe; first/last gap minute; a carrier cannot rescue an invalid wall |
-| Fold resolution | Independent first/second UTC fixture instants with generated fold minute | Earliest fresh occurrence; untouched second occurrence and seconds preserved; equal wall text ordered using UTC carriers |
+| Fold resolution | Independent first/second UTC fixture instants with generated fold minute | Latest (second) fresh occurrence, as legacy (TOG-11669); untouched first occurrence and seconds preserved; equal wall text ordered using UTC carriers |
 | Forbidden text | C0/C1, bidi overrides/isolates, U+200B–U+200D, BOM inserted at start/middle/end | Title, description, location checked before trim; embedded NUL, edge BOM and non-emoji ZWJ pinned |
 | Legitimate Unicode | Accents, CJK, Arabic including letter mark, emoji ZWJ sequences, tab/LF/CR | Family, profession and heart-on-fire emoji stay accepted; not a blanket Cf ban |
 | Capacity | Integers in the stored signed-32-bit range and invalid numeric/text domains | 1, 2147483647, 0, 2147483648, 400-digit overflow, fractional values, blank unlimited |
