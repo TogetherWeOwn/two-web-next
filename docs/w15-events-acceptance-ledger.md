@@ -42,7 +42,7 @@ suite below.
 
 | Gap | New suite | Tests | Ports |
 |---|---|---|---|
-| G1 wall-time ⇄ UTC, DST gap/fold, IANA + offset + impossible-date rejection | `test/event-time-validation.test.ts` | 9 | **Partial/adapted:** `Feature/Events/EventTimezoneTest.php`, incl. 2026 gap shoulders. Current Next selects the first, BST fold occurrence after main PR #64; legacy selected the second, GMT occurrence. The fold divergence remains a parity gap, not an authorized waiver. |
+| G1 wall-time ⇄ UTC, DST gap/fold, IANA + offset + impossible-date rejection | `test/event-time-validation.test.ts` | 9 | **Partial/adapted:** `Feature/Events/EventTimezoneTest.php`, incl. 2026 gap shoulders. Fresh fold parses select the second, GMT occurrence, as legacy did (`EventTimezoneTest.php:295-300`; TOG-11669 reverses main PR #64's first-occurrence choice). Legacy's moved-forward gap time (`2026-03-29 02:30` → `01:30:00 UTC`) is still refused in Next; that gap-time divergence stays open, outside TOG-11669. |
 | G2 event-form floor + fold carrier | `test/event-time-validation.test.ts` | 7 | `EventCapacityFloorTest.php` **form-floor half**, TOG-6805 carrier both sides, `EventService::transitionTo` guard |
 | G3 RSS item-edge bytes (no description, guid stability, DST pubDate, multibyte) | `test/event-feeds.test.ts` | +3 | `Feature/Events/EventRssTest.php` edge rows, `EventIcsTest.php` folding |
 | G4 feed expiry rotates validators with no write | `test/event-feeds.test.ts` | +2 | `Feature/Events/FeedExpiryValidatorTest.php` (one case per RSS/ICS: a valid two-hour event is included exactly at `ends_at`, one second later drops out; original ETag → 200 + changed validator, new ETag → empty 304; persisted row unchanged; per-event ICS still serves) |
@@ -98,7 +98,7 @@ series (W13) and agent-events grants respectively — see defers below.
 
 | Legacy test file | Disposition and Next proof |
 |---|---|
-| `Feature/Events/EventTimezoneTest.php` | **Partial/adapted (G1):** both DST sides, round-trip, UTC zone, IANA/offset/impossible-date rejection, gap + shoulders, with the unchanged fold-carrier rule of TOG-6805 (G2) in `test/event-time-validation.test.ts`. Current Next's fresh fold parse selects the first occurrence (main PR #64), unlike legacy's second occurrence; an explicit authorized divergence or legacy-equivalent implementation remains required before full parity. Page-render display is the W10 islands drift net (`test/islands-events-calendar.test.ts`). |
+| `Feature/Events/EventTimezoneTest.php` | **Partial/adapted (G1):** both DST sides, round-trip, UTC zone, IANA/offset/impossible-date rejection, gap + shoulders, with the unchanged fold-carrier rule of TOG-6805 (G2) in `test/event-time-validation.test.ts`. Current Next's fresh fold parse selects the second (GMT) occurrence like legacy (`2026-10-25 01:30` → `01:30:00 UTC`, TOG-11669, pinned in `test/event-time-validation.test.ts`, `test/admin-validation.property.test.ts` and through `POST /events` in `test/event-fold-display-agreement.test.ts`). Page-render display is the W10 islands drift net (`test/islands-events-calendar.test.ts`). |
 | `Feature/Events/EventCapacityFloorTest.php` | **Adapted/partial (G2, A2):** parser form-floor rows remain in `test/event-time-validation.test.ts`. `test/event-mutation-invariants.test.ts` and `test/rsvp-waitlist.test.ts` prove the locked Going-only floor on JSON/admin edits, count-bearing errors, no mutation/write-back on refusal, equality/higher/unlimited acceptance and stale-form/concurrent recount. **Remaining gap:** grant-owned shrink assertions; no full-file pass is inferred. |
 | `Feature/Events/EndedDraftPublicationTest.php` | **Ported (A1):** `test/event-mutation-invariants.test.ts` proves expired-draft refusal with the exact legacy reason, lock-before-clock/persisted-date races, strict boundary and ended-draft cancellation. Cancelled-terminal and draft-only-publish guards remain in `test/event-time-validation.test.ts` ("status transition guard"). |
 | `Feature/Events/FeedExpiryValidatorTest.php` | **Ported (G4):** `test/event-feeds.test.ts` table-driven "%s drops an expired event… no write after ends_at": RSS and ICS equality inclusion, one-second expiry, original validator miss, new validator hit, persisted full-row equality, per-event ICS still 200. |
@@ -136,11 +136,11 @@ Application gaps require that domain owner's implementation before QA can pass.
 | `Feature/Events/EventJsonContractTest.php` | **Gap: exact consumer wire contract.** `test/events.test.ts` exercises CRUD, but does not pin the ordered key set/no database id, nullable keys, every field type, going-only/zero aggregates, all status values, moderator-vs-member listings, stable earliest-first ties and `synced_to_discord` derivation. QA must add a dedicated JSON contract suite; a CRUD round-trip is not equivalent. |
 | `Feature/Events/DraftIcsConditionalAuthorizationTest.php` | **Partial/gap.** `test/event-feeds.test.ts` pins unconditional draft 403 and published 304. It does not capture a real moderator draft ETag then reuse it as guest/member to prove authorization before conditional success, nor moderator draft empty 304. QA owns those missing conditional-authorization assertions; no inferred security pass. |
 | `Feature/Events/EventRssConsumerShapeTest.php` | **Adapted/partial.** `test/event-feeds.test.ts` pins permalink guid stability across rename, UTC summer/winter pubDate bytes, description omission, multibyte titles, draft/cancellation filtering and route cache/ETag behavior. XML parsing and a separately asserted UTC-parsable channel lastBuildDate, plus moderator route parity, remain QA gaps rather than an implied full consumer-shape pass. |
-| `Feature/Events/EventTimezoneDisplayTest.php` | **Partial/deferred to W10** / [TOG-9689](/TOG/issues/TOG-9689). `test/event-time-validation.test.ts` pins host wall-time conversion; feed fixtures pin UTC exports, and `test/islands-events-calendar.test.ts` covers host-zone month bucketing. The complete DST-paired page/JSON/ICS/Google cross-surface agreement, New York date rollover and Auckland viewer cases are not all ported. |
+| `Feature/Events/EventTimezoneDisplayTest.php` | **Partial/deferred to W10** / [TOG-9689](/TOG/issues/TOG-9689). `test/event-time-validation.test.ts` pins host wall-time conversion; feed fixtures pin UTC exports, and `test/islands-events-calendar.test.ts` covers host-zone month bucketing. `test/event-fold-display-agreement.test.ts` (TOG-11669) proves Europe/London 2026 DST-paired agreement for both spring gap shoulders and both fold occurrences: the show page's `<time datetime>` and wall-clock text, `/events.json`, per-event and collection ICS `DTSTART`/`DTEND` and the Google `dates=` link all carry the stored instant. **Remaining:** the show page's visible text has no zone abbreviation, so the two fold occurrences read identically (`01:30`); the 20:00 both-sides matrix, New York date rollover and Auckland viewer cases are not ported. |
 | `Feature/Events/EventCoverImagesTest.php` | **Deferred to W10** / [TOG-9689](/TOG/issues/TOG-9689). Reserved layout boxes across index/detail/gone/archive images and the featured admin preview need HTML tripwires. A currently text-only page is not a regression assertion. |
 | `Feature/Events/EventGoneTest.php` | **Partial.** `test/events.test.ts` pins cancelled JSON 410 and noindex; SEO coverage is owned by [TOG-10118](/TOG/issues/TOG-10118). Cancelled HTML copy/JSON-LD, unknown-vs-gone distinction, draft noindex on both surfaces and published/past absence of robots signals require dedicated assertions across W10/SEO; not a full file pass. |
 | `Feature/Events/EventPageTest.php` | **Deferred page integration to W10** / [TOG-9689](/TOG/issues/TOG-9689). Island RSVP/member-exposure suites cover component/privacy contracts, not every share-page assertion: canonical/title/time/venue/description, guest join pitch vs member RSVP/answer, capacity/over-capacity spots and attendee names hidden from guests. |
-| `Feature/Admin/EventEditFoldRoundTripTest.php` | **Partial (G2)/gap.** `test/event-time-validation.test.ts` pins unchanged fold-carrier preservation on both overlap occurrences at the parser boundary. Real edit-route save, deliberate wall-time edits dropping the carrier, and sub-minute precision preservation are unproved; QA/admin owner must add these before full fold-edit parity. |
+| `Feature/Admin/EventEditFoldRoundTripTest.php` | **Ported (G2).** `test/event-time-validation.test.ts` pins fold-carrier preservation on both occurrences at the parser boundary. `test/event-fold-edit-roundtrip.test.ts` (#249, re-pinned by TOG-11669) proves the real edit route on agent-testdb/CI Postgres: unchanged saves keep either occurrence, sub-minute precision survives on both, and deliberate wall edits drop the carrier to the fresh second-occurrence parse. |
 | `Feature/Admin/EventFillColumnTest.php` | **Deferred admin presentation proof.** Going-only fill counts, uncapped display and full/over-capacity badges need explicit route/render assertions; `test/roster.test.ts` is not proof of this table column. Admin domain owner + QA under [TOG-9697](/TOG/issues/TOG-9697). |
 | `Feature/Admin/EventResourceServiceRoutingTest.php` | **Partial.** `test/admin.test.ts` and `test/events.test.ts` exercise CRUD/service effects, but do not collectively assert every host-attribution, UTC conversion and publish/cancel action visibility row. Filament wiring syntax is framework-specific; portable side effects/visibility remain QA/admin gaps. |
 | `Feature/Admin/EventTableTimezoneLabelTest.php` | **Deferred admin display proof.** The explicit UTC column label and date rollover across London/New York need rendered-table assertions; form conversion tests do not prove the label. Admin domain owner + QA. |
@@ -171,15 +171,17 @@ The machine-readable selected inventory and audit results are attached to
 
 ## Recorded notes for reviewers
 
-1. **Fold direction changed on main.** Main PR #64 (`4cb024d`) changed
-   `wallToUtc` to the **first (BST) occurrence** and independently pins that
-   behavior in `test/admin-validation.property.test.ts`. Legacy pinned
-   `2026-10-25 01:30` → `01:30:00 UTC` (second/GMT occurrence,
-   `EventTimezoneTest.php:295-300`); current Next returns `00:30:00 UTC`.
-   This refresh adapts the fresh-parse assertions, preserves exact edit
-   carriers on both sides, and removes the now-obsolete comment correction.
-   `src/admin/validation.ts` is identical to refreshed main. The legacy fold
-   divergence remains NEEDS WORK; no waiver or runtime change is included.
+1. **Fold direction restored to legacy (TOG-11669).** Main PR #64
+   (`4cb024d`) had changed `wallToUtc` to the **first (BST) occurrence**.
+   Legacy pinned `2026-10-25 01:30` → `01:30:00 UTC` (second/GMT occurrence,
+   `EventTimezoneTest.php:295-300`). TOG-11669 makes `wallToUtc` take the
+   latest round-tripping candidate, so Next again returns `01:30:00 UTC`.
+   Unchanged edits still keep the exact stored instant on either side through
+   the TOG-6805 carriers. Series occurrences resolve through the same
+   `wallToUtc` (`src/admin/recurrence-wall.ts`), so a weekly slot landing in
+   the fold also takes the second occurrence (`test/recurrence-subminute.test.ts`).
+   The `src/admin/recurrence.ts:43-44` comment that says "first occurrence" is
+   now stale and was left alone: that file is out of scope while #114 is open.
 2. **Clock-only fakes.** DB tests that need a moving clock fake only `Date`
    (`vi.useFakeTimers({ toFake: ["Date"] })`); full fake timers hang the
    postgres-js driver's socket timers.
