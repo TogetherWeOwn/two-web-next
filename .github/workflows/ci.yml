@@ -212,6 +212,9 @@ jobs:
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run test:cutover
+      - name: Shadow-compare selftest (loopback only)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run test:shadow
       - name: Coverage job summary
         if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
