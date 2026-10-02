@@ -53,6 +53,8 @@ function fixture() {
     recurrenceEndsOn: null,
     parentEventId: null,
     recurrenceIndex: null,
+    syncRevision: 1,
+    syncedRevision: 0,
     createdAt: start,
     updatedAt: start,
   };
