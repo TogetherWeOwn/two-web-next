@@ -292,6 +292,92 @@ test("login alias requires the temporary local no-store redirect in both phases"
   }
 });
 
+test("legacy admin aliases require the guarded guest redirect in both phases", async () => {
+  // Guests bounce to OAuth before the moderator 301s, so the rows pin the
+  // temporary guest posture: a canonical target leaking to guests fails.
+  assert.deepEqual(
+    URL_CASES.filter((row) => row.path === "/admin/events/{key}/edit"),
+    [
+      {
+        frozen: "/admin/*",
+        path: "/admin/events/{key}/edit",
+        status: 302,
+        redirect: "/auth/discord",
+      },
+    ],
+  );
+  assert.deepEqual(
+    URL_CASES.filter((row) => row.path === "/admin/featured-contents"),
+    [
+      {
+        frozen: "/admin/*",
+        path: "/admin/featured-contents",
+        status: 302,
+        redirect: "/auth/discord",
+      },
+    ],
+  );
+  for (const phase of ["before", "after"]) {
+    for (const path of [`/admin/events/${eventKey}/edit`, "/admin/featured-contents"]) {
+      const measure = (change) =>
+        runChecks(options(phase), {
+          freeze,
+          resolver: stubDns(),
+          request: async (url) => {
+            const response = fixture(url, phase);
+            if (new URL(url).hostname === options(phase).target && new URL(url).pathname === path)
+              change(response);
+            return { ...response, tlsVerified: true };
+          },
+        });
+      const healthy = await measure(() => {});
+      assert.equal(healthy.ok, true, `${phase} ${path}`);
+      for (const id of [`url:${path}`, `location:${path}`]) {
+        assert.equal(healthy.checks.find((check) => check.id === id)?.ok, true, `${phase} ${id}`);
+      }
+      const regressions = [
+        [
+          "moderator target leaks to guests",
+          (response) => {
+            response.headers.location = "/admin/events/new";
+          },
+          `location:${path}`,
+        ],
+        [
+          "permanent redirect",
+          (response) => {
+            response.status = 301;
+          },
+          `url:${path}`,
+        ],
+        [
+          "success",
+          (response) => {
+            response.status = 200;
+          },
+          `url:${path}`,
+        ],
+        [
+          "missing Location",
+          (response) => {
+            delete response.headers.location;
+          },
+          `location:${path}`,
+        ],
+      ];
+      for (const [label, change, id] of regressions) {
+        const result = await measure(change);
+        assert.equal(result.ok, false, `${phase} ${path} ${label}`);
+        assert.deepEqual(
+          result.checks.filter((check) => !check.ok).map((check) => check.id),
+          [id],
+          `${phase} ${path} ${label}`,
+        );
+      }
+    }
+  }
+});
+
 test("all no-store gates require a complete directive outside quoted values in both phases", async () => {
   const cases = [
     ["no-store", true],

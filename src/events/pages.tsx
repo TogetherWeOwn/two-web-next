@@ -960,12 +960,16 @@ export const EventPage: FC<{
               {related.map((event) => (
                 <li>
                   <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
-                    {event.title}
-                    {" · "}
+                    {event.title}{" "}
                     <time datetime={event.startsAt.toISOString()}>
                       {fmtWithOffset(event.startsAt, event.timezone)}
                     </time>
-                    {event.location ? ` · ${event.location}` : ""}
+                    {event.location ? (
+                      <>
+                        {" "}
+                        <span class="event-related-location">{event.location}</span>
+                      </>
+                    ) : null}
                   </a>
                 </li>
               ))}
@@ -992,11 +996,8 @@ export const EventPage: FC<{
   );
 };
 
-export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string; returnTo?: string }> = ({
-  e,
-  jsonLd,
-  returnTo,
-}) => (
+/** The notice is the only visible cancellation copy; a closed RSVP control would repeat it. */
+export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonLd }) => (
   <EventDetailShell title={e.title} robots="noindex, nofollow" account={false}>
     <section class="event-hero event-gone" aria-label="Cancelled event">
       <p class="event-kicker">{e.game || "Community event"}</p>
@@ -1004,11 +1005,6 @@ export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string; returnTo?: stri
         Cancelled
       </p>
       <h1>{e.title}</h1>
-      <p>This event was cancelled</p>
-      <div class="event-rsvp">
-        <RsvpButton e={e} member={false} answer={null} returnTo={returnTo ?? `/e/${e.eventKey}`} />
-        <script src="/islands/rsvp-button.js" defer />
-      </div>
       <p>
         <a class="btn" href="/events">
           See upcoming events

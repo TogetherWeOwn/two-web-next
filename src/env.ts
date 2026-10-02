@@ -51,6 +51,12 @@ export type JobsEnv = Env & {
   INTERNAL_ACTION_QUEUE: Queue<QueueMessage>;
   HYPERDRIVE?: Hyperdrive;
   DATABASE_URL?: string;
+  // Signed bot client for sync/announcement/role jobs. All three are required
+  // to send; a missing value is a terminal, alerting job failure (never an ack
+  // as success). Values are Operator-provisioned; see docs/config.md.
+  BOT_ENDPOINT_URL?: string;
+  BOT_KEY_ID?: string;
+  BOT_SHARED_SECRET?: string;
 };
 
 export type Session = {
