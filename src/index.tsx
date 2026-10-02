@@ -4,6 +4,7 @@ import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
 import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
+import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import { cspReportsRoute } from "./csp-reports";
@@ -610,5 +611,7 @@ app.post("/auth/qa/:identity", async (c, next) => {
   });
   return c.body(null, 204);
 });
+
+registerAlertProbe(app);
 
 export default app;

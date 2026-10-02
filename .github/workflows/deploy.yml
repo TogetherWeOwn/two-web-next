@@ -87,8 +87,19 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Re-verify exact-SHA full CI before Tail Worker deploy
+        # The Tail Worker is a Cloudflare mutation too; queue creation may outlive the accepted CI attempt.
+        run: node ci/staging-deploy-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Deploy alert Tail Worker before attaching the app
+        # The app's tail_consumers binding needs the consumer to exist first.
+        run: npx wrangler deploy --config tail/wrangler.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Re-verify exact-SHA full CI before Worker deploy
-        # Queue creation may outlive the accepted CI attempt; this step runs directly before the deploy.
+        # Queue creation or the Tail deploy may outlive the accepted CI attempt; this step runs directly before the deploy.
         run: node ci/staging-deploy-gate.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
