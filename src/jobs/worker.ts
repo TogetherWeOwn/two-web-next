@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { createBotClient } from "../bot/client";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { qaEnabled } from "../qa";
@@ -11,15 +12,23 @@ import type { BotClient, QueueLedger, QueueMessage, UniqueLock } from "./types";
 import { dispatchSyncEvent } from "./sync-event";
 import { pgEventStore } from "./events";
 
-// The Rust bot client is a later slice. Refuse loudly rather than ack a stub
-// as success; this slice wires the carrier and current-row event store only.
-const notWired = (what: string) => () => Promise.reject(new Error(`${what} not wired yet`));
-const bot: BotClient = {
-  upsertEvent: notWired("BotClient.upsertEvent"),
-  cancelEvent: notWired("BotClient.cancelEvent"),
-  postAnnouncement: notWired("BotClient.postAnnouncement"),
-  assignRole: notWired("BotClient.assignRole"),
-};
+/**
+ * Live bot transport for the queue consumer. Configuration is checked per call
+ * (not at construction), so a missing BOT_* value surfaces as the consumer's
+ * terminal BotTerminalError outcome: it alerts and is recorded as failed, and
+ * is never acked as a success. Redirects are refused by the client.
+ */
+export function botClientFor(
+  env: Pick<JobsEnv, "BOT_ENDPOINT_URL" | "BOT_KEY_ID" | "BOT_SHARED_SECRET">,
+  fetchFn?: typeof fetch,
+): BotClient {
+  return createBotClient({
+    url: env.BOT_ENDPOINT_URL,
+    secret: env.BOT_SHARED_SECRET,
+    keyId: env.BOT_KEY_ID,
+    fetchFn,
+  });
+}
 
 function sqlFor(
   env: Env & { HYPERDRIVE?: Hyperdrive },
@@ -121,7 +130,7 @@ export async function handleQueue(
         successorSql(env, (sql) => pgUniqueLock(sql).release(key, leaseToken)),
     };
     await consume(batch, {
-      bot,
+      bot: botClientFor(env),
       events: pgEventStore(sql),
       lock: pgUniqueLock(cleanupSql),
       ledger,
