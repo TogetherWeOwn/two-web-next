@@ -40,7 +40,7 @@ import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { consumeLoginReturn, LOGIN_INTENDED_COOKIE, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody } from "./up";
+import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 import { rulesLastUpdated } from "./rules-last-updated";
@@ -404,12 +404,9 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
-// `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
-// ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
-// stack). No session, cookie or auth on this path, and the queue read can never
-// sink the endpoint: a backlog answers 200 `degraded`, an unreachable or
-// unconfigured ledger 200 `unknown` — `curl -f` must keep passing through the
-// outage it reports on. `no-store` so a monitor never reads a stale 200.
+// `GET /up` — session-free DB/schema readiness plus the existing queue signal.
+// DB/ledger failure or pending web migrations answers 503; queue-only degraded
+// or unknown remains 200. `no-store` so a monitor never reads a stale response.
 // Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
 type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
@@ -418,25 +415,39 @@ app.get("/up", async (c) => {
   // Fixed app identity for the cutover probe, including unknown/degraded reads.
   c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
-  // The queue ledger lives in the same Postgres as the rest of the W13 backend:
-  // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
-  const url = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
-  let sql: EnvWithDepth["QUEUE_DEPTH_STORE"] | null = injected ?? null;
+  // Readiness must probe the database selected by the web stores. Preserve the
+  // queue's existing Hyperdrive-first selection without falling back on failure.
+  const url = databaseUrl(c.env);
+  const queueUrl = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
+  const shared = url === queueUrl;
+  const owned = new Set<ReturnType<typeof postgres>>();
+  const connect = (target: string | undefined, max: number) => {
+    if (injected) return injected;
+    if (!target) return null;
+    try {
+      const client = postgres(target, { max, idle_timeout: 10, connect_timeout: 3, fetch_types: false });
+      owned.add(client);
+      return client;
+    } catch (err) {
+      console.warn("Health check could not build the database client.", { exception: err instanceof Error ? err.name : typeof err });
+      return null;
+    }
+  };
   try {
     c.header("cache-control", "no-store");
-    // Client construction can throw (malformed URL); that is `unknown`, never a 500.
-    if (!sql && url) {
-      try {
-        sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 });
-      } catch (err) {
-        console.warn("Health check could not build the queue client.", { exception: err instanceof Error ? err.name : typeof err });
-      }
-    }
-    const client = sql;
-    return c.json(await upBody(client ? () => pgQueueDepth(client) : null));
+    // Two slots when shared, one per client otherwise: queue cannot starve DB.
+    const sql = connect(url, shared ? 2 : 1);
+    const queueSql = shared ? sql : connect(queueUrl, 1);
+    const body = await upBody(queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null, sql);
+    return c.json(body, upHttpStatus(body));
   } finally {
-    // Per-request client; an injected double owns its own lifecycle.
-    if (sql && !injected) await sql.end({ timeout: 1 }).catch(() => {});
+    // Close request-owned clients without waiting to drain. Transaction-local
+    // server limits bound active queries; disconnect alone is not cancellation.
+    // An injected client owns its own lifecycle.
+    for (const sql of owned) {
+      const closed = sql.end({ timeout: 0 }).catch(() => {});
+      try { c.executionCtx.waitUntil(closed); } catch { void closed; }
+    }
   }
 });
 

@@ -126,7 +126,7 @@ no public version/clock endpoint or redirect alias remains.
 | Legacy | Next status | Card |
 |---|---|---|
 | SyncEventToDiscord (unique per eventKey, tries 6, backoff 10/60/300/900/3600, debounce 10 s, grant recheck, terminal stamp) | pending (PR #7 in review) | W13 ⛔ |
-| CallInternalAction (`role.assign`/`announcement.post` only; production web never dispatches it — drill-only) | pending, port shape | W13 ⛔ |
+| CallInternalAction (`role.assign`/`announcement.post` only; production web never dispatches it — drill-only) | ✅ drill port: `bin/internal-action-drill.mjs` drives the real producers + consumer (`handleCallInternalAction`, attempts=1) against staging, refusing the production bot host and web apex; no web route dispatch ([TOG-11706](/TOG/issues/TOG-11706)) | W13 ⛔ |
 | `events:reconcile` every 10 min (close past, materialize series, re-dispatch stale; single-flight) | pending | W13 ⛔ |
 | `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ this card (90 d each, legacy constants) | W13 ⛔ |
 | `web_sessions` expiry cleanup (no legacy equivalent — Laravel GC; rows accumulate without one) | ✅ this card (expiry sweep in the prune pass) | W13 ⛔ |
@@ -139,7 +139,7 @@ no public version/clock endpoint or redirect alias remains.
 | `discord:check-moderators` (deploy-time role-config probe) | no equivalent | W16 📋 (pre-flip checks) |
 | `bot:internal-action-smoke` (live-against-staging QA) | no equivalent | W16 📋 (cutover rehearsal) |
 | `queue:check-depth` (box probe) | dropped as a command (no box on Workers) — replaced by `GET /up` | **N3** |
-| `error-alert:probe`, `queue:poison-probe` (drills) | dropped as commands — re-express as Vitest tests | W13 ⛔ / W15 ⛔ (verify scope) |
+| `error-alert:probe`, `queue:poison-probe` (drills) | ✅ re-expressed as Vitest tests (`test/drill-probes.test.ts`: error-alert 1-per-fingerprint/5min critical line against a fixture logger; poison-queue fixture isolated from ordinary queued work; fixture-only, no staging/prod) | [TOG-11732](/TOG/issues/TOG-11732) |
 | `ci:session-cookie` (perf-budget session minter) | no equivalent | W15 ⛔ (verify scope; drop if no budget job) |
 | `inspire` | stock scaffold | dropped (no-op) |
 

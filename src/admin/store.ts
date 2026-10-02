@@ -10,7 +10,7 @@
 // lock. Validation, edits and FIFO promotions commit together; routes dispatch
 // write-back only after commit, with promoted answers' mirror stamps reset.
 
-import { and, asc, desc, eq, getTableColumns, gt, ilike, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, gt, ilike, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
 import { parseFeaturedListQuery } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
@@ -410,8 +410,11 @@ export class NotFoundError extends Error {
   }
 }
 
+/** One admin list row: the event plus its Going-only seat count. */
+export type EventListRow = EventRow & { goingCount: number };
+
 /** Fetch one extra row so pagination needs no separate count query. */
-export async function listEvents(db: Db, params: EventListParams): Promise<EventRow[]> {
+export async function listEvents(db: Db, params: EventListParams): Promise<EventListRow[]> {
   const opts = parseEventListQuery(params);
   const conds: (SQL | undefined)[] = [];
   if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
@@ -431,9 +434,21 @@ export async function listEvents(db: Db, params: EventListParams): Promise<Event
   // Pick real column objects, never an identifier interpolated from the URL.
   const column = opts.sort === "title" ? events.title : opts.sort === "status" ? events.status : events.startsAt;
   const order = opts.order === "asc" ? asc(column) : desc(column);
-  return nonSensitiveRead("events", () => db.select().from(events).where(and(...conds))
+  const rows = await nonSensitiveRead("events", () => db.select().from(events).where(and(...conds))
     .orderBy(order, asc(events.id))
     .limit(EVENT_PAGE_SIZE + 1).offset((opts.page - 1) * EVENT_PAGE_SIZE));
+  if (rows.length === 0) return [];
+  // Going-only seat counts for the rendered Fill column (same rule as the
+  // fill filter: Maybe/Waitlist/Not going never occupy a seat). One
+  // classified aggregate read, like the public withGoing helper — a second
+  // non-sensitive statement, not member subjects.
+  const counts = await nonSensitiveRead("going-counts", () => db
+    .select({ eventId: rsvps.eventId, n: count() })
+    .from(rsvps)
+    .where(and(inArray(rsvps.eventId, rows.map((r) => r.id)), eq(rsvps.status, "going")))
+    .groupBy(rsvps.eventId));
+  const by = new Map(counts.map((c) => [c.eventId, Number(c.n)]));
+  return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
 }
 
 export async function getEvent(db: Db, eventKey: string): Promise<EventRow | null> {
