@@ -17,6 +17,32 @@
       (fromHistory || (/^(\?page=[1-9]\d*)?$/.test(url.search) && !url.hash)) ? url : null;
   }
 
+  function required(parent, selector) {
+    var nodes = parent.querySelectorAll(selector);
+    if (nodes.length !== 1) throw new Error("Invalid archive page");
+    return nodes[0];
+  }
+
+  function zones(parent) {
+    var nodes = selectors.map(function (s) { return required(parent, s); });
+    if (nodes.some(function (node, i) {
+      return nodes.some(function (other, j) { return i !== j && node.contains(other); });
+    })) throw new Error("Invalid archive page");
+    return nodes;
+  }
+
+  function metadata(page) {
+    var canonical = required(page, 'link[rel="canonical"]');
+    var og = required(page, 'meta[property="og:url"]');
+    var href = canonical.getAttribute("href");
+    var content = og.getAttribute("content");
+    var url = href && archiveUrl(href);
+    if (!url || !content || new URL(content, window.location.href).href !== url.href) {
+      throw new Error("Invalid archive page");
+    }
+    return { canonical: canonical, og: og, href: url.href };
+  }
+
   async function load(url, push) {
     if (active) active.abort();
     var controller = new AbortController();
@@ -29,22 +55,43 @@
       });
       if (!response.ok) throw new Error("Archive unavailable");
       var html = await response.text();
-      if (active !== controller) return;
+      if (active !== controller || controller.signal.aborted) return;
       var page = new DOMParser().parseFromString(html, "text/html");
-      var next = page.querySelector('[data-island="past-events"]');
-      var sources = next && selectors.map(function (s) { return next.querySelector(s); });
-      var canonical = page.querySelector('link[rel="canonical"]');
-      if (!sources || sources.some(function (n) { return !n; }) || !canonical) throw new Error("Invalid archive page");
-      sources.forEach(function (source, i) {
-        targets[i].replaceChildren.apply(targets[i], Array.from(source.childNodes).map(function (n) {
+      var next = required(page, '[data-island="past-events"]');
+      var sources = zones(next);
+      var incoming = metadata(page);
+      var live = metadata(document);
+      var current = zones(root);
+      if (required(document, '[data-island="past-events"]') !== root ||
+          current.some(function (node, i) { return node !== targets[i]; }) ||
+          required(root, "h1") !== heading || required(root, "[data-archive-feedback]") !== feedback ||
+          current.some(function (node) {
+            return node.contains(heading) || node.contains(feedback) || node.contains(live.canonical) || node.contains(live.og);
+          }) || sources.some(function (node) { return node.contains(incoming.canonical) || node.contains(incoming.og); })) {
+        throw new Error("Invalid archive page");
+      }
+      var pageNumber = next.dataset.page;
+      var totalPages = next.dataset.totalPages;
+      if (!/^[1-9]\d*$/.test(pageNumber) || !/^(0|[1-9]\d*)$/.test(totalPages) ||
+          !Number.isSafeInteger(Number(pageNumber)) || !Number.isSafeInteger(Number(totalPages)) ||
+          new URL(incoming.href).search !== (pageNumber === "1" ? "" : "?page=" + pageNumber)) {
+        throw new Error("Invalid archive page");
+      }
+      // Resolve and import everything before the first last-good DOM mutation.
+      var swaps = sources.map(function (source, i) {
+        return { target: targets[i], hidden: source.hidden, children: Array.from(source.childNodes).map(function (n) {
           return document.importNode(n, true);
-        }));
-        targets[i].hidden = source.hidden;
+        }) };
       });
-      root.dataset.page = next.dataset.page;
-      root.dataset.totalPages = next.dataset.totalPages;
-      document.querySelector('link[rel="canonical"]').href = canonical.href;
-      document.querySelector('meta[property="og:url"]').content = canonical.href;
+      if (active !== controller || controller.signal.aborted) return;
+      swaps.forEach(function (swap) {
+        swap.target.replaceChildren.apply(swap.target, swap.children);
+        swap.target.hidden = swap.hidden;
+      });
+      root.dataset.page = pageNumber;
+      root.dataset.totalPages = totalPages;
+      live.canonical.href = incoming.href;
+      live.og.content = incoming.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search);
       renderedUrl = url.href;
       feedback.textContent = "";
