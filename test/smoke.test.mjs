@@ -18,8 +18,8 @@ const fixtures = {
   "/events/past": [200, "text/html", '<h1 id="past-events-heading">Past events</h1>'],
   "/events.rss": [200, "application/rss+xml", '<rss version="2.0"><channel></channel></rss>'],
   "/events.ics": [200, "text/calendar", "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n"],
-  "/sitemap_index.xml": [200, "application/xml", '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>'],
-  "/robots.txt": [200, "text/plain", "User-agent: *\nDisallow:\n"],
+  "/sitemap_index.xml": [200, "application/xml", (origin) => `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${origin}/</loc></url></urlset>`],
+  "/robots.txt": [200, "text/plain", (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
@@ -29,15 +29,20 @@ const fixtures = {
 async function stub(t, change = () => {}) {
   const requests = [];
   const server = createServer((request, response) => {
-    requests.push({ path: request.url, method: request.method, cookie: request.headers.cookie });
+    requests.push({ path: request.url, method: request.method, cookie: request.headers.cookie, host: request.headers.host });
     const fixture = fixtures[request.url];
     if (!fixture) {
       response.writeHead(500).end("Unexpected request");
       return;
     }
     const [status, type, body, location] = fixture;
+    // Origin-aware SEO fixtures (W16b TOG-11942): the stub advertises its own
+    // origin the way the Worker advertises APP_URL, so the probe's
+    // same-origin robots/sitemap assertions exercise a true positive.
+    const origin = `http://${request.headers.host}`;
+    const resolved = typeof body === "function" ? body(origin) : body;
     const result = {
-      status, body,
+      status, body: resolved,
       headers: {
         "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
@@ -119,6 +124,29 @@ for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
     assert.ok(!result.output.includes("upstream fallback"));
   });
 }
+
+test("rejects a foreign robots Sitemap host without leaking the body", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = "User-agent: *\nDisallow:\nSitemap: https://togetherweown.com/sitemap_index.xml\n";
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(result.output, /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/);
+  assert.ok(!result.output.includes("togetherweown.com"), result.output);
+});
+
+test("rejects foreign sitemap locs and an empty sitemap", async (t) => {
+  for (const [body, expected] of [
+    ['<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://togetherweown.com/</loc></url></urlset>', "same-origin sitemap locs"],
+    ['<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>', "at least one sitemap <loc>"],
+  ]) {
+    const { url } = await stub(t, (route, result) => { if (route === "/sitemap_index.xml") result.body = body; });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(result.output.includes(`FAIL /sitemap_index.xml: expected ${expected}`), result.output);
+    assert.ok(!result.output.includes("togetherweown.com"), result.output);
+  }
+});
 
 test("rules accepts rendered Rules but rejects rendered Home with the shared footer", async (t) => {
   // In-memory rendering uses local components only: https://esbuild.github.io/api/#write

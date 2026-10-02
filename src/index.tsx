@@ -83,6 +83,15 @@ const staticSecurityHeaders = secureHeaders({
   strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
+    // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
+    // <object>/<embed> anywhere in src/), base-uri 'self', connect-src
+    // 'self' (island fetch targets are same-origin paths). The remaining
+    // legacy delta — upgrade-insecure-requests — stays edge-owned with HSTS
+    // (Cloudflare Automatic HTTPS Rewrites): Hono cannot serialize a
+    // valueless directive, and the app never serves plaintext in production.
+    baseUri: ["'self'"],
+    connectSrc: ["'self'"],
+    objectSrc: ["'none'"],
     imgSrc: ["'self'", (c) => imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`).join(" ")],
     // Only join reads embed the widget; other routes cannot frame anything.
     frameSrc: [(c) => c.req.path === "/join" && ["GET", "HEAD"].includes(c.req.method) ? "https://discord.com/widget" : "'none'"],
