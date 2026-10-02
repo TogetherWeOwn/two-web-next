@@ -17,12 +17,33 @@ const SECRET = "test-session-secret-at-least-32-bytes-long";
 function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
-    id: 1, icsSequence: 1n, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
-    startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC",
-    location: "The lobby & voice channel", capacity: 10, status: "published", rsvpOpen: true,
-    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
-    recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
+    id: 1,
+    icsSequence: 1n,
+    eventKey: KEY,
+    title: "Chess night",
+    game: "Chess",
+    description: "Bring a friend & a board.",
+    startsAt: start,
+    endsAt: new Date("2030-01-10T22:00:00Z"),
+    timezone: "UTC",
+    location: "The lobby & voice channel",
+    capacity: 10,
+    status: "published",
+    rsvpOpen: true,
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    createdBy: null,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: start,
+    updatedAt: start,
     ...over,
   };
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
@@ -30,23 +51,51 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const db = drizzle(async (sql) => {
     queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
-    if (sql.includes('from "rsvps"')) return { rows: [[row.id, 3]] };
+    // The going-count aggregate reads two positional columns; the viewer
+    // answer read selects its own row and is empty in this fixture.
+    if (sql.includes('from "rsvps"'))
+      return sql.includes("count(*)") ? { rows: [[row.id, 3]] } : { rows: [] };
     if (sql.includes('"event_key" =')) {
-      return { rows: [columns.map((key) => row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key])] };
+      return {
+        rows: [
+          columns.map((key) =>
+            row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key],
+          ),
+        ],
+      };
     }
     return { rows: [] };
   });
   const store = createMemorySessionStore();
-  const env = { APP_URL: `${APP_URL}/`, SESSION_SECRET: SECRET, SESSION_STORE: store, ADMIN_DB: db as unknown as Db } as unknown as Env;
+  const env = {
+    APP_URL: `${APP_URL}/`,
+    SESSION_SECRET: SECRET,
+    SESSION_STORE: store,
+    ADMIN_DB: db as unknown as Db,
+  } as unknown as Env;
   return {
-    row, queries, env,
+    row,
+    queries,
+    env,
     async cookie(moderator = false, expired = false) {
       const token = newSessionToken();
-      await store.create({ tokenHash: await hashToken(token), userId: "100000000000000001", username: "member", avatar: null,
-        member: true, moderator, expiresAt: new Date(Date.now() + (expired ? -1000 : 3600_000)) });
-      return (await serializeSigned("__Host-two_session", token, SECRET, {
-        path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-      })).split(";")[0]!;
+      await store.create({
+        tokenHash: await hashToken(token),
+        userId: "100000000000000001",
+        username: "member",
+        avatar: null,
+        member: true,
+        moderator,
+        expiresAt: new Date(Date.now() + (expired ? -1000 : 3600_000)),
+      });
+      return (
+        await serializeSigned("__Host-two_session", token, SECRET, {
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        })
+      ).split(";")[0]!;
     },
     request(cookie?: string, path = PATH) {
       return app.request(path, cookie ? { headers: { cookie } } : {}, env);
@@ -54,7 +103,13 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   };
 }
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+const esc = (s: string) =>
+  s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 describe("Event page parity (fixture-only)", () => {
   it("renders published venue, guest pitch, calendar and canonical copy link without inline JS", async () => {
@@ -67,7 +122,9 @@ describe("Event page parity (fixture-only)", () => {
     expect(html).toContain('data-testid="event-join-pitch"');
     expect(html).toContain(`href="/join?next=${encodeURIComponent(PATH)}"`);
     expect(html).toContain('data-testid="discord-join"');
-    expect(html).toContain(`href="${APP_URL}${PATH}" data-copy-link="${APP_URL}${PATH}" data-testid="event-copy-link">Copy link</a>`);
+    expect(html).toContain(
+      `href="${APP_URL}${PATH}" data-copy-link="${APP_URL}${PATH}" data-testid="event-copy-link">Copy link</a>`,
+    );
     expect(html).toContain('role="status" aria-live="polite" data-testid="event-copy-toast"');
     expect(html).toContain('src="/islands/copy-link.js" defer');
     expect(html).toContain('data-testid="event-ics"');
@@ -77,7 +134,13 @@ describe("Event page parity (fixture-only)", () => {
     // The global preview-host middleware additionally suppresses indexing here.
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)];
-    expect(scripts.every(([, attrs, body]) => attrs!.includes('type="application/ld+json"') || (attrs!.includes('src="') && body === ""))).toBe(true);
+    expect(
+      scripts.every(
+        ([, attrs, body]) =>
+          attrs!.includes('type="application/ld+json"') ||
+          (attrs!.includes('src="') && body === ""),
+      ),
+    ).toBe(true);
     expect(html).not.toMatch(/\son(?:click|keydown)=/);
   });
 
@@ -135,7 +198,9 @@ describe("Event page parity (fixture-only)", () => {
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     expect(html).toContain('data-testid="event-past">Past event');
     expect(html).toContain('name="robots" content="noindex, nofollow"');
-    const elapsed = await (await fixture({ endsAt: new Date("2000-01-01T00:00:00Z") }).request()).text();
+    const elapsed = await (
+      await fixture({ endsAt: new Date("2000-01-01T00:00:00Z") }).request()
+    ).text();
     expect(elapsed).not.toContain('data-testid="event-past"');
   });
 

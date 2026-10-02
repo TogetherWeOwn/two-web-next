@@ -3,8 +3,16 @@ import { botRefusalReason, botRetryExhaustedReason, terminalFailureReason } from
 import { withInternalActionDeadline } from "./internal-action-deadline";
 import { admitRetryDelay } from "./retry-delay";
 import { BotTerminalError, BotTransportError } from "./types";
-import type { Announcement, BotClient, BotFailure, BotSuccess, QueueMessage, RoleAssignment } from "./types";
+import type {
+  Announcement,
+  BotClient,
+  BotFailure,
+  BotSuccess,
+  QueueMessage,
+  RoleAssignment,
+} from "./types";
 import type { Outcome } from "./sync-event";
+import { safeRequestId } from "../request-log";
 
 type InternalActionAnswer =
   | BotSuccess<{ messageId: string; replayed: boolean }>
@@ -12,12 +20,30 @@ type InternalActionAnswer =
   | BotFailure;
 
 /** Producer. Announcements mint a key at dispatch (two dispatches = two announcements, by design); role.assign sends none. */
-export async function dispatchAnnouncement(queue: { send(b: unknown): Promise<unknown> }, action: Announcement) {
-  const msg: QueueMessage = { kind: "announcement", idempotencyKey: crypto.randomUUID(), action };
+export async function dispatchAnnouncement(
+  queue: { send(b: unknown): Promise<unknown> },
+  action: Announcement,
+  requestId?: string,
+) {
+  const msg: QueueMessage = {
+    kind: "announcement",
+    idempotencyKey: crypto.randomUUID(),
+    action,
+    requestId: safeRequestId(requestId),
+  };
   await queue.send(msg);
 }
-export async function dispatchRoleAssign(queue: { send(b: unknown): Promise<unknown> }, action: RoleAssignment) {
-  const msg: QueueMessage = { kind: "role-assign", idempotencyKey: null, action };
+export async function dispatchRoleAssign(
+  queue: { send(b: unknown): Promise<unknown> },
+  action: RoleAssignment,
+  requestId?: string,
+) {
+  const msg: QueueMessage = {
+    kind: "role-assign",
+    idempotencyKey: null,
+    action,
+    requestId: safeRequestId(requestId),
+  };
   await queue.send(msg);
 }
 
@@ -61,5 +87,10 @@ export async function handleCallInternalAction(
   // range, falling back to this attempt's configured backoff (TOG-11629).
   // The admitted value feeds both the ledger `availableAt` Date and
   // `Queue.retry({ delaySeconds })` in the consumer, which share it.
-  return { retryInSeconds: admitRetryDelay(answer.retryAfterSeconds, backoffFor(C.backoffSeconds, attempts)) };
+  return {
+    retryInSeconds: admitRetryDelay(
+      answer.retryAfterSeconds,
+      backoffFor(C.backoffSeconds, attempts),
+    ),
+  };
 }

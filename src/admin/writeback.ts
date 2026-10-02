@@ -9,6 +9,10 @@ import type { Env } from "../env";
 import { enqueueEventSync } from "../events/sync";
 import type { WriteBack } from "./store";
 
-export async function dispatchWriteBack(env: Env, wb: NonNullable<WriteBack>): Promise<void> {
-  await enqueueEventSync(env, wb.eventKey, wb.status);
+export async function dispatchWriteBack(
+  env: Env,
+  wb: NonNullable<WriteBack>,
+  requestId?: string,
+): Promise<void> {
+  await enqueueEventSync(env, wb.eventKey, wb.status, requestId);
 }

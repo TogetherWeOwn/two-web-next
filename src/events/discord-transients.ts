@@ -63,7 +63,10 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("DiscordReadDeadline")), DISCORD_READ_DEADLINE_MS);
+        timer = setTimeout(
+          () => reject(new Error("DiscordReadDeadline")),
+          DISCORD_READ_DEADLINE_MS,
+        );
       });
       const read = async (): Promise<unknown> => {
         const res = await fetch(`${API}/guilds/${env.DISCORD_GUILD_ID}/scheduled-events`, {
@@ -98,7 +101,9 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         const horizon = now.getTime() + HORIZON_MS;
         return rows
           .map(admitScheduledEvent)
-          .filter((r): r is AdmittedScheduledEvent => r !== null && LIVE_STATUSES.has(r.status ?? 1))
+          .filter(
+            (r): r is AdmittedScheduledEvent => r !== null && LIVE_STATUSES.has(r.status ?? 1),
+          )
           .map(toTransient)
           .filter((t): t is DiscordTransient => t !== null && t.startsAt.getTime() <= horizon);
       } catch {

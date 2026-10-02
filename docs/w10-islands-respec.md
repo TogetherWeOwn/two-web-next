@@ -1,6 +1,6 @@
 # TOG-9689 — W10: Livewire → islands re-spec + drift tests
 
-**Status:** slice 1 merged-ready; slices 2–5 as gated child cards.
+**Status:** slice 1 merged; slices 2–5 as gated child cards.
 **Source of truth for behavior:** two-web (maintenance-only) `app/Livewire/*.php`,
 `resources/views/livewire/*.blade.php`, `tests/Feature/Livewire/*`, `tests/Feature/Events/*`,
 `tests/Feature/Profile/*`. This doc re-expresses them; nothing is ported verbatim
@@ -36,29 +36,59 @@ Legacy: `GoingCount.php` + `going-count.blade.php` + `GoingCountTest.php` (TOG-7
   "You're on the waitlist." / "RSVP removed."); silent on first render so page load
   stays quiet; never `role="alert"`.
 - Refresh: `going-count-updated` DOM CustomEvent `{eventKey, viewerState}` → exactly
-  one `GET /events.json` per answered event; non-matching island keys fire nothing;
-  missing row keeps last known-good. Executable: `test/islands-going-count.test.ts` (18 tests).
+  one `GET /events.json?event_key=…` per answered event (key filtered before
+  pagination); non-matching island keys fire nothing; missing row keeps last known-good. A newer write owns its refresh even when an
+  older fetch/body finishes later. The accepted aggregate emits
+  `going-count-refreshed {eventKey, goingCount, capacity}` for capacity reconciliation,
+  without another request. Executable: `test/islands-going-count*.test.ts`.
 
-## 2. RsvpButton (slice 2, after W8/W9 — the routes it writes don't exist yet)
+## 2. RsvpButton (slice 2, on the frozen W8/W9 routes)
 
 Legacy: `RsvpButton.php` + `rsvp-button.blade.php` + `RsvpButtonTest.php`
 (TOG-8135 session-expiry, TOG-7976 throttle copy CM-frozen, TOG-6956 focus moves,
 TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
 
 - Writes: `PUT /events/{key}/rsvp {status}` (201 first write / 200 re-answer),
-  `DELETE /events/{key}/rsvp` → 204. Status values: `going` / `waitlisted` / none.
-  Request budget: one request per click; abort-then-resend on double-click.
+  `DELETE /events/{key}/rsvp` → 204. PUT accepts `going` / `maybe` / `not_going` /
+  `waitlisted`; the island exposes going, waitlist and withdrawal controls.
+  Request budget: one request per accepted activation. All controls are disabled
+  until the write and response body settle; repeated activations fire nothing.
+  Writes are never aborted/replaced: aborting a fetch cannot cancel a transaction.
+  This supersedes the unsafe abort-then-resend wording after the slice-2 review.
+  A readable, valid stored answer is required to confirm going/waitlisted. An
+  unreadable/missing/unexpected successful answer or response-less transport rejection
+  announces an unknown outcome and offers an event refresh; mutations stay disabled
+  until SSR recovers the answer, rather than asserting a failed write or blindly
+  replaying it. Losing transport does not prove a delivered transaction was refused.
 - States rendered: guest login link (never a dead button); closed (Cancelled /
   Not published yet / been-and-gone, `role="status"`); full + waitlist join; in-line
   position + claim-seat (locked path); You're-in + withdraw; optimistic saving in
   flight (`aria-busy`); throttle wait (CM copy verbatim, `role="status"`, button stays
   enabled); failure alert beside an enabled control; session-expired → login link with
-  `?next=` return path captured at SSR (never the update endpoint).
+  `?next=` return path captured at SSR (never the update endpoint), through the
+  existing `/join/discord` signed-return flow, not the home-only auth alias.
+- Member controls are POST form submits to `/e/{key}/rsvp` without JavaScript;
+  the adapter reuses the JSON handlers' auth, caller identity, traps and shared
+  budget, then returns 303 to the event. The binder prevents native submission
+  and enhances the same controls to PUT/DELETE. No inert member buttons.
+- EventPage mounts the GoingCount listener and stable count/announcement targets.
+  Its member-only attendee list is explicitly a page-load snapshot with a refresh
+  link; RSVP enhancement does not pretend to keep identities live.
 - Broadcasts `going-count-updated {eventKey, viewerState}` on every successful write
   (going / waitlisted / none) and re-reads nothing itself — the badge owns its aggregate.
+  Withdrawal does not imply a vacancy: FIFO promotion may keep the event full.
+  Keep last-known capacity until the badge's latest valid aggregate reconciles the
+  join/waitlist/claim controls; a failed refresh cannot invent an open seat.
+  A validated allocation received during a write is retained without changing busy
+  controls. A known-refused write (including 429) reconciles the latest retained
+  allocation at settlement. Successful writes supersede it with their own refresh;
+  unknown, closed or authoritative full outcomes never replay an older allocation.
 - Honeypot `website` field: a filled decoy answers the byte-identical success shape
-  without touching limiter/auth/DB; nothing attacker-shaped logged. Toast floor
-  `MIN_FILL_MS = 1000` server-enforced; fail-closed on zero/future stamps.
+  without touching limiter/auth/DB; nothing attacker-shaped logged. Per the executable
+  contract (`rsvpTrapTripped`), a bare RSVP click has no form-open timestamp or
+  minimum-fill gate; absent/empty inputs never trip. `RSVP_MIN_FILL_MS = 1000` is
+  a legacy constant, not a W9 enforcement claim. Non-string and filled duplicate
+  decoys fail closed.
 - Drift tests pin: requests fired per click (method/URL/body), all states rendered,
   broadcast payload, CM throttle copy verbatim, honeypot success-shape equality.
 - Needs from W9: frozen `PUT/DELETE` status codes, throttle agreement (12/min shared
