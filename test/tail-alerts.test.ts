@@ -435,15 +435,16 @@ describe("Tail scheduled uptime prober", () => {
     expect(pagePosts(send)).toHaveLength(1);
   });
 
-  it.each([{ OPS_ALERT_WEBHOOK_URL: undefined, UPTIME_URL: uptime }, { OPS_ALERT_WEBHOOK_URL: secret }, {}])(
-    "missing webhook or target is a silent no-op %#: no probing, no logging",
-    async (env) => {
-      const { worker, send, sink, event } = uptimeFixture([{ status: 200, origin: "two-web-next" }]);
-      await worker.scheduled(event, env);
-      expect(send).not.toHaveBeenCalled();
-      expect(sink).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    { OPS_ALERT_WEBHOOK_URL: undefined, UPTIME_URL: uptime },
+    { OPS_ALERT_WEBHOOK_URL: secret },
+    {},
+  ])("missing webhook or target is a silent no-op %#: no probing, no logging", async (env) => {
+    const { worker, send, sink, event } = uptimeFixture([{ status: 200, origin: "two-web-next" }]);
+    await worker.scheduled(event, env);
+    expect(send).not.toHaveBeenCalled();
+    expect(sink).not.toHaveBeenCalled();
+  });
 
   it("a timeout counts as a failure", async () => {
     const timeout = new DOMException("The operation timed out.", "TimeoutError");
@@ -462,19 +463,24 @@ describe("Tail scheduled uptime prober", () => {
     { status: 200, origin: null, label: "missing x-two-origin" },
     { status: 200, origin: "evil.test", label: "wrong x-two-origin" },
     { status: 503, origin: "two-web-next", label: "non-200 status" },
-  ])("a 200 without the origin header or $label pages after two failures", async ({ status, origin }) => {
-    const { worker, send, event } = uptimeFixture([
-      { status, origin },
-      { status, origin },
-    ]);
-    await worker.scheduled(event, upEnv);
-    const pages = pagePosts(send);
-    expect(pages).toHaveLength(1);
-    expect(JSON.parse(JSON.parse(pages[0]![1].body as string).content).status).toBe(status);
-  });
+  ])(
+    "a 200 without the origin header or $label pages after two failures",
+    async ({ status, origin }) => {
+      const { worker, send, event } = uptimeFixture([
+        { status, origin },
+        { status, origin },
+      ]);
+      await worker.scheduled(event, upEnv);
+      const pages = pagePosts(send);
+      expect(pages).toHaveLength(1);
+      expect(JSON.parse(JSON.parse(pages[0]![1].body as string).content).status).toBe(status);
+    },
+  );
 
   it("a healthy first probe makes no second attempt", async () => {
-    const { worker, send, sleeps, event } = uptimeFixture([{ status: 200, origin: "two-web-next" }]);
+    const { worker, send, sleeps, event } = uptimeFixture([
+      { status: 200, origin: "two-web-next" },
+    ]);
     await worker.scheduled(event, upEnv);
     expect(probeGets(send)).toHaveLength(1);
     expect(sleeps).toHaveLength(0);

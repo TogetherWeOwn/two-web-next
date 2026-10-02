@@ -228,7 +228,8 @@ export function createTailWorker(
         redirect: "error",
         signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
       });
-      const ok = response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
+      const ok =
+        response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
       await response.body?.cancel(); // Never read or log the body.
       return { ok, status: response.status };
     } catch {
