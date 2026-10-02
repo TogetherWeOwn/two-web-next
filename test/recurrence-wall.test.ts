@@ -26,24 +26,37 @@ describe("precise wall round-trip across zones", () => {
     ["2026-10-04T14:15:27.125Z", "Asia/Kathmandu", "2026-10-04 20:00", 27125], // +5:45
     ["2026-10-04T14:15:27.125Z", "Australia/Lord_Howe", "2026-10-05 01:15", 27125],
     ["2026-07-15T19:00:27.125Z", "Pacific/Kiritimati", "2026-07-16 09:00", 27125], // +14, date rollover
-  ])("splits %s in %s into minute %s + %sms and restores it", (iso, timezone, minute, subMinuteMs) => {
-    expect(utcToPreciseWall(new Date(iso), timezone)).toEqual({ minute, subMinuteMs });
-    expect(preciseWallToUtc(utcToPreciseWall(new Date(iso), timezone), timezone).toISOString()).toBe(iso);
-  });
+  ])(
+    "splits %s in %s into minute %s + %sms and restores it",
+    (iso, timezone, minute, subMinuteMs) => {
+      expect(utcToPreciseWall(new Date(iso), timezone)).toEqual({ minute, subMinuteMs });
+      expect(
+        preciseWallToUtc(utcToPreciseWall(new Date(iso), timezone), timezone).toISOString(),
+      ).toBe(iso);
+    },
+  );
 });
 
 describe("sub-minute millisecond restoration", () => {
-  it.each([0, 1, 1000, 27125, 44875, 59999])("round-trips %sms without touching the minute", (sub) => {
-    const instant = new Date(`2026-10-04T20:00:${String(Math.floor(sub / 1000)).padStart(2, "0")}.${String(sub % 1000).padStart(3, "0")}Z`);
-    const wall = utcToPreciseWall(instant, "UTC");
-    expect(wall).toEqual({ minute: "2026-10-04 20:00", subMinuteMs: sub });
-    expect(preciseWallToUtc(wall, "UTC").toISOString()).toBe(instant.toISOString());
-  });
+  it.each([0, 1, 1000, 27125, 44875, 59999])(
+    "round-trips %sms without touching the minute",
+    (sub) => {
+      const instant = new Date(
+        `2026-10-04T20:00:${String(Math.floor(sub / 1000)).padStart(2, "0")}.${String(sub % 1000).padStart(3, "0")}Z`,
+      );
+      const wall = utcToPreciseWall(instant, "UTC");
+      expect(wall).toEqual({ minute: "2026-10-04 20:00", subMinuteMs: sub });
+      expect(preciseWallToUtc(wall, "UTC").toISOString()).toBe(instant.toISOString());
+    },
+  );
 
   it("restores the exact tail across a zone with a non-hour offset", () => {
-    expect(preciseWallToUtc({ minute: "2026-10-04 20:00", subMinuteMs: 27125 }, "Asia/Kathmandu").toISOString()).toBe(
-      "2026-10-04T14:15:27.125Z",
-    );
+    expect(
+      preciseWallToUtc(
+        { minute: "2026-10-04 20:00", subMinuteMs: 27125 },
+        "Asia/Kathmandu",
+      ).toISOString(),
+    ).toBe("2026-10-04T14:15:27.125Z");
   });
 });
 
@@ -62,40 +75,55 @@ describe("fold/gap minute delegation passthrough", () => {
   });
 
   it("applies the minute's fold resolution, then restores the sub-minute tail", () => {
-    const minute = wallToUtc("2026-10-25 01:30", "Europe/London");
+    const minute = wallToUtc("2026-10-25 01:30", "Europe/London", "earlier");
     for (const subMinuteMs of [0, 27125, 59999]) {
-      expect(preciseWallToUtc({ minute: "2026-10-25 01:30", subMinuteMs }, "Europe/London").getTime()).toBe(
-        minute.getTime() + subMinuteMs,
-      );
+      expect(
+        preciseWallToUtc({ minute: "2026-10-25 01:30", subMinuteMs }, "Europe/London").getTime(),
+      ).toBe(minute.getTime() + subMinuteMs);
     }
   });
 
   it("resolves the fold minute to the first (BST) occurrence under the current policy", () => {
     // Owned by TOG-11669: if the fold decision changes, this one expectation moves with it.
-    expect(preciseWallToUtc({ minute: "2026-10-25 01:30", subMinuteMs: 27125 }, "Europe/London").toISOString()).toBe(
-      "2026-10-25T00:30:27.125Z",
-    );
+    expect(
+      preciseWallToUtc(
+        { minute: "2026-10-25 01:30", subMinuteMs: 27125 },
+        "Europe/London",
+      ).toISOString(),
+    ).toBe("2026-10-25T00:30:27.125Z");
   });
 
   it("refuses a gap minute with the wall parser's own error, whatever the sub-minute tail", () => {
     // 2026-03-29 01:00 GMT -> 02:00 BST: local 01:00-01:59 never happened.
     for (const subMinuteMs of [0, 27125]) {
-      expect(fieldsOf(() => preciseWallToUtc({ minute: "2026-03-29 01:30", subMinuteMs }, "Europe/London"))).toEqual(
-        fieldsOf(() => wallToUtc("2026-03-29 01:30", "Europe/London")),
-      );
+      expect(
+        fieldsOf(() =>
+          preciseWallToUtc({ minute: "2026-03-29 01:30", subMinuteMs }, "Europe/London"),
+        ),
+      ).toEqual(fieldsOf(() => wallToUtc("2026-03-29 01:30", "Europe/London")));
     }
-    expect(fieldsOf(() => preciseWallToUtc({ minute: "2026-03-29 01:30", subMinuteMs: 0 }, "Europe/London"))).toEqual({
+    expect(
+      fieldsOf(() =>
+        preciseWallToUtc({ minute: "2026-03-29 01:30", subMinuteMs: 0 }, "Europe/London"),
+      ),
+    ).toEqual({
       wall: "That time never occurred in Europe/London — clocks skipped forward over it. Pick a time outside the gap.",
     });
   });
 
   it("restores the tail on the gap shoulders", () => {
-    expect(preciseWallToUtc({ minute: "2026-03-29 00:59", subMinuteMs: 27125 }, "Europe/London").toISOString()).toBe(
-      "2026-03-29T00:59:27.125Z",
-    );
-    expect(preciseWallToUtc({ minute: "2026-03-29 02:00", subMinuteMs: 1000 }, "Europe/London").toISOString()).toBe(
-      "2026-03-29T01:00:01.000Z",
-    );
+    expect(
+      preciseWallToUtc(
+        { minute: "2026-03-29 00:59", subMinuteMs: 27125 },
+        "Europe/London",
+      ).toISOString(),
+    ).toBe("2026-03-29T00:59:27.125Z");
+    expect(
+      preciseWallToUtc(
+        { minute: "2026-03-29 02:00", subMinuteMs: 1000 },
+        "Europe/London",
+      ).toISOString(),
+    ).toBe("2026-03-29T01:00:01.000Z");
   });
 });
 
@@ -122,9 +150,9 @@ describe("era and nonfinite-adjacent minute text", () => {
   );
 
   it("rejects a non-leap February 29th like the wall parser does", () => {
-    expect(fieldsOf(() => preciseWallToUtc({ minute: "2026-02-29 12:00", subMinuteMs: 0 }, "UTC"))).toEqual(
-      fieldsOf(() => wallToUtc("2026-02-29 12:00", "UTC")),
-    );
+    expect(
+      fieldsOf(() => preciseWallToUtc({ minute: "2026-02-29 12:00", subMinuteMs: 0 }, "UTC")),
+    ).toEqual(fieldsOf(() => wallToUtc("2026-02-29 12:00", "UTC")));
   });
 
   it("refuses nonfinite instants instead of splitting them", () => {
@@ -135,20 +163,29 @@ describe("era and nonfinite-adjacent minute text", () => {
 
   it("yields an Invalid Date for a nonfinite sub-minute tail rather than clamping it", () => {
     for (const subMinuteMs of [NaN, Infinity, -Infinity]) {
-      expect(preciseWallToUtc({ minute: "2026-07-15 20:00", subMinuteMs }, "UTC").getTime()).toBeNaN();
+      expect(
+        preciseWallToUtc({ minute: "2026-07-15 20:00", subMinuteMs }, "UTC").getTime(),
+      ).toBeNaN();
     }
   });
 });
 
 describe("invalid minute text delegates to the wall parser", () => {
-  it.each([[""], ["2026-07-15T20:00:00+02:00"], ["2026-02-30 20:00"]])("reports %j exactly as wallToUtc does", (minute) => {
-    expect(fieldsOf(() => preciseWallToUtc({ minute, subMinuteMs: 0 }, "Europe/London"))).toEqual(
-      fieldsOf(() => wallToUtc(minute, "Europe/London")),
-    );
-  });
+  it.each([[""], ["2026-07-15T20:00:00+02:00"], ["2026-02-30 20:00"]])(
+    "reports %j exactly as wallToUtc does",
+    (minute) => {
+      expect(fieldsOf(() => preciseWallToUtc({ minute, subMinuteMs: 0 }, "Europe/London"))).toEqual(
+        fieldsOf(() => wallToUtc(minute, "Europe/London")),
+      );
+    },
+  );
 
   it("reports an unknown zone exactly as wallToUtc does", () => {
-    expect(fieldsOf(() => preciseWallToUtc({ minute: "2026-07-15 20:00", subMinuteMs: 0 }, "Mars/Olympus"))).toEqual({
+    expect(
+      fieldsOf(() =>
+        preciseWallToUtc({ minute: "2026-07-15 20:00", subMinuteMs: 0 }, "Mars/Olympus"),
+      ),
+    ).toEqual({
       timezone: "Unknown timezone: Mars/Olympus",
     });
   });

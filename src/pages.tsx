@@ -389,6 +389,7 @@ export const Home: FC<{
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
+  sessionUnavailable?: boolean;
   upcomingEvents: HomeEvent[];
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
@@ -400,6 +401,7 @@ export const Home: FC<{
   inviteUrl: configuredInviteUrl,
   appUrl,
   counts,
+  sessionUnavailable = false,
   upcomingEvents,
   eventsUnavailable,
   featured,
@@ -444,7 +446,11 @@ export const Home: FC<{
           <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
           <h1 id="home-heading">The lobby is open.</h1>
           <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-          {session?.member ? (
+          {sessionUnavailable ? (
+            <a class="btn" href="/discord" data-testid="discord-join">
+              Join with an invite link
+            </a>
+          ) : session?.member ? (
             <a class="btn" href={inviteUrl}>
               Open Discord
             </a>
@@ -452,6 +458,13 @@ export const Home: FC<{
             <a class="btn" href="/auth/discord" data-testid="join">
               Join with Discord
             </a>
+          )}
+          {!session && !sessionUnavailable && eventsUnavailable && (
+            <p>
+              <a href="/discord" data-testid="discord-join">
+                Join with an invite link instead
+              </a>
+            </p>
           )}
           {notice === "join_failed" && (
             <p>

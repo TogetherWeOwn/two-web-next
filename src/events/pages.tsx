@@ -86,7 +86,7 @@ import { loginUrl } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
-import { feedUrl, googleCalendarUrl, webcalUrl } from "./feeds";
+import { feedUrl, googleCalendarUrl, rssUrl, webcalUrl } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 
@@ -711,6 +711,15 @@ export const PastEventsPage: FC<{
         </h1>
         <p>Game nights we’ve shared. Find the next one in the upcoming schedule.</p>
       </div>
+      {/* Feed links live outside the binder's swapped zones (state/list/pager)
+          so fragment turns never swallow them; same helpers as the calendar. */}
+      <p>
+        <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
+          {EVENTS_EMPTY_COPY.subscribe}
+        </a>{" "}
+        <a href={rssUrl(appUrl)}>RSS feed</a>{" "}
+        <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
+      </p>
       <div data-archive-state>
         {rows.length === 0 ? (
           totalPages === 0 ? (
