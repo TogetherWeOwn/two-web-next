@@ -8,18 +8,30 @@ import { SYSOP_MODERATOR_ROLE_ID as SYSOP } from "../src/probes/check-moderators
 const read = (path: string) => readFileSync(path, "utf8");
 const deploy = read(".github/workflows/deploy.yml");
 const smoke = read(".github/workflows/staging-smoke.yml");
-const temp = () => mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "probe-fixture-"));
+const temp = () =>
+  mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "probe-fixture-"));
 
 function configProbe(text: string, envRole = SYSOP) {
   const dir = temp();
   try {
     const path = join(dir, "wrangler.jsonc");
     writeFileSync(path, text);
-    return spawnSync(process.execPath, ["--import", "./bin/ts-hook.mjs", "bin/check-moderators.mjs", `--config=${path}`, "--require-configured", "--json"], {
-      encoding: "utf8",
-      timeout: 30_000,
-      env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: envRole },
-    });
+    return spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./bin/ts-hook.mjs",
+        "bin/check-moderators.mjs",
+        `--config=${path}`,
+        "--require-configured",
+        "--json",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: envRole },
+      },
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -27,7 +39,10 @@ function configProbe(text: string, envRole = SYSOP) {
 
 describe("source-managed moderator deployment preflight", () => {
   it("validates JSONC vars rather than an unrelated process value", () => {
-    const result = configProbe(`{ // public role\n "vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}",},}`, "SySOp");
+    const result = configProbe(
+      `{ // public role\n "vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}",},}`,
+      "SySOp",
+    );
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ failures: 0, ok: true });
   });
@@ -45,16 +60,21 @@ describe("source-managed moderator deployment preflight", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
   });
 
-  it.each(['{"vars":', '{"vars": {"DISCORD_MODERATOR_ROLE_IDS": 123}}'])("reports malformed config without echoing it", (text) => {
-    const result = configProbe(text);
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toMatch(/cannot read a valid Wrangler config/);
-  });
+  it.each(['{"vars":', '{"vars": {"DISCORD_MODERATOR_ROLE_IDS": 123}}'])(
+    "reports malformed config without echoing it",
+    (text) => {
+      const result = configProbe(text);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toMatch(/cannot read a valid Wrangler config/);
+    },
+  );
 
   it("checks the same explicit source config before all Cloudflare mutations", () => {
     const scripts = JSON.parse(read("package.json")).scripts;
-    expect(scripts["check:worker-moderators"]).toContain("--config=wrangler.jsonc --require-configured");
+    expect(scripts["check:worker-moderators"]).toContain(
+      "--config=wrangler.jsonc --require-configured",
+    );
     expect(deploy).toContain("run: npx wrangler deploy --config wrangler.jsonc\n");
     const gate = deploy.indexOf("run: npm run check:worker-moderators");
     expect(gate).toBeGreaterThan(-1);
@@ -83,24 +103,53 @@ describe("staging smoke workflow safety", () => {
   });
 
   it("passes metacharacters as inert arguments through the actual workflow shell", () => {
-    const script = smoke.split("        run: >-\n")[1]?.split("        env:\n")[0]?.trim().replace(/\n\s+/g, " ");
+    const script = smoke
+      .split("        run: >-\n")[1]
+      ?.split("        env:\n")[0]
+      ?.trim()
+      .replace(/\n\s+/g, " ");
     expect(script).toBeTruthy();
     expect(script).not.toContain("${{ inputs.");
-    for (const [env, input] of [["SMOKE_DISCORD_ID", "discord_id"], ["SMOKE_ROLE_KEY", "role_key"], ["SMOKE_CHANNEL_KEY", "channel_key"]]) {
+    for (const [env, input] of [
+      ["SMOKE_DISCORD_ID", "discord_id"],
+      ["SMOKE_ROLE_KEY", "role_key"],
+      ["SMOKE_CHANNEL_KEY", "channel_key"],
+    ]) {
       expect(smoke).toContain(`${env}: \${{ inputs.${input} }}`);
     }
     const dir = temp();
     try {
       // Fake npm captures argv; no CLI request, credential or external service.
-      writeFileSync(join(dir, "npm"), '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)));\n', { mode: 0o755 });
-      const values = ['$(printf HARMLESS_SUBSTITUTION_MARKER)', 'r"; printf HARMLESS_BREAKOUT; #', '`printf HARMLESS_BACKTICK` * ; $HOME'];
+      writeFileSync(
+        join(dir, "npm"),
+        "#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)));\n",
+        { mode: 0o755 },
+      );
+      const values = [
+        "$(printf HARMLESS_SUBSTITUTION_MARKER)",
+        'r"; printf HARMLESS_BREAKOUT; #',
+        "`printf HARMLESS_BACKTICK` * ; $HOME",
+      ];
       const result = spawnSync("/bin/sh", ["-c", script!], {
-        encoding: "utf8", timeout: 3000,
-        env: { PATH: `${dir}:${process.env.PATH}`, SMOKE_DISCORD_ID: values[0], SMOKE_ROLE_KEY: values[1], SMOKE_CHANNEL_KEY: values[2] },
+        encoding: "utf8",
+        timeout: 3000,
+        env: {
+          PATH: `${dir}:${process.env.PATH}`,
+          SMOKE_DISCORD_ID: values[0],
+          SMOKE_ROLE_KEY: values[1],
+          SMOKE_CHANNEL_KEY: values[2],
+        },
       });
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
-      expect(JSON.parse(result.stdout)).toEqual(["run", "smoke:internal-action", "--", `--discord-id=${values[0]}`, `--role-key=${values[1]}`, `--channel-key=${values[2]}`]);
+      expect(JSON.parse(result.stdout)).toEqual([
+        "run",
+        "smoke:internal-action",
+        "--",
+        `--discord-id=${values[0]}`,
+        `--role-key=${values[1]}`,
+        `--channel-key=${values[2]}`,
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

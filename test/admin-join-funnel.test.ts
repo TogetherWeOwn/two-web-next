@@ -89,7 +89,10 @@ describe("dashboardJoinFunnel cache", () => {
   });
 
   it("resolves undefined on failure and does not cache it", async () => {
-    const fill = vi.fn().mockRejectedValueOnce(new Error("db down")).mockResolvedValueOnce({ added: 3 });
+    const fill = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("db down"))
+      .mockResolvedValueOnce({ added: 3 });
     const id = "conn-fail";
     expect(await dashboardJoinFunnel(stubDb, id, 500, fill)).toBeUndefined();
     expect(await dashboardJoinFunnel(stubDb, id, 500, fill)).toEqual({ added: 3 });
@@ -128,15 +131,28 @@ function aggregateDb(n: number) {
   // Real builders, dialect and prepared-execution metadata survive observation;
   // only returned rows are memory fixtures, not PostgreSQL persistence evidence.
   const db = drizzle.mock() as unknown as Db;
-  const session = (db as unknown as { session: {
-    prepareQuery: (query: { sql: string }) => unknown;
-    transaction: (work: (tx: Db) => Promise<unknown>) => Promise<unknown>;
-  } }).session;
-  session.prepareQuery = (query) => ({ setToken() { return this; }, execute: async () => {
-    if (query.sql.includes('from "join_attempts"')) return aggregate();
-    if (query.sql.includes('from "event_search_logs"') || query.sql.startsWith("select set_config(")) return [];
-    throw new Error("Dashboard query has no isolated fixture");
-  } });
+  const session = (
+    db as unknown as {
+      session: {
+        prepareQuery: (query: { sql: string }) => unknown;
+        transaction: (work: (tx: Db) => Promise<unknown>) => Promise<unknown>;
+      };
+    }
+  ).session;
+  session.prepareQuery = (query) => ({
+    setToken() {
+      return this;
+    },
+    execute: async () => {
+      if (query.sql.includes('from "join_attempts"')) return aggregate();
+      if (
+        query.sql.includes('from "event_search_logs"') ||
+        query.sql.startsWith("select set_config(")
+      )
+        return [];
+      throw new Error("Dashboard query has no isolated fixture");
+    },
+  });
   session.transaction = async (work) => work(db);
   return { db, aggregate, session };
 }
@@ -153,7 +169,11 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
     const app = adminApp({ sessionStore: store });
     const a = aggregateDb(111);
     const b = aggregateDb(999);
-    for (const [source, expected] of [[a, 111], [a, 111], [b, 999]] as const) {
+    for (const [source, expected] of [
+      [a, 111],
+      [a, 111],
+      [b, 999],
+    ] as const) {
       const mixedEnv: EnvWithAdminDb = { ...env, ...binding, ADMIN_DB: source.db };
       const res = await app.request("/", { headers: { cookie } }, mixedEnv);
       expect(res.status).toBe(200);
@@ -164,41 +184,50 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
     expect(b.aggregate).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["both", "funnel", "search"])("bounds pending %s analytics to one dashboard deadline, preserving healthy widgets", async (pending) => {
-    const store = createMemorySessionStore();
-    const cookie = await cookieFor(store);
-    vi.useFakeTimers();
-    let started!: () => void;
-    const firstStarted = new Promise<void>((resolve) => { started = resolve; });
-    const { db, session } = aggregateDb(7);
-    let calls = 0;
-    const transaction = vi.fn((work: (tx: Db) => Promise<unknown>) => {
-      const widget = ++calls === 1 ? "funnel" : "search";
-      started();
-      return pending === "both" || pending === widget
-        ? new Promise<never>(() => {})
-        : work(db);
-    });
-    session.transaction = transaction;
-    let response: Response | undefined;
-    const request = Promise.resolve(adminApp({ sessionStore: store }).request("/", { headers: { cookie } }, {
-      ...env, ADMIN_DB: db,
-    } as Env)).then((res) => { response = res; return res; });
-    await firstStarted;
-    await vi.advanceTimersByTimeAsync(FUNNEL_READ_DEADLINE_MS - 1);
-    expect(response).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1);
-    const statusAtDeadline = response?.status;
-    if (!response) {
-      // Let the pre-fix sequential route finish, rather than leak a pending request.
-      await vi.advanceTimersByTimeAsync(FUNNEL_READ_DEADLINE_MS);
-    }
-    const html = await (await request).text();
-    expect(statusAtDeadline).toBe(200);
-    expect(transaction).toHaveBeenCalledTimes(2);
-    expect(html.includes('data-testid="join-funnel"')).toBe(pending === "search");
-    expect(html.includes('data-testid="top-zero-searches"')).toBe(pending === "funnel");
-  });
+  it.each(["both", "funnel", "search"])(
+    "bounds pending %s analytics to one dashboard deadline, preserving healthy widgets",
+    async (pending) => {
+      const store = createMemorySessionStore();
+      const cookie = await cookieFor(store);
+      vi.useFakeTimers();
+      let started!: () => void;
+      const firstStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const { db, session } = aggregateDb(7);
+      let calls = 0;
+      const transaction = vi.fn((work: (tx: Db) => Promise<unknown>) => {
+        const widget = ++calls === 1 ? "funnel" : "search";
+        started();
+        return pending === "both" || pending === widget ? new Promise<never>(() => {}) : work(db);
+      });
+      session.transaction = transaction;
+      let response: Response | undefined;
+      const request = Promise.resolve(
+        adminApp({ sessionStore: store }).request("/", { headers: { cookie } }, {
+          ...env,
+          ADMIN_DB: db,
+        } as Env),
+      ).then((res) => {
+        response = res;
+        return res;
+      });
+      await firstStarted;
+      await vi.advanceTimersByTimeAsync(FUNNEL_READ_DEADLINE_MS - 1);
+      expect(response).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      const statusAtDeadline = response?.status;
+      if (!response) {
+        // Let the pre-fix sequential route finish, rather than leak a pending request.
+        await vi.advanceTimersByTimeAsync(FUNNEL_READ_DEADLINE_MS);
+      }
+      const html = await (await request).text();
+      expect(statusAtDeadline).toBe(200);
+      expect(transaction).toHaveBeenCalledTimes(2);
+      expect(html.includes('data-testid="join-funnel"')).toBe(pending === "search");
+      expect(html.includes('data-testid="top-zero-searches"')).toBe(pending === "funnel");
+    },
+  );
 
   it("omits the funnel widget and still answers 200", async () => {
     const store = createMemorySessionStore();

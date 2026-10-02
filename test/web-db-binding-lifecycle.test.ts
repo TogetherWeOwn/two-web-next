@@ -3,14 +3,18 @@ import { RequestClients } from "./helpers/request-clients";
 
 const deferred = () => {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 };
 
 const client = () => {
   let ended = false;
   return {
-    end: vi.fn(async () => { ended = true; }),
+    end: vi.fn(async () => {
+      ended = true;
+    }),
     query: () => {
       if (ended) throw new Error("CONNECTION_ENDED");
       return "connected";
@@ -56,10 +60,12 @@ describe("web DB binding request lifecycle", () => {
   it("closes owned clients when the request fails, without swallowing the failure", async () => {
     const clients = new RequestClients();
     const owned = client();
-    await expect(clients.run(async () => {
-      clients.track(owned);
-      throw new Error("request failed");
-    })).rejects.toThrow("request failed");
+    await expect(
+      clients.run(async () => {
+        clients.track(owned);
+        throw new Error("request failed");
+      }),
+    ).rejects.toThrow("request failed");
     await clients.drain();
     expect(owned.end).toHaveBeenCalledTimes(1);
   });
@@ -71,10 +77,12 @@ describe("web DB binding request lifecycle", () => {
     const cleanupStarted = deferred();
     const dispose = vi.fn();
     const request = clients.run(async () => {
-      clients.track({ end: async () => {
-        cleanupStarted.resolve();
-        await cleanupDone.promise;
-      } });
+      clients.track({
+        end: async () => {
+          cleanupStarted.resolve();
+          await cleanupDone.promise;
+        },
+      });
       await requestDone.promise;
     });
     const teardown = clients.drain().then(dispose);

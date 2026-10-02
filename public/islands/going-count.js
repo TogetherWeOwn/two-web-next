@@ -70,7 +70,9 @@
     // fails. An older completion must never replace the last good state.
     var request = {};
     latest.set(key, request);
-    fetch(URL + "?event_key=" + encodeURIComponent(key), { headers: { accept: "application/json" } })
+    fetch(URL + "?event_key=" + encodeURIComponent(key), {
+      headers: { accept: "application/json" },
+    })
       .then(function (res) {
         if (!res.ok) throw new Error("events " + res.status);
         return res.json();
@@ -90,8 +92,12 @@
         // the key are an older shape: each badge keeps its strictly
         // validated SSR cap instead.
         var fromSnapshot = row.capacity !== undefined;
-        if (fromSnapshot && row.capacity !== null &&
-            (!Number.isSafeInteger(row.capacity) || row.capacity < 1)) return;
+        if (
+          fromSnapshot &&
+          row.capacity !== null &&
+          (!Number.isSafeInteger(row.capacity) || row.capacity < 1)
+        )
+          return;
         var snapshotCapacity = fromSnapshot ? row.capacity : null;
         var capacities = nodes.map(function (node) {
           if (fromSnapshot) return snapshotCapacity;
@@ -128,10 +134,18 @@
         // One accepted snapshot per read, not per badge. Conflicting or
         // unknown legacy fallback caps cannot truthfully describe this key.
         var capacity = capacities[0];
-        if (capacity === undefined || !capacities.every(function (value) { return value === capacity; })) return;
-        document.dispatchEvent(new CustomEvent(REFRESHED, {
-          detail: { eventKey: key, goingCount: row.going_count, capacity: capacity }
-        }));
+        if (
+          capacity === undefined ||
+          !capacities.every(function (value) {
+            return value === capacity;
+          })
+        )
+          return;
+        document.dispatchEvent(
+          new CustomEvent(REFRESHED, {
+            detail: { eventKey: key, goingCount: row.going_count, capacity: capacity },
+          }),
+        );
       })
       .catch(function () {
         // Keep the last known-good badge; the button island already

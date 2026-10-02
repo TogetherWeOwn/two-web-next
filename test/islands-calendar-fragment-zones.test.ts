@@ -3,12 +3,20 @@ import { runInNewContext } from "node:vm";
 import { URL as NodeURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
-const binder = readFileSync(new NodeURL("../public/islands/events-calendar.js", import.meta.url), "utf8");
+const binder = readFileSync(
+  new NodeURL("../public/islands/events-calendar.js", import.meta.url),
+  "utf8",
+);
 const ORIGIN = "https://calendar.example.test";
 const ENTRY = "/events?q=old";
 const DESTINATION = "/events?view=calendar&month=2026-10&past=1";
 const NAMES = ["head", "actions", "miss", "content"];
-const LIVE_IDS = ["events-view-status", "events-search-status", "events-past-status", "calendar-month-status"];
+const LIVE_IDS = [
+  "events-view-status",
+  "events-search-status",
+  "events-past-status",
+  "calendar-month-status",
+];
 const FAILURE = "Calendar could not be loaded. Try again.";
 
 type Content = { text: string };
@@ -39,18 +47,42 @@ class Element {
   selectors = new Map<string, Element>();
   zones: Element[] = [];
   listeners = new Map<string, (event: SyntheticEvent) => void>();
-  getAttribute(name: string) { return this.attributes.get(name) ?? null; }
-  setAttribute(name: string, value: string) { this.attributes.set(name, value); }
-  removeAttribute(name: string) { this.attributes.delete(name); }
-  hasAttribute(name: string) { return this.attributes.has(name); }
-  querySelector(selector: string) { return this.selectors.get(selector) ?? null; }
-  querySelectorAll(selector: string) { return selector === "[data-cal-zone]" ? this.zones : []; }
-  replaceChildren(...children: Content[]) { this.childNodes = children; }
-  closest(selector: string) { return selector === "form" ? this.form : this.isLink ? this : null; }
-  contains() { return true; }
-  focus() { this.focused = true; }
-  addEventListener(type: string, listener: (event: SyntheticEvent) => void) { this.listeners.set(type, listener); }
-  emit(type: string, event: SyntheticEvent = {}) { this.listeners.get(type)!(event); }
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
+  }
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
+  }
+  removeAttribute(name: string) {
+    this.attributes.delete(name);
+  }
+  hasAttribute(name: string) {
+    return this.attributes.has(name);
+  }
+  querySelector(selector: string) {
+    return this.selectors.get(selector) ?? null;
+  }
+  querySelectorAll(selector: string) {
+    return selector === "[data-cal-zone]" ? this.zones : [];
+  }
+  replaceChildren(...children: Content[]) {
+    this.childNodes = children;
+  }
+  closest(selector: string) {
+    return selector === "form" ? this.form : this.isLink ? this : null;
+  }
+  contains() {
+    return true;
+  }
+  focus() {
+    this.focused = true;
+  }
+  addEventListener(type: string, listener: (event: SyntheticEvent) => void) {
+    this.listeners.set(type, listener);
+  }
+  emit(type: string, event: SyntheticEvent = {}) {
+    this.listeners.get(type)!(event);
+  }
 }
 
 function zone(name: string, text: string) {
@@ -60,11 +92,15 @@ function zone(name: string, text: string) {
   return node;
 }
 
-function fragment(options: { names?: string[]; root?: boolean; canonical?: boolean; badImport?: boolean } = {}) {
+function fragment(
+  options: { names?: string[]; root?: boolean; canonical?: boolean; badImport?: boolean } = {},
+) {
   const root = new Element();
   root.dataset = { view: "calendar", month: "2026-10", past: "1" };
   root.zones = (options.names ?? NAMES).map((name) => zone(name, `new ${name}`));
-  root.zones.forEach((node) => { node.hidden = node.getAttribute("data-cal-zone") === "miss"; });
+  root.zones.forEach((node) => {
+    node.hidden = node.getAttribute("data-cal-zone") === "miss";
+  });
   if (options.badImport) root.zones.at(-1)!.childNodes = [{ text: "unimportable" }];
   const page = new Element();
   if (options.root !== false) page.selectors.set('[data-island="events-calendar"]', root);
@@ -87,7 +123,9 @@ function browser() {
   root.dataset = { view: "list", month: "2026-09", past: "", loadError: FAILURE };
   root.zones = NAMES.map((name) => zone(name, `old ${name}`));
   root.zones[2]!.hidden = true;
-  root.zones.forEach((node) => root.selectors.set(`[data-cal-zone="${node.getAttribute("data-cal-zone")}"]`, node));
+  root.zones.forEach((node) =>
+    root.selectors.set(`[data-cal-zone="${node.getAttribute("data-cal-zone")}"]`, node),
+  );
   const skeleton = new Element();
   skeleton.hidden = true;
   root.selectors.set('[data-testid="events-loading"]', skeleton);
@@ -115,8 +153,15 @@ function browser() {
   document.selectors.set('meta[property="og:url"]', og);
   const history: string[] = [];
   const reloads: string[] = [];
-  const location = { origin: ORIGIN, href: ORIGIN + ENTRY, assign: (href: string) => reloads.push(href) };
-  const requests: { signal: AbortSignal; resolve: (response: { ok: boolean; text: () => Promise<string> }) => void }[] = [];
+  const location = {
+    origin: ORIGIN,
+    href: ORIGIN + ENTRY,
+    assign: (href: string) => reloads.push(href),
+  };
+  const requests: {
+    signal: AbortSignal;
+    resolve: (response: { ok: boolean; text: () => Promise<string> }) => void;
+  }[] = [];
   const pages = new Map<string, Element>();
   const timers = new Map<number, () => void>();
   let timerId = 0;
@@ -126,19 +171,38 @@ function browser() {
     return { ...child };
   });
   runInNewContext(binder, {
-    URL, AbortController,
+    URL,
+    AbortController,
     document: Object.assign(document, { importNode }),
     window: {
       location,
-      history: { pushState: (_state: unknown, _title: string, path: string) => { history.push(path); location.href = ORIGIN + path; } },
-      addEventListener: (_type: string, listener: () => void) => { popstate = listener; },
+      history: {
+        pushState: (_state: unknown, _title: string, path: string) => {
+          history.push(path);
+          location.href = ORIGIN + path;
+        },
+      },
+      addEventListener: (_type: string, listener: () => void) => {
+        popstate = listener;
+      },
     },
-    DOMParser: class { parseFromString(html: string) { return pages.get(html); } },
-    fetch: (_path: string, init: { signal: AbortSignal }) => new Promise((resolve) => requests.push({ signal: init.signal, resolve })),
-    setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
+    DOMParser: class {
+      parseFromString(html: string) {
+        return pages.get(html);
+      }
+    },
+    fetch: (_path: string, init: { signal: AbortSignal }) =>
+      new Promise((resolve) => requests.push({ signal: init.signal, resolve })),
+    setTimeout: (callback: () => void) => {
+      timers.set(++timerId, callback);
+      return timerId;
+    },
     clearTimeout: (id: number) => timers.delete(id),
   });
-  function click(path = DESTINATION, options: { ctrlKey?: boolean; download?: boolean; target?: string } = {}) {
+  function click(
+    path = DESTINATION,
+    options: { ctrlKey?: boolean; download?: boolean; target?: string } = {},
+  ) {
     const link = new Element();
     link.isLink = true;
     const url = new URL(path, ORIGIN);
@@ -147,7 +211,14 @@ function browser() {
     link.target = options.target ?? "";
     if (options.download) link.setAttribute("download", "");
     let prevented = false;
-    root.emit("click", { button: 0, target: link, ctrlKey: options.ctrlKey, preventDefault: () => { prevented = true; } });
+    root.emit("click", {
+      button: 0,
+      target: link,
+      ctrlKey: options.ctrlKey,
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
     return prevented;
   }
   async function finish(index: number, next: ReturnType<typeof fragment>) {
@@ -168,10 +239,32 @@ function browser() {
       history: [...history],
     };
   }
-  return { root, skeleton, feedback, form, input, live, canonical, og, history, reloads, location, requests, importNode, timers, click, finish, snapshot, popstate: () => popstate() };
+  return {
+    root,
+    skeleton,
+    feedback,
+    form,
+    input,
+    live,
+    canonical,
+    og,
+    history,
+    reloads,
+    location,
+    requests,
+    importNode,
+    timers,
+    click,
+    finish,
+    snapshot,
+    popstate: () => popstate(),
+  };
 }
 
-function expectLastGood(b: ReturnType<typeof browser>, before: ReturnType<ReturnType<typeof browser>["snapshot"]>) {
+function expectLastGood(
+  b: ReturnType<typeof browser>,
+  before: ReturnType<ReturnType<typeof browser>["snapshot"]>,
+) {
   expect(b.snapshot()).toEqual(before);
   b.root.zones.forEach((node, i) => expect(node.childNodes).toBe(before.zones[i]!.children));
   expect(b.feedback.textContent).toBe(FAILURE);
@@ -224,13 +317,16 @@ describe("calendar fragment zone admission", () => {
     const statuses = [...b.live];
     const input = b.input;
     const next = fragment({ names: [...NAMES].reverse() });
-    next.root.zones.find((node) => node.getAttribute("data-cal-zone") === "actions")!.childNodes = [];
+    next.root.zones.find((node) => node.getAttribute("data-cal-zone") === "actions")!.childNodes =
+      [];
     b.click();
     await b.finish(0, next);
     expect(b.root.zones).toEqual(targets);
     b.root.zones.forEach((node, i) => {
       expect(node).toBe(targets[i]);
-      const source = next.root.zones.find((source) => source.getAttribute("data-cal-zone") === NAMES[i])!;
+      const source = next.root.zones.find(
+        (source) => source.getAttribute("data-cal-zone") === NAMES[i],
+      )!;
       expect(node.childNodes).toEqual(source.childNodes);
       if (source.childNodes.length) expect(node.childNodes[0]).not.toBe(source.childNodes[0]);
       expect(node.hidden).toBe(source.hidden);

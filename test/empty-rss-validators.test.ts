@@ -16,7 +16,9 @@ const KEY = "01J0000000000000000000RSS1";
 describe.skipIf(!process.env.DATABASE_URL)("empty RSS validators (isolated test schema)", () => {
   let fixture: MemberDataFixture;
   let env: Env;
-  const sessionAccess = vi.fn(() => { throw new Error("Public RSS must not read sessions"); });
+  const sessionAccess = vi.fn(() => {
+    throw new Error("Public RSS must not read sessions");
+  });
 
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
@@ -35,21 +37,29 @@ describe.skipIf(!process.env.DATABASE_URL)("empty RSS validators (isolated test 
     vi.useRealTimers();
     expect(sessionAccess).not.toHaveBeenCalled();
   });
-  afterAll(async () => { await fixture?.dispose(); });
-
-  const request = (etag?: string) => app.request("/events.rss", {
-    headers: etag ? { "if-none-match": etag } : {},
-  }, env);
-  const insert = (overrides: Partial<typeof events.$inferInsert> = {}) => fixture.db.insert(events).values({
-    eventKey: KEY,
-    title: "RSS event",
-    startsAt: new Date("2026-10-01T13:00:00Z"),
-    endsAt: new Date(END),
-    timezone: "UTC",
-    status: "published",
-    updatedAt: UPDATED,
-    ...overrides,
+  afterAll(async () => {
+    await fixture?.dispose();
   });
+
+  const request = (etag?: string) =>
+    app.request(
+      "/events.rss",
+      {
+        headers: etag ? { "if-none-match": etag } : {},
+      },
+      env,
+    );
+  const insert = (overrides: Partial<typeof events.$inferInsert> = {}) =>
+    fixture.db.insert(events).values({
+      eventKey: KEY,
+      title: "RSS event",
+      startsAt: new Date("2026-10-01T13:00:00Z"),
+      endsAt: new Date(END),
+      timezone: "UTC",
+      status: "published",
+      updatedAt: UPDATED,
+      ...overrides,
+    });
   const read = async (etag?: string) => {
     const response = await request(etag);
     expect(response.status).toBe(200);
@@ -79,9 +89,13 @@ describe.skipIf(!process.env.DATABASE_URL)("empty RSS validators (isolated test 
       expect(await read()).toEqual(empty);
       await unchanged(empty.etag);
     }
-    const withCookie = await app.request("/events.rss", {
-      headers: { cookie: "__Host-two_session=not-a-session", "if-none-match": empty.etag },
-    }, env);
+    const withCookie = await app.request(
+      "/events.rss",
+      {
+        headers: { cookie: "__Host-two_session=not-a-session", "if-none-match": empty.etag },
+      },
+      env,
+    );
     expect(withCookie.status).toBe(304);
     expect(withCookie.headers.get("set-cookie")).toBeNull();
   });
@@ -114,12 +128,19 @@ describe.skipIf(!process.env.DATABASE_URL)("empty RSS validators (isolated test 
     vi.setSystemTime(new Date("2026-10-01T12:30:00Z"));
     expect(await read()).toEqual(first);
     await unchanged(first.etag);
-    await fixture.db.update(events).set({ title: "Edited RSS event", updatedAt: new Date("2026-10-01T12:30:00Z") }).where(eq(events.eventKey, KEY));
+    await fixture.db
+      .update(events)
+      .set({ title: "Edited RSS event", updatedAt: new Date("2026-10-01T12:30:00Z") })
+      .where(eq(events.eventKey, KEY));
     const edited = await read(first.etag);
     expect(edited.etag).not.toBe(first.etag);
     expect(edited.body).toContain("<title>Edited RSS event</title>");
     expect(edited.body).toContain("<lastBuildDate>Thu, 01 Oct 2026 12:30:00 +0000</lastBuildDate>");
-    await insert({ eventKey: "01J0000000000000000000RSS2", title: "Another RSS event", updatedAt: new Date("2026-10-01T12:31:00Z") });
+    await insert({
+      eventKey: "01J0000000000000000000RSS2",
+      title: "Another RSS event",
+      updatedAt: new Date("2026-10-01T12:31:00Z"),
+    });
     const added = await read(edited.etag);
     expect(added.etag).not.toBe(edited.etag);
     expect(added.body.match(/<item>/g)).toHaveLength(2);

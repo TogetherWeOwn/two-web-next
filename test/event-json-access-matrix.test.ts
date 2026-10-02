@@ -51,28 +51,49 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
   let db: MemberDataFixture["db"];
   const store = createMemorySessionStore();
   const env = {
-    APP_URL, SESSION_SECRET,
-    DISCORD_CLIENT_ID: "client-id", DISCORD_CLIENT_SECRET: "client-secret",
-    DISCORD_GUILD_ID: "326474832151838730", DISCORD_INVITE_URL: "https://discord.gg/invite",
-    DISCORD_BOT_TOKEN: "bot-token", SESSION_STORE: store,
-    get ADMIN_DB() { return db; },
+    APP_URL,
+    SESSION_SECRET,
+    DISCORD_CLIENT_ID: "client-id",
+    DISCORD_CLIENT_SECRET: "client-secret",
+    DISCORD_GUILD_ID: "326474832151838730",
+    DISCORD_INVITE_URL: "https://discord.gg/invite",
+    DISCORD_BOT_TOKEN: "bot-token",
+    SESSION_STORE: store,
+    get ADMIN_DB() {
+      return db;
+    },
   } as unknown as Env;
 
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
     db = fixture.db;
   });
-  beforeEach(async () => { await fixture.reset(); });
-  afterAll(async () => { await fixture?.dispose(); });
+  beforeEach(async () => {
+    await fixture.reset();
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   async function cookieFor(userId: string, moderator: boolean): Promise<string> {
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId, username: userId, avatar: null,
-      member: true, moderator, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId,
+      username: userId,
+      avatar: null,
+      member: true,
+      moderator,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    return (await serializeSigned("__Host-two_session", token, SESSION_SECRET,
-      { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+    return (
+      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
   }
 
   // /events.json never rotates the fragment session, but /e/:key HTML does, so
@@ -86,7 +107,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
   // string ids trip the member-read boundary into 503 on /e/:key HTML.
   const asMember = (path: string) => get(path, "100000000000000131", false);
   const asModerator = (path: string) => get(path, "100000000000000132", true);
-  const rowsOf = async (res: Response) => (await res.json() as { data: Row[] }).data;
+  const rowsOf = async (res: Response) => ((await res.json()) as { data: Row[] }).data;
 
   async function seedStatuses() {
     const seeds = [
@@ -97,7 +118,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
     ] as const;
     for (const [i, s] of seeds.entries()) {
       await db.insert(events).values({
-        eventKey: key(s.n), title: s.title, status: s.status,
+        eventKey: key(s.n),
+        title: s.title,
+        status: s.status,
         startsAt: new Date(Date.UTC(2099, 5, 10 + i, 18)),
         endsAt: new Date(Date.UTC(2099, 5, 10 + i, 20)),
         timezone: "UTC",
@@ -108,8 +131,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
 
   it("refuses a guest over JSON with 401", async () => {
     await db.insert(events).values({
-      eventKey: key(11), title: "Friday night Helldivers", status: "published",
-      startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
+      eventKey: key(11),
+      title: "Friday night Helldivers",
+      status: "published",
+      startsAt: new Date("2099-11-04T20:00:00Z"),
+      endsAt: new Date("2099-11-04T22:00:00Z"),
     });
     const res = await get("/events.json", null);
     expect(res.status).toBe(401);
@@ -144,14 +170,26 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
 
   it("exposes exactly the allowlisted keys in order, with nulls as nulls and no internal ids", async () => {
     await db.insert(events).values({
-      eventKey: key(21), title: "Sparse night", status: "published",
-      game: null, description: null, location: null, capacity: null,
-      startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
+      eventKey: key(21),
+      title: "Sparse night",
+      status: "published",
+      game: null,
+      description: null,
+      location: null,
+      capacity: null,
+      startsAt: new Date("2099-11-04T20:00:00Z"),
+      endsAt: new Date("2099-11-04T22:00:00Z"),
     });
     await db.insert(events).values({
-      eventKey: key(22), title: "Full night", status: "published",
-      game: "Helldivers 2", description: "Bring stims.", location: "Voice: General", capacity: 4,
-      startsAt: new Date("2099-11-05T20:00:00Z"), endsAt: new Date("2099-11-05T22:00:00Z"),
+      eventKey: key(22),
+      title: "Full night",
+      status: "published",
+      game: "Helldivers 2",
+      description: "Bring stims.",
+      location: "Voice: General",
+      capacity: 4,
+      startsAt: new Date("2099-11-05T20:00:00Z"),
+      endsAt: new Date("2099-11-05T22:00:00Z"),
     });
     for (const res of [await asMember("/events.json"), await asModerator("/events.json")]) {
       expect(res.status).toBe(200);
@@ -172,10 +210,16 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
 
   it("keeps the field types the consumers parse against, with both readings of the time", async () => {
     await db.insert(events).values({
-      eventKey: key(31), title: "Friday night Helldivers", game: "Helldivers 2",
-      description: "Bring stims.", timezone: "Europe/London", location: "Voice: General",
-      capacity: 4, status: "published",
-      startsAt: new Date("2099-07-15T18:00:00Z"), endsAt: new Date("2099-07-15T20:00:00Z"),
+      eventKey: key(31),
+      title: "Friday night Helldivers",
+      game: "Helldivers 2",
+      description: "Bring stims.",
+      timezone: "Europe/London",
+      location: "Voice: General",
+      capacity: 4,
+      status: "published",
+      startsAt: new Date("2099-07-15T18:00:00Z"),
+      endsAt: new Date("2099-07-15T20:00:00Z"),
     });
     const res = await asMember("/events.json");
     const row = (await rowsOf(res)).find((r) => r.event_key === key(31))!;
@@ -199,10 +243,16 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
   });
 
   it("counts only going answers in going_count, on the listing as on one row", async () => {
-    const [ev] = await db.insert(events).values({
-      eventKey: key(41), title: "Counted night", status: "published",
-      startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
-    }).returning();
+    const [ev] = await db
+      .insert(events)
+      .values({
+        eventKey: key(41),
+        title: "Counted night",
+        status: "published",
+        startsAt: new Date("2099-11-04T20:00:00Z"),
+        endsAt: new Date("2099-11-04T22:00:00Z"),
+      })
+      .returning();
     await db.insert(rsvps).values([
       { eventId: ev!.id, userId: "going-1", status: "going" },
       { eventId: ev!.id, userId: "going-2", status: "going" },
@@ -211,8 +261,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
       { eventId: ev!.id, userId: "queued", status: "waitlisted" },
     ]);
     await db.insert(events).values({
-      eventKey: key(42), title: "Quiet night", status: "published",
-      startsAt: new Date("2099-11-05T20:00:00Z"), endsAt: new Date("2099-11-05T22:00:00Z"),
+      eventKey: key(42),
+      title: "Quiet night",
+      status: "published",
+      startsAt: new Date("2099-11-05T20:00:00Z"),
+      endsAt: new Date("2099-11-05T22:00:00Z"),
     });
     const rows = await rowsOf(await asMember("/events.json"));
     // "maybe" is not a seat, and neither is a no or a queue place.
@@ -223,12 +276,20 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
   it("derives synced_to_discord from the mirror column without leaking the raw id", async () => {
     const mirrorId = "987654321098765432";
     await db.insert(events).values({
-      eventKey: key(51), title: "Unmirrored night", status: "published", discordEventId: null,
-      startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
+      eventKey: key(51),
+      title: "Unmirrored night",
+      status: "published",
+      discordEventId: null,
+      startsAt: new Date("2099-11-04T20:00:00Z"),
+      endsAt: new Date("2099-11-04T22:00:00Z"),
     });
     await db.insert(events).values({
-      eventKey: key(52), title: "Mirrored night", status: "published", discordEventId: mirrorId,
-      startsAt: new Date("2099-11-05T20:00:00Z"), endsAt: new Date("2099-11-05T22:00:00Z"),
+      eventKey: key(52),
+      title: "Mirrored night",
+      status: "published",
+      discordEventId: mirrorId,
+      startsAt: new Date("2099-11-05T20:00:00Z"),
+      endsAt: new Date("2099-11-05T22:00:00Z"),
     });
     const res = await asMember("/events.json");
     const rows = await rowsOf(res);
@@ -248,6 +309,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
     const shown = await rowsOf(await asModerator(`/events.json?event_key=${draftKey}`));
     expect(shown.map((r) => r.event_key)).toEqual([draftKey]);
     expect((await asMember("/events.json?event_key=nope")).status).toBe(422);
-    expect(await rowsOf(await asMember("/events.json?event_key=01J00000000000000000000999"))).toEqual([]);
+    expect(
+      await rowsOf(await asMember("/events.json?event_key=01J00000000000000000000999")),
+    ).toEqual([]);
   });
 });

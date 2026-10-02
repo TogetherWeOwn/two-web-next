@@ -19,25 +19,31 @@ const input: FeaturedFormInput = {
 
 // createFeatured also returns the exact-text timestamp projections used by the edit form.
 function stored(row: Awaited<ReturnType<typeof createFeatured>>) {
-  const { startsAtText: _s, endsAtText: _e, ...rest } = row as typeof row & { startsAtText?: unknown; endsAtText?: unknown };
+  const {
+    startsAtText: _s,
+    endsAtText: _e,
+    ...rest
+  } = row as typeof row & { startsAtText?: unknown; endsAtText?: unknown };
   return rest;
 }
 
-describe.skipIf(!process.env.DATABASE_URL)("featured creation atomicity (isolated test Postgres)", () => {
-  let fixture: MemberDataFixture | undefined;
-  beforeEach(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-  });
-  afterEach(async () => {
-    await fixture?.dispose();
-    fixture = undefined;
-  });
+describe.skipIf(!process.env.DATABASE_URL)(
+  "featured creation atomicity (isolated test Postgres)",
+  () => {
+    let fixture: MemberDataFixture | undefined;
+    beforeEach(async () => {
+      fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    });
+    afterEach(async () => {
+      await fixture?.dispose();
+      fixture = undefined;
+    });
 
-  it("rolls back after the feature insert when its audit fails, then retries without duplicates", async () => {
-    const { db, client, schemaName } = fixture!;
-    // Only this fixture's audit table fails. The trigger checks the candidate
-    // exists before rejecting its audit; no test-owned transaction masks the bug.
-    await client.unsafe(`
+    it("rolls back after the feature insert when its audit fails, then retries without duplicates", async () => {
+      const { db, client, schemaName } = fixture!;
+      // Only this fixture's audit table fails. The trigger checks the candidate
+      // exists before rejecting its audit; no test-owned transaction masks the bug.
+      await client.unsafe(`
       CREATE FUNCTION "${schemaName}".reject_featured_create_audit()
       RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
@@ -54,81 +60,91 @@ describe.skipIf(!process.env.DATABASE_URL)("featured creation atomicity (isolate
       EXECUTE FUNCTION "${schemaName}".reject_featured_create_audit();
     `);
 
-    await expect(createFeatured(db, actor, input)).rejects.toMatchObject({
-      cause: { code: "P0001", message: "synthetic audit failure after featured insert" },
-    });
-    expect(await db.select().from(featuredContents)).toEqual([]);
-    expect(await db.select().from(activityLog)).toEqual([]);
+      await expect(createFeatured(db, actor, input)).rejects.toMatchObject({
+        cause: { code: "P0001", message: "synthetic audit failure after featured insert" },
+      });
+      expect(await db.select().from(featuredContents)).toEqual([]);
+      expect(await db.select().from(activityLog)).toEqual([]);
 
-    await client.unsafe(`DROP TRIGGER reject_featured_create_audit ON "${schemaName}".activity_log`);
-    const row = await createFeatured(db, actor, input);
-    expect(await db.select().from(featuredContents)).toEqual([stored(row)]);
-    const audits = await db.select().from(activityLog);
-    expect(audits).toHaveLength(1);
-    expect(audits[0]).toMatchObject({
-      subjectType: "FeaturedContent",
-      subjectId: String(row.id),
-      causerId: actor.id,
-      description: `created featured content ${input.title}`,
+      await client.unsafe(
+        `DROP TRIGGER reject_featured_create_audit ON "${schemaName}".activity_log`,
+      );
+      const row = await createFeatured(db, actor, input);
+      expect(await db.select().from(featuredContents)).toEqual([stored(row)]);
+      const audits = await db.select().from(activityLog);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({
+        subjectType: "FeaturedContent",
+        subjectId: String(row.id),
+        causerId: actor.id,
+        description: `created featured content ${input.title}`,
+      });
     });
-  });
 
-  it.each([true, false])("preserves the returned row, actor and dirty properties (published=%s)", async (isPublished) => {
-    const { db } = fixture!;
-    const values: FeaturedFormInput = isPublished ? input : {
-      ...input,
-      isPublished: false,
-      position: 0,
-      body: null,
-      url: null,
-      imageUrl: null,
-      imageAlt: null,
-      startsAtUtc: null,
-      endsAtUtc: null,
-    };
-    const row = await createFeatured(db, actor, values);
-    expect(row).toMatchObject({
-      title: values.title,
-      body: values.body,
-      url: values.url,
-      imageUrl: values.imageUrl,
-      imageAlt: values.imageAlt,
-      isPublished,
-      position: values.position,
-      startsAt: values.startsAtUtc,
-      endsAt: values.endsAtUtc,
-      createdBy: actor.id,
-      legacyId: null,
-      createdAt: expect.any(Date),
-      updatedAt: expect.any(Date),
-    });
-    expect(await db.select().from(featuredContents)).toEqual([stored(row)]);
-    const audits = await db.select().from(activityLog);
-    expect(audits).toHaveLength(1);
-    expect(audits[0]).toMatchObject({
-      logName: "default",
-      subjectType: "FeaturedContent",
-      subjectId: String(row.id),
-      causerId: actor.id,
-      causerType: null,
-      description: `created featured content ${values.title}`,
-    });
-    expect(audits[0]!.properties).toEqual({
-      id: { before: null, after: row.id },
-      title: { before: null, after: values.title },
-      isPublished: { before: null, after: isPublished },
-      position: { before: null, after: values.position },
-      createdBy: { before: null, after: actor.id },
-      createdAt: { before: null, after: row.createdAt.toISOString() },
-      updatedAt: { before: null, after: row.updatedAt.toISOString() },
-      ...(isPublished ? {
-        body: { before: null, after: values.body },
-        url: { before: null, after: values.url },
-        imageUrl: { before: null, after: values.imageUrl },
-        imageAlt: { before: null, after: values.imageAlt },
-        startsAt: { before: null, after: "2026-10-08 18:00:00.000000" },
-        endsAt: { before: null, after: "2026-10-09 18:00:00.000000" },
-      } : {}),
-    });
-  });
-});
+    it.each([true, false])(
+      "preserves the returned row, actor and dirty properties (published=%s)",
+      async (isPublished) => {
+        const { db } = fixture!;
+        const values: FeaturedFormInput = isPublished
+          ? input
+          : {
+              ...input,
+              isPublished: false,
+              position: 0,
+              body: null,
+              url: null,
+              imageUrl: null,
+              imageAlt: null,
+              startsAtUtc: null,
+              endsAtUtc: null,
+            };
+        const row = await createFeatured(db, actor, values);
+        expect(row).toMatchObject({
+          title: values.title,
+          body: values.body,
+          url: values.url,
+          imageUrl: values.imageUrl,
+          imageAlt: values.imageAlt,
+          isPublished,
+          position: values.position,
+          startsAt: values.startsAtUtc,
+          endsAt: values.endsAtUtc,
+          createdBy: actor.id,
+          legacyId: null,
+          createdAt: expect.any(Date),
+          updatedAt: expect.any(Date),
+        });
+        expect(await db.select().from(featuredContents)).toEqual([stored(row)]);
+        const audits = await db.select().from(activityLog);
+        expect(audits).toHaveLength(1);
+        expect(audits[0]).toMatchObject({
+          logName: "default",
+          subjectType: "FeaturedContent",
+          subjectId: String(row.id),
+          causerId: actor.id,
+          causerType: null,
+          description: `created featured content ${values.title}`,
+        });
+        expect(audits[0]!.properties).toEqual({
+          id: { before: null, after: row.id },
+          title: { before: null, after: values.title },
+          isPublished: { before: null, after: isPublished },
+          position: { before: null, after: values.position },
+          createdBy: { before: null, after: actor.id },
+          createdAt: { before: null, after: row.createdAt.toISOString() },
+          updatedAt: { before: null, after: row.updatedAt.toISOString() },
+          ...(isPublished
+            ? {
+                body: { before: null, after: values.body },
+                url: { before: null, after: values.url },
+                imageUrl: { before: null, after: values.imageUrl },
+                imageAlt: { before: null, after: values.imageAlt },
+                startsAt: { before: null, after: "2026-10-08 18:00:00.000000" },
+                endsAt: { before: null, after: "2026-10-09 18:00:00.000000" },
+              }
+            : {}),
+        });
+      },
+    );
+  },
+);

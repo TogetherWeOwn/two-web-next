@@ -19,9 +19,13 @@ export async function sha256Hex(data: string): Promise<string> {
 }
 
 export async function hmacSha256Hex(secret: string, data: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-  ]);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
   return hex(await crypto.subtle.sign("HMAC", key, enc.encode(data)));
 }
 
@@ -39,7 +43,13 @@ export async function signInternalAction(
   timestamp: number,
   nonce: string,
 ): Promise<SigningHeaders> {
-  const canonical = ["POST", INTERNAL_ACTIONS_PATH, String(timestamp), nonce, await sha256Hex(body)].join("\n");
+  const canonical = [
+    "POST",
+    INTERNAL_ACTIONS_PATH,
+    String(timestamp),
+    nonce,
+    await sha256Hex(body),
+  ].join("\n");
   return {
     "X-TWO-Key-Id": keyId,
     "X-TWO-Timestamp": String(timestamp),
@@ -53,7 +63,9 @@ export async function signInternalAction(
 // is U+2028/U+2029, which PHP still escapes (no JSON_UNESCAPED_LINE_TERMINATORS). Floats are not
 // supported: no bot action carries one.
 export function encodeCanonicalJson(payload: unknown): string {
-  return JSON.stringify(payload).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+  return JSON.stringify(payload)
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
 }
 
 export function newNonce(): string {
