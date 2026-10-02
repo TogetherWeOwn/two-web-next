@@ -112,14 +112,14 @@ baseline (`copy-link`, `avatar`, `admin-event-editor`, `admin-event-text-limits`
 `auth-status`, `rsvp-button`) start at their measured size plus 25–33% headroom.
 
 Served assets are main's files, unchanged: this PR adds gates only and does not
-rewrite or minify CSS, JavaScript or markup. Measured at main `fb63afa`, five
-pre-existing assets exceed their unchanged ceilings:
+rewrite or minify CSS, JavaScript or markup. Measured on the merged tree
+(main `7b42c09`), five pre-existing assets exceed their unchanged ceilings:
 
 | Asset | Raw / gzip bytes | Ceiling |
 |---|---:|---:|
 | `public/islands/events-calendar.js` | 12060 / 3919 | 10240 / 3584 |
-| `public/islands/going-count.js` | 5321 / 2062 | 4096 / 1536 |
-| `public/islands/member-profile.js` | 14612 / 4581 | 7168 / 2560 |
+| `public/islands/going-count.js` | 6663 / 2522 | 4096 / 1536 |
+| `public/islands/member-profile.js` | 15358 / 4936 | 7168 / 2560 |
 | `public/islands/past-events.js` | 5871 / 1972 | 5120 / 2048 |
 | `public/styles.css` | 5678 / 1841 | 3072 / 1280 |
 
