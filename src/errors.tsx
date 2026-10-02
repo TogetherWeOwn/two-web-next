@@ -8,6 +8,7 @@ import { notFoundSuggestions, type SuggestedEvent } from "./events/suggestions";
 import { inviteDestination } from "./invite";
 import { RecoveryShell } from "./pages";
 import { bufferedMemberHtml, bufferedMemberText, memberReadActive } from "./member-reads";
+import { withPinnedAssetCache } from "./pinned-assets";
 import { requestRoute } from "./request-log";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
@@ -340,7 +341,9 @@ export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
       const asset = await c.env.ASSETS.fetch(c.req.raw);
       // ASSETS responses have immutable headers; outer security middleware
       // needs a writable copy. Preserve the streaming body and asset metadata.
-      if (asset.status !== 404) return new Response(asset.body, asset);
+      // Pinned fonts pick up the year-long immutable header here (TOG-12550).
+      if (asset.status !== 404)
+        return withPinnedAssetCache(c.req.url, new Response(asset.body, asset));
     }
     return notFoundHandler(c);
   });
