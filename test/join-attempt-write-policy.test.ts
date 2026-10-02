@@ -143,17 +143,29 @@ describe.skipIf(!process.env.DATABASE_URL)("join-attempt write policy (agent-tes
     // Keyed member reads fail closed on non-owner keys: seed the users row
     // and use a valid Discord-shaped owner id, like the sibling suites.
     await fixture.db.insert(users).values({
-      id: SUBJECT.userId, username: SUBJECT.username, member: SUBJECT.member,
+      id: SUBJECT.userId,
+      username: SUBJECT.username,
+      member: SUBJECT.member,
     });
-    await fixture.db.insert(joinAttempts).values({ outcome: "added", source: "site", requestId: "policy-req", discordId: SUBJECT.userId });
+    await fixture.db.insert(joinAttempts).values({
+      outcome: "added",
+      source: "site",
+      requestId: "policy-req",
+      discordId: SUBJECT.userId,
+    });
   });
   afterAll(() => fixture?.dispose());
 
   it("admin list + detail reads leave the rows byte-identical", async () => {
     const before = await rows();
     expect(before).toHaveLength(1);
-    expect((await app().request("/join-attempts", { headers: { cookie } }, bindings())).status).toBe(200);
-    expect((await app().request(`/join-attempts/${before[0]!.id}`, { headers: { cookie } }, bindings())).status).toBe(200);
+    expect(
+      (await app().request("/join-attempts", { headers: { cookie } }, bindings())).status,
+    ).toBe(200);
+    expect(
+      (await app().request(`/join-attempts/${before[0]!.id}`, { headers: { cookie } }, bindings()))
+        .status,
+    ).toBe(200);
     expect(await rows()).toEqual(before);
   });
 
@@ -163,7 +175,11 @@ describe.skipIf(!process.env.DATABASE_URL)("join-attempt write policy (agent-tes
       for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const) {
         const res = await app().request(
           path,
-          { method, headers: { cookie, origin: env.APP_URL, "content-type": "application/json" }, body: "{}" },
+          {
+            method,
+            headers: { cookie, origin: env.APP_URL, "content-type": "application/json" },
+            body: "{}",
+          },
           bindings(),
         );
         expect(res.status, `${method} ${path}`).toBe(404);

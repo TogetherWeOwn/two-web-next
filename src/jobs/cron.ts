@@ -61,7 +61,10 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * the cutoff goes, cutoff-exact rows survive. Idempotent: a re-run matches
  * nothing and reports zeros.
  */
-export async function pruneModelTables(stores: PruneStores, now: Date = new Date()): Promise<PruneCounts> {
+export async function pruneModelTables(
+  stores: PruneStores,
+  now: Date = new Date(),
+): Promise<PruneCounts> {
   const [accessLog, joinAttempts, idempotencyKeys, searchLog, sessions] = await Promise.all([
     stores.accessLog.pruneOlderThan(cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS)),
     stores.joinAttempts.pruneOlderThan(cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS)),
@@ -78,9 +81,13 @@ export async function pruneModelTables(stores: PruneStores, now: Date = new Date
 export async function runScheduled(
   cron: string,
   flight: SingleFlight,
-  jobs: { reconcile: (db: TxClient) => Promise<unknown>; prune: (db: TxClient) => Promise<unknown> },
+  jobs: {
+    reconcile: (db: TxClient) => Promise<unknown>;
+    prune: (db: TxClient) => Promise<unknown>;
+  },
 ): Promise<boolean> {
-  if (cron === RECONCILE_CRON) return flight("events:reconcile", async (db) => void (await jobs.reconcile(db)));
+  if (cron === RECONCILE_CRON)
+    return flight("events:reconcile", async (db) => void (await jobs.reconcile(db)));
   if (cron === PRUNE_CRON) return flight("model:prune", async (db) => void (await jobs.prune(db)));
   throw new Error(`unknown cron trigger: ${cron}`);
 }

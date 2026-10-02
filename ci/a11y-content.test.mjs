@@ -5,16 +5,18 @@ import { coverage } from "./a11y-cases.mjs";
 
 function fixturePage(scenario, changed = {}) {
   const expected = contentExpectations(scenario);
-  return { locator(selector) {
-    const entries = expected.filter((entry) => entry.selector === selector);
-    const entry = Object.assign({}, ...entries, changed[selector]);
-    return {
-      count: async () => entry.count ?? 1,
-      nth: () => ({ isVisible: async () => entry.visible ?? true }),
-      textContent: async () => entry.text ?? entries.map((item) => item.includes || "").join(" "),
-      getAttribute: async (name) => entry.attributes?.[name],
-    };
-  } };
+  return {
+    locator(selector) {
+      const entries = expected.filter((entry) => entry.selector === selector);
+      const entry = Object.assign({}, ...entries, changed[selector]);
+      return {
+        count: async () => entry.count ?? 1,
+        nth: () => ({ isVisible: async () => entry.visible ?? true }),
+        textContent: async () => entry.text ?? entries.map((item) => item.includes || "").join(" "),
+        getAttribute: async (name) => entry.attributes?.[name],
+      };
+    },
+  };
 }
 const home = { route: "/", path: "/", status: 200 };
 const owner = { route: "/profile", path: "/profile", status: 200 };
@@ -22,10 +24,17 @@ const owner = { route: "/profile", path: "/profile", status: 200 };
 test("404 audit distinguishes populated suggestions from their empty fallback", async () => {
   const populated = { route: "/__a11y/404", status: 404 };
   const empty = { route: "/__a11y/404-empty", status: 404 };
-  for (const scenario of [populated, empty]) await assertAuditContent(fixturePage(scenario), scenario);
+  for (const scenario of [populated, empty])
+    await assertAuditContent(fixturePage(scenario), scenario);
   const cards = '[data-testid="error-event-suggestions"] .card';
-  await assert.rejects(assertAuditContent(fixturePage(populated, { [cards]: { count: 0 } }), populated), /Fixture content count/);
-  await assert.rejects(assertAuditContent(fixturePage(empty, { [cards]: { count: 1 } }), empty), /Fixture content count/);
+  await assert.rejects(
+    assertAuditContent(fixturePage(populated, { [cards]: { count: 0 } }), populated),
+    /Fixture content count/,
+  );
+  await assert.rejects(
+    assertAuditContent(fixturePage(empty, { [cards]: { count: 1 } }), empty),
+    /Fixture content count/,
+  );
   assert(coverage[populated.route].cases.some((item) => item.status === 404));
   assert(coverage[empty.route].cases.some((item) => item.status === 404));
 });
@@ -34,15 +43,39 @@ test("home assertions require member, online, numeric and zero-rank content befo
   const assertions = await assertAuditContent(fixturePage(home), home);
   assert(assertions.some((item) => item.text === "84 members · 12 online"));
   assert(assertions.some((item) => item.text === "unclaimed"));
-  await assert.rejects(assertAuditContent(fixturePage(home, { '[data-testid="member-count"]': { count: 0 } }), home), /Fixture content count/);
-  await assert.rejects(assertAuditContent(fixturePage(home, { '[data-rank="member"] dd': { text: "" } }), home), /Fixture content text/);
+  await assert.rejects(
+    assertAuditContent(fixturePage(home, { '[data-testid="member-count"]': { count: 0 } }), home),
+    /Fixture content count/,
+  );
+  await assert.rejects(
+    assertAuditContent(fixturePage(home, { '[data-rank="member"] dd': { text: "" } }), home),
+    /Fixture content text/,
+  );
 });
 
 test("fallback rank/joined text cannot substitute for populated profile stats", async () => {
   await assertAuditContent(fixturePage(owner), owner);
-  await assert.rejects(assertAuditContent(fixturePage(owner, { '[data-testid="profile-stats"]': { count: 0 } }), owner), /Fixture content count/);
-  await assert.rejects(assertAuditContent(fixturePage(owner, { '[data-testid="profile-stats"] ol > li': { count: 0 } }), owner), /Fixture content count/);
-  await assert.rejects(assertAuditContent(fixturePage(owner, { '[data-testid="profile-stats"]': { visible: false } }), owner), /Fixture content hidden/);
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(owner, { '[data-testid="profile-stats"]': { count: 0 } }),
+      owner,
+    ),
+    /Fixture content count/,
+  );
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(owner, { '[data-testid="profile-stats"] ol > li': { count: 0 } }),
+      owner,
+    ),
+    /Fixture content count/,
+  );
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(owner, { '[data-testid="profile-stats"]': { visible: false } }),
+      owner,
+    ),
+    /Fixture content hidden/,
+  );
 });
 
 test("unavailable and populated states coexist; unavailable content must really be absent", async () => {
@@ -50,7 +83,13 @@ test("unavailable and populated states coexist; unavailable content must really 
     const unavailable = { ...scenario, readState: "unavailable" };
     const expectations = await assertAuditContent(fixturePage(unavailable), unavailable);
     const absent = expectations.find((item) => item.count === 0);
-    await assert.rejects(assertAuditContent(fixturePage(unavailable, { [absent.selector]: { count: 1 } }), unavailable), /Fixture content count/);
+    await assert.rejects(
+      assertAuditContent(
+        fixturePage(unavailable, { [absent.selector]: { count: 1 } }),
+        unavailable,
+      ),
+      /Fixture content count/,
+    );
     assert(coverage[scenario.route].cases.some((item) => item.readState === "unavailable"));
     assert(coverage[scenario.route].cases.some((item) => !item.readState));
   }
@@ -58,8 +97,17 @@ test("unavailable and populated states coexist; unavailable content must really 
 
 test("empty fallback totals may have no box but their rank cards must remain visible", async () => {
   const unavailable = { ...home, readState: "unavailable" };
-  await assertAuditContent(fixturePage(unavailable, { '[data-rank="prospect"] dd': { visible: false } }), unavailable);
-  await assert.rejects(assertAuditContent(fixturePage(unavailable, { '[data-testid="rank-stack"] > div': { visible: false } }), unavailable), /Fixture content hidden/);
+  await assertAuditContent(
+    fixturePage(unavailable, { '[data-rank="prospect"] dd': { visible: false } }),
+    unavailable,
+  );
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(unavailable, { '[data-testid="rank-stack"] > div': { visible: false } }),
+      unavailable,
+    ),
+    /Fixture content hidden/,
+  );
 });
 
 test("other-member empty milestones, validation errors and non-profile pages retain their cases", async () => {
@@ -68,5 +116,8 @@ test("other-member empty milestones, validation errors and non-profile pages ret
   await assertAuditContent(fixturePage(other), other);
   assert.deepEqual(contentExpectations({ ...other, status: 404 }), []);
   assert.deepEqual(contentExpectations({ route: "/events", status: 200 }), []);
-  assert.deepEqual(contentExpectations({ ...owner, state: "validation-error" }), contentExpectations(owner));
+  assert.deepEqual(
+    contentExpectations({ ...owner, state: "validation-error" }),
+    contentExpectations(owner),
+  );
 });

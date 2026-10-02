@@ -50,10 +50,7 @@ export class AlertRateLimit {
   // Plain assignments (no parameter properties): bin/*.mjs operator scripts
   // run under node's type-stripping, which rejects parameter properties, and
   // this class sits in the drill/smoke import closure (TOG-11706).
-  constructor(
-    windowMs = ALERT_WINDOW_MS,
-    now: Clock = Date.now,
-  ) {
+  constructor(windowMs = ALERT_WINDOW_MS, now: Clock = Date.now) {
     this.windowMs = windowMs;
     this.now = now;
   }
@@ -115,5 +112,12 @@ export type FailedJob = {
 /** Failing queue job (ports Queue::failing): connection, queue, job class, attempts, exception. */
 export function alertQueueFailing(job: FailedJob, sink: Sink = consoleSink): void {
   const { requestId, ...fields } = job;
-  sink(JSON.stringify({ level: "critical", event: "queue.failing", ...fields, request_id: safeRequestId(requestId) }));
+  sink(
+    JSON.stringify({
+      level: "critical",
+      event: "queue.failing",
+      ...fields,
+      request_id: safeRequestId(requestId),
+    }),
+  );
 }

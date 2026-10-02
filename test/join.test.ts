@@ -17,7 +17,12 @@ import {
   sanitizeSource,
 } from "../src/join/service";
 import type { EnvWithJoin, JoinRouteDeps } from "../src/join/route";
-import { createMemorySessionStore, createPostgresSessionStore, migrate, type Sql } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  createPostgresSessionStore,
+  migrate,
+  type Sql,
+} from "../src/sessions";
 import joinMigration from "../drizzle/1000_join-attempts-throttle.sql?raw";
 
 // W6 acceptance (TOG-9685): the one-click join journey. Ports two-web
@@ -50,7 +55,12 @@ const cookiesFrom = (res: Response) =>
 // bug, surfaced loudly.
 function fakeSql() {
   const throttle: { bucket: string; at: number }[] = [];
-  const attempts: { outcome: string; source: string | null; requestId: string | null; discordId: string | null }[] = [];
+  const attempts: {
+    outcome: string;
+    source: string | null;
+    requestId: string | null;
+    discordId: string | null;
+  }[] = [];
   const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const head = strings[0] ?? "";
     if (head.includes("count(*)")) {
@@ -60,7 +70,10 @@ function fakeSql() {
       const wait =
         rows.length === 0
           ? 1
-          : Math.max(1, Math.ceil((Math.min(...rows.map((r) => r.at)) + 60_000 - Date.now()) / 1000));
+          : Math.max(
+              1,
+              Math.ceil((Math.min(...rows.map((r) => r.at)) + 60_000 - Date.now()) / 1000),
+            );
       return [{ n: rows.length, wait }];
     }
     if (head.includes("INSERT INTO web_throttle_hits")) {
@@ -69,7 +82,12 @@ function fakeSql() {
     }
     if (head.includes("DELETE FROM web_throttle_hits")) return [];
     if (head.includes("INSERT INTO join_attempts")) {
-      const [outcome, source, requestId, discordId] = values as [string, string | null, string | null, string | null];
+      const [outcome, source, requestId, discordId] = values as [
+        string,
+        string | null,
+        string | null,
+        string | null,
+      ];
       attempts.push({ outcome, source, requestId, discordId });
       return [];
     }
@@ -93,7 +111,11 @@ function isolated(deps: Partial<JoinRouteDeps> = {}) {
 
 type DiscordStubOpts = { joinStatus?: number; memberRoles?: string[]; token?: string };
 
-function mockDiscord({ joinStatus = 201, memberRoles = [], token = "user-token" }: DiscordStubOpts = {}) {
+function mockDiscord({
+  joinStatus = 201,
+  memberRoles = [],
+  token = "user-token",
+}: DiscordStubOpts = {}) {
   const calls: { url: string; init?: RequestInit }[] = [];
   vi.stubGlobal(
     "fetch",
@@ -118,7 +140,12 @@ function mockDiscord({ joinStatus = 201, memberRoles = [], token = "user-token" 
 async function startJoin(e: Env, query = "") {
   const res = await app.request(`/join/discord${query}`, {}, e);
   const location = res.headers.get("location") ? new URL(res.headers.get("location")!) : null;
-  return { res, location, state: location?.searchParams.get("state") ?? null, cookie: cookiesFrom(res) };
+  return {
+    res,
+    location,
+    state: location?.searchParams.get("state") ?? null,
+    cookie: cookiesFrom(res),
+  };
 }
 
 const finishJoinCb = (e: Env, state: string, cookie: string, extra = "code=abc") =>
@@ -156,17 +183,20 @@ describe("safeNext (legacy SafeRedirect::safe)", () => {
   });
 
   it.each(["/events\n", "/events\r", "/events\t", "/events next", ["/events"], 42])(
-    "rejects whitespace/control characters and non-string input: %j", (next) => {
+    "rejects whitespace/control characters and non-string input: %j",
+    (next) => {
       expect(safeNext(next)).toBeNull();
     },
   );
 });
 
 describe("finishJoin (synchronous tail: one bot attempt owns the token)", () => {
-  const bot = (result: "joined" | "already_member" | "failed", requestId: string | null = null) => async () => ({
-    result,
-    requestId,
-  });
+  const bot =
+    (result: "joined" | "already_member" | "failed", requestId: string | null = null) =>
+    async () => ({
+      result,
+      requestId,
+    });
 
   it("signs in on added / already_member, honoring a safe next", async () => {
     expect(await finishJoin(bot("joined"), "g", "u", "tok", null)).toEqual({
@@ -193,7 +223,9 @@ describe("finishJoin (synchronous tail: one bot attempt owns the token)", () => 
       outcome: "degraded",
       requestId: "req-9",
     });
-    expect(await finishJoin(async () => Promise.reject(new Error("down")), "g", "u", "tok", null)).toEqual({
+    expect(
+      await finishJoin(async () => Promise.reject(new Error("down")), "g", "u", "tok", null),
+    ).toEqual({
       kind: "recoverable",
       outcome: "degraded",
       requestId: null,
@@ -206,7 +238,9 @@ describe("throttle + attempt units (Postgres fixed window)", () => {
     const { sql } = fakeSql();
     const bucket = `${JOIN_THROTTLE_BUCKET}:unit`;
     for (let i = 0; i < JOIN_THROTTLE_PER_MINUTE; i++) {
-      expect(await checkJoinThrottle(sql, bucket, JOIN_THROTTLE_PER_MINUTE)).toEqual({ limited: false });
+      expect(await checkJoinThrottle(sql, bucket, JOIN_THROTTLE_PER_MINUTE)).toEqual({
+        limited: false,
+      });
     }
     const verdict = await checkJoinThrottle(sql, bucket, JOIN_THROTTLE_PER_MINUTE);
     expect(verdict.limited).toBe(true);
@@ -222,8 +256,15 @@ describe("throttle + attempt units (Postgres fixed window)", () => {
 
   it("recordAttempt persists exactly the four safe columns", async () => {
     const { sql, attempts } = fakeSql();
-    await recordAttempt(sql, { outcome: "added", source: "web-homepage", requestId: "req-1", discordId: "42" });
-    expect(attempts).toEqual([{ outcome: "added", source: "web-homepage", requestId: "req-1", discordId: "42" }]);
+    await recordAttempt(sql, {
+      outcome: "added",
+      source: "web-homepage",
+      requestId: "req-1",
+      discordId: "42",
+    });
+    expect(attempts).toEqual([
+      { outcome: "added", source: "web-homepage", requestId: "req-1", discordId: "42" },
+    ]);
   });
 });
 
@@ -240,7 +281,9 @@ describe("GET /join (database-free leaf)", () => {
   });
 
   it("renders without consulting session or journey persistence", async () => {
-    const journey = vi.fn(async () => { throw new Error("test store must not be reached"); });
+    const journey = vi.fn(async () => {
+      throw new Error("test store must not be reached");
+    });
     const sessions = { create: vi.fn(), get: vi.fn(), rotate: vi.fn(), revoke: vi.fn() };
     const { env: e } = isolated({ store: journey });
     const res = await app.request("/join", {}, { ...e, SESSION_STORE: sessions } as Env);
@@ -271,9 +314,12 @@ describe("W15 join landing and recovery parity", () => {
   });
 
   it.each(["https://evil.test/", "//evil.test/", "/\\evil.test", "javascript:alert(1)"])(
-    "strips hostile landing return path %s", async (next) => {
+    "strips hostile landing return path %s",
+    async (next) => {
       const { env: e } = isolated();
-      const html = await (await app.request(`/join?next=${encodeURIComponent(next)}`, {}, e)).text();
+      const html = await (
+        await app.request(`/join?next=${encodeURIComponent(next)}`, {}, e)
+      ).text();
       expect(html).toContain('href="/join/discord"');
       expect(html).not.toContain(encodeURIComponent(next));
     },
@@ -282,32 +328,52 @@ describe("W15 join landing and recovery parity", () => {
   it("renders the widget with sandbox, lazy loading and no-referrer", async () => {
     const { env: e } = isolated();
     const html = await (await app.request("/join", {}, e)).text();
-    for (const attr of ['sandbox="allow-scripts allow-same-origin"', 'loading="lazy"', 'referrerpolicy="no-referrer"']) {
+    for (const attr of [
+      'sandbox="allow-scripts allow-same-origin"',
+      'loading="lazy"',
+      'referrerpolicy="no-referrer"',
+    ]) {
       expect(html).toContain(attr);
     }
   });
 
   it.each(["", "javascript:alert(1)", "https://evil.test/invite"])(
-    "uses the static Discord invite on recovery when configuration is unusable: %s", async (invite) => {
+    "uses the static Discord invite on recovery when configuration is unusable: %s",
+    async (invite) => {
       const { env: e } = isolated();
-      const html = await (await app.request("/join/callback?error=access_denied", {}, { ...e, DISCORD_INVITE_URL: invite })).text();
+      const html = await (
+        await app.request(
+          "/join/callback?error=access_denied",
+          {},
+          { ...e, DISCORD_INVITE_URL: invite },
+        )
+      ).text();
       expect(html).toContain('href="https://discord.gg/4GwEDNRTtx"');
       if (invite) expect(html).not.toContain(invite);
     },
   );
 
   it.each(["access_denied", "server_error", "temporarily_unavailable"])(
-    "clears attribution and return cookies, records a denied outcome and never exchanges on %s", async (error) => {
+    "clears attribution and return cookies, records a denied outcome and never exchanges on %s",
+    async (error) => {
       const { fake, env: e } = isolated();
       const calls = mockDiscord();
       const start = await startJoin(e, "?source=web-homepage&next=/events");
-      const res = await app.request(`/join/callback?error=${error}&error_description=never-echo&state=${start.state}`, { headers: { cookie: start.cookie } }, e);
+      const res = await app.request(
+        `/join/callback?error=${error}&error_description=never-echo&state=${start.state}`,
+        { headers: { cookie: start.cookie } },
+        e,
+      );
       expect(res.status).toBe(200);
       expect(await res.text()).not.toContain("never-echo");
       expect(calls).toHaveLength(0);
-      expect(fake.attempts).toEqual([{ outcome: "denied", source: "web-homepage", requestId: null, discordId: null }]);
+      expect(fake.attempts).toEqual([
+        { outcome: "denied", source: "web-homepage", requestId: null, discordId: null },
+      ]);
       for (const name of ["state", "source", "next"]) {
-        expect(res.headers.getSetCookie().join("\n")).toContain(`__Host-two_join_${name}=; Max-Age=0`);
+        expect(res.headers.getSetCookie().join("\n")).toContain(
+          `__Host-two_join_${name}=; Max-Age=0`,
+        );
       }
       // Neither an empty browser jar nor replayed original cookies can append
       // another terminal attempt for the already consumed journey.
@@ -323,7 +389,9 @@ describe("W15 join landing and recovery parity", () => {
     const res = await finishJoinCb(e, state!, cookie);
     expect(res.headers.get("location")).toBe("/events");
     expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
-    expect(fake.attempts).toEqual([{ outcome: "already_member", source: "returning", requestId: null, discordId: "42" }]);
+    expect(fake.attempts).toEqual([
+      { outcome: "already_member", source: "returning", requestId: null, discordId: "42" },
+    ]);
     expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_join_next=; Max-Age=0");
   });
 
@@ -345,7 +413,9 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(res.status).toBe(302);
     expect(location!.origin + location!.pathname).toBe("https://discord.com/oauth2/authorize");
     expect(location!.searchParams.get("scope")).toBe("identify guilds.join");
-    expect(location!.searchParams.get("redirect_uri")).toBe("https://next.example.test/join/callback");
+    expect(location!.searchParams.get("redirect_uri")).toBe(
+      "https://next.example.test/join/callback",
+    );
     expect(state).toMatch(/^[0-9a-f-]{36}$/);
     expect(cookie).toContain("__Host-two_join_state=");
     expect(res.headers.get("cache-control")).toContain("no-store");
@@ -368,7 +438,11 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     for (let i = 0; i < 10; i++) {
       expect((await app.request("/join/discord", {}, e)).status).toBe(302);
     }
-    const limited = await app.request("/join/discord", { headers: { accept: "application/json" } }, e);
+    const limited = await app.request(
+      "/join/discord",
+      { headers: { accept: "application/json" } },
+      e,
+    );
     expect(limited.status).toBe(429);
     expect(limited.headers.get("Retry-After")).toMatch(/^\d+$/);
     expect(await limited.json()).toMatchObject({ reason: "rate_limited" });
@@ -432,7 +506,9 @@ describe("GET /join/callback (synchronous bot add + sign-in)", () => {
     expect(html).toContain("Join cancelled");
     expect(html).not.toContain("ashould-never-appear");
     expect(calls).toHaveLength(0);
-    expect(fake.attempts).toEqual([{ outcome: "denied", source: null, requestId: null, discordId: null }]);
+    expect(fake.attempts).toEqual([
+      { outcome: "denied", source: null, requestId: null, discordId: null },
+    ]);
   });
 
   it("renders the expired-link page when state is missing or forged", async () => {
@@ -529,12 +605,18 @@ describe.skipIf(!process.env.DATABASE_URL)("join journey (agent-testdb)", () => 
     const start = await app.request("/join/discord?source=web-homepage", {}, e);
     expect(start.status).toBe(302);
     const location = new URL(start.headers.get("location")!);
-    const cb = await app.request(`/join/callback?code=abc&state=${location.searchParams.get("state")}`, {
-      headers: { cookie: cookiesFrom(start) },
-    }, e);
+    const cb = await app.request(
+      `/join/callback?code=abc&state=${location.searchParams.get("state")}`,
+      {
+        headers: { cookie: cookiesFrom(start) },
+      },
+      e,
+    );
     expect(cb.headers.get("location")).toBe("/?n=joined");
 
-    const attempts = await sql<{ outcome: string; source: string | null; discord_id: string | null }[]>`
+    const attempts = await sql<
+      { outcome: string; source: string | null; discord_id: string | null }[]
+    >`
       SELECT outcome, source, discord_id FROM join_attempts`;
     expect(attempts).toEqual([{ outcome: "added", source: "web-homepage", discord_id: "42" }]);
     const hits = await sql<{ n: string }[]>`SELECT count(*)::text AS n FROM web_throttle_hits`;

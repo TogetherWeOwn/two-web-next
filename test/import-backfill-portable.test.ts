@@ -20,8 +20,7 @@ const shippedKey = "01J2ZB2X5X3Q8T1V9W4Y6Z7A8B";
 const dstKey = "01J2ZB2X5X3Q8T1V9W4Y6Z7A8C";
 // Session-independent UTC text with all six fractional digits.
 const utc = (column: string) => `to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ${column}`;
-const schedule = (sql: ReturnType<typeof postgres>) =>
-  sql.unsafe(`event_key, timezone, game, ${utc("starts_at")}, ${utc("ends_at")}`);
+const schedule = (sql: ReturnType<typeof postgres>) => sql.unsafe(`event_key, timezone, game, ${utc("starts_at")}, ${utc("ends_at")}`);
 
 describe.skipIf(!url)("portable legacy event backfill import (EventScheduleTest.php:58-90)", () => {
   let fixture: MemberDataFixture;
@@ -82,8 +81,11 @@ describe.skipIf(!url)("portable legacy event backfill import (EventScheduleTest.
   afterAll(async () => {
     await Promise.all([legacy?.end(), target?.end()]);
     if (fixture) {
-      try { await fixture.client`drop schema if exists ${fixture.client(legacySchema)} cascade`; }
-      finally { await fixture.dispose(); }
+      try {
+        await fixture.client`drop schema if exists ${fixture.client(legacySchema)} cascade`;
+      } finally {
+        await fixture.dispose();
+      }
     }
   });
 
@@ -91,8 +93,13 @@ describe.skipIf(!url)("portable legacy event backfill import (EventScheduleTest.
     await backfillShippedRows([{ key: shippedKey, startsAt: "2026-07-15 19:00:00" }]);
     const [source] = await legacy`select ${schedule(legacy)} from events where event_key = ${shippedKey}`;
     // The legacy expectations at EventScheduleTest.php:83-89, read session-independently.
-    expect(source).toEqual({ event_key: shippedKey, timezone: "UTC", game: null,
-      starts_at: "2026-07-15T19:00:00.000000Z", ends_at: "2026-07-15T21:00:00.000000Z" });
+    expect(source).toEqual({
+      event_key: shippedKey,
+      timezone: "UTC",
+      game: null,
+      starts_at: "2026-07-15T19:00:00.000000Z",
+      ends_at: "2026-07-15T21:00:00.000000Z",
+    });
     expect(source!.event_key).toMatch(ulidPattern);
 
     const dry = await importEventsRsvps(legacy, target);
@@ -118,8 +125,7 @@ describe.skipIf(!url)("portable legacy event backfill import (EventScheduleTest.
     expect(keys).toHaveLength(5);
     for (const key of keys) expect(key).toMatch(ulidPattern);
     expect((await target`select event_key from events order by event_key`).map((row) => row.event_key)).toEqual(keys);
-    expect(await target`select id, timezone from events where event_key = ${shippedKey}`)
-      .toEqual([{ id: 700, timezone: "UTC" }]);
+    expect(await target`select id, timezone from events where event_key = ${shippedKey}`).toEqual([{ id: 700, timezone: "UTC" }]);
   });
 
   it("preserves microsecond start/end pairs across the backfill's two-hour default and a DST change", async () => {
@@ -132,10 +138,22 @@ describe.skipIf(!url)("portable legacy event backfill import (EventScheduleTest.
     const imported = await target`select ${schedule(target)}, extract(epoch from ends_at - starts_at)::text as seconds
       from events where event_key in (${shippedKey}, ${dstKey}) order by event_key`;
     expect(imported).toEqual([
-      { event_key: shippedKey, timezone: "UTC", game: null, starts_at: "2026-07-15T19:00:00.123456Z",
-        ends_at: "2026-07-15T21:00:00.123456Z", seconds: "7200.000000" },
-      { event_key: dstKey, timezone: "UTC", game: null, starts_at: "2026-10-25T00:30:00.000001Z",
-        ends_at: "2026-10-25T02:30:00.000001Z", seconds: "7200.000000" },
+      {
+        event_key: shippedKey,
+        timezone: "UTC",
+        game: null,
+        starts_at: "2026-07-15T19:00:00.123456Z",
+        ends_at: "2026-07-15T21:00:00.123456Z",
+        seconds: "7200.000000",
+      },
+      {
+        event_key: dstKey,
+        timezone: "UTC",
+        game: null,
+        starts_at: "2026-10-25T00:30:00.000001Z",
+        ends_at: "2026-10-25T02:30:00.000001Z",
+        seconds: "7200.000000",
+      },
     ]);
     // Explicit fixture pairs (London series across the same DST change) also survive.
     expect(await targetRows()).toEqual(await legacyRows());
@@ -144,8 +162,9 @@ describe.skipIf(!url)("portable legacy event backfill import (EventScheduleTest.
 
   it("defaults only omitted zones to UTC: legacy refuses NULL and the importer never fabricates one", async () => {
     await expect(legacy`insert into events (event_key, title, starts_at, ends_at, timezone)
-      values (${dstKey}, 'Null zone', '2026-07-15T19:00:00Z', '2026-07-15T21:00:00Z', null)`)
-      .rejects.toThrow(/null value in column "timezone"/);
+      values (${dstKey}, 'Null zone', '2026-07-15T19:00:00Z', '2026-07-15T21:00:00Z', null)`).rejects.toThrow(
+      /null value in column "timezone"/,
+    );
     // Were the frozen constraint ever bypassed, the import fails closed with no writes.
     await legacy`alter table events alter column timezone drop not null`;
     await legacy`update events set timezone = null where event_key = '01K00000000000000000000040'`;

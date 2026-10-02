@@ -7,7 +7,14 @@ import {
   OAUTH_JOURNEY_TTL_SECONDS,
   type OAuthJourneyStore,
 } from "../src/oauth-journeys";
-import { createMemorySessionStore, createPostgresSessionStore, hashToken, migrate, type SessionStore, type Sql } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  createPostgresSessionStore,
+  hashToken,
+  migrate,
+  type SessionStore,
+  type Sql,
+} from "../src/sessions";
 
 import { authTestDatabaseUrl } from "./helpers/auth-test-db";
 
@@ -15,16 +22,21 @@ const url = authTestDatabaseUrl();
 
 function journeyContract(name: string, make: () => OAuthJourneyStore) {
   describe(`${name} OAuth admission`, () => {
-    it.each(["auth", "join"] as const)("admits %s once across concurrent consumers and retains the tombstone", async (flow) => {
-      const store = make();
-      const hash = await hashToken(crypto.randomUUID());
-      expect(await store.issue(hash, flow)).toBe(true);
-      const answers = await Promise.all(Array.from({ length: 24 }, () => store.consume(hash, flow)));
-      expect(answers.filter(Boolean)).toHaveLength(1);
-      expect(await store.consume(hash, flow)).toBe(false);
-      expect(await store.issue(hash, flow)).toBe(false);
-      expect(await store.consume(hash, flow)).toBe(false);
-    });
+    it.each(["auth", "join"] as const)(
+      "admits %s once across concurrent consumers and retains the tombstone",
+      async (flow) => {
+        const store = make();
+        const hash = await hashToken(crypto.randomUUID());
+        expect(await store.issue(hash, flow)).toBe(true);
+        const answers = await Promise.all(
+          Array.from({ length: 24 }, () => store.consume(hash, flow)),
+        );
+        expect(answers.filter(Boolean)).toHaveLength(1);
+        expect(await store.consume(hash, flow)).toBe(false);
+        expect(await store.issue(hash, flow)).toBe(false);
+        expect(await store.consume(hash, flow)).toBe(false);
+      },
+    );
 
     it("rejects unissued and cross-flow state without spending the valid journey", async () => {
       const store = make();
@@ -40,8 +52,13 @@ function journeyContract(name: string, make: () => OAuthJourneyStore) {
 function replacementContract(name: string, make: () => SessionStore) {
   describe(`${name} fresh-login replacement`, () => {
     const row = () => ({
-      tokenHash: crypto.randomUUID(), userId: "42", username: "Fixture Member", avatar: null,
-      member: true, moderator: false, expiresAt: new Date(Date.now() + 60_000),
+      tokenHash: crypto.randomUUID(),
+      userId: "42",
+      username: "Fixture Member",
+      avatar: null,
+      member: true,
+      moderator: false,
+      expiresAt: new Date(Date.now() + 60_000),
     });
 
     it("revokes an active supplied token, not merely creates a different token", async () => {
@@ -103,7 +120,10 @@ it("memory expiry rejects the exact ten-minute boundary even before cleanup", as
 describe.skipIf(!url)("isolated Postgres persistence", () => {
   const sql = postgres(url!, { max: 8 }) as unknown as Sql & { end: () => Promise<void> };
   const peer = postgres(url!, { max: 8 }) as unknown as Sql & { end: () => Promise<void> };
-  beforeAll(async () => { await migrate(sql); await migrateOAuthJourneys(peer); });
+  beforeAll(async () => {
+    await migrate(sql);
+    await migrateOAuthJourneys(peer);
+  });
   afterAll(async () => {
     await sql`delete from web_sessions`;
     await sql`delete from web_oauth_journeys`;
@@ -121,7 +141,9 @@ describe.skipIf(!url)("isolated Postgres persistence", () => {
     await first.issue(hash, "join");
     const results = await Promise.all([first.consume(hash, "join"), second.consume(hash, "join")]);
     expect(results.filter(Boolean)).toHaveLength(1);
-    const rows = await sql<{ state_hash: string; flow: string; lifetime: number; consumed_at: Date }[]>`
+    const rows = await sql<
+      { state_hash: string; flow: string; lifetime: number; consumed_at: Date }[]
+    >`
       select state_hash, flow, extract(epoch from (expires_at - consumed_at))::float8 as lifetime, consumed_at
       from web_oauth_journeys where state_hash = ${hash}`;
     expect(rows).toHaveLength(1);
@@ -152,7 +174,8 @@ describe.skipIf(!url)("isolated Postgres persistence", () => {
           const rows = await sql<{ n: number }[]>`select count(*)::int as n from pg_stat_activity
             where application_name = ${name} and wait_event_type = 'Lock'`;
           if (rows[0]!.n === 1) break;
-          if (Date.now() >= deadline) throw new Error("fixture consumer never reached the row lock");
+          if (Date.now() >= deadline)
+            throw new Error("fixture consumer never reached the row lock");
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
         await tx`update web_oauth_journeys set expires_at = clock_timestamp() where state_hash = ${hash}`;
@@ -165,59 +188,65 @@ describe.skipIf(!url)("isolated Postgres persistence", () => {
     }
   });
 
-  it.each(["auth", "join"] as const)("rejects %s after an unchanged row-lock wait crosses natural expiry", async (flow) => {
-    const name = `oauth_natural_expiry_${crypto.randomUUID()}`;
-    const locker = postgres(url!, { max: 1 });
-    const consumer = postgres(url!, { max: 1, connection: { application_name: name } });
-    const hash = await hashToken(crypto.randomUUID());
-    const store = createPostgresOAuthJourneyStore(consumer as unknown as Sql);
-    await store.issue(hash, flow);
-    // Set the deadline before locking. A holder-side UPDATE would force tuple
-    // rechecking and hide eligibility evaluated before the unchanged-row wait.
-    await sql`update web_oauth_journeys set expires_at = clock_timestamp() + interval '3 seconds'
+  it.each(["auth", "join"] as const)(
+    "rejects %s after an unchanged row-lock wait crosses natural expiry",
+    async (flow) => {
+      const name = `oauth_natural_expiry_${crypto.randomUUID()}`;
+      const locker = postgres(url!, { max: 1 });
+      const consumer = postgres(url!, { max: 1, connection: { application_name: name } });
+      const hash = await hashToken(crypto.randomUUID());
+      const store = createPostgresOAuthJourneyStore(consumer as unknown as Sql);
+      await store.issue(hash, flow);
+      // Set the deadline before locking. A holder-side UPDATE would force tuple
+      // rechecking and hide eligibility evaluated before the unchanged-row wait.
+      await sql`update web_oauth_journeys set expires_at = clock_timestamp() + interval '3 seconds'
       where state_hash = ${hash}`;
-    // Exercise ordinary collected statistics, not only a newly created table's
-    // default estimates. Eligibility must be correct for either join direction.
-    await sql`analyze web_oauth_journeys`;
-    let attempt: Promise<boolean> | undefined;
-    try {
-      await locker.begin(async (tx) => {
-        const [holder] = await tx`select pg_backend_pid() as pid`;
-        const [locked] = await tx`select state_hash, expires_at, consumed_at, xmin::text, ctid::text
+      // Exercise ordinary collected statistics, not only a newly created table's
+      // default estimates. Eligibility must be correct for either join direction.
+      await sql`analyze web_oauth_journeys`;
+      let attempt: Promise<boolean> | undefined;
+      try {
+        await locker.begin(async (tx) => {
+          const [holder] = await tx`select pg_backend_pid() as pid`;
+          const [locked] =
+            await tx`select state_hash, expires_at, consumed_at, xmin::text, ctid::text
           from web_oauth_journeys where state_hash = ${hash} for update`;
-        attempt = store.consume(hash, flow);
-        const deadline = Date.now() + 1500;
-        for (;;) {
-          const rows = await sql<{ n: number }[]>`select count(*)::int as n from pg_stat_activity
+          attempt = store.consume(hash, flow);
+          const deadline = Date.now() + 1500;
+          for (;;) {
+            const rows = await sql<{ n: number }[]>`select count(*)::int as n from pg_stat_activity
             where application_name = ${name} and wait_event_type = 'Lock'
               and ${holder!.pid} = any(pg_blocking_pids(pid))`;
-          if (rows[0]!.n === 1) break;
-          if (Date.now() >= deadline) throw new Error("fixture consumer never reached the held row lock");
-          await new Promise((resolve) => setTimeout(resolve, 5));
-        }
-        const [before] = await tx`select expires_at > clock_timestamp() as live
+            if (rows[0]!.n === 1) break;
+            if (Date.now() >= deadline)
+              throw new Error("fixture consumer never reached the held row lock");
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+          const [before] = await tx`select expires_at > clock_timestamp() as live
           from web_oauth_journeys where state_hash = ${hash}`;
-        expect(before!.live).toBe(true);
-        await tx`select pg_sleep(greatest(0, extract(epoch from expires_at - clock_timestamp()))::float8 + 0.01)
+          expect(before!.live).toBe(true);
+          await tx`select pg_sleep(greatest(0, extract(epoch from expires_at - clock_timestamp()))::float8 + 0.01)
           from web_oauth_journeys where state_hash = ${hash}`;
-        const [after] = await tx`select expires_at > now() as transaction_live,
+          const [after] = await tx`select expires_at > now() as transaction_live,
           expires_at <= clock_timestamp() as expired from web_oauth_journeys where state_hash = ${hash}`;
-        expect(after).toMatchObject({ transaction_live: true, expired: true });
-        const [unchanged] = await tx`select state_hash, expires_at, consumed_at, xmin::text, ctid::text
+          expect(after).toMatchObject({ transaction_live: true, expired: true });
+          const [unchanged] =
+            await tx`select state_hash, expires_at, consumed_at, xmin::text, ctid::text
           from web_oauth_journeys where state_hash = ${hash}`;
-        expect(unchanged).toEqual(locked);
-      });
-      expect(await attempt).toBe(false);
-      const [row] = await sql`select consumed_at, expires_at <= clock_timestamp() as expired
+          expect(unchanged).toEqual(locked);
+        });
+        expect(await attempt).toBe(false);
+        const [row] = await sql`select consumed_at, expires_at <= clock_timestamp() as expired
         from web_oauth_journeys where state_hash = ${hash}`;
-      expect(row).toMatchObject({ consumed_at: null, expired: true });
-      expect(await store.consume(hash, flow)).toBe(false);
-    } finally {
-      await attempt?.catch(() => {});
-      await locker.end();
-      await consumer.end();
-    }
-  });
+        expect(row).toMatchObject({ consumed_at: null, expired: true });
+        expect(await store.consume(hash, flow)).toBe(false);
+      } finally {
+        await attempt?.catch(() => {});
+        await locker.end();
+        await consumer.end();
+      }
+    },
+  );
 
   it("server-side expiry rejects an original cookie's state before and after GC", async () => {
     const store = createPostgresOAuthJourneyStore(sql);

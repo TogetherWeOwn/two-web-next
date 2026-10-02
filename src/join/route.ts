@@ -110,11 +110,22 @@ export type JoinSessionHooks = {
   issueSession: (
     c: Ctx,
     store: SessionStore,
-    row: { userId: string; username: string; avatar: string | null; member: boolean; moderator: boolean },
+    row: {
+      userId: string;
+      username: string;
+      avatar: string | null;
+      member: boolean;
+      moderator: boolean;
+    },
   ) => Promise<void>;
 };
 
-export type JoinPageProps = { inviteUrl: string; widgetUrl: string | null; next?: string | null; appUrl: string };
+export type JoinPageProps = {
+  inviteUrl: string;
+  widgetUrl: string | null;
+  next?: string | null;
+  appUrl: string;
+};
 export type RecoveryProps = {
   title: string;
   message: string;
@@ -131,7 +142,11 @@ export type JoinRender = {
   recovery: (c: Ctx, props: RecoveryProps, status?: 200 | 503) => Response | Promise<Response>;
 };
 
-export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSessionHooks, render: JoinRender) {
+export function registerJoinRoutes(
+  app: Hono<{ Bindings: Env }>,
+  hooks: JoinSessionHooks,
+  render: JoinRender,
+) {
   // `/join` — the journey page. Database-free leaf like /about: it must stay
   // 200 when everything behind it is down (a 500 here loses the member).
   app.get("/join", (c) => {
@@ -144,7 +159,12 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     // A safe `?next=` survives onto the one-click link; a hostile one leaves
     // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
     const next = safeNext(c.req.query("next"));
-    return render.joinPage(c, { inviteUrl: c.env.DISCORD_INVITE_URL, widgetUrl, next, appUrl: c.env.APP_URL });
+    return render.joinPage(c, {
+      inviteUrl: c.env.DISCORD_INVITE_URL,
+      widgetUrl,
+      next,
+      appUrl: c.env.APP_URL,
+    });
   });
 
   app.get("/join/discord", async (c) => {
@@ -158,19 +178,32 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     const state = crypto.randomUUID();
     const store = await hooks.storeFor(c);
     await store.journeys.sweepExpired();
-    if (!await store.journeys.issue(await hashToken(state), "join")) return c.redirect("/join", 302);
+    if (!(await store.journeys.issue(await hashToken(state), "join")))
+      return c.redirect("/join", 302);
     if (source) {
       await setSignedCookie(c, JOIN_SOURCE_COOKIE, source, c.env.SESSION_SECRET, {
-        path: "/", secure: true, httpOnly: true, sameSite: "Lax", maxAge: JOURNEY_TTL_SECONDS,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+        maxAge: JOURNEY_TTL_SECONDS,
       });
     }
     if (next) {
       await setSignedCookie(c, JOIN_NEXT_COOKIE, next, c.env.SESSION_SECRET, {
-        path: "/", secure: true, httpOnly: true, sameSite: "Lax", maxAge: JOURNEY_TTL_SECONDS,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+        maxAge: JOURNEY_TTL_SECONDS,
       });
     }
     await setSignedCookie(c, JOIN_STATE_COOKIE, state, c.env.SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax", maxAge: STATE_TTL_SECONDS,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+      maxAge: STATE_TTL_SECONDS,
     });
     c.header("cache-control", "no-store, private");
     return c.redirect(authorizeUrl(c.env.DISCORD_CLIENT_ID, joinRedirectUri(c.env), state), 302);
@@ -195,22 +228,29 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     // JoinCallbackFailureTest "recovery uses static invite when none is configured").
     const invite = inviteDestination(c.env.DISCORD_INVITE_URL);
     const recover = (title: string, message: string, status: 200 | 503 = 200) =>
-      render.recovery(c, { title, message, retryUrl: "/join/discord", retryLabel: "Try again", inviteUrl: invite }, status);
+      render.recovery(
+        c,
+        { title, message, retryUrl: "/join/discord", retryLabel: "Try again", inviteUrl: invite },
+        status,
+      );
 
     const rawExpected = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_STATE_COOKIE);
     const expected = typeof rawExpected === "string" ? rawExpected : null;
     clearJourney();
     const code = c.req.query("code");
     const state = c.req.query("state");
-    const store = state && expected && state === expected ? await hooks.storeFor(c).catch(() => null) : null;
-    const admitted = store && await store.journeys.consume(await hashToken(state!), "join").catch(() => false);
+    const store =
+      state && expected && state === expected ? await hooks.storeFor(c).catch(() => null) : null;
+    const admitted =
+      store && (await store.journeys.consume(await hashToken(state!), "join").catch(() => false));
 
     // They pressed Cancel on the consent screen, or Discord answered the
     // approval with an error: nothing to exchange. Legacy renders the recovery
     // page (not a redirect) and never echoes Discord's error_description.
     if (c.req.query("error")) {
       const denied = c.req.query("error") === "access_denied";
-      if (admitted) await recordAttempt(sql, { outcome: "denied", source, requestId: null, discordId: null });
+      if (admitted)
+        await recordAttempt(sql, { outcome: "denied", source, requestId: null, discordId: null });
       return recover(
         denied ? "Join cancelled" : "Join didn't complete",
         denied
@@ -228,12 +268,19 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
         source,
         outcome: "expired",
       });
-      if (admitted) await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
-      return recover("Join link expired", "That join link expired. Approvals last ten minutes — try again below.");
+      if (admitted)
+        await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
+      return recover(
+        "Join link expired",
+        "That join link expired. Approvals last ten minutes — try again below.",
+      );
     }
     if (c.env.DISCORD_BOT_TOKEN.trim() === "") {
       await recordAttempt(sql, { outcome: "degraded", source, requestId: null, discordId: null });
-      return recover("Automatic join is unavailable", "Use the invite link below to join the server directly.");
+      return recover(
+        "Automatic join is unavailable",
+        "Use the invite link below to join the server directly.",
+      );
     }
 
     // The exchange is the one place the live token exists. It is exchanged,
@@ -242,7 +289,10 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     let user;
     try {
       accessToken = await exchangeCode(
-        code, c.env.DISCORD_CLIENT_ID, c.env.DISCORD_CLIENT_SECRET, joinRedirectUri(c.env),
+        code,
+        c.env.DISCORD_CLIENT_ID,
+        c.env.DISCORD_CLIENT_SECRET,
+        joinRedirectUri(c.env),
       );
       user = await fetchUser(accessToken);
     } catch (err) {
@@ -260,12 +310,15 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
       });
       await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
       return outcome === "expired"
-        ? recover("Join approval expired", "That Discord approval expired. Try again or use the invite below.")
+        ? recover(
+            "Join approval expired",
+            "That Discord approval expired. Try again or use the invite below.",
+          )
         : recover(
-          "Discord is unreachable",
-          "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below.",
-          503,
-        );
+            "Discord is unreachable",
+            "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below.",
+            503,
+          );
     }
 
     const deps = (c.env as EnvWithJoin).JOIN_DEPS;
@@ -274,14 +327,24 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     // The live token's last use was inside finishJoin. From here on only the
     // four safe columns travel: outcome, source, request_id, discord_id.
     if (done.kind === "recoverable") {
-      await recordAttempt(sql, { outcome: done.outcome, source, requestId: done.requestId, discordId: user.id });
+      await recordAttempt(sql, {
+        outcome: done.outcome,
+        source,
+        requestId: done.requestId,
+        discordId: user.id,
+      });
       return recover(
         "We couldn't add you automatically",
         "You're nearly there — use the invite link below to join the server directly.",
       );
     }
 
-    await recordAttempt(sql, { outcome: done.outcome, source, requestId: done.requestId, discordId: done.discordId });
+    await recordAttempt(sql, {
+      outcome: done.outcome,
+      source,
+      requestId: done.requestId,
+      discordId: done.discordId,
+    });
 
     // Join never writes `is_moderator`: only login recomputes it from Discord
     // roles, and join's scopes cannot read roles. Here the bot-token recompute
@@ -308,4 +371,3 @@ export function registerJoinRoutes(app: Hono<{ Bindings: Env }>, hooks: JoinSess
     return c.redirect(done.redirect, 302);
   });
 }
-

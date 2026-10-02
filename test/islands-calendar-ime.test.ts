@@ -7,8 +7,16 @@ import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const APP_URL = "https://next.example.test";
-const binder = readFileSync(new NodeURL("../public/islands/events-calendar.js", import.meta.url), "utf8");
-const LIVE_IDS = ["events-view-status", "events-search-status", "events-past-status", "calendar-month-status"];
+const binder = readFileSync(
+  new NodeURL("../public/islands/events-calendar.js", import.meta.url),
+  "utf8",
+);
+const LIVE_IDS = [
+  "events-view-status",
+  "events-search-status",
+  "events-past-status",
+  "calendar-month-status",
+];
 
 class Node {
   childNodes: unknown[] = [];
@@ -18,13 +26,25 @@ class Node {
   dataset: Record<string, string> = {};
   attributes = new Map<string, string>();
   listeners = new Map<string, (e: unknown) => void>();
-  setAttribute(k: string, v: string) { this.attributes.set(k, v); }
-  getAttribute(k: string) { return this.attributes.get(k) ?? null; }
-  removeAttribute(k: string) { this.attributes.delete(k); }
-  replaceChildren(...c: unknown[]) { this.childNodes = c; }
+  setAttribute(k: string, v: string) {
+    this.attributes.set(k, v);
+  }
+  getAttribute(k: string) {
+    return this.attributes.get(k) ?? null;
+  }
+  removeAttribute(k: string) {
+    this.attributes.delete(k);
+  }
+  replaceChildren(...c: unknown[]) {
+    this.childNodes = c;
+  }
   focus() {}
-  addEventListener(t: string, fn: (e: unknown) => void) { this.listeners.set(t, fn); }
-  closest() { return null as unknown; }
+  addEventListener(t: string, fn: (e: unknown) => void) {
+    this.listeners.set(t, fn);
+  }
+  closest() {
+    return null as unknown;
+  }
 }
 
 function browser() {
@@ -58,34 +78,58 @@ function browser() {
   let now = 0;
   let next = 0;
   runInNewContext(binder, {
-    URL, AbortController,
-    setTimeout: (fn: () => void, ms: number) => { timers.set(++next, { at: now + ms, fn }); return next; },
-    clearTimeout: (id: number) => { timers.delete(id); },
+    URL,
+    AbortController,
+    setTimeout: (fn: () => void, ms: number) => {
+      timers.set(++next, { at: now + ms, fn });
+      return next;
+    },
+    clearTimeout: (id: number) => {
+      timers.delete(id);
+    },
     document: {
-      querySelector: (s: string) => (s === '[data-island="events-calendar"]' ? root : { href: `${APP_URL}/events`, content: "" }),
+      querySelector: (s: string) =>
+        s === '[data-island="events-calendar"]' ? root : { href: `${APP_URL}/events`, content: "" },
       importNode: (n: unknown) => n,
     },
     window: {
       location,
-      history: { pushState: (_s: unknown, _t: string, url: string) => { history.push(url); location.href = APP_URL + url; } },
+      history: {
+        pushState: (_s: unknown, _t: string, url: string) => {
+          history.push(url);
+          location.href = APP_URL + url;
+        },
+      },
       addEventListener: () => {},
     },
-    DOMParser: class { parseFromString() { return null; } },
+    DOMParser: class {
+      parseFromString() {
+        return null;
+      }
+    },
     fetch: (url: string, init: RequestInit) => new Promise(() => requests.push({ url, init })),
   });
   const fire = (type: string, e: Record<string, unknown> = {}) => input.listeners.get(type)!(e);
   return {
-    input, requests, history, root,
+    input,
+    requests,
+    history,
+    root,
     advance(ms: number) {
       now += ms;
-      for (const [id, t] of [...timers]) if (t.at <= now) { timers.delete(id); t.fn(); }
+      for (const [id, t] of [...timers])
+        if (t.at <= now) {
+          timers.delete(id);
+          t.fn();
+        }
     },
     pending: () => timers.size,
     compositionstart: () => fire("compositionstart"),
     compositionend: () => fire("compositionend"),
     inputEvent: (isComposing = false) => fire("input", { isComposing }),
     submit: () => form.listeners.get("submit")!({ preventDefault() {}, isComposing: false }),
-    submitComposing: () => form.listeners.get("submit")!({ preventDefault() {}, isComposing: true }),
+    submitComposing: () =>
+      form.listeners.get("submit")!({ preventDefault() {}, isComposing: true }),
   };
 }
 
@@ -151,8 +195,18 @@ describe("EventsCalendar IME composition", () => {
     b.input.value = "日本";
     b.compositionend();
     expect(b.pending()).toBe(1);
-    const link = { href: `${APP_URL}/events?view=calendar`, hash: "", target: "", hasAttribute: () => false };
-    b.root.listeners.get("click")!({ defaultPrevented: false, button: 0, target: { closest: () => link }, preventDefault() {} });
+    const link = {
+      href: `${APP_URL}/events?view=calendar`,
+      hash: "",
+      target: "",
+      hasAttribute: () => false,
+    };
+    b.root.listeners.get("click")!({
+      defaultPrevented: false,
+      button: 0,
+      target: { closest: () => link },
+      preventDefault() {},
+    });
     expect(b.pending()).toBe(0);
     b.advance(1000);
     expect(b.requests.map((r) => r.url)).toEqual(["/events?view=calendar"]);

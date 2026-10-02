@@ -30,7 +30,9 @@ export function createPostgresOAuthJourneyStore(sql: Sql): OAuthJourneyStore {
     async issue(stateHash, flow) {
       // A collision cannot resurrect a consumed journey. Cleanup is separate
       // from admission: deleting an expired row never makes an old cookie valid.
-      const rows = await sql<{ state_hash: string }[]>`insert into web_oauth_journeys (state_hash, flow, expires_at)
+      const rows = await sql<
+        { state_hash: string }[]
+      >`insert into web_oauth_journeys (state_hash, flow, expires_at)
         values (${stateHash}, ${flow}, now() + ${OAUTH_JOURNEY_TTL_SECONDS} * interval '1 second')
         on conflict (state_hash) do nothing returning state_hash`;
       return rows.length === 1;
@@ -64,7 +66,11 @@ export function createMemoryOAuthJourneyStore(clock: () => number = Date.now): O
   return {
     async issue(stateHash, flow) {
       if (rows.has(stateHash)) return false;
-      rows.set(stateHash, { flow, expiresAt: clock() + OAUTH_JOURNEY_TTL_SECONDS * 1000, consumed: false });
+      rows.set(stateHash, {
+        flow,
+        expiresAt: clock() + OAUTH_JOURNEY_TTL_SECONDS * 1000,
+        consumed: false,
+      });
       return true;
     },
     async consume(stateHash, flow) {

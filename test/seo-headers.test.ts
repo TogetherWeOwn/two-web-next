@@ -64,10 +64,24 @@ describe("sitemap + robots (per-env host)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("application/xml; charset=UTF-8");
     const xml = await res.text();
-    for (const loc of [`${APP_URL}/`, `${APP_URL}/join`, `${APP_URL}/about`, `${APP_URL}/faq`, `${APP_URL}/rules`, `${APP_URL}/privacy`]) {
+    for (const loc of [
+      `${APP_URL}/`,
+      `${APP_URL}/join`,
+      `${APP_URL}/about`,
+      `${APP_URL}/faq`,
+      `${APP_URL}/rules`,
+      `${APP_URL}/privacy`,
+    ]) {
       expect(xml).toContain(`<loc>${loc}</loc>`);
     }
-    for (const banned of ["/events/past", "/admin", "/profile", "/members/", "/events.json", "/auth/"]) {
+    for (const banned of [
+      "/events/past",
+      "/admin",
+      "/profile",
+      "/members/",
+      "/events.json",
+      "/auth/",
+    ]) {
       expect(xml).not.toContain(banned);
     }
   });
@@ -76,7 +90,9 @@ describe("sitemap + robots (per-env host)", () => {
     const res = await app.request("/robots.txt", {}, env);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/plain; charset=UTF-8");
-    expect(await res.text()).toBe(`User-agent: *\nDisallow:\nSitemap: ${APP_URL}/sitemap_index.xml\n`);
+    expect(await res.text()).toBe(
+      `User-agent: *\nDisallow:\nSitemap: ${APP_URL}/sitemap_index.xml\n`,
+    );
   });
 
   it("staging advertises the staging host, never the apex (TOG-7071)", async () => {
@@ -114,13 +130,23 @@ describe("share meta (TOG-5624)", () => {
 
   it("tags home with its canonical + OG/Twitter set and no og:image", async () => {
     const html = await (await app.request("/", {}, env)).text();
-    tags(html, `${APP_URL}/`, "Together We Own — the lobby is open", "We spent most of our life private. Now you can just turn up.");
+    tags(
+      html,
+      `${APP_URL}/`,
+      "Together We Own — the lobby is open",
+      "We spent most of our life private. Now you can just turn up.",
+    );
     expect(html).not.toContain("og:image");
   });
 
   it("tags the join page with its own canonical (funnel lives on shared links)", async () => {
     const html = await (await app.request("/join", {}, env)).text();
-    tags(html, `${APP_URL}/join`, "Join Together We Own", "Approve once with Discord and we will add you to the server.");
+    tags(
+      html,
+      `${APP_URL}/join`,
+      "Join Together We Own",
+      "Approve once with Discord and we will add you to the server.",
+    );
   });
 
   it("emits no double-slash canonical when APP_URL carries a trailing slash", async () => {
@@ -137,43 +163,60 @@ describe("share meta (TOG-5624)", () => {
   });
 
   it("keeps exactly one self-pointing canonical per tagged page", async () => {
-    for (const [path, canonical] of [["/", `${APP_URL}/`], ["/join", `${APP_URL}/join`]] as const) {
+    for (const [path, canonical] of [
+      ["/", `${APP_URL}/`],
+      ["/join", `${APP_URL}/join`],
+    ] as const) {
       const html = await (await app.request(path, {}, env)).text();
       expect(html.match(/rel="canonical"/g)).toHaveLength(1);
       expect(html).toContain(`<link rel="canonical" href="${canonical}"`);
     }
   });
 
-  it.each(["/about", "/faq", "/rules", "/privacy"])("%s has one configured self-canonical and keeps feed autodiscovery", async (path) => {
-    for (const appUrl of [APP_URL, `${APP_URL}/`]) {
-      const res = await app.request(`${APP_URL}${path}?utm_source=share`, {
-        headers: { "x-forwarded-host": "untrusted.example.test" },
-      }, { ...env, APP_URL: appUrl });
-      expect(res.status).toBe(200);
-      expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
-      expect(res.headers.getSetCookie()).toHaveLength(0);
-      const html = await res.text();
-      expect(html.match(/rel="canonical"/g)).toHaveLength(1);
-      expect(html).toContain(`<link rel="canonical" href="${APP_URL}${path}"`);
-      expect(html).toContain(`<meta property="og:url" content="${APP_URL}${path}"`);
-      expect(html).not.toContain("untrusted.example.test");
-      expect(html).not.toContain("utm_source");
-      expect(html).toContain('type="application/rss+xml"');
-      // Main's TrustHosts guard now refuses an actual foreign URL before routing.
-      const refused = await app.request(`https://untrusted.example.test${path}`, {}, { ...env, APP_URL: appUrl });
-      expect(refused.status).toBe(404);
-      expect(await refused.text()).not.toContain('rel="canonical"');
-    }
-  });
+  it.each(["/about", "/faq", "/rules", "/privacy"])(
+    "%s has one configured self-canonical and keeps feed autodiscovery",
+    async (path) => {
+      for (const appUrl of [APP_URL, `${APP_URL}/`]) {
+        const res = await app.request(
+          `${APP_URL}${path}?utm_source=share`,
+          {
+            headers: { "x-forwarded-host": "untrusted.example.test" },
+          },
+          { ...env, APP_URL: appUrl },
+        );
+        expect(res.status).toBe(200);
+        expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
+        expect(res.headers.getSetCookie()).toHaveLength(0);
+        const html = await res.text();
+        expect(html.match(/rel="canonical"/g)).toHaveLength(1);
+        expect(html).toContain(`<link rel="canonical" href="${APP_URL}${path}"`);
+        expect(html).toContain(`<meta property="og:url" content="${APP_URL}${path}"`);
+        expect(html).not.toContain("untrusted.example.test");
+        expect(html).not.toContain("utm_source");
+        expect(html).toContain('type="application/rss+xml"');
+        // Main's TrustHosts guard now refuses an actual foreign URL before routing.
+        const refused = await app.request(
+          `https://untrusted.example.test${path}`,
+          {},
+          { ...env, APP_URL: appUrl },
+        );
+        expect(refused.status).toBe(404);
+        expect(await refused.text()).not.toContain('rel="canonical"');
+      }
+    },
+  );
 });
 
 describe("static leaves (DB-free floor)", () => {
-  it.each(["/about", "/faq", "/rules", "/privacy"])("%s renders 200 with no cookies", async (path) => {
-    const res = await app.request(path, {}, env);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/html");
-    expect(res.headers.getSetCookie()).toHaveLength(0);
-  });
+  it.each(["/about", "/faq", "/rules", "/privacy"])(
+    "%s renders 200 with no cookies",
+    async (path) => {
+      const res = await app.request(path, {}, env);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/html");
+      expect(res.headers.getSetCookie()).toHaveLength(0);
+    },
+  );
 
   it("/about carries the facts, a join CTA and the footer link set", async () => {
     const html = await (await app.request("/about", {}, env)).text();
@@ -207,7 +250,13 @@ describe("static leaves (DB-free floor)", () => {
 
   it("/rules carries the five rules with a machine + human stamp when configured", async () => {
     const html = await (await app.request("/rules", {}, env)).text();
-    for (const rule of ["18+ only", "Respect the room", "Voice-first", "Play fair", "Moderators have the last word"]) {
+    for (const rule of [
+      "18+ only",
+      "Respect the room",
+      "Voice-first",
+      "Play fair",
+      "Moderators have the last word",
+    ]) {
       expect(html).toContain(rule);
     }
     expect(html).toContain('data-testid="rules-list"');
@@ -252,7 +301,11 @@ describe("static leaves (DB-free floor)", () => {
           },
         },
       );
-    const e = { ...env, SESSION_STORE: throwing(), DATABASE_URL: "postgres://agent-testdb:5432/unused" } as unknown as Env;
+    const e = {
+      ...env,
+      SESSION_STORE: throwing(),
+      DATABASE_URL: "postgres://agent-testdb:5432/unused",
+    } as unknown as Env;
     for (const path of ["/discord", "/about", "/faq", "/rules", "/privacy"]) {
       const res = await app.request(path, {}, e);
       expect(res.status, path).toBe(path === "/discord" ? 302 : 200);
@@ -280,18 +333,32 @@ describe("profile share tags (TOG-6793)", () => {
   function profileHarness() {
     const sessions = createMemorySessionStore();
     const store = createMemoryProfileStore([
-      { id: MEMBER.userId, username: "alice", avatar: null, bio: "Co-op after work.", games: [], timezone: null },
+      {
+        id: MEMBER.userId,
+        username: "alice",
+        avatar: null,
+        bio: "Co-op after work.",
+        games: [],
+        timezone: null,
+      },
     ]);
-    return { sessions, app: profilesApp({ sessionStore: sessions, store, accessLog: async () => true }) };
+    return {
+      sessions,
+      app: profilesApp({ sessionStore: sessions, store, accessLog: async () => true }),
+    };
   }
 
   it("tags the shareable member URL with a generic description, never the bio", async () => {
     const { app: profiles, sessions } = profileHarness();
     const cookie = await cookieFor(sessions, { userId: "100000000000000002", username: "bob" });
-    const html = await (await profiles.request(`/members/${MEMBER.userId}`, { headers: { cookie } }, env)).text();
+    const html = await (
+      await profiles.request(`/members/${MEMBER.userId}`, { headers: { cookie } }, env)
+    ).text();
     expect(html).toContain(`<link rel="canonical" href="${APP_URL}/members/${MEMBER.userId}"`);
     expect(html).toContain('<meta property="og:title" content="alice — Member profile"');
-    expect(html).toContain('<meta property="og:description" content="A member of Together We Own."');
+    expect(html).toContain(
+      '<meta property="og:description" content="A member of Together We Own."',
+    );
     expect(html).toContain("Co-op after work.");
     expect(html).not.toContain('<meta property="og:description" content="Co-op after work.');
     expect(html.match(/rel="canonical"/g)).toHaveLength(1);
@@ -301,7 +368,9 @@ describe("profile share tags (TOG-6793)", () => {
     const { app: profiles, sessions } = profileHarness();
     const cookie = await cookieFor(sessions, { userId: "100000000000000002", username: "bob" });
     const slashed = { ...env, APP_URL: `${APP_URL}/` };
-    const html = await (await profiles.request(`/members/${MEMBER.userId}`, { headers: { cookie } }, slashed)).text();
+    const html = await (
+      await profiles.request(`/members/${MEMBER.userId}`, { headers: { cookie } }, slashed)
+    ).text();
     expect(html).toContain(`<link rel="canonical" href="${APP_URL}/members/${MEMBER.userId}"`);
     expect(html).not.toContain("//members/");
   });
@@ -331,7 +400,16 @@ describe("security headers per route class", () => {
   });
 
   it("sets the four headers on every response class: HTML, redirect, JSON, XML, text, 404", async () => {
-    for (const path of ["/", "/about", "/join", "/discord", "/sitemap_index.xml", "/robots.txt", "/up", "/definitely-not-here"]) {
+    for (const path of [
+      "/",
+      "/about",
+      "/join",
+      "/discord",
+      "/sitemap_index.xml",
+      "/robots.txt",
+      "/up",
+      "/definitely-not-here",
+    ]) {
       const res = await app.request(path, {}, env);
       for (const [header, value] of Object.entries(SECURITY_HEADERS)) {
         expect(res.headers.get(header), `${path} ${header}`).toBe(value);
@@ -348,7 +426,15 @@ describe("security headers per route class", () => {
     // pins that a policy with the sink rides every document, not its exact
     // directives, so the two cards cannot fight over one header. Admin HTML
     // needs a DB-backed access log and is pinned by TOG-10107/TOG-10116.
-    for (const path of ["/", "/about", "/faq", "/rules", "/privacy", "/join", "/definitely-not-here"]) {
+    for (const path of [
+      "/",
+      "/about",
+      "/faq",
+      "/rules",
+      "/privacy",
+      "/join",
+      "/definitely-not-here",
+    ]) {
       const res = await app.request(path, {}, env);
       expect(res.headers.get("content-type"), path).toContain("text/html");
       const csp = res.headers.get("Content-Security-Policy");
@@ -365,19 +451,29 @@ describe("security headers per route class", () => {
     expect((await app.request("/", {}, env)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
     // Explicit absolute URL pins apex config + apex serving host; the test
     // helper resolves relative requests to APP_URL, never Hono's localhost.
-    const apex = await app.request("https://togetherweown.com/", {}, { ...env, APP_URL: "https://togetherweown.com" });
+    const apex = await app.request(
+      "https://togetherweown.com/",
+      {},
+      { ...env, APP_URL: "https://togetherweown.com" },
+    );
     expect(apex.headers.get("X-Robots-Tag")).toBeNull();
   });
 
   it("noindexes foreign-host refusals while trusted apex HTML and preview JSON keep their header policy", async () => {
     // Unit: config-only call keeps the old verdict; a serving host refines it.
     expect(robotsTagFor("https://togetherweown.com", "togetherweown.com")).toBeNull();
-    expect(robotsTagFor("https://togetherweown.com", "preview.example.test")).toBe("noindex, nofollow");
+    expect(robotsTagFor("https://togetherweown.com", "preview.example.test")).toBe(
+      "noindex, nofollow",
+    );
     expect(robotsTagFor("not-a-url", "togetherweown.com")).toBe("noindex, nofollow");
     // W16 TrustHosts refuses aliases outside this environment's APP_URL before
     // routing. Use the raw app so these explicit foreign authorities stay intact.
     const apex = { ...env, APP_URL: "https://togetherweown.com" };
-    for (const url of ["https://preview.example.test/", "https://two-web-next.example.workers.dev/", "http://localhost/"]) {
+    for (const url of [
+      "https://preview.example.test/",
+      "https://two-web-next.example.workers.dev/",
+      "http://localhost/",
+    ]) {
       const res = await rawApp.request(url, {}, apex);
       expect(res.status, url).toBe(404);
       expect(res.headers.get("content-type"), url).toContain("text/html");
@@ -415,7 +511,11 @@ describe("security headers per route class", () => {
     // ride along anyway: the middleware runs before the guard refuses.
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store, MOD);
-    const mounted = await app.request("/admin/events/new", { headers: { cookie } }, { ...env, SESSION_STORE: store });
+    const mounted = await app.request(
+      "/admin/events/new",
+      { headers: { cookie } },
+      { ...env, SESSION_STORE: store },
+    );
     expect(mounted.status).toBe(503);
     for (const [header, value] of Object.entries(SECURITY_HEADERS)) {
       expect(mounted.headers.get(header), header).toBe(value);
@@ -425,12 +525,18 @@ describe("security headers per route class", () => {
 });
 
 describe("URL freeze + no soft 404s", () => {
-  it.each(["/", "/join", "/about", "/faq", "/rules", "/privacy", "/sitemap_index.xml", "/robots.txt"])(
-    "%s answers 200",
-    async (path) => {
-      expect((await app.request(path, {}, env)).status).toBe(200);
-    },
-  );
+  it.each([
+    "/",
+    "/join",
+    "/about",
+    "/faq",
+    "/rules",
+    "/privacy",
+    "/sitemap_index.xml",
+    "/robots.txt",
+  ])("%s answers 200", async (path) => {
+    expect((await app.request(path, {}, env)).status).toBe(200);
+  });
 
   it("/discord redirects 302, never 301", async () => {
     const res = await app.request("/discord", {}, env);
