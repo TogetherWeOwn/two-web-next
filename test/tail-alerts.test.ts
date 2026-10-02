@@ -414,8 +414,7 @@ describe("Production Tail pager wiring", () => {
       unknown
     >;
     expect(tail.name).toBe("two-web-next-alerts");
-    const production = (tail.env as Record<string, Record<string, unknown> | undefined>)
-      .production;
+    const production = (tail.env as Record<string, Record<string, unknown> | undefined>).production;
     expect(production?.name).toBe("two-web-next-alerts-production");
     expect(production?.tail_consumers).toBeUndefined();
     expect(production?.workers_dev).toBe(false);
