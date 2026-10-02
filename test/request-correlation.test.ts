@@ -45,28 +45,56 @@ const ledger: QueueLedger = {
 };
 afterEach(() => vi.restoreAllMocks());
 
+/** One real event route with requestLog, capturing what it sends to EVENT_SYNC_QUEUE. */
+async function routeSync(method: string, path: string) {
+  const sent: SyncMessage[] = [];
+  const bindings = { ...env, EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) } };
+  const app = new Hono<{ Bindings: Env }>();
+  app.use("*", requestLog);
+  const session = { id: "fixture-member", username: "fixture", member: true, moderator: true, avatar: null } as Session;
+  registerEventRoutes(app, async () => session, async () => session);
+  const response = await app.request(path, {
+    method, headers: { "cf-ray": ID, "content-type": "application/json" },
+    body: method === "PUT" ? JSON.stringify({ status: "going" }) : undefined,
+  }, bindings);
+  return { response, sent };
+}
+
 describe("request correlation through queue envelopes (local fixtures)", () => {
   it.each([
     ["POST", `/events/${KEY}/publish`, 200], ["POST", `/events/${KEY}/cancel`, 200],
     ["PUT", `/events/${KEY}/rsvp`, 201], ["DELETE", `/events/${KEY}/rsvp`, 204],
   ])("propagates the HTTP ID from %s %s to the actual event-sync envelope", async (method, path, status) => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const sent: SyncMessage[] = [];
-    const bindings = { ...env, EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) } };
-    const app = new Hono<{ Bindings: Env }>();
-    app.use("*", requestLog);
-    const session = { id: "fixture-member", username: "fixture", member: true, moderator: true, avatar: null } as Session;
-    registerEventRoutes(app, async () => session, async () => session);
-    const response = await app.request(path, {
-      method, headers: { "cf-ray": ID, "content-type": "application/json" },
-      body: method === "PUT" ? JSON.stringify({ status: "going" }) : undefined,
-    }, bindings);
+    const { response, sent } = await routeSync(method, path);
     expect(response.status).toBe(status);
     expect(response.headers.get("x-request-id")).toBe(ID);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ requestId: ID, eventKey: KEY, dedupeKey: KEY });
     expect(sent[0]!.idempotencyKey).not.toBe(ID);
   });
+
+  // The W8 producer binding (EVENT_SYNC_QUEUE) and the consumer's queue
+  // (SYNC_EVENT_QUEUE) are still split in wrangler; that wiring is TOG-10815.
+  // This proves the carrier itself: a route-produced message reaches the
+  // terminal queue.failing alert with the originating request ID.
+  it.each([["POST", `/events/${KEY}/publish`], ["PUT", `/events/${KEY}/rsvp`]])(
+    "carries the ID from %s %s through consume to a terminal queue.failing alert", async (method, path) => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { sent } = await routeSync(method, path);
+      expect(sent).toHaveLength(1);
+      const events = { find: async (eventKey: string) => ({ eventKey, payload: {}, mirrored: true }) } as unknown as EventStore;
+      const bot = { upsertEvent: async () => { throw new BotTerminalError("fixture-failure"); } } as unknown as BotClient;
+      const ack = vi.fn(), retry = vi.fn();
+      await consume({ messages: [{ body: sent[0], attempts: 1, ack, retry }] }, { bot, lock, ledger, events });
+      const alerts = error.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('"queue.failing"'));
+      expect(alerts.map((line) => JSON.parse(line))).toEqual([
+        expect.objectContaining({ event: "queue.failing", job: "SyncEventToDiscord", request_id: ID }),
+      ]);
+      expect(ack).toHaveBeenCalledTimes(1);
+      expect(retry).not.toHaveBeenCalled();
+    });
 
   it("preserves IDs through admin/RSVP seams, rejects invalid metadata, and accepts legacy calls", async () => {
     const sent: SyncMessage[] = [];
