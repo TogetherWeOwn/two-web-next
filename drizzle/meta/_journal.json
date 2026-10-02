@@ -134,6 +134,20 @@
       "when": 1790856000002,
       "tag": "1017_queue_failed_job_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790902431105,
+      "tag": "1018_audit-immutability",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790954753239,
+      "tag": "1019_shared-agent-events",
+      "breakpoints": true
     }
   ]
 }

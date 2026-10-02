@@ -28,6 +28,7 @@ import { getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
+import { databaseUnavailable, notFoundHandler } from "../errors";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
 import {
@@ -41,7 +42,6 @@ import {
 import { dbFor } from "./db";
 import { recordAccess } from "./store";
 import { memberReadBoundary } from "../member-reads";
-import { notFoundHandler } from "../errors";
 
 export type Actor = { id: string; username: string };
 
@@ -125,8 +125,10 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       // Signed in, not a moderator: 403, not a login loop (TOG-54).
       if (row?.moderator) actor = { id: row.userId, username: row.username };
     } catch (err) {
-      console.error("admin guard could not resolve the session; refusing.", { error: String(err) });
-      return c.text("Admin temporarily unavailable", 503);
+      console.error("admin guard could not resolve the session; refusing.", {
+        exception: err instanceof Error ? err.name : "unknown",
+      });
+      return databaseUnavailable(c);
     }
     if (!actor) return c.text("Forbidden", 403);
     c.set("adminActor", actor);
@@ -134,19 +136,25 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     if (c.req.method === "GET" || c.req.method === "HEAD") {
       // Every admin read is observed, including a query added to an existing
       // non-sensitive screen. Route metadata never supplies the subject keys.
-      await memberReadBoundary(c, () => {
-        const declared = c.get("access");
-        return declared ? { ...declared, viewer: actor!.id } : undefined;
-      }, async (entry) => {
-        const db = dbOverride ?? await dbFor(c);
-        if (!db) throw new Error("Admin audit database unavailable");
-        return recordAccess(db, entry);
-      }, async () => {
-        if (c.req.matchedRoutes.length > 1) await next();
-        // Only this guard matched. Render here: Hono's single-middleware path
-        // otherwise reassigns/clones a finalized not-found buffer after next().
-        else await notFoundHandler(c);
-      });
+      await memberReadBoundary(
+        c,
+        () => {
+          const declared = c.get("access");
+          return declared ? { ...declared, viewer: actor!.id } : undefined;
+        },
+        async (entry) => {
+          const db = dbOverride ?? (await dbFor(c));
+          if (!db) throw new Error("Admin audit database unavailable");
+          return recordAccess(db, entry);
+        },
+        async () => {
+          if (c.req.matchedRoutes.length > 1) await next();
+          // Only this guard matched. Render here: Hono's single-middleware path
+          // otherwise reassigns/clones a finalized not-found buffer after next().
+          else await notFoundHandler(c);
+        },
+        databaseUnavailable,
+      );
     } else {
       await next();
     }

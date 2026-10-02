@@ -25,7 +25,11 @@ export function rssDate(d: Date): string {
 
 /** RFC 5545 §3.3.11 escaping: backslash, semicolon, comma, newlines. */
 function text(v: string): string {
-  return v.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r\n|\r|\n/g, "\\n");
+  return v
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r\n|\r|\n/g, "\\n");
 }
 
 const enc = new TextEncoder();
@@ -86,7 +90,15 @@ function vevent(e: EventRow, appUrl: string): string[] {
   ];
   if (e.description) lines.push(`DESCRIPTION:${text(e.description)}`);
   if (e.location) lines.push(`LOCATION:${text(e.location)}`);
-  lines.push(`URL:${pageUrl(e, appUrl)}`, "BEGIN:VALARM", "TRIGGER:-PT30M", "ACTION:DISPLAY", `DESCRIPTION:${text(e.title)}`, "END:VALARM", "END:VEVENT");
+  lines.push(
+    `URL:${pageUrl(e, appUrl)}`,
+    "BEGIN:VALARM",
+    "TRIGGER:-PT30M",
+    "ACTION:DISPLAY",
+    `DESCRIPTION:${text(e.title)}`,
+    "END:VALARM",
+    "END:VEVENT",
+  );
   return lines;
 }
 
@@ -134,10 +146,15 @@ export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): st
 }
 
 export const feedUrl = (appUrl: string) => `${feedBase(appUrl)}/events.ics`;
+export const rssUrl = (appUrl: string) => `${feedBase(appUrl)}/events.rss`;
 export const webcalUrl = (appUrl: string) => feedUrl(appUrl).replace(/^https?:\/\//, "webcal://");
 
 /** RFC3986 query encoding, like PHP_QUERY_RFC3986. */
-const q = (v: string) => encodeURIComponent(v).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+const q = (v: string) =>
+  encodeURIComponent(v).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 
 export function googleCalendarUrl(e: EventRow): string {
   const params: [string, string][] = [

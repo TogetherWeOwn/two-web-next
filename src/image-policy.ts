@@ -2,13 +2,29 @@
 // wildcards or user-supplied CSP source expressions. Discord avatars retain
 // their existing CDN permission even when no featured hosts are configured.
 const DISCORD_IMAGE_HOST = "cdn.discordapp.com";
-const PRIVATE_SUFFIXES = ["localhost", "localdomain", "local", "internal", "lan", "home", "corp", "mail", "test", "invalid", "example", "onion", "arpa", "alt"];
+const PRIVATE_SUFFIXES = [
+  "localhost",
+  "localdomain",
+  "local",
+  "internal",
+  "lan",
+  "home",
+  "corp",
+  "mail",
+  "test",
+  "invalid",
+  "example",
+  "onion",
+  "arpa",
+  "alt",
+];
 
 function isPublicHostname(host: string): boolean {
   if (host.length > 253) return false;
   const labels = host.split(".");
   if (labels.length < 2 || !/^[a-z]{2,63}$/.test(labels.at(-1)!)) return false;
-  if (PRIVATE_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) return false;
+  if (PRIVATE_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`)))
+    return false;
   return labels.every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
 }
 
@@ -28,8 +44,14 @@ export function isFeaturedImageUrl(raw: string, configured?: string): boolean {
   if (!/^https:\/\//i.test(raw) || /[\\\u0000- \u007f]/.test(raw)) return false;
   try {
     const url = new URL(raw);
-    return url.protocol === "https:" && !url.username && !url.password && !url.port
-      && isPublicHostname(url.hostname) && imageHosts(configured).includes(url.hostname);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      isPublicHostname(url.hostname) &&
+      imageHosts(configured).includes(url.hostname)
+    );
   } catch {
     return false;
   }

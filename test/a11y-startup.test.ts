@@ -21,7 +21,9 @@ describe("local accessibility worker startup", () => {
 
   it("polls the existing DB-free route, not deployment readiness", async () => {
     expect(path).toBe("/robots.txt");
-    const read = vi.fn(() => { throw new Error("Startup must not read DB/session bindings"); });
+    const read = vi.fn(() => {
+      throw new Error("Startup must not read DB/session bindings");
+    });
     const bindings = { ...env };
     for (const key of ["DB", "DATABASE_URL", "ADMIN_DB", "SESSION_STORE"]) {
       Object.defineProperty(bindings, key, { get: read });
