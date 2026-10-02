@@ -59,7 +59,7 @@ import {
   takeJoinResult,
 } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
+import { configReadiness, upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
@@ -512,8 +512,9 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
-// `GET /up` — session-free DB/schema readiness plus the existing queue signal.
-// DB/ledger failure or pending web migrations answers 503; queue-only degraded
+// `GET /up` — session-free DB/schema and secret-presence readiness plus the
+// existing queue signal. A missing required secret, DB/ledger failure or
+// pending web migrations answers 503; queue-only degraded
 // or unknown remains 200. `no-store` so a monitor never reads a stale response.
 // Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
@@ -556,6 +557,7 @@ app.get("/up", async (c) => {
     const body = await upBody(
       queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null,
       sql,
+      configReadiness(c.env),
     );
     return c.json(body, upHttpStatus(body));
   } finally {

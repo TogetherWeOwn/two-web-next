@@ -277,6 +277,9 @@ function page(
     createdAt: startsAt,
     updatedAt: startsAt,
     icsSequence: 0n,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     ...over,
   };
   const queries: { sql: string; params: unknown[] }[] = [];
