@@ -660,6 +660,50 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(await member.text()).not.toContain('data-testid="signin"');
   });
 
+  it.each([
+    "/events",
+    "/events?q=Sunday%20Squad",
+    "/events?view=calendar&month=2099-11",
+    "/events?view=calendar&month=2099-11&q=no-such-event&past=1",
+  ])("the schedule-heading Join CTA returns to %s through the guarded join journey", async (path) => {
+    const env = envFor(createMemorySessionStore());
+    const page = await app.request(path, {}, env);
+    expect(page.status).toBe(200);
+    const heading = (await page.text()).match(/<div class="schedule-heading">(.*?)<\/div>/)![1]!;
+    const joinHref = heading.match(/href="([^"]+)">Join the Discord<\/a>/)![1]!;
+    expect(joinHref).toBe(`/join?next=${encodeURIComponent(path)}`);
+
+    const join = await app.request(joinHref, {}, env);
+    expect(join.status).toBe(200);
+    const joinHtml = await join.text();
+    const startHref = `/join/discord?next=${encodeURIComponent(path)}`;
+    expect(joinHtml).toContain(`href="${startHref}"`);
+    mockDiscord();
+    const start = await app.request(startHref, {}, env);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const callback = await app.request(`/join/callback?code=abc&state=${state}`, {
+      headers: { cookie: sendJar(jarFrom(start)) },
+    }, env);
+    expect(callback.headers.get("location")).toBe(path);
+  });
+
+  it.each([
+    ["/events/past", "/events/past"],
+    ["/events/past?page=3", "/events/past?page=3"],
+  ] as const)("the archive header returns to %s after ordinary login", async (path, next) => {
+    const env = envFor(createMemorySessionStore());
+    const page = await app.request(path, {}, env);
+    expect(page.status).toBe(200);
+    const header = (await page.text()).match(/<header\b[^>]*>(.*?)<\/header>/)![1]!;
+    const loginHref = header.match(/href="([^"]+)" data-testid="signin"/)![1]!;
+    expect(loginHref).toBe(`/auth/discord?next=${encodeURIComponent(next)}`);
+
+    mockDiscord();
+    const start = await startLogin(env, new URL(loginHref, APP_URL).search);
+    const callback = await finishLogin(env, start.state, start.jar);
+    expect(callback.headers.get("location")).toBe(next);
+  });
+
   it("the join_result banner lands on /profile too and is consumed there", async () => {
     // The protected profile landing and stored member use the same real-shaped key.
     const snow = "326474832151838721";
