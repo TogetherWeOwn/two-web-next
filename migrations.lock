@@ -79,7 +79,7 @@
     },
     {
       "path": "drizzle/1018_audit-immutability.sql",
-      "sha256": "faf1591b387c3f515d6627e36c3f9085ed6248b2a98b16cb9bd77bd1ae119866"
+      "sha256": "7dc14b470a68bc3a8a308af47f7216fdde32badf8bf5c23e3ccce2428f12e627"
     }
   ]
 }

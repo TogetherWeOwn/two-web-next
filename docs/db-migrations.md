@@ -156,6 +156,9 @@ yet provisioned; this PR changes no live role or credential):
 - On these three tables the runtime roles hold only `SELECT, INSERT, DELETE`,
   plus `USAGE` on their id sequences. They hold no `UPDATE`, `TRUNCATE`,
   `TRIGGER` or `REFERENCES`.
+- The runtime roles hold `CREATE` on no schema, so they cannot plant shadow
+  functions or operators. Separately, the guard function pins its own
+  `search_path`, so a shadowed `clock_timestamp()` or `<` cannot reach it.
 - Test fixtures own their disposable schemas, so `test/helpers/audit-rows.ts`
   can lift the TRUNCATE guard inside one transaction for teardown.
   `test/audit-immutability.test.ts` proves the guard under a throwaway non-owner

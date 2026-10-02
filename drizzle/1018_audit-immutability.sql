@@ -12,7 +12,11 @@
 -- transaction, so a row in between would make the whole prune DELETE raise.
 -- 2160 hours, not '90 days': day intervals follow DST in the session TimeZone,
 -- the JS cutoff is a fixed 90 * 86_400_000 ms. A NULL age never qualifies.
-CREATE FUNCTION "public"."audit_rows_append_only"() RETURNS trigger LANGUAGE plpgsql AS $$
+-- search_path is pinned: the guard runs as its caller, and a caller who may
+-- CREATE in any schema could otherwise shadow clock_timestamp() or < ahead of
+-- pg_catalog and open the DELETE window.
+CREATE FUNCTION "public"."audit_rows_append_only"() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   aged timestamptz;
 BEGIN

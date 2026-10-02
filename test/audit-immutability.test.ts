@@ -35,6 +35,7 @@ const refused = (op: "UPDATE" | "DELETE" | "TRUNCATE", table: string) =>
 
 describe.skipIf(!process.env.DATABASE_URL)("audit tables are append-only for a non-owner app role", () => {
   const role = `w15_app_${randomUUID().replaceAll("-", "")}`;
+  const shadow = `w15_shadow_${randomUUID().replaceAll("-", "")}`; // The only schema the role may CREATE in.
   let fixture: JobsFixture | undefined;
   let admin: Sql | undefined;
   let app: Sql | undefined;
@@ -56,12 +57,15 @@ describe.skipIf(!process.env.DATABASE_URL)("audit tables are append-only for a n
     await admin.unsafe(`GRANT USAGE ON SCHEMA ${schema} TO "${role}"`);
     await admin.unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO "${role}"`);
     await admin.unsafe(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO "${role}"`);
+    await admin.unsafe(`CREATE SCHEMA "${shadow}"`);
+    await admin.unsafe(`GRANT USAGE, CREATE ON SCHEMA "${shadow}" TO "${role}"`);
     app = postgres(url.href, { ...options, max: 4, connection: { role, search_path: fixture.schemaName } });
   });
   afterAll(async () => {
     try {
       await app?.end();
       await fixture?.dispose(); // Drops the schema and every grant on it.
+      await admin?.unsafe(`DROP SCHEMA IF EXISTS "${shadow}" CASCADE`);
       if (roleCreated) await admin?.unsafe(`DROP ROLE "${role}"`);
     } finally { await admin?.end(); }
   });
@@ -80,9 +84,11 @@ describe.skipIf(!process.env.DATABASE_URL)("audit tables are append-only for a n
     }
     await expect(app!`set session_replication_role = replica`).rejects.toMatchObject({ code: "42501" });
     // No caller-controlled escape hatch: the guard reads no setting or identity.
-    const [fn] = await owner`select prosrc from pg_proc
+    const [fn] = await owner`select prosrc, proconfig from pg_proc
       where proname = 'audit_rows_append_only' and pronamespace = ${fixture!.schemaName}::regnamespace`;
     expect(fn!.prosrc).not.toMatch(/current_setting|session_user|current_user|pg_has_role/);
+    // Nor does it resolve names through the caller's search_path.
+    expect(fn!.proconfig).toEqual(["search_path=pg_catalog, pg_temp"]);
   });
 
   it.each(AUDIT_TABLES)("%s: INSERT succeeds and UPDATE is refused at the database, rows unchanged", async (table) => {
@@ -145,6 +151,36 @@ describe.skipIf(!process.env.DATABASE_URL)("audit tables are append-only for a n
     } finally {
       await admin!.unsafe(`REVOKE TRUNCATE ON "${fixture!.schemaName}"."${table}" FROM "${role}"`);
     }
+    expect(await rows(table)).toEqual(before);
+  });
+
+  // A role that may CREATE in any schema can put it ahead of pg_catalog and
+  // shadow what the guard calls. Each shadow below resolves for the caller,
+  // and would let the DELETE through if the guard used the caller's path.
+  const shadows: Record<string, { create: string[]; live: string }> = {
+    "clock_timestamp()": {
+      create: [`create function clock_timestamp() returns timestamptz language sql
+        as $$ select 'infinity'::pg_catalog.timestamptz $$`],
+      live: "select clock_timestamp() = 'infinity'::timestamptz as live",
+    },
+    "timestamptz < timestamptz": {
+      create: [
+        "create function shadow_lt(timestamptz, timestamptz) returns boolean language sql as $$ select true $$",
+        "create operator < (leftarg = timestamptz, rightarg = timestamptz, function = shadow_lt)",
+      ],
+      live: "select now() < '-infinity'::timestamptz as live",
+    },
+  };
+  it.each(Object.keys(shadows))("a caller-shadowed %s cannot open DELETE on a fresh row", async (name) => {
+    const table = "member_data_access_logs";
+    const fresh = await insert[table](app!, new Date());
+    const before = await rows(table);
+    await expect(app!.begin(async (tx) => {
+      await tx.unsafe(`set local search_path = "${shadow}", pg_catalog, "${fixture!.schemaName}"`);
+      for (const ddl of shadows[name]!.create) await tx.unsafe(ddl);
+      expect((await tx.unsafe(shadows[name]!.live))[0]!.live).toBe(true);
+      await tx.unsafe(`delete from "${table}" where id = $1`, [fresh]);
+    })).rejects.toMatchObject(refused("DELETE", table));
     expect(await rows(table)).toEqual(before);
   });
 
