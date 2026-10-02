@@ -1,4 +1,4 @@
-# Shared Postgres: Neon topology, migration numbering, backups
+# Shared Postgres: topology, migration numbering, backups
 
 Single database for the Cloudflare build (bot + web), per the
 [TOG-9671 plan](/TOG/issues/TOG-9671#document-plan) §2. Legacy `two-web` /
@@ -10,12 +10,12 @@ bot rewrite, framework ADR pending).
 
 | Piece | Value |
 |---|---|
-| Provider / plan | Neon, Launch (`$0.106`/CU-hr + `$0.35`/GB-mo, no minimum, scale-to-zero) |
-| Region (proposed) | `aws-eu-central-1` (Frankfurt) — **pending CISO GDPR/region sign-off on [TOG-9679](/TOG/issues/TOG-9679); no member data moves before it** |
-| Branches | `main` (prod, at cutover) + `staging` (all pre-cutover work) |
-| Web path | Workers → Hyperdrive (`DB` binding) → Neon pooled URL |
-| Bot path | Container → direct `postgres` driver (no Hyperdrive) → Neon pooled URL |
-| Migrations | direct (non-pooled) URL; pooled endpoints can break DDL transactionally |
+| Staging provider / plan | Neon, Launch (`$0.106`/CU-hr + `$0.35`/GB-mo, no minimum, scale-to-zero) |
+| Production provider / plan | PlanetScale Postgres HA, PS-10 arm, Frankfurt (`aws-eu-central-1`), PG17 — per [TOG-12178](/TOG/issues/TOG-12178#document-decision) rev 2 |
+| Branches | Neon `staging` (all pre-cutover work) + PlanetScale `two-production` (prod, at cutover) |
+| Web path | Workers → Hyperdrive (`DB` binding) → staging Neon pooled URL / production PlanetScale `6432` (PgBouncer) URL |
+| Bot path | Container → direct `postgres` driver (no Hyperdrive) → staging Neon pooled URL / production PlanetScale `5432` direct URL |
+| Migrations | direct (non-pooled) URL on port `5432`; pooled endpoints can break DDL transactionally. Staging reads `NEON_STAGING_DATABASE_URL`; production reads `PRODUCTION_DATABASE_URL` (PlanetScale direct `<id>.pg.psdb.cloud:5432`, never `6432`) |
 
 Status 2026-09-29: Neon **not yet provisioned** (host step:
 `Operator:` card under [TOG-9679](/TOG/issues/TOG-9679)). R2 bucket
@@ -181,9 +181,9 @@ yet provisioned; this PR changes no live role or credential):
 
 ## Backups
 
-Nightly `pg_dump -Fc` of the `staging` branch (and `main` after
-cutover) to R2 `two-web-next-backups` (EU-jurisdiction-pinned,
-jurisdiction immutable after creation):
+Nightly `pg_dump -Fc` of the Neon `staging` branch (and the PlanetScale
+`two-production` branch after cutover) to R2 `two-web-next-backups`
+(EU-jurisdiction-pinned, jurisdiction immutable after creation):
 
 - Script: `bin/neon-backup.sh` (`backup` | `promote-weekly` |
   `rotate` | `check`). Connection comes from `DATABASE_URL` env only —
@@ -194,9 +194,13 @@ jurisdiction immutable after creation):
 - `paperclip-backups` is explicitly out of scope for member-data dumps
   (jurisdiction `default` / location `ENAM`; must never receive them).
 - Schedule: `.github/workflows/neon-backup.yml` — nightly `03:17Z` cron
-  + manual `workflow_dispatch`. Needs repo secrets `NEON_STAGING_DATABASE_URL`
-  (operator-provisioned), `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
-- Layout: `neon-staging/neon-<UTC>.dump`; weeklies are
+  + manual `workflow_dispatch`. Staging reads repo secret
+  `NEON_STAGING_DATABASE_URL` (operator-provisioned); the production target
+  reads `PRODUCTION_DATABASE_URL` (PlanetScale direct endpoint, same
+  `pg_dump -Fc` path — direct `5432`, never the pooled `6432` port).
+  Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+- Layout: `neon-staging/neon-<UTC>.dump` (staging) and
+  `neon-production/neon-<UTC>.dump` (production after cutover); weeklies are
   `neon-<UTC>-weekly-<UTC>.dump` copies. Retention: newest 7 dailies +
   newest 4 weeklies (mirrors the `two-web` `pg-backup.sh` policy).
 - Proof: every backup re-lists its key after upload; restore is proved

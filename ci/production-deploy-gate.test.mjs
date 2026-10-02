@@ -101,14 +101,128 @@ test("requires a production Environment with reviewers and no self-review", () =
   }
 });
 
-test("allows only an enabled main dispatch with verified protection", async () => {
-  let requests = 0;
-  await checkProductionGate(enabled, async (url) => {
-    requests++;
-    assert.equal(url, "https://api.github.com/repos/fixture/repo/environments/production");
-    return { ok: true, json: async () => protectedEnvironment };
+const dispatchSha = "a".repeat(40);
+const otherSha = "b".repeat(40);
+function ciEvidence() {
+  const run = {
+    id: 42,
+    run_attempt: 1,
+    head_sha: dispatchSha,
+    head_branch: "main",
+    event: "push",
+    path: ".github/workflows/ci.yml",
+    head_repository: { full_name: "fixture/repo" },
+    status: "completed",
+    conclusion: "success",
+  };
+  return {
+    runs: { total_count: 1, workflow_runs: [structuredClone(run)] },
+    jobs: {
+      total_count: 2,
+      jobs: ["a11y", "check"].map((name) => ({
+        name,
+        head_sha: dispatchSha,
+        status: "completed",
+        conclusion: "success",
+      })),
+    },
+    current: structuredClone(run),
+  };
+}
+function stubProductionApi(evidence, seen = {}) {
+  return async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/environments/production")) {
+      seen.environment = (seen.environment ?? 0) + 1;
+      return { ok: true, json: async () => protectedEnvironment };
+    }
+    seen.ci = (seen.ci ?? 0) + 1;
+    if (parsed.pathname.endsWith("/workflows/ci.yml/runs")) {
+      assert.equal(parsed.searchParams.get("head_sha"), dispatchSha);
+      assert.equal(parsed.searchParams.get("branch"), "main");
+      assert.equal(parsed.searchParams.get("event"), "push");
+      return { ok: true, json: async () => evidence.runs };
+    }
+    if (parsed.pathname.endsWith("/runs/42/jobs")) {
+      return { ok: true, json: async () => evidence.jobs };
+    }
+    if (parsed.pathname.endsWith("/runs/42")) {
+      return { ok: true, json: async () => evidence.current };
+    }
+    assert.fail(`unexpected production gate API path ${parsed.pathname}`);
+  };
+}
+const greenEnv = { ...enabled, GITHUB_SHA: dispatchSha };
+function checkGreen(evidence, seen = {}, env = greenEnv, options = { checkoutSha: dispatchSha }) {
+  return checkProductionGate(env, stubProductionApi(evidence, seen), options);
+}
+
+test("allows only an enabled main dispatch with verified protection and green exact-SHA CI", async () => {
+  const seen = {};
+  const evidence = await checkGreen(ciEvidence(), seen);
+  assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
+  assert.equal(seen.environment, 1);
+  assert.equal(seen.ci, 3);
+});
+
+for (const [name, pattern, mutate] of [
+  [
+    "red CI",
+    /Full CI has not completed successfully/,
+    (evidence) => {
+      evidence.runs.workflow_runs[0].conclusion = "failure";
+    },
+  ],
+  [
+    "pending CI",
+    /Full CI has not completed successfully/,
+    (evidence) => {
+      evidence.runs.workflow_runs[0].status = "in_progress";
+    },
+  ],
+  [
+    "missing CI",
+    /Missing or ambiguous exact-SHA CI evidence/,
+    (evidence) => {
+      evidence.runs = { total_count: 0, workflow_runs: [] };
+    },
+  ],
+  [
+    "ambiguous CI",
+    /Missing or ambiguous exact-SHA CI evidence/,
+    (evidence) => {
+      evidence.runs.total_count = 2;
+      evidence.runs.workflow_runs.push(structuredClone(evidence.runs.workflow_runs[0]));
+    },
+  ],
+  [
+    "missing check job",
+    /Missing or ambiguous check job/,
+    (evidence) => {
+      evidence.jobs.jobs.pop();
+      evidence.jobs.total_count = 1;
+    },
+  ],
+  [
+    "rerun between reads",
+    /CI changed while checking evidence/,
+    (evidence) => {
+      evidence.current.run_attempt = 2;
+    },
+  ],
+]) {
+  test(`${name} refuses production deployment`, async () => {
+    const evidence = ciEvidence();
+    mutate(evidence);
+    await assert.rejects(checkGreen(evidence), pattern);
   });
-  assert.equal(requests, 1);
+}
+
+test("checkout/dispatch SHA mismatch refuses production deployment", async () => {
+  await assert.rejects(
+    checkGreen(ciEvidence(), {}, greenEnv, { checkoutSha: otherSha }),
+    /Checkout does not match deployment SHA/,
+  );
 });
 
 const sentinel = "00000000000000000000000000000000";
@@ -324,23 +438,37 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   assert.match(workflow, /^  preflight:/m);
   assert.match(workflow, /^  deploy-production:/m);
   assert.equal((workflow.match(/run: node ci\/production-deploy-gate\.mjs\n/g) ?? []).length, 2);
+  const gates = workflow.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+  assert.equal(gates.length, 2);
+  for (const gate of gates) {
+    const block = gate.split("\n      - ")[0];
+    assert.match(block, /GITHUB_TOKEN: /);
+    assert.match(block, /GITHUB_SHA: /);
+  }
 });
 
-test("manual production workflow uses private-repo runners and production-only secrets", () => {
+test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  assert.equal((workflow.match(/runs-on: \[self-hosted, two-selfhosted\]/g) ?? []).length, 2);
-  assert.ok(!workflow.includes("ubuntu-latest"));
+  // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
+  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  assert.equal(workflow.split(runsOn).length - 1, 2);
+  assert.equal(
+    workflow.split("ubuntu-latest").length - 1,
+    2,
+    "ubuntu-latest only as the public-repo branch",
+  );
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 2);
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 3);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
+  const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const deploy = workflow.indexOf("run: npx wrangler deploy --env production");
-  assert.ok(credentialCheck > 0 && credentialCheck < deploy);
+  assert.ok(credentialCheck > 0 && credentialCheck < requiredSecrets && requiredSecrets < deploy);
 });
 
 test("rollback workflow reuses the production gate with no wider permissions", () => {
@@ -370,9 +498,14 @@ test("rollback workflow reuses the production gate with no wider permissions", (
     (workflow.match(/run: node ci\/production-deploy-gate\.mjs --version-id\n/g) ?? []).length,
     2,
   );
-  // Same private-repo runners as the production deploy workflow.
-  assert.equal((workflow.match(/runs-on: \[self-hosted, two-selfhosted\]/g) ?? []).length, 2);
-  assert.ok(!workflow.includes("ubuntu-latest"));
+  // Same visibility-aware runners as the production deploy workflow (TOG-12326).
+  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  assert.equal(workflow.split(runsOn).length - 1, 2);
+  assert.equal(
+    workflow.split("ubuntu-latest").length - 1,
+    2,
+    "ubuntu-latest only as the public-repo branch",
+  );
   // Production-only secrets, credential check before the mutation.
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));

@@ -1,7 +1,7 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { wallToUtc } from "../src/admin/validation";
-import { pgEventStore } from "../src/jobs/event-store-pg";
+import { pgEventStore } from "../src/jobs/events";
 import { clearAuditRows } from "./helpers/audit-rows";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
@@ -54,37 +54,6 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
       returning id`) as { id: number }[];
     return { id: row!.id, eventKey };
   }
-  async function seedRsvp(eventId: number, userId: string, updatedAt: Date): Promise<void> {
-    await sql`insert into rsvps (event_id, user_id, status, created_at, updated_at)
-      values (${eventId}, ${userId}, 'going', ${updatedAt}, ${updatedAt})`;
-  }
-
-  describe("find", () => {
-    it("returns the bot payload and mirrored flag for a published event", async () => {
-      const { eventKey } = await seedEvent({ tag: "find-pub" });
-      const store = pgEventStore(sql);
-      expect(await store.find(eventKey)).toEqual({
-        eventKey,
-        payload: {
-          eventKey,
-          name: "event find-pub",
-          startsAt: "2026-10-01T10:00:00.000Z",
-          endsAt: "2026-10-01T14:00:00.000Z",
-          location: "hall",
-          description: null,
-        },
-        mirrored: true,
-      });
-    });
-
-    it("marks drafts unmirrored and returns null for unknown keys", async () => {
-      const { eventKey } = await seedEvent({ tag: "find-draft", status: "draft" });
-      const store = pgEventStore(sql);
-      expect((await store.find(eventKey))!.mirrored).toBe(false);
-      expect(await store.find("no-such-event")).toBeNull();
-    });
-  });
-
   describe("closeFinished", () => {
     it("closes only finished published rows and returns rows changed", async () => {
       const finished = await seedEvent({
@@ -128,70 +97,6 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
         [already.eventKey]: "past",
       });
       expect(await store.closeFinished(NOW)).toBe(0); // idempotent
-    });
-  });
-
-  describe("staleEventKeys", () => {
-    it("selects unmirrored and half-synced rows, skips mirrored/draft/cancelled ones", async () => {
-      const noId = await seedEvent({ tag: "no-id" });
-      const halfSynced = await seedEvent({ tag: "half", discordEventId: "discord-half" });
-      await seedRsvp(halfSynced.id, "u1", new Date("2026-09-30T12:00:00Z")); // unsynced answer
-      const mirrored = await seedEvent({ tag: "mirrored", discordEventId: "discord-full" });
-      await seedRsvp(mirrored.id, "u2", new Date("2026-09-30T12:00:00Z"));
-      await sql`update rsvps set synced_to_discord_at = ${NOW} where event_id = ${mirrored.id}`;
-      await seedEvent({ tag: "draft", status: "draft" });
-      await seedEvent({ tag: "cancelled", status: "cancelled" });
-      await seedEvent({ tag: "past", status: "past" });
-      const store = pgEventStore(sql);
-      expect(await store.staleEventKeys()).toEqual([noId.eventKey, halfSynced.eventKey]);
-    });
-  });
-
-  describe("recordMirrored", () => {
-    it("persists the Discord id and stamps only RSVPs at or before mirroredAt", async () => {
-      const { eventKey, id } = await seedEvent({ tag: "mirror" });
-      await seedRsvp(id, "old", new Date("2026-09-30T12:00:00Z"));
-      await seedRsvp(id, "exact", NOW);
-      await seedRsvp(id, "new", new Date("2026-10-01T13:00:00Z")); // edited after the mirror ran
-      const store = pgEventStore(sql);
-      await store.recordMirrored(eventKey, "discord-1", NOW);
-      const [event] =
-        (await sql`select discord_event_id from events where event_key = ${eventKey}`) as {
-          discord_event_id: string;
-        }[];
-      expect(event!.discord_event_id).toBe("discord-1");
-      const stamps =
-        (await sql`select user_id, synced_to_discord_at from rsvps where event_id = ${id} order by user_id`) as {
-          user_id: string;
-          synced_to_discord_at: Date | null;
-        }[];
-      expect(stamps).toMatchObject([
-        { user_id: "exact", synced_to_discord_at: NOW },
-        { user_id: "new", synced_to_discord_at: null },
-        { user_id: "old", synced_to_discord_at: NOW },
-      ]);
-    });
-
-    it("is a no-op for an unknown key (event deleted mid-flight)", async () => {
-      const store = pgEventStore(sql);
-      await expect(
-        store.recordMirrored("no-such-event", "discord-x", NOW),
-      ).resolves.toBeUndefined();
-    });
-
-    it("leaves an already-mirrored row untouched (replay changes nothing)", async () => {
-      const { eventKey } = await seedEvent({ tag: "replay", discordEventId: "discord-1" });
-      const before = (await sql`select * from events where event_key = ${eventKey}`) as Record<
-        string,
-        unknown
-      >[];
-      const later = new Date("2026-10-02T12:00:00Z");
-      await pgEventStore(sql).recordMirrored(eventKey, "discord-1", later);
-      const after = (await sql`select * from events where event_key = ${eventKey}`) as Record<
-        string,
-        unknown
-      >[];
-      expect(after).toEqual(before);
     });
   });
 

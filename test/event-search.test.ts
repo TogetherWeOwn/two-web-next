@@ -2,10 +2,15 @@
 // Unit parts need no DB; the round-trip runs on agent-testdb (skipped without DATABASE_URL).
 import { serializeSigned } from "hono/utils/cookie";
 import postgres from "postgres";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { eventSearchLogs, events } from "../src/db/admin-schema";
 import { createDb, type Db } from "../src/db/index";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import {
   matchQuery,
@@ -124,7 +129,27 @@ async function cookieFor(store: SessionStore, moderator: boolean): Promise<strin
 }
 
 describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: MemberDataFixture["db"];
+  beforeAll(async () => {
+    // Replay every canonical migration into a guarded, owned schema (never public).
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
+  const lockClient = () => {
+    const safe = testDatabaseUrl(process.env.DATABASE_URL!);
+    return postgres(safe.href, {
+      max: 1,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => safe.password,
+      connection: { search_path: fixture.schemaName },
+      onnotice: () => {},
+    });
+  };
   const store = createMemorySessionStore();
   const env = {
     APP_URL,
@@ -134,7 +159,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     DISCORD_CLIENT_SECRET: "s",
     DISCORD_BOT_TOKEN: "b",
     SESSION_SECRET,
-    ADMIN_DB: db,
+    get ADMIN_DB() {
+      return db;
+    },
     SESSION_STORE: store,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   } as unknown as Env;
@@ -172,12 +199,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
 
   it("cancels a log INSERT blocked on a table lock (no blocked backend remains)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const locker = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const locker = lockClient();
     try {
       await locker.begin(async (tx) => {
         await tx`lock table event_search_logs in access exclusive mode`;
         const t0 = Date.now();
-        await recordSearch(createDb(process.env.DATABASE_URL!), "blocked", 0);
+        await recordSearch(db, "blocked", 0);
         expect(Date.now() - t0).toBeLessThan(1500);
         await new Promise((r) => setTimeout(r, 300));
         const active =
@@ -253,7 +280,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
   it("serves /admin 200 with the widget omitted while the search-log table is locked", async () => {
     // P2: the optional widget SELECT must be cancelled DB-side so the
     // dashboard never waits on an analytics-only lock (no Promise.race-only fix).
-    const locker = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const locker = lockClient();
     try {
       await locker.begin(async (tx) => {
         await tx`lock table event_search_logs in access exclusive mode`;

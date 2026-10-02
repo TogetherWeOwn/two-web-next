@@ -2,6 +2,9 @@ import type { QueueMessage } from "./jobs/types";
 
 export type Env = AgentEventsEnv & {
   APP_URL: string;
+  // Event writes use the same W13 queue as scheduled reconciliation. Optional
+  // only for local/test environments without a transport.
+  SYNC_EVENT_QUEUE?: Pick<Queue<QueueMessage>, "send">;
   // Worker-first static assets: fetched only after the host guard admits the request.
   ASSETS?: Pick<Fetcher, "fetch">;
   DISCORD_CLIENT_ID: string;
@@ -10,9 +13,9 @@ export type Env = AgentEventsEnv & {
   // Optional: surfaces the "Last updated" stamp on /rules (YYYY-MM-DD). Empty or unparseable
   // hides the stamp instead of 500ing (ports two-web TOG-7323).
   RULES_LAST_UPDATED?: string;
-  // Hyperdrive → shared Postgres for web DB reads, sessions, roster writes,
-  // and /up. DATABASE_URL overrides it for local/dev use. Same shape as
-  // AGENT_DB below; the ingress binding remains independent.
+  // Hyperdrive → shared Postgres for web reads, agent events, sessions,
+  // roster writes and /up. DATABASE_URL overrides it for local/dev use. An
+  // optional AGENT_DB binding overrides the store for agent-event ingress only.
   DB?: { connectionString: string };
   // Secrets (wrangler secret put). The bot token must belong to the same Discord application as
   // DISCORD_CLIENT_ID: Discord only lets an application's own bot add a member with that
@@ -48,6 +51,12 @@ export type JobsEnv = Env & {
   INTERNAL_ACTION_QUEUE: Queue<QueueMessage>;
   HYPERDRIVE?: Hyperdrive;
   DATABASE_URL?: string;
+  // Signed bot client for sync/announcement/role jobs. All three are required
+  // to send; a missing value is a terminal, alerting job failure (never an ack
+  // as success). Values are Operator-provisioned; see docs/config.md.
+  BOT_ENDPOINT_URL?: string;
+  BOT_KEY_ID?: string;
+  BOT_SHARED_SECRET?: string;
 };
 
 export type Session = {
@@ -62,6 +71,10 @@ export type Session = {
 // and `wrangler dev` inject a connection string via the same shape (agent-testdb only).
 export type AgentEventsEnv = {
   AGENT_DB?: { connectionString: string };
+  // Optional signed bot observation configuration; missing values fail closed.
+  BOT_ENDPOINT_URL?: string;
+  BOT_KEY_ID?: string;
+  BOT_SHARED_SECRET?: string;
   // Kill switch, default off: an unconfigured environment answers 404 ingress_disabled.
   AGENT_EVENTS_ENABLED?: string;
   // The one admitted caller. Env-only, no default: unset denies every grant (wrong_caller).

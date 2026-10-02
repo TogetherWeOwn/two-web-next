@@ -13,7 +13,7 @@
 
 import postgres from "postgres";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql as dsql } from "drizzle-orm";
 import type { Db } from "../src/db/index";
 import {
   createMemberDataFixture,
@@ -24,7 +24,7 @@ import { events } from "../src/db/admin-schema";
 import { createEvent, materializeRecurringSeries, transitionEvent } from "../src/admin/store";
 import { wallToUtc, type EventStatus } from "../src/admin/validation";
 import { buildSyncMessage } from "../src/events/sync";
-import { pgEventStore } from "../src/jobs/event-store-pg";
+import { pgEventStore } from "../src/jobs/events";
 import { handleSyncEvent } from "../src/jobs/sync-event";
 import type { BotClient, EventStore } from "../src/jobs/types";
 
@@ -39,7 +39,7 @@ describe("series extension announce boundary (unit, no DB)", () => {
   it("builds no sync message for draft/past, upsert for published", () => {
     expect(payloadFor("K", "draft")).toBeNull();
     expect(payloadFor("K", "past")).toBeNull();
-    expect(payloadFor("K", "published")?.action).toBe("event.upsert");
+    expect(payloadFor("K", "published")?.kind).toBe("sync-event");
   });
 
   it("drops an unmirrored occurrence without calling the bot", async () => {
@@ -49,20 +49,15 @@ describe("series extension announce boundary (unit, no DB)", () => {
         called++, { ok: true, requestId: null, discordEventId: "discord-1" }
       ),
     } as unknown as BotClient;
+    // The tracked store snapshots nothing for a row that is not mirrored (draft/past/unknown).
     const unmirrored: EventStore = {
-      find: async (eventKey: string) => ({
-        eventKey,
-        payload: {
-          eventKey,
-          name: "Sunday Squad",
-          startsAt: starts.toISOString(),
-          endsAt: ends.toISOString(),
-          location: "hall",
-          description: null,
-        },
-        mirrored: false,
-      }),
-      recordMirrored: async () => {},
+      prepareSync: async () => null,
+      completeSync: async () => {},
+      claimSync: async () => null,
+      deferSync: async () => {},
+      failSync: async () => {},
+      needsSync: async () => false,
+      pendingSync: async () => null,
       closeFinished: async () => 0,
       materializeSeries: async () => 0,
       staleEventKeys: async () => [],
@@ -119,6 +114,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
       }
     });
 
+    // Fully mirrored: Discord id known and every revision acknowledged.
+    const markMirrored = (eventKey: string, discordEventId: string) =>
+      db
+        .update(events)
+        .set({ discordEventId, syncedRevision: dsql`${events.syncRevision}` })
+        .where(eq(events.eventKey, eventKey));
+
     const seriesRows = () =>
       db.select().from(events).orderBy(asc(events.recurrenceIndex), asc(events.id));
 
@@ -132,10 +134,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const pub = await transitionEvent(db, actor, parent.eventKey, "published");
       expect(pub.writeBack).toEqual({ eventKey: parent.eventKey, status: "published" });
       // Fully mirror the live parent so the reconcile pass has nothing to re-announce for it.
-      await db
-        .update(events)
-        .set({ discordEventId: "discord-parent" })
-        .where(eq(events.eventKey, parent.eventKey));
+      await markMirrored(parent.eventKey, "discord-parent");
 
       // Extend the live series 2 -> 4 and run the reconcile top-up.
       await db
@@ -166,10 +165,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // Live and fully mirrored: nothing left to announce.
       const { row: live } = await createEvent(db, actor, { ...input, title: "Live" });
       await transitionEvent(db, actor, live.eventKey, "published");
-      await db
-        .update(events)
-        .set({ discordEventId: "discord-live" })
-        .where(eq(events.eventKey, live.eventKey));
+      await markMirrored(live.eventKey, "discord-live");
       // Draft: never announced.
       const { row: draft } = await createEvent(db, actor, { ...input, title: "Draft" });
       // Ended: published while live, then closed to past by the reconcile close half.
@@ -220,10 +216,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
         [3, "published"],
         [4, "draft"],
       ]);
-      // The queued set holds exactly the genuinely-new published occurrence:
-      // never the draft parent, the cancelled skipped week, or the draft top-up.
+      // Tracked outbox: the new published occurrence plus the skipped week's
+      // cancel (event.cancel). Never the draft parent or the draft top-up.
       const store = pgEventStore(sql!);
-      expect(await store.staleEventKeys()).toEqual([freshKey]);
+      const skippedKey = before[2]!.eventKey;
+      expect((await store.staleEventKeys()).sort()).toEqual([freshKey, skippedKey].sort());
       expect(await materializeRecurringSeries(db)).toBe(0);
     });
   },

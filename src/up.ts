@@ -109,8 +109,35 @@ export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadin
   }
 }
 
-export function upHttpStatus(body: DatabaseReadiness): 200 | 503 {
-  return body.db === "ok" && body.pending_migrations === 0 ? 200 : 503;
+// Secrets without which sign-in or join cannot work. Presence only: no shape
+// or strength check, and the body never names which one is absent. The
+// server-side warning lists names, never values (TOG-12400).
+export const REQUIRED_SECRETS = [
+  "SESSION_SECRET",
+  "DISCORD_CLIENT_SECRET",
+  "DISCORD_BOT_TOKEN",
+] as const;
+type RequiredSecret = (typeof REQUIRED_SECRETS)[number];
+
+export type ConfigReadiness = { config?: "missing" };
+
+export function missingSecrets(env: Partial<Record<RequiredSecret, unknown>>): RequiredSecret[] {
+  return REQUIRED_SECRETS.filter((name) => {
+    const value = env[name];
+    return typeof value !== "string" || value.trim() === "";
+  });
+}
+
+// A ready Worker adds nothing to the body, so its shape stays unchanged.
+export function configReadiness(env: Partial<Record<RequiredSecret, unknown>>): ConfigReadiness {
+  const missing = missingSecrets(env);
+  if (missing.length === 0) return {};
+  console.warn("Health check found required Worker secrets missing.", { missing });
+  return { config: "missing" };
+}
+
+export function upHttpStatus(body: DatabaseReadiness & ConfigReadiness): 200 | 503 {
+  return body.config === undefined && body.db === "ok" && body.pending_migrations === 0 ? 200 : 503;
 }
 
 export const QUEUE_WARN_AT = 20;
@@ -142,18 +169,20 @@ export type QueuePayload = {
 };
 
 type QueueHealth = { status: "healthy" | "degraded"; queue: QueuePayload };
-export type UpBody = QueueHealth & DatabaseReadiness;
+export type UpBody = QueueHealth & DatabaseReadiness & ConfigReadiness;
 
 export async function upBody(
   measure: (() => Promise<QueueDepth>) | null,
   sql: Sql | null = null,
+  config: ConfigReadiness = {},
 ): Promise<UpBody> {
   // Parallel deadlines keep a hung DB + hung queue inside one 3 s window.
   const [queue, database] = await Promise.all([queueBody(measure), databaseReadiness(sql)]);
+  const ready = { ...database, ...config };
   return {
     ...queue,
-    ...database,
-    status: upHttpStatus(database) === 503 ? "degraded" : queue.status,
+    ...ready,
+    status: upHttpStatus(ready) === 503 ? "degraded" : queue.status,
   };
 }
 
