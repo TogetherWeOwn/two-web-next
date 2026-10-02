@@ -27,9 +27,9 @@
 // | JoinDenialMatrixTest.php:107 (double-submitted callback is one idempotent join) | behavioral equivalent: profile first-save race converges on one row (roster upsert idempotence itself is proved in test/roster.test.ts) |
 // | ProfileCreationRaceTest.php:121 (concurrent first saves serialize to one row) | same, via the Next upsert writer (mechanism differs: ON CONFLICT, not a parent lock) |
 //
-// Already ported elsewhere (cited, not duplicated):
+// Already ported elsewhere (cited, not duplicated; listed for traceability only):
 // | Legacy row | Existing proof |
-// |---| Futile to re-pin: listed for traceability only. |
+// |---|---|
 // | ThrottleCoverageTest.php:60,74,97,106,127 (every-POST-throttled audit) | test/throttle.test.ts |
 // | RsvpThrottleTest.php:21,42,78,104 (rsvp-writes bucket, 13th-write 429, bucket isolation) | test/throttle.test.ts budgets + test/rsvp.test.ts:319,333,346 |
 // | RsvpAuthGateTest.php (guest PUT/DELETE 401, writes nothing) | test/rsvp.test.ts:155 |
@@ -322,7 +322,9 @@ describe.skipIf(!process.env.DATABASE_URL)("profile first-save race (agent-testd
   let fixture: MemberDataFixture;
 
   beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    // max: 2 so the two saves really overlap on separate connections; with the
+    // default single connection they queue and a racy check-then-insert passes.
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 2 });
   });
   beforeEach(async () => { await fixture.reset(); });
   afterAll(async () => { await fixture?.dispose(); });
