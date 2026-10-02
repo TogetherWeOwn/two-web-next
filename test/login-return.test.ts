@@ -588,6 +588,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
       isActive: async () => { throw new Error("store down"); },
       rotate: async () => { throw new Error("store down"); },
       revoke: async () => { throw new Error("store down"); },
+      revokeUserSessions: async () => { throw new Error("store down"); },
       sweepExpired: async () => { throw new Error("store down"); },
     };
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(failing));

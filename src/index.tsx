@@ -209,8 +209,9 @@ async function issueSession(
     console.warn("roster upsert failed", { user: row.userId, exception: (err as Error)?.constructor?.name ?? "unknown" });
   }
   const token = newSessionToken();
+  const tokenHash = await hashToken(token);
   await store.create({
-    tokenHash: await hashToken(token),
+    tokenHash,
     userId: row.userId,
     username: row.username,
     avatar: row.avatar,
@@ -218,6 +219,23 @@ async function issueSession(
     moderator: row.moderator,
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
   });
+  // Session fixation (TOG-12284): a fresh login revokes the presented
+  // pre-login/pre-join token plus every other live session for this user, so
+  // only the newest session survives. The presented token is revoked by hash
+  // explicitly because it can belong to a different user (shared terminal:
+  // the user sweep below would miss it); the sweep covers same-user sessions
+  // on other devices. The fresh row is created first: a sweep failure warns
+  // and sign-in still succeeds (fail-open on the sweep, never a
+  // logout-on-login). Token-hash-only.
+  try {
+    const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+    if (typeof prior === "string" && prior.startsWith("two_")) {
+      await store.revoke(await hashToken(prior));
+    }
+    await store.revokeUserSessions(row.userId, tokenHash);
+  } catch (err) {
+    console.warn("prior session sweep failed", { user: row.userId, exception: (err as Error)?.constructor?.name ?? "unknown" });
+  }
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
