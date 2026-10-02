@@ -16,7 +16,12 @@ import {
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
   pastEventsOutOfRangeCopy,
 } from "../src/islands/contracts";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -24,12 +29,33 @@ const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 function eventRow(n: number): typeof events.$inferSelect {
   const date = new Date(Date.UTC(2020, 0, n + 1));
   return {
-    id: n, icsSequence: 1n, eventKey: `archive-${n}`, title: `Past game ${n}`, game: "Chess", description: null,
-    startsAt: date, endsAt: date, timezone: "UTC", location: null, capacity: 10, status: "past",
-    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
-    recurrenceCount: null, recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
-    createdAt: date, updatedAt: date,
+    id: n,
+    icsSequence: 1n,
+    eventKey: `archive-${n}`,
+    title: `Past game ${n}`,
+    game: "Chess",
+    description: null,
+    startsAt: date,
+    endsAt: date,
+    timezone: "UTC",
+    location: null,
+    capacity: 10,
+    status: "past",
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    createdBy: null,
+    rsvpOpen: true,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: date,
+    updatedAt: date,
   };
 }
 
@@ -44,14 +70,20 @@ function archive(total: number, appUrl = APP_URL) {
     const offset = hasOffset ? Number(params.at(-1)) : 0;
     const limit = Number(params.at(hasOffset ? -2 : -1));
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
-    return { rows: rows.slice(offset, offset + limit).map((row) => columns.map((k) => {
-      const value = row[k];
-      return value instanceof Date ? value.toISOString() : value;
-    })) };
+    return {
+      rows: rows.slice(offset, offset + limit).map((row) =>
+        columns.map((k) => {
+          const value = row[k];
+          return value instanceof Date ? value.toISOString() : value;
+        }),
+      ),
+    };
   });
   const env = {
-    APP_URL: appUrl, ADMIN_DB: db as unknown as Db,
-    SESSION_SECRET, SESSION_STORE: createMemorySessionStore(),
+    APP_URL: appUrl,
+    ADMIN_DB: db as unknown as Db,
+    SESSION_SECRET,
+    SESSION_STORE: createMemorySessionStore(),
   } as unknown as Env & { SESSION_STORE: SessionStore };
   return { env, request: (path: string, init?: RequestInit) => app.request(path, init ?? {}, env) };
 }
@@ -59,12 +91,22 @@ function archive(total: number, appUrl = APP_URL) {
 async function memberCookie(env: Env & { SESSION_STORE: SessionStore }) {
   const token = newSessionToken();
   await env.SESSION_STORE!.create({
-    tokenHash: await hashToken(token), userId: "100000000000000001", username: "viewer", avatar: null,
-    member: true, moderator: false, expiresAt: new Date(Date.now() + 3600_000),
+    tokenHash: await hashToken(token),
+    userId: "100000000000000001",
+    username: "viewer",
+    avatar: null,
+    member: true,
+    moderator: false,
+    expiresAt: new Date(Date.now() + 3600_000),
   });
-  return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-    path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-  })).split(";")[0]!;
+  return (
+    await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
 }
 
 const origin = (appUrl: string) => appUrl.replace(/\/$/, "");
@@ -82,7 +124,9 @@ describe("past-events feed affordances", () => {
       expect(html).toContain(`<a href="${base}/events.ics">Download calendar (.ics)</a>`);
       // Outside the binder's swapped zones: never swallowed by page turns, and
       // never intercepted (the binder only handles a[data-archive-page]).
-      expect(html.indexOf(`data-testid="${EVENTS_SUBSCRIBE_TESTID}"`)).toBeLessThan(html.indexOf("data-archive-state"));
+      expect(html.indexOf(`data-testid="${EVENTS_SUBSCRIBE_TESTID}"`)).toBeLessThan(
+        html.indexOf("data-archive-state"),
+      );
       expect(subscribe![0]).not.toContain("data-archive-page");
     });
   }

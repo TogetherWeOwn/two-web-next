@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/pg-proxy";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
+import { NOT_FOUND_SUGGESTIONS_TTL_MS } from "../src/not-found-suggestions";
 import type { Env } from "../src/env";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Db } from "../src/db/index";
@@ -20,6 +21,10 @@ const removed = ["/db-ping", "/health", "/healthz"];
 // One Ray ID gives every response the same x-request-id, so the full header
 // comparison still proves removed paths match unknown ones.
 const RAY = "0123456789abcdef-LHR";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])(
   "removed diagnostics on %s",
@@ -53,8 +58,12 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])(
         if (state === "available") bindings.ADMIN_DB = db as unknown as Db;
         const reads = () =>
           [dbRead, urlRead, transaction, query].map((mock) => mock.mock.calls.length);
+        // The generic 404 caches its optional lookup per isolate (TOG-12551).
+        // Expire it before every probe so each path is compared on a cold fill.
+        vi.useFakeTimers({ toFake: ["Date"] });
         const clearReads = () => {
           for (const mock of [dbRead, urlRead, transaction, query]) mock.mockClear();
+          vi.setSystemTime(Date.now() + NOT_FOUND_SUGGESTIONS_TTL_MS);
         };
         const headerCases = [
           { name: "no origin evidence", headers: new Headers(), unsafeStatus: 403 },
