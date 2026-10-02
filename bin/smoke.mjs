@@ -106,6 +106,20 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
           check(false, "valid JSON object", "invalid JSON");
         }
       }
+      if (route.path === "/robots.txt") {
+        // Per-environment robots (W16b TOG-11942): the Sitemap line must name
+        // this environment's own origin, never the apex or another env's host.
+        const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
+        check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+      }
+      if (route.path === "/sitemap_index.xml") {
+        // Same-environment sitemap: every loc stays on the probed origin, and
+        // the index is never empty (static leaves render even with the DB down).
+        const locs = [...body.matchAll(/<loc>([^<]*)<\/loc>/g)].map((m) => m[1].trim());
+        check(locs.length > 0, "at least one sitemap <loc>", `${locs.length} <loc> entries`);
+        const foreign = locs.filter((loc) => !loc.startsWith(`${base.origin}/`)).length;
+        check(foreign === 0, "same-origin sitemap locs", `${foreign} foreign locs`);
+      }
       if (route.body)
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");
       if (route.redirect && response.status === 302) {
