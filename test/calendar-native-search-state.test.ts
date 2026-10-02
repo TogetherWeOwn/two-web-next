@@ -35,6 +35,8 @@ function eventRow(id: number, startsAt: Date): PublicEvent {
   return {
     id,
     icsSequence: 1n,
+    syncRevision: 1,
+    syncedRevision: 0,
     eventKey: `event-${id}`,
     title: "Game night",
     game: null,

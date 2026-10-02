@@ -56,6 +56,8 @@ const row = {
   parentEventId: null,
   recurrenceIndex: null,
   icsSequence: 0n,
+  syncRevision: 1,
+  syncedRevision: 0,
   status: "draft",
   rsvpOpen: true,
   createdBy: null,

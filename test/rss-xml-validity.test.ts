@@ -18,6 +18,8 @@ const APP_URL = "https://next.example.test";
 const row = {
   id: 1,
   icsSequence: 1782907200n,
+  syncRevision: 1,
+  syncedRevision: 0,
   eventKey: "01J0000000000000000000ABCD",
   title: "Synthetic event",
   game: null,

@@ -1,13 +1,26 @@
 // route-inventory: POST /events
 // route-inventory: PATCH /events/:key
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import postgres from "postgres";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
+
+// Keep the routes, tracking ledger and unique locks real, in the owned schema.
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
+
+type SyncEventMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -34,24 +47,47 @@ const invalidBodies = [
 
 describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-testdb)", () => {
   let fixture: MemberDataFixture;
+  let realPostgres: typeof postgres;
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  const sent: SyncEventMessage[] = [];
   let env: Env;
 
   beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres")).default;
+    const url = testDatabaseUrl(process.env.DATABASE_URL!);
+    fixture = await createMemberDataFixture(url.href);
+    vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}>) => {
+      testDatabaseUrl(raw);
+      return realPostgres(raw, {
+        ...opts,
+        port: 5432,
+        password: () => url.password,
+        connection: { search_path: fixture.schemaName },
+        onnotice: () => {},
+      });
+    }) as typeof postgres);
     env = {
       ...baseEnv,
+      DB: { connectionString: url.href },
       ADMIN_DB: fixture.db,
       SESSION_STORE: store,
-      EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
-    } as unknown as Env;
+      SYNC_EVENT_QUEUE: {
+        send: async (message) => {
+          sent.push(message as SyncEventMessage);
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+        },
+      },
+    } as Env;
   });
   afterAll(async () => {
+    if (realPostgres) vi.mocked(postgres).mockImplementation(realPostgres);
     await fixture?.dispose();
   });
 
   beforeEach(async () => {
+    await fixture.client`delete from queue_jobs`;
+    await fixture.client`delete from job_unique_locks`;
+    await fixture.client`delete from web_throttle_hits`;
     await fixture.reset();
     sent.length = 0;
     // Second occurrence of London's autumn fold; retain seconds as well as the instant.
@@ -117,6 +153,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     events: await fixture.db.select().from(events),
     audit: await fixture.db.select().from(activityLog),
     rsvps: await fixture.db.select().from(rsvps),
+    jobs: await fixture.client`select * from queue_jobs order by job_id`,
+    locks: await fixture.client`select * from job_unique_locks order by key`,
   });
   async function expectUnchanged(before: Awaited<ReturnType<typeof snapshot>>) {
     expect(await snapshot()).toEqual(before);
@@ -183,11 +221,27 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
       title: "Renamed",
       updatedAt: after.events[0]!.updatedAt,
       icsSequence: after.events[0]!.icsSequence,
+      syncRevision: after.events[0]!.syncRevision,
     });
     expect(after.events[0]!.icsSequence).toBeGreaterThan(before.events[0]!.icsSequence);
+    expect(after.events[0]!.syncRevision).toBeGreaterThan(before.events[0]!.syncRevision);
     expect(after.audit).toHaveLength(before.audit.length + 1);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ eventKey: EVENT_KEY, action: "event.upsert" });
+    expect(sent[0]).toEqual({
+      kind: "sync-event",
+      eventKey: EVENT_KEY,
+      idempotencyKey: expect.any(String),
+      jobId: expect.any(String),
+      leaseToken: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+      requestId: expect.any(String),
+    });
+    expect(after.jobs).toHaveLength(1);
+    expect(after.jobs[0]!.job_id).toBe(sent[0]!.jobId);
+    expect(after.locks).toHaveLength(1);
+    expect(after.locks[0]!.key).toBe(`sync-event:${EVENT_KEY}`);
+    expect(after.locks[0]!.owner_token).toBe(sent[0]!.leaseToken);
   });
 
   it("an empty object is a valid partial PATCH and preserves all omitted values", async () => {
@@ -243,8 +297,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
       timezone: "America/New_York",
       updatedAt: after.events[0]!.updatedAt,
       icsSequence: after.events[0]!.icsSequence,
+      syncRevision: after.events[0]!.syncRevision,
     });
     expect(after.events[0]!.icsSequence).toBeGreaterThan(before.events[0]!.icsSequence);
+    expect(after.events[0]!.syncRevision).toBeGreaterThan(before.events[0]!.syncRevision);
     expect(sent).toHaveLength(1);
   });
 
