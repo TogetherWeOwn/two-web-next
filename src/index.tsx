@@ -59,7 +59,7 @@ import {
   takeJoinResult,
 } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
+import { configReadiness, upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
@@ -254,8 +254,9 @@ async function issueSession(
     });
   }
   const token = newSessionToken();
+  const tokenHash = await hashToken(token);
   await store.create({
-    tokenHash: await hashToken(token),
+    tokenHash,
     userId: row.userId,
     username: row.username,
     avatar: row.avatar,
@@ -263,6 +264,26 @@ async function issueSession(
     moderator: row.moderator,
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
   });
+  // Session fixation (TOG-12284): a fresh login revokes the presented
+  // pre-login/pre-join token plus every other live session for this user, so
+  // only the newest session survives. The presented token is revoked by hash
+  // explicitly because it can belong to a different user (shared terminal:
+  // the user sweep below would miss it); the sweep covers same-user sessions
+  // on other devices. The fresh row is created first: a sweep failure warns
+  // and sign-in still succeeds (fail-open on the sweep, never a
+  // logout-on-login). Token-hash-only.
+  try {
+    const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+    if (typeof prior === "string" && prior.startsWith("two_")) {
+      await store.revoke(await hashToken(prior));
+    }
+    await store.revokeUserSessions(row.userId, tokenHash);
+  } catch (err) {
+    console.warn("prior session sweep failed", {
+      user: row.userId,
+      exception: (err as Error)?.constructor?.name ?? "unknown",
+    });
+  }
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -512,8 +533,9 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
-// `GET /up` — session-free DB/schema readiness plus the existing queue signal.
-// DB/ledger failure or pending web migrations answers 503; queue-only degraded
+// `GET /up` — session-free DB/schema and secret-presence readiness plus the
+// existing queue signal. A missing required secret, DB/ledger failure or
+// pending web migrations answers 503; queue-only degraded
 // or unknown remains 200. `no-store` so a monitor never reads a stale response.
 // Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
@@ -556,6 +578,7 @@ app.get("/up", async (c) => {
     const body = await upBody(
       queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null,
       sql,
+      configReadiness(c.env),
     );
     return c.json(body, upHttpStatus(body));
   } finally {

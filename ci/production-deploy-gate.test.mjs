@@ -447,21 +447,28 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   }
 });
 
-test("manual production workflow uses private-repo runners and production-only secrets", () => {
+test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  assert.equal((workflow.match(/runs-on: \[self-hosted, two-selfhosted\]/g) ?? []).length, 2);
-  assert.ok(!workflow.includes("ubuntu-latest"));
+  // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
+  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  assert.equal(workflow.split(runsOn).length - 1, 2);
+  assert.equal(
+    workflow.split("ubuntu-latest").length - 1,
+    2,
+    "ubuntu-latest only as the public-repo branch",
+  );
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 2);
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 3);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
+  const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const deploy = workflow.indexOf("run: npx wrangler deploy --env production");
-  assert.ok(credentialCheck > 0 && credentialCheck < deploy);
+  assert.ok(credentialCheck > 0 && credentialCheck < requiredSecrets && requiredSecrets < deploy);
 });
 
 test("rollback workflow reuses the production gate with no wider permissions", () => {

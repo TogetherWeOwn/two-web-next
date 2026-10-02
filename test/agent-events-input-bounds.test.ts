@@ -95,6 +95,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
     state.schema = fixture.schemaName;
   });
   beforeEach(async () => {
+    await fixture.reset();
     await clearAuditRows(sql, ["agent_event_audits"]);
     await sql`DELETE FROM agent_event_grants`;
     await sql`DELETE FROM agent_event_hits`;
@@ -121,7 +122,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
         },
         {
           APP_URL: "https://next.example.test",
-          AGENT_DB: { connectionString: url },
+          DATABASE_URL: url,
           AGENT_EVENTS_ENABLED: "true",
           AGENT_EVENTS_CALLER_AGENT_ID: CALLER,
         } as never,
@@ -173,7 +174,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
     async (capacity) => {
       const eventKey = await create(capacity);
       expect(
-        (await sql`SELECT capacity FROM agent_events WHERE event_key = ${eventKey}`)[0]!.capacity,
+        (await sql`SELECT capacity FROM events WHERE event_key = ${eventKey}`)[0]!.capacity,
       ).toBe(capacity);
       const updated = await call({
         op: "update",
@@ -184,9 +185,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
       });
       expect(updated.status).toBe(200);
       expect(
-        (
-          await sql`SELECT capacity, agent_version FROM agent_events WHERE event_key = ${eventKey}`
-        )[0],
+        (await sql`SELECT capacity, agent_version FROM events WHERE event_key = ${eventKey}`)[0],
       ).toMatchObject({ capacity, agent_version: 2 });
     },
   );
@@ -196,7 +195,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
       `${op} audits oversized capacity %s without mutation or replay; corrected payload reuses the key`,
       async (capacity) => {
         const eventKey = op === "update" ? await create() : null;
-        const before = await sql`SELECT * FROM agent_events`;
+        const before = await sql`SELECT * FROM events`;
         const request = {
           op,
           idempotency_key: "capacity-retry",
@@ -205,7 +204,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
         const rejected = await call({ ...request, fields: { ...FIELDS, capacity } });
         await expectDenial(rejected, 422, "validation_failed", eventKey);
         expect(rejected.body.errors).toMatchObject({ capacity: [expect.any(String)] });
-        expect(await sql`SELECT * FROM agent_events`).toEqual(before);
+        expect(await sql`SELECT * FROM events`).toEqual(before);
         expect(
           await sql`SELECT key FROM agent_event_idempotency_keys WHERE key = 'capacity-retry'`,
         ).toHaveLength(0);
@@ -215,7 +214,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
         expect(
           await sql`SELECT key FROM agent_event_idempotency_keys WHERE key = 'capacity-retry'`,
         ).toHaveLength(1);
-        expect((await sql`SELECT capacity FROM agent_events`)[0]!.capacity).toBe(MAX_CAPACITY);
+        expect((await sql`SELECT capacity FROM events`)[0]!.capacity).toBe(MAX_CAPACITY);
       },
     );
   }
@@ -224,7 +223,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
     it.each(UNKNOWN_KEYS)(
       `${op} returns audited 404 for $label without storing success`,
       async ({ key, auditKey }) => {
-        const before = await sql`SELECT * FROM agent_events`;
+        const before = await sql`SELECT * FROM events`;
         const rejected = await call({
           op,
           idempotency_key: "key-retry",
@@ -233,18 +232,18 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
           fields: FIELDS,
         });
         await expectDenial(rejected, 404, "event_not_found", auditKey);
-        expect(await sql`SELECT * FROM agent_events`).toEqual(before);
+        expect(await sql`SELECT * FROM events`).toEqual(before);
         expect(await sql`SELECT key FROM agent_event_idempotency_keys`).toHaveLength(0);
       },
     );
 
     it(`${op} does not truncate a real key plus suffix and allows retry with the owned 26-character key`, async () => {
       const eventKey = await create();
-      const before = await sql`SELECT * FROM agent_events`;
+      const before = await sql`SELECT * FROM events`;
       const request = { op, idempotency_key: "owned-retry", version: 1, fields: FIELDS };
       const rejected = await call({ ...request, event_key: eventKey + "Z" });
       await expectDenial(rejected, 404, "event_not_found", null);
-      expect(await sql`SELECT * FROM agent_events`).toEqual(before);
+      expect(await sql`SELECT * FROM events`).toEqual(before);
       expect(
         await sql`SELECT key FROM agent_event_idempotency_keys WHERE key = 'owned-retry'`,
       ).toHaveLength(0);
@@ -262,12 +261,12 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
     const [other] =
       await sql`INSERT INTO agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
       VALUES (${CALLER}, 'synthetic-company', ${DEFAULT_CONFIG.stagingGuildId}, ${await sha256Hex("synthetic-other")}) RETURNING id`;
-    await sql`UPDATE agent_events SET agent_grant_id = ${other!.id} WHERE event_key = ${eventKey}`;
+    await sql`UPDATE events SET agent_grant_id = ${other!.id} WHERE event_key = ${eventKey}`;
     const denied = await call({ op: "cancel", idempotency_key: "foreign", event_key: eventKey });
     await expectDenial(denied, 403, "foreign_event", eventKey);
-    expect(
-      (await sql`SELECT status FROM agent_events WHERE event_key = ${eventKey}`)[0]!.status,
-    ).toBe("draft");
+    expect((await sql`SELECT status FROM events WHERE event_key = ${eventKey}`)[0]!.status).toBe(
+      "draft",
+    );
   });
 
   it.each([undefined, null])(
@@ -278,7 +277,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
       expect(read.status).toBe(200);
       expect(read.body.event).toMatchObject({ event_key: eventKey });
       expect(
-        (await sql`SELECT agent_grant_id FROM agent_events WHERE event_key = ${eventKey}`)[0]!
+        (await sql`SELECT agent_grant_id FROM events WHERE event_key = ${eventKey}`)[0]!
           .agent_grant_id,
       ).toBe(grantId);
     },
