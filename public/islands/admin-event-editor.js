@@ -24,15 +24,26 @@
   window.addEventListener("pageshow", function () {
     saving = false;
   });
+  // Same bar as safeNext (src/join/service.ts): a same-origin path or nothing.
+  function samePath(raw) {
+    if (typeof raw !== "string" || raw === "" || /[\s\x00-\x1f\x7f]/.test(raw)) return null;
+    if (raw.charAt(0) !== "/" || raw.charAt(1) === "/" || raw.indexOf("\\") >= 0) return null;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
+    try {
+      var origin = window.location.origin;
+      if (new URL(raw, origin).origin !== origin) return null;
+    } catch {
+      return null;
+    }
+    return raw;
+  }
   window.addEventListener("two:session-expired", function (event) {
     event.preventDefault();
     sessionExpired = true;
     var detail = (event && event.detail) || {};
     var recoveryUrl =
-      typeof detail.recoveryUrl === "string" && detail.recoveryUrl.charAt(0) === "/"
-        ? detail.recoveryUrl
-        : "/auth/recover?next=" +
-          encodeURIComponent(window.location.pathname + window.location.search);
+      samePath(detail.recoveryUrl) ||
+      "/auth/recover?next=" + encodeURIComponent(window.location.pathname + window.location.search);
     var old = document.querySelector('[data-testid="admin-session-expired"]');
     if (old) old.remove();
     var notice = document.createElement("div");

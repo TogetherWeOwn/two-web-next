@@ -14,6 +14,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import production from "../src/index";
 import { adminApp } from "../src/admin/routes";
+import { safeNext } from "../src/join/service";
 import { sameOrigin } from "../src/same-origin";
 import { ADMIN_SESSION_EXPIRED_COPY, ADMIN_SESSION_EXPIRED_TESTID } from "../src/islands/contracts";
 import type { Env } from "../src/env";
@@ -329,6 +330,32 @@ describe("admin editor session-expiry island", () => {
     expect(
       b.created.filter((el) => el.attrs["data-testid"] === ADMIN_SESSION_EXPIRED_TESTID),
     ).toHaveLength(1);
+  });
+
+  it.each([
+    ["protocol-relative host", "//evil.example/auth/recover"],
+    ["backslash host", "/\\evil.example"],
+    ["absolute URL", "https://evil.example/auth/recover"],
+    ["script scheme", "javascript:alert(1)"],
+    ["control character", "/auth/recover\t//evil.example"],
+    ["relative path", "auth/recover"],
+    ["empty string", ""],
+    ["non-string", 42],
+  ])("a hostile recovery detail (%s) falls back to this page's recovery path", (_, hostile) => {
+    expect(safeNext(hostile)).toBeNull();
+    const b = eventEditorBrowser({});
+    b.expireSession(hostile);
+    const notice = b.created.find((el) => el.attrs["data-testid"] === ADMIN_SESSION_EXPIRED_TESTID);
+    expect(notice!.children[0]!.href).toBe("/auth/recover?next=%2Fadmin%2Fevents%2Fabc");
+  });
+
+  it("accepts any detail safeNext accepts, unchanged", () => {
+    const safe = "/auth/recover?next=%2Fadmin%2Ffeatured%2F7";
+    expect(safeNext(safe)).toBe(safe);
+    const b = eventEditorBrowser({});
+    b.expireSession(safe);
+    const notice = b.created.find((el) => el.attrs["data-testid"] === ADMIN_SESSION_EXPIRED_TESTID);
+    expect(notice!.children[0]!.href).toBe(safe);
   });
 
   it("releases the dirty guard for the recovery trip but keeps prompting otherwise", () => {

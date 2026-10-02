@@ -98,7 +98,7 @@ export function eventEditorBrowser({
         kind: string,
         fn: (event: { preventDefault: () => void; returnValue?: string; detail?: unknown }) => void,
       ) => windowListeners.set(kind, fn),
-      location: { pathname: "/admin/events/abc", search: "" },
+      location: { origin: "https://next.example", pathname: "/admin/events/abc", search: "" },
     },
     FormData: class {
       constructor(form: unknown) {
@@ -108,6 +108,7 @@ export function eventEditorBrowser({
         return values[Symbol.iterator]();
       }
     },
+    URL: NodeURL,
     URLSearchParams,
   });
   return {
@@ -125,7 +126,7 @@ export function eventEditorBrowser({
       windowListeners.get("beforeunload")?.(event);
       return event;
     },
-    expireSession(recoveryUrl = "/auth/recover?next=%2Fadmin%2Fevents%2Fabc") {
+    expireSession(recoveryUrl: unknown = "/auth/recover?next=%2Fadmin%2Fevents%2Fabc") {
       const event = { preventDefault: vi.fn(), detail: { recoveryUrl } };
       windowListeners.get("two:session-expired")?.(event);
       return event;
