@@ -4,7 +4,14 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG, handleAgentEvent, type Answer } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
-import migration from "../drizzle/0001_agent-events.sql?raw";
+import agentTables from "../drizzle/0001_agent-events.sql?raw";
+import sharedEvents from "../drizzle/1001_admin-slice.sql?raw";
+import rsvpSeats from "../drizzle/1002_rsvps.sql?raw";
+import rsvpSyncStamp from "../drizzle/1006_rsvp-synced-at.sql?raw";
+import syncFailure from "../drizzle/1009_event-sync-failure.sql?raw";
+import rsvpLegacyOrder from "../drizzle/1010_rsvp-legacy-order.sql?raw";
+import icsSequence from "../drizzle/1014_event-ics-sequence.sql?raw";
+import sharedAgentColumns from "../drizzle/1019_shared-agent-events.sql?raw";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
 const cfg = {
@@ -71,10 +78,32 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
       created = true;
       setup = client("setup");
-      for (const statement of migration
-        .replaceAll('"public".', `"${schemaName}".`)
-        .split("--> statement-breakpoint")) {
-        if (statement.trim()) await setup.unsafe(statement);
+      // The merged ingress acts on the shared `events` rows: the agent tables
+      // from 0001, the shared events table from 1001, the seat tally from 1002,
+      // later additive columns the shared-row queries select (1006/1009/1010
+      // and 1014 without its backfill UPDATE, which needs no rows here), then
+      // the agent ownership columns from 1019 (without its data migration — no
+      // retired rows exist in this fresh schema).
+      const columnAdds = sharedAgentColumns
+        .split("--> statement-breakpoint")
+        .slice(0, 5)
+        .join("--> statement-breakpoint");
+      const icsColumns = icsSequence.split("--> statement-breakpoint")[0]!;
+      for (const migration of [
+        agentTables,
+        sharedEvents,
+        rsvpSeats,
+        rsvpSyncStamp,
+        syncFailure,
+        rsvpLegacyOrder,
+        icsColumns,
+        columnAdds,
+      ]) {
+        for (const statement of migration
+          .replaceAll('"public".', `"${schemaName}".`)
+          .split("--> statement-breakpoint")) {
+          if (statement.trim()) await setup.unsafe(statement);
+        }
       }
     });
     afterAll(async () => {
@@ -123,7 +152,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         let holderPid = 0;
         const held = holder.begin(async (tx) => {
           holderPid = (await tx`SELECT pg_backend_pid() AS pid`)[0]!.pid;
-          await tx`SELECT event_key FROM agent_events WHERE event_key = ${eventKey} FOR UPDATE`;
+          await tx`SELECT event_key FROM events WHERE event_key = ${eventKey} FOR UPDATE`;
           ready.release();
           await release.promise;
         });
@@ -136,6 +165,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         );
         let updated: Promise<Attempt> | undefined;
         let read: Promise<Attempt> | undefined;
+        let heldError: unknown = null;
         try {
           await ready.promise;
           updated = attempt(
@@ -153,7 +183,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
             ),
           );
           const updateWait = await waitForLock(`update-${n}`);
-          expect(updateWait.query).toMatch(/SELECT \* FROM agent_events .*FOR UPDATE/);
+          expect(updateWait.query).toMatch(/SELECT \* FROM events .*FOR UPDATE/);
           expect(updateWait.blockers).toContain(holderPid);
           read = attempt(
             handleAgentEvent(
@@ -171,7 +201,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           // Pre-fix read passed the transactional replay lookup and waits in the
           // row/tuple queue. With key serialization, it waits on the writer's lock.
           expect(readWait.query).toMatch(
-            /SELECT \* FROM agent_events .*FOR UPDATE|pg_advisory_xact_lock/,
+            /SELECT \* FROM events .*FOR UPDATE|pg_advisory_xact_lock/,
           );
           expect(readWait.blockers).toContain(updateWait.pid);
           console.info("observed schedule", {
@@ -181,13 +211,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
           });
         } finally {
           release.release();
+          heldError = await heldResult;
+          await Promise.all([updated, read]);
         }
-        const updatePhaseError = await heldResult;
-        await Promise.all([updated, read]);
-        if (updatePhaseError) throw updatePhaseError;
+        if (heldError) throw heldError;
         const results = await Promise.all([updated!, read!]);
         const [event] =
-          await setup`SELECT agent_version, title FROM agent_events WHERE event_key = ${eventKey}`;
+          await setup`SELECT agent_version, title FROM events WHERE event_key = ${eventKey}`;
         const stored =
           await setup`SELECT status, event_key, body FROM agent_event_idempotency_keys WHERE grant_id = ${grantId} AND key = ${key}`;
         const receipts =
@@ -242,13 +272,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
         },
       );
       await ready.promise;
+      let heldError: unknown = null;
       try {
         await run();
       } finally {
         release.release();
+        heldError = await heldResult;
       }
-      const lockPhaseError = await heldResult;
-      if (lockPhaseError) throw lockPhaseError;
+      if (heldError) throw heldError;
     }
 
     it("identical create and update payloads replay their stored success without mutating twice", async () => {
@@ -276,7 +307,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       let first!: Promise<Attempt>;
       let second!: Promise<Attempt>;
       await withLock(
-        (tx) => tx`SELECT event_key FROM agent_events WHERE event_key = ${eventKey} FOR UPDATE`,
+        (tx) => tx`SELECT event_key FROM events WHERE event_key = ${eventKey} FOR UPDATE`,
         async () => {
           first = attempt(handleAgentEvent(writer, cfg, request, token));
           const owner = await waitForLock(`duplicate-first-${n}`);
@@ -291,7 +322,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         answer: { status: 200, body: { replayed: true, agent_version: 2 } },
       });
       expect(
-        (await setup`SELECT agent_version FROM agent_events WHERE event_key = ${eventKey}`)[0]!
+        (await setup`SELECT agent_version FROM events WHERE event_key = ${eventKey}`)[0]!
           .agent_version,
       ).toBe(2);
       expect(
@@ -317,7 +348,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           (tx) =>
             lock === "key"
               ? tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-idempotency:${grantId}:${key}`}, 0))`
-              : tx`SELECT event_key FROM agent_events WHERE event_key = ${eventKey} FOR UPDATE`,
+              : tx`SELECT event_key FROM events WHERE event_key = ${eventKey} FOR UPDATE`,
           async () => {
             const pending = attempt(
               handleAgentEvent(writer, { ...cfg, lockWaitMs: 200 }, request, token),
@@ -352,8 +383,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const reader = client(`grant-other-${n}`);
       let pending!: Promise<Attempt>;
       await withLock(
-        (tx) =>
-          tx`SELECT event_key FROM agent_events WHERE event_key = ${owned.eventKey} FOR UPDATE`,
+        (tx) => tx`SELECT event_key FROM events WHERE event_key = ${owned.eventKey} FOR UPDATE`,
         async () => {
           pending = attempt(
             handleAgentEvent(
