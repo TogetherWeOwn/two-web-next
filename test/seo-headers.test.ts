@@ -282,7 +282,7 @@ describe("static leaves (DB-free floor)", () => {
   it("/privacy renders the versioned policy with a join CTA and no scripts", async () => {
     const html = await (await app.request("/privacy", {}, env)).text();
     expect(html).toContain("Privacy policy");
-    expect(html).toContain("Version 1");
+    expect(html).toContain("Version 2");
     expect(html).toContain('data-testid="privacy-policy"');
     expect(html).toContain('data-testid="privacy-join"');
     expect(html).toContain("What we never store, ever");

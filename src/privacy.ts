@@ -13,8 +13,8 @@
 // lines. Anything else passes through as plain paragraph text (escaped), so
 // a future version using new syntax renders safely, not richly.
 
-export const POLICY_FILE = "content/privacy-policy-v1.md";
-export const POLICY_VERSION = 1;
+export const POLICY_FILE = "content/privacy-policy-v2.md";
+export const POLICY_VERSION = 2;
 
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
