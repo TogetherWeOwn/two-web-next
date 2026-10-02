@@ -278,7 +278,10 @@ async function issueSession(
     }
     await store.revokeUserSessions(row.userId, tokenHash);
   } catch (err) {
-    console.warn("prior session sweep failed", { user: row.userId, exception: (err as Error)?.constructor?.name ?? "unknown" });
+    console.warn("prior session sweep failed", {
+      user: row.userId,
+      exception: (err as Error)?.constructor?.name ?? "unknown",
+    });
   }
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",

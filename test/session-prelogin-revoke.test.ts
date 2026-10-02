@@ -43,7 +43,10 @@ const jarOf = (res: Response) =>
 
 const bearerOf = (res: Response) =>
   decodeURIComponent(
-    jarOf(res).split("; ").find((c) => c.startsWith(`${SESSION_COOKIE}=`))!.slice(SESSION_COOKIE.length + 1),
+    jarOf(res)
+      .split("; ")
+      .find((c) => c.startsWith(`${SESSION_COOKIE}=`))!
+      .slice(SESSION_COOKIE.length + 1),
   ).split(".")[0]!;
 
 function isolated() {
@@ -64,10 +67,12 @@ async function mintPreLogin(store: SessionStore, userId = "42") {
     moderator: false,
     expiresAt: new Date(Date.now() + 3600_000),
   });
-  const session = (await serializeSigned(SESSION_COOKIE, token, SECRET, { path: "/", secure: true })).split(";")[0]!;
-  const status = (await serializeSigned(AUTH_STATUS_COOKIE, tokenHash, SECRET, { path: "/", secure: true })).split(
-    ";",
-  )[0]!;
+  const session = (
+    await serializeSigned(SESSION_COOKIE, token, SECRET, { path: "/", secure: true })
+  ).split(";")[0]!;
+  const status = (
+    await serializeSigned(AUTH_STATUS_COOKIE, tokenHash, SECRET, { path: "/", secure: true })
+  ).split(";")[0]!;
   return { token, tokenHash, jar: `${session}; ${status}` };
 }
 
@@ -80,7 +85,8 @@ function mockDiscord() {
         return Response.json({ id: "42", username: "rick", global_name: "Rick", avatar: null });
       if (url.includes("/members/42") && (init as RequestInit)?.method === "PUT")
         return new Response(null, { status: 201 });
-      if (url.includes("/members/42")) return Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" });
+      if (url.includes("/members/42"))
+        return Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" });
       return new Response("unexpected", { status: 500 });
     }),
   );
@@ -97,7 +103,12 @@ async function discordLogin(e: Env, presentedCookie: string) {
 // test/join.test.ts: only the throttle/attempt queries the callback emits).
 function fakeSql() {
   const throttle: { bucket: string; at: number }[] = [];
-  const attempts: { outcome: string; source: string | null; requestId: string | null; discordId: string | null }[] = [];
+  const attempts: {
+    outcome: string;
+    source: string | null;
+    requestId: string | null;
+    discordId: string | null;
+  }[] = [];
   const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const head = strings[0] ?? "";
     if (head.includes("count(*)")) {
@@ -107,7 +118,10 @@ function fakeSql() {
       const wait =
         rows.length === 0
           ? 1
-          : Math.max(1, Math.ceil((Math.min(...rows.map((r) => r.at)) + 60_000 - Date.now()) / 1000));
+          : Math.max(
+              1,
+              Math.ceil((Math.min(...rows.map((r) => r.at)) + 60_000 - Date.now()) / 1000),
+            );
       return [{ n: rows.length, wait }];
     }
     if (head.includes("INSERT INTO web_throttle_hits")) {
@@ -116,7 +130,12 @@ function fakeSql() {
     }
     if (head.includes("DELETE FROM web_throttle_hits")) return [];
     if (head.includes("INSERT INTO join_attempts")) {
-      const [outcome, source, requestId, discordId] = values as [string, string | null, string | null, string | null];
+      const [outcome, source, requestId, discordId] = values as [
+        string,
+        string | null,
+        string | null,
+        string | null,
+      ];
       attempts.push({ outcome, source, requestId, discordId });
       return [];
     }
@@ -145,7 +164,9 @@ describe("pre-login session revocation on fresh login", () => {
     mockDiscord();
     const pre = await mintPreLogin(store);
     expect(await store.get(pre.tokenHash)).not.toBeNull();
-    expect(await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json()).toEqual({
+    expect(
+      await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json(),
+    ).toEqual({
       authenticated: true,
     });
 
@@ -153,7 +174,9 @@ describe("pre-login session revocation on fresh login", () => {
     expect(login.status).toBe(302);
 
     expect(await store.get(pre.tokenHash)).toBeNull();
-    expect(await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json()).toEqual({
+    expect(
+      await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json(),
+    ).toEqual({
       authenticated: false,
     });
     // The fresh session itself is live.
@@ -164,19 +187,27 @@ describe("pre-login session revocation on fresh login", () => {
     const { store, env: e } = isolatedJoin();
     mockDiscord();
     const pre = await mintPreLogin(store);
-    expect(await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json()).toEqual({
+    expect(
+      await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json(),
+    ).toEqual({
       authenticated: true,
     });
 
     const start = await app.request("/join/discord", {}, e);
     const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
-    const cb = await app.request(`/join/callback?code=abc&state=${state}`, {
-      headers: { cookie: `${jarOf(start)}; ${pre.jar}` },
-    }, e);
+    const cb = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      {
+        headers: { cookie: `${jarOf(start)}; ${pre.jar}` },
+      },
+      e,
+    );
     expect(cb.headers.get("location")).toBe("/?n=joined");
 
     expect(await store.get(pre.tokenHash)).toBeNull();
-    expect(await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json()).toEqual({
+    expect(
+      await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json(),
+    ).toEqual({
       authenticated: false,
     });
     expect(await store.get(await hashToken(bearerOf(cb)))).not.toBeNull();
@@ -193,7 +224,9 @@ describe("pre-login session revocation on fresh login", () => {
     expect(login.status).toBe(302);
 
     expect(await store.get(pre.tokenHash)).toBeNull();
-    expect(await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json()).toEqual({
+    expect(
+      await (await app.request("/auth/status", { headers: { cookie: pre.jar } }, e)).json(),
+    ).toEqual({
       authenticated: false,
     });
     expect(await store.get(await hashToken(bearerOf(login)))).not.toBeNull();
@@ -210,10 +243,14 @@ describe("pre-login session revocation on fresh login", () => {
 
     expect(await store.get(hashA)).toBeNull();
     expect(await store.get(hashB)).not.toBeNull();
-    expect(await (await app.request("/auth/status", { headers: { cookie: jarOf(first) } }, e)).json()).toEqual({
+    expect(
+      await (await app.request("/auth/status", { headers: { cookie: jarOf(first) } }, e)).json(),
+    ).toEqual({
       authenticated: false,
     });
-    expect(await (await app.request("/auth/status", { headers: { cookie: jarOf(second) } }, e)).json()).toEqual({
+    expect(
+      await (await app.request("/auth/status", { headers: { cookie: jarOf(second) } }, e)).json(),
+    ).toEqual({
       authenticated: true,
     });
   });
