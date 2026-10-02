@@ -49,13 +49,30 @@ function eventRow(over: Partial<EventRow> = {}): EventRow {
   const start = new Date(Date.UTC(2030, 0, 10 + n, 20));
   const end = new Date(start.getTime() + 7200_000);
   return {
-    id: n, icsSequence: 1n, eventKey: `01ARZ3NDEKTSV4RRFFQ69G5FA${String(n).padStart(2, "0")}`,
-    title: `Game night ${n}`, game: null, description: null,
-    startsAt: start, endsAt: end, timezone: "UTC", location: null, capacity: null,
-    status: "published", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    createdBy: null, rsvpOpen: true,
-    recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-    parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
+    id: n,
+    icsSequence: 1n,
+    eventKey: `01ARZ3NDEKTSV4RRFFQ69G5FA${String(n).padStart(2, "0")}`,
+    title: `Game night ${n}`,
+    game: null,
+    description: null,
+    startsAt: start,
+    endsAt: end,
+    timezone: "UTC",
+    location: null,
+    capacity: null,
+    status: "published",
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    createdBy: null,
+    rsvpOpen: true,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: start,
+    updatedAt: start,
     ...over,
   };
 }
@@ -72,15 +89,17 @@ function harness(rows: EventRow[]) {
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "rsvps"')) return { rows: [] };
     if (sql.startsWith('select "discord_event_id" from "events"')) return { rows: [] };
-    if (sql.startsWith('insert into "member_data_access_logs"') || sql.startsWith("SET LOCAL")) return { rows: [] };
+    if (sql.startsWith('insert into "member_data_access_logs"') || sql.startsWith("SET LOCAL"))
+      return { rows: [] };
     if (sql.includes('from "events"')) {
       // sitemapEvents filters status = published; calendar reads filter on
       // ends_at. Honor both, then encode full rows in column order.
       let out = rows;
       if (sql.includes('"status" =') || sql.includes("= 'published'") || sql.includes("status")) {
-        out = params.length > 0 && typeof params[0] === "string"
-          ? rows.filter((r) => r.status === params[0])
-          : rows.filter((r) => r.status === "published");
+        out =
+          params.length > 0 && typeof params[0] === "string"
+            ? rows.filter((r) => r.status === params[0])
+            : rows.filter((r) => r.status === "published");
       }
       if (/"ends_at" </.test(sql)) out = out.filter((r) => r.endsAt < new Date());
       else if (/"ends_at" >=/.test(sql)) out = out.filter((r) => r.endsAt >= new Date());
@@ -88,12 +107,17 @@ function harness(rows: EventRow[]) {
     }
     throw new Error(`Unexpected sitemap-meta fixture query: ${sql}`);
   });
-  Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db) });
+  Object.assign(db, {
+    transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db),
+  });
   const env = {
-    APP_URL, SESSION_SECRET: SECRET,
-    DISCORD_CLIENT_ID: "client-id", DISCORD_GUILD_ID: "guild-id",
+    APP_URL,
+    SESSION_SECRET: SECRET,
+    DISCORD_CLIENT_ID: "client-id",
+    DISCORD_GUILD_ID: "guild-id",
     DISCORD_INVITE_URL: "https://discord.gg/configured",
-    DISCORD_CLIENT_SECRET: "client-secret", DISCORD_BOT_TOKEN: "bot-token",
+    DISCORD_CLIENT_SECRET: "client-secret",
+    DISCORD_BOT_TOKEN: "bot-token",
     ADMIN_DB: db as unknown as Db,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   } as unknown as Env;
@@ -103,7 +127,12 @@ function harness(rows: EventRow[]) {
 beforeEach(() => {
   // Even a swallowed fetch error is a test failure: nothing reaches Discord,
   // a preview service or a staging/production database in this suite.
-  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("sitemap-meta tests must remain local"); }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => {
+      throw new Error("sitemap-meta tests must remain local");
+    }),
+  );
 });
 afterEach(() => {
   expect(fetch).not.toHaveBeenCalled();
@@ -120,8 +149,13 @@ describe("sitemap static leaves (SitemapTest.php:6)", () => {
     const xml = await res.text();
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     for (const loc of [
-      `${APP_URL}/`, `${APP_URL}/join`, `${APP_URL}/events`,
-      `${APP_URL}/about`, `${APP_URL}/faq`, `${APP_URL}/rules`, `${APP_URL}/privacy`,
+      `${APP_URL}/`,
+      `${APP_URL}/join`,
+      `${APP_URL}/events`,
+      `${APP_URL}/about`,
+      `${APP_URL}/faq`,
+      `${APP_URL}/rules`,
+      `${APP_URL}/privacy`,
     ]) {
       expect(xml, loc).toContain(`<loc>${loc}</loc>`);
     }
@@ -133,7 +167,10 @@ describe("sitemap static leaves (SitemapTest.php:6)", () => {
   it("pins changefreq/priority per entry, matching the legacy sitemap", async () => {
     const xml = await (await harness([]).request("/sitemap_index.xml")).text();
     const entry = (loc: string, changefreq: string, priority: string) => {
-      const block = new RegExp(`<url>\\s*<loc>${loc.replace(/[./]/g, (c) => `\\${c}`)}</loc>[\\s\\S]*?</url>`, "m").exec(xml);
+      const block = new RegExp(
+        `<url>\\s*<loc>${loc.replace(/[./]/g, (c) => `\\${c}`)}</loc>[\\s\\S]*?</url>`,
+        "m",
+      ).exec(xml);
       expect(block, loc).not.toBeNull();
       expect(block![0]).toContain(`<changefreq>${changefreq}</changefreq>`);
       expect(block![0]).toContain(`<priority>${priority}</priority>`);
@@ -180,12 +217,14 @@ describe("sitemap published events (SitemapTest.php:21)", () => {
       .map((m) => m[1])
       .filter((block) => (block ?? "").includes(`<loc>${loc}</loc>`));
     expect(matches).toHaveLength(1);
-    expect(matches[0]).toContain('<changefreq>weekly</changefreq>');
-    expect(matches[0]).toContain('<priority>0.6</priority>');
+    expect(matches[0]).toContain("<changefreq>weekly</changefreq>");
+    expect(matches[0]).toContain("<priority>0.6</priority>");
   });
 
   it("keeps drafts, cancelled and past events out of the index", async () => {
-    const xml = await (await harness([live, draft, cancelled, past]).request("/sitemap_index.xml")).text();
+    const xml = await (
+      await harness([live, draft, cancelled, past]).request("/sitemap_index.xml")
+    ).text();
     expect(xml).toContain(`<loc>${APP_URL}/e/${live.eventKey}</loc>`);
     for (const hidden of [draft, cancelled, past]) {
       expect(xml, hidden.eventKey).not.toContain(`/e/${hidden.eventKey}`);
@@ -193,7 +232,9 @@ describe("sitemap published events (SitemapTest.php:21)", () => {
   });
 
   it("leaks no gated, API or wrong-host URLs", async () => {
-    const xml = await (await harness([live, draft, cancelled, past]).request("/sitemap_index.xml")).text();
+    const xml = await (
+      await harness([live, draft, cancelled, past]).request("/sitemap_index.xml")
+    ).text();
     for (const loc of [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]!)) {
       expect(loc, "same host").toMatch(new RegExp(`^${APP_URL.replace(/[./]/g, (c) => `\\${c}`)}`));
       for (const banned of ["/profile", "/members/", "/events.json", "/auth/", "/admin"]) {
@@ -237,7 +278,10 @@ describe("share meta home + join (ShareMetaTagsTest.php:28,39,61)", () => {
 
   it("keeps exactly one canonical per page, pointing at itself", async () => {
     const src = harness([]);
-    for (const [path, canonical] of [["/", `${APP_URL}/`], ["/join", `${APP_URL}/join`]] as const) {
+    for (const [path, canonical] of [
+      ["/", `${APP_URL}/`],
+      ["/join", `${APP_URL}/join`],
+    ] as const) {
       const html = await (await src.request(path)).text();
       expect(html.match(/rel="canonical"/g), path).toHaveLength(1);
       expect(html).toContain(`<link rel="canonical" href="${canonical}"`);
