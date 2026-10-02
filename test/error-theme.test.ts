@@ -37,10 +37,10 @@ function errors() {
 }
 
 function assertTheme(html: string) {
-  expect(html).toContain('<body class="homepage-theme"><a class="sl bd"');
+  expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
   expect(html).toContain('href="/theme.css"');
   expect(html).toContain('href="/fonts/display-latin-700.woff2"');
-  expect(html).toContain('<header class="bar rw ct site-header">');
+  expect(html).toContain('<header class="bar site-header">');
   expect(html).toContain('src="/logo.svg"');
   expect(html).toContain('class="hero recovery-hero"');
   expect(html).toContain('<main id="main" tabindex="-1">');
@@ -74,7 +74,7 @@ describe("base-theme error and recovery shells without a DB binding", () => {
     expect(html).toContain('href="/e/game%20night"');
     expect(html).toContain("Co-op evening");
     expect(html).toMatch(/<\/section><section class="recovery-events"/);
-    expect(html).toContain('<label for="error-events-search" class="bk bd">Search events</label>');
+    expect(html).toContain('<label for="error-events-search">Search events</label>');
     expect(html).toContain('action="/events" method="get" role="search"');
   });
 

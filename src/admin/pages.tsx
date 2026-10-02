@@ -4,10 +4,12 @@
 
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { cloneElement, isValidElement } from "hono/jsx";
 import type { Actor } from "./guard";
 import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
 import { FeaturedContentItem, SkipLink } from "../pages";
-import type { EventRow, FeaturedRow } from "./store";
+import type { EventListRow, EventRow, FeaturedRow } from "./store";
+import { goingCountText } from "../islands/contracts";
 import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 import { featuredListUrl, joinAttemptsUrl, rosterUrl, type FeaturedListQuery, type JoinAttemptsQuery, type RosterQuery, type SortOrder } from "./table-list";
@@ -33,8 +35,8 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
     </head>
     <body>
       <SkipLink />
-      <header class="bar rw ct">
-        <a class="brand pl" href="/admin">TWO admin</a>
+      <header class="bar">
+        <a class="brand" href="/admin">TWO admin</a>
         <nav aria-label="Administration">
           <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> · <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
         </nav>
@@ -61,17 +63,17 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
   <Shell title="Dashboard">
     <section>
       <h1>Moderation</h1>
-      <p class="ld">
+      <p class="lead">
         Signed in as <strong data-testid="admin-actor">{actor.username}</strong>.
       </p>
-      <ul class="ft">
-        <li class="cd">
+      <ul class="facts">
+        <li class="card">
           <h2>
             <a href="/admin/events">Events</a>
           </h2>
           <p>Drafts, publishing, cancellations. Create-as-draft; events are never deleted.</p>
         </li>
-        <li class="cd">
+        <li class="card">
           <h2>
             <a href="/admin/featured">Featured content</a>
           </h2>
@@ -84,7 +86,7 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
           {Object.keys(funnel).length === 0 ? (
             <p data-testid="join-funnel-empty">No join attempts in the window.</p>
           ) : (
-            <table class="tbl">
+            <table class="admin-table">
               <thead>
                 <tr>
                   <th>Outcome</th>
@@ -110,7 +112,7 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
           {zeroSearches.length === 0 ? (
             <p data-testid="top-zero-searches-empty">No missed searches.</p>
           ) : (
-            <table class="tbl">
+            <table class="admin-table">
               <thead>
                 <tr>
                   <th>Search</th>
@@ -144,13 +146,13 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQ
   <Shell title="Join attempts">
     <section>
       <h1>Join attempts</h1>
-      <p class="hn">Read-only. Last {JOIN_RETENTION_DAYS} days, newest first. Search is an exact Discord id or request id.</p>
-      <form method="get" action="/admin/join-attempts" class="flt rw">
-        <div class="fd">
+      <p class="hint">Read-only. Last {JOIN_RETENTION_DAYS} days, newest first. Search is an exact Discord id or request id.</p>
+      <form method="get" action="/admin/join-attempts" class="filters">
+        <div class="field">
           <label for="q">Discord id or request id</label>
           <input id="q" name="q" type="search" value={query.q} />
         </div>
-        <div class="fd">
+        <div class="field">
           <label for="outcome">Outcome</label>
           <select id="outcome" name="outcome">
             {["", ...outcomes].map((o) => (
@@ -160,18 +162,20 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQ
             ))}
           </select>
         </div>
-        <div class="fd">
-          <button type="submit" class="bt ct bd cp pl">Filter</button>
+        <div class="field">
+          <button type="submit" class="btn">Filter</button>
         </div>
       </form>
-      <table class="tbl" data-testid="join-attempts-table">
+      <p id="join-attempts-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="admin-table-scroll" role="region" aria-label="Join attempts list" aria-describedby="join-attempts-scroll-hint" tabindex={0} data-testid="join-attempts-table-scroll">
+      <table class="admin-table" data-testid="join-attempts-table">
         <thead>
           <tr>
-            <th>Outcome</th>
-            <th>Source</th>
-            <th>Discord id</th>
-            <th>Request id</th>
-            <th>Attempted</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Source</th>
+            <th scope="col">Discord id</th>
+            <th scope="col">Request id</th>
+            <th scope="col">Attempted</th>
           </tr>
         </thead>
         <tbody>
@@ -194,7 +198,8 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQ
           )}
         </tbody>
       </table>
-      <nav aria-label="Join attempt pages" class="act rw ct">
+      </div>
+      <nav aria-label="Join attempt pages" class="actions">
         {query.page > 1 ? <a rel="prev" href={joinAttemptsUrl(query, query.page - 1)}>Previous</a> : null}
         <span>Page {query.page}</span>
         {hasNext ? <a rel="next" href={joinAttemptsUrl(query, query.page + 1)}>Next</a> : null}
@@ -208,7 +213,7 @@ const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
   const action = row.rsvpOpen ? "rsvp-pause" : "rsvp-reopen";
   return (
     <form method="post" action={`/admin/events/${row.eventKey}/${action}`}>
-      <button type="submit" class="ln ifnt" data-testid={action}>
+      <button type="submit" class="link" data-testid={action}>
         {row.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
       </button>
     </form>
@@ -220,7 +225,7 @@ export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
     <section>
       <p><a href="/admin/join-attempts">Back to join attempts</a></p>
       <h1>Join attempt {row.id}</h1>
-      <p class="hn">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
+      <p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
       <h2>Outcome</h2>
       <dl>
         <dt>Outcome</dt><dd>{row.outcome}</dd>
@@ -248,18 +253,36 @@ const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuer
   );
 };
 
-export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
+/**
+ * Going-only seat fill for one admin list row. Maybe/Waitlist/Not going never
+ * occupy a seat (same rule as the fill filter); uncapped events show "N going".
+ * A capped event at or over capacity carries a Full badge, and an
+ * over-capacity row (more Going than seats) carries an Over capacity badge.
+ */
+const EventFillCell: FC<{ row: EventListRow }> = ({ row }) => (
+  <td data-testid={`event-fill-${row.eventKey}`}>
+    {goingCountText(row.goingCount, row.capacity)}
+    {row.capacity !== null && row.goingCount >= row.capacity ? (
+      <span data-testid={`event-fill-badge-${row.eventKey}`}> Full</span>
+    ) : null}
+    {row.capacity !== null && row.goingCount > row.capacity ? (
+      <span data-testid={`event-over-capacity-${row.eventKey}`}> Over capacity</span>
+    ) : null}
+  </td>
+);
+
+export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
-      <form method="get" action="/admin/events" class="flt rw">
+      <form method="get" action="/admin/events" class="filters">
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
-        <div class="fd">
+        <div class="field">
           <label for="q">Search</label>
           <input id="q" name="q" type="search" value={query.q} />
         </div>
-        <div class="fd">
+        <div class="field">
           <label for="status">Status</label>
           <select id="status" name="status">
             {["", "draft", "published", "cancelled", "past"].map((s) => (
@@ -269,7 +292,7 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
             ))}
           </select>
         </div>
-        <div class="fd">
+        <div class="field">
           <label for="rsvp_open">RSVPs</label>
           <select id="rsvp_open" name="rsvp_open">
             <option value="" selected={query.rsvp_open === ""}>All</option>
@@ -277,7 +300,7 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
             <option value="0" selected={query.rsvp_open === "0"}>Paused</option>
           </select>
         </div>
-        <div class="fd">
+        <div class="field">
           <label for="series">Series</label>
           <select id="series" name="series">
             {[["", "All"], ["parent", "Parent"], ["child", "Child"], ["standalone", "Standalone"]].map(([value, label]) => (
@@ -285,7 +308,7 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
             ))}
           </select>
         </div>
-        <div class="fd">
+        <div class="field">
           <label for="fill">Fill</label>
           <select id="fill" name="fill">
             {[["", "All"], ["full", "Full"], ["has_seats", "Has seats"], ["unlimited", "Unlimited"]].map(([value, label]) => (
@@ -293,26 +316,29 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
             ))}
           </select>
         </div>
-        <div class="fd">
-          <button type="submit" class="bt ct bd cp pl">Filter</button>
+        <div class="field">
+          <button type="submit" class="btn">Filter</button>
         </div>
       </form>
       <p>
-        <a class="bt ct bd cp pl" href="/admin/events/new" data-testid="new-event">New event</a>
+        <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
       </p>
-      <table class="tbl" data-testid="events-table">
+      <p id="events-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="admin-table-scroll" role="region" aria-label="Events list" aria-describedby="events-scroll-hint" tabindex={0} data-testid="events-table-scroll">
+      <table class="admin-table" data-testid="events-table">
         <thead>
           <tr>
             <EventSortHeader label="Title" sort="title" query={query} />
             <EventSortHeader label="Status" sort="status" query={query} />
-            <EventSortHeader label="Starts" sort="starts_at" query={query} />
+            <EventSortHeader label="Starts (UTC)" sort="starts_at" query={query} />
+            <th scope="col">Fill</th>
             <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colspan={4} data-testid="events-empty">
+              <td colspan={5} data-testid="events-empty">
                 No events yet.
               </td>
             </tr>
@@ -323,16 +349,17 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
                   <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
                 </td>
                 <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
-                <td>{r.startsAt.toISOString()}</td>
+                <td><time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time></td>
+                <EventFillCell row={r} />
                 <td>
                   {r.status === "draft" ? (
                     <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                      <button type="submit" class="ln ifnt">Publish</button>
+                      <button type="submit" class="link">Publish</button>
                     </form>
                   ) : null}
                   {r.status === "draft" || r.status === "published" ? (
                     <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                      <button type="submit" class="ln ifnt">Cancel</button>
+                      <button type="submit" class="link">Cancel</button>
                     </form>
                   ) : null}
                   <RsvpAction row={r} />
@@ -342,7 +369,8 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
           )}
         </tbody>
       </table>
-      <nav aria-label="Event pages" class="act rw ct">
+      </div>
+      <nav aria-label="Event pages" class="actions">
         {query.page > 1 ? <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a> : null}
         <span>Page {query.page}</span>
         {hasNext ? <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>Next</a> : null}
@@ -359,16 +387,39 @@ type FieldProps = {
   children: (id: string) => unknown;
 };
 
-const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
+/**
+ * Merge association tokens, dropping exact duplicates so re-wiring is idempotent.
+ */
+const mergeDescribedBy = (existing: unknown, added: string): string => {
+  const tokens = [...String(existing ?? "").split(/\s+/), ...added.split(/\s+/)].filter(Boolean);
+  return [...new Set(tokens)].join(" ");
+};
+
+/**
+ * Shared admin field wrapper. Field owns hint/error association: it mints ids
+ * for its hint and error nodes and merges them into the child input's
+ * `aria-describedby` (appended after any inline wiring, never clobbering it),
+ * plus `aria-invalid` when an error is present. Consumers pass a bare control.
+ */
+export const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
   const err = errors[name];
   const id = `f-${name.replace(/[^a-z0-9]+/gi, "-")}`;
+  const owned = [hint ? `${id}-hint` : "", err ? `${id}-error` : ""].filter(Boolean).join(" ");
+  const node = children(id);
+  const control =
+    owned && isValidElement(node)
+      ? cloneElement(node, {
+          "aria-invalid": err ? "true" : undefined,
+          "aria-describedby": mergeDescribedBy(node.props["aria-describedby"], owned),
+        })
+      : node;
   return (
-    <div class="fd">
+    <div class="field">
       <label for={id}>{label}</label>
-      {children(id)}
-      {hint ? <p class="hn">{hint}</p> : null}
+      {control}
+      {hint ? <p id={`${id}-hint`} class="hint">{hint}</p> : null}
       {err ? (
-        <p id={`${id}-error`} class="err" role="alert" data-testid={`error-${name}`}>
+        <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>
           {err}
         </p>
       ) : null}
@@ -395,30 +446,26 @@ export const EventFormPage: FC<{
       <section>
         <h1>{mode === "new" ? "New event" : `Edit ${row!.title}`}</h1>
         {Object.keys(errors).length > 0 ? (
-          <p class="nt" role="alert" data-testid="form-errors">
+          <p class="notice" role="alert" data-testid="form-errors">
             Check the highlighted fields and try again.
           </p>
         ) : null}
         <form method="post" action={action} data-event-editor=""
           data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required
-              aria-invalid={errors.title ? "true" : undefined} aria-describedby={errors.title ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100}
-              aria-invalid={errors.game ? "true" : undefined} aria-describedby={errors.game ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
             {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
           </Field>
           <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required
-              aria-invalid={errors.starts_at ? "true" : undefined} aria-describedby={errors.starts_at ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />}
           </Field>
           <Field name="ends_at" label="Ends (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required
-              aria-invalid={errors.ends_at ? "true" : undefined} aria-describedby={errors.ends_at ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required />}
           </Field>
           <Field
             name="timezone"
@@ -426,12 +473,10 @@ export const EventFormPage: FC<{
             errors={errors}
             hint="The IANA zone the wall time above is typed in. Storage is UTC."
           >
-            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"}
-              aria-invalid={errors.timezone ? "true" : undefined} aria-describedby={errors.timezone ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255}
-              aria-invalid={errors.location ? "true" : undefined} aria-describedby={errors.location ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
@@ -455,12 +500,12 @@ export const EventFormPage: FC<{
               </Field>
             </fieldset>
           ) : row?.recurrenceFrequency ? (
-            <p class="hn" data-testid="series-info">
+            <p class="hint" data-testid="series-info">
               Part of a {row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.
             </p>
           ) : null}
-          <div class="act rw ct">
-            <button type="submit" class="bt ct bd cp pl" data-testid="save-event">
+          <div class="actions">
+            <button type="submit" class="btn" data-testid="save-event">
               {mode === "new" ? "Create draft" : "Save"}
             </button>
             <a href="/admin/events">Cancel</a>
@@ -469,15 +514,15 @@ export const EventFormPage: FC<{
         {mode === "edit" && row ? (
           <section aria-label="Status">
             <h2>Status: {row.status}</h2>
-            <div class="act rw ct">
+            <div class="actions">
               {row.status === "draft" ? (
                 <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
-                  <button type="submit" class="bt ct bd cp pl" data-testid="publish-event">Publish</button>
+                  <button type="submit" class="btn" data-testid="publish-event">Publish</button>
                 </form>
               ) : null}
               {row.status === "draft" || row.status === "published" ? (
                 <form method="post" action={`/admin/events/${row.eventKey}/cancel`}>
-                  <button type="submit" class="ln ifnt" data-testid="cancel-event">Cancel event</button>
+                  <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
                 </form>
               ) : null}
               <RsvpAction row={row} />
@@ -487,17 +532,19 @@ export const EventFormPage: FC<{
         {mode === "edit" && roster ? (
           <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
             <h2>RSVPs ({roster.length})</h2>
-            <p class="hn">Save event changes before searching or sorting the roster.</p>
-            <form method="get" action={`${action}#rsvp-roster`} class="flt rw">
+            <p class="hint">Save event changes before searching or sorting the roster.</p>
+            <form method="get" action={`${action}#rsvp-roster`} class="filters">
               <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
               <input type="hidden" name="roster_order" value={rosterQuery.order} />
-              <div class="fd">
+              <div class="field">
                 <label for="roster-q">Search members</label>
                 <input id="roster-q" name="roster_q" type="search" value={rosterQuery.q} />
               </div>
-              <div class="fd"><button type="submit" class="bt ct bd cp pl">Search</button></div>
+              <div class="field"><button type="submit" class="btn">Search</button></div>
             </form>
-            <table class="tbl">
+            <p id="roster-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+            <div class="admin-table-scroll" role="region" aria-label="RSVP roster list" aria-describedby="roster-scroll-hint" tabindex={0} data-testid="roster-table-scroll">
+            <table class="admin-table" data-testid="roster-table">
               <thead>
                 <tr>
                   <th scope="col">Member</th>
@@ -523,6 +570,7 @@ export const EventFormPage: FC<{
                 )}
               </tbody>
             </table>
+            </div>
           </section>
         ) : null}
       </section>
@@ -537,16 +585,16 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; n
     <section>
       <h1>Featured content</h1>
       <p>
-        <a class="bt ct bd cp pl" href="/admin/featured/new" data-testid="new-featured">New featured slot</a>
+        <a class="btn" href="/admin/featured/new" data-testid="new-featured">New featured slot</a>
       </p>
-      <form method="get" action="/admin/featured" class="flt rw">
+      <form method="get" action="/admin/featured" class="filters">
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
-        <div class="fd">
+        <div class="field">
           <label for="q">Search titles</label>
           <input id="q" name="q" type="search" value={query.q} />
         </div>
-        <div class="fd">
+        <div class="field">
           <label for="published">Published</label>
           <select id="published" name="published">
             <option value="" selected={query.published === ""}>All</option>
@@ -554,11 +602,11 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; n
             <option value="0" selected={query.published === "0"}>Unpublished</option>
           </select>
         </div>
-        <div class="fd"><button type="submit" class="bt ct bd cp pl">Filter</button></div>
+        <div class="field"><button type="submit" class="btn">Filter</button></div>
       </form>
       <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
       <div class="featured-table-scroll" role="region" aria-label="Featured content list" aria-describedby="featured-scroll-hint" tabindex={0} data-testid="featured-table-scroll">
-      <table class="tbl featured-table" data-testid="featured-table">
+      <table class="admin-table featured-table" data-testid="featured-table">
         <thead>
           <tr>
             <th scope="col">Title</th>
@@ -626,11 +674,12 @@ export const FeaturedFormPage: FC<{
           </section>
         ) : null}
         {Object.keys(errors).length > 0 ? (
-          <p class="nt" role="alert" data-testid="form-errors">
+          <p class="notice" role="alert" data-testid="form-errors">
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action}>
+        <form method="post" action={action} data-event-editor=""
+          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Headline" errors={errors}>
             {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={255} required />}
           </Field>
@@ -651,7 +700,7 @@ export const FeaturedFormPage: FC<{
           >
             {(id) => <input id={id} name="image_alt" type="text" value={val(values, "image_alt")} maxlength={255} />}
           </Field>
-          <div class="fd">
+          <div class="field">
             <label for="f-is-published">Published</label>
             <input id="f-is-published" name="is_published" type="checkbox" checked={checked} />
           </div>
@@ -666,8 +715,8 @@ export const FeaturedFormPage: FC<{
           <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
           </Field>
-          <div class="act rw ct">
-            <button type="submit" class="bt ct bd cp pl" data-testid="save-featured">
+          <div class="actions">
+            <button type="submit" class="btn" data-testid="save-featured">
               {mode === "new" ? "Create" : "Save"}
             </button>
             <a href="/admin/featured">Cancel</a>
@@ -675,14 +724,15 @@ export const FeaturedFormPage: FC<{
         </form>
         {mode === "edit" ? (
           <form method="post" action={`/admin/featured/${row!.id}/delete`}>
-            <div class="act rw ct">
-              <button type="submit" class="ln ifnt" data-testid="delete-featured">
+            <div class="actions">
+              <button type="submit" class="link" data-testid="delete-featured">
                 Delete this slot
               </button>
             </div>
           </form>
         ) : null}
       </section>
+      <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
 };

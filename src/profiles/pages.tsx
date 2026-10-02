@@ -76,19 +76,19 @@ export const ProfilePage: FC<{
       robots="noindex, nofollow"
       theme="profile"
     >
-      <header class="bar rw ct profile-header-bar">
-        <a class="brand pl" href="/">TWO</a>
+      <header class="bar profile-header-bar">
+        <a class="brand" href="/">TWO</a>
         <nav aria-label="Primary">
-          <a class="bt ct bd cp pl" href="/profile">Your profile</a>
+          <a class="btn" href="/profile">Your profile</a>
         </nav>
       </header>
       <main id="main" tabindex={-1}>
         {joinResult ? <JoinResultBanner result={joinResult} /> : null}
         <section class="profile-player" aria-labelledby="member-heading" data-testid={PROFILE_VIEW_TESTID}>
           <div class="profile-identity">
-            <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="av bk">
-              {img ? <img class="bk" src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
-              <span data-avatar-initial="" class="ai rw ct bd" hidden={!!img}>
+            <span data-testid={PROFILE_AVATAR_TESTID} data-avatar="" aria-hidden="true" class="avatar">
+              {img ? <img src={img.src} srcset={img.srcset} alt="" width="64" height="64" loading="eager" /> : null}
+              <span data-avatar-initial="" class="avatar-initial" hidden={!!img}>
                 {[...member.username][0]?.toUpperCase() ?? "?"}
               </span>
             </span>
@@ -125,7 +125,7 @@ export const ProfilePage: FC<{
           <section class="profile-panel profile-editor" aria-labelledby="edit-heading" data-testid={PROFILE_EDIT_TESTID} {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }} data-member-id={member.id}>
             <h2 id="edit-heading" tabindex="-1">Edit your profile</h2>
             <div data-testid="profile-edit-control" hidden>
-              <button class="bt ct bd cp pl" type="button" data-testid="profile-edit-again">Edit your profile</button>
+              <button class="btn" type="button" data-testid="profile-edit-again">Edit your profile</button>
             </div>
             {errors && Object.keys(errors).length > 0 ? (
               <div role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}><ul>{Object.values(errors).map((e) => <li>{e}</li>)}</ul></div>
@@ -140,9 +140,9 @@ export const ProfilePage: FC<{
                 <label>Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" /></label>
               </div>
               <input type="hidden" name={PROFILE_OPENED_AT_FIELD} value={String(Date.now())} />
-              <div class="act rw ct">
-                <button class="bt ct bd cp pl" type="submit" data-testid={PROFILE_SAVE_TESTID}>{PROFILE_COPY.save}</button>
-                <button class="bt ct bd cp pl profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>{PROFILE_COPY.cancel}</button>
+              <div class="actions">
+                <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>{PROFILE_COPY.save}</button>
+                <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>{PROFILE_COPY.cancel}</button>
               </div>
             </form>
             <script src="/islands/member-profile.js" defer></script>

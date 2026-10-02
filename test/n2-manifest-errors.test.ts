@@ -7,7 +7,6 @@ import app from "./app";
 import {
   internalErrorHandler,
   maintenanceHandler,
-  NotFoundPage,
   notFoundHandler,
   rateLimitExceeded,
 } from "../src/errors";
@@ -107,17 +106,6 @@ describe("branded error handlers on a scratch app", () => {
     expect(html).toContain('href="/events"');
     expect(html).toContain('action="/events" method="get"');
     expect(html).toContain('name="q" type="search"');
-  });
-
-  it("404: populated suggestion metadata retains muted styling with and without a location", () => {
-    const startsAt = new Date("2030-01-01T20:00:00Z");
-    const html = NotFoundPage({ suggestions: [
-      { key: "with-location", title: "Game night", startsAt, location: "Lobby" },
-      { key: "no-location", title: "Online games", startsAt, location: null },
-    ] })!.toString();
-    expect(html).toContain('<p class="mt"><time datetime="2030-01-01T20:00:00.000Z">2030-01-01 20:00 UTC</time> · Lobby</p>');
-    expect(html).toContain('<p class="mt"><time datetime="2030-01-01T20:00:00.000Z">2030-01-01 20:00 UTC</time></p>');
-    expect(html).not.toContain('data-testid="error-events-empty"');
   });
 
   it("500: branded copy, logged, never echoes the failure", async () => {

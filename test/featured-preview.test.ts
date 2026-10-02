@@ -32,6 +32,9 @@ const home = (saved: FeaturedRow, imageHosts?: string) => String(jsx(Home, {
   upcomingEvents: [], eventsUnavailable: false, featured: [saved],
 }));
 const articles = (html: string) => html.match(/<article\b[\s\S]*?<\/article>/g);
+// The dirty-navigation island is an external script with no inline code:
+// strip island tags before asserting the page carries no inline script/style.
+const withoutIslands = (html: string) => html.replace(/<script\b[^>]*src="\/islands\/[^"]*"[^>]*><\/script>/g, "");
 
 // Local rows only: these tests never open a database or public/staging endpoint.
 describe("featured publish-window status", () => {
@@ -105,7 +108,7 @@ describe("featured publish-window status", () => {
   it("captures one clock for every row in the table and adds the bounded-width table class", () => {
     const html = String(jsx(FeaturedPage, { rows: [row, { ...row, id: 2 }], query, now }));
     expect(html.match(/data-status="live"/g)).toHaveLength(2);
-    expect(html).toContain('class="tbl featured-table"');
+    expect(html).toContain('class="admin-table featured-table"');
   });
 });
 
@@ -126,8 +129,8 @@ describe("featured SSR preview", () => {
     expect(html).toContain('class="featured-preview"');
     expect(articles(html)).toEqual(articles(home(saved)));
     expect(articles(html)?.[0]).toContain(saved.title);
-    expect(articles(html)?.[0]).toContain(`<p class="mt">${saved.body}</p>`);
-    expect(html).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
+    expect(articles(html)?.[0]).toContain(`<p>${saved.body}</p>`);
+    expect(withoutIslands(html)).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
   });
 
   it.each(states.filter(([status]) => status !== "live"))("hides %s items", (_status, window) => {
@@ -179,7 +182,7 @@ describe("featured SSR preview", () => {
 
   it("has no inline script, stylesheet, style attribute or event handlers", () => {
     for (const html of [edit(row), String(jsx(FeaturedPage, { rows: [row], query, now })), item(row)]) {
-      expect(html).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
+      expect(withoutIslands(html)).not.toMatch(/<(?:script|style)\b|\sstyle=|\son\w+=/i);
     }
     expect(edit(row)).toContain('<link rel="stylesheet" href="/styles.css"/>');
   });

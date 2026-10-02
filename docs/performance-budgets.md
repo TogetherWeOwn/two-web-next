@@ -30,8 +30,11 @@ CHROME_PATH=/path/to/chrome WRANGLER_SEND_METRICS=false npm run lighthouse
 
 The lockfile keeps `@lhci/cli` at **0.15.1** and Lighthouse at **12.6.1**.
 Overrides scoped to LHCI use `tmp` **0.2.7** and `@puppeteer/browsers` **3.2.3**
-to remove high-severity temporary-file and ZIP-extraction advisories; there are
-no new audit exceptions. The browser helper is ESM-only and requires Node
+to remove high-severity temporary-file and ZIP-extraction advisories. A global
+`basic-ftp` **6.2.1** override fixes GHSA-c475-qrg2-pj4r; only LHCI's proxy chain
+pulls `basic-ftp` in, and npm 10 does not apply a scoped override to the hoisted
+copy. The `basic-ftp` client API used by `get-uri` is unchanged between 5.3.1 and
+6.2.1. There are no new audit exceptions. The browser helper is ESM-only and requires Node
 **22.12.0 or later**; CI remains on Node **24**. The performance regression suite
 checks LHCI's temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
@@ -104,13 +107,25 @@ missing budgeted assets, **2** for missing/invalid configuration or unenforced
 assets. Its 31-case selftest isolates raw/gzip breaches, exact boundaries,
 missing files, malformed/empty/invalid budgets and newly unbudgeted assets,
 including imported nested helpers and dot-prefixed files/directories that Workers
-also serves. Hidden paths require explicit ceilings and cannot escape raw/gzip enforcement. The newly landed `copy-link` island has an
-initial ceiling based on its measured size. Island ceilings stay unchanged.
-The stylesheet ceilings remain **3072/1280 raw/gzip bytes**. Main's home-event
-and error-search rules must be preserved while reducing asset size; whitespace
-compaction alone does not fit those additions. Do not raise the ceilings in this
-PR to hide that failure. Declarations remain whitespace-compacted (identical
-parsed CSS); Lighthouse thresholds and island ceilings are untouched.
+also serves. Hidden paths require explicit ceilings and cannot escape raw/gzip enforcement. Islands that landed after the
+baseline (`copy-link`, `avatar`, `admin-event-editor`, `admin-event-text-limits`,
+`auth-status`) start at their measured size plus 25–33% headroom.
+
+Served assets are main's files, unchanged: this PR adds gates only and does not
+rewrite or minify CSS, JavaScript or markup. Measured at main `fb63afa`, five
+pre-existing assets exceed their unchanged ceilings:
+
+| Asset | Raw / gzip bytes | Ceiling |
+|---|---:|---:|
+| `public/islands/events-calendar.js` | 12060 / 3919 | 10240 / 3584 |
+| `public/islands/going-count.js` | 5321 / 2062 | 4096 / 1536 |
+| `public/islands/member-profile.js` | 14612 / 4581 | 7168 / 2560 |
+| `public/islands/past-events.js` | 5871 / 1972 | 5120 / 2048 |
+| `public/styles.css` | 5678 / 1841 | 3072 / 1280 |
+
+The checker reports them over budget until an explicit ceiling decision or a
+size reduction lands. Do not raise them here to turn the job green. Lighthouse
+thresholds are untouched.
 
 Never relax a Lighthouse threshold to turn a build green. Threshold changes
 require a separate owner-approved PR. Byte-ceiling increases must likewise be a

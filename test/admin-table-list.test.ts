@@ -207,7 +207,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin tables (isolated agent-testdb 
     expect(html).toContain('id="roster-q" name="roster_q" type="search" value="alice"');
     expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
     expect(html).toContain('<form method="post" action="/admin/events/roster" data-event-editor="">');
-    expect(html).toContain('<form method="get" action="/admin/events/roster#rsvp-roster" class="flt rw">');
+    expect(html).toContain('<form method="get" action="/admin/events/roster#rsvp-roster" class="filters">');
     expect(html.match(/data-event-editor/g)).toHaveLength(1); // Only Save bypasses the dirty guard.
   });
 

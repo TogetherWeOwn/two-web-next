@@ -317,6 +317,8 @@ describe("performance CI", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     expect(pkg.devDependencies["@lhci/cli"]).toBe("0.15.1");
     expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
+    // GHSA-c475-qrg2-pj4r: only LHCI's proxy chain pulls basic-ftp in.
+    expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
     // Main's engines floor (^22.18.0 || >=24) satisfies the ESM-only browser
     // helper's own >=22.12.0 requirement; pin the merged value, not the floor.
     expect(pkg.engines.node).toBe("^22.18.0 || >=24");
@@ -339,6 +341,14 @@ describe("performance CI", () => {
       assert.equal(typeof require("puppeteer-core").connect, "function");
       assert.equal(typeof (await import("puppeteer-core")).connect, "function");
       assert.equal(typeof (await import("lighthouse")).default, "function");
+      // Both proxy chains (LHCI's and Puppeteer's) must resolve the patched FTP client.
+      for (const chain of [["@lhci/cli", "proxy-agent", "pac-proxy-agent", "get-uri"],
+        ["lighthouse", "puppeteer-core", "proxy-agent", "pac-proxy-agent", "get-uri"]]) {
+        let req = require;
+        for (const name of chain) req = createRequire(req.resolve(name + "/package.json"));
+        assert.equal(req("basic-ftp/package.json").version, "6.2.1");
+        assert.equal(typeof req("basic-ftp").Client, "function");
+      }
     `], { encoding: "utf8", timeout: 20000 });
     expect(loaded.status, loaded.stdout + loaded.stderr).toBe(0);
   });

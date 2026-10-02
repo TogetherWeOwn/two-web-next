@@ -14,7 +14,7 @@ function deferred<T>() {
 }
 
 type ResponseFixture = { ok: boolean; status: number; type?: string; json?: () => Promise<unknown> };
-const success = () => ({ ok: true, status: 200 });
+const success = () => ({ ok: true, status: 200, json: async () => ({ saved: true, message: "Profile saved." }) });
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 // Only the DOM surface used by the shipped binder. Network and reset timers
@@ -369,9 +369,9 @@ describe("shipped member-profile edit lifecycle", () => {
     const html = jsx(ProfilePage, { member: { id: "100000000000000001", username: "Fixture", avatar: null, bio: "Original bio", games: ["Chess"], timezone: "UTC" }, isOwner: true, appUrl: "https://next.example.test" }).toString();
     expect(html).toMatch(/<form method="post" action="\/members\/100000000000000001" data-testid="profile-form">/);
     expect(html).toContain('name="_method" value="PATCH"');
-    // Hide the unstyled wrapper: .bt's display:inline-flex overrides the
+    // Hide the unstyled wrapper: .btn's display:inline-flex overrides the
     // browser's hidden rule if hidden is put on the styled button itself.
-    expect(html).toMatch(/<div data-testid="profile-edit-control" hidden=""><button class="bt ct bd cp pl" type="button" data-testid="profile-edit-again">/);
+    expect(html).toMatch(/<div data-testid="profile-edit-control" hidden=""><button class="btn" type="button" data-testid="profile-edit-again">/);
     expect(html).toContain('data-testid="profile-bio"');
     expect(html).toContain('data-testid="profile-games"');
     expect(html).toContain('data-testid="profile-timezone"');

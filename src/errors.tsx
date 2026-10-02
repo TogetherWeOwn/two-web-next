@@ -30,11 +30,11 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
     <section class="recovery-events" aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
       <h2 id="error-events-heading">Happening soon</h2>
       {suggestions.length ? (
-        <ul class="ft">
+        <ul class="facts">
           {suggestions.map((event) => (
-            <li class="cd">
+            <li class="card">
               <a href={`/e/${encodeURIComponent(event.key)}`} data-testid="error-event-suggestion">{event.title}</a>
-              <p class="mt">
+              <p>
                 <time datetime={event.startsAt.toISOString()}>{event.startsAt.toISOString().slice(0, 16).replace("T", " ")} UTC</time>
                 {event.location ? <> · {event.location}</> : null}
               </p>
@@ -45,20 +45,20 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
         <p data-testid="error-events-empty">Nothing is on the calendar right now — check back soon.</p>
       )}
       <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
-      <form action="/events" method="get" role="search" class="ees">
-        <label for="error-events-search" class="bk bd">Search events</label>
-        <div class="rw">
-          <input id="error-events-search" class="ifnt" name="q" type="search" placeholder="Search events…" autocomplete="off" data-testid="error-events-search" />
-          <button type="submit" class="bt ct bd cp pl ifnt" data-testid="error-events-search-submit">Search events</button>
+      <form action="/events" method="get" role="search" class="error-events-search">
+        <label for="error-events-search">Search events</label>
+        <div>
+          <input id="error-events-search" name="q" type="search" placeholder="Search events…" autocomplete="off" data-testid="error-events-search" />
+          <button type="submit" class="btn" data-testid="error-events-search-submit">Search events</button>
         </div>
       </form>
     </section>
   }>
-    <p class="ld">
+    <p class="lead">
       The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
     </p>
     <p class="recovery-actions">
-      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
   </ErrorShell>
@@ -68,12 +68,12 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
 // the logs, never in a member's browser.
 export const InternalErrorPage: FC = () => (
   <ErrorShell code="500" title="Something broke on our side">
-    <p class="ld">
+    <p class="lead">
       It is not you. We have logged the failure and the team will take a look. Try again in a minute — the lobby is
       not going anywhere.
     </p>
     <p class="recovery-actions">
-      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
   </ErrorShell>
@@ -82,11 +82,11 @@ export const InternalErrorPage: FC = () => (
 // 429 (ports errors/429 + App\Support\ThrottleEnvelope::render).
 export const RateLimitedPage: FC = () => (
   <ErrorShell code="429" title="Slow down a little">
-    <p class="ld">
+    <p class="lead">
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is not going anywhere.
     </p>
     <p class="recovery-actions">
-      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
+      <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
   </ErrorShell>
@@ -94,7 +94,7 @@ export const RateLimitedPage: FC = () => (
 
 export const PayloadTooLargePage: FC = () => (
   <ErrorShell code="413" title="That request is too large">
-    <p class="ld">Reduce the size of your request and try again.</p>
+    <p class="lead">Reduce the size of your request and try again.</p>
     <p><a href="/">Back to the homepage</a></p>
   </ErrorShell>
 );
@@ -108,12 +108,12 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
     title="We will be right back"
     headerCta={{ href: inviteUrl, label: "Open Discord" }}
   >
-    <p class="ld">
+    <p class="lead">
       The site is down for a minute of maintenance. The Discord server never closes — come in through the invite and
       we will see you there.
     </p>
     <p class="recovery-actions">
-      <a class="bt ct bd cp pl" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
+      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
       <a href="/" data-testid="error-retry">Try again</a>
     </p>
   </ErrorShell>

@@ -29,7 +29,7 @@ function expectFormErrors(html: string, values: Record<string, string>, errors: 
   expect(visible.sort()).toEqual(Object.keys(errors).sort());
   for (const name of ["title", "starts_at", "ends_at", "timezone"]) {
     const id = `f-${name.replaceAll("_", "-")}`;
-    const field = [...html.matchAll(/<div class="fd">([\s\S]*?)<\/div>/g)]
+    const field = [...html.matchAll(/<div class="field">([\s\S]*?)<\/div>/g)]
       .find((m) => m[1]!.includes(`name="${name}"`))?.[1];
     expect(field, name).toBeDefined();
     expect(field).toContain(`<label for="${id}">`);
@@ -38,12 +38,17 @@ function expectFormErrors(html: string, values: Record<string, string>, errors: 
     expect(input).toContain(`value="${escape(values[name]!)}"`);
     if (errors[name]) {
       expect(input).toContain('aria-invalid="true"');
-      expect(input).toContain(`aria-describedby="${id}-error"`);
+      // Field owns association: hint id first when the field carries hint copy.
+      const hintPrefix = field!.includes(`id="${id}-hint"`) ? `${id}-hint ` : "";
+      expect(input).toContain(`aria-describedby="${hintPrefix}${id}-error"`);
       expect(field).toMatch(new RegExp(`<p[^>]*id="${id}-error"[^>]*role="alert"`));
       expect(field).toContain(escape(errors[name]!));
     } else {
       expect(input).not.toContain("aria-invalid");
-      expect(input).not.toContain("aria-describedby");
+      // Timezone always carries hint copy, so Field wires the hint id even clean.
+      const hintOnly = field!.includes(`id="${id}-hint"`) ? `aria-describedby="${id}-hint"` : "aria-describedby";
+      if (field!.includes(`id="${id}-hint"`)) expect(input).toContain(hintOnly);
+      else expect(input).not.toContain(hintOnly);
     }
   }
 }

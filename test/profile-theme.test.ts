@@ -17,7 +17,7 @@ const render = (overrides = {}) => ProfilePage({ member, isOwner: true, appUrl: 
 describe("member profile base theme", () => {
   it("loads the base tokens and profile-only layout without changing other shells", () => {
     const html = render();
-    expect(html).toContain('<body class="profile-theme"><a class="sl bd"');
+    expect(html).toContain('<body class="base-theme profile-theme"><a class="skip-link"');
     expect(html).toContain('rel="stylesheet" href="/theme.css"');
     expect(html).toContain('rel="stylesheet" href="/profile-theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
@@ -74,7 +74,7 @@ describe("member profile base theme", () => {
 
   it("preserves join confirmation and its reinvite action inside the themed shell", () => {
     const html = render({ joinResult: "already_member" });
-    expect(html).toContain('class="nt" role="status" data-testid="join-result"');
+    expect(html).toContain('class="notice" role="status" data-testid="join-result"');
     expect(html).toContain('href="/discord" data-testid="reinvite-link"');
     expect(html.indexOf('data-testid="join-result"')).toBeLessThan(html.indexOf('class="profile-player"'));
   });

@@ -11,17 +11,17 @@ import { canonicalUrl } from "./seo";
 
 const SITE_NAME = "Together We Own";
 
-export const SkipLink: FC = () => <a class="sl bd" href="#main">Skip to content</a>;
+export const SkipLink: FC = () => <a class="skip-link" href="#main">Skip to content</a>;
 
 export const FeaturedContentItem: FC<{ row: VisibleFeatured; appUrl: string; imageHosts?: string }> = ({ row, appUrl, imageHosts }) => {
   const src = row.imageUrl ? featuredImageSrc(row.imageUrl, appUrl, imageHosts) : null;
   return (
-    <article class="cd" data-testid="featured-item">
+    <article class="card" data-testid="featured-item">
       <h3>{row.url ? <a href={row.url}>{row.title}</a> : row.title}</h3>
-      {row.body ? <p class="mt">{row.body}</p> : null}
+      {row.body ? <p>{row.body}</p> : null}
       {src ? (
         <img
-          class="fimg bk"
+          class="featured-image"
           src={src}
           alt={row.imageAlt?.trim() || row.title}
           width="640"
@@ -42,7 +42,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home" | "profile";
+    theme?: "home" | "content" | "join" | "profile";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -79,8 +79,50 @@ export const Layout: FC<
         </>
       ) : null}
     </head>
-    <body class={theme === "home" ? "homepage-theme" : theme === "profile" ? "profile-theme" : undefined}><SkipLink />{children}</body>
+    <body class={theme ? `base-theme ${theme === "home" ? "homepage-theme" : `${theme}-theme`}` : undefined}><SkipLink />{children}</body>
   </html>
+);
+
+type HeaderCta = { href: string; label: string };
+
+// Static pages pass no session: shared chrome never reads account persistence.
+// joinAction renders the join-funnel entry on the static leaves; an explicit
+// cta overrides the guest action (recovery shells pass their way back in).
+export const SiteHeader: FC<{
+  session?: Session | null;
+  home?: boolean;
+  joinAction?: boolean;
+  cta?: HeaderCta;
+}> = ({ session, home, joinAction, cta }) => (
+  <header class="bar site-header">
+    <nav class="main-nav" aria-label="Primary">
+      <a href="/" aria-current={home ? "page" : undefined}>Home</a>
+      <a href="/events">Events</a>
+    </nav>
+    <a class="brand" href="/" aria-label="Together We Own homepage">
+      <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+    </a>
+    <nav class="header-account" aria-label="Account">
+      {session ? (
+        <form method="post" action="/logout">
+          <span class="account-caption">Signed in</span>
+          <span class="who">{session.username}</span>
+          <button type="submit" class="link">Sign out</button>
+        </form>
+      ) : (
+        <div>
+          <span class="account-caption">Welcome, guest</span>
+          {cta ? (
+            <a class="btn" href={cta.href} data-testid="signin">{cta.label}</a>
+          ) : joinAction ? (
+            <a class="btn" href="/join">Join with Discord</a>
+          ) : (
+            <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+          )}
+        </div>
+      )}
+    </nav>
+  </header>
 );
 
 // The site footer carries the static-leaf links on the funnel + leaf + error
@@ -96,38 +138,6 @@ export const SiteFooter: FC = () => (
       <a href="/privacy">Privacy</a>
     </nav>
   </footer>
-);
-
-type HeaderCta = { href: string; label: string };
-
-export const SiteHeader: FC<{
-  session?: Session | null;
-  home?: boolean;
-  cta?: HeaderCta;
-}> = ({ session, home, cta = { href: "/auth/discord", label: "Sign in with Discord" } }) => (
-  <header class="bar rw ct site-header">
-    <nav class="main-nav" aria-label="Primary">
-      <a href="/" aria-current={home ? "page" : undefined}>Home</a>
-      <a href="/events">Events</a>
-    </nav>
-    <a class="brand pl" href="/" aria-label="Together We Own homepage">
-      <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
-    </a>
-    <nav class="header-account" aria-label="Account">
-      {session ? (
-        <form method="post" action="/logout">
-          <span class="account-caption">Signed in</span>
-          <span class="w mt">{session.username}</span>
-          <button type="submit" class="ln ifnt">Sign out</button>
-        </form>
-      ) : (
-        <div>
-          <span class="account-caption">Welcome, guest</span>
-          <a class="bt ct bd cp pl" href={cta.href} data-testid="signin">{cta.label}</a>
-        </div>
-      )}
-    </nav>
-  </header>
 );
 
 // Presentational only: error and OAuth recovery routes must not read sessions
@@ -146,7 +156,7 @@ export const RecoveryShell: FC<PropsWithChildren<{
       <section class="hero recovery-hero" aria-labelledby={headingId}>
         <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
-        {code ? <p class="recovery-code" aria-hidden="true">{code}</p> : <p class="st mt cp">Let&apos;s get you back to the lobby</p>}
+        {code ? <p class="recovery-code" aria-hidden="true">{code}</p> : <p class="strap">Let&apos;s get you back to the lobby</p>}
         <h1 id={headingId}>{title}</h1>
         {children}
       </section>
@@ -186,7 +196,7 @@ const JOIN_HREF = "/join";
 // guild gets the reinvite action — /discord resolves to the live invite — never
 // the bare homepage "Open Discord".
 export const JoinResultBanner: FC<{ result: JoinResult }> = ({ result }) => (
-  <p class="nt" role="status" data-testid="join-result">
+  <p class="notice" role="status" data-testid="join-result">
     {result === "added" ? (
       <>You are in. Finish Discord's rules screening before you can post.</>
     ) : (
@@ -212,45 +222,44 @@ export const Join: FC<{ inviteUrl: string; widgetUrl: string | null; next?: stri
   joinResult,
 
 }) => (
-  <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO}>
-    <header class="bar rw ct">
-      <a class="brand pl" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="bt ct bd cp pl" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
-      </nav>
-    </header>
+  <Layout title="Join Together We Own" canonical={canonicalUrl(appUrl, "/join")} shareDescription={JOIN_INTRO} theme="join">
+    <SiteHeader />
     <main id="main" tabindex={-1}>
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
-      <section aria-labelledby="join-heading">
-        <h1 id="join-heading">Join Together We Own</h1>
-        <p class="ld">{JOIN_INTRO}</p>
-        <p>One click with Discord and we&apos;ll add you to the server — no invite link, no waiting.</p>
-        <p>
-          <a
-            class="bt ct bd cp pl"
-            href={next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord"}
-            data-testid="join-oneclick"
-          >
-            Join with Discord
-          </a>{" "}
-          <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
-        </p>
-        {widgetUrl ? (
-          <iframe
-            title="TWO Discord server preview"
-            src={widgetUrl}
-            width="350"
-            height="500"
-            sandbox="allow-scripts allow-same-origin"
-            loading="lazy"
-            referrerpolicy="no-referrer"
-            data-testid="join-widget"
-          />
-        ) : (
-          <p class="st mt cp" data-testid="join-widget-fallback">
-            Live server preview is unavailable — the join button above still works.
+      <section class="join-layout" aria-labelledby="join-heading">
+        <div class="join-panel">
+          <h1 id="join-heading">Join Together We Own</h1>
+          <p class="lead">{JOIN_INTRO}</p>
+          <p>One click with Discord and we&apos;ll add you to the server — no invite link, no waiting.</p>
+          <p class="join-actions">
+            <a
+              class="btn"
+              href={next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord"}
+              data-testid="join-oneclick"
+            >
+              Join with Discord
+            </a>{" "}
+            <a href={inviteUrl} data-testid="join-invite">Join with an invite link instead</a>
           </p>
-        )}
+        </div>
+        <div class="join-preview">
+          {widgetUrl ? (
+            <iframe
+              title="TWO Discord server preview"
+              src={widgetUrl}
+              width="350"
+              height="500"
+              sandbox="allow-scripts allow-same-origin"
+              loading="lazy"
+              referrerpolicy="no-referrer"
+              data-testid="join-widget"
+            />
+          ) : (
+            <p class="strap" data-testid="join-widget-fallback">
+              Live server preview is unavailable — the join button above still works.
+            </p>
+          )}
+        </div>
       </section>
     </main>
     <SiteFooter />
@@ -265,9 +274,9 @@ export const Recovery: FC<{
   inviteUrl: string;
 }> = ({ title, message, retryUrl, retryLabel, inviteUrl }) => (
   <RecoveryShell title={title} headingId="recovery-heading" headerCta={{ href: "/join", label: "Join with Discord" }}>
-    <p class="ld">{message}</p>
+    <p class="lead">{message}</p>
     <p class="recovery-actions">
-      <a class="bt ct bd cp pl" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
+      <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>{" "}
       <a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
     </p>
   </RecoveryShell>
@@ -308,22 +317,22 @@ export const Home: FC<{
       {joinResult ? (
         <JoinResultBanner result={joinResult} />
       ) : (
-        notice && <p class="nt" role="status" data-testid="notice">{NOTICES[notice]}</p>
+        notice && <p class="notice" role="status" data-testid="notice">{NOTICES[notice]}</p>
       )}
       <section class="hero" aria-labelledby="home-heading">
         <div class="hero-detail hero-detail-left" aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="hero-detail hero-detail-right" aria-hidden="true"><span></span><span></span><span></span></div>
-        <p class="st mt cp">A close-knit gaming clan / mostly evenings / 18+</p>
+        <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
         <h1 id="home-heading">The lobby is open.</h1>
-        <p class="ld">We spent most of our life private. Now you can just turn up.</p>
+        <p class="lead">We spent most of our life private. Now you can just turn up.</p>
         {session?.member ? (
-          <a class="bt ct bd cp pl" href={inviteUrl}>Open Discord</a>
+          <a class="btn" href={inviteUrl}>Open Discord</a>
         ) : (
-          <a class="bt ct bd cp pl" href="/auth/discord" data-testid="join">Join with Discord</a>
+          <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
         )}
         {notice === "join_failed" && <p><a href={inviteUrl}>Join with an invite link instead</a></p>}
         {counts.memberCount != null && (
-          <p class="cnt mt" data-testid="member-count">
+          <p class="counts" data-testid="member-count">
             <strong>{counts.memberCount}</strong> members
             {counts.onlineCount != null && counts.onlineCount > 0 && (
               <>
@@ -336,7 +345,7 @@ export const Home: FC<{
       {featured.length > 0 ? (
         <section aria-labelledby="featured-heading" data-testid="featured-content">
           <h2 id="featured-heading">From the community team</h2>
-          <div class="ft">
+          <div class="facts">
             {featured.map((item) => <FeaturedContentItem key={item.id} row={item} appUrl={appUrl} imageHosts={imageHosts} />)}
           </div>
         </section>
@@ -359,28 +368,28 @@ export const Home: FC<{
       <section aria-label="Community ladder" class="community-ladder">
         <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
         <p>Ranks stack — a Veteran still holds everything below.</p>
-        <dl class="ft rst" data-testid="rank-stack">
+        <dl class="facts rank-stack" data-testid="rank-stack">
           {(counts.ranks.length ? counts.ranks : FALLBACK_RANKS).map((rank) => (
-            <div class="cd bk" key={rank.key} data-rank={rank.key}>
+            <div class="card" key={rank.key} data-rank={rank.key}>
               <dt>{rank.label}</dt>
-              <dd class="mt">{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
+              <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
             </div>
           ))}
         </dl>
       </section>
       <section aria-labelledby="home-events-heading">
-        <p class="st mt cp">Next up</p>
+        <p class="strap">Next up</p>
         <h2 id="home-events-heading">Game nights, when they land.</h2>
         {upcomingEvents.length > 0 ? (
           <>
-            <ul class="ft hes" data-testid="home-events-list">
+            <ul class="facts home-events" data-testid="home-events-list">
               {upcomingEvents.map((event) => (
-                <li class="cd">
-                  <a class="hel bk pl" href={`/e/${encodeURIComponent(event.eventKey)}`}>
-                    <p class="mt"><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time></p>
+                <li class="card">
+                  <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
+                    <p><time datetime={event.startsAt.toISOString()}>{cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone) ? event.timezone : "UTC"})</time></p>
                     <h3>{event.title}</h3>
-                    {event.location ? <p class="mt">{event.location}</p> : null}
-                    <p class="mt">{event.goingCount} going</p>
+                    {event.location ? <p>{event.location}</p> : null}
+                    <p>{event.goingCount} going</p>
                   </a>
                 </li>
               ))}
@@ -388,7 +397,7 @@ export const Home: FC<{
             <p><a href="/events">See all events <span aria-hidden="true">→</span></a></p>
           </>
         ) : (
-          <div class="cd" data-testid="home-events-empty" data-state={eventsUnavailable ? "unavailable" : "empty"}>
+          <div class="card" data-testid="home-events-empty" data-state={eventsUnavailable ? "unavailable" : "empty"}>
             <h3>{eventsUnavailable ? "Game nights are unavailable right now." : "Nothing scheduled yet."}</h3>
             <p>{eventsUnavailable
               ? "We couldn’t load the schedule. The Discord is still open — check there for the next game night."
@@ -396,7 +405,7 @@ export const Home: FC<{
           </div>
         )}
         {!session ? (
-          <p><a class="bt ct bd cp pl" href="/join" data-testid="home-events-join">Join the Discord <span aria-hidden="true">→</span></a></p>
+          <p><a class="btn" href="/join" data-testid="home-events-join">Join the Discord <span aria-hidden="true">→</span></a></p>
         ) : null}
       </section>
     </main>
@@ -412,18 +421,21 @@ const Leaf: FC<PropsWithChildren<{ title: string; canonical: string; headingId: 
   heading,
   children,
 }) => (
-  <Layout title={title} canonical={canonical}>
-    <header class="bar rw ct">
-      <a class="brand pl" href="/">TWO</a>
-      <nav aria-label="Primary">
-        <a class="bt ct bd cp pl" href={JOIN_HREF}>Join with Discord</a>
-      </nav>
-    </header>
+  <Layout title={title} canonical={canonical} theme="content">
+    <SiteHeader joinAction />
     <main id="main" tabindex={-1}>
-      <section aria-labelledby={headingId}>
-        <h1 id={headingId}>{heading}</h1>
-        {children}
-      </section>
+      <div class="content-layout">
+        <nav class="content-nav" aria-label="Community information">
+          <a href="/about" aria-current={headingId === "about-heading" ? "page" : undefined}>About</a>
+          <a href="/faq" aria-current={headingId === "faq-heading" ? "page" : undefined}>FAQ</a>
+          <a href="/rules" aria-current={headingId === "rules-heading" ? "page" : undefined}>House rules</a>
+          <a href="/privacy" aria-current={headingId === "privacy-heading" ? "page" : undefined}>Privacy</a>
+        </nav>
+        <section class="content-page" aria-labelledby={headingId}>
+          <h1 id={headingId}>{heading}</h1>
+          {children}
+        </section>
+      </div>
     </main>
     <SiteFooter />
   </Layout>
@@ -431,30 +443,30 @@ const Leaf: FC<PropsWithChildren<{ title: string; canonical: string; headingId: 
 
 export const About: FC<{ appUrl: string }> = ({ appUrl }) => (
   <Leaf title="About — Together We Own" canonical={canonicalUrl(appUrl, "/about")} headingId="about-heading" heading="About Together We Own">
-    <p class="st mt cp">Est. 1998</p>
-    <p class="ld">
+    <p class="strap">Est. 1998</p>
+    <p class="lead">
       An adult gaming community that spent most of its life private. Now the doors are open: turn up, say hello,
       come back.
     </p>
-    <dl data-testid="about-facts" class="ft">
-      <div class="cd bk">
+    <dl data-testid="about-facts" class="facts">
+      <div class="card">
         <dt>Voice-first</dt>
-        <dd class="mt">The community lives in voice. Turn up, say hello, and come back — that is the whole membership path.</dd>
+        <dd>The community lives in voice. Turn up, say hello, and come back — that is the whole membership path.</dd>
       </div>
-      <div class="cd bk">
+      <div class="card">
         <dt>No application, no interview</dt>
-        <dd class="mt">
+        <dd>
           You start as a Prospect. Show up a few times, play, become a Member. The ladder records trust and time,
           not grind.
         </dd>
       </div>
-      <div class="cd bk">
+      <div class="card">
         <dt>From forum threads to voice rooms</dt>
-        <dd class="mt">Founded in 1998. Forum years, then voice years — duos, trios, quads, squads. Today: doors open.</dd>
+        <dd>Founded in 1998. Forum years, then voice years — duos, trios, quads, squads. Today: doors open.</dd>
       </div>
     </dl>
     <p>
-      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="about-join">Join with Discord</a>{" "}
+      <a class="btn" href={JOIN_HREF} data-testid="about-join">Join with Discord</a>{" "}
       <a href="/">Back to the homepage</a>
     </p>
   </Leaf>
@@ -481,25 +493,25 @@ const RULES: Array<[string, string]> = [
 // legacy "1 September 2026" render): crawlers read datetime, members read words.
 export const Rules: FC<{ appUrl: string; lastUpdated: { iso: string; label: string } | null }> = ({ appUrl, lastUpdated }) => (
   <Leaf title="House rules — Together We Own" canonical={canonicalUrl(appUrl, "/rules")} headingId="rules-heading" heading="House rules">
-    <p class="ld">
+    <p class="lead">
       Five rules that keep the lobby a place people come back to. Short on purpose — if anything is unclear, ask in
       Discord before you assume.
     </p>
     {lastUpdated ? (
-      <p data-testid="rules-last-updated" class="st mt cp">
+      <p data-testid="rules-last-updated" class="strap">
         Last updated <time datetime={lastUpdated.iso}>{lastUpdated.label}</time>
       </p>
     ) : null}
-    <ol data-testid="rules-list" class="ft">
+    <ol data-testid="rules-list" class="facts">
       {RULES.map(([name, body]) => (
-        <li class="cd" key={name}>
+        <li class="card" key={name}>
           <h2>{name}</h2>
-          <p class="mt">{body}</p>
+          <p>{body}</p>
         </li>
       ))}
     </ol>
     <p>
-      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="rules-join">Join with Discord</a>{" "}
+      <a class="btn" href={JOIN_HREF} data-testid="rules-join">Join with Discord</a>{" "}
       <a href="/">Back to the homepage</a>
     </p>
   </Leaf>
@@ -618,25 +630,27 @@ const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, st
 
 export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
   <Leaf title="FAQ — Together We Own" canonical={canonicalUrl(appUrl, "/faq")} headingId="faq-heading" heading="Frequently asked questions">
-    <p class="st mt cp">New here? Start here</p>
-    <p class="ld">
+    <p class="strap">New here? Start here</p>
+    <p class="lead">
       Short answers to what newcomers actually ask. If yours isn't here, ask in general or DM a moderator.
     </p>
     <div data-testid="faq-list">
       {FAQS.map((group) => (
         <section aria-labelledby={group.sectionId} key={group.sectionId}>
           <h2 id={group.sectionId}>{group.section}</h2>
-          {group.items.map(([q, a]) => (
-            <div class="cd" key={q}>
-              <h3>{q}</h3>
-              <p class="mt">{a}</p>
-            </div>
-          ))}
+          <div>
+            {group.items.map(([q, a]) => (
+              <div class="card" key={q}>
+                <h3>{q}</h3>
+                <p>{a}</p>
+              </div>
+            ))}
+          </div>
         </section>
       ))}
     </div>
     <p>
-      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="faq-join">Join with Discord</a>{" "}
+      <a class="btn" href={JOIN_HREF} data-testid="faq-join">Join with Discord</a>{" "}
       <a href="/">Back to the homepage</a>
     </p>
   </Leaf>
@@ -647,10 +661,10 @@ export const Faq: FC<{ appUrl: string }> = ({ appUrl }) => (
 // it in the funnel leaf chrome. No JavaScript ships on this page.
 export const Privacy: FC<{ appUrl: string; version: number; html: string }> = ({ appUrl, version, html }) => (
   <Leaf title="Privacy policy — Together We Own" canonical={canonicalUrl(appUrl, "/privacy")} headingId="privacy-heading" heading="Privacy policy">
-    <p class="st mt cp" data-testid="privacy-version">Version {version}</p>
+    <p class="strap" data-testid="privacy-version">Version {version}</p>
     <div data-testid="privacy-policy" dangerouslySetInnerHTML={{ __html: html }} />
     <p>
-      <a class="bt ct bd cp pl" href={JOIN_HREF} data-testid="privacy-join">Join with Discord</a>{" "}
+      <a class="btn" href={JOIN_HREF} data-testid="privacy-join">Join with Discord</a>{" "}
       <a href="/">Back to the homepage</a>
     </p>
   </Leaf>

@@ -169,11 +169,11 @@ describe("member-profile states rendered", () => {
     const response = await app.request(`/members/${id}`, { headers: { cookie: await cookie(ALICE, "alice") } }, env);
     const html = await response.text();
     expect(response.status).toBe(200);
-    expect(html).toContain('data-testid="profile-avatar" data-avatar="" aria-hidden="true" class="av bk"');
+    expect(html).toContain('data-testid="profile-avatar" data-avatar="" aria-hidden="true" class="avatar"');
     expect(html).toContain(`src="${profileAvatarSrcset(id, "abc")!.src}"`);
     expect(html).toContain(`srcset="${profileAvatarSrcset(id, "abc")!.srcset}"`);
     expect(html).toContain('alt="" width="64" height="64" loading="eager"');
-    expect(html).toContain(`<span data-avatar-initial="" class="ai rw ct bd" hidden="">${id === ALICE ? "A" : "B"}</span>`);
+    expect(html).toContain(`<span data-avatar-initial="" class="avatar-initial" hidden="">${id === ALICE ? "A" : "B"}</span>`);
     expect(html).toContain('<script src="/islands/avatar.js" defer=""></script>');
     expect(html).not.toMatch(/\son(?:error|load)=/i);
     if (id === BOB) expect(html).not.toContain('/islands/member-profile.js');
@@ -183,7 +183,7 @@ describe("member-profile states rendered", () => {
     store.rows.get(ALICE)!.avatar = avatar;
     store.rows.get(ALICE)!.username = "<script>";
     const html = await (await app.request("/profile", { headers: { cookie: await cookie(ALICE, "alice") } }, env)).text();
-    expect(html).toContain('<span data-avatar-initial="" class="ai rw ct bd">&lt;</span>');
+    expect(html).toContain('<span data-avatar-initial="" class="avatar-initial">&lt;</span>');
     expect(html).not.toContain('cdn.discordapp.com/avatars/');
   });
   it("SSR view: avatar fallback, name, joined month, honeypot + opened-at", async () => {
