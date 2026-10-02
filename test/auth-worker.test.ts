@@ -1,8 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { build } from "esbuild";
 import { request as httpRequest } from "node:http";
 import { convertV4MiniflareOptions, Miniflare, Response as WorkerResponse, type Request as WorkerRequest } from "miniflare";
 import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
+import { loginUrl } from "../src/islands/contracts";
 
 // Workers runtime parity: no remote binding, deployment secrets or live HTTP.
 // Discord is intercepted; unmatched network access is forbidden.
@@ -10,6 +11,9 @@ describe("W15 auth/join in Miniflare", () => {
   let mf: Miniflare;
   const calls: { path: string; method: string; auth: string | null; body: string }[] = [];
   const unexpected: string[] = [];
+  // The /join widget health probe rides waitUntil, so it can land after the
+  // test that caused it; it is kept apart from the auth-path ledger.
+  const widgetProbes: { method: string; auth: string | null; cookie: string | null }[] = [];
   let joinStatus: 201 | 204 = 201;
   // TOG-10355: when set, the token endpoint answers with this instead of the
   // success body — the workerd fixture for expired-grant / outage responses.
@@ -50,6 +54,10 @@ describe("W15 auth/join in Miniflare", () => {
       compatibilityDate: "2026-09-29", compatibilityFlags: ["nodejs_compat"],
       outboundService: async (request: WorkerRequest) => {
         const url = new URL(request.url);
+        if (url.origin === "https://discord.com" && url.pathname === "/api/v10/guilds/326474832151838730/widget.json") {
+          widgetProbes.push({ method: request.method, auth: request.headers.get("authorization"), cookie: request.headers.get("cookie") });
+          return WorkerResponse.json({ id: "326474832151838730", presence_count: 3 });
+        }
         const call = { path: url.pathname, method: request.method, auth: request.headers.get("authorization"), body: await request.text() };
         calls.push(call);
         if (url.origin === "https://discord.com") {
@@ -138,6 +146,15 @@ describe("W15 auth/join in Miniflare", () => {
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });
 
+  it("probes the public widget JSON off the /join response path as a bare GET", async () => {
+    const res = await request("/join", { headers: { cookie: "__Host-two_session=member-cookie" } });
+    expect(res.status).toBe(200);
+    // One probe per verdict window per isolate: an earlier /join may own it.
+    await vi.waitFor(() => expect(widgetProbes.length).toBeGreaterThan(0));
+    for (const probe of widgetProbes) expect(probe).toEqual({ method: "GET", auth: null, cookie: null });
+    expect(calls).toEqual([]);
+  });
+
   it("carries an explicit ?next= through ordinary login and clears the journey cookies", async () => {
     const start = await request("/auth/discord?next=%2Fe%2Fsunday-squad-01");
     expect(start.headers.getSetCookie().join("\n")).toContain("__Host-two_login_next=");
@@ -162,6 +179,18 @@ describe("W15 auth/join in Miniflare", () => {
       headers: { cookie: `${cookie(bounce)}; ${cookie(start)}` },
     });
     expect(login.headers.get("location")).toBe("/profile");
+    expect(calls.map((c) => c.path)).toEqual(expectedPaths);
+  });
+
+  it("returns RSVP guests and expired sessions to the event via the existing join flow", async () => {
+    joinStatus = 204;
+    const next = "/e/01ARZ3NDEKTSV4RRFFQ69G5FAV?from=calendar";
+    const start = await request(loginUrl(next));
+    const url = new URL(start.headers.get("location")!);
+    const result = await request(`/join/callback?code=test-code&state=${url.searchParams.get("state")}`, { headers: { cookie: cookie(start) } });
+    expect(result.status).toBe(302);
+    expect(result.headers.get("location")).toBe(next);
+    expect(result.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });
 

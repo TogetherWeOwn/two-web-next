@@ -14,6 +14,16 @@
 .event-theme .event-meta dt { font: 700 .9rem/1.4 Display, 'Arial Narrow', sans-serif; text-transform: uppercase; color: var(--muted); letter-spacing: .06em; margin-bottom: .5rem; }
 .event-theme .event-meta dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .event-theme .event-meta dd p { color: inherit; margin: 0; }
+.event-theme .event-rsvp { display: flex; justify-content: center; margin: 0 0 2rem; }
+.event-theme .event-rsvp > section { display: flex; flex-direction: column; align-items: center; gap: .75rem; border: 0; padding: 0; text-align: center; }
+.event-theme .event-rsvp form { display: flex; flex-direction: column; align-items: center; gap: .75rem; margin: 0; }
+.event-theme .event-rsvp p { margin: 0; }
+.event-theme .event-rsvp > section > a, .event-theme .event-rsvp button {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .65rem 1.8rem; border: 1px solid var(--brand);
+  background: var(--brand); color: var(--paper); font: 700 1.1rem/1.2 Display, 'Arial Narrow', sans-serif; text-transform: uppercase; text-decoration: none; cursor: pointer;
+}
+.event-theme .event-rsvp button[data-action='withdraw'] { background: transparent; color: var(--brand); }
+.event-theme .event-rsvp button:disabled { opacity: .65; cursor: progress; }
 .event-theme .event-detail-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 3rem; align-items: start; }
 .event-theme .event-detail-grid > * { min-width: 0; }
 .event-theme .event-detail-grid section { border: 0; }
@@ -37,6 +47,7 @@
 .event-theme .event-related-grid time { display: block; font-size: .9rem; color: var(--muted); margin-top: .5rem; }
 .event-theme .event-gone { min-height: 28rem; padding-block: 4rem; }
 .event-theme .event-gone h1 { margin-bottom: 1.5rem; }
+.event-theme .event-gone .event-rsvp { margin-bottom: 1.5rem; }
 @media (max-width: 48rem) {
   .event-theme .event-hero { padding: 2rem 0 3rem; }
   .event-theme .event-meta { grid-template-columns: 1fr; }

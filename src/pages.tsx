@@ -5,7 +5,7 @@ import { featuredImageSrc } from "./featured-image";
 import type { Session } from "./env";
 import type { JoinResult } from "./return-journey";
 import type { HomeEvent } from "./events/reads";
-import { cardTimeLabel, isValidZone } from "./islands/contracts";
+import { cardTimeLabel, isValidZone, loginUrl } from "./islands/contracts";
 import { inviteDestination } from "./invite";
 import { canonicalUrl } from "./seo";
 
@@ -42,7 +42,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home" | "event" | "content" | "join" | "profile";
+    theme?: "home" | "event" | "content" | "join" | "profile" | "schedule";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -77,6 +77,7 @@ export const Layout: FC<
           <link rel="stylesheet" href="/theme.css" />
           {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
           {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
+          {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}
         </>
       ) : null}
     </head>
@@ -89,25 +90,29 @@ type HeaderCta = { href: string; label: string };
 // Static pages pass no session: shared chrome never reads account persistence.
 // joinAction renders the join-funnel entry on the static leaves; an explicit
 // cta overrides the guest action (recovery shells pass their way back in).
-export const SiteHeader: FC<{
+// Children replace the account area (the schedule's member Discord link);
+// loginReturnTo carries the guest sign-in destination. account={false} drops
+// the account area on the session-less cancelled (410) event page; active
+// "event" marks Events as the current section (not page) on event detail.
+export const SiteHeader: FC<PropsWithChildren<{
   session?: Session | null;
-  home?: boolean;
-  current?: "events";
+  active?: "home" | "events" | "event";
+  loginReturnTo?: string | null;
   account?: boolean;
   joinAction?: boolean;
   cta?: HeaderCta;
-}> = ({ session, home, current, account = true, joinAction, cta }) => (
+}>> = ({ session, active, loginReturnTo = null, account = true, joinAction, cta, children }) => (
   <header class="bar site-header">
     <nav class="main-nav" aria-label="Primary">
-      <a href="/" aria-current={home ? "page" : undefined}>Home</a>
-      <a href="/events" aria-current={current === "events" ? "location" : undefined}>Events</a>
+      <a href="/" aria-current={active === "home" ? "page" : undefined}>Home</a>
+      <a href="/events" aria-current={active === "events" ? "page" : active === "event" ? "location" : undefined}>Events</a>
     </nav>
     <a class="brand" href="/" aria-label="Together We Own homepage">
       <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
     </a>
     {account ? (
       <nav class="header-account" aria-label="Account">
-        {session ? (
+        {children ?? (session ? (
           <form method="post" action="/logout">
             <span class="account-caption">Signed in</span>
             <span class="who">{session.username}</span>
@@ -121,10 +126,10 @@ export const SiteHeader: FC<{
             ) : joinAction ? (
               <a class="btn" href="/join">Join with Discord</a>
             ) : (
-              <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+              <a class="btn" href={loginUrl(loginReturnTo)} data-testid="signin">Sign in with Discord</a>
             )}
           </div>
-        )}
+        ))}
       </nav>
     ) : null}
   </header>
@@ -132,8 +137,9 @@ export const SiteHeader: FC<{
 
 // The site footer carries the static-leaf links on the funnel + leaf + error
 // shells (home, join, recovery, about/faq/rules/privacy, branded errors —
-// ports the legacy home footer: About, FAQ, House rules, Privacy). Admin,
-// events and profile shells intentionally keep their own chrome. One
+// ports the legacy home footer: About, FAQ, House rules, Privacy), the
+// themed schedule (/events, /events/past) and event detail/cancelled pages.
+// Admin and profile shells intentionally keep their own chrome. One
 // component so a new leaf cannot ship without a way back to it.
 export const SiteFooter: FC = () => (
   <footer>
@@ -311,7 +317,7 @@ export const Home: FC<{
     shareDescription="We spent most of our life private. Now you can just turn up."
     theme="home"
   >
-    <SiteHeader session={session} home />
+    <SiteHeader session={session} active="home" />
     <main id="main" tabindex={-1}>
       {/*
         The flashed join confirmation takes the notice slot: both carry the same

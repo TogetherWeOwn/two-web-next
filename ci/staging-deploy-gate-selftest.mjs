@@ -44,6 +44,7 @@ function step(name) {
 }
 const gateCommand = step("Require successful exact-SHA full CI");
 const queueCommand = step("Ensure queues exist");
+const tailCommand = `${step("Re-verify exact-SHA full CI before Tail Worker deploy")}\n${step("Deploy alert Tail Worker before attaching the app")}`;
 const deployGateCommand = step("Re-verify exact-SHA full CI before Worker deploy");
 const deployCommand = `${deployGateCommand}\n${step("Deploy to Cloudflare Workers")}`;
 
@@ -82,7 +83,7 @@ function executeStaging(ctx, evidence, changes = {}) {
         }};
       };
     `);
-    const result = spawnSync("bash", ["-c", `set -e\n${gateCommand}\nnode "$TEST_TRANSITION" afterPreparation\n${queueCommand}\n${deployCommand}`], {
+    const result = spawnSync("bash", ["-c", `set -e\n${gateCommand}\nnode "$TEST_TRANSITION" afterPreparation\n${queueCommand}\n${tailCommand}\n${deployCommand}`], {
       cwd: root, encoding: "utf8", timeout: 15_000,
       env: {
         PATH: `${dir}:${process.env.PATH}`, NODE_OPTIONS: `--import=${join(dir, "fetch.mjs")}`,
@@ -141,7 +142,7 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   test(`${eventName}: successful same-SHA full CI allows exactly the staging commands`, () => {
     const result = executeStaging(context(eventName), fixture());
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(result.calls, ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy --config wrangler.jsonc"]);
+    assert.deepEqual(result.calls, ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy --config tail/wrangler.jsonc", "wrangler deploy --config wrangler.jsonc"]);
     assert.match(result.stdout, new RegExp(`Staging gate passed: ${sha}`));
   });
   test(`${eventName}: checkout mismatch makes no queue/deploy calls`, () => {
@@ -154,9 +155,9 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   });
 }
 
-const mutationCalls = ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy --config wrangler.jsonc"];
+const mutationCalls = ["wrangler queues create two-sync-event", "wrangler queues create two-internal-action", "wrangler deploy --config tail/wrangler.jsonc", "wrangler deploy --config wrangler.jsonc"];
 for (const eventName of ["workflow_run", "workflow_dispatch"]) {
-  for (const [phase, allowedCalls] of [["afterPreparation", 0], [mutationCalls[0], 1], [mutationCalls[1], 2]]) {
+  for (const [phase, allowedCalls] of [["afterPreparation", 0], [mutationCalls[0], 1], [mutationCalls[1], 2], [mutationCalls[2], 3]]) {
     for (const [name, mutate] of denied.filter(([name]) => ["missing", "wrong SHA", "in_progress", "failure", "cancelled"].includes(name))) {
       test(`${eventName}: ${name} after ${phase} stops the next mutation`, () => {
         const changed = fixture();
@@ -288,7 +289,9 @@ test("workflow wires the tested gate before both mutations and preserves staging
   assert.ok(gateOffset < workflow.indexOf("- name: Deploy to Cloudflare Workers"));
   assert.equal(deployGateCommand, "node ci/staging-deploy-gate.mjs");
   assert.match(workflow, /- name: Re-verify exact-SHA full CI before Worker deploy\n(?:(?!      - ).*\n)*      - name: Deploy to Cloudflare Workers\n/, "Deploy gate must be the step immediately before the deploy");
-  assert.equal((workflow.match(/npx wrangler/g) ?? []).length, 2, "No additional ungated mutations");
+  assert.equal(step("Re-verify exact-SHA full CI before Tail Worker deploy"), "node ci/staging-deploy-gate.mjs");
+  assert.match(workflow, /- name: Re-verify exact-SHA full CI before Tail Worker deploy\n(?:(?!      - ).*\n)*      - name: Deploy alert Tail Worker before attaching the app\n(?:(?!      - ).*\n)*      - name: Re-verify exact-SHA full CI before Worker deploy\n/, "Tail gate must be the step immediately before the Tail deploy, which precedes the app deploy gate");
+  assert.equal((workflow.match(/npx wrangler/g) ?? []).length, 3, "No additional ungated mutations");
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
 });

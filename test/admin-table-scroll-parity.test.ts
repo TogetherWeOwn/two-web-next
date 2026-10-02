@@ -74,7 +74,7 @@ describe("admin table scroll-region and header-scope parity", () => {
   it("keeps the native tables and empty states server-rendered inside the regions", () => {
     const emptyEvents = String(jsx(EventsPage, { rows: [], query: parseEventListQuery({}), hasNext: false }));
     expect(emptyEvents).toContain('data-testid="events-table-scroll"');
-    expect(emptyEvents).toContain('colspan="4" data-testid="events-empty"');
+    expect(emptyEvents).toContain('colspan="5" data-testid="events-empty"');
     const emptyRoster = String(EventFormPage({ mode: "edit", row: eventRow, values: {}, errors: {}, roster: [], rosterQuery: parseRosterQuery({}) }));
     expect(emptyRoster).toContain('data-testid="roster-table-scroll"');
     expect(emptyRoster).toContain('data-testid="roster-empty"');

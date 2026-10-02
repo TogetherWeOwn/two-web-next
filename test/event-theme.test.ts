@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventGonePage, EventPage, PastEventsPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
 import type { Session } from "../src/env";
+import { loginUrl } from "../src/islands/contracts";
 import { Layout } from "../src/pages";
 
 const start = new Date("2030-01-10T20:00:00Z");
@@ -33,15 +34,15 @@ describe("event detail theme", () => {
     expect(html).toContain('<dl class="event-meta" aria-label="Event details">');
     expect(html).toContain('href="/events" aria-current="location"');
     expect(html).toContain('<main id="main" tabindex="-1">');
+    expect(Layout({ title: "Fixture" })!.toString()).not.toContain("/theme.css");
     for (const leaf of [Layout({ title: "Fixture" }), PastEventsPage({ rows: [], page: 1, hasMore: false, totalPages: 1, appUrl: props.appUrl })]) {
-      expect(leaf!.toString()).not.toContain("/theme.css");
       expect(leaf!.toString()).not.toContain("/event-theme.css");
     }
   });
 
   it("keeps guest entry points, sharing and island mounts", () => {
     const html = render();
-    expect(html).toContain('href="/auth/discord" data-testid="signin"');
+    expect(html).toContain(`href="${loginUrl(`/e/${e.eventKey}`)}" data-testid="signin"`);
     expect(html).toContain(`href="/join?next=${encodeURIComponent(`/e/${e.eventKey}`)}"`);
     expect(html).toContain('data-testid="event-join-pitch"');
     expect(html).toContain('data-island="going-count"');
@@ -50,17 +51,20 @@ describe("event detail theme", () => {
     expect(html).toContain('src="/islands/going-count.js" defer');
     expect(html).toContain(`<script type="application/ld+json">${props.jsonLd}</script>`);
     expect(html).not.toContain('data-testid="event-attendees"');
-    expect(html).not.toContain('data-island="rsvp');
+    expect(html).toMatch(/<\/dl><div class="event-rsvp"><section data-island="rsvp-button"/);
+    expect(html).toContain('src="/islands/rsvp-button.js" defer');
+    expect(html).not.toContain("data-action");
   });
 
-  it.each([null, 2])("preserves signed-in and waitlist state without adding RSVP controls (%s)", (waitlistPosition) => {
+  it.each([null, 2])("preserves signed-in and waitlist state while RSVP actions stay member-only (%s)", (waitlistPosition) => {
     const html = render({ session, waitlistPosition });
     expect(html).toContain('<form method="post" action="/logout">');
     expect(html).toContain("Player &lt;script&gt;");
     expect(html).toContain(`data-waitlist-position="${waitlistPosition ?? ""}"`);
     expect(html).not.toContain('data-testid="signin"');
     expect(html).not.toContain('data-testid="event-join-pitch"');
-    expect(html).not.toContain('data-island="rsvp');
+    expect(html).toContain('data-island="rsvp-button"');
+    expect(html).not.toContain("data-action");
   });
 
   it("keeps attendee links escaped and decorative initials out of their accessible names", () => {
@@ -78,7 +82,7 @@ describe("event detail theme", () => {
     expect(html).not.toContain('data-testid="event-related"');
   });
 
-  it("gives the cancelled state the same chrome without session, sharing or RSVP UI", () => {
+  it("gives the cancelled state the same chrome without session, sharing or RSVP actions", () => {
     const jsonLd = '{"eventStatus":"https://schema.org/EventCancelled"}';
     const html = EventGonePage({ e: { ...e, status: "cancelled" }, jsonLd })!.toString();
     expect(html).toContain('href="/event-theme.css"');
@@ -88,7 +92,9 @@ describe("event detail theme", () => {
     expect(html).toContain('name="robots" content="noindex, nofollow"');
     expect(html).toContain(`<script type="application/ld+json">${jsonLd}</script>`);
     expect(html).toContain('href="/events">See upcoming events');
-    for (const absent of ['rel="canonical"', 'property="og:', 'name="twitter:', '/islands/', 'data-testid="signin"', '/logout', 'event-attendee-grid', 'event-join-pitch']) {
+    expect(html).toContain('<div class="event-rsvp"><section data-island="rsvp-button"');
+    expect(html).toContain('data-testid="rsvp-closed">Cancelled');
+    for (const absent of ['rel="canonical"', 'property="og:', 'name="twitter:', '/islands/copy-link', '/islands/going-count', 'data-action', 'data-testid="signin"', '/logout', 'event-attendee-grid', 'event-join-pitch']) {
       expect(html).not.toContain(absent);
     }
   });

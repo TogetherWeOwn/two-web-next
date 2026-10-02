@@ -7,8 +7,8 @@ export default defineConfig({
   out: "./drizzle",
   dialect: "postgresql",
   dbCredentials: {
-    // Local/dev: agent-testdb (see README). CI never migrates; staging/prod
-    // get their connection strings at deploy time (Neon via Hyperdrive).
+    // Local/CI: disposable Postgres only (see README). Live web migrations
+    // use the separately gated db-migrate workflow, never Hyperdrive.
     url: process.env.DATABASE_URL!,
   },
 });
