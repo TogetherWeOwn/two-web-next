@@ -27,6 +27,7 @@
     "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:selftest": "node --test ci/neon-migrate-selftest.mjs",
     "db:check": "drizzle-kit check",
     "check:moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs",
     "check:worker-moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=wrangler.jsonc --require-configured",

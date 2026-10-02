@@ -109,7 +109,7 @@ missing files, malformed/empty/invalid budgets and newly unbudgeted assets,
 including imported nested helpers and dot-prefixed files/directories that Workers
 also serves. Hidden paths require explicit ceilings and cannot escape raw/gzip enforcement. Islands that landed after the
 baseline (`copy-link`, `avatar`, `admin-event-editor`, `admin-event-text-limits`,
-`auth-status`) start at their measured size plus 25–33% headroom.
+`auth-status`, `rsvp-button`) start at their measured size plus 25–33% headroom.
 
 Served assets are main's files, unchanged: this PR adds gates only and does not
 rewrite or minify CSS, JavaScript or markup. Measured at main `fb63afa`, five

@@ -2,7 +2,7 @@
 """Conventional-commit PR/conventions check (TOG-9865).
 
 Shared by the pull_request/push path and the workflow_dispatch path in
-.github/workflows/pr-lint.yml. Reads its inputs from the environment so both
+.github/workflows/pr-gates.yml (pr-lint job). Reads its inputs from the environment so both
 jobs stay in lockstep:
 
   EVENT   github.event_name (pull_request | push | workflow_dispatch)
