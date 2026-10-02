@@ -38,3 +38,8 @@ targetRules = ["discord-client-id"]
 condition = "AND"
 paths = ['''^test/home-theme\.test\.ts$''']
 regexes = ['''123456789012345678''']
+
+[[allowlists]]
+description = "Two synthetic ULID event keys in the portable legacy backfill import proof, not credentials"
+targetRules = ["generic-api-key"]
+regexes = ['''01J2ZB2X5X3Q8T1V9W4Y6Z7A8[BC]''']
