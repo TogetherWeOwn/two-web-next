@@ -121,6 +121,8 @@ describe("expired admin writes recover instead of 403ing", () => {
     ["/events/abc", "/admin/events/abc"],
     ["/events/abc/publish", "/admin/events/abc"],
     ["/events/abc/cancel", "/admin/events/abc"],
+    ["/events/abc/rsvp-pause", "/admin/events/abc"],
+    ["/events/abc/rsvp-reopen", "/admin/events/abc"],
     ["/featured", "/admin/featured/new"],
     ["/featured/1", "/admin/featured/1"],
     ["/featured/1/delete", "/admin/featured"],

@@ -26,19 +26,19 @@ function writeReturn(c: Ctx): string {
 
 /**
  * Admin POSTs bounce to the GET form page, never the write URL. Action-only
- * endpoints (publish/cancel/delete) have no GET form, so they fall back to
+ * endpoints (publish/cancel/RSVP pause/delete) have no GET form, so they fall back to
  * the page holding their buttons; anything unrecognized falls back to the
  * dashboard. Every candidate re-passes safeNext at the use site.
  */
 function adminWriteReturn(path: string): string | null {
-  if (!path.startsWith("/admin")) return null;
+  if (path !== "/admin" && !path.startsWith("/admin/")) return null;
   const rest = path.slice("/admin".length);
   const candidates: Record<string, string> = {
     "/events": "/admin/events/new",
     "/featured": "/admin/featured/new",
   };
   if (candidates[rest]) return candidates[rest];
-  let match = rest.match(/^\/events\/([^/]+)\/(publish|cancel)$/);
+  let match = rest.match(/^\/events\/([^/]+)\/(publish|cancel|rsvp-pause|rsvp-reopen)$/);
   if (match) return safeNext(`/admin/events/${match[1]}`) ?? "/admin/events";
   match = rest.match(/^\/events\/([^/]+)$/);
   if (match) return safeNext(`/admin/events/${match[1]}`) ?? "/admin/events";

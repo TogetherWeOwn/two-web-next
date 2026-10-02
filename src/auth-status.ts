@@ -1,5 +1,5 @@
 import type { Context, Next } from "hono";
-import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { deleteCookie, generateSignedCookie, getSignedCookie } from "hono/cookie";
 import { hashToken, type SessionStore } from "./sessions";
 
 export const AUTH_STATUS_COOKIE = "__Host-two_session_status";
@@ -20,10 +20,26 @@ export async function enableAuthStatus(
   tokenHash: string,
   knownKey?: string | null,
 ): Promise<void> {
+  (await prepareAuthStatus(c, store, tokenHash, knownKey))?.();
+}
+
+/**
+ * Signs the probe cookie up front and returns a synchronous attach step, for
+ * callers that only learn after the handler whether they rendered a document.
+ */
+export async function prepareAuthStatus(
+  c: Ctx,
+  store: SessionStore,
+  tokenHash: string,
+  knownKey?: string | null,
+): Promise<(() => void) | null> {
   const key = knownKey === undefined ? await store.statusHash(tokenHash) : knownKey;
-  if (!key) return;
-  await setSignedCookie(c, AUTH_STATUS_COOKIE, key, c.env.SESSION_SECRET, OPTIONS);
-  c.set("authStatusEnabled", true);
+  if (!key) return null;
+  const cookie = await generateSignedCookie(AUTH_STATUS_COOKIE, key, c.env.SESSION_SECRET, OPTIONS);
+  return () => {
+    c.header("set-cookie", cookie, { append: true });
+    c.set("authStatusEnabled", true);
+  };
 }
 
 export function clearAuthStatus(c: Ctx): void {
