@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Home, Layout } from "../src/pages";
+import { Home, Layout, SiteHeader } from "../src/pages";
 import { discordWidgetUrl } from "../src/discord-widget";
 import { FALLBACK_INVITE } from "../src/invite";
 import type { Session } from "../src/env";
@@ -34,6 +34,15 @@ describe("homepage theme", () => {
     const leaf = Layout({ title: "Fixture" })!.toString();
     expect(leaf).not.toContain("/theme.css");
     expect(leaf).not.toContain("/fonts/");
+  });
+
+  it.each([
+    [null, "/auth/discord"],
+    ["/events", "/auth/discord?next=%2Fevents"],
+  ])("shares the existing login return link in the schedule header (%s)", (loginReturnTo, href) => {
+    const html = SiteHeader({ active: "events", loginReturnTo })!.toString();
+    expect(html).toContain(`href="${href}" data-testid="signin"`);
+    expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
   });
 
   it("retains the guest sign-in and join OAuth entry points", () => {

@@ -4,6 +4,7 @@ import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
 import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
+import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
 import { cspReportsRoute } from "./csp-reports";
@@ -462,6 +463,11 @@ app.get("/auth/discord/redirect", (c) => {
 });
 
 app.get("/auth/discord", async (c) => {
+  // throttle:10,1 like the other three OAuth routes (TOG-6788 envelope; W15b
+  // TOG-12088 ports OAuthReplayAndThrottleTest's all-four-routes guard). The
+  // guard degrades to allow without a store, so DB-free leaves stay up.
+  const limited = await throttleGuard(c, "login-redirect", AUTH_THROTTLE_PER_MINUTE);
+  if (limited) return limited;
   const state = crypto.randomUUID();
   // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
   // OAuth round trip in a signed cookie; a hostile value leaves no trace.
@@ -605,5 +611,7 @@ app.post("/auth/qa/:identity", async (c, next) => {
   });
   return c.body(null, 204);
 });
+
+registerAlertProbe(app);
 
 export default app;
