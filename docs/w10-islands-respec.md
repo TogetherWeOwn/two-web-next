@@ -126,6 +126,11 @@ trap, TOG-6924-adjacent new-member state).
   line de-duped, IANA timezone, no control chars); cancel discards; save-failed keeps
   input + announces; session-expired (checked before the gate) keeps input + points at
   login; focus moves to form heading / alert / saved confirmation.
+- Save deadline (TOG-11625): one owned 10 s client deadline
+  (`PROFILE_SAVE_DEADLINE_MS`) covering fetch plus response-body completion;
+  on expiry the binder aborts the owned fetch where possible, shows the
+  `profile-uncertain` status notice with the draft intact, and releases the
+  controls — never a rollback, no resend, no second PATCH while unsettled.
 - Spam trap: unlocked `website` honeypot + server `formOpenedAt` floor (1000 ms);
   either signal on a valid save ends in the exact success state ("Profile saved.",
   form closed) — no oracle, no log. Validation errors always surface first.
