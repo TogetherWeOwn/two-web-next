@@ -4,9 +4,15 @@ import { describe, expect, it } from "vitest";
 
 // Offline documentation drift checks; runtime behavior has its own route fixtures.
 const runbook = readFileSync(new URL("../docs/runbook.md", import.meta.url), "utf8");
-const deploy = runbook.split("## Deploy and record the rollback pointer")[1]!.split("### Worker rollback")[0]!;
-const health = runbook.split("## Read `/up` without mistaking liveness for readiness")[1]!.split("## Neon / Hyperdrive outage behavior")[0]!;
-const outage = runbook.split("## Neon / Hyperdrive outage behavior")[1]!.split("## Queue containment, drain and failed-job replay")[0]!;
+const deploy = runbook
+  .split("## Deploy and record the rollback pointer")[1]!
+  .split("### Worker rollback")[0]!;
+const health = runbook
+  .split("## Read `/up` without mistaking liveness for readiness")[1]!
+  .split("## Neon / Hyperdrive outage behavior")[0]!;
+const outage = runbook
+  .split("## Neon / Hyperdrive outage behavior")[1]!
+  .split("## Queue containment, drain and failed-job replay")[0]!;
 const rows = outage.split("\n").filter((line) => line.startsWith("| "));
 const retired = ["/health", "/healthz", "/db-ping"];
 
@@ -20,12 +26,17 @@ describe("runbook diagnostic and homepage contract", () => {
   it("documents the deployed public-route smoke, not removed diagnostic probes", () => {
     expect(deploy).toMatch(/node bin\/smoke\.mjs https:\/\/next\.togetherweown\.com/);
     for (const path of retired) expect(deploy).not.toContain(`\`${path}\``);
-    const workflow = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+    const workflow = readFileSync(
+      new URL("../.github/workflows/deploy.yml", import.meta.url),
+      "utf8",
+    );
     expect(workflow).toContain("node bin/smoke.mjs https://next.togetherweown.com");
   });
 
   it("explicitly retires all removed routes instead of listing them as outage diagnostics", () => {
-    const retirement = health.split("\n\n").find((paragraph) => retired.every((path) => paragraph.includes(`\`${path}\``)));
+    const retirement = health
+      .split("\n\n")
+      .find((paragraph) => retired.every((path) => paragraph.includes(`\`${path}\``)));
     expect(retirement).toMatch(/retired[\s\S]*404/);
     for (const path of retired) {
       // An outage-table row may list them, but only as ordinary 404s.
@@ -56,9 +67,13 @@ describe("runbook diagnostic and homepage contract", () => {
   });
 
   it("cites shipped readiness and keeps the broader outage PR pending", () => {
-    expect(health).toMatch(/Readiness shipped in \[#111\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/111\)/);
+    expect(health).toMatch(
+      /Readiness shipped in \[#111\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/111\)/,
+    );
     expect(health).not.toMatch(/Pending[^\n]*#111/);
-    expect(outage).toMatch(/Pending[^\n]*\[#92\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/92\)/);
+    expect(outage).toMatch(
+      /Pending[^\n]*\[#92\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/92\)/,
+    );
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);
   });
