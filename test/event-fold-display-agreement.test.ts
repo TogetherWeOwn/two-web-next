@@ -42,7 +42,8 @@ const icsInstant = (iso: string) => iso.replace(/[-:]/g, "").replace(/\.\d{3}Z$/
 describe.skipIf(!process.env.DATABASE_URL)("DST-paired page/JSON/ICS agreement (isolated test DB)", () => {
   let fixture: MemberDataFixture;
   let env: Env;
-  const store = createMemorySessionStore();
+  // Late-bound clock: the default captures the real Date.now before the fake.
+  const store = createMemorySessionStore(() => Date.now());
   const sent: SyncMessage[] = [];
 
   beforeAll(async () => {
