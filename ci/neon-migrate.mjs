@@ -61,11 +61,12 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     refuse("Migrations require a direct Neon endpoint with TLS; value withheld.");
   }
   const bindings = url.searchParams.getAll("channel_binding");
-  if (bindings.includes("require"))
-    refuse("Required channel binding is unsupported by the migration driver.");
-  if (bindings.some((value) => !["prefer", "disable"].includes(value)))
+  if (bindings.some((value) => !["require", "prefer", "disable"].includes(value)))
     refuse("Invalid channel binding option; value withheld.");
-  // postgres.js forwards unknown URL options as startup settings, not libpq flags.
+  // postgres.js forwards unknown URL options as startup settings, not libpq flags,
+  // and does not implement SCRAM channel binding. Strip the libpq-only flag here
+  // (including `require`, the Neon default); TLS stays enforced via
+  // sslmode=require|verify-full + rejectUnauthorized:true in migrationClient.
   url.searchParams.delete("channel_binding");
   url.port = "5432";
   return { target, url, testDatabase };

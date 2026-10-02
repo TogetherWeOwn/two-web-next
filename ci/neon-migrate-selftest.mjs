@@ -217,12 +217,17 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
   );
 });
 
-test("driver configuration strips optional channel binding and pins the port despite PGPORT", async () => {
+test("driver configuration strips channel binding and pins the port despite PGPORT", async () => {
   const priorPort = process.env.PGPORT;
   process.env.PGPORT = "5433";
   try {
     const staging = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
-    for (const binding of ["", "&channel_binding=prefer", "&channel_binding=disable"]) {
+    for (const binding of [
+      "",
+      "&channel_binding=require",
+      "&channel_binding=prefer",
+      "&channel_binding=disable",
+    ]) {
       const config = migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging + binding });
       assert.equal(config.url.searchParams.has("channel_binding"), false);
       const client = migrationClient(config); // Lazy constructor only: no Neon connection.
@@ -234,7 +239,9 @@ test("driver configuration strips optional channel binding and pins the port des
         await client.end();
       }
     }
-    for (const binding of ["require", "invalid", "prefer&channel_binding=require"]) {
+    // `require` (the Neon default) is accepted wherever it appears and stripped;
+    // only unknown values are still refused.
+    for (const binding of ["invalid", "prefer&channel_binding=bogus"]) {
       assert.throws(
         () =>
           migrationConfig({
