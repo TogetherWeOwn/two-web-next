@@ -145,57 +145,40 @@ describe("HMAC verification vectors", () => {
   // row per vector (InternalActionSignerTest.php:65-88;
   // InternalActionSignerReferenceTest.php:66-75;
   // two-bot test/unit.internalauth.test.ts:33-59).
+  // Each row carries its own vector's timestamp and nonce so the tamper is
+  // the only thing that differs from a passing verification.
   const tamperRows = VECTORS.flatMap((v) => {
     const ts = String(v.timestamp);
+    const row = { label: v.label, timestamp: ts, nonce: v.nonce, secret: v.secret };
     return [
       {
-        label: v.label,
+        ...row,
         kind: "wrong secret",
         keyId: KEY_ID,
         signature: referenceSign("a-completely-different-shared-secret-value", ts, v.nonce, v.body),
         body: v.body,
-        secret: v.secret,
       },
+      { ...row, kind: "tampered body", keyId: KEY_ID, signature: v.signature, body: `${v.body} ` },
       {
-        label: v.label,
-        kind: "tampered body",
-        keyId: KEY_ID,
-        signature: v.signature,
-        body: `${v.body} `,
-        secret: v.secret,
-      },
-      {
-        label: v.label,
+        ...row,
         kind: "truncated signature",
         keyId: KEY_ID,
         signature: v.signature.slice(0, -1),
         body: v.body,
-        secret: v.secret,
       },
-      {
-        label: v.label,
-        kind: "unknown key id",
-        keyId: "web-staging",
-        signature: v.signature,
-        body: v.body,
-        secret: v.secret,
-      },
-    ];
+      { ...row, kind: "unknown key id", keyId: "web-staging", signature: v.signature, body: v.body },
+    ].map((r) => ({ ...r, goodSignature: v.signature, goodBody: v.body }));
   });
 
-  it.each(tamperRows)("rejects $label with a $kind", ({ keyId, signature, body, secret, kind }) => {
-    expect(kind).toMatch(/wrong secret|tampered body|truncated signature|unknown key id/);
-    expect(
-      referenceVerify(
-        new Map([[KEY_ID, secret]]),
-        keyId,
-        signature,
-        String(VECTORS[0]!.timestamp),
-        VECTORS[0]!.nonce,
-        body,
-      ),
-    ).toBe(false);
-  });
+  it.each(tamperRows)(
+    "rejects $label with a $kind",
+    ({ keyId, signature, body, secret, timestamp, nonce, goodSignature, goodBody }) => {
+      const keys = new Map([[KEY_ID, secret]]);
+      // Positive control: the same timestamp and nonce verify untampered.
+      expect(referenceVerify(keys, KEY_ID, goodSignature, timestamp, nonce, goodBody)).toBe(true);
+      expect(referenceVerify(keys, keyId, signature, timestamp, nonce, body)).toBe(false);
+    },
+  );
 
   it("never confuses the key with the data (the hash_hmac argument-order row)", () => {
     // InternalActionSignerReferenceTest.php:66-75: both orders are
