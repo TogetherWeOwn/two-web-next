@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env, JobsEnv } from "../src/env";
 import { handleQueue } from "../src/jobs/worker";
+import { healthSql } from "./helpers/up";
 
 // Constructor/route proof only: neither sentinel backend ever connects.
 vi.mock("postgres", () => ({ default: vi.fn() }));
@@ -18,14 +19,11 @@ const environment = (sources: Record<string, unknown>) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(postgres).mockImplementation((url) => {
-    const sql = vi.fn(async () => [{
-      pending: url === explicit ? 25 : 0,
-      delayed: 0, reserved: 0, total: url === explicit ? 25 : 0,
-      failed: 0, oldest_pending_age_seconds: 0,
-    }]);
-    return Object.assign(sql, { end: vi.fn(async () => {}) }) as unknown as ReturnType<typeof postgres>;
-  });
+  vi.mocked(postgres).mockImplementation((url) => Object.assign(healthSql({ queue: [{
+    pending: url === explicit ? 25 : 0,
+    delayed: 0, reserved: 0, total: url === explicit ? 25 : 0,
+    failed: 0, oldest_pending_age_seconds: 0,
+  }] }), { end: vi.fn(async () => {}) }) as unknown as ReturnType<typeof postgres>);
 });
 
 for (const [name, sources, expected, pending] of [
@@ -56,21 +54,21 @@ for (const [name, sources, expected, pending] of [
   });
 }
 
-it("a selected backend read failure stays unknown without trying the other binding", async () => {
+it("a selected backend queue read failure stays unknown without trying the other binding", async () => {
   vi.mocked(postgres).mockImplementation(() => Object.assign(
-    vi.fn(async () => { throw new Error("selected backend unavailable"); }),
+    healthSql({ queue: new Error("selected backend unavailable") }),
     { end: vi.fn(async () => {}) },
   ) as unknown as ReturnType<typeof postgres>);
   const response = await app.request("/up", {}, environment({ DATABASE_URL: explicit, DB: { connectionString: bound } }));
   expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({ queue: { status: "unknown", pending: null } });
+  expect(await response.json()).toMatchObject({ db: "ok", queue: { status: "unknown", pending: null } });
   expect(vi.mocked(postgres).mock.calls.map(([url]) => url)).toEqual([explicit]);
 });
 
 it("selected client construction failure never falls back to the other binding", async () => {
   vi.mocked(postgres).mockImplementation(() => { throw new Error("selected client refused"); });
   const response = await app.request("/up", {}, environment({ DATABASE_URL: explicit, DB: { connectionString: bound } }));
-  expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({ queue: { status: "unknown", pending: null } });
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({ db: "error", queue: { status: "unknown", pending: null } });
   expect(vi.mocked(postgres).mock.calls.map(([url]) => url)).toEqual([explicit]);
 });
