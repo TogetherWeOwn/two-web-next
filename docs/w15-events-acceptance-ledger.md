@@ -171,17 +171,18 @@ The machine-readable selected inventory and audit results are attached to
 
 ## Recorded notes for reviewers
 
-1. **Fold direction restored to legacy (TOG-11669).** Main PR #64
+1. **Fold direction restored to legacy for single events (TOG-11669).** Main PR #64
    (`4cb024d`) had changed `wallToUtc` to the **first (BST) occurrence**.
    Legacy pinned `2026-10-25 01:30` → `01:30:00 UTC` (second/GMT occurrence,
-   `EventTimezoneTest.php:295-300`). TOG-11669 makes `wallToUtc` take the
-   latest round-tripping candidate, so Next again returns `01:30:00 UTC`.
-   Unchanged edits still keep the exact stored instant on either side through
-   the TOG-6805 carriers. Series occurrences resolve through the same
-   `wallToUtc` (`src/admin/recurrence-wall.ts`), so a weekly slot landing in
-   the fold also takes the second occurrence (`test/recurrence-subminute.test.ts`).
-   The `src/admin/recurrence.ts:43-44` comment that says "first occurrence" is
-   now stale and was left alone: that file is out of scope while #114 is open.
+   `EventTimezoneTest.php:295-300`). TOG-11669 makes `wallToUtc` default to the
+   latest round-tripping candidate, so fresh single-event parses again return
+   `01:30:00 UTC`. Unchanged edits still keep the exact stored instant on either
+   side through the TOG-6805 carriers. Series are unaffected: `preciseWallToUtc`
+   (`src/admin/recurrence-wall.ts`) asks for the earlier occurrence, keeping the
+   seed's offset the way legacy `addWeeks` does (`test/recurrence-subminute.test.ts`
+   pins restored); the `src/admin/recurrence.ts:43-44` "first occurrence" comment
+   still describes series. **Remaining:** GMT-seeded series (a seed stored on the
+   GMT side whose slot lands in the fold) is unproved.
 2. **Clock-only fakes.** DB tests that need a moving clock fake only `Date`
    (`vi.useFakeTimers({ toFake: ["Date"] })`); full fake timers hang the
    postgres-js driver's socket timers.

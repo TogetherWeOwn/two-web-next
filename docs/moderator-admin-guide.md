@@ -163,7 +163,7 @@ transition is refused, check status and end time rather than retrying another AP
 Choose **Weekly** only for an approved series and review its count/end date
 before **Create draft**. Occurrences retain local wall time across clock changes;
 subsequent occurrences in a spring-forward gap move forward by that gap, and
-repeated-hour times use the second occurrence. Fresh ambiguous first-event times
+repeated-hour times use the first occurrence. Fresh ambiguous first-event times
 still follow the event form's validation rules.
 
 Each occurrence has its own event page and status. Cancelling an occurrence does
