@@ -2,6 +2,7 @@ import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { wallToUtc } from "../src/admin/validation";
 import { pgEventStore } from "../src/jobs/event-store-pg";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 // Real-SQL EventStore adapter proof (TOG-11660): the reconcile pass's row
@@ -21,7 +22,7 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
   });
   beforeEach(async () => {
     await sql`delete from rsvps`;
-    await sql`delete from activity_log`;
+    await clearAuditRows(sql, ["activity_log"]);
     await sql`delete from events`;
   });
 
