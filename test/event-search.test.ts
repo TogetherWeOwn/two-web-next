@@ -2,14 +2,29 @@
 // Unit parts need no DB; the round-trip runs on agent-testdb (skipped without DATABASE_URL).
 import { serializeSigned } from "hono/utils/cookie";
 import postgres from "postgres";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { eventSearchLogs, events } from "../src/db/admin-schema";
 import { createDb, type Db } from "../src/db/index";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 import type { Env } from "../src/env";
-import { matchQuery, normalizeQuery, recordSearch, topZeroResultSearches } from "../src/events/search-log";
+import {
+  matchQuery,
+  normalizeQuery,
+  recordSearch,
+  topZeroResultSearches,
+} from "../src/events/search-log";
 import { searchCondition } from "../src/events/reads";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 
 describe("normalizeQuery (legacy EventSearchLogger::normalize)", () => {
   it.each([
@@ -51,8 +66,13 @@ describe("normalizeQuery (legacy EventSearchLogger::normalize)", () => {
 describe("recordSearch is fail-open", () => {
   // Fake Db whose transaction runs the callback against a fake tx (execute is a no-op, insert is the given values fn).
   const fakeDb = (values: (v: unknown) => unknown) =>
-    ({ transaction: async (fn: (tx: unknown) => Promise<void>) => fn({ execute: async () => {}, insert: () => ({ values }) }) }) as unknown as Db;
-  const failingDb = fakeDb(async () => { throw new Error("postgres://user:secret@host/db down"); });
+    ({
+      transaction: async (fn: (tx: unknown) => Promise<void>) =>
+        fn({ execute: async () => {}, insert: () => ({ values }) }),
+    }) as unknown as Db;
+  const failingDb = fakeDb(async () => {
+    throw new Error("postgres://user:secret@host/db down");
+  });
 
   it("never throws and never logs the driver message", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -98,11 +118,38 @@ async function cookieFor(store: SessionStore, moderator: boolean): Promise<strin
     moderator,
     expiresAt: new Date(Date.now() + 3600_000),
   });
-  return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+  return (
+    await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
 }
 
 describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: MemberDataFixture["db"];
+  beforeAll(async () => {
+    // Replay every canonical migration into a guarded, owned schema (never public).
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
+  const lockClient = () => {
+    const safe = testDatabaseUrl(process.env.DATABASE_URL!);
+    return postgres(safe.href, {
+      max: 1,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => safe.password,
+      connection: { search_path: fixture.schemaName },
+      onnotice: () => {},
+    });
+  };
   const store = createMemorySessionStore();
   const env = {
     APP_URL,
@@ -112,7 +159,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     DISCORD_CLIENT_SECRET: "s",
     DISCORD_BOT_TOKEN: "b",
     SESSION_SECRET,
-    ADMIN_DB: db,
+    get ADMIN_DB() {
+      return db;
+    },
     SESSION_STORE: store,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   } as unknown as Env;
@@ -123,23 +172,43 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     await db.delete(eventSearchLogs);
     await db.delete(events);
     await db.insert(events).values([
-      { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "Friday night Helldivers", description: "Weekly co-op chaos.", startsAt: new Date(Date.now() + 72 * hour), endsAt: new Date(Date.now() + 74 * hour), status: "published" },
-      { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB", title: "Old chess night", startsAt: new Date(Date.now() - 74 * hour), endsAt: new Date(Date.now() - 72 * hour), status: "published" },
-      { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC", title: "Secret draft helldivers", startsAt: new Date(Date.now() + 72 * hour), endsAt: new Date(Date.now() + 74 * hour), status: "draft" },
+      {
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
+        title: "Friday night Helldivers",
+        description: "Weekly co-op chaos.",
+        startsAt: new Date(Date.now() + 72 * hour),
+        endsAt: new Date(Date.now() + 74 * hour),
+        status: "published",
+      },
+      {
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB",
+        title: "Old chess night",
+        startsAt: new Date(Date.now() - 74 * hour),
+        endsAt: new Date(Date.now() - 72 * hour),
+        status: "published",
+      },
+      {
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC",
+        title: "Secret draft helldivers",
+        startsAt: new Date(Date.now() + 72 * hour),
+        endsAt: new Date(Date.now() + 74 * hour),
+        status: "draft",
+      },
     ]);
   });
 
   it("cancels a log INSERT blocked on a table lock (no blocked backend remains)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const locker = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const locker = lockClient();
     try {
       await locker.begin(async (tx) => {
         await tx`lock table event_search_logs in access exclusive mode`;
         const t0 = Date.now();
-        await recordSearch(createDb(process.env.DATABASE_URL!), "blocked", 0);
+        await recordSearch(db, "blocked", 0);
         expect(Date.now() - t0).toBeLessThan(1500);
         await new Promise((r) => setTimeout(r, 300));
-        const active = await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`;
+        const active =
+          await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`;
         expect(active[0]!.n).toBe(0);
       });
     } finally {
@@ -159,14 +228,29 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     expect(past).toContain("Old chess night");
 
     const rows = await db.select().from(eventSearchLogs).orderBy(eventSearchLogs.id);
-    expect(rows.map((r) => [r.normalizedQuery, r.resultCount])).toEqual([["helldiv", 1], ["chess", 1]]);
+    expect(rows.map((r) => [r.normalizedQuery, r.resultCount])).toEqual([
+      ["helldiv", 1],
+      ["chess", 1],
+    ]);
     // Row shape carries no member identifier; legacyId is only a source row PK.
-    expect(Object.keys(rows[0]!).sort()).toEqual(["id", "legacyId", "normalizedQuery", "occurredAt", "resultCount"]);
+    expect(Object.keys(rows[0]!).sort()).toEqual([
+      "id",
+      "legacyId",
+      "normalizedQuery",
+      "occurredAt",
+      "resultCount",
+    ]);
     expect(rows.every((row) => row.legacyId === null)).toBe(true);
   });
 
   it("matches an exact title with doubled spaces, logs the collapsed form once; NUL does not 500", async () => {
-    await db.insert(events).values({ eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD", title: "Chess  night", startsAt: new Date(Date.now() + 72 * hour), endsAt: new Date(Date.now() + 74 * hour), status: "published" });
+    await db.insert(events).values({
+      eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD",
+      title: "Chess  night",
+      startsAt: new Date(Date.now() + 72 * hour),
+      endsAt: new Date(Date.now() + 74 * hour),
+      status: "published",
+    });
     const html = await (await req("/events?q=Chess%20%20night")).text();
     expect(html).toContain("Chess  night");
     expect((await req("/events?q=%00")).status).toBe(200);
@@ -184,15 +268,19 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
   });
 
   it("counts zero-result searches, misses only, ties alphabetical", async () => {
-    for (const q of ["valorant", "VALORANT", " valorant ", "chess-boxing", "helldivers"]) await req(`/events?q=${encodeURIComponent(q)}`);
+    for (const q of ["valorant", "VALORANT", " valorant ", "chess-boxing", "helldivers"])
+      await req(`/events?q=${encodeURIComponent(q)}`);
     const top = await topZeroResultSearches(db);
-    expect(top!.map((r) => [r.query, r.searches])).toEqual([["valorant", 3], ["chess-boxing", 1]]);
+    expect(top!.map((r) => [r.query, r.searches])).toEqual([
+      ["valorant", 3],
+      ["chess-boxing", 1],
+    ]);
   });
 
   it("serves /admin 200 with the widget omitted while the search-log table is locked", async () => {
     // P2: the optional widget SELECT must be cancelled DB-side so the
     // dashboard never waits on an analytics-only lock (no Promise.race-only fix).
-    const locker = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const locker = lockClient();
     try {
       await locker.begin(async (tx) => {
         await tx`lock table event_search_logs in access exclusive mode`;
@@ -203,7 +291,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
         const html = await mod.text();
         expect(html).not.toContain('data-testid="top-zero-searches"');
         await new Promise((r) => setTimeout(r, 300));
-        const active = await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`;
+        const active =
+          await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`;
         expect(active[0]!.n).toBe(0);
       });
     } finally {
@@ -218,7 +307,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
     // refuse the whole dashboard. Delay each transaction's start as a loaded host would.
     const slow = createDb(process.env.DATABASE_URL!);
     // memberReadDb rebuilds the database from this session, so delay it here.
-    const session = (slow as unknown as { session: { transaction: (...args: unknown[]) => Promise<unknown> } }).session;
+    const session = (
+      slow as unknown as { session: { transaction: (...args: unknown[]) => Promise<unknown> } }
+    ).session;
     const begin = session.transaction.bind(session);
     session.transaction = async (...args: unknown[]) => {
       await new Promise((r) => setTimeout(r, 250));
@@ -229,7 +320,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
       await locker.begin(async (tx) => {
         await tx`lock table event_search_logs in access exclusive mode`;
         const t0 = Date.now();
-        const mod = await app.request("/admin", { headers: { cookie: await cookieFor(store, true) } }, { ...env, ADMIN_DB: slow } as Env);
+        const mod = await app.request(
+          "/admin",
+          { headers: { cookie: await cookieFor(store, true) } },
+          { ...env, ADMIN_DB: slow } as Env,
+        );
         expect(mod.status).toBe(200);
         expect(Date.now() - t0).toBeLessThan(2000);
         expect(await mod.text()).not.toContain('data-testid="top-zero-searches"');
@@ -241,19 +336,28 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
   });
 
   it("serves results when the log table is down", async () => {
-    await db.execute("alter table event_search_logs rename to event_search_logs_gone" as never).catch(() => {});
+    await db
+      .execute("alter table event_search_logs rename to event_search_logs_gone" as never)
+      .catch(() => {});
     try {
       const res = await req("/events?q=helldiv");
       expect(res.status).toBe(200);
       expect(await res.text()).toContain("Friday night Helldivers");
     } finally {
-      await db.execute("alter table if exists event_search_logs_gone rename to event_search_logs" as never).catch(() => {});
+      await db
+        .execute(
+          "alter table if exists event_search_logs_gone rename to event_search_logs" as never,
+        )
+        .catch(() => {});
     }
   });
 
   it("widget is moderator-only and shows normalized queries, no identifiers", async () => {
     await req("/events?q=Valorant", { headers: { cookie: await cookieFor(store, false) } });
-    const member = await req("/admin", { headers: { cookie: await cookieFor(store, false) }, redirect: "manual" });
+    const member = await req("/admin", {
+      headers: { cookie: await cookieFor(store, false) },
+      redirect: "manual",
+    });
     expect(member.status).toBe(403);
     const mod = await req("/admin", { headers: { cookie: await cookieFor(store, true) } });
     expect(mod.status).toBe(200);

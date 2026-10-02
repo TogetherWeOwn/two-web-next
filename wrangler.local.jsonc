@@ -16,8 +16,18 @@
       { "queue": "two-internal-action-local", "binding": "INTERNAL_ACTION_QUEUE" }
     ],
     "consumers": [
-      { "queue": "two-sync-event-local", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-      { "queue": "two-internal-action-local", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+      {
+        "queue": "two-sync-event-local",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      },
+      {
+        "queue": "two-internal-action-local",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      }
     ]
   },
   "vars": {

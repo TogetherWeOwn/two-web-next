@@ -1,9 +1,11 @@
 import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
+import { safeRequestId } from "../request-log";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
+import { SyncRetryPersistenceError } from "./types";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
@@ -14,25 +16,59 @@ const LEDGER_TIMEOUT_MS = 2000;
 // secondAck=0, whole batch lost).
 const LOCK_TIMEOUT_MS = 2000;
 
-type Msg = { body: unknown; attempts: number; ack(): void; retry(o?: { delaySeconds?: number }): void };
+type Msg = {
+  body: unknown;
+  attempts: number;
+  ack(): void;
+  retry(o?: { delaySeconds?: number }): void;
+};
 
 // Legacy identity of each job, for the queue.failing alert line (ports Queue::failing fields).
 const JOBS = {
   "alert-probe": { queue: "two-internal-action", job: "AlertProbe", tries: 1 },
   "sync-event": { queue: "two-sync-event", job: "SyncEventToDiscord", tries: SYNC_EVENT.tries },
-  announcement: { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
-  "role-assign": { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
+  announcement: {
+    queue: "two-internal-action",
+    job: "CallInternalAction",
+    tries: CALL_INTERNAL_ACTION.tries,
+  },
+  "role-assign": {
+    queue: "two-internal-action",
+    job: "CallInternalAction",
+    tries: CALL_INTERNAL_ACTION.tries,
+  },
 } as const;
 
-function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: string, probeId?: string) {
+function alertFailing(
+  kind: QueueMessage["kind"],
+  attempts: number,
+  exception: string,
+  ids: { probeId?: string; requestId?: string },
+) {
   const j = JOBS[kind];
-  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception, probeId });
+  alertQueueFailing({
+    connection: "cloudflare-queues",
+    queue: j.queue,
+    job: j.job,
+    attempts,
+    exception,
+    ...ids,
+  });
 }
 
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
 export async function consume(
   batch: { messages: readonly Msg[] },
-  deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger; probeEnabled?: boolean },
+  deps: {
+    bot: BotClient;
+    events: EventStore;
+    lock: UniqueLock;
+    ledger: QueueLedger;
+    now?: () => Date;
+    needsSync?: EventStore["needsSync"];
+    dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
+    probeEnabled?: boolean;
+  },
 ): Promise<void> {
   for (const m of batch.messages) {
     const body = toQueueMessage(m.body);
@@ -43,6 +79,7 @@ export async function consume(
       m.ack();
       continue;
     }
+    const requestId = safeRequestId(body.requestId);
     const jobId = typeof body.jobId === "string" ? body.jobId : null;
     const key = body.kind === "sync-event" ? uniqueKey(body.eventKey) : null;
     // Ledger transitions are best-effort: a stale ledger row is a visible backlog
@@ -82,9 +119,25 @@ export async function consume(
       return Promise.race([
         // Class-only: lock errors can carry SQL or connection secrets.
         deps.lock.release(key, body.leaseToken).catch((e: unknown) =>
-          console.warn("queue lock release failed", sanitizeQueueScope(key), { exception: queueExceptionClass(e) })),
+          console.warn("queue lock release failed", sanitizeQueueScope(key), {
+            exception: queueExceptionClass(e),
+          }),
+        ),
         timeout,
       ]).finally(() => clearTimeout(t));
+    };
+    const failAttempt = async () => {
+      if (body.kind !== "sync-event") return true;
+      try {
+        await deps.events.failSync(body.idempotencyKey);
+        return true;
+      } catch (e) {
+        // Snapshot settlement is correctness-critical, unlike the depth ledger.
+        // Never ack a terminal message while it still blocks future revisions.
+        console.error("sync attempt settlement failed", e instanceof Error ? e.message : e);
+        m.retry();
+        return false;
+      }
     };
     if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
 
@@ -96,49 +149,105 @@ export async function consume(
         if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
         outcome = { done: true }; // A delayed staging probe cannot page in production.
       } else {
-        outcome = body.kind === "sync-event"
-          ? await handleSyncEvent(body, m.attempts, deps)
-          : await handleCallInternalAction(body, m.attempts, deps.bot);
+        outcome =
+          body.kind === "sync-event"
+            ? await handleSyncEvent(body, m.attempts, deps)
+            : await handleCallInternalAction(body, m.attempts, deps.bot);
       }
     } catch (e) {
-      // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
-      // redeliverable throw goes back on the queue with the same message (same
-      // idempotency key); an exhausted throw is terminal, like a failed outcome.
-      // Class-only: thrown messages can carry tokens, SQL or personal data.
-      console.error("job threw", body.kind, { exception: queueExceptionClass(e) });
-      // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
-      if (m.attempts >= JOBS[body.kind].tries) {
-        alertFailing(body.kind, m.attempts, queueExceptionClass(e),
-          e instanceof AlertProbeError ? e.probeId : undefined);
-        // Out of tries: a terminal failure, not a phantom pending row — and not
-        // a retry either. The job already spent its tries (the transport's
-        // max_retries is only a backstop above this cap), so ack it and free
-        // the sync lock instead of requeueing a message the ledger just buried
-        // (which would run again with no live depth accounting and stack up
-        // duplicate failure rows).
-        if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, queueExceptionClass(e)));
-        if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
-        m.ack();
+      if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
+        // Carry the known wait on this delivery, but only a committed result can
+        // reopen the durable claim. Recovery must not substitute a short lease.
+        console.error("sync retry result persistence failed", e.message);
+        outcome =
+          e.nextAttemptAt === null || m.attempts >= SYNC_EVENT.tries
+            ? { failed: e.message }
+            : {
+                retryInSeconds: Math.max(
+                  0,
+                  Math.ceil(
+                    (e.nextAttemptAt.getTime() - (deps.now?.() ?? new Date()).getTime()) / 1000,
+                  ),
+                ),
+              };
       } else {
-        if (jobId) await bounded("released", deps.ledger.released(jobId, new Date()));
-        m.retry();
+        // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
+        // redeliverable throw goes back on the queue with the same message (same
+        // idempotency key); an exhausted throw is terminal, like a failed outcome.
+        // Class-only: thrown messages can carry tokens, SQL or personal data.
+        console.error("job threw", body.kind, { exception: queueExceptionClass(e) });
+        // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
+        if (m.attempts >= JOBS[body.kind].tries) {
+          alertFailing(body.kind, m.attempts, queueExceptionClass(e), {
+            probeId: e instanceof AlertProbeError ? e.probeId : undefined,
+            requestId,
+          });
+          // Out of tries: a terminal failure, not a phantom pending row — and not
+          // a retry either. The job already spent its tries (the transport's
+          // max_retries is only a backstop above this cap), so ack it and free
+          // the sync lock instead of requeueing a message the ledger just buried
+          // (which would run again with no live depth accounting and stack up
+          // duplicate failure rows).
+          if (jobId)
+            await bounded(
+              "failed",
+              deps.ledger.failed(jobId, body.kind, key, queueExceptionClass(e)),
+            );
+          if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
+          m.ack();
+        } else {
+          if (jobId) await bounded("released", deps.ledger.released(jobId, new Date()));
+          m.retry();
+        }
+        continue;
       }
-      continue;
     }
     if ("retryInSeconds" in outcome) {
       if (jobId)
-        await bounded("released", deps.ledger.released(jobId, new Date(Date.now() + outcome.retryInSeconds * 1000)));
+        await bounded(
+          "released",
+          deps.ledger.released(jobId, new Date(Date.now() + outcome.retryInSeconds * 1000)),
+        );
       m.retry({ delaySeconds: outcome.retryInSeconds });
       continue;
     }
     if ("failed" in outcome) {
+      if (outcome.definitive && !(await failAttempt())) continue;
       console.error("job failed", body.kind, outcome.failed);
-      alertFailing(body.kind, m.attempts, outcome.failed);
+      alertFailing(body.kind, m.attempts, outcome.failed, { requestId });
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
     }
-    if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
+    if (body.kind === "sync-event") {
+      await releaseLock(uniqueKey(body.eventKey));
+      if ("done" in outcome && deps.dispatchPending) {
+        // Release before checking: a racing after-commit producer either owns
+        // the successor lock or this dispatch does. A rejected send still
+        // leaves the dirty revision for reconciliation.
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            console.warn("sync successor dispatch timed out; reconcile will retry");
+            resolve();
+          }, LEDGER_TIMEOUT_MS);
+        });
+        const successor = (async () => {
+          if (await (deps.needsSync?.(body.eventKey) ?? deps.events.needsSync(body.eventKey))) {
+            controller.signal.throwIfAborted();
+            await deps.dispatchPending!(body.eventKey, controller.signal);
+          }
+        })().catch((e: unknown) => {
+          console.warn(
+            "sync successor dispatch failed; reconcile will retry",
+            e instanceof Error ? e.message : e,
+          );
+        });
+        await Promise.race([successor, timeout]).finally(() => clearTimeout(timer));
+      }
+    }
     m.ack();
   }
 }

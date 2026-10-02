@@ -8,7 +8,7 @@ import type { Db } from "../src/db/index";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 
 vi.mock("../src/admin/store", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../src/admin/store")>(),
+  ...(await importOriginal<typeof import("../src/admin/store")>()),
   createFeatured: vi.fn(),
   getFeatured: vi.fn(),
   updateFeatured: vi.fn(),
@@ -26,16 +26,31 @@ const env: EnvWithAdminDb = {
   FEATURED_IMAGE_HOSTS: "images.unsplash.com",
   // Store operations are mocked: any accidental driver call fails rather than
   // reaching a database. This seam exists already for the admin route tests.
-  ADMIN_DB: new Proxy({} as Db, { get: (_, key) => {
-    if (key === "then") return undefined; // Async dbFor() checks whether the fixture is a thenable.
-    throw new Error("fixture must not query a DB");
-  } }),
+  ADMIN_DB: new Proxy({} as Db, {
+    get: (_, key) => {
+      if (key === "then") return undefined; // Async dbFor() checks whether the fixture is a thenable.
+      throw new Error("fixture must not query a DB");
+    },
+  }),
 };
 
 const existing = {
-  id: 1, legacyId: null, title: "Featured", body: null, url: null, imageUrl: null, imageAlt: null,
-  isPublished: false, position: 0, startsAt: null, endsAt: null, startsAtText: null, endsAtText: null, createdBy: null,
-  createdAt: new Date(0), updatedAt: new Date(0),
+  id: 1,
+  legacyId: null,
+  title: "Featured",
+  body: null,
+  url: null,
+  imageUrl: null,
+  imageAlt: null,
+  isPublished: false,
+  position: 0,
+  startsAt: null,
+  endsAt: null,
+  startsAtText: null,
+  endsAtText: null,
+  createdBy: null,
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
 };
 
 beforeEach(() => {
@@ -49,14 +64,35 @@ async function post(path: string, imageUrl: string, bindings = env) {
   const store = createMemorySessionStore();
   const token = newSessionToken();
   await store.create({
-    tokenHash: await hashToken(token), userId: "111111111111111111", username: "mod", avatar: null,
-    member: true, moderator: true, expiresAt: new Date(Date.now() + 3600_000),
+    tokenHash: await hashToken(token),
+    userId: "111111111111111111",
+    username: "mod",
+    avatar: null,
+    member: true,
+    moderator: true,
+    expiresAt: new Date(Date.now() + 3600_000),
   });
-  const cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
-  return adminApp(store).request(path, {
-    method: "POST", headers: { cookie, origin: env.APP_URL },
-    body: new URLSearchParams({ title: "Featured", image_url: imageUrl, image_alt: "Players together" }),
-  }, bindings);
+  const cookie = (
+    await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
+  return adminApp(store).request(
+    path,
+    {
+      method: "POST",
+      headers: { cookie, origin: env.APP_URL },
+      body: new URLSearchParams({
+        title: "Featured",
+        image_url: imageUrl,
+        image_alt: "Players together",
+      }),
+    },
+    bindings,
+  );
 }
 
 describe("featured preview response image policy (local fixtures)", () => {
@@ -65,21 +101,42 @@ describe("featured preview response image policy (local fixtures)", () => {
     ["https://images.unsplash.com/photo.jpg", "https://images.unsplash.com"],
     ["https://unapproved.com/photo.jpg", null],
   ])("only emits a CSP-permitted saved image for %s", async (imageUrl, allowedOrigin) => {
-    vi.mocked(getFeatured).mockResolvedValue({ ...existing, isPublished: true, imageUrl, imageAlt: "Players together" });
+    vi.mocked(getFeatured).mockResolvedValue({
+      ...existing,
+      isPublished: true,
+      imageUrl,
+      imageAlt: "Players together",
+    });
     const store = createMemorySessionStore();
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "111111111111111111", username: "mod", avatar: null,
-      member: true, moderator: true, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId: "111111111111111111",
+      username: "mod",
+      avatar: null,
+      member: true,
+      moderator: true,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    const cookie = (await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+    const cookie = (
+      await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
     const bindings = { ...env, SESSION_STORE: store };
     for (const [path, init] of [
       ["/admin/featured/1", { headers: { cookie } }],
-      ["/admin/featured/1", {
-        method: "POST", headers: { cookie, origin: env.APP_URL },
-        body: new URLSearchParams({ title: "", image_url: "https://unapproved.com/bad.jpg" }),
-      }],
+      [
+        "/admin/featured/1",
+        {
+          method: "POST",
+          headers: { cookie, origin: env.APP_URL },
+          body: new URLSearchParams({ title: "", image_url: "https://unapproved.com/bad.jpg" }),
+        },
+      ],
     ] as const) {
       const res = await app.request(path, init, bindings);
       expect(res.status).toBe("method" in init ? 422 : 200);
@@ -97,7 +154,13 @@ describe("featured preview response image policy (local fixtures)", () => {
 
 describe("featured create/edit image validation (local fixtures)", () => {
   for (const path of ["/featured", "/featured/1"]) {
-    it.each(["http://images.unsplash.com/photo.png", "https://127.0.0.1/photo.png", "https://localhost/photo.png", "https://user:pass@images.unsplash.com/photo.png", "https://unapproved.com/photo.png"])(`${path} returns a field error without writing for %s`, async (url) => {
+    it.each([
+      "http://images.unsplash.com/photo.png",
+      "https://127.0.0.1/photo.png",
+      "https://localhost/photo.png",
+      "https://user:pass@images.unsplash.com/photo.png",
+      "https://unapproved.com/photo.png",
+    ])(`${path} returns a field error without writing for %s`, async (url) => {
       const res = await post(path, url);
       expect(res.status).toBe(422);
       const html = await res.text();
@@ -107,8 +170,24 @@ describe("featured create/edit image validation (local fixtures)", () => {
       expect(updateFeatured).not.toHaveBeenCalled();
     });
 
-    it.each(["localdomain", "localhost.localdomain", "cdn.localhost.localdomain", "alt", "images.alt", "cdn.images.alt", "corp", "images.corp", "cdn.images.corp", "mail", "images.mail", "cdn.images.mail"])(`${path} rejects configured reserved namespace %s without writing`, async (host) => {
-      const res = await post(path, `https://${host}/photo.png`, { ...env, FEATURED_IMAGE_HOSTS: host });
+    it.each([
+      "localdomain",
+      "localhost.localdomain",
+      "cdn.localhost.localdomain",
+      "alt",
+      "images.alt",
+      "cdn.images.alt",
+      "corp",
+      "images.corp",
+      "cdn.images.corp",
+      "mail",
+      "images.mail",
+      "cdn.images.mail",
+    ])(`${path} rejects configured reserved namespace %s without writing`, async (host) => {
+      const res = await post(path, `https://${host}/photo.png`, {
+        ...env,
+        FEATURED_IMAGE_HOSTS: host,
+      });
       expect(res.status).toBe(422);
       const html = await res.text();
       expect(html).toContain("HTTPS on an approved public host");
@@ -126,4 +205,33 @@ describe("featured create/edit image validation (local fixtures)", () => {
       expect((await post(path, url, { ...env, FEATURED_IMAGE_HOSTS: "" })).status).toBe(422);
     });
   }
+});
+
+describe("featured form image guidance (local fixtures)", () => {
+  it("asks for an HTTPS URL on an approved host without promising same-site or Discord-only", async () => {
+    const store = createMemorySessionStore();
+    const token = newSessionToken();
+    await store.create({
+      tokenHash: await hashToken(token),
+      userId: "111111111111111111",
+      username: "mod",
+      avatar: null,
+      member: true,
+      moderator: true,
+      expiresAt: new Date(Date.now() + 3600_000),
+    });
+    const cookie = (
+      await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
+    const res = await adminApp(store).request("/featured/1", { headers: { cookie } }, env);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("HTTPS URL on cdn.discordapp.com or a configured approved public host");
+    expect(html).not.toMatch(/same[- ]site/i);
+  });
 });

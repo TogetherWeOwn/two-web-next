@@ -17,8 +17,18 @@ import {
   LOGIN_INTENDED_COOKIE,
   LOGIN_NEXT_COOKIE,
 } from "../src/return-journey";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore, type Sql } from "../src/sessions";
-import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+  type Sql,
+} from "../src/sessions";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -60,7 +70,12 @@ function isolated(extra: Record<string, unknown> = {}) {
 }
 
 /** Discord stub identical to join.test.ts: exchange, identity, guild join, roles. */
-function mockDiscord({ joinStatus = 201, memberRoles = [], token = "user-token", userId = "420000000000000042" } = {}) {
+function mockDiscord({
+  joinStatus = 201,
+  memberRoles = [],
+  token = "user-token",
+  userId = "420000000000000042",
+} = {}) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -90,10 +105,16 @@ const jarFrom = (res: Response, into: Jar = {}): Jar => {
   }
   return into;
 };
-const sendJar = (j: Jar) => Object.entries(j).map(([k, v]) => `${k}=${v}`).join("; ");
+const sendJar = (j: Jar) =>
+  Object.entries(j)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
 const setCookies = (res: Response) => res.headers.getSetCookie().join("\n");
 
-async function sessionCookie(store: SessionStore, row: { userId: string; member: boolean; moderator?: boolean }) {
+async function sessionCookie(
+  store: SessionStore,
+  row: { userId: string; member: boolean; moderator?: boolean },
+) {
   const token = newSessionToken();
   await store.create({
     tokenHash: await hashToken(token),
@@ -104,16 +125,31 @@ async function sessionCookie(store: SessionStore, row: { userId: string; member:
     moderator: row.moderator ?? false,
     expiresAt: new Date(Date.now() + 3600_000),
   });
-  return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
+  return (
+    await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
 }
 
 const startLogin = async (e: Env, query = "", cookie = "") => {
   const res = await app.request(`/auth/discord${query}`, { headers: cookie ? { cookie } : {} }, e);
   const location = res.headers.get("location");
-  return { res, state: location ? new URL(location).searchParams.get("state") : null, jar: jarFrom(res) };
+  return {
+    res,
+    state: location ? new URL(location).searchParams.get("state") : null,
+    jar: jarFrom(res),
+  };
 };
 const finishLogin = (e: Env, state: string | null, j: Jar, extra = "code=abc") =>
-  app.request(`/auth/discord/callback?${extra}${state ? `&state=${state}` : ""}`, { headers: { cookie: sendJar(j) } }, e);
+  app.request(
+    `/auth/discord/callback?${extra}${state ? `&state=${state}` : ""}`,
+    { headers: { cookie: sendJar(j) } },
+    e,
+  );
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -124,7 +160,11 @@ describe("login_next (legacy ReturnToPageTest)", () => {
   ])("retains guarded return behavior through the legacy alias (%s)", async (next, destination) => {
     mockDiscord();
     const { env } = isolated();
-    const alias = await app.request(`/auth/discord/redirect?next=${next}&state=untrusted&code=untrusted`, {}, env);
+    const alias = await app.request(
+      `/auth/discord/redirect?next=${next}&state=untrusted&code=untrusted`,
+      {},
+      env,
+    );
     expect(alias.status).toBe(302);
     expect(alias.headers.get("cache-control")).toBe("no-store");
     const location = alias.headers.get("location")!;
@@ -177,10 +217,21 @@ describe("login_next (legacy ReturnToPageTest)", () => {
     const { env } = isolated();
     const start = await startLogin(env);
     // Forged value, valid signature: safeNext still rejects at consume time.
-    const forged = (await serializeSigned(LOGIN_NEXT_COOKIE, "https://evil.test", SESSION_SECRET, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" })).split(";")[0]!;
-    const cb = await app.request(`/auth/discord/callback?code=abc&state=${start.state}`, {
-      headers: { cookie: `${sendJar(start.jar)}; ${forged}` },
-    }, env);
+    const forged = (
+      await serializeSigned(LOGIN_NEXT_COOKIE, "https://evil.test", SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
+    const cb = await app.request(
+      `/auth/discord/callback?code=abc&state=${start.state}`,
+      {
+        headers: { cookie: `${sendJar(start.jar)}; ${forged}` },
+      },
+      env,
+    );
     expect(cb.headers.get("location")).toBe("/?n=joined");
   });
 
@@ -188,9 +239,13 @@ describe("login_next (legacy ReturnToPageTest)", () => {
     mockDiscord();
     const { env } = isolated();
     const start = await startLogin(env);
-    const cb = await app.request(`/auth/discord/callback?code=abc&state=${start.state}`, {
-      headers: { cookie: `${sendJar(start.jar)}; ${LOGIN_NEXT_COOKIE}=%2Fprofile` },
-    }, env);
+    const cb = await app.request(
+      `/auth/discord/callback?code=abc&state=${start.state}`,
+      {
+        headers: { cookie: `${sendJar(start.jar)}; ${LOGIN_NEXT_COOKIE}=%2Fprofile` },
+      },
+      env,
+    );
     expect(cb.headers.get("location")).toBe("/?n=joined");
   });
 
@@ -240,7 +295,11 @@ describe("url.intended (auth-gate bounce)", () => {
     // Same-origin POST reaches the guard (outer sameOrigin middleware fails
     // closed without an Origin); the bounce itself records intended only for
     // GET/HEAD, so a POST redirects without the cookie.
-    const bounce = await app.request("/admin/", { method: "POST", headers: { origin: APP_URL } }, env);
+    const bounce = await app.request(
+      "/admin/",
+      { method: "POST", headers: { origin: APP_URL } },
+      env,
+    );
     expect(bounce.status).toBe(302);
     expect(setCookies(bounce)).not.toContain(`${LOGIN_INTENDED_COOKIE}=`);
   });
@@ -282,7 +341,11 @@ describe("url.intended (auth-gate bounce)", () => {
     expect(cb.headers.get("location")).toBe("/?n=join_failed");
     const jar = jarFrom(cb, { ...j, ...start.jar });
     expect(jar[LOGIN_INTENDED_COOKIE]).toBeTruthy();
-    const landing = await app.request("/?n=join_failed", { headers: { cookie: sendJar(jar) } }, env);
+    const landing = await app.request(
+      "/?n=join_failed",
+      { headers: { cookie: sendJar(jar) } },
+      env,
+    );
     expect(landing.status).toBe(200);
     const html = await landing.text();
     expect(html).toContain("couldn&#39;t add you to the Discord automatically");
@@ -296,30 +359,41 @@ describe("join_result flash (legacy AlreadyMemberReinviteTest)", () => {
     const start = await app.request(`/join/discord${next}`, {}, env);
     const state = new URL(start.headers.get("location")!).searchParams.get("state");
     const j = jarFrom(start);
-    const cb = await app.request(`/join/callback?code=abc&state=${state}`, { headers: { cookie: sendJar(j) } }, env);
+    const cb = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie: sendJar(j) } },
+      env,
+    );
     return { cb, jar: jarFrom(cb, j) };
   };
 
-  it.each(["/", "/join"])("HEAD %s preserves the flash for exactly one visible GET", async (path) => {
-    const { env } = isolated();
-    const { jar } = await runJoin(env, 204);
-    const pending = jar[JOIN_RESULT_COOKIE];
-    const head = await app.request(path, { method: "HEAD", headers: { cookie: sendJar(jar) } }, env);
-    expect(head.status).toBe(200);
-    expect(await head.text()).toBe("");
-    expect(setCookies(head)).not.toContain(`${JOIN_RESULT_COOKIE}=; Max-Age=0`);
-    expect(jarFrom(head, jar)[JOIN_RESULT_COOKIE]).toBe(pending);
+  it.each(["/", "/join"])(
+    "HEAD %s preserves the flash for exactly one visible GET",
+    async (path) => {
+      const { env } = isolated();
+      const { jar } = await runJoin(env, 204);
+      const pending = jar[JOIN_RESULT_COOKIE];
+      const head = await app.request(
+        path,
+        { method: "HEAD", headers: { cookie: sendJar(jar) } },
+        env,
+      );
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
+      expect(setCookies(head)).not.toContain(`${JOIN_RESULT_COOKIE}=; Max-Age=0`);
+      expect(jarFrom(head, jar)[JOIN_RESULT_COOKIE]).toBe(pending);
 
-    const first = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
-    expect(first.status).toBe(200);
-    expect(first.headers.get("cache-control")).toBe("private, no-store");
-    const html = await first.text();
-    expect(html).toContain('data-testid="join-result"');
-    expect(html).toContain('data-testid="reinvite-link"');
-    expect(jarFrom(first, jar)[JOIN_RESULT_COOKIE]).toBeUndefined();
-    const second = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
-    expect(await second.text()).not.toContain('data-testid="join-result"');
-  });
+      const first = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("private, no-store");
+      const html = await first.text();
+      expect(html).toContain('data-testid="join-result"');
+      expect(html).toContain('data-testid="reinvite-link"');
+      expect(jarFrom(first, jar)[JOIN_RESULT_COOKIE]).toBeUndefined();
+      const second = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
+      expect(await second.text()).not.toContain('data-testid="join-result"');
+    },
+  );
 
   it("added: the homepage renders the confirmation once, then never again", async () => {
     const { env } = isolated();
@@ -479,7 +553,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(res.headers.get("vary")?.toLowerCase()).toContain("cookie");
     const html = await res.text();
     expect(html).toContain('data-testid="event-join-pitch"');
-    expect(html).toContain("Game nights get posted here first. Join the Discord and you&#39;ll see them before they land on this page.");
+    expect(html).toContain(
+      "Game nights get posted here first. Join the Discord and you&#39;ll see them before they land on this page.",
+    );
     expect(html).toContain(`href="/join?next=%2Fe%2F${KEY}" data-testid="discord-join"`);
   });
 
@@ -509,28 +585,40 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(html).not.toContain('data-testid="discord-join"');
   });
 
-  it.each(["/events", `/e/${KEY}`])("HEAD %s preserves the flash for exactly one visible GET", async (path) => {
-    const env = envFor(createMemorySessionStore());
-    const signed = await serializeSigned(JOIN_RESULT_COOKIE, "already_member", SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    });
-    const jar: Jar = { [JOIN_RESULT_COOKIE]: signed.split(";")[0]!.slice(JOIN_RESULT_COOKIE.length + 1) };
-    const pending = jar[JOIN_RESULT_COOKIE];
-    const head = await app.request(path, { method: "HEAD", headers: { cookie: sendJar(jar) } }, env);
-    expect(head.status).toBe(200);
-    expect(await head.text()).toBe("");
-    expect(jarFrom(head, jar)[JOIN_RESULT_COOKIE]).toBe(pending);
+  it.each(["/events", `/e/${KEY}`])(
+    "HEAD %s preserves the flash for exactly one visible GET",
+    async (path) => {
+      const env = envFor(createMemorySessionStore());
+      const signed = await serializeSigned(JOIN_RESULT_COOKIE, "already_member", SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      });
+      const jar: Jar = {
+        [JOIN_RESULT_COOKIE]: signed.split(";")[0]!.slice(JOIN_RESULT_COOKIE.length + 1),
+      };
+      const pending = jar[JOIN_RESULT_COOKIE];
+      const head = await app.request(
+        path,
+        { method: "HEAD", headers: { cookie: sendJar(jar) } },
+        env,
+      );
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
+      expect(jarFrom(head, jar)[JOIN_RESULT_COOKIE]).toBe(pending);
 
-    const first = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
-    expect(first.status).toBe(200);
-    expect(first.headers.get("cache-control")).toBe("private, no-store");
-    const html = await first.text();
-    expect(html).toContain('data-testid="join-result"');
-    expect(html).toContain('data-testid="reinvite-link"');
-    expect(jarFrom(first, jar)[JOIN_RESULT_COOKIE]).toBeUndefined();
-    const second = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
-    expect(await second.text()).not.toContain('data-testid="join-result"');
-  });
+      const first = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("private, no-store");
+      const html = await first.text();
+      expect(html).toContain('data-testid="join-result"');
+      expect(html).toContain('data-testid="reinvite-link"');
+      expect(jarFrom(first, jar)[JOIN_RESULT_COOKIE]).toBeUndefined();
+      const second = await app.request(path, { headers: { cookie: sendJar(jar) } }, env);
+      expect(await second.text()).not.toContain('data-testid="join-result"');
+    },
+  );
 
   it("the event landing renders the join confirmation once, then never again", async () => {
     // Finding 3: the /e/<key> join CTA carries next=/e/<key>, so the join
@@ -541,7 +629,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const next = encodeURIComponent(`/e/${KEY}`);
     const start = await app.request(`/join/discord?next=${next}`, {}, env);
     const state = new URL(start.headers.get("location")!).searchParams.get("state");
-    const cb = await app.request(`/join/callback?code=abc&state=${state}`, { headers: { cookie: sendJar(jarFrom(start)) } }, env);
+    const cb = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie: sendJar(jarFrom(start)) } },
+      env,
+    );
     expect(cb.headers.get("location")).toBe(`/e/${KEY}`);
     const jar = jarFrom(cb, jarFrom(start));
     expect(jar[JOIN_RESULT_COOKIE]).toBeTruthy();
@@ -582,13 +674,30 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     const store = createMemorySessionStore();
     const cookie = await sessionCookie(store, { userId: "420000000000000042", member: true });
     const failing: SessionStore = {
-      create: async () => { throw new Error("store down"); },
-      get: async () => { throw new Error("store down"); },
-      statusHash: async () => { throw new Error("store down"); },
-      isActive: async () => { throw new Error("store down"); },
-      rotate: async () => { throw new Error("store down"); },
-      revoke: async () => { throw new Error("store down"); },
-      sweepExpired: async () => { throw new Error("store down"); },
+      create: async () => {
+        throw new Error("store down");
+      },
+      get: async () => {
+        throw new Error("store down");
+      },
+      statusHash: async () => {
+        throw new Error("store down");
+      },
+      isActive: async () => {
+        throw new Error("store down");
+      },
+      rotate: async () => {
+        throw new Error("store down");
+      },
+      revoke: async () => {
+        throw new Error("store down");
+      },
+      revokeUserSessions: async () => {
+        throw new Error("store down");
+      },
+      sweepExpired: async () => {
+        throw new Error("store down");
+      },
     };
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(failing));
     expect(res.status).toBe(410);
@@ -604,7 +713,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     mockDiscord({ joinStatus: 204 });
     const start = await app.request("/join/discord?next=%2Fevents", {}, env);
     const state = new URL(start.headers.get("location")!).searchParams.get("state");
-    const cb = await app.request(`/join/callback?code=abc&state=${state}`, { headers: { cookie: sendJar(jarFrom(start)) } }, env);
+    const cb = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie: sendJar(jarFrom(start)) } },
+      env,
+    );
     expect(cb.headers.get("location")).toBe("/events");
     const jar = jarFrom(cb, jarFrom(start));
     expect(jar[JOIN_RESULT_COOKIE]).toBeTruthy();
@@ -630,12 +743,20 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     mockDiscord({ joinStatus: 204 });
     const start = await app.request("/join/discord?next=%2Fevents", {}, env);
     const state = new URL(start.headers.get("location")!).searchParams.get("state");
-    const cb = await app.request(`/join/callback?code=abc&state=${state}`, { headers: { cookie: sendJar(jarFrom(start)) } }, env);
+    const cb = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie: sendJar(jarFrom(start)) } },
+      env,
+    );
     const jar = jarFrom(cb, jarFrom(start));
 
-    const fragment = await app.request("/events", {
-      headers: { cookie: sendJar(jar), "x-two-island": "events-calendar" },
-    }, env);
+    const fragment = await app.request(
+      "/events",
+      {
+        headers: { cookie: sendJar(jar), "x-two-island": "events-calendar" },
+      },
+      env,
+    );
     expect(fragment.status).toBe(200);
     expect(await fragment.text()).not.toContain('data-testid="join-result"');
     const kept = jarFrom(fragment, jar);
@@ -650,7 +771,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(guest.headers.get("cache-control")).toBe("public, max-age=60");
     expect(guest.headers.get("vary")?.toLowerCase()).toContain("cookie");
     const html = await guest.text();
-    expect(html).toContain('href="/auth/discord?next=%2Fevents" data-testid="signin"');
+    expect(html).toContain('href="/join/discord?next=%2Fevents" data-testid="signin"');
     expect(html).toContain("Sign in with Discord");
 
     const store = createMemorySessionStore();
@@ -665,27 +786,34 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     "/events?q=Sunday%20Squad",
     "/events?view=calendar&month=2099-11",
     "/events?view=calendar&month=2099-11&q=no-such-event&past=1",
-  ])("the schedule-heading Join CTA returns to %s through the guarded join journey", async (path) => {
-    const env = envFor(createMemorySessionStore());
-    const page = await app.request(path, {}, env);
-    expect(page.status).toBe(200);
-    const heading = (await page.text()).match(/<div class="schedule-heading">(.*?)<\/div>/)![1]!;
-    const joinHref = heading.match(/href="([^"]+)">Join the Discord<\/a>/)![1]!;
-    expect(joinHref).toBe(`/join?next=${encodeURIComponent(path)}`);
+  ])(
+    "the schedule-heading Join CTA returns to %s through the guarded join journey",
+    async (path) => {
+      const env = envFor(createMemorySessionStore());
+      const page = await app.request(path, {}, env);
+      expect(page.status).toBe(200);
+      const heading = (await page.text()).match(/<div class="schedule-heading">(.*?)<\/div>/)![1]!;
+      const joinHref = heading.match(/href="([^"]+)">Join the Discord<\/a>/)![1]!;
+      expect(joinHref).toBe(`/join?next=${encodeURIComponent(path)}`);
 
-    const join = await app.request(joinHref, {}, env);
-    expect(join.status).toBe(200);
-    const joinHtml = await join.text();
-    const startHref = `/join/discord?next=${encodeURIComponent(path)}`;
-    expect(joinHtml).toContain(`href="${startHref}"`);
-    mockDiscord();
-    const start = await app.request(startHref, {}, env);
-    const state = new URL(start.headers.get("location")!).searchParams.get("state");
-    const callback = await app.request(`/join/callback?code=abc&state=${state}`, {
-      headers: { cookie: sendJar(jarFrom(start)) },
-    }, env);
-    expect(callback.headers.get("location")).toBe(path);
-  });
+      const join = await app.request(joinHref, {}, env);
+      expect(join.status).toBe(200);
+      const joinHtml = await join.text();
+      const startHref = `/join/discord?next=${encodeURIComponent(path)}`;
+      expect(joinHtml).toContain(`href="${startHref}"`);
+      mockDiscord();
+      const start = await app.request(startHref, {}, env);
+      const state = new URL(start.headers.get("location")!).searchParams.get("state");
+      const callback = await app.request(
+        `/join/callback?code=abc&state=${state}`,
+        {
+          headers: { cookie: sendJar(jarFrom(start)) },
+        },
+        env,
+      );
+      expect(callback.headers.get("location")).toBe(path);
+    },
+  );
 
   it.each([
     ["/events/past", "/events/past"],
@@ -714,7 +842,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
 
     const start = await app.request("/join/discord", {}, env);
     const state = new URL(start.headers.get("location")!).searchParams.get("state");
-    const cb = await app.request(`/join/callback?code=abc&state=${state}`, { headers: { cookie: sendJar(jarFrom(start)) } }, env);
+    const cb = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie: sendJar(jarFrom(start)) } },
+      env,
+    );
     const jar = jarFrom(cb, jarFrom(start));
     expect(jar[JOIN_RESULT_COOKIE]).toBeTruthy();
 

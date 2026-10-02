@@ -8,11 +8,11 @@
 // console.error with `event` set to "error.alert" or "queue.failing".
 //
 // Alert lines carry the exception CLASS, never its message: a database error
-// message can carry the failed statement's bound values. The full error is
-// still logged by the caller (internalErrorHandler) for whoever follows the
-// alert line to the trace.
+// message can carry the failed statement's bound values. Correlate by request
+// ID rather than logging exception messages or stacks.
 
 import { AlertProbeError } from "./alert-probe-error";
+import { safeRequestId } from "./request-log";
 
 export const ALERT_WINDOW_MS = 5 * 60 * 1000;
 const MAX_TRACKED = 500;
@@ -50,10 +50,7 @@ export class AlertRateLimit {
   // Plain assignments (no parameter properties): bin/*.mjs operator scripts
   // run under node's type-stripping, which rejects parameter properties, and
   // this class sits in the drill/smoke import closure (TOG-11706).
-  constructor(
-    windowMs = ALERT_WINDOW_MS,
-    now: Clock = Date.now,
-  ) {
+  constructor(windowMs = ALERT_WINDOW_MS, now: Clock = Date.now) {
     this.windowMs = windowMs;
     this.now = now;
   }
@@ -81,7 +78,7 @@ const consoleSink: Sink = (line) => console.error(line);
 /** Request error alert. Returns true when a line was written. */
 export function alertRequestError(
   err: unknown,
-  req: { method: string; route: string },
+  req: { method: string; route: string; requestId?: string },
   opts: { limiter?: AlertRateLimit; sink?: Sink } = {},
 ): boolean {
   if (!shouldReport(err)) return false;
@@ -95,6 +92,7 @@ export function alertRequestError(
       exception: exceptionClass(err),
       method: req.method,
       route: req.route,
+      request_id: safeRequestId(req.requestId),
       ...(err instanceof AlertProbeError && err.probeId ? { probeId: err.probeId } : {}),
     }),
   );
@@ -108,9 +106,18 @@ export type FailedJob = {
   attempts: number;
   exception: string;
   probeId?: string;
+  requestId?: string;
 };
 
 /** Failing queue job (ports Queue::failing): connection, queue, job class, attempts, exception. */
 export function alertQueueFailing(job: FailedJob, sink: Sink = consoleSink): void {
-  sink(JSON.stringify({ level: "critical", event: "queue.failing", ...job }));
+  const { requestId, ...fields } = job;
+  sink(
+    JSON.stringify({
+      level: "critical",
+      event: "queue.failing",
+      ...fields,
+      request_id: safeRequestId(requestId),
+    }),
+  );
 }
