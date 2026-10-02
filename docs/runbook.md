@@ -290,8 +290,8 @@ and [rollback limits](https://developers.cloudflare.com/workers/versions-and-dep
 
 `GET /robots.txt` is DB-free and can check local Worker startup; it does not
 prove deployment readiness. `/health` and `/healthz` are removed (404).
-`GET /up` is **readiness**: a read-only DB ping and web migration-ledger read,
-plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
+`GET /up` is **readiness**: a required-secret presence check, a read-only DB
+ping and web migration-ledger read, plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
 
 DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty
@@ -332,6 +332,16 @@ Sources: [PostgreSQL statement/lock timeouts](https://www.postgresql.org/docs/cu
 | DB reachable, N web migrations missing | 503 | `ok` | N | `degraded` |
 | DB reachable, ledger read fails/times out | 503 | `ok` | `null` | `degraded` |
 | No usable DB configuration, failed/hung ping | 503 | `error` | `null` | `degraded` |
+
+**Required secrets.** `SESSION_SECRET`, `DISCORD_CLIENT_SECRET` and
+`DISCORD_BOT_TOKEN` must be present and nonempty (whitespace-only counts as
+empty). If any is missing, `/up` answers 503 with top-level `status: degraded`
+and `config: "missing"`, alongside the DB and queue fields above. The body never
+names the secret; the Worker log line `Health check found required Worker
+secrets missing.` lists the missing names only, never values. A ready Worker's
+body has no `config` key. This is a presence check only: a wrong value still
+reports ready and fails at sign-in. Fix by setting the secret (an Operator step
+for staging/production), not by weakening the probe.
 
 Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready**:
 

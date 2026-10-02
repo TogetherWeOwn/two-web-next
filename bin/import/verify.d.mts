@@ -42,6 +42,7 @@ export class VerificationError extends Error {
 export function quoteIdentifier(value: string): string;
 export function validateMap(map: unknown): TableMapping[];
 export function compareKeys(a: string[], b: string[]): number;
+export function assertDistinctDatabases(legacyRaw: string, nextRaw: string): void;
 export function verify(options: {
   legacy: Sql;
   next: Sql;

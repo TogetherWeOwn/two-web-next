@@ -24,7 +24,9 @@ concurrency:
 
 jobs:
   bootstrap-selftest:
-    runs-on: [self-hosted, two-selfhosted]
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     container: python:3.13-bookworm
     timeout-minutes: 5
     steps:
