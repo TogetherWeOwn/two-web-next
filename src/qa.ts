@@ -31,7 +31,10 @@ export function qaEnabled(appUrl: string, qaToken: string | undefined): boolean 
 const sha256 = (s: string) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
 
 /** Constant-time compare. Blank configured token always fails closed. */
-export async function qaTokenMatches(configured: string | undefined, presented: string): Promise<boolean> {
+export async function qaTokenMatches(
+  configured: string | undefined,
+  presented: string,
+): Promise<boolean> {
   if (!configured) return false;
   const [a, b] = await Promise.all([sha256(configured), sha256(presented)]);
   const x = new Uint8Array(a);
