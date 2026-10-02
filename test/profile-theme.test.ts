@@ -17,7 +17,7 @@ const render = (overrides = {}) => ProfilePage({ member, isOwner: true, appUrl: 
 describe("member profile base theme", () => {
   it("loads the base tokens and profile-only layout without changing other shells", () => {
     const html = render();
-    expect(html).toContain('<body class="profile-theme"><a class="skip-link"');
+    expect(html).toContain('<body class="base-theme profile-theme"><a class="skip-link"');
     expect(html).toContain('rel="stylesheet" href="/theme.css"');
     expect(html).toContain('rel="stylesheet" href="/profile-theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
