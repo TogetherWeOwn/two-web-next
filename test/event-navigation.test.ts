@@ -52,7 +52,7 @@ function pageFixture(e = row(2), previous: EventLink | null = row(1), next: Even
 async function cookie(env: Env & { SESSION_STORE: SessionStore }, moderator = false, member = true) {
   const token = newSessionToken();
   await env.SESSION_STORE!.create({
-    tokenHash: await hashToken(token), userId: "viewer", username: "viewer", avatar: null,
+    tokenHash: await hashToken(token), userId: "100000000000000001", username: "viewer", avatar: null,
     member, moderator, expiresAt: new Date(Date.now() + 3600_000),
   });
   return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {

@@ -60,7 +60,7 @@ function isolated(extra: Record<string, unknown> = {}) {
 }
 
 /** Discord stub identical to join.test.ts: exchange, identity, guild join, roles. */
-function mockDiscord({ joinStatus = 201, memberRoles = [], token = "user-token", userId = "42" } = {}) {
+function mockDiscord({ joinStatus = 201, memberRoles = [], token = "user-token", userId = "420000000000000042" } = {}) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -485,8 +485,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
 
   it("event page hides the pitch from a member and keeps their response private", async () => {
     const store = createMemorySessionStore();
-    const cookie = await sessionCookie(store, { userId: "42", member: true });
+    const cookie = await sessionCookie(store, { userId: "420000000000000042", member: true });
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(store));
+    expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.get("vary")?.toLowerCase()).toContain("cookie");
     const html = await res.text();
@@ -499,8 +500,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     // is past the join pitch, even before guild membership lands. The
     // non-member's recovery path is /join, not the event page.
     const store = createMemorySessionStore();
-    const cookie = await sessionCookie(store, { userId: "43", member: false });
+    const cookie = await sessionCookie(store, { userId: "430000000000000043", member: false });
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(store));
+    expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const html = await res.text();
     expect(html).not.toContain('data-testid="event-join-pitch"');
@@ -545,6 +547,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(jar[JOIN_RESULT_COOKIE]).toBeTruthy();
 
     const first = await app.request(`/e/${KEY}`, { headers: { cookie: sendJar(jar) } }, env);
+    expect(first.status).toBe(200);
     expect(first.headers.get("cache-control")).toBe("private, no-store");
     const html = await first.text();
     expect(html).toContain('data-testid="join-result"');
@@ -553,6 +556,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(after[JOIN_RESULT_COOKIE]).toBeUndefined();
 
     const second = await app.request(`/e/${KEY}`, { headers: { cookie: sendJar(after) } }, env);
+    expect(second.status).toBe(200);
     expect(await second.text()).not.toContain('data-testid="join-result"');
   });
 
@@ -562,7 +566,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     // 500 — and no rotation cookie is minted for a body that ignores it.
     await db.update(events).set({ status: "cancelled" }).where(eq(events.eventKey, KEY));
     const store = createMemorySessionStore();
-    const cookie = await sessionCookie(store, { userId: "42", member: true });
+    const cookie = await sessionCookie(store, { userId: "420000000000000042", member: true });
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(store));
     expect(res.status).toBe(410);
     expect(res.headers.getSetCookie().some((c) => c.startsWith("__Host-two_session="))).toBe(false);
@@ -576,7 +580,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     // the handler performs zero session reads on this path.
     await db.update(events).set({ status: "cancelled" }).where(eq(events.eventKey, KEY));
     const store = createMemorySessionStore();
-    const cookie = await sessionCookie(store, { userId: "42", member: true });
+    const cookie = await sessionCookie(store, { userId: "420000000000000042", member: true });
     const failing: SessionStore = {
       create: async () => { throw new Error("store down"); },
       get: async () => { throw new Error("store down"); },
@@ -650,7 +654,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
     expect(html).toContain("Sign in with Discord");
 
     const store = createMemorySessionStore();
-    const cookie = await sessionCookie(store, { userId: "42", member: true });
+    const cookie = await sessionCookie(store, { userId: "420000000000000042", member: true });
     const member = await app.request("/events", { headers: { cookie } }, envFor(store));
     expect(member.headers.get("cache-control")).toBe("private, no-store");
     expect(await member.text()).not.toContain('data-testid="signin"');
@@ -701,8 +705,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
   });
 
   it("the join_result banner lands on /profile too and is consumed there", async () => {
-    // /profile validates the snowflake shape before the store lookup, so the
-    // stubbed Discord identity needs a real-shaped id here (elsewhere "42" is fine).
+    // The protected profile landing and stored member use the same real-shaped key.
     const snow = "326474832151838721";
     await db.insert(users).values({ id: snow, username: "Rick", member: true });
     const store = createMemorySessionStore();

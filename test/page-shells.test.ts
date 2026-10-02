@@ -15,15 +15,15 @@ function assertShell(html: string) {
   expect(html.match(/<a\b[^>]*href="#main"[^>]*>/g)).toHaveLength(1);
   // First child of body is stronger than first anchor: no button/input/positive
   // tabindex can silently get ahead of the bypass link.
-  expect(html).toMatch(/<body(?: class="(?:homepage|profile)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/);
+  expect(html).toMatch(/<body(?: class="base-theme (?:homepage|content|join|profile|schedule)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/);
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   expect(html).toContain('rel="stylesheet" href="/styles.css"');
 }
 
 function assertInventory(router: { routes: { method: string; path: string }[] }) {
   const actual = router.routes.filter((route) => route.method === "GET").map((route) => route.path).sort();
-  // Event attendee access logging is a second GET registration, not another page.
-  expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS, "/e/:key"].sort());
+  // The event read boundary encloses its existing GET registration.
+  expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS].sort());
 }
 
 beforeEach(() => {
@@ -56,8 +56,9 @@ describe("every GET HTML route uses an accessible page shell (local fixtures)", 
 it.each(["/events", "/events?view=calendar&month=2030-01", "/events?q=no-such-event", "/events/past"])("%s opts into the shared schedule theme without vendor scripts", async (path) => {
   const html = await (await pageShellFixture().request(path)).text();
   assertShell(html);
-  expect(html).toContain('class="homepage-theme"');
+  expect(html).toContain('<body class="base-theme schedule-theme">');
   expect(html).toContain('rel="stylesheet" href="/theme.css"');
+  expect(html).toContain('rel="stylesheet" href="/schedule-theme.css"');
   expect(html).toContain('class="bar site-header"');
   expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
   expect(html).toContain('<nav aria-label="Site">');
@@ -98,7 +99,19 @@ it.each([
 it("keeps event detail outside the schedule-only theme", async () => {
   const html = await (await pageShellFixture().request(`/e/${EVENT_KEY}`)).text();
   expect(html).not.toContain('href="/theme.css"');
+  expect(html).not.toContain('href="/schedule-theme.css"');
   expect(html).not.toContain('class="events-page"');
+});
+
+it("keeps schedule layout in its own self-contained sheet", () => {
+  const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
+  expect(css.length).toBeLessThan(6000);
+  expect(css).toContain("@media (max-width: 48rem)");
+  expect(css).not.toMatch(/@import|https:\/\/|@font-face/);
+  // Every rule stays scoped to the schedule main, never the shared chrome.
+  for (const rule of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+    for (const selector of rule[1]!.split(/,(?![^(]*\))/)) expect(selector.trim()).toMatch(/^\.events-page /);
+  }
 });
 
 it("serves a recovery HTML shell and bool-only status to guests without a session", async () => {

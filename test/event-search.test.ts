@@ -91,7 +91,7 @@ async function cookieFor(store: SessionStore, moderator: boolean): Promise<strin
   const token = newSessionToken();
   await store.create({
     tokenHash: await hashToken(token),
-    userId: `search-${moderator ? "mod" : "member"}`,
+    userId: moderator ? "100000000000000111" : "100000000000000112",
     username: "searcher",
     avatar: null,
     member: true,

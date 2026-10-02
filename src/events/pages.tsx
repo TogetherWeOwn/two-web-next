@@ -131,7 +131,7 @@ const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: 
 const ScheduleShell: FC<PropsWithChildren<{
   title: string; canonical: string; description?: string; robots?: string; member?: boolean; loginReturnTo?: string | null;
 }>> = ({ title, canonical, description, robots, member, loginReturnTo, children }) => (
-  <Layout title={`${title} — Together We Own`} canonical={canonical} shareDescription={description} robots={robots} theme="home">
+  <Layout title={`${title} — Together We Own`} canonical={canonical} shareDescription={description} robots={robots} theme="schedule">
     <SiteHeader active="events" loginReturnTo={loginReturnTo}>
       {member ? <a class="btn" href="/discord">Open Discord</a> : undefined}
     </SiteHeader>
@@ -463,6 +463,7 @@ export const EventsCalendarPage: FC<{
           />
           <button class="btn" type="submit">Search</button>
           <span data-cal-zone="actions">
+            {state.past ? <input type="hidden" name="past" value="1" /> : null}
             {searching ? (
               <a href={calendarUrl({ ...state, q: "" })} data-testid={EVENTS_SEARCH_CLEAR_TESTID}>
                 {EVENTS_EMPTY_COPY.searchClear}

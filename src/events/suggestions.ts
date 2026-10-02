@@ -2,6 +2,7 @@ import { and, asc, eq, gte, sql } from "drizzle-orm";
 import { dbFor } from "../admin/db";
 import { events } from "../db/admin-schema";
 import type { Env } from "../env";
+import { nonSensitiveRead } from "../member-reads";
 
 export type SuggestedEvent = {
   key: string;
@@ -22,17 +23,17 @@ export async function notFoundSuggestions(env: Env, now = new Date()): Promise<S
       const db = await dbFor({ env });
       if (!db) return [];
       const suggestions = await db.transaction(async (tx) => {
-        await tx.execute(
+        await nonSensitiveRead("timeouts", () => tx.execute(
           sql`select set_config('lock_timeout', ${`${DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${DB_TIMEOUT_MS}ms`}, true)`,
-        );
+        ));
         // Upcoming means not ended, matching listUpcoming and the legacy scope.
         // Drizzle select/where/orderBy/limit: https://orm.drizzle.team/docs/select
-        return tx
+        return nonSensitiveRead("events", () => tx
           .select({ key: events.eventKey, title: events.title, startsAt: events.startsAt, location: events.location })
           .from(events)
           .where(and(eq(events.status, "published"), gte(events.endsAt, now), sql`isfinite(${events.startsAt})`))
           .orderBy(asc(events.startsAt), asc(events.id))
-          .limit(3);
+          .limit(3));
       });
       // PostgreSQL infinity timestamps decode to invalid Dates; keep them out
       // of the renderer so optional recovery links cannot turn a 404 into 500.
