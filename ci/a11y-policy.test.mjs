@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { auditCases, auditDatabaseUrl, assertNoViolations, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { coverage as documentCoverage } from "./a11y-cases.mjs";
 import { loadAuditWorkerRoutes } from "./a11y-test-worker.mjs";
 
 const coverage = {
@@ -23,6 +24,16 @@ test("derive cases from registered GETs, deduplicate middleware and omit non-GET
 test("new static GETs are audited automatically; new parameterized GETs require fixtures", () => {
   assert(auditCases([...routes, { method: "GET", path: "/new-page" }], coverage).some((entry) => entry.path === "/new-page"));
   assert.throws(() => auditCases([...routes, { method: "GET", path: "/new-page/:id" }], coverage), /missing=\/new-page/);
+});
+
+test("event JSON reads are explicitly classified as non-documents, not HTML success pages", () => {
+  const paths = ["/events.json", "/events/:key"];
+  const entries = Object.fromEntries(paths.map((path) => [path, documentCoverage[path]]));
+  for (const entry of Object.values(entries)) {
+    assert.equal(entry.skip, true);
+    assert.match(entry.reason, /Session-gated JSON/);
+  }
+  assert.deepEqual(auditCases(paths.map((path) => ({ method: "GET", path })), entries), []);
 });
 
 test("removed routes and unexplained exclusions fail", () => {

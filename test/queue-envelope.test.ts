@@ -45,6 +45,12 @@ const malformed: [string, unknown][] = [
   ["missing kind", {}],
   ["unknown kind", { kind: "private-unsupported-kind", action: role.action }],
   ["prototype kind", { kind: "toString", action: role.action }],
+  ["probe with ledger identifier", { kind: "alert-probe", jobId: "private-job-id" }],
+  ["probe with non-string ID", { kind: "alert-probe", probeId: 42 }],
+  ["probe with null ID", { kind: "alert-probe", probeId: null }],
+  ["probe with empty ID", { kind: "alert-probe", probeId: "" }],
+  ["probe with arbitrary ID", { kind: "alert-probe", probeId: "private-probe-content" }],
+  ["probe with non-v4 ID", { kind: "alert-probe", probeId: "11111111-1111-7111-8111-111111111111" }],
   ["missing sync event key", { kind: "sync-event", idempotencyKey: "k" }],
   ["non-string sync event key", { ...sync, eventKey: 42 }],
   ["missing sync idempotency key", { kind: "sync-event", eventKey: "e" }],
@@ -114,6 +120,32 @@ describe("queue envelope batch isolation", () => {
       // body, action, identifiers or exception text can escape through this path.
       expect(console.warn).toHaveBeenCalledExactlyOnceWith("queue malformed message discarded");
       expect(console.error).not.toHaveBeenCalled();
+    });
+  });
+
+  describe.each([false, true])("synthetic probe QA enabled: %s", (probeEnabled) => {
+    it.each([
+      { kind: "alert-probe" },
+      { kind: "alert-probe", probeId: "11111111-1111-4111-8111-111111111111" },
+    ])("admits only the synthetic carrier without ledger, lock or bot operations %#", async (body) => {
+      const m = message(body);
+      const deps = dependencies();
+      await consume({ messages: [m] }, { ...deps, probeEnabled });
+      expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+      expect(m.retry).not.toHaveBeenCalled();
+      expect(handlers.sync).not.toHaveBeenCalled();
+      expect(handlers.internal).not.toHaveBeenCalled();
+      for (const operation of Object.values(deps.ledger)) expect(operation).not.toHaveBeenCalled();
+      for (const operation of Object.values(deps.lock)) expect(operation).not.toHaveBeenCalled();
+      expect(console.warn).not.toHaveBeenCalled();
+      if (probeEnabled) {
+        const critical = vi.mocked(console.error).mock.calls.filter(([line]) => String(line).startsWith('{"level":"critical"'));
+        expect(critical).toHaveLength(1);
+        expect(JSON.parse(String(critical[0]![0]))).toMatchObject({ event: "queue.failing", job: "AlertProbe", attempts: 1 });
+        expect(JSON.parse(String(critical[0]![0])).probeId).toBe(body.probeId);
+      } else {
+        expect(console.error).not.toHaveBeenCalled();
+      }
     });
   });
 
