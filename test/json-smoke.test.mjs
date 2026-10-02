@@ -85,6 +85,8 @@ async function stub(t, change = () => {}, { preContract = false } = {}) {
         }
       }
       change(id, result, { originHeader: request.headers.origin, qaHeader: request.headers["x-two-qa-auth"], body });
+      // A stalled route never answers; closeAllConnections() in t.after ends it.
+      if (result.stall) return;
       response.writeHead(result.status, result.headers);
       response.end(result.body);
     });
@@ -251,8 +253,8 @@ test("still fails a broken pre-contract collection instead of skipping", async (
 });
 
 test("bounds stalled responses", async (t) => {
-  const { url } = await stub(t, () => {});
-  const result = await run(url, { timeoutMs: 1 });
+  const { url } = await stub(t, (id, result) => { if (id === "guest-collection") result.stall = true; });
+  const result = await run(url, { timeoutMs: 150 });
   assert.equal(result.ok, false);
   assert.match(result.output, /FAIL guest collection refusal: expected HTTP response and body within timeout; actual (TimeoutError|AbortError)/);
 });
