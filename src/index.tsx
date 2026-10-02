@@ -86,9 +86,9 @@ const staticSecurityHeaders = secureHeaders({
     // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
     // <object>/<embed> anywhere in src/), base-uri 'self', connect-src
     // 'self' (island fetch targets are same-origin paths). The remaining
-    // legacy delta — upgrade-insecure-requests — stays edge-owned with HSTS
-    // (Cloudflare Automatic HTTPS Rewrites): Hono cannot serialize a
-    // valueless directive, and the app never serves plaintext in production.
+    // legacy delta — upgrade-insecure-requests — is left out: every source
+    // list is 'self' or an explicit https:// host, so an http: subresource is
+    // blocked rather than upgraded, and HTTPS itself is edge-owned (TOG-8729).
     baseUri: ["'self'"],
     connectSrc: ["'self'"],
     objectSrc: ["'none'"],

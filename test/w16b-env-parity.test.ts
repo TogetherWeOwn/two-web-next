@@ -119,8 +119,9 @@ describe("row 18: CSP deltas from legacy, each pinned with its reason", () => {
   // frame-ancestors 'none'; base-uri 'self'; object-src 'none';
   // upgrade-insecure-requests on https; NO form-action (reverted TOG-7095).
   // Restored here: base-uri, connect-src, object-src. upgrade-insecure-
-  // requests stays edge-owned with HSTS (TOG-8729): it is meaningless over
-  // plaintext dev servers, and Hono cannot serialize a valueless directive.
+  // requests is omitted: every source list is 'self' or an explicit https://
+  // host, so an http: subresource is blocked, not upgraded; HSTS is
+  // edge-owned (TOG-8729).
 
   it("drops unsafe-inline/unsafe-eval: no inline code survives", async () => {
     const csp = directives(await app.request("/", {}, staging));
@@ -169,6 +170,14 @@ describe("row 18: CSP deltas from legacy, each pinned with its reason", () => {
     expect(csp["object-src"]).toBe("'none'");
     expect(csp["base-uri"]).toBe("'self'");
     expect(csp["connect-src"]).toBe("'self'");
+  });
+
+  it("omits upgrade-insecure-requests: no source admits plaintext http:", async () => {
+    const csp = directives(await app.request("/join", {}, staging));
+    expect(csp).not.toHaveProperty("upgrade-insecure-requests");
+    for (const sources of Object.values(csp)) {
+      expect(sources.split(/\s+/).some((s) => s === "http:" || s.startsWith("http://"))).toBe(false);
+    }
   });
 
   it("keeps frame-ancestors none and the report sink", async () => {
