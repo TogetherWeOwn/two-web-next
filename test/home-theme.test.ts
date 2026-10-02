@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Home, Layout } from "../src/pages";
+import { Home, Layout, SiteHeader } from "../src/pages";
 import { discordWidgetUrl } from "../src/discord-widget";
 import { FALLBACK_INVITE } from "../src/invite";
 import type { Session } from "../src/env";
@@ -17,16 +17,32 @@ const props = {
   eventsUnavailable: false,
   featured: [],
 };
-const session: Session = { id: "fixture", username: "Player <script>", avatar: null, member: false, moderator: false };
+const session: Session = {
+  id: "fixture",
+  username: "Player <script>",
+  avatar: null,
+  member: false,
+  moderator: false,
+};
 const render = (overrides = {}) => Home({ ...props, ...overrides })!.toString();
 
-beforeEach(() => vi.stubGlobal("fetch", vi.fn(() => { throw new Error("theme tests must remain offline"); })));
-afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
+beforeEach(() =>
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => {
+      throw new Error("theme tests must remain offline");
+    }),
+  ),
+);
+afterEach(() => {
+  expect(fetch).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+});
 
 describe("homepage theme", () => {
-  it("opts the homepage into the theme without changing unthemed leaf layouts", () => {
+  it("opts the homepage into the theme without changing unthemed layouts", () => {
     const html = render();
-    expect(html).toContain('<body class="homepage-theme"><a class="skip-link"');
+    expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
     expect(html).toContain('href="/theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
@@ -34,6 +50,15 @@ describe("homepage theme", () => {
     const leaf = Layout({ title: "Fixture" })!.toString();
     expect(leaf).not.toContain("/theme.css");
     expect(leaf).not.toContain("/fonts/");
+  });
+
+  it.each([
+    [null, "/auth/discord"],
+    ["/events", "/auth/discord?next=%2Fevents"],
+  ])("shares the existing login return link in the schedule header (%s)", (loginReturnTo, href) => {
+    const html = SiteHeader({ active: "events", loginReturnTo })!.toString();
+    expect(html).toContain(`href="${href}" data-testid="signin"`);
+    expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
   });
 
   it("retains the guest sign-in and join OAuth entry points", () => {
@@ -54,20 +79,45 @@ describe("homepage theme", () => {
     if (member) expect(html).toContain('href="https://discord.gg/invite">Open Discord');
   });
 
-  it.each(["joined", "already_member", "join_failed", "signin_failed"])("retains the %s status and invite recovery", (notice) => {
-    const html = render({ notice });
-    expect(html).toContain('role="status" data-testid="notice"');
-    if (notice === "join_failed") expect(html).toContain("Join with an invite link instead");
-  });
+  it.each(["joined", "already_member", "join_failed", "signin_failed"])(
+    "retains the %s status and invite recovery",
+    (notice) => {
+      const html = render({ notice });
+      expect(html).toContain('role="status" data-testid="notice"');
+      if (notice === "join_failed") expect(html).toContain("Join with an invite link instead");
+    },
+  );
 
   it("keeps data and image policy inside the themed layout", () => {
     const html = render({
-      counts: { memberCount: 57, onlineCount: 8, ranks: [{ key: "legend", label: "Legend", memberCount: 0 }] },
-      featured: [{ id: 1, title: "Community update", body: "Fixture content", url: "/events", imageUrl: "/logo.svg", imageAlt: "TWO" }],
-      upcomingEvents: [{ eventKey: "game-night", title: "Co-op evening", startsAt: new Date("2030-07-04T19:00:00Z"), timezone: "UTC", location: "Voice lobby", goingCount: 2 }],
+      counts: {
+        memberCount: 57,
+        onlineCount: 8,
+        ranks: [{ key: "legend", label: "Legend", memberCount: 0 }],
+      },
+      featured: [
+        {
+          id: 1,
+          title: "Community update",
+          body: "Fixture content",
+          url: "/events",
+          imageUrl: "/logo.svg",
+          imageAlt: "TWO",
+        },
+      ],
+      upcomingEvents: [
+        {
+          eventKey: "game-night",
+          title: "Co-op evening",
+          startsAt: new Date("2030-07-04T19:00:00Z"),
+          timezone: "UTC",
+          location: "Voice lobby",
+          goingCount: 2,
+        },
+      ],
     });
-    expect(html).toContain('<strong>57</strong> members');
-    expect(html).toContain('<strong>8</strong> online');
+    expect(html).toContain("<strong>57</strong> members");
+    expect(html).toContain("<strong>8</strong> online");
     expect(html).toContain('data-testid="featured-item"');
     expect(html).toContain('src="/logo.svg" alt="TWO" width="640" height="360" loading="lazy"');
     expect(html).toContain('href="/e/game-night"');
@@ -77,17 +127,29 @@ describe("homepage theme", () => {
     expect(html).toContain('data-rank="legend"><dt>Legend</dt><dd>unclaimed</dd>');
   });
 
-  it.each([null, session, { ...session, member: true }])("links every account state to the existing join preview (%#)", (session) => {
-    const html = render({ session });
-    expect(html).toContain('href="/join#join-heading" data-testid="home-widget-link"');
-    expect(html).not.toContain("<iframe");
-    expect(html).not.toContain("https://discord.com/widget");
-  });
+  it.each([null, session, { ...session, member: true }])(
+    "links every account state to the existing join preview (%#)",
+    (session) => {
+      const html = render({ session });
+      expect(html).toContain('href="/join#join-heading" data-testid="home-widget-link"');
+      expect(html).not.toContain("<iframe");
+      expect(html).not.toContain("https://discord.com/widget");
+    },
+  );
 
-  it.each(["", "javascript:alert(1)", "http://discord.gg/invite", "https://invalid.example/invite"])("routes the new invite fallback through normalization (%s)", async (inviteUrl) => {
+  it.each([
+    "",
+    "javascript:alert(1)",
+    "http://discord.gg/invite",
+    "https://invalid.example/invite",
+  ])("routes the new invite fallback through normalization (%s)", async (inviteUrl) => {
     const env = {
-      APP_URL: props.appUrl, DISCORD_GUILD_ID: "123456789012345678", DISCORD_INVITE_URL: inviteUrl,
-      DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture", DISCORD_BOT_TOKEN: "fixture",
+      APP_URL: props.appUrl,
+      DISCORD_GUILD_ID: "123456789012345678",
+      DISCORD_INVITE_URL: inviteUrl,
+      DISCORD_CLIENT_ID: "fixture",
+      DISCORD_CLIENT_SECRET: "fixture",
+      DISCORD_BOT_TOKEN: "fixture",
       SESSION_SECRET: "fixture-secret-longer-than-32-bytes",
     };
     const response = await app.request("/", {}, env);
@@ -100,28 +162,49 @@ describe("homepage theme", () => {
   });
 
   it("retains the disclosed join-only widget and the linked section target", async () => {
-    const response = await app.request("/join", {}, {
-      APP_URL: props.appUrl, DISCORD_GUILD_ID: "123456789012345678", DISCORD_INVITE_URL: props.inviteUrl,
-      DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture", DISCORD_BOT_TOKEN: "fixture",
-      SESSION_SECRET: "fixture-secret-longer-than-32-bytes",
-    });
+    const response = await app.request(
+      "/join",
+      {},
+      {
+        APP_URL: props.appUrl,
+        DISCORD_GUILD_ID: "123456789012345678",
+        DISCORD_INVITE_URL: props.inviteUrl,
+        DISCORD_CLIENT_ID: "fixture",
+        DISCORD_CLIENT_SECRET: "fixture",
+        DISCORD_BOT_TOKEN: "fixture",
+        SESSION_SECRET: "fixture-secret-longer-than-32-bytes",
+      },
+    );
     const html = await response.text();
     expect(html).toContain('id="join-heading"');
     expect(html).toContain('src="https://discord.com/widget?id=123456789012345678&amp;theme=dark"');
-    expect(html).toContain('sandbox="allow-scripts allow-same-origin" loading="lazy" referrerpolicy="no-referrer"');
+    expect(html).toContain(
+      'sandbox="allow-scripts allow-same-origin" loading="lazy" referrerpolicy="no-referrer"',
+    );
     expect(html).toContain('data-testid="join-widget"');
   });
 
-  it.each([undefined, "guild", "123", "1234567890&evil=1", "https://evil.test"])("rejects invalid widget identifiers (%s)", (id) => {
-    expect(discordWidgetUrl(id)).toBeNull();
-  });
+  it.each([undefined, "guild", "123", "1234567890&evil=1", "https://evil.test"])(
+    "rejects invalid widget identifiers (%s)",
+    (id) => {
+      expect(discordWidgetUrl(id)).toBeNull();
+    },
+  );
 
   it("allows only self fonts and keeps the homepage frame policy closed", async () => {
-    const response = await app.request("/", {}, {
-      APP_URL: "https://next.example.test", DISCORD_GUILD_ID: "123456789012345678", DISCORD_INVITE_URL: props.inviteUrl,
-      DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture", DISCORD_BOT_TOKEN: "fixture",
-      SESSION_SECRET: "fixture-secret-longer-than-32-bytes",
-    });
+    const response = await app.request(
+      "/",
+      {},
+      {
+        APP_URL: "https://next.example.test",
+        DISCORD_GUILD_ID: "123456789012345678",
+        DISCORD_INVITE_URL: props.inviteUrl,
+        DISCORD_CLIENT_ID: "fixture",
+        DISCORD_CLIENT_SECRET: "fixture",
+        DISCORD_BOT_TOKEN: "fixture",
+        SESSION_SECRET: "fixture-secret-longer-than-32-bytes",
+      },
+    );
     const csp = response.headers.get("content-security-policy")!;
     expect(csp).toContain("font-src 'self'");
     expect(csp).toContain("frame-src 'none';");
@@ -136,7 +219,7 @@ describe("homepage theme", () => {
 
   it("keeps the responsive, focus and reduced-motion rules external and compact", () => {
     const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
-    expect(css).toContain(".homepage-theme :focus-visible");
+    expect(css).toContain(".base-theme :focus-visible");
     expect(css).toContain("@media (max-width: 48rem)");
     expect(css).toContain("prefers-reduced-motion: no-preference");
     expect(css).not.toContain("@import");

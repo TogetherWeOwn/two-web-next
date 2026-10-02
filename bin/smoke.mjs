@@ -21,14 +21,27 @@ const routes = [
   { path: "/discord", statuses: [302], redirect: "discord" },
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
-  { path: "/__smoke_unknown_route__", statuses: [404], type: "text/html", body: /We cannot find that page[\s\S]*Together We Own/ },
+  {
+    path: "/__smoke_unknown_route__",
+    statuses: [404],
+    type: "text/html",
+    body: /We cannot find that page[\s\S]*Together We Own/,
+  },
 ];
 
 export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = {}) {
   const base = new URL(baseUrl);
-  if (!["http:", "https:"].includes(base.protocol) || base.username || base.password ||
-      base.pathname !== "/" || base.search || base.hash) {
-    throw new Error("base-url must be an HTTP(S) origin without credentials, path, query or fragment");
+  if (
+    !["http:", "https:"].includes(base.protocol) ||
+    base.username ||
+    base.password ||
+    base.pathname !== "/" ||
+    base.search ||
+    base.hash
+  ) {
+    throw new Error(
+      "base-url must be an HTTP(S) origin without credentials, path, query or fragment",
+    );
   }
   let failures = 0;
   for (const route of routes) {
@@ -47,14 +60,30 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
       });
-      check(route.statuses.includes(response.status), `HTTP ${route.statuses.join(" or ")}`, `HTTP ${response.status}`);
+      check(
+        route.statuses.includes(response.status),
+        `HTTP ${route.statuses.join(" or ")}`,
+        `HTTP ${response.status}`,
+      );
       const headers = response.headers;
-      check(Boolean(headers.get("content-security-policy")?.trim()), "nonempty Content-Security-Policy", headers.get("content-security-policy") ? "empty" : "missing");
-      check(headers.get("x-content-type-options")?.toLowerCase() === "nosniff", "X-Content-Type-Options nosniff", headers.get("x-content-type-options") ?? "missing");
+      check(
+        Boolean(headers.get("content-security-policy")?.trim()),
+        "nonempty Content-Security-Policy",
+        headers.get("content-security-policy") ? "empty" : "missing",
+      );
+      check(
+        headers.get("x-content-type-options")?.toLowerCase() === "nosniff",
+        "X-Content-Type-Options nosniff",
+        headers.get("x-content-type-options") ?? "missing",
+      );
       const contentType = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
       // Staging noindex follows returned HTML, including guest denials (src/headers.ts).
       if (contentType === "text/html") {
-        check(headerIndexingRules(headers.get("x-robots-tag")).some(rule => rule.crawler === "*"), "staging X-Robots-Tag noindex/none (unscoped)", headers.get("x-robots-tag") ?? "missing");
+        check(
+          headerIndexingRules(headers.get("x-robots-tag")).some((rule) => rule.crawler === "*"),
+          "staging X-Robots-Tag noindex/none (unscoped)",
+          headers.get("x-robots-tag") ?? "missing",
+        );
       }
       if (route.type) {
         check(contentType === route.type, `Content-Type ${route.type}`, contentType ?? "missing");
@@ -63,10 +92,16 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
       if (route.json) {
         try {
           const data = JSON.parse(body);
-          const valid = data?.db === "ok" && data?.pending_migrations === 0 &&
+          const valid =
+            data?.db === "ok" &&
+            data?.pending_migrations === 0 &&
             ["healthy", "degraded"].includes(data?.status) &&
             ["healthy", "degraded", "unknown"].includes(data?.queue?.status);
-          check(valid, "JSON /up db:ok, pending_migrations:0, status and queue.status", "valid JSON with unexpected health shape");
+          check(
+            valid,
+            "JSON /up db:ok, pending_migrations:0, status and queue.status",
+            "valid JSON with unexpected health shape",
+          );
         } catch {
           check(false, "valid JSON object", "invalid JSON");
         }
@@ -85,22 +120,39 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
         const foreign = locs.filter((loc) => !loc.startsWith(`${base.origin}/`)).length;
         check(foreign === 0, "same-origin sitemap locs", `${foreign} foreign locs`);
       }
-      if (route.body) check(route.body.test(body), `body matching ${route.body}`, "body did not match");
+      if (route.body)
+        check(route.body.test(body), `body matching ${route.body}`, "body did not match");
       if (route.redirect && response.status === 302) {
         const location = headers.get("location");
         let target;
-        try { if (location) target = new URL(location, base); } catch { /* Invalid Location fails below. */ }
-        const valid = route.redirect === "discord"
-          ? target?.protocol === "https:" && !target.port && !target.username && !target.password &&
-            ((target.hostname === "discord.gg" && /^\/[\w-]+$/.test(target.pathname)) ||
-             (target.hostname === "discord.com" && /^\/invite\/[\w-]+$/.test(target.pathname)))
-          : target?.origin === base.origin && target.pathname === "/auth/discord";
+        try {
+          if (location) target = new URL(location, base);
+        } catch {
+          /* Invalid Location fails below. */
+        }
+        const valid =
+          route.redirect === "discord"
+            ? target?.protocol === "https:" &&
+              !target.port &&
+              !target.username &&
+              !target.password &&
+              ((target.hostname === "discord.gg" && /^\/[\w-]+$/.test(target.pathname)) ||
+                (target.hostname === "discord.com" && /^\/invite\/[\w-]+$/.test(target.pathname)))
+            : target?.origin === base.origin && target.pathname === "/auth/discord";
         // Do not print OAuth/query values or response bodies into deploy logs.
-        check(Boolean(valid), `Location to ${route.redirect === "discord" ? "HTTPS Discord invite" : "same-origin /auth/discord"}`, location ? "unexpected Location" : "missing Location");
+        check(
+          Boolean(valid),
+          `Location to ${route.redirect === "discord" ? "HTTPS Discord invite" : "same-origin /auth/discord"}`,
+          location ? "unexpected Location" : "missing Location",
+        );
       }
       if (!routeFailures) log(`PASS ${route.path}`);
     } catch (error) {
-      check(false, "HTTP response and body within timeout", error instanceof Error ? error.name : "request error");
+      check(
+        false,
+        "HTTP response and body within timeout",
+        error instanceof Error ? error.name : "request error",
+      );
     }
   }
   log(`smoke: ${routes.length} routes, ${failures} failed assertions`);
@@ -113,7 +165,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = 2;
   } else {
     try {
-      process.exitCode = await smoke(process.argv[2]) ? 0 : 1;
+      process.exitCode = (await smoke(process.argv[2])) ? 0 : 1;
     } catch (error) {
       console.error(`smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
       process.exitCode = 2;

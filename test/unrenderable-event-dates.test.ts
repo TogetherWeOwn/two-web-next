@@ -11,7 +11,16 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Env } from "../src/env";
-import { getEventRow, getPublicEvent, listCalendarPast, listFeed, listHomeUpcoming, listJson, listPast, listUpcoming } from "../src/events/reads";
+import {
+  getEventRow,
+  getPublicEvent,
+  listCalendarPast,
+  listFeed,
+  listHomeUpcoming,
+  listJson,
+  listPast,
+  listUpcoming,
+} from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
 import { createMemberDataFixture, testDatabaseUrl } from "./helpers/member-data-db";
 
@@ -33,16 +42,23 @@ const FAR_ENDS = "280000-06-01T20:00:00Z";
 const routeEnv = (adminDb: EnvWithAdminDb["ADMIN_DB"]) =>
   ({
     APP_URL: "https://next.example.test",
-    DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture",
-    DISCORD_GUILD_ID: "fixture", DISCORD_INVITE_URL: "https://discord.gg/fixture",
-    DISCORD_BOT_TOKEN: "fixture", SESSION_SECRET: "fixture",
+    DISCORD_CLIENT_ID: "fixture",
+    DISCORD_CLIENT_SECRET: "fixture",
+    DISCORD_GUILD_ID: "fixture",
+    DISCORD_INVITE_URL: "https://discord.gg/fixture",
+    DISCORD_BOT_TOKEN: "fixture",
+    SESSION_SECRET: "fixture",
     ADMIN_DB: adminDb,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   }) as unknown as Env;
 
 const app = () => {
   const application = new Hono<{ Bindings: Env }>();
-  registerEventRoutes(application, async () => null, async () => null);
+  registerEventRoutes(
+    application,
+    async () => null,
+    async () => null,
+  );
   return application;
 };
 
@@ -126,7 +142,7 @@ describe.skipIf(!url)("served reads refuse JS-unrepresentable windows (isolated 
       const archive = await listPast(db, 1);
       expect(archive.rows.map((row) => row.eventKey)).toEqual([FINITE]);
       const json = await listJson(db, { limit: 20, offset: 0, includeDrafts: false });
-      expect(json.map((row) => row.eventKey)).toEqual([FINITE]);
+      expect(json.rows.map((row) => row.eventKey)).toEqual([FINITE]);
 
       // The pages themselves stay 200 with only the poison row archived.
       await client`delete from events where event_key = ${FINITE}`;

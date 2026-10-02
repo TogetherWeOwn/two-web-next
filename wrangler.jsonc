@@ -6,6 +6,8 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
+  "tail_consumers": [{ "service": "two-web-next-alerts" }],
   "workers_dev": false,
   // Preserve unrelated dashboard vars; source vars below override same-name vars.
   // Remote secrets are retained by Wrangler (never copied into source).
@@ -22,8 +24,18 @@
     ],
     // Terminal outcomes are acked by the consumer; max_retries is only a backstop above the largest `tries`.
     "consumers": [
-      { "queue": "two-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-      { "queue": "two-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+      {
+        "queue": "two-sync-event",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      },
+      {
+        "queue": "two-internal-action",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      }
     ]
   },
   // W8 write-back carrier. Still NOT bound: a producer binding to a queue that does not exist fails
@@ -65,8 +77,18 @@
           { "queue": "two-web-next-production-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
         ],
         "consumers": [
-          { "queue": "two-web-next-production-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-          { "queue": "two-web-next-production-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+          {
+            "queue": "two-web-next-production-sync-event",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "two-web-next-production-internal-action",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
         ]
       },
       // PLACEHOLDER: replace with the separately provisioned production Hyperdrive
