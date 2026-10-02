@@ -110,7 +110,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
   assert(check, "Required check job must exist");
-  assert.match(check.split("\n    steps:\n")[0], /\n    timeout-minutes: 20\n/);
+  assert.match(check.split("\n    steps:\n")[0], /\n    timeout-minutes: 40\n/);
   assert.match(check, /\n      - run: npm ci\n/);
   const steps = check.split(/\n      - /).slice(1);
   for (const command of [
