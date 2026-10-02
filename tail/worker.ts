@@ -41,6 +41,7 @@ export const ALERT_ROUTES = new Set([
   "/csp-reports",
   "/discord",
   "/e/:key",
+  "/e/:key/rsvp",
   "/events",
   "/events.ics",
   "/events.json",

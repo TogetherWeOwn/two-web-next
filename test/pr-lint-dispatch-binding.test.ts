@@ -11,7 +11,7 @@ const mergeSha = "c".repeat(40);
 // An offline baseline workflow fixture lets the same assertions reproduce the
 // old-source failure without modifying the checkout or dispatching live jobs.
 const workflow = readFileSync(
-  process.env.PR_LINT_WORKFLOW_FIXTURE ?? ".github/workflows/pr-lint.yml",
+  process.env.PR_LINT_WORKFLOW_FIXTURE ?? ".github/workflows/pr-gates.yml",
   "utf8",
 );
 function workflowStep(name: string) {

@@ -75,8 +75,8 @@ export async function recordSearch(
 
 export type ZeroResultSearch = { query: string; searches: number; lastSearchedAt: Date };
 
-/** Read deadline: the optional widget must never hold the dashboard (a locked table would wait forever). */
-export const LOG_READ_DEADLINE_MS = 500;
+/** Read deadline: never hold the dashboard; outlasts LOG_DB_TIMEOUT_MS (see FUNNEL_READ_DEADLINE_MS). */
+export const LOG_READ_DEADLINE_MS = 1500;
 
 /**
  * Content-gap read: zero-result queries by miss count, ties alphabetical.

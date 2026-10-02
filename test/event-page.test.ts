@@ -48,7 +48,10 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const db = drizzle(async (sql) => {
     queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
-    if (sql.includes('from "rsvps"')) return { rows: [[row.id, 3]] };
+    // The going-count aggregate reads two positional columns; the viewer
+    // answer read selects its own row and is empty in this fixture.
+    if (sql.includes('from "rsvps"'))
+      return sql.includes("count(*)") ? { rows: [[row.id, 3]] } : { rows: [] };
     if (sql.includes('"event_key" =')) {
       return {
         rows: [

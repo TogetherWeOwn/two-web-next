@@ -17,6 +17,9 @@ const env: Env = {
 
 // In-process requests only: production host/config, but no live database or network.
 const removed = ["/db-ping", "/health", "/healthz"];
+// One Ray ID gives every response the same x-request-id, so the full header
+// comparison still proves removed paths match unknown ones.
+const RAY = "0123456789abcdef-LHR";
 
 describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])(
   "removed diagnostics on %s",
@@ -82,6 +85,7 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])(
         ];
         for (const method of ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]) {
           for (const { name, headers, unsafeStatus } of headerCases) {
+            headers.set("cf-ray", RAY);
             const expectedStatus = ["GET", "HEAD", "OPTIONS"].includes(method) ? 404 : unsafeStatus;
             clearReads();
             const unknown = await app.request(`${host}/not-a-route`, { method, headers }, bindings);
@@ -144,6 +148,7 @@ describe.each(["https://togetherweown.com", "https://next.togetherweown.com"])(
           authorization: "Bearer fixture-probe",
         });
         if (origin !== undefined) headers.set("origin", origin);
+        headers.set("cf-ray", RAY);
         for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
           const unknown = await app.request(`${host}/not-a-route`, { method, headers }, bindings);
           const body = await unknown.text();

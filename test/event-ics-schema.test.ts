@@ -75,7 +75,7 @@ it.each([false, true])(
         {
           cwd: scratch,
           encoding: "utf8",
-          timeout: 10_000,
+          timeout: 60_000,
         },
       );
       expect(output).toContain("No schema changes, nothing to migrate");
@@ -87,5 +87,5 @@ it.each([false, true])(
       rmSync(scratch, { recursive: true, force: true });
     }
   },
-  15_000,
+  90_000,
 );

@@ -93,18 +93,23 @@ export interface UniqueLock {
   release(key: string, leaseToken: string): Promise<void>;
 }
 
-export type QueueMessage =
+/** Originating web request, not the bot response ID or a deduplication key. */
+type QueueCorrelation = { requestId?: string };
+
+export type QueueMessage = QueueCorrelation &
   // Optional only for pre-fencing messages: those finish without releasing a lock (TTL recovers it).
-  | {
-      kind: "sync-event";
-      eventKey: string;
-      idempotencyKey: string;
-      leaseToken?: string;
-      jobId?: string;
-    }
-  | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
-  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
-  | { kind: "alert-probe"; probeId?: string; jobId?: never };
+  (
+    | {
+        kind: "sync-event";
+        eventKey: string;
+        idempotencyKey: string;
+        leaseToken?: string;
+        jobId?: string;
+      }
+    | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
+    | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
+    | { kind: "alert-probe"; probeId?: string; jobId?: never }
+  );
 
 /**
  * N3 (TOG-9895): the countable side of the queue. Cloudflare Queues carries the

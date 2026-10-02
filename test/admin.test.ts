@@ -257,10 +257,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       liveEnv(),
     );
     expect(publish.status).toBe(303);
-    expect(dispatchWriteBack).toHaveBeenCalledWith(expect.anything(), {
-      eventKey: key,
-      status: "published",
-    });
+    expect(dispatchWriteBack).toHaveBeenCalledWith(
+      expect.anything(),
+      { eventKey: key, status: "published" },
+      undefined,
+    );
 
     const cancel = await app().request(
       `/events/${key}/cancel`,
@@ -268,10 +269,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       liveEnv(),
     );
     expect(cancel.status).toBe(303);
-    expect(dispatchWriteBack).toHaveBeenCalledWith(expect.anything(), {
-      eventKey: key,
-      status: "cancelled",
-    });
+    expect(dispatchWriteBack).toHaveBeenCalledWith(
+      expect.anything(),
+      { eventKey: key, status: "cancelled" },
+      undefined,
+    );
 
     const [final] = await db.select().from(events).where(eq(events.eventKey, key));
     expect(final?.status).toBe("cancelled");

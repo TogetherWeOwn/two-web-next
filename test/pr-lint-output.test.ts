@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const workflow = readFileSync(".github/workflows/pr-lint.yml", "utf8");
+const workflow = readFileSync(".github/workflows/pr-gates.yml", "utf8");
 const checker = "ci/check-pr-conventions.py";
 const helper = "ci/pr-lint-output.py";
 

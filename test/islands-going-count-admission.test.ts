@@ -32,7 +32,7 @@ class Badge {
 
   constructor(
     readonly key: string,
-    readonly capacity: string,
+    public capacity: string,
   ) {
     this.count = new TextTarget(capacity ? `2 of ${capacity} going` : "2 going");
     this.spots = capacity
@@ -44,6 +44,9 @@ class Badge {
     if (name === "data-event-key") return this.key;
     if (name === "data-capacity") return this.capacity;
     return null;
+  }
+  setAttribute(name: string, value: string) {
+    if (name === "data-capacity") this.capacity = String(value);
   }
   querySelector(selector: string) {
     if (selector === "[data-count]") return this.count;

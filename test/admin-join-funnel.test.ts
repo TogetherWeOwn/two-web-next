@@ -185,7 +185,7 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
   });
 
   it.each(["both", "funnel", "search"])(
-    "bounds pending %s analytics to one 500 ms dashboard deadline, preserving healthy widgets",
+    "bounds pending %s analytics to one dashboard deadline, preserving healthy widgets",
     async (pending) => {
       const store = createMemorySessionStore();
       const cookie = await cookieFor(store);

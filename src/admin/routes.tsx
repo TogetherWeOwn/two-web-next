@@ -192,8 +192,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const db = await dbFor(c);
     // Match dbFor's precedence: an injected ADMIN_DB overrides either URL.
     const identity = (c.env as EnvWithAdminDb).ADMIN_DB || databaseUrl(c.env) || db;
-    // Start both optional analytics reads together with the same 500 ms budget,
-    // rather than stacking their deadlines. Failed/blocked widgets are omitted;
+    // Start both optional analytics reads together with the same budget, rather
+    // than stacking their deadlines; they still share one pooled connection, so
+    // the budget covers both transactions. Failed/blocked widgets are omitted;
     // authorization and the guard's critical access-log write stay fail-closed.
     const [funnel, zeroSearches] = db
       ? await Promise.all([
@@ -369,8 +370,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           key,
           input,
         );
-        if (writeBack) await dispatchWriteBack(c.env, writeBack);
-        for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
+        if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
+        for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
         return c.redirect(`/admin/events/${row.eventKey}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
@@ -408,7 +409,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                   key,
                   action === "publish" ? "published" : "cancelled",
                 );
-          if (writeBack) await dispatchWriteBack(c.env, writeBack);
+          if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
           return c.redirect(`/admin/events/${row.eventKey}`, 303);
         } catch (err) {
           if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");

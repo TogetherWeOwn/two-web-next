@@ -3,6 +3,7 @@
 // /events.json needs a session, writes are moderator-only and enqueue the Discord
 // write-back through the same seam as the admin panel (src/admin/writeback.ts).
 import type { Context, Hono, MiddlewareHandler } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import {
@@ -29,6 +30,9 @@ import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { discordEventsSource } from "./discord-transients";
 import {
   RSVP_HONEY_FIELD,
+  RSVP_COPY,
+  loginUrl,
+  throttleWaitCopy,
   rsvpHoneyFilled,
   rsvpTrapTripped,
   calendarEmptyState,
@@ -38,7 +42,6 @@ import {
   mergeCalendarRows,
   parseCalendarMonth,
   parseCalendarView,
-  loginUrl,
   wallMonth,
   calendarZone,
   currentCalendarMonth,
@@ -54,6 +57,7 @@ import {
   getEventNeighbors,
   getEventRow,
   getPublicEvent,
+  getViewerRsvp,
   listCalendarPast,
   listFeed,
   listGoingAttendees,
@@ -480,9 +484,17 @@ export function registerEventRoutes(
           if (!e) return notFound();
           if (e.status === "cancelled") {
             c.header("x-robots-tag", "noindex, nofollow");
+            // The live page personalizes on the session and the one-shot join
+            // confirmation, so it is never share-cached (main W16) and always
+            // varies on the cookie (TOG-10356 finding 5). The cancelled page is
+            // viewer-independent: it renders before any session read, so a
+            // store outage or a rotated cookie can never turn the static
+            // cancellation into a 500 (TOG-10356 review).
+            c.header("cache-control", "private, no-store");
+            const returnTo = c.req.path + new URL(c.req.url).search;
             return bufferedMemberHtml(
               c,
-              <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />,
+              <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} returnTo={returnTo} />,
               410,
             );
           }
@@ -492,13 +504,21 @@ export function registerEventRoutes(
             return bufferedMemberText(c, "Forbidden", 403);
           if (e.status === "draft" || e.status === "past")
             c.header("x-robots-tag", "noindex, nofollow");
+          // One-shot join confirmation (legacy join_result flash): the event
+          // page is a join-CTA landing (`/join?next=/e/<key>`), so it consumes
+          // and renders the banner exactly once like /, /join and /profile.
+          // Read inside the boundary (audited reads defer consumption), then
+          // consume only after the boundary allows a visible response.
           const joinResult = await readJoinResult(c);
-          const [neighbors, related, attendees, position] = await Promise.all([
+          const member = session?.member === true;
+          const [neighbors, related, attendees, position, answer] = await Promise.all([
             getEventNeighbors(db, e),
             listRelatedEvents(db, e),
             session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
             session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+            session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
           ]);
+          const returnTo = c.req.path + new URL(c.req.url).search;
           return bufferedMemberHtml(
             c,
             <EventPage
@@ -511,6 +531,9 @@ export function registerEventRoutes(
               session={session}
               joinResult={joinResult}
               waitlistPosition={position}
+              member={member}
+              answer={answer}
+              returnTo={returnTo}
             />,
           );
         };
@@ -642,8 +665,8 @@ export function registerEventRoutes(
           key,
           input,
         );
-        if (writeBack) await dispatchWriteBack(c.env, writeBack);
-        for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
+        if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
+        for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
         const updated = await getPublicEvent(db, row.eventKey);
         return c.json({ data: eventJson(updated!) });
       } catch (err) {
@@ -676,7 +699,7 @@ export function registerEventRoutes(
                   key,
                   action === "publish" ? "published" : "cancelled",
                 );
-          if (writeBack) await dispatchWriteBack(c.env, writeBack);
+          if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
           return c.json({ data: eventJson(await withGoingCount(db, row)) });
         } catch (err) {
           if (err instanceof ValidationError) return invalid(c, err);
@@ -708,9 +731,8 @@ export function registerEventRoutes(
     return session;
   }
 
-  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
+  const putRsvp = async (c: Ctx, input: Record<string, unknown>): Promise<Response> => {
     c.header("cache-control", "private, no-store");
-    const input = await body(c);
     // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
     // without touching limiter, auth or DB, and logs nothing. Present non-string
     // values count as filled (fail-closed); absent/empty inputs are genuine.
@@ -731,7 +753,8 @@ export function registerEventRoutes(
     // Accepted, then refused: answering for the caller instead would look like it worked.
     if (input.user_id !== undefined && String(input.user_id) !== who.id)
       return c.json({ error: "forbidden" }, 403);
-    const key = c.req.param("key");
+    // Generic Ctx (no route path type) yields string|undefined: fail closed.
+    const key = c.req.param("key") ?? "";
     if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
@@ -745,20 +768,19 @@ export function registerEventRoutes(
       if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
       return closed(c, r.why);
     }
-    await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
+    await dispatchRsvpSync(c.env, r.eventKey, r.mirrored, c.get("requestId"));
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
-  });
+  };
+  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => putRsvp(c, await body(c)));
 
-  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
+  const deleteRsvp = async (c: Ctx, input: Record<string, unknown>): Promise<Response> => {
     c.header("cache-control", "private, no-store");
     // Both sources are evaluated independently, with ALL values preserved:
     // `query()` is first-wins, so duplicates use `queries()` — an empty query
     // value must not mask a filled sibling or a filled body decoy, and a
     // non-string body value trips like a filled string.
     const queryHoney = c.req.queries(RSVP_HONEY_FIELD);
-    const bodyHoney = (await body(c).catch(() => ({}) as Record<string, unknown>))[
-      RSVP_HONEY_FIELD
-    ];
+    const bodyHoney = input[RSVP_HONEY_FIELD];
     if (rsvpHoneyFilled(queryHoney) || rsvpHoneyFilled(bodyHoney)) return c.body(null, 204);
     const who = await member(c);
     if (who instanceof Response) return who;
@@ -766,11 +788,44 @@ export function registerEventRoutes(
     if (!db) return c.json({ error: "db_unavailable" }, 503);
     // Only the caller's own row is reachable: the delete is keyed on the session user.
     // The budget is charged inside withdrawRsvp, atomically with the delete.
-    const key = c.req.param("key");
+    // Generic Ctx (no route path type) yields string|undefined: fail closed.
+    const key = c.req.param("key") ?? "";
     const r = await withdrawRsvp(db, eventKeyAllowed(key, c.env.APP_URL) ? key : "", who.id);
     if (r.limited) return rateLimitExceeded(c, r.retryAfter);
-    await dispatchRsvpSync(c.env, key, r.status);
+    await dispatchRsvpSync(c.env, key, r.status, c.get("requestId"));
     return c.body(null, 204);
+  };
+  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) =>
+    deleteRsvp(c, await body(c).catch(() => ({}))),
+  );
+
+  // HTML adapter only: reuse the exact session, decoy, shared budget and
+  // locked service paths above. The frozen JSON resource still refuses POST.
+  app.post("/e/:key/rsvp", requestBodyLimit("action"), async (c) => {
+    const input = await body(c);
+    const response = await (input.status === "withdraw" ? deleteRsvp(c, input) : putRsvp(c, input));
+    const path = `/e/${encodeURIComponent(c.req.param("key"))}`;
+    if (response.ok) return c.redirect(path, 303);
+    if (response.status === 401) return c.redirect(loginUrl(path), 303);
+    const retryAfter = response.headers.get("Retry-After");
+    if (retryAfter) c.header("Retry-After", retryAfter);
+    return c.html(
+      <html lang="en">
+        <head>
+          <title>RSVP not saved</title>
+        </head>
+        <body>
+          <h1>{RSVP_COPY.failedTitle}</h1>
+          <p role="alert">
+            {response.status === 429
+              ? throttleWaitCopy(retryAfter ? Number(retryAfter) : null)
+              : "Nothing changed. Return to the event to check availability and try again."}
+          </p>
+          <a href={path}>Return to the event</a>
+        </body>
+      </html>,
+      response.status as ContentfulStatusCode,
+    );
   });
 
   app.all("/events/:key/rsvp", (c) => c.body(null, 405, { Allow: "PUT, DELETE" }));

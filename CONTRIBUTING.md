@@ -112,8 +112,9 @@ The four standalone importer tests (`import-audit.test.ts`,
 `import-backfill-portable.test.ts`) use a 140-column formatter override to keep their
 existing `@ts-expect-error` imports on one line; wrapping would detach the directive
 from TypeScript's module diagnostic. `public/styles.css`, `public/theme.css`,
-`public/profile-theme.css` and `ci/a11y.mjs` are not formatted because existing
-regression tests assert exact stylesheet bytes and source-order substrings. `ci/featured-proof/**` also retains its immutable,
+`public/profile-theme.css`, `public/schedule-theme.css` and `ci/a11y.mjs` are not
+formatted because existing regression tests assert exact stylesheet bytes,
+source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,
 hash-verified proof inputs byte-for-byte. Their content, hashes and regression
 assertions remain unchanged. These formatter exemptions disable neither lint nor
 typecheck.

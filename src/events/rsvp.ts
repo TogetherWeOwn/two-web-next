@@ -219,6 +219,7 @@ export async function dispatchRsvpSync(
   env: Env,
   eventKey: string,
   status: EventStatus | null,
+  requestId?: string,
 ): Promise<void> {
-  if (status) await enqueueEventSync(env, eventKey, status);
+  if (status) await enqueueEventSync(env, eventKey, status, requestId);
 }

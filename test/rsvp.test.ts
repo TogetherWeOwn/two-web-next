@@ -458,6 +458,39 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect((await put(a.key, "u1")).status).toBe(429);
   });
 
+  it("HTML submits and JSON writes share the same transactional twelve-write budget", async () => {
+    const ev = await seed();
+    const submit = async (status: string) =>
+      app.request(
+        `/e/${ev.key}/rsvp`,
+        {
+          method: "POST",
+          headers: {
+            cookie: await cookieFor(store, "u1"),
+            origin: APP_URL,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({ status }),
+        },
+        env,
+      );
+    for (let i = 0; i < 4; i++) {
+      const html = await submit("going");
+      expect(html.status).toBe(303);
+      expect(html.headers.get("location")).toBe(`/e/${ev.key}`);
+      expect((await rows(ev.id)).map((r) => r.userId)).toEqual(["u1"]);
+      expect((await put(ev.key, "u1", "maybe")).status).toBe(200);
+      expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
+    }
+    const limited = await submit("going");
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    expect(await limited.text()).toContain("Slow down — try again in");
+    expect((await put(ev.key, "u1")).status).toBe(429);
+    expect((await call("DELETE", ev.key, "u1")).status).toBe(429);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 12 });
+  });
+
   it("hammering: 40 concurrent writes by one member let exactly 12 through", async () => {
     const ev = await seed();
     const res = await Promise.all(

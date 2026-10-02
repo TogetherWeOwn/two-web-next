@@ -27,7 +27,10 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
       auth = "session";
     else if (path === "/e/:key" || path === "/events/:file{.+\\.ics}")
       auth = "public-draft-moderator";
-    else if (path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE"))
+    else if (
+      (path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE")) ||
+      (path === "/e/:key/rsvp" && method === "POST")
+    )
       auth = "member-decoy";
     else if (
       (path === "/events" && method === "POST") ||

@@ -353,7 +353,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           expect(res.status).toBe(accept === "text/html" ? 302 : 401);
           if (accept === "text/html")
             expect(res.headers.get("location")).toBe(
-              `/auth/discord?next=${encodeURIComponent(path)}`,
+              `/join/discord?next=${encodeURIComponent(path)}`,
             );
           const body = await res.text();
           for (const personal of [...PERSONAL_STRINGS, SUBJECT.userId])

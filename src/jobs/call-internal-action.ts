@@ -12,6 +12,7 @@ import type {
   RoleAssignment,
 } from "./types";
 import type { Outcome } from "./sync-event";
+import { safeRequestId } from "../request-log";
 
 type InternalActionAnswer =
   | BotSuccess<{ messageId: string; replayed: boolean }>
@@ -22,15 +23,27 @@ type InternalActionAnswer =
 export async function dispatchAnnouncement(
   queue: { send(b: unknown): Promise<unknown> },
   action: Announcement,
+  requestId?: string,
 ) {
-  const msg: QueueMessage = { kind: "announcement", idempotencyKey: crypto.randomUUID(), action };
+  const msg: QueueMessage = {
+    kind: "announcement",
+    idempotencyKey: crypto.randomUUID(),
+    action,
+    requestId: safeRequestId(requestId),
+  };
   await queue.send(msg);
 }
 export async function dispatchRoleAssign(
   queue: { send(b: unknown): Promise<unknown> },
   action: RoleAssignment,
+  requestId?: string,
 ) {
-  const msg: QueueMessage = { kind: "role-assign", idempotencyKey: null, action };
+  const msg: QueueMessage = {
+    kind: "role-assign",
+    idempotencyKey: null,
+    action,
+    requestId: safeRequestId(requestId),
+  };
   await queue.send(msg);
 }
 

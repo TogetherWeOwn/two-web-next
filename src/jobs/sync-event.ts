@@ -2,6 +2,7 @@ import { SYNC_EVENT, backoffFor } from "./constants";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
 import { BotTerminalError, BotTransportError } from "./types";
 import type { BotClient, EventStore, UniqueLock } from "./types";
+import { safeRequestId } from "../request-log";
 
 export type Outcome = { done: true } | { retryInSeconds: number } | { failed: string };
 
@@ -14,6 +15,7 @@ export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },
   lock: UniqueLock,
   eventKey: string,
+  requestId?: string,
 ): Promise<boolean> {
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
   const key = uniqueKey(eventKey);
@@ -21,7 +23,13 @@ export async function dispatchSyncEvent(
   if (!leaseToken) return false;
   try {
     await queue.send(
-      { kind: "sync-event", eventKey, idempotencyKey: crypto.randomUUID(), leaseToken },
+      {
+        kind: "sync-event",
+        eventKey,
+        idempotencyKey: crypto.randomUUID(),
+        leaseToken,
+        requestId: safeRequestId(requestId),
+      },
       { delaySeconds: SYNC_EVENT.debounceSeconds },
     );
   } catch (err) {

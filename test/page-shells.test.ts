@@ -15,12 +15,14 @@ import {
 function assertShell(html: string) {
   expect(html.match(/<main\b[^>]*>/g)).toHaveLength(1);
   expect(html.match(/\bid="main"/g)).toHaveLength(1);
-  expect(html).toMatch(/<main id="main" tabindex="-1">/);
+  const main = html.match(/<main\b[^>]*>/)![0];
+  expect(main).toContain('id="main"');
+  expect(main).toContain('tabindex="-1"');
   expect(html.match(/<a\b[^>]*href="#main"[^>]*>/g)).toHaveLength(1);
   // First child of body is stronger than first anchor: no button/input/positive
   // tabindex can silently get ahead of the bypass link.
   expect(html).toMatch(
-    /<body(?: class="base-theme (?:homepage|content|join|profile)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/,
+    /<body(?: class="base-theme (?:homepage|content|join|profile|schedule)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/,
   );
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   expect(html).toContain('rel="stylesheet" href="/styles.css"');
@@ -68,6 +70,81 @@ describe("every GET HTML route uses an accessible page shell (local fixtures)", 
       assertShell(await response.text());
     },
   );
+});
+
+it.each([
+  "/events",
+  "/events?view=calendar&month=2030-01",
+  "/events?q=no-such-event",
+  "/events/past",
+])("%s opts into the shared schedule theme without vendor scripts", async (path) => {
+  const html = await (await pageShellFixture().request(path)).text();
+  assertShell(html);
+  expect(html).toContain('<body class="base-theme schedule-theme">');
+  expect(html).toContain('rel="stylesheet" href="/theme.css"');
+  expect(html).toContain('rel="stylesheet" href="/schedule-theme.css"');
+  expect(html).toContain('class="bar site-header"');
+  expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
+  expect(html).toContain('<nav aria-label="Site">');
+  expect(html).toContain('class="schedule-heading"');
+  const scripts =
+    path === "/events/past"
+      ? ['<script src="/islands/past-events.js" defer="">']
+      : [
+          '<script src="/islands/events-calendar.js" defer="">',
+          // Main's signed-in tab recovery controller is first-party, not vendor JS.
+          '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync">',
+        ];
+  expect(html.match(/<script\b[^>]*>/g)).toEqual(scripts);
+});
+
+it.each([
+  "/events",
+  "/events?q=game%20night",
+  "/events?view=calendar&month=2030-01",
+  "/events?view=calendar&month=2030-01&q=no-such-event&past=1",
+])("%s: the guest schedule-heading Join CTA preserves the calendar destination", async (path) => {
+  const { env } = pageShellFixture();
+  const response = await app.request(`${env.APP_URL}${path}`, {}, env);
+  expect(response.status).toBe(200);
+  const heading = (await response.text()).match(/<div class="schedule-heading">(.*?)<\/div>/)![1]!;
+  expect(heading).toContain(`href="/join?next=${encodeURIComponent(path)}">Join the Discord</a>`);
+});
+
+it.each([
+  ["/events/past", "/events/past"],
+  ["/events/past?page=1", "/events/past"],
+  ["/events/past?page=3", "/events/past?page=3"],
+] as const)(
+  "%s: the archive header Sign in CTA preserves the normalized archive destination",
+  async (path, next) => {
+    const { env } = pageShellFixture();
+    const response = await app.request(`${env.APP_URL}${path}`, {}, env);
+    expect(response.status).toBe(200);
+    const header = (await response.text()).match(/<header\b[^>]*>(.*?)<\/header>/)![1]!;
+    expect(header).toContain(
+      `href="/auth/discord?next=${encodeURIComponent(next)}" data-testid="signin"`,
+    );
+  },
+);
+
+it("keeps event detail outside the schedule-only theme", async () => {
+  const html = await (await pageShellFixture().request(`/e/${EVENT_KEY}`)).text();
+  expect(html).not.toContain('href="/theme.css"');
+  expect(html).not.toContain('href="/schedule-theme.css"');
+  expect(html).not.toContain('class="events-page"');
+});
+
+it("keeps schedule layout in its own self-contained sheet", () => {
+  const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
+  expect(css.length).toBeLessThan(6000);
+  expect(css).toContain("@media (max-width: 48rem)");
+  expect(css).not.toMatch(/@import|https:\/\/|@font-face/);
+  // Every rule stays scoped to the schedule main, never the shared chrome.
+  for (const rule of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+    for (const selector of rule[1]!.split(/,(?![^(]*\))/))
+      expect(selector.trim()).toMatch(/^\.events-page /);
+  }
 });
 
 it("serves a recovery HTML shell and bool-only status to guests without a session", async () => {
