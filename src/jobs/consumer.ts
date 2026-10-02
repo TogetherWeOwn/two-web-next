@@ -1,7 +1,7 @@
 import { alertQueueFailing } from "../alerts";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
-import { isQueueMessage } from "./envelope";
+import { toQueueMessage } from "./envelope";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
@@ -33,8 +33,8 @@ export async function consume(
   deps: { bot: BotClient; events: EventStore; lock: UniqueLock; ledger: QueueLedger },
 ): Promise<void> {
   for (const m of batch.messages) {
-    const body = m.body;
-    if (!isQueueMessage(body)) {
+    const body = toQueueMessage(m.body);
+    if (!body) {
       // Bad carriers cannot recover on retry. Do not trust their ledger/lock
       // identifiers or log their payload; discard only this message.
       console.warn("queue malformed message discarded");
