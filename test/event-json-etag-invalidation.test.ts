@@ -47,7 +47,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
       DISCORD_GUILD_ID: "326474832151838730",
       DISCORD_INVITE_URL: "https://discord.gg/invite",
       DISCORD_BOT_TOKEN: "bot-token",
-      EVENT_SYNC_QUEUE: { send: async () => {} },
+      SYNC_EVENT_QUEUE: { send: async () => {} },
     } as unknown as Env;
   });
   afterAll(async () => {

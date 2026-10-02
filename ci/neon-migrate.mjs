@@ -21,8 +21,7 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     refuse("Production migrations require PRODUCTION_DEPLOY_ENABLED=true.");
   }
   if (env.GITHUB_REF !== "refs/heads/main") refuse("Migrations require the reviewed main branch.");
-  const secret =
-    target === "staging" ? "NEON_STAGING_DATABASE_URL" : "NEON_PRODUCTION_DATABASE_URL";
+  const secret = target === "staging" ? "NEON_STAGING_DATABASE_URL" : "PRODUCTION_DATABASE_URL";
   if (!env[secret]) refuse(`Missing ${secret} Environment secret; no fallback is permitted.`);
   let url;
   try {
@@ -51,21 +50,40 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
       refuse("Selftest requires its owned database on agent-testdb or the CI Postgres service.");
     }
   } else if (
-    !/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(url.hostname) ||
-    url.hostname.split(".")[0].endsWith("-pooler") ||
-    !url.username ||
-    !url.password ||
-    !["require", "verify-full"].includes(url.searchParams.get("sslmode")) ||
-    [...url.searchParams.keys()].some((key) => !["sslmode", "channel_binding"].includes(key))
+    target === "staging" &&
+    (!/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(url.hostname) ||
+      url.hostname.split(".")[0].endsWith("-pooler"))
   ) {
     refuse("Migrations require a direct Neon endpoint with TLS; value withheld.");
+  } else if (
+    target === "production" &&
+    // PlanetScale Postgres direct endpoint: <id>.pg.psdb.cloud:5432.
+    // The pooled 6432 port and -pooler hosts are refused: DDL and the
+    // transaction advisory lock must bypass transaction pooling.
+    (!/^[a-z0-9-]+\.pg\.psdb\.cloud$/.test(url.hostname) ||
+      url.hostname.split(".")[0].endsWith("-pooler"))
+  ) {
+    refuse("Production migrations require a direct PlanetScale endpoint with TLS; value withheld.");
+  }
+  // Disposable test databases carry no TLS params or password; their strict
+  // hostname/principal check above is the whole gate. Live targets always
+  // need credentials and verified TLS.
+  if (
+    !testDatabase &&
+    (!url.username ||
+      !url.password ||
+      !["require", "verify-full"].includes(url.searchParams.get("sslmode")) ||
+      [...url.searchParams.keys()].some((key) => !["sslmode", "channel_binding"].includes(key)))
+  ) {
+    refuse("Migrations require a direct endpoint with TLS; value withheld.");
   }
   const bindings = url.searchParams.getAll("channel_binding");
-  if (bindings.includes("require"))
-    refuse("Required channel binding is unsupported by the migration driver.");
-  if (bindings.some((value) => !["prefer", "disable"].includes(value)))
+  if (bindings.some((value) => !["require", "prefer", "disable"].includes(value)))
     refuse("Invalid channel binding option; value withheld.");
-  // postgres.js forwards unknown URL options as startup settings, not libpq flags.
+  // postgres.js forwards unknown URL options as startup settings, not libpq flags,
+  // and does not implement SCRAM channel binding. Strip the libpq-only flag here
+  // (including `require`, the Neon default); TLS stays enforced via
+  // sslmode=require|verify-full + rejectUnauthorized:true in migrationClient.
   url.searchParams.delete("channel_binding");
   url.port = "5432";
   return { target, url, testDatabase };

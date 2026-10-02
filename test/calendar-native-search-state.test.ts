@@ -35,6 +35,8 @@ function eventRow(id: number, startsAt: Date): PublicEvent {
   return {
     id,
     icsSequence: 1n,
+    syncRevision: 1,
+    syncedRevision: 0,
     eventKey: `event-${id}`,
     title: "Game night",
     game: null,
@@ -48,6 +50,9 @@ function eventRow(id: number, startsAt: Date): PublicEvent {
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     createdBy: null,
     rsvpOpen: true,
     recurrenceFrequency: null,

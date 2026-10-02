@@ -50,7 +50,7 @@ export const Layout: FC<
     shareTitle?: string;
     shareDescription?: string | null;
     robots?: string;
-    theme?: "home" | "content" | "join" | "profile" | "schedule";
+    theme?: "home" | "event" | "content" | "join" | "profile" | "schedule";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
   <html lang="en">
@@ -99,6 +99,7 @@ export const Layout: FC<
             crossorigin="anonymous"
           />
           <link rel="stylesheet" href="/theme.css" />
+          {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
           {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
           {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}
         </>
@@ -126,65 +127,73 @@ const signInUrl = (returnTo: string | null) =>
 // joinAction renders the join-funnel entry on the static leaves; an explicit
 // cta overrides the guest action (recovery shells pass their way back in).
 // Children replace the account area (the schedule's member Discord link);
-// loginReturnTo carries the guest sign-in destination.
+// loginReturnTo carries the guest sign-in destination. account={false} drops
+// the account area on the session-less cancelled (410) event page; active
+// "event" marks Events as the current section (not page) on event detail.
 export const SiteHeader: FC<
   PropsWithChildren<{
     session?: Session | null;
-    active?: "home" | "events";
+    active?: "home" | "events" | "event";
     loginReturnTo?: string | null;
+    account?: boolean;
     joinAction?: boolean;
     cta?: HeaderCta;
   }>
-> = ({ session, active, loginReturnTo = null, joinAction, cta, children }) => (
+> = ({ session, active, loginReturnTo = null, account = true, joinAction, cta, children }) => (
   <header class="bar site-header">
     <nav class="main-nav" aria-label="Primary">
       <a href="/" aria-current={active === "home" ? "page" : undefined}>
         Home
       </a>
-      <a href="/events" aria-current={active === "events" ? "page" : undefined}>
+      <a
+        href="/events"
+        aria-current={active === "events" ? "page" : active === "event" ? "location" : undefined}
+      >
         Events
       </a>
     </nav>
     <a class="brand" href="/" aria-label="Together We Own homepage">
       <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
     </a>
-    <nav class="header-account" aria-label="Account">
-      {children ??
-        (session ? (
-          <form method="post" action="/logout">
-            <span class="account-caption">Signed in</span>
-            <span class="who">{session.username}</span>
-            <button type="submit" class="link">
-              Sign out
-            </button>
-          </form>
-        ) : (
-          <div>
-            <span class="account-caption">Welcome, guest</span>
-            {cta ? (
-              <a class="btn" href={cta.href} data-testid="signin">
-                {cta.label}
-              </a>
-            ) : joinAction ? (
-              <a class="btn" href="/join">
-                Join with Discord
-              </a>
-            ) : (
-              <a class="btn" href={signInUrl(loginReturnTo)} data-testid="signin">
-                Sign in with Discord
-              </a>
-            )}
-          </div>
-        ))}
-    </nav>
+    {account ? (
+      <nav class="header-account" aria-label="Account">
+        {children ??
+          (session ? (
+            <form method="post" action="/logout">
+              <span class="account-caption">Signed in</span>
+              <span class="who">{session.username}</span>
+              <button type="submit" class="link">
+                Sign out
+              </button>
+            </form>
+          ) : (
+            <div>
+              <span class="account-caption">Welcome, guest</span>
+              {cta ? (
+                <a class="btn" href={cta.href} data-testid="signin">
+                  {cta.label}
+                </a>
+              ) : joinAction ? (
+                <a class="btn" href="/join">
+                  Join with Discord
+                </a>
+              ) : (
+                <a class="btn" href={signInUrl(loginReturnTo)} data-testid="signin">
+                  Sign in with Discord
+                </a>
+              )}
+            </div>
+          ))}
+      </nav>
+    ) : null}
   </header>
 );
 
 // The site footer carries the static-leaf links on the funnel + leaf + error
 // shells (home, join, recovery, about/faq/rules/privacy, branded errors —
-// ports the legacy home footer: About, FAQ, House rules, Privacy) and the
-// themed schedule (/events, /events/past). Admin, event detail and profile
-// shells intentionally keep their own chrome. One
+// ports the legacy home footer: About, FAQ, House rules, Privacy), the
+// themed schedule (/events, /events/past) and event detail/cancelled pages.
+// Admin and profile shells intentionally keep their own chrome. One
 // component so a new leaf cannot ship without a way back to it.
 export const SiteFooter: FC = () => (
   <footer>
@@ -389,6 +398,7 @@ export const Home: FC<{
   inviteUrl: string;
   appUrl: string;
   counts: Counts;
+  sessionUnavailable?: boolean;
   upcomingEvents: HomeEvent[];
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
@@ -400,6 +410,7 @@ export const Home: FC<{
   inviteUrl: configuredInviteUrl,
   appUrl,
   counts,
+  sessionUnavailable = false,
   upcomingEvents,
   eventsUnavailable,
   featured,
@@ -444,7 +455,11 @@ export const Home: FC<{
           <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
           <h1 id="home-heading">The lobby is open.</h1>
           <p class="lead">We spent most of our life private. Now you can just turn up.</p>
-          {session?.member ? (
+          {sessionUnavailable ? (
+            <a class="btn" href="/discord" data-testid="discord-join">
+              Join with an invite link
+            </a>
+          ) : session?.member ? (
             <a class="btn" href={inviteUrl}>
               Open Discord
             </a>
@@ -452,6 +467,13 @@ export const Home: FC<{
             <a class="btn" href="/auth/discord" data-testid="join">
               Join with Discord
             </a>
+          )}
+          {!session && !sessionUnavailable && eventsUnavailable && (
+            <p>
+              <a href="/discord" data-testid="discord-join">
+                Join with an invite link instead
+              </a>
+            </p>
           )}
           {notice === "join_failed" && (
             <p>

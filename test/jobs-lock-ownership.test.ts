@@ -12,6 +12,7 @@ import {
   type EventStore,
   type QueueLedger,
   type QueueMessage,
+  type SyncAttempt,
   type UniqueLock,
 } from "../src/jobs/types";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
@@ -20,24 +21,76 @@ type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 const eventKey = "lease-regression";
 const key = uniqueKey(eventKey);
 const success = { ok: true, requestId: null, discordEventId: "discord-event" } as const;
-const events: EventStore = {
-  find: async () => ({
-    eventKey,
-    mirrored: true,
-    payload: {
-      eventKey,
-      name: "fixture",
-      startsAt: "2026-10-01T12:00:00Z",
-      endsAt: null,
-      location: "",
-      description: null,
+function memoryEvents(): EventStore {
+  const attempts = new Map<string, SyncAttempt>();
+  return {
+    prepareSync: async (eventKey, idempotencyKey, mirroredAt) => {
+      const existing = attempts.get(idempotencyKey);
+      if (existing) return existing;
+      if ([...attempts.values()].some((a) => a.eventKey === eventKey && a.state === "pending"))
+        return { waiting: true };
+      const attempt: SyncAttempt = {
+        eventKey,
+        idempotencyKey,
+        mirroredAt,
+        revision: 1,
+        state: "pending",
+        requestAttempts: 0,
+        nextAttemptAt: mirroredAt,
+        action: "event.upsert",
+        payload: {
+          eventKey,
+          name: "fixture",
+          startsAt: "2026-10-01T12:00:00Z",
+          endsAt: null,
+          location: "",
+          description: null,
+        },
+      };
+      attempts.set(idempotencyKey, attempt);
+      return attempt;
     },
-  }),
-  recordMirrored: async () => {},
-  closeFinished: async () => 0,
-  materializeSeries: async () => 0,
-  staleEventKeys: async () => [],
-};
+    claimSync: async (attempt, now) => {
+      const stored = attempts.get(attempt.idempotencyKey)!;
+      if (stored.state !== "pending" || !stored.nextAttemptAt || stored.nextAttemptAt > now)
+        return null;
+      const claimed = {
+        ...stored,
+        requestAttempts: stored.requestAttempts + 1,
+        nextAttemptAt: null,
+      };
+      attempts.set(attempt.idempotencyKey, claimed);
+      return claimed;
+    },
+    deferSync: async (attempt, nextAttemptAt) => {
+      attempts.set(attempt.idempotencyKey, {
+        ...attempts.get(attempt.idempotencyKey)!,
+        nextAttemptAt,
+      });
+    },
+    completeSync: async (attempt) => {
+      attempts.set(attempt.idempotencyKey, {
+        ...attempts.get(attempt.idempotencyKey)!,
+        state: "succeeded",
+        nextAttemptAt: null,
+      });
+    },
+    failSync: async (idempotencyKey) => {
+      attempts.set(idempotencyKey, {
+        ...attempts.get(idempotencyKey)!,
+        state: "failed",
+        nextAttemptAt: null,
+      });
+    },
+    needsSync: async () => false,
+    pendingSync: async (eventKey) =>
+      [...attempts.values()].find((a) => a.eventKey === eventKey && a.state === "pending") ?? null,
+    closeFinished: async () => 0,
+    materializeSeries: async () => 0,
+    staleEventKeys: async () => [],
+  };
+}
+let events = memoryEvents();
 function ledger(): QueueLedger {
   return {
     enqueued: vi.fn(async () => {}),
@@ -83,6 +136,7 @@ function producer(lock: UniqueLock, transport = vi.fn(async (_body: unknown) => 
 
 describe("queue carrier lease ownership", () => {
   beforeEach(() => {
+    events = memoryEvents();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -126,6 +180,26 @@ describe("queue carrier lease ownership", () => {
       expect(lock.release).toHaveBeenCalledWith(key, a.leaseToken);
       expect(rows.get(key)?.token).toBe(b.leaseToken);
       expect(await p.dispatch()).toBe(false);
+      if (terminal === "exhausted throw") {
+        // Carrier exhaustion cannot let B overtake A's unresolved request.
+        const blocked = carrier(b);
+        const send = vi.fn(async (_payload: unknown, _idempotencyKey: string) => success);
+        await consume(
+          { messages: [blocked] },
+          { bot: { upsertEvent: send } as unknown as BotClient, events, lock, ledger: p.depth },
+        );
+        expect(blocked.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
+        expect(blocked.ack).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+        expect(rows.get(key)?.token).toBe(b.leaseToken);
+        vi.advanceTimersByTime(3600_000);
+        await consume(
+          { messages: [carrier(a)] },
+          { bot: { upsertEvent: send } as unknown as BotClient, events, lock, ledger: p.depth },
+        );
+        expect(send.mock.calls[0]![1]).toBe(a.idempotencyKey);
+        expect(rows.get(key)?.token).toBe(b.leaseToken);
+      }
       const current = carrier(b);
       await consume(
         { messages: [current] },

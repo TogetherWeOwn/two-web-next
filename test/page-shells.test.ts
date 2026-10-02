@@ -22,7 +22,7 @@ function assertShell(html: string) {
   // First child of body is stronger than first anchor: no button/input/positive
   // tabindex can silently get ahead of the bypass link.
   expect(html).toMatch(
-    /<body(?: class="base-theme (?:homepage|content|join|profile|schedule)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/,
+    /<body(?: class="base-theme (?:homepage|content|join|profile|schedule|event)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/,
   );
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   expect(html).toContain('rel="stylesheet" href="/styles.css"');
@@ -128,9 +128,9 @@ it.each([
   },
 );
 
-it("keeps event detail outside the schedule-only theme", async () => {
+it("keeps event detail on its own theme, outside the schedule-only sheet", async () => {
   const html = await (await pageShellFixture().request(`/e/${EVENT_KEY}`)).text();
-  expect(html).not.toContain('href="/theme.css"');
+  expect(html).toContain('href="/event-theme.css"');
   expect(html).not.toContain('href="/schedule-theme.css"');
   expect(html).not.toContain('class="events-page"');
 });

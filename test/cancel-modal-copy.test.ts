@@ -56,6 +56,9 @@ function listRow(status: EventListRow["status"], eventKey: string): EventListRow
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     createdBy: null,
     rsvpOpen: true,
     recurrenceFrequency: null,
@@ -67,6 +70,8 @@ function listRow(status: EventListRow["status"], eventKey: string): EventListRow
     updatedAt: at,
     icsSequence: 0n,
     goingCount: 0,
+    syncRevision: 1,
+    syncedRevision: 0,
   };
 }
 
@@ -94,6 +99,9 @@ function publicEvent(over: Partial<PublicEvent> = {}): PublicEvent {
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     createdBy: null,
     recurrenceFrequency: null,
     recurrenceCount: null,
@@ -103,6 +111,8 @@ function publicEvent(over: Partial<PublicEvent> = {}): PublicEvent {
     createdAt: start,
     updatedAt: start,
     goingCount: 0,
+    syncRevision: 1,
+    syncedRevision: 0,
     ...over,
   };
 }
