@@ -1,5 +1,18 @@
 import { isNull, sql } from "drizzle-orm";
-import { bigint, boolean, index, integer, jsonb, pgTable, type AnyPgColumn, serial, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import {
+  bigint,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  type AnyPgColumn,
+  serial,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { agentEventGrants } from "./schema";
 
 // Admin slice (W11). Ports the legacy two-web DDL the Filament panel ran on:
@@ -42,7 +55,9 @@ export const events = pgTable(
     discordSyncFailureCode: text("discord_sync_failure_code"),
     // Machine ownership shares the public/admin event row. Null for human events;
     // a grant can own only one proof event. Deleting a grant preserves the event.
-    agentGrantId: uuid("agent_grant_id").unique().references(() => agentEventGrants.id, { onDelete: "set null" }),
+    agentGrantId: uuid("agent_grant_id")
+      .unique()
+      .references(() => agentEventGrants.id, { onDelete: "set null" }),
     proofMarker: text("proof_marker").unique(),
     agentVersion: integer("agent_version").notNull().default(1),
     createdBy: text("created_by"),
@@ -57,7 +72,9 @@ export const events = pgTable(
     recurrenceEndsOn: timestamp("recurrence_ends_on"),
     // The self-reference needs the column type spelled out (drizzle self-FK
     // inference cycle — tsc rejects the bare `() => events.id` form).
-    parentEventId: integer("parent_event_id").references((): AnyPgColumn => events.id, { onDelete: "set null" }),
+    parentEventId: integer("parent_event_id").references((): AnyPgColumn => events.id, {
+      onDelete: "set null",
+    }),
     recurrenceIndex: integer("recurrence_index"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -209,7 +226,10 @@ export const eventSearchLogs = pgTable(
     resultCount: integer("result_count").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("event_search_logs_zero_idx").on(t.resultCount, t.normalizedQuery), index("event_search_logs_occurred_at_idx").on(t.occurredAt)],
+  (t) => [
+    index("event_search_logs_zero_idx").on(t.resultCount, t.normalizedQuery),
+    index("event_search_logs_occurred_at_idx").on(t.occurredAt),
+  ],
 );
 
 export type Event = typeof events.$inferSelect;

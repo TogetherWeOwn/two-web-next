@@ -1,4 +1,17 @@
-import { bigserial, boolean, index, integer, jsonb, pgTable, smallint, text, timestamp, unique, uuid, varchar } from "drizzle-orm/pg-core";
+import {
+  bigserial,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  smallint,
+  text,
+  timestamp,
+  unique,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 
 // First data slice (W3): Discord users who have signed in. Sessions stay in
 // signed cookies; this table is the durable roster (member = in the TWO guild
@@ -119,7 +132,10 @@ export const agentEventAudits = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("agent_event_audits_grant_created_idx").on(t.grantId, t.createdAt), index("agent_event_audits_event_key_idx").on(t.eventKey)],
+  (t) => [
+    index("agent_event_audits_grant_created_idx").on(t.grantId, t.createdAt),
+    index("agent_event_audits_event_key_idx").on(t.eventKey),
+  ],
 );
 
 // One row per counted (non-replay) request; the budget is the rows in the last 60 s.

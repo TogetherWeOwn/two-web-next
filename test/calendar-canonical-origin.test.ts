@@ -25,13 +25,34 @@ function expectMetadata(html: string, path: string) {
 }
 
 const event: PublicEvent = {
-  id: 1, icsSequence: 1n, eventKey: "chess-night", title: "Chess night", game: "Chess", description: null,
-  startsAt: NOW, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC", location: null,
-  capacity: null, status: "published", rsvpOpen: true, goingCount: 0,
-  discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-  agentGrantId: null, proofMarker: null, agentVersion: 1,
-  createdBy: null, recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-  parentEventId: null, recurrenceIndex: null, createdAt: NOW, updatedAt: NOW,
+  id: 1,
+  icsSequence: 1n,
+  eventKey: "chess-night",
+  title: "Chess night",
+  game: "Chess",
+  description: null,
+  startsAt: NOW,
+  endsAt: new Date("2030-01-10T22:00:00Z"),
+  timezone: "UTC",
+  location: null,
+  capacity: null,
+  status: "published",
+  rsvpOpen: true,
+  goingCount: 0,
+  discordEventId: null,
+  discordSyncFailedAt: null,
+  discordSyncFailureCode: null,
+  agentGrantId: null,
+  proofMarker: null,
+  agentVersion: 1,
+  createdBy: null,
+  recurrenceFrequency: null,
+  recurrenceCount: null,
+  recurrenceEndsOn: null,
+  parentEventId: null,
+  recurrenceIndex: null,
+  createdAt: NOW,
+  updatedAt: NOW,
 };
 
 // Render the real page shells directly: no DB, Discord, timers or network.
@@ -44,10 +65,22 @@ describe("event-list canonical origins", () => {
   ];
 
   it.each(states)("keeps $view/$month/q=$q/past=$past canonical at /events", async (state) => {
-    const rendered = await Promise.all(ORIGINS.map((appUrl) => jsx(EventsCalendarPage, {
-      state, upcoming: [], past: [], zone: "UTC", now: NOW, emptyState: "never",
-      discordFailed: false, member: false, inviteUrl: "https://discord.gg/fixture", appUrl,
-    }).toString()));
+    const rendered = await Promise.all(
+      ORIGINS.map((appUrl) =>
+        jsx(EventsCalendarPage, {
+          state,
+          upcoming: [],
+          past: [],
+          zone: "UTC",
+          now: NOW,
+          emptyState: "never",
+          discordFailed: false,
+          member: false,
+          inviteUrl: "https://discord.gg/fixture",
+          appUrl,
+        }).toString(),
+      ),
+    );
     for (const html of rendered) {
       expectMetadata(html, "/events");
       expect(html).not.toContain('name="robots"');
@@ -56,9 +89,17 @@ describe("event-list canonical origins", () => {
   });
 
   it.each([1, 2, 12])("preserves archive page %i canonical, robots and pager", async (page) => {
-    const rendered = await Promise.all(ORIGINS.map((appUrl) => jsx(PastEventsPage, {
-      rows: [{ ...event, status: "past" }], page, hasMore: true, totalPages: 13, appUrl,
-    }).toString()));
+    const rendered = await Promise.all(
+      ORIGINS.map((appUrl) =>
+        jsx(PastEventsPage, {
+          rows: [{ ...event, status: "past" }],
+          page,
+          hasMore: true,
+          totalPages: 13,
+          appUrl,
+        }).toString(),
+      ),
+    );
     const path = page === 1 ? "/events/past" : `/events/past?page=${page}`;
     for (const html of rendered) {
       expectMetadata(html, path);
@@ -70,22 +111,33 @@ describe("event-list canonical origins", () => {
         expect(html).toContain(`href="${newer}">Newer`);
       } else {
         expect(html).not.toContain(">Newer</a>");
-        expect(html).not.toContain("/events/past?page=1\"");
+        expect(html).not.toContain('/events/past?page=1"');
       }
     }
     expect(rendered.map(metadata)).toEqual(rendered.map(() => metadata(rendered[0]!)));
   });
 
-  it.each(["published", "past"] as const)("leaves %s event-detail canonicals unchanged", async (status) => {
-    const rendered = await Promise.all(ORIGINS.map((appUrl) => jsx(EventPage, {
-      e: { ...event, status }, neighbors: { previous: null, next: null }, related: [], appUrl, jsonLd: "{}",
-    }).toString()));
-    for (const html of rendered) {
-      expectMetadata(html, "/e/chess-night");
-      expect(html).toContain(`data-copy-link="${APP_URL}/e/chess-night"`);
-      if (status === "past") expect(html).toContain('name="robots" content="noindex, nofollow"');
-      else expect(html).not.toContain('name="robots"');
-    }
-    expect(rendered.map(metadata)).toEqual(rendered.map(() => metadata(rendered[0]!)));
-  });
+  it.each(["published", "past"] as const)(
+    "leaves %s event-detail canonicals unchanged",
+    async (status) => {
+      const rendered = await Promise.all(
+        ORIGINS.map((appUrl) =>
+          jsx(EventPage, {
+            e: { ...event, status },
+            neighbors: { previous: null, next: null },
+            related: [],
+            appUrl,
+            jsonLd: "{}",
+          }).toString(),
+        ),
+      );
+      for (const html of rendered) {
+        expectMetadata(html, "/e/chess-night");
+        expect(html).toContain(`data-copy-link="${APP_URL}/e/chess-night"`);
+        if (status === "past") expect(html).toContain('name="robots" content="noindex, nofollow"');
+        else expect(html).not.toContain('name="robots"');
+      }
+      expect(rendered.map(metadata)).toEqual(rendered.map(() => metadata(rendered[0]!)));
+    },
+  );
 });

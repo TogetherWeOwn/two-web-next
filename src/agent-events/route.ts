@@ -4,9 +4,18 @@ import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { dispatchWriteBack } from "../admin/writeback";
 import { signedEventReader } from "../bot/event-read";
-import { DEFAULT_CONFIG, type IngressConfig, type Answer, type IngressEffects, admitAgentEvent } from "./service";
+import {
+  DEFAULT_CONFIG,
+  type IngressConfig,
+  type Answer,
+  type IngressEffects,
+  admitAgentEvent,
+} from "./service";
 
-type IngressEnv = { Bindings: Env; Variables: { agentEventHandler: (body: unknown) => Promise<Answer> } };
+type IngressEnv = {
+  Bindings: Env;
+  Variables: { agentEventHandler: (body: unknown) => Promise<Answer> };
+};
 
 // In-process fixture seam only; deployed ingress uses its own binding, then the shared DB.
 export type EnvWithAgentStore = Env & { AGENT_EVENT_SQL?: postgres.Sql };
@@ -19,7 +28,10 @@ export function ingressConfig(env: Env): IngressConfig {
     callerAgentId: env.AGENT_EVENTS_CALLER_AGENT_ID ?? "",
     stagingGuildId: env.AGENT_EVENTS_GUILD_ID || DEFAULT_CONFIG.stagingGuildId,
     productionGuildId: env.AGENT_EVENTS_PRODUCTION_GUILD_ID || DEFAULT_CONFIG.productionGuildId,
-    routePerMinute: Number.isInteger(routePerMinute) && routePerMinute > 0 ? routePerMinute : DEFAULT_CONFIG.routePerMinute,
+    routePerMinute:
+      Number.isInteger(routePerMinute) && routePerMinute > 0
+        ? routePerMinute
+        : DEFAULT_CONFIG.routePerMinute,
   };
 }
 
@@ -33,13 +45,23 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   c.header("cache-control", "no-store");
   const cfg = ingressConfig(c.env);
   if (!cfg.enabled) {
-    return c.json({ reason: "ingress_disabled", message: "The agent event ingress is not enabled in this environment." }, 404);
+    return c.json(
+      {
+        reason: "ingress_disabled",
+        message: "The agent event ingress is not enabled in this environment.",
+      },
+      404,
+    );
   }
   const injected = (c.env as EnvWithAgentStore).AGENT_EVENT_SQL;
   // The dedicated binding wins where configured; otherwise the ingress acts on
   // the same rows as public events through the shared database URL.
   const url = injected ? undefined : (c.env.AGENT_DB?.connectionString ?? databaseUrl(c.env));
-  if (!injected && !url) return c.json({ reason: "ingress_unavailable", message: "The agent event store is not configured." }, 503);
+  if (!injected && !url)
+    return c.json(
+      { reason: "ingress_unavailable", message: "The agent event store is not configured." },
+      503,
+    );
 
   // Release idle sockets even if an admitted upload never reaches EOF.
   const sql = injected ?? postgres(url!, databaseOptions);
@@ -52,10 +74,21 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     // client (fail-closed when unconfigured).
     const effects: IngressEffects = {
       writeBack: (wb) => dispatchWriteBack(c.env, wb),
-      readEvent: signedEventReader({ baseUrl: c.env.BOT_ENDPOINT_URL, keyId: c.env.BOT_KEY_ID, secret: c.env.BOT_SHARED_SECRET }),
+      readEvent: signedEventReader({
+        baseUrl: c.env.BOT_ENDPOINT_URL,
+        keyId: c.env.BOT_KEY_ID,
+        secret: c.env.BOT_SHARED_SECRET,
+      }),
     };
-    const admitted = await admitAgentEvent(sql, cfg, bearer(c.req.header("authorization")), ip, effects);
-    if (!("handle" in admitted)) return c.json(admitted.body, admitted.status as 200, admitted.headers);
+    const admitted = await admitAgentEvent(
+      sql,
+      cfg,
+      bearer(c.req.header("authorization")),
+      ip,
+      effects,
+    );
+    if (!("handle" in admitted))
+      return c.json(admitted.body, admitted.status as 200, admitted.headers);
     c.set("agentEventHandler", admitted.handle);
     await next();
   } catch (err) {

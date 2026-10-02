@@ -42,13 +42,34 @@ const errors = (fn: () => unknown): Record<string, string> => {
 function listRow(status: EventListRow["status"], eventKey: string): EventListRow {
   const at = new Date("2026-06-15T00:30:00Z");
   return {
-    id: 1, eventKey, title: eventKey, game: null, description: null,
-    startsAt: at, endsAt: new Date("2026-06-15T02:30:00Z"), timezone: "UTC", location: null,
-    capacity: null, status, discordEventId: null, discordSyncFailedAt: null,
-    discordSyncFailureCode: null, agentGrantId: null, proofMarker: null, agentVersion: 1,
-    createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
-    recurrenceCount: null, recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
-    createdAt: at, updatedAt: at, icsSequence: 0n, goingCount: 0,
+    id: 1,
+    eventKey,
+    title: eventKey,
+    game: null,
+    description: null,
+    startsAt: at,
+    endsAt: new Date("2026-06-15T02:30:00Z"),
+    timezone: "UTC",
+    location: null,
+    capacity: null,
+    status,
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    createdBy: null,
+    rsvpOpen: true,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: at,
+    updatedAt: at,
+    icsSequence: 0n,
+    goingCount: 0,
   };
 }
 
@@ -60,14 +81,35 @@ function editRow(status: EventRow["status"]): EventRow {
 function publicEvent(over: Partial<PublicEvent> = {}): PublicEvent {
   const start = new Date("2030-01-10T20:00:00Z");
   return {
-    id: 1, icsSequence: 0n, eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAV", title: "Chess night",
-    game: null, description: null, startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"),
-    timezone: "UTC", location: null, capacity: null, status: "published", rsvpOpen: true,
-    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    agentGrantId: null, proofMarker: null, agentVersion: 1,
-    createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
-    recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
-    createdAt: start, updatedAt: start, goingCount: 0, ...over,
+    id: 1,
+    icsSequence: 0n,
+    eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    title: "Chess night",
+    game: null,
+    description: null,
+    startsAt: start,
+    endsAt: new Date("2030-01-10T22:00:00Z"),
+    timezone: "UTC",
+    location: null,
+    capacity: null,
+    status: "published",
+    rsvpOpen: true,
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    createdBy: null,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: start,
+    updatedAt: start,
+    goingCount: 0,
+    ...over,
   };
 }
 
@@ -150,7 +192,9 @@ describe("cancel action copy (no confirmation dialog)", () => {
     }
     const html = editHtml("published");
     expect(html).toContain('<form method="post" action="/admin/events/cancel-published/cancel">');
-    expect(html).toContain('<button type="submit" class="link" data-testid="cancel-event">Cancel event</button>');
+    expect(html).toContain(
+      '<button type="submit" class="link" data-testid="cancel-event">Cancel event</button>',
+    );
   });
 
   it("offers Publish only for drafts, so a cancelled event cannot be republished from the UI", () => {

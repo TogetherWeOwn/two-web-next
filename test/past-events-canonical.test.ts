@@ -23,18 +23,41 @@ import {
 } from "../src/islands/contracts";
 
 const APP_URL = "https://next.example.test";
-const binder = readFileSync(new NodeURL("../public/islands/past-events.js", import.meta.url), "utf8");
+const binder = readFileSync(
+  new NodeURL("../public/islands/past-events.js", import.meta.url),
+  "utf8",
+);
 
 function eventRow(n: number): typeof events.$inferSelect {
   const date = new Date(Date.UTC(2020, 0, n + 1));
   return {
-    id: n, icsSequence: 1n, eventKey: `archive-${n}`, title: `Past game ${n}`, game: "Chess", description: null,
-    startsAt: date, endsAt: date, timezone: "UTC", location: null, capacity: 10, status: "past",
-    discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    agentGrantId: null, proofMarker: null, agentVersion: 1,
-    createdBy: null, rsvpOpen: true, recurrenceFrequency: null,
-    recurrenceCount: null, recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null,
-    createdAt: date, updatedAt: date,
+    id: n,
+    icsSequence: 1n,
+    eventKey: `archive-${n}`,
+    title: `Past game ${n}`,
+    game: "Chess",
+    description: null,
+    startsAt: date,
+    endsAt: date,
+    timezone: "UTC",
+    location: null,
+    capacity: 10,
+    status: "past",
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    createdBy: null,
+    rsvpOpen: true,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: date,
+    updatedAt: date,
   };
 }
 
@@ -48,10 +71,14 @@ function archive(total: number) {
     const offset = hasOffset ? Number(params.at(-1)) : 0;
     const limit = Number(params.at(hasOffset ? -2 : -1));
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
-    return { rows: rows.slice(offset, offset + limit).map((row) => columns.map((k) => {
-      const value = row[k];
-      return value instanceof Date ? value.toISOString() : value;
-    })) };
+    return {
+      rows: rows.slice(offset, offset + limit).map((row) =>
+        columns.map((k) => {
+          const value = row[k];
+          return value instanceof Date ? value.toISOString() : value;
+        }),
+      ),
+    };
   });
   const env = { APP_URL, ADMIN_DB: db as unknown as Db } as unknown as Env;
   return { request: (path: string) => app.request(path, {}, env) };
@@ -63,12 +90,9 @@ const ogUrls = (html: string) =>
   [...html.matchAll(/<meta property="og:url" content="([^"]+)"/g)].map((m) => m[1]);
 const robots = (html: string) =>
   [...html.matchAll(/<meta name="robots" content="([^"]+)"/g)].map((m) => m[1]);
-const islands = (html: string) =>
-  [...html.matchAll(/data-island="([^"]+)"/g)].map((m) => m[1]);
-const scripts = (html: string) =>
-  [...html.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);
-const keys = (html: string) =>
-  [...html.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);
+const islands = (html: string) => [...html.matchAll(/data-island="([^"]+)"/g)].map((m) => m[1]);
+const scripts = (html: string) => [...html.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]);
+const keys = (html: string) => [...html.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);
 
 // Extract the archive island section so forbidden-control checks ignore
 // themed header/footer chrome: SiteHeader/SiteFooter legitimately carry

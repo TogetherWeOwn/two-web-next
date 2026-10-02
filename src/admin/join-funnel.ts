@@ -44,9 +44,11 @@ let publishedFill = 0;
  */
 async function funnelRead(db: Db): Promise<Funnel> {
   return db.transaction(async (tx) => {
-    await nonSensitiveRead("timeouts", () => tx.execute(
-      sql`select set_config('lock_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true)`,
-    ));
+    await nonSensitiveRead("timeouts", () =>
+      tx.execute(
+        sql`select set_config('lock_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FUNNEL_DB_TIMEOUT_MS}ms`}, true)`,
+      ),
+    );
     return joinFunnelStats(tx);
   });
 }

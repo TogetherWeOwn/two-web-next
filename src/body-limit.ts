@@ -29,19 +29,22 @@ export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings:
     // reader is locked inside bodyLimit and cannot be cancelled by onError.
     const reader = c.req.raw.body.getReader();
     let readFailed = false;
-    const body = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          const chunk = await reader.read();
-          if (chunk.done) controller.close();
-          else controller.enqueue(chunk.value);
-        } catch (err) {
-          readFailed = true;
-          controller.error(err);
-        }
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          try {
+            const chunk = await reader.read();
+            if (chunk.done) controller.close();
+            else controller.enqueue(chunk.value);
+          } catch (err) {
+            readFailed = true;
+            controller.error(err);
+          }
+        },
+        cancel: (reason) => reader.cancel(reason),
       },
-      cancel: (reason) => reader.cancel(reason),
-    }, { highWaterMark: 0 });
+      { highWaterMark: 0 },
+    );
 
     // Hono trusts Content-Length without counting the stream. Remove that
     // shortcut even for understated/invalid lengths, then restore the header

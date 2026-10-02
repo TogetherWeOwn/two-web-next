@@ -8,18 +8,22 @@ import { registerEventRoutes } from "../src/events/routes";
 import { listCalendarPast, listUpcoming, type PublicEvent } from "../src/events/reads";
 
 vi.mock("../src/events/reads", async (original) => ({
-  ...await original<typeof import("../src/events/reads")>(),
+  ...(await original<typeof import("../src/events/reads")>()),
   listUpcoming: vi.fn(),
   listCalendarPast: vi.fn(),
   persistedDiscordIds: vi.fn(async () => new Set<string>()),
 }));
 vi.mock("../src/events/search-log", async (original) => ({
-  ...await original<typeof import("../src/events/search-log")>(),
+  ...(await original<typeof import("../src/events/search-log")>()),
   recordSearch: vi.fn(async () => {}),
 }));
 
 const app = new Hono<{ Bindings: Env }>();
-registerEventRoutes(app, async () => null, async () => null);
+registerEventRoutes(
+  app,
+  async () => null,
+  async () => null,
+);
 const env = {
   APP_URL: "https://next.example.test",
   DISCORD_INVITE_URL: "https://discord.gg/example",
@@ -29,23 +33,44 @@ const env = {
 
 function eventRow(id: number, startsAt: Date): PublicEvent {
   return {
-    id, icsSequence: 1n, eventKey: `event-${id}`, title: "Game night", game: null, description: null,
-    startsAt, endsAt: new Date(startsAt.getTime() + 7200_000), timezone: "UTC",
-    location: null, capacity: null, status: "published", discordEventId: null,
-    discordSyncFailedAt: null, discordSyncFailureCode: null, agentGrantId: null, proofMarker: null, agentVersion: 1,
-    createdBy: null, rsvpOpen: true,
-    recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-    parentEventId: null, recurrenceIndex: null, createdAt: startsAt, updatedAt: startsAt,
+    id,
+    icsSequence: 1n,
+    eventKey: `event-${id}`,
+    title: "Game night",
+    game: null,
+    description: null,
+    startsAt,
+    endsAt: new Date(startsAt.getTime() + 7200_000),
+    timezone: "UTC",
+    location: null,
+    capacity: null,
+    status: "published",
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    createdBy: null,
+    rsvpOpen: true,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: startsAt,
+    updatedAt: startsAt,
     goingCount: 0,
   };
 }
 
-const decode = (value: string) => value.replace(/&(amp|quot|#39|lt|gt);/g, (_, entity: string) =>
-  ({ amp: "&", quot: '"', "#39": "'", lt: "<", gt: ">" })[entity]!,
-);
-const attributes = (tag: string) => Object.fromEntries(
-  [...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map((m) => [m[1]!, decode(m[2]!)]),
-);
+const decode = (value: string) =>
+  value.replace(
+    /&(amp|quot|#39|lt|gt);/g,
+    (_, entity: string) => ({ amp: "&", quot: '"', "#39": "'", lt: "<", gt: ">" })[entity]!,
+  );
+const attributes = (tag: string) =>
+  Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map((m) => [m[1]!, decode(m[2]!)]));
 
 function calendarState(html: string) {
   const root = attributes(html.match(/<section\b[^>]*data-island="events-calendar"[^>]*>/)![0]);
@@ -57,7 +82,7 @@ function nativeSearch(html: string, query: string) {
   const controls = [...form.matchAll(/<input\b[^>]*>/g)].map((m) => attributes(m[0]));
   const params = new URLSearchParams();
   for (const input of controls) {
-    if (input.name) params.append(input.name, input.name === "q" ? query : input.value ?? "");
+    if (input.name) params.append(input.name, input.name === "q" ? query : (input.value ?? ""));
   }
   return { form, controls, params, url: `${attributes(form).action}?${params}` };
 }
@@ -85,7 +110,12 @@ describe("calendar native search state", () => {
     { entry: "?view=calendar&month=2030-02", view: "calendar", month: "2030-02", past: false },
     { entry: "", view: "list", month: "2030-01", past: false },
     { entry: "?view=bad&month=2030-13&past=true", view: "list", month: "2030-01", past: false },
-    { entry: "?view=calendar&month=2030-02&past=01&q=old", view: "list", month: "2030-02", past: false },
+    {
+      entry: "?view=calendar&month=2030-02&past=01&q=old",
+      view: "list",
+      month: "2030-02",
+      past: false,
+    },
     { entry: "?view=list&month=2030-02&past=0&q=old", view: "list", month: "2030-02", past: false },
   ])("preserves only accepted past state from $entry", async ({ entry, view, month, past }) => {
     const html = await page(`/events${entry}`);
@@ -96,7 +126,9 @@ describe("calendar native search state", () => {
       expect(submission.params.getAll("q")).toEqual([query]);
       expect([...submission.params.keys()].sort()).toEqual(past ? ["past", "q"] : ["q"]);
       expect(submission.params.getAll("past")).toEqual(past ? ["1"] : []);
-      expect(submission.controls.filter((c) => c.name !== "q").every((c) => c.type === "hidden")).toBe(true);
+      expect(
+        submission.controls.filter((c) => c.name !== "q").every((c) => c.type === "hidden"),
+      ).toBe(true);
       // Like the shipped binder, search drops view/month even for blank input.
       const nativeState = calendarState(await page(submission.url));
       expect(nativeState).toEqual({ view: "list", month: "2030-01", past });
@@ -108,7 +140,9 @@ describe("calendar native search state", () => {
   });
 
   it("replaces the query without forwarding paging or arbitrary and duplicate parameters", async () => {
-    const html = await page("/events?view=calendar&month=2030-02&past=1&q=old&page=7&redirect=bad&past=0&view=bad&q=extra");
+    const html = await page(
+      "/events?view=calendar&month=2030-02&past=1&q=old&page=7&redirect=bad&past=0&view=bad&q=extra",
+    );
     const submission = nativeSearch(html, 'raid & "friends" <game>');
     expect([...submission.params.keys()].sort()).toEqual(["past", "q"]);
     expect(submission.params.getAll("q")).toEqual(['raid & "friends" <game>']);
@@ -117,7 +151,11 @@ describe("calendar native search state", () => {
     expect(calendarState(result)).toEqual({ view: "list", month: "2030-01", past: true });
     const cleared = nativeSearch(result, "");
     expect(cleared.params.getAll("q")).toEqual([""]);
-    expect(calendarState(await page(cleared.url))).toEqual({ view: "list", month: "2030-01", past: true });
+    expect(calendarState(await page(cleared.url))).toEqual({
+      view: "list",
+      month: "2030-01",
+      past: true,
+    });
   });
 
   it("does not open the past drawer just because a search reveals past matches", async () => {
@@ -128,7 +166,9 @@ describe("calendar native search state", () => {
     expect(html).toContain('data-testid="events-past-list"');
     expect(nativeSearch(html, "").params.has("past")).toBe(false);
     expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({
-      view: "list", month: "2026-10", past: false,
+      view: "list",
+      month: "2026-10",
+      past: false,
     });
   });
 
@@ -139,7 +179,9 @@ describe("calendar native search state", () => {
     vi.mocked(listCalendarPast).mockResolvedValue([]);
     const html = await page("/events?view=calendar&month=2030-02&past=1");
     expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({
-      view: "list", month: "2026-10", past: true,
+      view: "list",
+      month: "2026-10",
+      past: true,
     });
   });
 

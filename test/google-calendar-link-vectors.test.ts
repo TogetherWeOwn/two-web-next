@@ -19,7 +19,9 @@ const row = (overrides: Partial<EventRow> = {}): EventRow => ({
   discordEventId: null,
   discordSyncFailedAt: null,
   discordSyncFailureCode: null,
-  agentGrantId: null, proofMarker: null, agentVersion: 1,
+  agentGrantId: null,
+  proofMarker: null,
+  agentVersion: 1,
   createdBy: null,
   rsvpOpen: true,
   recurrenceFrequency: null,
@@ -59,22 +61,27 @@ describe("Google Calendar link compatibility vectors", () => {
       value: "AZaz09-._~",
       encoded: "AZaz09-._~",
     },
-  ])("pins exact bytes and decoded semantics for $name in every text field", ({ value, encoded }) => {
-    const out = googleCalendarUrl(row({ title: value, description: value, location: value }));
-    expect(out).toBe(`${BASE}&text=${encoded}&dates=${DATES}&details=${encoded}&location=${encoded}`);
+  ])(
+    "pins exact bytes and decoded semantics for $name in every text field",
+    ({ value, encoded }) => {
+      const out = googleCalendarUrl(row({ title: value, description: value, location: value }));
+      expect(out).toBe(
+        `${BASE}&text=${encoded}&dates=${DATES}&details=${encoded}&location=${encoded}`,
+      );
 
-    const url = new URL(out);
-    expect(url.origin).toBe("https://calendar.google.com");
-    expect(url.pathname).toBe("/calendar/render");
-    expect(url.hash).toBe("");
-    expect([...url.searchParams.entries()]).toEqual([
-      ["action", "TEMPLATE"],
-      ["text", value],
-      ["dates", "20260715T180000Z/20260715T200000Z"],
-      ["details", value],
-      ["location", value],
-    ]);
-  });
+      const url = new URL(out);
+      expect(url.origin).toBe("https://calendar.google.com");
+      expect(url.pathname).toBe("/calendar/render");
+      expect(url.hash).toBe("");
+      expect([...url.searchParams.entries()]).toEqual([
+        ["action", "TEMPLATE"],
+        ["text", value],
+        ["dates", "20260715T180000Z/20260715T200000Z"],
+        ["details", value],
+        ["location", value],
+      ]);
+    },
+  );
 
   it.each([
     {
@@ -99,7 +106,9 @@ describe("Google Calendar link compatibility vectors", () => {
       encodedDates: "20261101T053017Z%2F20261101T061543Z",
     },
   ])("uses stored UTC instants: $name", ({ start, end, dates, encodedDates }) => {
-    const out = googleCalendarUrl(row({ startsAt: new Date(start), endsAt: new Date(end), timezone: "Pacific/Auckland" }));
+    const out = googleCalendarUrl(
+      row({ startsAt: new Date(start), endsAt: new Date(end), timezone: "Pacific/Auckland" }),
+    );
     expect(out).toBe(`${BASE}&text=Vector&dates=${encodedDates}`);
     expect([...new URL(out).searchParams.entries()]).toEqual([
       ["action", "TEMPLATE"],
@@ -123,14 +132,31 @@ describe("Google Calendar link compatibility vectors", () => {
   });
 
   it.each([
-    { description: "Bring stims.", location: "", suffix: "&details=Bring%20stims.", key: "details", value: "Bring stims.", absent: "location" },
-    { description: null, location: "Voice: General", suffix: "&location=Voice%3A%20General", key: "location", value: "Voice: General", absent: "details" },
-  ])("retains populated $key independently of the absent $absent", ({ description, location, suffix, key, value, absent }) => {
-    const out = googleCalendarUrl(row({ description, location }));
-    expect(out).toBe(`${BASE}&text=Vector&dates=${DATES}${suffix}`);
-    const params = new URL(out).searchParams;
-    expect([...params.keys()]).toEqual(["action", "text", "dates", key]);
-    expect(params.get(key)).toBe(value);
-    expect(params.has(absent)).toBe(false);
-  });
+    {
+      description: "Bring stims.",
+      location: "",
+      suffix: "&details=Bring%20stims.",
+      key: "details",
+      value: "Bring stims.",
+      absent: "location",
+    },
+    {
+      description: null,
+      location: "Voice: General",
+      suffix: "&location=Voice%3A%20General",
+      key: "location",
+      value: "Voice: General",
+      absent: "details",
+    },
+  ])(
+    "retains populated $key independently of the absent $absent",
+    ({ description, location, suffix, key, value, absent }) => {
+      const out = googleCalendarUrl(row({ description, location }));
+      expect(out).toBe(`${BASE}&text=Vector&dates=${DATES}${suffix}`);
+      const params = new URL(out).searchParams;
+      expect([...params.keys()]).toEqual(["action", "text", "dates", key]);
+      expect(params.get(key)).toBe(value);
+      expect(params.has(absent)).toBe(false);
+    },
+  );
 });

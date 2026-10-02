@@ -10,7 +10,7 @@ import { getEventRow, listFeed } from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
 
 vi.mock("../src/events/reads", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../src/events/reads")>(),
+  ...(await importOriginal<typeof import("../src/events/reads")>()),
   getEventRow: vi.fn(),
   listFeed: vi.fn(),
 }));
@@ -18,37 +18,71 @@ vi.mock("../src/events/reads", async (importOriginal) => ({
 const KEY = "01J0000000000000000000ABCD";
 const EVENT_PATH = `/events/${KEY}.ics`;
 const row = {
-  id: 1, icsSequence: 1782907200n, eventKey: KEY, title: "Synthetic calendar event", game: null,
-  agentGrantId: null, proofMarker: null, agentVersion: 1,
-  discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-  recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-  parentEventId: null, recurrenceIndex: null,
-  description: "Bring stims.", startsAt: new Date("2026-07-15T18:00:00Z"),
-  endsAt: new Date("2026-07-15T20:00:00Z"), timezone: "UTC", location: null,
-  capacity: null, status: "published", rsvpOpen: true, createdBy: null,
-  createdAt: new Date("2026-07-01T12:00:00Z"), updatedAt: new Date("2026-07-01T12:00:00Z"),
+  id: 1,
+  icsSequence: 1782907200n,
+  eventKey: KEY,
+  title: "Synthetic calendar event",
+  game: null,
+  agentGrantId: null,
+  proofMarker: null,
+  agentVersion: 1,
+  discordEventId: null,
+  discordSyncFailedAt: null,
+  discordSyncFailureCode: null,
+  recurrenceFrequency: null,
+  recurrenceCount: null,
+  recurrenceEndsOn: null,
+  parentEventId: null,
+  recurrenceIndex: null,
+  description: "Bring stims.",
+  startsAt: new Date("2026-07-15T18:00:00Z"),
+  endsAt: new Date("2026-07-15T20:00:00Z"),
+  timezone: "UTC",
+  location: null,
+  capacity: null,
+  status: "published",
+  rsvpOpen: true,
+  createdBy: null,
+  createdAt: new Date("2026-07-01T12:00:00Z"),
+  updatedAt: new Date("2026-07-01T12:00:00Z"),
 } satisfies typeof events.$inferSelect;
 const dbIdentity = Symbol("fixture database");
 const env: EnvWithAdminDb = {
   APP_URL: "https://next.example.test",
-  DISCORD_CLIENT_ID: "fixture", DISCORD_CLIENT_SECRET: "fixture",
-  DISCORD_GUILD_ID: "fixture", DISCORD_INVITE_URL: "https://discord.gg/fixture",
-  DISCORD_BOT_TOKEN: "fixture", SESSION_SECRET: "fixture",
-  ADMIN_DB: new Proxy({} as Db, { get: (_, key) => {
-    if (key === "then") return undefined;
-    if (key === dbIdentity) return dbIdentity;
-    throw new Error("fixture must not query a DB");
-  } }),
+  DISCORD_CLIENT_ID: "fixture",
+  DISCORD_CLIENT_SECRET: "fixture",
+  DISCORD_GUILD_ID: "fixture",
+  DISCORD_INVITE_URL: "https://discord.gg/fixture",
+  DISCORD_BOT_TOKEN: "fixture",
+  SESSION_SECRET: "fixture",
+  ADMIN_DB: new Proxy({} as Db, {
+    get: (_, key) => {
+      if (key === "then") return undefined;
+      if (key === dbIdentity) return dbIdentity;
+      throw new Error("fixture must not query a DB");
+    },
+  }),
 };
-const moderator: Session = { id: "fixture", username: "mod", avatar: null, member: true, moderator: true };
+const moderator: Session = {
+  id: "fixture",
+  username: "mod",
+  avatar: null,
+  member: true,
+  moderator: true,
+};
 const readSession = vi.fn<() => Promise<Session | null>>();
 const readFragmentSession = vi.fn<() => Promise<Session | null>>();
 const app = new Hono<{ Bindings: Env }>();
 app.onError(() => new Response("Synthetic read failure", { status: 500 }));
 registerEventRoutes(app, readSession, readFragmentSession);
-const req = (path: string, validator?: string, bindings = env) => app.request(path, {
-  headers: validator === undefined ? {} : { "if-none-match": validator },
-}, bindings);
+const req = (path: string, validator?: string, bindings = env) =>
+  app.request(
+    path,
+    {
+      headers: validator === undefined ? {} : { "if-none-match": validator },
+    },
+    bindings,
+  );
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -89,8 +123,14 @@ describe("successful public feeds accept the wildcard after reading the represen
         expect(response.headers.get("set-cookie")).toBeNull();
       }
       expect(listFeed).toHaveBeenCalledTimes(3);
-      expect((vi.mocked(listFeed).mock.calls.at(-1)![0] as unknown as Record<symbol, unknown>)[dbIdentity]).toBe(dbIdentity);
-      expect(vi.mocked(listFeed).mock.calls.at(-1)![1]).toEqual(path.endsWith(".rss") ? ["published"] : ["published", "cancelled"]);
+      expect(
+        (vi.mocked(listFeed).mock.calls.at(-1)![0] as unknown as Record<symbol, unknown>)[
+          dbIdentity
+        ],
+      ).toBe(dbIdentity);
+      expect(vi.mocked(listFeed).mock.calls.at(-1)![1]).toEqual(
+        path.endsWith(".rss") ? ["published"] : ["published", "cancelled"],
+      );
       expect(readSession).not.toHaveBeenCalled();
       expect(readFragmentSession).not.toHaveBeenCalled();
     });
@@ -98,21 +138,28 @@ describe("successful public feeds accept the wildcard after reading the represen
 });
 
 describe("readable per-event ICS accepts the wildcard only after admission", () => {
-  it.each(["published", "past", "cancelled", "draft"] as const)("%s representation", async (status) => {
-    vi.mocked(getEventRow).mockResolvedValue({ ...row, status });
-    readSession.mockResolvedValue(moderator);
-    const baseline = await req(EVENT_PATH);
-    expect(baseline.status).toBe(200);
-    expect(baseline.headers.get("content-disposition")).toBe(`attachment; filename="${KEY}.ics"`);
-    expect(baseline.headers.get("cache-control")).toBe("max-age=300, private");
-    if (status === "cancelled") expect(await baseline.text()).toContain("STATUS:CANCELLED");
-    await expectNotModified(EVENT_PATH, "*", baseline);
-    expect(getEventRow).toHaveBeenCalledTimes(2);
-    expect((vi.mocked(getEventRow).mock.calls.at(-1)![0] as unknown as Record<symbol, unknown>)[dbIdentity]).toBe(dbIdentity);
-    expect(vi.mocked(getEventRow).mock.calls.at(-1)![1]).toBe(KEY);
-    expect(readSession).toHaveBeenCalledTimes(status === "draft" ? 2 : 0);
-    expect(readFragmentSession).not.toHaveBeenCalled();
-  });
+  it.each(["published", "past", "cancelled", "draft"] as const)(
+    "%s representation",
+    async (status) => {
+      vi.mocked(getEventRow).mockResolvedValue({ ...row, status });
+      readSession.mockResolvedValue(moderator);
+      const baseline = await req(EVENT_PATH);
+      expect(baseline.status).toBe(200);
+      expect(baseline.headers.get("content-disposition")).toBe(`attachment; filename="${KEY}.ics"`);
+      expect(baseline.headers.get("cache-control")).toBe("max-age=300, private");
+      if (status === "cancelled") expect(await baseline.text()).toContain("STATUS:CANCELLED");
+      await expectNotModified(EVENT_PATH, "*", baseline);
+      expect(getEventRow).toHaveBeenCalledTimes(2);
+      expect(
+        (vi.mocked(getEventRow).mock.calls.at(-1)![0] as unknown as Record<symbol, unknown>)[
+          dbIdentity
+        ],
+      ).toBe(dbIdentity);
+      expect(vi.mocked(getEventRow).mock.calls.at(-1)![1]).toBe(KEY);
+      expect(readSession).toHaveBeenCalledTimes(status === "draft" ? 2 : 0);
+      expect(readFragmentSession).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("ordinary strong, weak and list validators retain their existing behavior", () => {
@@ -131,7 +178,9 @@ describe("ordinary strong, weak and list validators retain their existing behavi
       expect(response.headers.get("etag")).toBe(etag);
       expect(response.headers.get("cache-control")).toBe(baseline.headers.get("cache-control"));
       expect(response.headers.get("content-type")).toBe(baseline.headers.get("content-type"));
-      expect(response.headers.get("content-disposition")).toBe(baseline.headers.get("content-disposition"));
+      expect(response.headers.get("content-disposition")).toBe(
+        baseline.headers.get("content-disposition"),
+      );
     }
   });
 });
@@ -160,14 +209,17 @@ describe("wildcards never replace a denial, missing representation or read failu
     expect(getEventRow).not.toHaveBeenCalled();
   });
 
-  it.each(["/events.ics", "/events.rss", EVENT_PATH])("%s: unavailable DB stays 503", async (path) => {
-    const response = await req(path, "*", { ...env, ADMIN_DB: undefined });
-    expect(response.status).toBe(503);
-    expect(await response.text()).toBe("Events temporarily unavailable");
-    expect(response.headers.get("etag")).toBeNull();
-    expect(listFeed).not.toHaveBeenCalled();
-    expect(getEventRow).not.toHaveBeenCalled();
-  });
+  it.each(["/events.ics", "/events.rss", EVENT_PATH])(
+    "%s: unavailable DB stays 503",
+    async (path) => {
+      const response = await req(path, "*", { ...env, ADMIN_DB: undefined });
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe("Events temporarily unavailable");
+      expect(response.headers.get("etag")).toBeNull();
+      expect(listFeed).not.toHaveBeenCalled();
+      expect(getEventRow).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["/events.ics", "/events.rss", EVENT_PATH])("%s: thrown read stays 500", async (path) => {
     vi.mocked(listFeed).mockRejectedValue(new Error("synthetic read failure"));

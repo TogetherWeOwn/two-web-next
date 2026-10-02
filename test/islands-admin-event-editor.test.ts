@@ -7,18 +7,30 @@ describe("Admin event editor navigation guard", () => {
     expect(b.navigate(kind).preventDefault).not.toHaveBeenCalled();
   });
 
-  it.each(["search", "sort"] as const)("dirty roster %s requests a native leave/stay prompt; staying keeps the draft", (kind) => {
-    const b = browser();
-    b.values.set("title", "Unsaved game night");
-    const event = b.navigate(kind);
-    expect(event.preventDefault).toHaveBeenCalledOnce();
-    expect(event.returnValue).toBe("");
-    // Cancelling beforeunload leaves this document intact; no handler clears it.
-    expect(b.values.get("title")).toBe("Unsaved game night");
-    expect(b.navigate(kind).preventDefault).toHaveBeenCalledOnce();
-  });
+  it.each(["search", "sort"] as const)(
+    "dirty roster %s requests a native leave/stay prompt; staying keeps the draft",
+    (kind) => {
+      const b = browser();
+      b.values.set("title", "Unsaved game night");
+      const event = b.navigate(kind);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+      expect(event.returnValue).toBe("");
+      // Cancelling beforeunload leaves this document intact; no handler clears it.
+      expect(b.values.get("title")).toBe("Unsaved game night");
+      expect(b.navigate(kind).preventDefault).toHaveBeenCalledOnce();
+    },
+  );
 
-  it.each(["title", "game", "description", "starts_at", "ends_at", "timezone", "location", "capacity"])("tracks %s and allows navigation after reverting the edit", (field) => {
+  it.each([
+    "title",
+    "game",
+    "description",
+    "starts_at",
+    "ends_at",
+    "timezone",
+    "location",
+    "capacity",
+  ])("tracks %s and allows navigation after reverting the edit", (field) => {
     const b = browser();
     const initial = b.values.get(field)!;
     b.values.set(field, initial + " changed");
@@ -49,13 +61,16 @@ describe("Admin event editor navigation guard", () => {
     expect(b.navigate("sort").preventDefault).toHaveBeenCalledOnce();
   });
 
-  it.each(["search", "sort"] as const)("protects an untouched failed-Save draft on %s departure", (kind) => {
-    const b = browser({ draft: true, initial: { title: "Rejected draft" } });
-    expect(b.navigate(kind).preventDefault).toHaveBeenCalledOnce();
-    expect(b.values.get("title")).toBe("Rejected draft");
-    expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
-    expect(b.navigate(kind).preventDefault).toHaveBeenCalledOnce();
-  });
+  it.each(["search", "sort"] as const)(
+    "protects an untouched failed-Save draft on %s departure",
+    (kind) => {
+      const b = browser({ draft: true, initial: { title: "Rejected draft" } });
+      expect(b.navigate(kind).preventDefault).toHaveBeenCalledOnce();
+      expect(b.values.get("title")).toBe("Rejected draft");
+      expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
+      expect(b.navigate(kind).preventDefault).toHaveBeenCalledOnce();
+    },
+  );
 
   it("consumes the Save exemption when this document survives interrupted navigation", () => {
     const b = browser();

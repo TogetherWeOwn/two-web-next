@@ -192,6 +192,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Migration workflow selftest (isolated Postgres, no Neon/network APIs)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run db:migrate:selftest
         env:
           MIGRATION_TEST_DATABASE_URL: postgres://postgres:ci@postgres:5432/postgres
@@ -199,9 +200,12 @@ jobs:
       - name: Configuration drift check + selftest
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run config:check
-      - name: Check (typecheck + coverage gate)
+      - name: Biome gate selftest (intentional violations)
         if: needs.scope.outputs.docs_only != 'true'
-        run: npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
+        run: bash ci/biome-selftest.sh
+      - name: Check (lint + typecheck + coverage gate)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
@@ -249,6 +253,7 @@ jobs:
         if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --outdir dist
       - name: Build alert Tail Worker (wrangler dry run)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail
       - name: Production build (wrangler dry run, no deployment)
         if: needs.scope.outputs.docs_only != 'true'

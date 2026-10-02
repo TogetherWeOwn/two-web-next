@@ -10,23 +10,51 @@
 // lock. Validation, edits and FIFO promotions commit together; routes dispatch
 // write-back only after commit, with promoted answers' mirror stamps reset.
 
-import { and, asc, count, desc, eq, getTableColumns, gt, ilike, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  ilike,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
 import { parseFeaturedListQuery } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
-import { activityLog, events, featuredContents, memberDataAccessLogs, rsvps } from "../db/admin-schema";
+import {
+  activityLog,
+  events,
+  featuredContents,
+  memberDataAccessLogs,
+  rsvps,
+} from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
 import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
-import { CAPACITY_BELOW_GOING, goingCount, lockWaitlist, promoteWaitlist } from "../events/waitlist";
+import {
+  CAPACITY_BELOW_GOING,
+  goingCount,
+  lockWaitlist,
+  promoteWaitlist,
+} from "../events/waitlist";
 
 export type Actor = { id: string; username: string };
 
 export type EventRow = typeof events.$inferSelect;
 export type FeaturedRow = typeof featuredContents.$inferSelect;
-export type FeaturedEditRow = FeaturedRow & { startsAtText: string | null; endsAtText: string | null };
+export type FeaturedEditRow = FeaturedRow & {
+  startsAtText: string | null;
+  endsAtText: string | null;
+};
 
 // Date decoding loses imported microseconds and cannot represent infinity.
 // Pin formatting to UTC independently of the connection's TimeZone/DateStyle.
@@ -56,20 +84,30 @@ export type WriteBack = { eventKey: string; status: EventStatus } | null;
 
 const AUDIT_EXCLUDE = new Set(["discordEventId", "icsSequence"]);
 
-function dirty<T extends Record<string, unknown>>(before: T, after: Partial<T>): Record<string, { before: unknown; after: unknown }> {
+function dirty<T extends Record<string, unknown>>(
+  before: T,
+  after: Partial<T>,
+): Record<string, { before: unknown; after: unknown }> {
   const out: Record<string, { before: unknown; after: unknown }> = {};
   for (const [k, v] of Object.entries(after)) {
     if (AUDIT_EXCLUDE.has(k)) continue;
     const b = before[k];
     const norm = (x: unknown) => (x instanceof Date ? x.toISOString() : (x ?? null));
-    if (JSON.stringify(norm(b)) !== JSON.stringify(norm(v))) out[k] = { before: norm(b), after: norm(v) };
+    if (JSON.stringify(norm(b)) !== JSON.stringify(norm(v)))
+      out[k] = { before: norm(b), after: norm(v) };
   }
   return out;
 }
 
 async function audit(
   db: Pick<Db, "insert">,
-  opts: { subjectType: string; subjectId: string; causerId: string | null; description: string; properties: Record<string, { before: unknown; after: unknown }> },
+  opts: {
+    subjectType: string;
+    subjectId: string;
+    causerId: string | null;
+    description: string;
+    properties: Record<string, { before: unknown; after: unknown }>;
+  },
 ): Promise<void> {
   await db.insert(activityLog).values({
     logName: "default",
@@ -157,7 +195,11 @@ type Writer = Pick<Db, "select" | "insert" | "update">;
  *
  * @returns how many rows were created
  */
-export async function materializeMissingInstances(db: Writer, parent: EventRow, causerId: string | null = null): Promise<number> {
+export async function materializeMissingInstances(
+  db: Writer,
+  parent: EventRow,
+  causerId: string | null = null,
+): Promise<number> {
   if (parent.recurrenceFrequency !== "weekly") return 0;
   const wanted = occurrences(
     parent.startsAt,
@@ -168,7 +210,12 @@ export async function materializeMissingInstances(db: Writer, parent: EventRow, 
     parent.recurrenceEndsOn,
   );
   const existing = new Set(
-    (await db.select({ i: events.recurrenceIndex }).from(events).where(eq(events.parentEventId, parent.id))).map((r) => r.i),
+    (
+      await db
+        .select({ i: events.recurrenceIndex })
+        .from(events)
+        .where(eq(events.parentEventId, parent.id))
+    ).map((r) => r.i),
   );
   let created = 0;
   for (const [index, when] of wanted) {
@@ -213,9 +260,12 @@ export async function materializeRecurringSeries(db: Db): Promise<number> {
   const parents = await db
     .select()
     .from(events)
-    .where(and(isNotNull(events.recurrenceFrequency), inArray(events.status, ["draft", "published"])));
+    .where(
+      and(isNotNull(events.recurrenceFrequency), inArray(events.status, ["draft", "published"])),
+    );
   let created = 0;
-  for (const parent of parents) created += await db.transaction((tx) => materializeMissingInstances(tx, parent));
+  for (const parent of parents)
+    created += await db.transaction((tx) => materializeMissingInstances(tx, parent));
   return created;
 }
 
@@ -228,12 +278,18 @@ export async function updateEvent(
   return db.transaction(async (tx) => {
     // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
     // child shift below always sees the committed old times (no double-shift).
-    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
+    const [locked] = await tx
+      .select()
+      .from(events)
+      .where(eq(events.eventKey, eventKey))
+      .for("update");
     if (!locked) throw new NotFoundError("event");
     if (input.capacity !== null) {
       const occupied = await goingCount(tx, locked.id);
       if (input.capacity < occupied) {
-        throw new ValidationError({ capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.` });
+        throw new ValidationError({
+          capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
+        });
       }
     }
     // Closed field list: the key is addressed by, never written through,
@@ -257,7 +313,10 @@ export async function updateEvent(
       .returning();
     if (!row) throw new Error("event update returned no row");
     await promoteWaitlist(tx, row);
-    const changes = dirty(locked as Record<string, unknown>, row as unknown as Record<string, unknown>);
+    const changes = dirty(
+      locked as Record<string, unknown>,
+      row as unknown as Record<string, unknown>,
+    );
     if (Object.keys(changes).length > 0) {
       await tx.insert(activityLog).values({
         logName: "default",
@@ -272,7 +331,11 @@ export async function updateEvent(
       ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
       : [];
     const status = toEventStatus(row.status);
-    return { row, writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null, childWriteBacks };
+    return {
+      row,
+      writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
+      childWriteBacks,
+    };
   });
 }
 
@@ -310,7 +373,10 @@ async function shiftFutureChildren(
       .where(eq(events.id, child.id))
       .returning();
     if (!moved) throw new Error("child reschedule returned no row");
-    const changes = dirty(child as Record<string, unknown>, moved as unknown as Record<string, unknown>);
+    const changes = dirty(
+      child as Record<string, unknown>,
+      moved as unknown as Record<string, unknown>,
+    );
     if (Object.keys(changes).length > 0) {
       await tx.insert(activityLog).values({
         logName: "default",
@@ -342,19 +408,29 @@ export async function transitionEvent(
   return db.transaction(async (tx) => {
     // Share the ingress/RSVP row lock: judge the transition only after an
     // earlier writer commits, so publication cannot resurrect cancellation.
-    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
+    const [locked] = await tx
+      .select()
+      .from(events)
+      .where(eq(events.eventKey, eventKey))
+      .for("update");
     if (!locked) throw new NotFoundError("event");
     const from = toEventStatus(locked.status);
     const target = nextStatus(from, to);
     // Judge persisted dates only after the lock wait. Equality is still legal
     // for publication (legacy's strict isPast boundary); cancellation is exempt.
     if (to === "published" && locked.endsAt.getTime() < Date.now()) {
-      throw new ValidationError({ ends_at: "An event that has already ended cannot be published. Update its dates first." });
+      throw new ValidationError({
+        ends_at: "An event that has already ended cannot be published. Update its dates first.",
+      });
     }
     if (from === target) return { row: locked, writeBack: null };
     const [row] = await tx
       .update(events)
-      .set({ status: target, agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1, updatedAt: new Date() })
+      .set({
+        status: target,
+        agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+        updatedAt: new Date(),
+      })
       .where(eq(events.eventKey, eventKey))
       .returning();
     if (!row) throw new Error("event transition returned no row");
@@ -381,18 +457,28 @@ export async function setRsvpOpen(
   return db.transaction(async (tx) => {
     // Share the RSVP writer's event lock. Check the clock after acquiring it,
     // so a wait that crosses the end cannot reopen an expired event.
-    const [locked] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
+    const [locked] = await tx
+      .select()
+      .from(events)
+      .where(eq(events.eventKey, eventKey))
+      .for("update");
     if (!locked) throw new NotFoundError("event");
     // A mirror-stamp writer can hold a waiter row past expiry. Finish that
     // promotion-row wait too before judging whether reopening is allowed.
-    if (open && !locked.rsvpOpen && locked.status === "published") await lockWaitlist(tx, locked.id);
+    if (open && !locked.rsvpOpen && locked.status === "published")
+      await lockWaitlist(tx, locked.id);
     const now = clock();
     if (locked.status !== "published" || locked.endsAt <= now) {
-      throw new ValidationError({ rsvp_open: "Only published events that have not ended can pause or reopen RSVPs." });
+      throw new ValidationError({
+        rsvp_open: "Only published events that have not ended can pause or reopen RSVPs.",
+      });
     }
     if (locked.rsvpOpen === open) return { row: locked, writeBack: null };
-    const [row] = await tx.update(events).set({ rsvpOpen: open, updatedAt: now })
-      .where(eq(events.eventKey, eventKey)).returning();
+    const [row] = await tx
+      .update(events)
+      .set({ rsvpOpen: open, updatedAt: now })
+      .where(eq(events.eventKey, eventKey))
+      .returning();
     if (!row) throw new Error("event RSVP toggle returned no row");
     // Withdrawals/capacity edits leave the line frozen while paused. Reopening
     // settles those vacancies in FIFO order before the same event sync is queued.
@@ -425,39 +511,66 @@ export async function listEvents(db: Db, params: EventListParams): Promise<Event
   if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
   if (opts.status) conds.push(eq(events.status, opts.status));
   if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
-  if (opts.series === "parent") conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
+  if (opts.series === "parent")
+    conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));
   if (opts.series === "child") conds.push(isNotNull(events.parentEventId));
-  if (opts.series === "standalone") conds.push(and(isNull(events.parentEventId), isNull(events.recurrenceFrequency)));
+  if (opts.series === "standalone")
+    conds.push(and(isNull(events.parentEventId), isNull(events.recurrenceFrequency)));
   if (opts.fill === "unlimited") conds.push(isNull(events.capacity));
   if (opts.fill === "full" || opts.fill === "has_seats") {
     // Only Going occupies a seat: Maybe and Waitlist never make an event full.
-    const going = db.select({ count: sql<number>`count(*)` }).from(rsvps)
+    const going = db
+      .select({ count: sql<number>`count(*)` })
+      .from(rsvps)
       .where(and(eq(rsvps.eventId, events.id), eq(rsvps.status, "going")));
     conds.push(isNotNull(events.capacity));
-    conds.push(opts.fill === "full" ? sql`(${going}) >= ${events.capacity}` : sql`(${going}) < ${events.capacity}`);
+    conds.push(
+      opts.fill === "full"
+        ? sql`(${going}) >= ${events.capacity}`
+        : sql`(${going}) < ${events.capacity}`,
+    );
   }
   // Pick real column objects, never an identifier interpolated from the URL.
-  const column = opts.sort === "title" ? events.title : opts.sort === "status" ? events.status : events.startsAt;
+  const column =
+    opts.sort === "title" ? events.title : opts.sort === "status" ? events.status : events.startsAt;
   const order = opts.order === "asc" ? asc(column) : desc(column);
-  const rows = await nonSensitiveRead("events", () => db.select().from(events).where(and(...conds))
-    .orderBy(order, asc(events.id))
-    .limit(EVENT_PAGE_SIZE + 1).offset((opts.page - 1) * EVENT_PAGE_SIZE));
+  const rows = await nonSensitiveRead("events", () =>
+    db
+      .select()
+      .from(events)
+      .where(and(...conds))
+      .orderBy(order, asc(events.id))
+      .limit(EVENT_PAGE_SIZE + 1)
+      .offset((opts.page - 1) * EVENT_PAGE_SIZE),
+  );
   if (rows.length === 0) return [];
   // Going-only seat counts for the rendered Fill column (same rule as the
   // fill filter: Maybe/Waitlist/Not going never occupy a seat). One
   // classified aggregate read, like the public withGoing helper — a second
   // non-sensitive statement, not member subjects.
-  const counts = await nonSensitiveRead("going-counts", () => db
-    .select({ eventId: rsvps.eventId, n: count() })
-    .from(rsvps)
-    .where(and(inArray(rsvps.eventId, rows.map((r) => r.id)), eq(rsvps.status, "going")))
-    .groupBy(rsvps.eventId));
+  const counts = await nonSensitiveRead("going-counts", () =>
+    db
+      .select({ eventId: rsvps.eventId, n: count() })
+      .from(rsvps)
+      .where(
+        and(
+          inArray(
+            rsvps.eventId,
+            rows.map((r) => r.id),
+          ),
+          eq(rsvps.status, "going"),
+        ),
+      )
+      .groupBy(rsvps.eventId),
+  );
   const by = new Map(counts.map((c) => [c.eventId, Number(c.n)]));
   return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
 }
 
 export async function getEvent(db: Db, eventKey: string): Promise<EventRow | null> {
-  const [row] = await nonSensitiveRead("events", () => db.select().from(events).where(eq(events.eventKey, eventKey)));
+  const [row] = await nonSensitiveRead("events", () =>
+    db.select().from(events).where(eq(events.eventKey, eventKey)),
+  );
   return row ?? null;
 }
 
@@ -465,7 +578,11 @@ export async function getEvent(db: Db, eventKey: string): Promise<EventRow | nul
 // the audit trail of a cancellation is the record that it was (legacy
 // EventsTable: "no delete anywhere on this resource").
 
-export async function createFeatured(db: Db, actor: Actor, input: FeaturedFormInput): Promise<FeaturedRow> {
+export async function createFeatured(
+  db: Db,
+  actor: Actor,
+  input: FeaturedFormInput,
+): Promise<FeaturedRow> {
   return db.transaction(async (tx) => {
     const [row] = await tx
       .insert(featuredContents)
@@ -542,7 +659,11 @@ export async function updateFeatured(
 /** Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited. */
 export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<void> {
   await db.transaction(async (tx) => {
-    const [locked] = await tx.select().from(featuredContents).where(eq(featuredContents.id, id)).for("update");
+    const [locked] = await tx
+      .select()
+      .from(featuredContents)
+      .where(eq(featuredContents.id, id))
+      .for("update");
     if (!locked) throw new NotFoundError("featured content");
     await tx.delete(featuredContents).where(eq(featuredContents.id, id));
     await tx.insert(activityLog).values({
@@ -564,19 +685,33 @@ export async function listFeatured(
   const conds: SQL[] = [];
   if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
   if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
-  const column = query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
+  const column =
+    query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
   const order = query.order === "desc" ? desc(column) : asc(column);
-  return nonSensitiveRead("featured", () => db.select().from(featuredContents).where(and(...conds)).orderBy(order, asc(featuredContents.id)));
+  return nonSensitiveRead("featured", () =>
+    db
+      .select()
+      .from(featuredContents)
+      .where(and(...conds))
+      .orderBy(order, asc(featuredContents.id)),
+  );
 }
 
 /** Imported source IDs are independent of native IDs; never fall back to a native match. */
 export async function getFeaturedIdByLegacyId(db: Db, legacyId: string): Promise<number | null> {
-  const [row] = await nonSensitiveRead("featured", () => db.select({ id: featuredContents.id }).from(featuredContents).where(eq(featuredContents.legacyId, legacyId)));
+  const [row] = await nonSensitiveRead("featured", () =>
+    db
+      .select({ id: featuredContents.id })
+      .from(featuredContents)
+      .where(eq(featuredContents.legacyId, legacyId)),
+  );
   return row?.id ?? null;
 }
 
 export async function getFeatured(db: Db, id: number): Promise<FeaturedEditRow | null> {
-  const [row] = await nonSensitiveRead("featured", () => db.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id)));
+  const [row] = await nonSensitiveRead("featured", () =>
+    db.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id)),
+  );
   return row ?? null;
 }
 
@@ -613,7 +748,9 @@ export async function recordAccess(
 
 /** GIN index the query planner needs for "who looked at *this member*?" (legacy DDL, drizzle-kit cannot emit it). */
 export async function ensureAccessLogGin(db: Db): Promise<void> {
-  await db.execute(sql.raw(
-    `CREATE INDEX IF NOT EXISTS member_data_access_logs_subject_user_ids_gin ON member_data_access_logs USING gin (subject_user_ids jsonb_path_ops)`,
-  ));
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS member_data_access_logs_subject_user_ids_gin ON member_data_access_logs USING gin (subject_user_ids jsonb_path_ops)`,
+    ),
+  );
 }

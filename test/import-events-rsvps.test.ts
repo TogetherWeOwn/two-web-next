@@ -17,13 +17,22 @@ describe("legacy events import controls", () => {
   });
 
   it("orders parents first regardless of IDs, including nested links", () => {
-    expect(parentFirst([event("1", "2"), event("2", "30"), event("30"), event("4")])
-      .map((row: { id: string }) => row.id)).toEqual(["30", "2", "1", "4"]);
+    expect(parentFirst([event("1", "2"), event("2", "30"), event("30"), event("4")]).map((row: { id: string }) => row.id)).toEqual([
+      "30",
+      "2",
+      "1",
+      "4",
+    ]);
   });
 
   it("refuses missing parents, cycles, and duplicate natural keys before writes", () => {
-    for (const rows of [[event("1", "404")], [event("1", "1")], [event("1", "2"), event("2", "1")],
-      [event("1"), event("1")], [event("1"), { ...event("2"), event_key: "key-1" }]]) {
+    for (const rows of [
+      [event("1", "404")],
+      [event("1", "1")],
+      [event("1", "2"), event("2", "1")],
+      [event("1"), event("1")],
+      [event("1"), { ...event("2"), event_key: "key-1" }],
+    ]) {
       expect(() => parentFirst(rows)).toThrow();
     }
   });
@@ -68,25 +77,25 @@ describe("legacy events import controls", () => {
     }
   });
 
-  it.each([
-    "postgres://agent_test@agent-testdb/two_web_next",
-    "postgres://agent_test@agent-testdb:5432/two_web_next",
-  ])("pins both raw fixture clients to the authorized port without connecting: %s", async (url) => {
-    vi.stubEnv("PGPORT", "6432");
-    let clients;
-    try {
-      clients = createImportFixtureClients(url, "synthetic_legacy", "synthetic_target");
-      for (const client of Object.values(clients)) {
-        expect(client.options.port).toEqual([5432]);
-        expect(client.options.host).toEqual(["agent-testdb"]);
+  it.each(["postgres://agent_test@agent-testdb/two_web_next", "postgres://agent_test@agent-testdb:5432/two_web_next"])(
+    "pins both raw fixture clients to the authorized port without connecting: %s",
+    async (url) => {
+      vi.stubEnv("PGPORT", "6432");
+      let clients;
+      try {
+        clients = createImportFixtureClients(url, "synthetic_legacy", "synthetic_target");
+        for (const client of Object.values(clients)) {
+          expect(client.options.port).toEqual([5432]);
+          expect(client.options.host).toEqual(["agent-testdb"]);
+        }
+        expect(clients.legacy.options.connection.search_path).toBe("synthetic_legacy");
+        expect(clients.target.options.connection.search_path).toBe("synthetic_target");
+      } finally {
+        await Promise.all(Object.values(clients ?? {}).map((client) => client.end({ timeout: 2 })));
+        vi.unstubAllEnvs();
       }
-      expect(clients.legacy.options.connection.search_path).toBe("synthetic_legacy");
-      expect(clients.target.options.connection.search_path).toBe("synthetic_target");
-    } finally {
-      await Promise.all(Object.values(clients ?? {}).map((client) => client.end({ timeout: 2 })));
-      vi.unstubAllEnvs();
-    }
-  });
+    },
+  );
 
   it("rejects port zero rather than falling back to inherited connection settings", () => {
     expect(() => connectDatabase("postgres://agent_test@agent-testdb:0/two_web_next")).toThrow();
@@ -95,14 +104,19 @@ describe("legacy events import controls", () => {
   it("does not disclose argv/env secrets on failure", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      expect(await main(["postgres://synthetic:do-not-print@invalid/db"], {
-        LEGACY_DATABASE_URL: "synthetic-source-secret", DATABASE_URL: "synthetic-target-secret",
-      })).toBe(1);
+      expect(
+        await main(["postgres://synthetic:do-not-print@invalid/db"], {
+          LEGACY_DATABASE_URL: "synthetic-source-secret",
+          DATABASE_URL: "synthetic-target-secret",
+        }),
+      ).toBe(1);
       expect(await main([], {})).toBe(1);
       const output = JSON.stringify(log.mock.calls);
       expect(output).not.toContain("do-not-print");
       expect(output).not.toContain("synthetic-source-secret");
       expect(output).not.toContain("synthetic-target-secret");
-    } finally { log.mockRestore(); }
+    } finally {
+      log.mockRestore();
+    }
   });
 });
