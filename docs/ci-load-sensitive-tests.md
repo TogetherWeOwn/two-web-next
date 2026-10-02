@@ -1,7 +1,9 @@
 # Load-sensitive tests in `check`
 
-`check` runs the full coverage suite serially on shared self-hosted runners
-(`[self-hosted, two-selfhosted]`). The slowest runners (ci-rbx1) take 17-20
+`check` runs the full coverage suite serially. While the repo is public it runs
+on GitHub-hosted Linux, because the org's self-hosted runner group refuses public
+repos (TOG-12326); while private it runs on the shared self-hosted runners
+(`[self-hosted, two-selfhosted]`). The slowest of those (ci-rbx1) take 17-20
 minutes for a green run, about 4-5x a hosted runner, so wall-clock limits
 written for a laptop fail under normal queue load (TOG-12177).
 

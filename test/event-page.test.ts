@@ -33,6 +33,8 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    syncRevision: 1,
+    syncedRevision: 0,
     agentGrantId: null,
     proofMarker: null,
     agentVersion: 1,

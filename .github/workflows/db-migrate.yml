@@ -65,7 +65,7 @@ jobs:
           # Provision ONLY as secrets on the matching GitHub Environment.
           # The unselected target is not exposed to the process. No DATABASE_URL fallback.
           NEON_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.NEON_STAGING_DATABASE_URL || '' }}
-          NEON_PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.NEON_PRODUCTION_DATABASE_URL || '' }}
+          PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || '' }}
       - name: Record PITR timestamp, apply and verify under database lock
         run: node ci/neon-migrate.mjs apply
         env: *migration-env

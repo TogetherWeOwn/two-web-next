@@ -2,6 +2,9 @@ import type { QueueMessage } from "./jobs/types";
 
 export type Env = AgentEventsEnv & {
   APP_URL: string;
+  // Event writes use the same W13 queue as scheduled reconciliation. Optional
+  // only for local/test environments without a transport.
+  SYNC_EVENT_QUEUE?: Pick<Queue<QueueMessage>, "send">;
   // Worker-first static assets: fetched only after the host guard admits the request.
   ASSETS?: Pick<Fetcher, "fetch">;
   DISCORD_CLIENT_ID: string;
@@ -48,6 +51,12 @@ export type JobsEnv = Env & {
   INTERNAL_ACTION_QUEUE: Queue<QueueMessage>;
   HYPERDRIVE?: Hyperdrive;
   DATABASE_URL?: string;
+  // Signed bot client for sync/announcement/role jobs. All three are required
+  // to send; a missing value is a terminal, alerting job failure (never an ack
+  // as success). Values are Operator-provisioned; see docs/config.md.
+  BOT_ENDPOINT_URL?: string;
+  BOT_KEY_ID?: string;
+  BOT_SHARED_SECRET?: string;
 };
 
 export type Session = {

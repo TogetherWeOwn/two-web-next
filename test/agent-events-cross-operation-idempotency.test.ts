@@ -12,6 +12,7 @@ import syncFailure from "../drizzle/1009_event-sync-failure.sql?raw";
 import rsvpLegacyOrder from "../drizzle/1010_rsvp-legacy-order.sql?raw";
 import icsSequence from "../drizzle/1014_event-ics-sequence.sql?raw";
 import sharedAgentColumns from "../drizzle/1019_shared-agent-events.sql?raw";
+import syncRevisions from "../drizzle/1020_event-sync-revisions.sql?raw";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
 const cfg = {
@@ -83,12 +84,18 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // later additive columns the shared-row queries select (1006/1009/1010
       // and 1014 without its backfill UPDATE, which needs no rows here), then
       // the agent ownership columns from 1019 (without its data migration — no
-      // retired rows exist in this fresh schema).
+      // retired rows exist in this fresh schema), then the sync-revision
+      // outbox columns from 1020 (without its triggers — the current service
+      // selects sync_revision/synced_revision on every shared-row read).
       const columnAdds = sharedAgentColumns
         .split("--> statement-breakpoint")
         .slice(0, 5)
         .join("--> statement-breakpoint");
       const icsColumns = icsSequence.split("--> statement-breakpoint")[0]!;
+      const syncColumns = syncRevisions
+        .split("--> statement-breakpoint")
+        .slice(1, 3)
+        .join("--> statement-breakpoint");
       for (const migration of [
         agentTables,
         sharedEvents,
@@ -98,6 +105,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         rsvpLegacyOrder,
         icsColumns,
         columnAdds,
+        syncColumns,
       ]) {
         for (const statement of migration
           .replaceAll('"public".', `"${schemaName}".`)

@@ -76,7 +76,15 @@ async function createMigrationFixture(raw: string) {
     throw error;
   }
   // Match Drizzle's transactional migration boundary, including the final DROP.
-  const migrate = () => client.begin((sql) => apply(sql, migration1019.sql));
+  // Later migrations (1020_event-sync-revisions: sync_revision columns the
+  // current service selects) apply after 1019 so post-migration ingress sees
+  // the schema current code expects. 1019's own assertions still verify its
+  // data migration: 1020 only adds, never alters 1019's rows.
+  const migrate = () =>
+    client.begin(async (sql) => {
+      await apply(sql, migration1019.sql);
+      for (const migration of migrations.slice(migrationIndex + 1)) await apply(sql, migration.sql);
+    });
   return { client, schemaName, migrate, dispose };
 }
 
@@ -224,9 +232,10 @@ it("appends the shared migration after the audit-immutability migration with a l
   }[];
   const previous = entries[migrationIndex - 1]!;
   const shared = entries[migrationIndex]!;
-  // Appended last (above every applied ledger `when`), never into an older gap.
+  // Appended after 1018 (above every applied ledger `when`), never into an
+  // older gap. Later migrations (e.g. 1020_event-sync-revisions) may follow.
   expect(previous.tag).toBe("1018_audit-immutability");
-  expect(migrationIndex).toBe(entries.length - 1);
+  expect(migrationIndex).toBeLessThan(entries.length);
   expect(shared.idx).toBe(previous.idx + 1);
   expect(shared.when).toBeGreaterThan(previous.when);
   const before = JSON.parse(readFileSync(`${migrationsFolder}/meta/1018_snapshot.json`, "utf8"));
@@ -304,8 +313,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
           updated_at: new Date(event.updated_at),
         })),
       );
+      // 1020's sync_revision/synced_revision ride along with 1019 in this
+      // fixture's migrate(); they only add, so exclude them like 1019's own
+      // columns when proving human rows are untouched.
       const humanRows = await sql<{ row: Record<string, unknown> }[]>`SELECT
-      to_jsonb(e) - 'agent_grant_id' - 'proof_marker' - 'agent_version' AS row
+      to_jsonb(e) - 'agent_grant_id' - 'proof_marker' - 'agent_version' - 'sync_revision' - 'synced_revision' AS row
       FROM events e WHERE agent_grant_id IS NULL ORDER BY event_key`;
       expect(humanRows.map(({ row }) => row)).toEqual(humansBefore);
       expect(

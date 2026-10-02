@@ -29,6 +29,8 @@ const row = (overrides: Partial<EventRow> = {}): EventRow => ({
   status: "published",
   rsvpOpen: true,
   icsSequence: 0n,
+  syncRevision: 1,
+  syncedRevision: 0,
   discordEventId: null,
   discordSyncFailedAt: null,
   discordSyncFailureCode: null,

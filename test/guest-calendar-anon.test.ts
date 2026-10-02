@@ -53,6 +53,8 @@ function eventRow(over: Partial<typeof events.$inferSelect> = {}): typeof events
     recurrenceIndex: null,
     createdAt: start,
     updatedAt: start,
+    syncRevision: 1,
+    syncedRevision: 0,
     ...over,
   };
 }

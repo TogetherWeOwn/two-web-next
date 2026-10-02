@@ -9,9 +9,25 @@ import { signedEventReader } from "../src/bot/event-read";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { transitionEvent, updateEvent } from "../src/admin/store";
 import { parseEventForm, ValidationError } from "../src/admin/validation";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore } from "../src/sessions";
 import type { Env } from "../src/env";
+
+type TrackedSync = Extract<QueueMessage, { kind: "sync-event" }>;
+
+// The tracked W13 producer (SYNC_EVENT_QUEUE) supersedes main #124's stub
+// EVENT_SYNC_QUEUE carrier: the message holds identity only and the consumer
+// reads the current row, so assertions derive the action from the committed
+// row status at send time. Mirrors the real narrow signature (events.test.ts).
+vi.mock("../src/jobs/worker", () => ({
+  enqueueSyncEvent: async (env: Env, message: TrackedSync) => {
+    await env.SYNC_EVENT_QUEUE!.send(
+      { ...message, jobId: crypto.randomUUID() },
+      { delaySeconds: 10 },
+    );
+    return true;
+  },
+}));
 
 const CALLER = "shared-ingress-fixture";
 const cfg = { ...DEFAULT_CONFIG, enabled: true, callerAgentId: CALLER, lockWaitMs: 1500 };
@@ -33,7 +49,10 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
   let credential: string;
   let env: Env;
   let effects: IngressEffects;
-  const sent: SyncMessage[] = [];
+  const sent: TrackedSync[] = [];
+  // Committed row status observed at each send; the tracked carrier has no
+  // action field, so this is what assertions derive the action from.
+  const sentStatuses: string[] = [];
   const call = (op: string, rest: Record<string, unknown> = {}, deps = effects) =>
     handleAgentEvent(
       fixture.client,
@@ -62,6 +81,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     await fixture.client`DELETE FROM agent_event_hits`;
     await fixture.client`DELETE FROM agent_event_grants`;
     sent.length = 0;
+    sentStatuses.length = 0;
     credential = `fixture-${randomUUID()}`;
     await fixture.client`INSERT INTO agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
       VALUES (${CALLER}, 'fixture-company', ${cfg.stagingGuildId}, ${await sha256Hex(credential)})`;
@@ -79,12 +99,13 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
       ADMIN_DB: fixture.db,
       SESSION_STORE: createMemorySessionStore(),
       DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-      EVENT_SYNC_QUEUE: {
-        send: async (message: SyncMessage) => {
+      SYNC_EVENT_QUEUE: {
+        send: async (message: TrackedSync) => {
           // A second pool query must already see the committed state and replay receipt.
           const [row] =
             await fixture.client`SELECT status FROM events WHERE event_key = ${message.eventKey}`;
-          expect(row!.status).toBe(message.action === "event.cancel" ? "cancelled" : "published");
+          expect(["published", "cancelled"]).toContain(row!.status);
+          sentStatuses.push(row!.status as string);
           const [saved] =
             await fixture.client`SELECT count(*)::int AS n FROM agent_event_idempotency_keys WHERE event_key = ${message.eventKey}`;
           expect(saved!.n).toBeGreaterThanOrEqual(2);
@@ -123,10 +144,12 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     expect(published.status).toBe(200);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
-      action: "event.upsert",
+      kind: "sync-event",
       eventKey: event_key,
-      dedupeKey: event_key,
     });
+    // The tracked carrier holds identity only; the upsert action is what the
+    // consumer derives from the published row.
+    expect(sentStatuses).toEqual(["published"]);
     for (const path of ["/events", `/e/${event_key}`]) {
       const page = await app.request(path, {}, env);
       expect(page.status).toBe(200);
@@ -178,7 +201,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     expect((await call("update", { event_key, version: 3, fields })).body.reason).toBe(
       "event_not_open",
     );
-    expect(sent.map((m) => m.action)).toEqual(["event.upsert", "event.upsert", "event.cancel"]);
+    expect(sentStatuses).toEqual(["published", "published", "cancelled"]);
     expect(new Set(sent.map((m) => m.idempotencyKey)).size).toBe(3);
     expect((await app.request(`/e/${event_key}`, {}, env)).status).toBe(410);
   });
@@ -416,7 +439,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
         await fixture.client`SELECT count(*)::int AS n FROM activity_log WHERE subject_id = ${event_key}`
       )[0]!.n,
     ).toBe(0);
-    expect(sent.map((message) => message.action)).toEqual(["event.cancel"]);
+    expect(sentStatuses).toEqual(["cancelled"]);
   }, 15_000);
 
   it("refuses DST gaps without a shared event write or queue message", async () => {
