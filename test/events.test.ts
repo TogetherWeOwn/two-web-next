@@ -224,8 +224,10 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
   });
   type JsonRow = {
     event_key: string; title: string; game: string | null; description: string | null;
-    starts_at: string; ends_at: string; timezone: string; location: string | null;
-    capacity: number | null; status: string; rsvp_open: boolean; going_count: number; waitlist_position: number | null;
+    starts_at: string; ends_at: string; starts_at_local: string; ends_at_local: string;
+    timezone: string; location: string | null;
+    capacity: number | null; going_count: number; status: string; rsvp_open: boolean;
+    synced_to_discord: boolean; waitlist_position: number | null;
   };
   type Collection = { data: JsonRow[]; page: number; limit: number;
     meta: { current_page: number; per_page: number; total: number; last_page: number } };
@@ -346,10 +348,13 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(res.status).toBe(200);
     const { data } = await res.json() as { data: JsonRow };
     expect(Object.keys(data)).toEqual(["event_key", "title", "game", "description", "starts_at", "ends_at",
-      "timezone", "location", "capacity", "status", "rsvp_open", "going_count", "waitlist_position"]);
+      "starts_at_local", "ends_at_local", "timezone", "location", "capacity", "going_count", "status", "rsvp_open",
+      "synced_to_discord", "waitlist_position"]);
     expect(data).toEqual({ event_key: event!.eventKey, title: "Game 1", game: "Chess", description: "Bring a board.",
-      starts_at: "2099-01-01T20:00:00.000Z", ends_at: "2099-01-01T22:00:00.000Z", timezone: "Europe/London",
-      location: "Voice", capacity: 2, status: "published", rsvp_open: false, going_count: 2, waitlist_position: 2 });
+      starts_at: "2099-01-01T20:00:00.000Z", ends_at: "2099-01-01T22:00:00.000Z",
+      starts_at_local: "2099-01-01 20:00", ends_at_local: "2099-01-01 22:00", timezone: "Europe/London",
+      location: "Voice", capacity: 2, going_count: 2, status: "published", rsvp_open: false,
+      synced_to_discord: false, waitlist_position: 2 });
     expect(res.headers.get("x-robots-tag")).toBeNull();
     expect((await collection()).data).toEqual([data]);
     const etag = res.headers.get("etag")!;

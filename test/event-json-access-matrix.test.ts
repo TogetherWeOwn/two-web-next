@@ -82,8 +82,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
     if (userId) headers.cookie = await cookieFor(userId, moderator);
     return app.request(path, { headers }, env);
   }
-  const asMember = (path: string) => get(path, "matrix-member", false);
-  const asModerator = (path: string) => get(path, "matrix-moderator", true);
+  // Keyed member reads (d5d789c) require numeric Discord-snowflake viewers;
+  // string ids trip the member-read boundary into 503 on /e/:key HTML.
+  const asMember = (path: string) => get(path, "100000000000000131", false);
+  const asModerator = (path: string) => get(path, "100000000000000132", true);
   const rowsOf = async (res: Response) => (await res.json() as { data: Row[] }).data;
 
   async function seedStatuses() {
@@ -134,8 +136,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
 
   it("refuses a member the draft show while the moderator reads it; unknown/malformed keys 404", async () => {
     const { draftKey } = await seedStatuses();
-    expect((await get(`/e/${draftKey}`, "matrix-member", false)).status).toBe(403);
-    expect((await get(`/e/${draftKey}`, "matrix-moderator", true)).status).toBe(200);
+    expect((await get(`/e/${draftKey}`, "100000000000000131", false)).status).toBe(403);
+    expect((await get(`/e/${draftKey}`, "100000000000000132", true)).status).toBe(200);
     expect((await asMember("/e/01J00000000000000000000999")).status).toBe(404);
     expect((await asMember("/e/not-a-ulid")).status).toBe(404);
   });
