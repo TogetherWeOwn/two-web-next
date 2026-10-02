@@ -2,48 +2,63 @@ import type { Context, Hono } from "hono";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
-import { Layout, SiteFooter } from "./pages";
+import { notFoundSuggestions, type SuggestedEvent } from "./events/suggestions";
+import { RecoveryShell } from "./pages";
+import { bufferedMemberHtml, bufferedMemberText, memberReadActive } from "./member-reads";
 import { requestRoute } from "./request-log";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
-// errors/*.blade.php views (TOG-5626/TOG-6788). Database-free by construction:
-// no session, cookie or DB reads — the database may be exactly what is broken.
+// errors/*.blade.php views (TOG-5626/TOG-6788). No session or cookie reads.
+// Only 404 attempts a bounded, optional DB read — every shell works without it.
 const NOINDEX = "noindex, nofollow";
 
 const JOIN_HREF = "/auth/discord";
 
-const ErrorShell: FC<PropsWithChildren<{ code: string; title: string; headerCta?: { href: string; label: string } }>> = ({
-  code,
-  title,
-  headerCta = { href: JOIN_HREF, label: "Sign in with Discord" },
-  children,
-}) => (
-  <Layout title={`${title} — Together We Own`} robots={NOINDEX}>
-    <header class="bar">
-      <a class="brand" href="/">TWO</a>
-      <nav>
-        <a class="btn" href={headerCta.href}>{headerCta.label}</a>
-      </nav>
-    </header>
-    <main>
-      <section aria-labelledby="error-heading">
-        <p class="strap" aria-hidden="true">{code}</p>
-        <h1 id="error-heading">{title}</h1>
-        {children}
-      </section>
-    </main>
-    <SiteFooter />
-  </Layout>
+const ErrorShell: FC<PropsWithChildren<{
+  code: string;
+  title: string;
+  headerCta?: { href: string; label: string };
+  supportingContent?: PropsWithChildren["children"];
+}>> = ({ code, title, headerCta, supportingContent, children }) => (
+  <RecoveryShell code={code} title={title} headingId="error-heading" robots={NOINDEX} headerCta={headerCta} supportingContent={supportingContent}>
+    {children}
+  </RecoveryShell>
 );
 
-// 404 (ports errors/404 without the event suggestions: the events listing does
-// not exist in two-web-next yet, so no dead /events links — CTA + home only).
-export const NotFoundPage: FC = () => (
-  <ErrorShell code="404" title="We cannot find that page">
+// 404 recovery stays available even when the optional event lookup fails.
+export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestions = [] }) => (
+  <ErrorShell code="404" title="We cannot find that page" supportingContent={
+    <section class="recovery-events" aria-labelledby="error-events-heading" data-testid="error-event-suggestions">
+      <h2 id="error-events-heading">Happening soon</h2>
+      {suggestions.length ? (
+        <ul class="facts">
+          {suggestions.map((event) => (
+            <li class="card">
+              <a href={`/e/${encodeURIComponent(event.key)}`} data-testid="error-event-suggestion">{event.title}</a>
+              <p>
+                <time datetime={event.startsAt.toISOString()}>{event.startsAt.toISOString().slice(0, 16).replace("T", " ")} UTC</time>
+                {event.location ? <> · {event.location}</> : null}
+              </p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p data-testid="error-events-empty">Nothing is on the calendar right now — check back soon.</p>
+      )}
+      <p><a href="/events" data-testid="error-all-events">Browse all events</a></p>
+      <form action="/events" method="get" role="search" class="error-events-search">
+        <label for="error-events-search">Search events</label>
+        <div>
+          <input id="error-events-search" name="q" type="search" placeholder="Search events…" autocomplete="off" data-testid="error-events-search" />
+          <button type="submit" class="btn" data-testid="error-events-search-submit">Search events</button>
+        </div>
+      </form>
+    </section>
+  }>
     <p class="lead">
       The link may be old or mistyped, or the page may have moved. The lobby is still open — come in and say hello.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
@@ -58,7 +73,7 @@ export const InternalErrorPage: FC = () => (
       It is not you. We have logged the failure and the team will take a look. Try again in a minute — the lobby is
       not going anywhere.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
@@ -71,10 +86,17 @@ export const RateLimitedPage: FC = () => (
     <p class="lead">
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is not going anywhere.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="btn" href={JOIN_HREF} data-testid="error-join">Join with Discord</a>{" "}
       <a href="/" data-testid="error-home">Back to the homepage</a>
     </p>
+  </ErrorShell>
+);
+
+export const PayloadTooLargePage: FC = () => (
+  <ErrorShell code="413" title="That request is too large">
+    <p class="lead">Reduce the size of your request and try again.</p>
+    <p><a href="/">Back to the homepage</a></p>
   </ErrorShell>
 );
 
@@ -91,20 +113,38 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
       The site is down for a minute of maintenance. The Discord server never closes — come in through the invite and
       we will see you there.
     </p>
-    <p>
+    <p class="recovery-actions">
       <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">Use the Discord invite instead</a>{" "}
       <a href="/" data-testid="error-retry">Try again</a>
     </p>
   </ErrorShell>
 );
 
-export function notFoundHandler(c: Context): Response | Promise<Response> {
+// Host refusals use only this shell, never the optional DB lookup.
+export function notFoundResponse(c: Context, suggestions: SuggestedEvent[] = []): Response | Promise<Response> {
+  if (memberReadActive()) {
+    // Only this known shell classifies a missing route; arbitrary 404 responses
+    // and prior queries still must satisfy the ordinary read boundary.
+    if (c.get("adminActor")) c.set("access", { resource: "not-found", action: "view", route: "admin.not-found" });
+    return bufferedMemberHtml(c, <NotFoundPage suggestions={suggestions} />, 404);
+  }
   c.header("cache-control", "no-store, private");
   c.status(404);
-  return c.html(<NotFoundPage />);
+  return c.html(<NotFoundPage suggestions={suggestions} />);
+}
+
+export async function notFoundHandler(c: Context): Promise<Response> {
+  return notFoundResponse(c, await notFoundSuggestions(c.env));
 }
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
+  if (memberReadActive()) {
+    // Sanitize before the ordinary logger/alert sees SQL, bindings or causes.
+    console.error("Member request failed; refusing contents.", {
+      exception: err instanceof Error ? err.constructor.name : "unknown",
+    });
+    return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
+  }
   alertRequestError(err, { method: c.req.method, route: requestRoute(c), requestId: c.get("requestId") });
   c.header("cache-control", "no-store, private");
   c.status(500);
@@ -133,6 +173,17 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   return c.html(<RateLimitedPage />);
 }
 
+// Like the shared 429 response: one static envelope for API/JSON callers,
+// a branded page for browsers, and no request body, field names or stack traces.
+export function payloadTooLarge(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  c.status(413);
+  if (c.req.path.startsWith("/api/") || (c.req.header("accept") ?? "").includes("application/json")) {
+    return c.json({ reason: "payload_too_large", message: "Reduce the size of your request and try again." });
+  }
+  return c.html(<PayloadTooLargePage />);
+}
+
 export function maintenanceHandler(inviteUrl: string): (c: Context) => Response | Promise<Response> {
   return (c) => {
     c.header("cache-control", "no-store, private");
@@ -142,6 +193,16 @@ export function maintenanceHandler(inviteUrl: string): (c: Context) => Response 
 }
 
 export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
-  app.notFound((c) => notFoundHandler(c));
+  app.notFound(async (c) => {
+    // run_worker_first admits every request through TrustHosts before a
+    // static lookup. ASSETS.fetch never re-enters the user Worker.
+    if (c.env?.ASSETS && (c.req.method === "GET" || c.req.method === "HEAD")) {
+      const asset = await c.env.ASSETS.fetch(c.req.raw);
+      // ASSETS responses have immutable headers; outer security middleware
+      // needs a writable copy. Preserve the streaming body and asset metadata.
+      if (asset.status !== 404) return new Response(asset.body, asset);
+    }
+    return notFoundHandler(c);
+  });
   app.onError((err, c) => internalErrorHandler(err, c));
 }

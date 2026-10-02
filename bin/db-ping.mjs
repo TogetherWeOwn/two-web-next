@@ -1,26 +1,36 @@
 #!/usr/bin/env node
-// Direct-`postgres` acceptance probe for the shared Neon staging branch
-// (S1: TOG-9679 acceptance item 1, second half). The first half is the
-// Hyperdrive-bound Worker query (GET /db-ping); this script proves the same
-// branch serves a direct client with the repo's `postgres` driver (the path
-// the bot Container uses without Hyperdrive). DATABASE_URL env only (e.g.
-// NEON_STAGING_DATABASE_URL) — never argv, never logs. Prints the row on
-// success, exits non-zero otherwise.
-import postgres from "postgres";
+// Retained direct-postgres operator probe. DATABASE_URL is env-only; never
+// argv or logs. Require an explicit host, user and database; default port 5432
+// and empty password are pinned, not inherited from libpq environment settings.
+// Optional URL settings: sslmode=disable|require|verify-ca|verify-full and
+// sslrootcert=system. Refuse other/duplicate parameters and all CLI arguments.
+// Output: one stable JSON code, no driver details or rows. Exit 0 on success,
+// 2 on configuration refusal, 1 on driver/deadline/cleanup failure. Driver console output is
+// discarded. Connection plus query: 5s; cleanup: at most 1s more. No HTTP diagnostic is exposed.
+import { parseDatabaseUrl, runDbPing } from "./db-ping-core.mjs";
 
-const url = process.env.DATABASE_URL;
-if (!url) {
-  console.error("db-ping: refusing: DATABASE_URL is unset.");
-  process.exit(2);
+async function main() {
+  try {
+    if (process.argv.length !== 2) throw new Error();
+    parseDatabaseUrl(process.env.DATABASE_URL);
+  } catch {
+    return { ok: false, code: "DB_PING_CONFIG", exitCode: 2 };
+  }
+  // This standalone process owns its environment. Discard ambient libpq
+  // settings before driver construction, including PGAPPNAME/PGSSLMODE.
+  for (const key of Object.keys(process.env)) if (key.startsWith("PG")) delete process.env[key];
+  // The driver prints some protocol errors (e.g. "Unknown Auth") straight to
+  // the console; the only permitted output is the one JSON result below.
+  for (const method of ["log", "info", "warn", "error", "debug", "trace"]) console[method] = () => {};
+  try {
+    const { default: postgres } = await import("postgres");
+    return await runDbPing({ databaseUrl: process.env.DATABASE_URL, createClient: postgres });
+  } catch {
+    return { ok: false, code: "DB_PING_FAILED", exitCode: 1 };
+  }
 }
-
-const sql = postgres(url, { max: 1, fetch_types: false, prepare: false });
-try {
-  const rows = await sql.unsafe("SELECT version() AS version, now()::text AS now");
-  console.log(JSON.stringify({ ok: true, version: rows[0].version, now: rows[0].now }));
-} catch (err) {
-  console.error(`db-ping: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
-} finally {
-  await sql.end({ timeout: 2 }).catch(() => {});
-}
+const { exitCode, ...output } = await main();
+// Flush the one bounded result before exiting, even if a broken driver left
+// a socket/timer alive. runDbPing has already attempted bounded owned cleanup.
+const stream = output.ok ? process.stdout : process.stderr;
+stream.write(`${JSON.stringify(output)}\n`, () => process.exit(exitCode));

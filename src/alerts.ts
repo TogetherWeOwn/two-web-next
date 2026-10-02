@@ -2,14 +2,16 @@
 // (one critical line per distinct `class@route` fingerprint, muted by
 // ErrorAlertRateLimit for 5 minutes, dont-report list silent) and
 // AppServiceProvider::Queue::failing (one critical line per failed job).
-// There are no webhooks or mail: the platform log tail is the only channel
-// (see docs/runbook-alerts.md). Every alert is ONE single-line JSON object on
+// The app emits logs only; tail/worker.ts delivers allowlisted summaries to
+// the optional ops Discord webhook (see docs/runbook-alerts.md). Every alert is
+// ONE single-line JSON object on
 // console.error with `event` set to "error.alert" or "queue.failing".
 //
 // Alert lines carry the exception CLASS, never its message: a database error
 // message can carry the failed statement's bound values. Correlate by request
 // ID rather than logging exception messages or stacks.
 
+import { AlertProbeError } from "./alert-probe-error";
 import { safeRequestId } from "./request-log";
 
 export const ALERT_WINDOW_MS = 5 * 60 * 1000;
@@ -37,13 +39,24 @@ export function fingerprintOf(err: unknown, route: string): string {
   return `${exceptionClass(err)}@${route}`;
 }
 
-/** Per-fingerprint mute, ports ErrorAlertRateLimit (1 alert / 5 min). Per isolate: see the runbook. */
+/**
+ * Per-fingerprint mute, ports ErrorAlertRateLimit (1 alert / 5 min). Per isolate: see the runbook.
+ * At 500 live fingerprints, new ones stay silent until a slot expires; never evict an active mute.
+ */
 export class AlertRateLimit {
   private readonly last = new Map<string, number>();
+  private readonly windowMs: number;
+  private readonly now: Clock;
+  // Plain assignments (no parameter properties): bin/*.mjs operator scripts
+  // run under node's type-stripping, which rejects parameter properties, and
+  // this class sits in the drill/smoke import closure (TOG-11706).
   constructor(
-    private readonly windowMs = ALERT_WINDOW_MS,
-    private readonly now: Clock = Date.now,
-  ) {}
+    windowMs = ALERT_WINDOW_MS,
+    now: Clock = Date.now,
+  ) {
+    this.windowMs = windowMs;
+    this.now = now;
+  }
 
   /** True when this fingerprint may alert now; records the alert. */
   allow(fingerprint: string): boolean {
@@ -52,8 +65,8 @@ export class AlertRateLimit {
     if (prev !== undefined && t - prev < this.windowMs) return false;
     if (this.last.size >= MAX_TRACKED) {
       for (const [k, at] of this.last) if (t - at >= this.windowMs) this.last.delete(k);
-      // Still full of live entries: drop the oldest so memory stays bounded.
-      if (this.last.size >= MAX_TRACKED) this.last.delete(this.last.keys().next().value as string);
+      // Decline admission rather than forgetting a fingerprint still in its mute window.
+      if (this.last.size >= MAX_TRACKED) return false;
     }
     this.last.set(fingerprint, t);
     return true;
@@ -83,6 +96,7 @@ export function alertRequestError(
       method: req.method,
       route: req.route,
       request_id: safeRequestId(req.requestId),
+      ...(err instanceof AlertProbeError && err.probeId ? { probeId: err.probeId } : {}),
     }),
   );
   return true;
@@ -94,6 +108,7 @@ export type FailedJob = {
   job: string;
   attempts: number;
   exception: string;
+  probeId?: string;
   requestId?: string;
 };
 

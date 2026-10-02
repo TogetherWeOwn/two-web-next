@@ -7,10 +7,10 @@
 //   click. Per-click Discord lookups were deliberately not ported: main's
 //   settled design recomputes at login, and an extra Discord round-trip on
 //   every admin click would gate the panel on Discord availability.
-// - Access log: every admin READ route declares its subjects before the
-//   handler finishes; the guard writes one row per request (CISO condition
-//   TOG-355). Fail-closed: a log write failure refuses the read (503 under
-//   enforce, the default).
+// - Access log: every admin GET/HEAD runs inside the keyed read boundary. Stable
+//   route metadata does not authorize SQL or supply subjects. One row per
+//   request (CISO condition TOG-355); failed attribution or audit always
+//   refuses the buffered contents, even with the legacy enforcement flag off.
 // - POSTs carry the same origin check as /logout (SameSite=Lax already
 //   blocks cross-site cookie sends; this refuses a forged same-shape POST
 //   anyway).
@@ -29,6 +29,7 @@ import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
+import { bounceToLogin } from "../return-journey";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -39,6 +40,8 @@ import {
 } from "../sessions";
 import { dbFor } from "./db";
 import { recordAccess } from "./store";
+import { memberReadBoundary } from "../member-reads";
+import { notFoundHandler } from "../errors";
 
 export type Actor = { id: string; username: string };
 
@@ -76,18 +79,17 @@ export function enforceEnabled(env: Env): boolean {
 }
 
 /**
- * The whole guard as one ordered middleware: origin check (POST) → guest
- * redirect → moderator 403 → handler → access-log flush → no-store.
+ * Panel authorization: guest redirect → moderator 403 → handler →
+ * access-log flush → no-store. The outer app enforces same-origin writes.
  *
- * Read routes declare what member data they surfaced via `c.set("access",
- * {...})`; the guard writes the row after the handler. Writes do not log
- * here — they write the audit trail (M7) in the store instead.
+ * Read routes declare only resource/action/route via `c.set("access", {...})`.
+ * Observed keyed queries supply the subjects; unclassified reads/responses are
+ * refused. Writes audit their changes (M7) in the store instead.
  */
 export type AccessDecl = {
   resource: string;
   action: "view" | "list";
   route: string;
-  subjects: string[];
 };
 
 /**
@@ -103,15 +105,11 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
     next: Next,
   ) => {
-    if (c.req.method === "POST") {
-      const origin = c.req.header("origin");
-      if (origin && origin !== c.env.APP_URL) return c.text("Forbidden", 403);
-    }
-
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
     // Guest: into the site Discord OAuth flow, like everyone else. There is
-    // no panel login page.
-    if (!token) return c.redirect("/auth/discord", 302);
+    // no panel login page. The bounce records the page they asked for
+    // (legacy url.intended) so the callback returns them to it.
+    if (!token) return bounceToLogin(c);
 
     // A bare SessionStore keeps working as the single override (guard pins).
     const isStore = (o: unknown): o is SessionStore =>
@@ -133,46 +131,26 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     if (!actor) return c.text("Forbidden", 403);
     c.set("adminActor", actor);
 
-    await next();
-
+    if (c.req.method === "GET" || c.req.method === "HEAD") {
+      // Every admin read is observed, including a query added to an existing
+      // non-sensitive screen. Route metadata never supplies the subject keys.
+      await memberReadBoundary(c, () => {
+        const declared = c.get("access");
+        return declared ? { ...declared, viewer: actor!.id } : undefined;
+      }, async (entry) => {
+        const db = dbOverride ?? await dbFor(c);
+        if (!db) throw new Error("Admin audit database unavailable");
+        return recordAccess(db, entry);
+      }, async () => {
+        if (c.req.matchedRoutes.length > 1) await next();
+        // Only this guard matched. Render here: Hono's single-middleware path
+        // otherwise reassigns/clones a finalized not-found buffer after next().
+        else await notFoundHandler(c);
+      });
+    } else {
+      await next();
+    }
     // Never let the edge cache an authenticated panel response.
     c.header("cache-control", "private, no-store");
-
-    if (c.res.status >= 400) return;
-    // get() throws in hono when the key was never set — read defensively.
-    let decl: AccessDecl | undefined;
-    try {
-      decl = c.get("access");
-    } catch {
-      decl = undefined;
-    }
-    if (!decl) return;
-    try {
-      const db = dbOverride ?? (sessionOverride ? null : await dbFor(c));
-      if (!db && !sessionOverride && !dbOverride) throw new Error("admin needs a database for the access log");
-      if (db) {
-        await recordAccess(db, {
-          viewerDiscordId: actor.id,
-          viewerUserId: actor.id,
-          resource: decl.resource,
-          action: decl.action,
-          subjectUserIds: decl.subjects,
-          route: decl.route,
-        });
-      }
-    } catch (err) {
-      // Loud, and without the subjects in it: the app log has neither the
-      // access log's retention window nor its handling rules.
-      console.error("Member data access could not be recorded; refusing to serve the read.", {
-        route: decl.route,
-        exception: (err as Error)?.constructor?.name ?? "unknown",
-      });
-      if (enforceEnabled(c.env)) {
-        // The handler already finalized its response. Returning a new response
-        // here is ignored by Hono's compose; replace it before it leaves.
-        c.res = c.text("Member data is temporarily unavailable.", 503);
-        c.header("cache-control", "private, no-store");
-      }
-    }
   };
 }

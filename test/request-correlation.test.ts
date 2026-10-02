@@ -22,6 +22,10 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
     writeBack: { eventKey, status },
   }),
 }));
+vi.mock("../src/events/reads", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/events/reads")>(),
+  withGoingCount: async (_db: unknown, row: object) => ({ ...row, goingCount: 0 }),
+}));
 vi.mock("../src/events/rsvp", async (importOriginal) => ({
   ...await importOriginal<typeof import("../src/events/rsvp")>(),
   writeRsvp: async (_db: unknown, eventKey: string) => ({
@@ -34,7 +38,8 @@ const ID = "0123456789abcdef-LHR";
 const OTHER_ID = "fedcba9876543210-LHR";
 const KEY = "01ARYZ6S41TSV4RRFFQ69G5FAV";
 const env = { APP_URL: "https://example.test" } as Env;
-const lock: UniqueLock = { acquire: async () => true, release: async () => {} };
+const LEASE = "00000000-0000-4000-8000-000000000000";
+const lock: UniqueLock = { acquire: async () => LEASE, release: async () => {} };
 const ledger: QueueLedger = {
   enqueued: async () => {}, reserved: async () => {}, released: async () => {}, dequeued: async () => {}, failed: async () => {},
 };
@@ -85,7 +90,7 @@ describe("request correlation through queue envelopes (local fixtures)", () => {
     for (const message of sent) {
       expect(message.requestId).toBe(ID);
       expect(message.jobId).toMatch(/^[0-9a-f-]{36}$/);
-      expect(message.idempotencyKey).not.toBe(ID);
+      expect("idempotencyKey" in message && message.idempotencyKey).not.toBe(ID);
     }
     await dispatchAnnouncement(queue, { channelKey: "fixture", body: "fixture" }, "cookie-secret");
     expect(sent[3]!.requestId).toBeUndefined();

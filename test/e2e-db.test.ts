@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
-import app from "../src/index";
+import app from "./app";
 import { createPostgresSessionStore, hashToken, migrate, type Sql } from "../src/sessions";
 import type { Env } from "../src/env";
 
@@ -66,7 +66,7 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
     const replay = await app.request("/", { headers: { cookie: firstCookie } }, env);
     expect(await replay.text()).toContain("Sign in with Discord");
 
-    const out = await app.request("/logout", { method: "POST", headers: { cookie: secondCookie } }, env);
+    const out = await app.request("/logout", { method: "POST", headers: { cookie: secondCookie, origin: env.APP_URL } }, env);
     expect(out.status).toBe(303);
     const afterLogout = await app.request("/", { headers: { cookie: secondCookie } }, env);
     expect(await afterLogout.text()).toContain("Sign in with Discord");
@@ -79,7 +79,7 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
 
   it("W15 QA login writes the 30-day expiry and an expired DB row cannot authenticate", async () => {
     const qaEnv = { ...env, APP_URL: "https://next.togetherweown.com", QA_AUTH_TOKEN: "test-only-qa-token" };
-    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { "X-TWO-QA-Auth": "test-only-qa-token" } }, qaEnv);
+    const res = await app.request("/auth/qa/qa-member", { method: "POST", headers: { origin: qaEnv.APP_URL, "X-TWO-QA-Auth": "test-only-qa-token" } }, qaEnv);
     expect(res.status).toBe(204);
     const rows = await sql<{ token_hash: string; user_id: string; lifetime: number }[]>`
       select token_hash, user_id, extract(epoch from (expires_at - created_at))::float8 as lifetime from web_sessions`;

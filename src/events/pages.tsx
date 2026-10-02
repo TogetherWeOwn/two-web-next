@@ -1,5 +1,6 @@
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { Layout } from "../pages";
+import { canonicalUrl } from "../seo";
 import {
   CALENDAR_DAY_TESTID,
   CALENDAR_MONTH_STATUS_TESTID,
@@ -44,7 +45,6 @@ import {
   EVENTS_SEARCH_STATUS_TESTID,
   EVENTS_SEARCH_TESTID,
   EVENTS_SUBSCRIBE_TESTID,
-  EVENTS_SUBSCRIBE_URL,
   EVENTS_VIEW_CALENDAR_TESTID,
   EVENTS_VIEW_GROUP_LABEL,
   EVENTS_VIEW_LIST_TESTID,
@@ -73,6 +73,7 @@ import {
   monthGrid,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
+  renderGoingCount,
   transientEventKey,
   wallDateIso,
   wallTimeHm,
@@ -81,9 +82,12 @@ import {
   type CalendarState,
 } from "../islands/contracts";
 import { cardTimeLabel, type CalendarView, type DiscordTransient } from "../islands/contracts";
+import { loginUrl } from "../islands/contracts";
 import type { Session } from "../env";
-import { googleCalendarUrl } from "./feeds";
-import type { PublicEvent } from "./reads";
+import { JoinResultBanner } from "../pages";
+import type { JoinResult } from "../return-journey";
+import { feedUrl, googleCalendarUrl, webcalUrl } from "./feeds";
+import type { EventAttendee, EventLink, EventNeighbors, PublicEvent } from "./reads";
 
 const fmt = (d: Date, tz: string): string => {
   try {
@@ -93,21 +97,33 @@ const fmt = (d: Date, tz: string): string => {
   }
 };
 
-const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: string; description?: string | null }>> = ({
+const fmtWithOffset = (d: Date, tz: string): string => {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric",
+      hour: "2-digit", minute: "2-digit", timeZone: tz, timeZoneName: "longOffset",
+    }).format(d);
+  } catch {
+    return d.toISOString();
+  }
+};
+
+const Shell: FC<PropsWithChildren<{ title: string; canonical?: string; robots?: string; description?: string | null; shareTitle?: string }>> = ({
   title,
   canonical,
   robots,
   description,
+  shareTitle,
   children,
 }) => (
-  <Layout title={`${title} — Together We Own`} canonical={canonical} shareTitle={title} shareDescription={description} robots={robots}>
+  <Layout title={`${title} — Together We Own`} canonical={canonical} shareTitle={shareTitle ?? title} shareDescription={description} robots={robots}>
     <header class="bar">
       <a class="brand" href="/">TWO</a>
-      <nav>
+      <nav aria-label="Primary">
         <a href="/events">Events</a>
       </nav>
     </header>
-    <main>{children}</main>
+    <main id="main" tabindex={-1}>{children}</main>
   </Layout>
 );
 
@@ -138,12 +154,13 @@ const rowLocation = (e: CalRow): string | null => e.location;
  * Discord-native rows get "RSVP in Discord" and no going count (there are no
  * local answers to count). `isPast` suppresses the action area entirely.
  */
-const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; inviteUrl: string }> = ({
+const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; inviteUrl: string; loginReturnTo: string | null }> = ({
   e,
   zone,
   isPast,
   member,
   inviteUrl,
+  loginReturnTo,
 }) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
@@ -178,7 +195,7 @@ const CalCard: FC<{ e: CalRow; zone: string; isPast: boolean; member: boolean; i
           </p>
         ) : member ? null : (
           <p>
-            <a href="/auth/discord" data-testid="signin">
+            <a href={loginUrl(loginReturnTo)} data-testid="signin">
               {EVENTS_EMPTY_COPY.signIn}
             </a>
           </p>
@@ -326,7 +343,11 @@ export const EventsCalendarPage: FC<{
   member: boolean;
   inviteUrl: string;
   appUrl: string;
-}> = ({ state, upcoming, past, zone, now, emptyState, discordFailed, member, inviteUrl, appUrl }) => {
+  /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
+  loginReturnTo?: string | null;
+  /** One-shot join confirmation when this page is the join landing (TOG-10356). */
+  joinResult?: JoinResult | null;
+}> = ({ state, upcoming, past, zone, now, emptyState, discordFailed, member, inviteUrl, appUrl, loginReturnTo = null, joinResult = null }) => {
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
@@ -343,7 +364,7 @@ export const EventsCalendarPage: FC<{
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
   return (
-    <Shell title="Events" canonical={`${appUrl}/events`} description="Game nights, tournaments and whatever else the community puts on.">
+    <Shell title="Events" canonical={canonicalUrl(appUrl, "/events")} description="Game nights, tournaments and whatever else the community puts on.">
       <section
         data-island={EVENTS_CALENDAR_ISLAND}
         data-testid={EVENTS_CALENDAR_TESTID}
@@ -356,6 +377,10 @@ export const EventsCalendarPage: FC<{
         <h1 id="events-heading" tabindex={-1}>
           Events
         </h1>
+        {/* One-shot join confirmation (legacy join_result): /events is the
+            join landing when the CTA carried next=/events. Renders outside the
+            island zones so fragment swaps never swallow it. */}
+        {joinResult ? <JoinResultBanner result={joinResult} /> : null}
 
         {/* Live regions OUTSIDE the swapped zones (legacy TOG-5416): they must
             announce without being re-created. */}
@@ -376,14 +401,14 @@ export const EventsCalendarPage: FC<{
           <div role="group" aria-label={EVENTS_VIEW_GROUP_LABEL}>
             <a
               href={calendarUrl({ ...state, view: "list" })}
-              aria-pressed={state.view === "list"}
+              aria-current={state.view === "list" ? "page" : undefined}
               data-testid={EVENTS_VIEW_LIST_TESTID}
             >
               List
             </a>{" "}
             <a
               href={calendarUrl({ ...state, view: "calendar" })}
-              aria-pressed={state.view === "calendar"}
+              aria-current={state.view === "calendar" ? "page" : undefined}
               data-testid={EVENTS_VIEW_CALENDAR_TESTID}
             >
               Calendar
@@ -393,9 +418,10 @@ export const EventsCalendarPage: FC<{
             <a href="/events/past" data-testid={EVENTS_PAST_ARCHIVE_LINK_TESTID}>
               {EVENTS_EMPTY_COPY.pastArchive}
             </a>{" "}
-            <a href={EVENTS_SUBSCRIBE_URL} data-testid={EVENTS_SUBSCRIBE_TESTID}>
+            <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>
               {EVENTS_EMPTY_COPY.subscribe}
-            </a>
+            </a>{" "}
+            <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
           </p>
         </div>
 
@@ -415,6 +441,7 @@ export const EventsCalendarPage: FC<{
             data-testid={EVENTS_SEARCH_TESTID}
           />
           <span data-cal-zone="actions">
+            {state.past ? <input type="hidden" name="past" value="1" /> : null}
             {searching ? (
               <a href={calendarUrl({ ...state, q: "" })} data-testid={EVENTS_SEARCH_CLEAR_TESTID}>
                 {EVENTS_EMPTY_COPY.searchClear}
@@ -447,7 +474,7 @@ export const EventsCalendarPage: FC<{
               <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
               <ul data-testid={EVENTS_LIST_TESTID}>
                 {upcoming.map((e) => (
-                  <CalCard e={e} zone={zone} isPast={false} member={member} inviteUrl={inviteUrl} />
+                  <CalCard e={e} zone={zone} isPast={false} member={member} inviteUrl={inviteUrl} loginReturnTo={loginReturnTo} />
                 ))}
               </ul>
               {showPast && past.length > 0 ? (
@@ -455,7 +482,7 @@ export const EventsCalendarPage: FC<{
                   <h2>{EVENTS_PAST_LIST_HEADING}</h2>
                   <ul data-testid={EVENTS_PAST_LIST_TESTID}>
                     {past.map((e) => (
-                      <CalCard e={e} zone={zone} isPast member={member} inviteUrl={inviteUrl} />
+                      <CalCard e={e} zone={zone} isPast member={member} inviteUrl={inviteUrl} loginReturnTo={loginReturnTo} />
                     ))}
                   </ul>
                 </div>
@@ -483,7 +510,7 @@ export const EventsCalendarPage: FC<{
 };
 
 export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: boolean; totalPages: number; appUrl: string }> = ({ rows, page, hasMore, totalPages, appUrl }) => (
-  <Shell title="Past events" canonical={`${appUrl}${pastEventsUrl(page)}`} robots="noindex, follow">
+  <Shell title="Past events" canonical={canonicalUrl(appUrl, pastEventsUrl(page))} robots="noindex, follow">
     <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
       <h1 id="past-events-heading" tabindex={-1}>Past events</h1>
       <div data-archive-state>
@@ -512,29 +539,123 @@ export const PastEventsPage: FC<{ rows: PublicEvent[]; page: number; hasMore: bo
   </Shell>
 );
 
-export const EventPage: FC<{ e: PublicEvent; appUrl: string; jsonLd: string }> = ({ e, appUrl, jsonLd }) => (
-  <Shell title={e.title} canonical={`${appUrl}/e/${e.eventKey}`} description={e.description}>
-    <h1>{e.title}</h1>
-    <p>
-      <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
-    </p>
-    {e.location ? <p>{e.location}</p> : null}
-    {e.description ? <p>{e.description}</p> : null}
-    <p data-testid="going-count" data-island="going-count" data-event-key={e.eventKey}>
-      {goingCountText(e.goingCount, e.capacity)}
-    </p>
-    <p>
-      <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">Add to calendar (.ics)</a>
-      {" · "}
-      <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
-    </p>
-    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
-  </Shell>
-);
+// Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
+// the blade wraps it in @guest, so any signed-in viewer (member or
+// non-member) never sees it. The pitch carries this page as ?next= so the
+// journey lands the guest back here after joining. The one-shot join
+// confirmation still renders for the newly authenticated member.
+export const EventPage: FC<{
+  e: PublicEvent;
+  neighbors: EventNeighbors;
+  related: EventLink[];
+  attendees?: EventAttendee[];
+  appUrl: string;
+  jsonLd: string;
+  session?: Session | null;
+  joinResult?: JoinResult | null;
+  waitlistPosition?: number | null;
+}> = ({ e, neighbors, related, attendees = [], appUrl, jsonLd, session, joinResult, waitlistPosition }) => {
+  const path = `/e/${e.eventKey}`;
+  const canonical = canonicalUrl(appUrl, path);
+  return (
+    <Shell title={e.title} canonical={canonical} shareTitle={`${e.title} — Together We Own`}
+      description={e.description || "An event at Together We Own."}
+      robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}>
+      {e.status === "draft" ? <p class="notice" data-testid="event-draft">Draft</p> : null}
+      {e.status === "past" ? <p class="notice" data-testid="event-past">Past event</p> : null}
+      {e.status === "cancelled" ? <p class="notice" data-testid="event-cancelled">Cancelled</p> : null}
+      <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
+      {joinResult ? <JoinResultBanner result={joinResult} /> : null}
+      <p>
+        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
+      </p>
+      {e.location ? <p data-testid="event-venue">{e.location}</p> : null}
+      {e.description ? <p>{e.description}</p> : null}
+      <p dangerouslySetInnerHTML={{
+        __html: renderGoingCount(e.eventKey, {
+          going: e.goingCount,
+          capacity: e.capacity,
+          showSpotsLeft: true,
+          announcement: null,
+        }),
+      }} />
+      {!session ? (
+        <section data-testid="event-join-pitch" aria-label="Join the community">
+          <p>Game nights get posted here first. Join the Discord and you&apos;ll see them before they land on this page.</p>
+          <p>
+            <a class="btn" href={`/join?next=${encodeURIComponent(path)}`} data-testid="discord-join">
+              Join the Discord
+            </a>
+          </p>
+        </section>
+      ) : null}
+      <p>
+        <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">Add to calendar (.ics)</a>
+        {" · "}
+        <a href={googleCalendarUrl(e)} data-testid="event-google-calendar" rel="noopener">Google Calendar</a>
+        {" · "}
+        <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">Copy link</a>
+      </p>
+      <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {attendees.length > 0 ? (
+        <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
+          <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
+          <ul>{attendees.map((attendee) => (
+            <li><a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a></li>
+          ))}</ul>
+        </section>
+      ) : null}
+      <script src="/islands/copy-link.js" defer />
+      <script src="/islands/going-count.js" defer />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+      {neighbors.previous || neighbors.next ? (
+        <nav aria-label="More events" data-testid="event-pagination">
+          {neighbors.previous ? (
+            <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
+              ← Previous event: {neighbors.previous.title}
+            </a>
+          ) : null}{" "}
+          {neighbors.next ? (
+            <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
+              Next event: {neighbors.next.title} →
+            </a>
+          ) : null}
+        </nav>
+      ) : null}
+      {related.length > 0 ? (
+        <section aria-label="Related events" data-testid="event-related">
+          <h2>More events you might like</h2>
+          <ul>
+            {related.map((event) => (
+              <li>
+                <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
+                  {event.title}{" · "}
+                  <time datetime={event.startsAt.toISOString()}>{fmtWithOffset(event.startsAt, event.timezone)}</time>
+                  {event.location ? ` · ${event.location}` : ""}
+                </a>
+              </li>
+            ))}
+          </ul>
+          {!session ? (
+            <>
+              <p>These fill up fast for members. Join the Discord and you&apos;ll hear about the next one before it lands here.</p>
+              <a class="btn" href={`/join?next=${encodeURIComponent(path)}`} data-testid="event-related-join">
+                Join the Discord
+              </a>
+            </>
+          ) : null}
+        </section>
+      ) : null}
+    </Shell>
+  );
+};
 
-export const EventGonePage: FC = () => (
-  <Shell title="Event cancelled" robots="noindex, nofollow">
-    <h1>This event was cancelled</h1>
+export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonLd }) => (
+  <Shell title={e.title} robots="noindex, nofollow">
+    <p class="notice" data-testid="event-cancelled">Cancelled</p>
+    <h1>{e.title}</h1>
+    <p>This event was cancelled</p>
     <p><a href="/events">See upcoming events</a></p>
+    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
   </Shell>
 );

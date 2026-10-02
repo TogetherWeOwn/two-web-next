@@ -102,7 +102,7 @@ describe("app wiring", () => {
 });
 
 describe("queue.failing", () => {
-  const lock: UniqueLock = { acquire: async () => true, release: async () => {} };
+  const lock: UniqueLock = { acquire: async () => "test-lease", release: async () => {} };
   const events = {} as EventStore;
   const ledger = { released: async () => {}, dequeued: async () => {}, failed: async () => {} } as unknown as QueueLedger;
   const msg = (body: unknown, attempts: number) => ({ body, attempts, ack() {}, retry() {} });
@@ -112,6 +112,8 @@ describe("queue.failing", () => {
 
   it("logs connection/queue/job/attempts/exception on a terminal failure", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Class-only (TOG-11627): the terminal message can carry secrets, so the
+    // alert carries the error class, never its text.
     const bot = { postAnnouncement: async () => { throw new BotTerminalError("missing secret"); } } as unknown as BotClient;
     await consume({ messages: [msg(ann, 2)] }, { bot, events, lock, ledger });
     expect(failingLines(spy)).toEqual([
@@ -122,7 +124,7 @@ describe("queue.failing", () => {
         queue: "two-internal-action",
         job: "CallInternalAction",
         attempts: 2,
-        exception: "missing secret",
+        exception: "BotTerminalError",
       },
     ]);
   });
@@ -141,7 +143,7 @@ describe("queue.failing", () => {
     const boom = () => { throw new TypeError("x"); };
     const store = { find: boom } as unknown as EventStore;
     await consume(
-      { messages: [msg({ kind: "sync-event", eventKey: "e1" }, SYNC_EVENT.tries)] },
+      { messages: [msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k" }, SYNC_EVENT.tries)] },
       { bot: {} as BotClient, events: store, lock, ledger },
     );
     expect(failingLines(spy)).toMatchObject([{ queue: "two-sync-event", job: "SyncEventToDiscord" }]);

@@ -49,9 +49,14 @@ export function sanitizeSource(raw: unknown): string | null {
  * Legacy SafeRedirect::safe: the value survives only when it is a same-origin
  * path — starts with exactly one `/`, no `//`, no backslash, no scheme.
  * Hostile values leave no trace and the callback keeps the default landing.
+ *
+ * Control bytes (notably NUL) are rejected too: a surviving value lands in
+ * the callback's Location header, where Headers.set throws on them and turns
+ * an otherwise successful login into a 500.
  */
 export function safeNext(raw: unknown): string | null {
-  if (typeof raw !== "string" || raw === "" || /\s/.test(raw)) return null;
+  // eslint-disable-next-line no-control-regex
+  if (typeof raw !== "string" || raw === "" || /[\s\x00-\x1f\x7f]/.test(raw)) return null;
   if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return null;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
   try {
@@ -90,6 +95,10 @@ export async function checkJoinThrottle(sql: Sql | null, bucket: string, max: nu
 // Worker that reaches a migrated database is a no-op and one that reaches a
 // fresh staging database self-heals. The drizzle file stays the canonical
 // migration for the `db:migrate` path; this is the funnel-floor backstop.
+// The import-only legacy_id key (drizzle/1012) is deliberately absent here:
+// the admin viewer selects explicit columns so both shapes stay readable, and
+// keeping the bootstrap identical to 1000 means 1012 still applies cleanly on
+// bootstrapped databases.
 const JOIN_MIGRATION = [
   `create table if not exists join_attempts (
     id bigserial primary key,

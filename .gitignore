@@ -6,3 +6,6 @@ dist/
 .env*
 *.log
 coverage/
+artifacts/
+dist-tail/
+__pycache__/

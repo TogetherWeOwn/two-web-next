@@ -1,8 +1,16 @@
+// route-inventory: GET /events
+// route-inventory: GET /events/past
+// route-inventory: GET /events.json
+// route-inventory: GET /e/:key
+// route-inventory: POST /events
+// route-inventory: PATCH /events/:key
+// route-inventory: POST /events/:key/publish
+// route-inventory: POST /events/:key/cancel
 // W8: events sync carrier (unit, no DB) + public pages / JSON / moderator round-trips
 // (agent-testdb; skipped without DATABASE_URL like test/admin.test.ts).
 import { serializeSigned } from "hono/utils/cookie";
 import { beforeEach, describe, expect, it } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -93,7 +101,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
   // request mints a fresh cookie.
   const MOD = "mod" as const;
   const MEMBER = "member" as const;
-  const fresh = (who: typeof MOD | typeof MEMBER) => cookieFor(store, { userId: `w8-${who}`, moderator: who === MOD });
+  const fresh = (who: typeof MOD | typeof MEMBER) => cookieFor(store, { userId: who === MOD ? "100000000000000111" : "100000000000000112", moderator: who === MOD });
 
   const req = (path: string, init: RequestInit = {}) => app.request(path, init, env);
   const as = async (who: typeof MOD | typeof MEMBER, extra: Record<string, string> = {}) => ({ headers: { cookie: await fresh(who), ...extra } });
@@ -115,7 +123,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
 
   it("CRUD + publish/cancel round-trip with write-back enqueued and ULID route keys", async () => {
     expect((await write("POST", "/events", MEMBER, payload)).status).toBe(403);
-    expect((await req("/events", { method: "POST", body: "{}" })).status).toBe(401);
+    expect((await req("/events", { method: "POST", headers: { origin: APP_URL }, body: "{}" })).status).toBe(401);
 
     const created = await write("POST", "/events", MOD, payload);
     expect(created.status).toBe(201);
@@ -177,6 +185,31 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     const forged = await req("/events", { method: "POST", headers: { cookie: await fresh(MOD), origin: "https://evil.test" }, body: "{}" });
     expect(forged.status).toBe(403);
     expect((await req("/e/not-a-ulid")).status).toBe(404);
+  });
+
+  it("filters keyed JSON reads before pagination without changing draft visibility", async () => {
+    const key = String(1).padStart(26, "0");
+    const draftKey = String(99).padStart(26, "0");
+    await db.insert(events).values(Array.from({ length: 26 }, (_, i) => ({
+      eventKey: String(i + 1).padStart(26, "0"), title: `Game ${i + 1}`, status: "published",
+      startsAt: new Date(Date.UTC(2099, 0, i + 1)), endsAt: new Date(Date.UTC(2099, 0, i + 1, 1)),
+    })));
+    await db.insert(events).values({ eventKey: draftKey, title: "Draft game", status: "draft",
+      startsAt: new Date("2099-02-01T00:00:00Z"), endsAt: new Date("2099-02-01T01:00:00Z") });
+    const first = await req("/events.json", await as(MEMBER));
+    const firstRows = (await first.json() as { data: { event_key: string }[] }).data;
+    expect(firstRows).toHaveLength(20);
+    expect(firstRows.some((row) => row.event_key === key)).toBe(false);
+    const selected = await req(`/events.json?event_key=${key}`, await as(MEMBER));
+    expect(selected.status).toBe(200);
+    const selectedRows = (await selected.json() as { data: { event_key: string; going_count: number }[] }).data;
+    expect(selectedRows).toHaveLength(1);
+    expect(selectedRows[0]).toMatchObject({ event_key: key, going_count: 0 });
+    const hidden = await req(`/events.json?event_key=${draftKey}`, await as(MEMBER));
+    expect((await hidden.json() as { data: unknown[] }).data).toEqual([]);
+    const shown = await req(`/events.json?event_key=${draftKey}`, await as(MOD));
+    expect((await shown.json() as { data: { event_key: string }[] }).data[0]?.event_key).toBe(draftKey);
+    expect((await req(`/events.json?event_key=${key}`)).status).toBe(401);
   });
 
   it("past archive pages twenty newest-first eligible rows with a stable tie-break and correct page count", async () => {

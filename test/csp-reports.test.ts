@@ -1,5 +1,6 @@
+// route-inventory: POST /csp-reports
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import {
   MAX_CSP_REPORT_BYTES,
   cspReportLogFields,
@@ -280,7 +281,7 @@ describe("cspReportLogFields", () => {
       blocked_uri: null,
       violated_directive: null,
       document_uri: null,
-      source_file: "x",
+      source_file: null,
       line_number: null,
     });
   });

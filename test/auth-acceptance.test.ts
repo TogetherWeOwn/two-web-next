@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { QA_HEADER, QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, hashToken, type SessionStore } from "../src/sessions";
@@ -29,7 +29,7 @@ function isolated() {
   return { store, env: { ...env, SESSION_STORE: store } as Env };
 }
 const qaLogin = (e: Env, identity = "qa-member", headers: Record<string, string> = {}) =>
-  app.request(`/auth/qa/${identity}`, { method: "POST", headers: { [QA_HEADER]: env.QA_AUTH_TOKEN!, ...headers } }, e);
+  app.request(`/auth/qa/${identity}`, { method: "POST", headers: { origin: new URL(e.APP_URL).origin, [QA_HEADER]: env.QA_AUTH_TOKEN!, ...headers } }, e);
 
 function mockDiscord(failAt?: "exchange" | "user" | "join", globalName: string | null = "Display Name") {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -67,7 +67,10 @@ describe("W15 Discord login and callback boundaries", () => {
     expect(url.searchParams.get("scope")).toBe("identify guilds.join");
     expect(url.searchParams.get("client_id")).toBe(env.DISCORD_CLIENT_ID);
     expect(url.searchParams.get("state")).not.toBe(new URL(second.headers.get("location")!).searchParams.get("state"));
-    const stateCookie = first.headers.getSetCookie()[0]!;
+    // A bare /auth/discord emits the state cookie plus the stale-clear
+    // deletion for the explicit next (TOG-10356 finding 6): find by name,
+    // never by position.
+    const stateCookie = first.headers.getSetCookie().find((c) => c.startsWith("__Host-two_oauth_state="))!;
     for (const flag of ["__Host-two_oauth_state=", "Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=600"]) {
       expect(stateCookie).toContain(flag);
     }
@@ -81,7 +84,12 @@ describe("W15 Discord login and callback boundaries", () => {
       const start = await app.request("/auth/discord", {}, e);
       const result = await app.request(`/auth/discord/callback${query}`, { headers: { cookie: cookies(start) } }, e);
       expect(result.status).toBe(302);
-      expect(result.headers.get("location")).toBe("/?n=signin_failed");
+      // A consent refusal (error=access_denied) gets its own user-visible
+      // meaning — "you cancelled" — distinct from the generic failure banner
+      // (TOG-10355, legacy DiscordLoginTest denial row). None of these rows
+      // may reach Discord.
+      const notice = query.includes("error=access_denied") ? "signin_denied" : "signin_failed";
+      expect(result.headers.get("location")).toBe(`/?n=${notice}`);
       expect(fetch).not.toHaveBeenCalled();
       expect(result.headers.getSetCookie().join("\n")).toContain("__Host-two_oauth_state=; Max-Age=0");
       expect(result.headers.getSetCookie().join("\n")).not.toContain(`${SESSION_COOKIE}=`);
@@ -93,7 +101,11 @@ describe("W15 Discord login and callback boundaries", () => {
     mockDiscord(step);
     const res = await signIn(e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/?n=signin_failed");
+    // Classification, not a blanket banner (TOG-10355): a 401 on the token
+    // endpoint is OUR credentials being rejected (generic failure copy); a
+    // 503 from the user endpoint is a Discord outage ("on Discord, not you").
+    const notice = step === "exchange" ? "signin_failed" : "signin_unavailable";
+    expect(res.headers.get("location")).toBe(`/?n=${notice}`);
     expect(await res.text()).not.toContain("untrusted-upstream-body");
     expect(res.headers.getSetCookie().join("\n")).not.toContain(`${SESSION_COOKIE}=`);
   });
@@ -209,7 +221,7 @@ describe("W15 session lifetime, rotation and logout", () => {
 
   it("guest logout is idempotent", async () => {
     const { env: e } = isolated();
-    for (let i = 0; i < 2; i++) expect((await app.request("/logout", { method: "POST" }, e)).status).toBe(303);
+    for (let i = 0; i < 2; i++) expect((await app.request("/logout", { method: "POST", headers: { origin: e.APP_URL } }, e)).status).toBe(303);
   });
 });
 
@@ -239,7 +251,7 @@ describe("W15 staging-only QA login (deliberate POST divergence)", () => {
     const { env: e } = isolated();
     const fetch = mockDiscord();
     const responses = await Promise.all([
-      app.request("/auth/qa/qa-member", { method: "POST" }, e),
+      app.request("/auth/qa/qa-member", { method: "POST", headers: { origin: e.APP_URL } }, e),
       qaLogin(e, "qa-member", { [QA_HEADER]: "wrong-test-token" }),
       qaLogin(e, "not-a-fixture"),
     ]);

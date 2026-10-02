@@ -1,18 +1,18 @@
 // Exercise runtime factories (no injected stores) against an owned test schema.
 // The driver wrapper only pins search_path; all SQL goes to test containers.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type postgres from "postgres";
-import app from "../src/index";
+import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
+import type { DiscordEventsSource } from "../src/events/discord-transients";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
 
-const state = vi.hoisted(() => ({
-  schema: "",
-  urls: [] as string[],
-  clients: [] as { end: () => Promise<void> }[],
-}));
+const state = await vi.hoisted(async () => {
+  const { RequestClients } = await import("./helpers/request-clients");
+  return { schema: "", urls: [] as string[], clients: new RequestClients() };
+});
 vi.mock("postgres", async (importOriginal) => {
   const { default: original } = await importOriginal<{ default: typeof postgres }>();
   return { default: (url: string, options: Record<string, unknown> = {}) => {
@@ -24,39 +24,41 @@ vi.mock("postgres", async (importOriginal) => {
     });
     if (state.schema) {
       state.urls.push(url);
-      state.clients.push(client);
+      state.clients.track(client);
     }
     return client;
   } };
 });
 
-const baseEnv: Env = {
+const baseEnv: Env & { DISCORD_EVENTS: DiscordEventsSource } = {
   APP_URL: STAGING_APP_URL,
   DISCORD_CLIENT_ID: "test-client",
   DISCORD_GUILD_ID: "test-guild",
   DISCORD_INVITE_URL: "https://discord.gg/test",
   DISCORD_CLIENT_SECRET: "test-client-secret",
   DISCORD_BOT_TOKEN: "test-bot-token",
+  DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
   QA_AUTH_TOKEN: "test-only-qa-token",
 };
-const cookieFrom = (res: Response) => res.headers.get("set-cookie")!.split(";")[0]!;
+const cookieFrom = (res: Response) => {
+  // Status liveness is not authentication; never rely on Set-Cookie ordering.
+  const sessions = res.headers.getSetCookie().filter((cookie) => cookie.startsWith("__Host-two_session="));
+  expect(sessions).toHaveLength(1);
+  return sessions[0]!.split(";")[0]!;
+};
 const memberId = QA_IDENTITIES["qa-member"]!.discordId;
 
 describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", () => {
   let fixture: MemberDataFixture;
   let env: Env;
+  let remoteFetch: MockInstance<typeof fetch>;
   const upcomingKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
-  const request = async (path: string, init: RequestInit = {}, bindings = env) => {
-    try {
-      return await app.request(path, init, bindings);
-    } finally {
-      // Request-scoped clients must not exhaust CI's 100-connection service
-      // while exercising 30 rapid writes. Persistence must survive closure.
-      await Promise.all(state.clients.splice(0).map((client) => client.end()));
-    }
-  };
+  // Keep real per-request connections without allowing a late request's
+  // cleanup to close the next test's clients after a Vitest timeout.
+  const request = (path: string, init: RequestInit = {}, bindings = env) =>
+    state.clients.run(async () => app.request(path, init, bindings));
 
   beforeAll(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!).href;
@@ -72,15 +74,26 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     ]);
   });
 
+  beforeEach(() => {
+    remoteFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected external fetch"));
+  });
+  afterEach(() => {
+    try {
+      expect(remoteFetch).not.toHaveBeenCalled();
+    } finally {
+      remoteFetch?.mockRestore();
+    }
+  });
+
   afterAll(async () => {
-    await Promise.all(state.clients.map((client) => client.end()));
+    await state.clients.drain();
     state.schema = "";
     await fixture?.dispose();
   });
 
   const login = async (identity = "qa-member", bindings = env) => {
     const res = await request(`/auth/qa/${identity}`, {
-      method: "POST", headers: { "X-TWO-QA-Auth": baseEnv.QA_AUTH_TOKEN! },
+      method: "POST", headers: { origin: bindings.APP_URL, "X-TWO-QA-Auth": baseEnv.QA_AUTH_TOKEN! },
     }, bindings);
     expect(res.status).toBe(204);
     return cookieFrom(res);
@@ -120,7 +133,9 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     expect((await request("/admin", { headers: { cookie: moderator } }, env)).status).toBe(200);
   });
 
-  it("enforces profile writes at 30/min through the binding", async () => {
+  // 31 serial HTTP writes each create and close real factory-owned clients.
+  // Allow coverage on the shared runner without changing any other timeout.
+  it("enforces profile writes at 30/min through the binding", async ({ signal, onTestFinished }) => {
     const cookie = await login();
     // Isolate this budget from other requests and the wall-clock minute boundary.
     await fixture.client`DELETE FROM web_throttle_hits`;
@@ -129,11 +144,16 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
       body: JSON.stringify({ bio: "Binding bio", games: ["Chess"], timezone: "UTC" }),
     }, env);
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    onTestFinished(() => { clock.mockRestore(); });
     try {
-      for (let i = 0; i < 30; i++) expect((await write()).status).toBe(303);
+      for (let i = 0; i < 30; i++) {
+        signal.throwIfAborted();
+        expect((await write()).status).toBe(303);
+      }
+      signal.throwIfAborted();
       expect((await write()).status).toBe(429);
     } finally { clock.mockRestore(); }
-  });
+  }, 15_000);
 
   it("enforces join starts at 10/min through the binding", async () => {
     await fixture.client`DELETE FROM web_throttle_hits`;
@@ -143,7 +163,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
       expect((await request("/join/discord", {}, bindings)).status).toBe(302);
     }
     expect((await request("/join/discord", {}, bindings)).status).toBe(429);
-  });
+  }, 30_000);
 
   it("keeps explicit configuration ahead of the binding in all login/profile factories", async () => {
     state.urls.length = 0;

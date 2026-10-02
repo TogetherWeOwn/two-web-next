@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import app from "../src/index";
+import app from "./app";
 import { registerErrorHandlers } from "../src/errors";
 import type { Env } from "../src/env";
 import { newRequestId, requestLog, safeRequestId } from "../src/request-log";
@@ -124,7 +124,7 @@ describe("structured request logs (local fixtures only)", () => {
   it("is mounted on the real app including errors, redirects and guarded sub-apps", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     for (const [path, status, route] of [
-      ["/health", 200, "/health"], ["/discord", 302, "/discord"],
+      ["/up", 503, "/up"], ["/discord", 302, "/discord"],
       ["/members/123456789012345678", 302, "/members/:user"],
       ["/admin/events/123456789012345678", 302, "/admin/events/:key"],
       ["/no-such-path/123456789012345678", 404, "unmatched"],

@@ -1,3 +1,7 @@
+// route-inventory: GET /profile
+// route-inventory: GET /members/:user
+// route-inventory: PATCH /members/:user
+// route-inventory: POST /members/:user
 // W7 member journeys: /profile, /members/:user, PATCH /members/:user (TOG-9686).
 //
 // Exposure tests come first by design: the matrix pins what a guest, a signed-in
@@ -8,13 +12,17 @@
 // - Live (agent-testdb, skipped without DATABASE_URL): real users/profiles/
 //   member_data_access_logs rows through the drizzle store.
 
+import { Hono, type Context } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AccessEntry } from "../src/access-log";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import type { Db } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { profiles, users } from "../src/db/schema";
 import type { Env } from "../src/env";
+import { sameOrigin } from "../src/same-origin";
+import { JOIN_RESULT_COOKIE } from "../src/return-journey";
 import { recordAccess } from "../src/admin/store";
 import { profilesApp, PROFILE_WRITE_THROTTLE_PER_MINUTE } from "../src/profiles/routes";
 import { createDbProfileStore, createMemoryProfileStore, type MemberView } from "../src/profiles/store";
@@ -85,12 +93,12 @@ function harness(opts: { logDown?: boolean; throttle?: (b: string) => Promise<{ 
 }
 
 describe("exposure matrix: who sees what (memory doubles)", () => {
-  it("guest: redirected to Discord OAuth on every route, nothing rendered, nothing logged", async () => {
+  it("guest: reads go to OAuth, writes to explicit recovery, nothing rendered or logged", async () => {
     const { app, log } = harness();
     for (const [method, path] of [["GET", "/profile"], ["GET", `/members/${ALICE.userId}`], ["PATCH", `/members/${ALICE.userId}`]] as const) {
       const res = await app.request(path, { method }, env);
-      expect(res.status, `${method} ${path}`).toBe(302);
-      expect(res.headers.get("location")).toBe("/auth/discord");
+      expect(res.status, `${method} ${path}`).toBe(method === "PATCH" ? 303 : 302);
+      expect(res.headers.get("location")).toBe(method === "PATCH" ? "/auth/recover?next=%2Fprofile" : "/auth/discord");
       expect(await res.text()).not.toContain("alice");
     }
     expect(log).toHaveLength(0);
@@ -100,6 +108,25 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
     const { app } = harness();
     const res = await app.request("/profile", { headers: { cookie: "__Host-two_session=garbage" } }, env);
     expect(res.status).toBe(302);
+  });
+
+  it("session failure refuses contents with no-store and class-only diagnostics", async () => {
+    const { app, sessions, store, log } = harness();
+    const cookie = await cookieFor(sessions, BOB);
+    const find = vi.spyOn(store, "find");
+    const fail = vi.spyOn(sessions, "get").mockRejectedValue(new Error(`private-query ${BOB.userId} ${ALICE.userId}`));
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await app.request(`/members/${ALICE.userId}`, { headers: { cookie } }, env);
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.text()).not.toMatch(/alice|private-query|10000000000000000/);
+      expect(diagnostic).toHaveBeenCalledExactlyOnceWith("profiles could not resolve the session; refusing.", { exception: "Error" });
+      expect(find).not.toHaveBeenCalled();
+      expect(log).toHaveLength(0);
+    } finally {
+      fail.mockRestore(); find.mockRestore(); diagnostic.mockRestore();
+    }
   });
 
   it("signed-in non-member: 403 on every route, nothing rendered, nothing logged", async () => {
@@ -169,6 +196,27 @@ describe("member-access-log (memory doubles)", () => {
     });
   });
 
+  it.each(["/profile", `/members/${ALICE.userId}`])("HEAD %s leaves the banner for exactly one visible GET", async (path) => {
+    const { app, sessions } = harness();
+    const session = await cookieFor(sessions, BOB);
+    const flash = (await serializeSigned(JOIN_RESULT_COOKIE, "already_member", SESSION_SECRET, {
+      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+    })).split(";")[0]!;
+    const cookie = `${session}; ${flash}`;
+    const head = await app.request(path, { method: "HEAD", headers: { cookie } }, env);
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+    expect(head.headers.getSetCookie().some((c) => c.startsWith(`${JOIN_RESULT_COOKIE}=`))).toBe(false);
+
+    const first = await app.request(path, { headers: { cookie } }, env);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    expect(await first.text()).toContain('data-testid="join-result"');
+    expect(first.headers.getSetCookie().join("\n")).toContain(`${JOIN_RESULT_COOKIE}=; Max-Age=0`);
+    const second = await app.request(path, { headers: { cookie: session } }, env);
+    expect(await second.text()).not.toContain('data-testid="join-result"');
+  });
+
   it("a moderator's read is logged the same as a member's", async () => {
     const { app, sessions, log } = harness();
     await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, MOD) } }, env);
@@ -201,7 +249,59 @@ describe("member-access-log (memory doubles)", () => {
     spy.mockRestore();
   });
 
-  it("MEMBER_ACCESS_LOG_ENFORCE=false degrades: served, but still logged loudly", async () => {
+  it.each(["already_member", "added"])("audit-failure 503 preserves %s until one successful display", async (result) => {
+    const opts = { logDown: true };
+    const { app, sessions, log } = harness(opts);
+    const session = await cookieFor(sessions, BOB);
+    const flash = (await serializeSigned(JOIN_RESULT_COOKIE, result, SESSION_SECRET, {
+      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
+    })).split(";")[0]!;
+    const jar = new Map([session, flash].map((pair) => [pair.slice(0, pair.indexOf("=")), pair]));
+    const apply = (res: Response) => {
+      for (const cookie of res.headers.getSetCookie()) {
+        const pair = cookie.split(";")[0]!;
+        const name = pair.slice(0, pair.indexOf("="));
+        if (/max-age=0/i.test(cookie)) jar.delete(name);
+        else jar.set(name, pair);
+      }
+    };
+    const get = () => app.request(`/members/${ALICE.userId}`, {
+      headers: { cookie: [...jar.values()].join("; ") },
+    }, env);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const refused = await get();
+      expect(refused.status).toBe(503);
+      expect(refused.headers.get("cache-control")).toBe("private, no-store");
+      expect(await refused.text()).toBe("Member data is temporarily unavailable.");
+      expect(log).toHaveLength(0);
+      expect(spy).toHaveBeenCalled();
+      apply(refused);
+      expect(jar.get(JOIN_RESULT_COOKIE)).toBe(flash);
+
+      opts.logDown = false;
+      const first = await get();
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("private, no-store");
+      const html = await first.text();
+      expect(html).toContain('data-testid="join-result"');
+      if (result === "already_member") expect(html).toContain('data-testid="reinvite-link"');
+      else expect(html).toContain("You are in. Finish Discord&#39;s rules screening before you can post.");
+      expect(log).toHaveLength(1);
+      expect(log[0]?.subjectUserIds).toEqual([ALICE.userId]);
+      apply(first);
+      expect(jar.has(JOIN_RESULT_COOKIE)).toBe(false);
+
+      const second = await get();
+      expect(second.status).toBe(200);
+      expect(await second.text()).not.toContain('data-testid="join-result"');
+      expect(log).toHaveLength(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("MEMBER_ACCESS_LOG_ENFORCE=false cannot bypass the keyed read boundary", async () => {
     const { app, sessions } = harness({ logDown: true });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await app.request(
@@ -209,7 +309,8 @@ describe("member-access-log (memory doubles)", () => {
       { headers: { cookie: await cookieFor(sessions, BOB) } },
       { ...env, MEMBER_ACCESS_LOG_ENFORCE: "false" },
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain("alice");
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -256,7 +357,8 @@ describe("PATCH /members/:user (memory doubles)", () => {
 
   it("wrong origin is refused before anything else", async () => {
     const { app, sessions, store } = harness();
-    const res = await app.request(
+    const mounted = new Hono<{ Bindings: Env }>().use("*", sameOrigin).route("/", app);
+    const res = await mounted.request(
       `/members/${ALICE.userId}`,
       form(await cookieFor(sessions, ALICE), { bio: "x", games_text: "" }, { origin: "https://evil.example" }),
       env,
@@ -277,8 +379,33 @@ describe("PATCH /members/:user (memory doubles)", () => {
     for (const fields of bad) {
       const res = await app.request(`/members/${ALICE.userId}`, form(cookie, fields), env);
       expect(res.status).toBe(422);
-      expect(await res.text()).toContain('role="alert"');
+      const html = await res.text();
+      expect(html).toContain('<div role="alert" tabindex="-1" data-testid="profile-error"><ul>');
+      expect(html).not.toContain('<ul role="alert"');
     }
+    expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
+  });
+
+  it.each([false, true])("upload read failures return 400 without saving (partial: %s)", async (partial) => {
+    const { app, sessions, store } = harness();
+    const escaped = vi.fn((_err: Error, c: Context) => c.text("Internal Server Error", 500));
+    app.onError(escaped);
+    const save = vi.spyOn(store, "save");
+    let reads = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (partial && reads++ === 0) controller.enqueue(new TextEncoder().encode('{"bio":'));
+        else controller.error(new Error("fixture upload failure, do not expose"));
+      },
+    }, { highWaterMark: 0 });
+    const response = await app.request(new Request(`http://localhost/members/${ALICE.userId}`, {
+      method: "PATCH", body, duplex: "half",
+      headers: { cookie: await cookieFor(sessions, ALICE), "content-type": "application/json" },
+    } as RequestInit), undefined, env);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Bad request");
+    expect(escaped).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
     expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
   });
 
@@ -313,12 +440,12 @@ describe("validateProfile", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
-  const wipe = async () => {
-    await db.delete(memberDataAccessLogs);
-    await db.delete(profiles);
-    await db.delete(users);
-  };
+  let fixture: MemberDataFixture;
+  let db: Db;
+  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
+  afterEach(() => fixture?.reset());
+  afterAll(() => fixture?.dispose());
+  const wipe = () => fixture.reset();
   const setup = async () => {
     await wipe();
     await db.insert(users).values([
@@ -387,7 +514,7 @@ describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-te
     expect((await db.select().from(profiles)).filter((p) => p.userId === BOB.userId)).toHaveLength(1);
   });
 
-  it("log write failure against the real recorder refuses the read (503)", async () => {
+  it("a throwing sink with real profile rows refuses the read (503)", async () => {
     await setup();
     const sessions = createMemorySessionStore();
     const app = profilesApp({

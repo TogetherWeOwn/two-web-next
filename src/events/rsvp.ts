@@ -3,24 +3,24 @@
 //
 // Concurrency: both verbs lock the event row (`SELECT ... FOR UPDATE`) inside one
 // transaction, so capacity checks and status flips for one event are serialised — the
-// loser of a race for the last seat re-reads the count after the winner commits and gets
-// `at_capacity`. Same Postgres, same lock as Laravel's lockForUpdate().
-import { and, count, eq, sql } from "drizzle-orm";
+// loser of a race for the last seat re-reads the count after the winner commits and joins
+// the waitlist. Same Postgres, same lock as Laravel's lockForUpdate().
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { RSVP_RATE_LIMIT, RSVP_STATUSES, type RsvpWriteStatus } from "../islands/contracts";
 import { enqueueEventSync } from "./sync";
+import { lockWaitlist, promoteWaitlist, waitlistPosition } from "./waitlist";
 import type { Env } from "../env";
 import type { EventStatus } from "../admin/validation";
 
 export const isRsvpStatus = (v: unknown): v is RsvpWriteStatus => (RSVP_STATUSES as readonly unknown[]).includes(v);
 
-export type RsvpAnswer = { status: RsvpWriteStatus; syncedToDiscordAt: Date | null };
+export type RsvpAnswer = { status: RsvpWriteStatus; syncedToDiscordAt: Date | null; waitlistPosition: number | null };
 export type RsvpWriteResult =
   | { ok: true; created: boolean; answer: RsvpAnswer; mirrored: EventStatus | null; eventKey: string }
   | { ok: false; reason: "not_found" }
   | { ok: false; reason: "closed"; why: "draft" | "cancelled" | "past" | "paused" }
-  | { ok: false; reason: "at_capacity"; capacity: number }
   | { ok: false; reason: "limited"; retryAfter: number };
 
 /** Draft/cancelled/past events and paused ones take no new answers (RsvpPolicy + TOG-8725). */
@@ -42,35 +42,44 @@ export async function writeRsvp(db: Db, eventKey: string, userId: string, status
     // event has ended. Empty for a first answer, which has no row to wait on.
     const [existing] = await tx.select().from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)))
       .for("update");
-    // Blocking maintenance BEFORE the final decision: the global prune can wait on a
-    // contended expired row, and a wait after the clock is read would let an answer slip
-    // in after the event ends. The event row is locked above, so its columns cannot change
-    // under us while we wait; only the clock moves. Read it once all waits — member,
-    // event, RSVP row, prune — are behind us and judge expiry then.
+    // Promotion can wait on another member's mirror-stamp writer. Finish that wait
+    // and the global prune before judging expiry or stamping the budget hit.
+    if (ev.status === "published" && ev.rsvpOpen) await lockWaitlist(tx, ev.id);
     await pruneThrottle(tx);
     const now = clock();
     const why = closedWhy(ev, now);
     if (why) return { ok: false, reason: "closed", why } as const;
-    // Only an answer that newly takes a seat has to fit.
-    const takesASeat = status === "going" && existing?.status !== "going";
-    if (takesASeat && ev.capacity !== null) {
-      const [tally] = await tx.select({ n: count() }).from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.status, "going")));
-      if (Number(tally?.n ?? 0) >= ev.capacity) return { ok: false, reason: "at_capacity", capacity: ev.capacity } as const;
-    }
-    // Budget is charged only for a write that is accepted: policy and capacity are decided
-    // above under the row lock, the hit and the write commit together below.
+    // Every new seat request joins the line before allocation, even with a vacancy.
+    // The same FIFO pass handles explicit waitlist answers from a stale full view;
+    // neither can bypass an accepted head. Existing holders retain their seat.
+    const settledStatus = status === "going" && existing?.status !== "going" ? "waitlisted" : status;
+    // Budget is charged only for an accepted write, including a waitlist answer.
+    // Policy, the hit and the write share the same transaction and event lock.
     const verdict = await chargeThrottle(tx, userId);
     if (verdict.limited) return { ok: false, reason: "limited", retryAfter: verdict.retryAfter } as const;
+    // Joining from an older non-waitlisted answer is a new place, not its old priority.
+    // Recreate both FIFO keys so even equal timestamps cannot jump existing waiters.
+    if (settledStatus === "waitlisted" && existing && existing.status !== "waitlisted") {
+      await tx.delete(rsvps).where(eq(rsvps.id, existing.id));
+    }
     // Any change makes the Discord mirror stale again.
-    const [row] = await tx
+    await tx
       .insert(rsvps)
-      .values({ eventId: ev.id, userId, status, syncedToDiscordAt: null })
-      .onConflictDoUpdate({ target: [rsvps.eventId, rsvps.userId], set: { status, syncedToDiscordAt: null, updatedAt: now } })
-      .returning();
+      // Use the database's post-lock clock and full precision for fresh FIFO keys,
+      // not transaction-start now() or a skewed/millisecond Worker Date.
+      .values({ eventId: ev.id, userId, status: settledStatus, syncedToDiscordAt: null, createdAt: sql`clock_timestamp()`, updatedAt: now })
+      .onConflictDoUpdate({ target: [rsvps.eventId, rsvps.userId], set: { status: settledStatus, syncedToDiscordAt: null, updatedAt: now } });
+    await promoteWaitlist(tx, ev, clock);
+    // Return the committed allocation, including callers that promoted themselves.
+    const [row] = await tx.select().from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)));
     return {
       ok: true,
       created: !existing,
-      answer: { status: row!.status as RsvpWriteStatus, syncedToDiscordAt: row!.syncedToDiscordAt },
+      answer: {
+        status: row!.status as RsvpWriteStatus,
+        syncedToDiscordAt: row!.syncedToDiscordAt,
+        waitlistPosition: row!.status === "waitlisted" ? await waitlistPosition(tx, ev.id, userId) : null,
+      },
       mirrored: "published",
       eventKey: ev.eventKey,
     } as const;
@@ -89,15 +98,15 @@ export async function withdrawRsvp(db: Db, eventKey: string, userId: string): Pr
       const verdict = await chargeThrottle(tx, userId);
       return verdict.limited ? ({ limited: true, retryAfter: verdict.retryAfter } as const) : ({ limited: false, deleted: false, status: null } as const);
     }
-    // Blocking maintenance before the row-lock wait: the global prune can wait on a
-    // contended expired row, and a wait after the hit is stamped would age the accepted
-    // write out of its window. Take the RSVP row lock only after it: a wait on a
-    // mirror-stamp writer must finish before the hit is stamped.
-    await pruneThrottle(tx);
+    // Own row, promotion rows and maintenance can all wait on other writers.
+    // Take them before the hit is stamped so an accepted debit stays fresh.
     await tx.select({ id: rsvps.id }).from(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId))).for("update");
+    if (ev.status === "published" && ev.rsvpOpen) await lockWaitlist(tx, ev.id);
+    await pruneThrottle(tx);
     const verdict = await chargeThrottle(tx, userId);
     if (verdict.limited) return { limited: true, retryAfter: verdict.retryAfter } as const;
     const gone = await tx.delete(rsvps).where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId))).returning({ id: rsvps.id });
+    if (gone.length > 0) await promoteWaitlist(tx, ev);
     const mirrorable = ev.status === "published" || ev.status === "cancelled";
     return { limited: false, deleted: gone.length > 0, status: gone.length > 0 && mirrorable ? (ev.status as EventStatus) : null } as const;
   });
@@ -125,10 +134,9 @@ async function chargeThrottle(tx: Tx, userId: string): Promise<Verdict> {
   const { maxAttempts, decaySeconds } = RSVP_RATE_LIMIT;
   {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${bucket}))`);
-    // The global prune already ran before the final accept/charge decision (PUT runs it
-    // ahead of the clock read; DELETE runs it ahead of the row lock wait). Counting and
-    // inserting here, so the window is always judged fresh; refused writes return before
-    // this point and spend nothing.
+    // The own/promotion row locks and global prune ran before this final decision.
+    // Count and insert here so the window is judged fresh; policy-refused writes
+    // return before this point and spend nothing.
     const rows = (await tx.execute(sql`
       select count(*)::int as n,
         coalesce(ceil(extract(epoch from (min(at) + make_interval(secs => ${decaySeconds}) - clock_timestamp()))), 1)::int as wait

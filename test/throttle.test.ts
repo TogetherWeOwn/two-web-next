@@ -1,7 +1,8 @@
 // N5 (TOG-9897): human-route throttles + the every-POST-throttled audit
 // (ports TOG-8709: a new mutating route that ships without a throttle fails CI).
 import { describe, expect, it } from "vitest";
-import app from "../src/index";
+import rawApp from "../src/index";
+import app from "./app";
 import type { Env } from "../src/env";
 import { isThrottleMiddleware, throttle, type EnvWithThrottle } from "../src/throttle";
 import { Hono } from "hono";
@@ -20,7 +21,7 @@ const EXEMPT: Record<string, string> = {
 };
 
 describe("every mutating route is throttled", () => {
-  const routes = app.routes.filter((r) => MUTATING.has(r.method));
+  const routes = rawApp.routes.filter((r) => MUTATING.has(r.method));
   const keys = new Map<string, boolean>();
   for (const r of routes) {
     const k = `${r.method} ${r.path}`;
@@ -32,6 +33,14 @@ describe("every mutating route is throttled", () => {
   it("has no unthrottled mutating route outside the exemption list", () => {
     const bare = [...keys].filter(([k, t]) => !t && !(k in EXEMPT)).map(([k]) => k);
     expect(bare).toEqual([]);
+  });
+
+  it("registers throttled pause/reopen actions in both route families", () => {
+    for (const prefix of ["/events", "/admin/events"]) {
+      for (const action of ["rsvp-pause", "rsvp-reopen"]) {
+        expect(keys.get(`POST ${prefix}/:key/${action}`)).toBe(true);
+      }
+    }
   });
 
   it("keeps the exemption list honest (every entry is a real route)", () => {
@@ -87,14 +96,28 @@ describe("throttle middleware", () => {
 });
 
 describe("budgets on the legacy paths", () => {
+  it("pause/reopen share the existing 30/min event-write budget", async () => {
+    const { sql } = fakeStore();
+    const e = { APP_URL: "https://next.example.test", THROTTLE_STORE: async () => sql } as unknown as EnvWithThrottle;
+    const actions = ["publish", "cancel", "rsvp-pause", "rsvp-reopen"];
+    const init = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
+    for (let i = 0; i < 30; i++) {
+      expect((await app.request(`/events/abc/${actions[i % actions.length]}`, init, e)).status).toBe(401);
+    }
+    const res = await app.request("/events/abc/rsvp-reopen", init, e);
+    expect(res.status).toBe(429);
+    expect(await res.json()).toMatchObject({ reason: "rate_limited", retry_after: 30 });
+  });
+
   it("logout: 30 then 429; qa login: 10 then 429", async () => {
     const { sql } = fakeStore();
     const e = {
-      APP_URL: "https://next.example.test",
+      // Enable the QA environment gate in-process; no staging HTTP/DB.
+      APP_URL: "https://next.togetherweown.com", QA_AUTH_TOKEN: "test-only-qa-token",
       SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
       THROTTLE_STORE: async () => sql,
     } as unknown as EnvWithThrottle;
-    const json = { method: "POST", headers: { accept: "application/json" } };
+    const json = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
     for (let i = 0; i < 30; i++) expect((await app.request("/logout", json, e)).status).toBe(303);
     expect((await app.request("/logout", json, e)).status).toBe(429);
     for (let i = 0; i < 10; i++) expect((await app.request("/auth/qa/x", json, e)).status).not.toBe(429);

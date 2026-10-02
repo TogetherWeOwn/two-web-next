@@ -45,14 +45,15 @@ export const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
 export const canonicalUrl = (appUrl: string, path: string): string =>
   `${stripTrailingSlash(appUrl)}${path}`;
 
-// Static entries for the routes live in W4. /join, /events and friends join
-// the index in their own slices (see docs/url-freeze.md) — a sitemap must
-// never list a URL that 404s.
+// Static entries for the routes live today (parity matrix §1: home 1.0, join
+// 0.9, events.index 0.8 daily, leaves 0.7, published /e/{key} 0.6). A sitemap
+// must never list a URL that 404s, and /events/past stays out (TOG-7072).
 export function buildSitemapUrls(appUrl: string, events: SitemapEvent[]): SitemapUrl[] {
   const base = stripTrailingSlash(appUrl);
   const urls: SitemapUrl[] = [
     { loc: `${base}/`, changefreq: "weekly", priority: "1.0" },
     { loc: `${base}/join`, changefreq: "monthly", priority: "0.9" },
+    { loc: `${base}/events`, changefreq: "daily", priority: "0.8" },
     { loc: `${base}/about`, changefreq: "monthly", priority: "0.7" },
     { loc: `${base}/faq`, changefreq: "monthly", priority: "0.7" },
     { loc: `${base}/rules`, changefreq: "monthly", priority: "0.7" },

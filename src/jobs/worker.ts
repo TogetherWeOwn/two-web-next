@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import { qaEnabled } from "../qa";
 import type { JobsEnv } from "../env";
 import { migrate as migrateSessions, type Sql as SessionSql } from "../sessions";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
@@ -14,6 +15,7 @@ const events: EventStore = {
   find: notWired("EventStore.find"),
   recordMirrored: notWired("EventStore.recordMirrored"),
   closeFinished: notWired("EventStore.closeFinished"),
+  materializeSeries: notWired("EventStore.materializeSeries"),
   staleEventKeys: notWired("EventStore.staleEventKeys"),
 };
 const bot: BotClient = {
@@ -39,7 +41,10 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
   // behind an un-cancellable ledger UPDATE (TOG-9895 review).
   const ledgerSql = sqlFor(env);
   try {
-    await consume(batch, { bot, events, lock: pgUniqueLock(sql), ledger: pgQueueLedger(ledgerSql) });
+    await consume(batch, {
+      bot, events, lock: pgUniqueLock(sql), ledger: pgQueueLedger(ledgerSql),
+      probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
+    });
   } finally {
     // A wedged ledger statement must not hold the invocation open: force-close
     // past the timeout; the main client closes normally.
