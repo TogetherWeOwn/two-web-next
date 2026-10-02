@@ -341,9 +341,10 @@ copied. The preflight proves source configuration, **not live isolation or a
 successful deployment**. Blank config remains a valid local revocation state,
 but unapproved extra roles (including duplicates) fail the probe.
 
-The live smoke runs manually via the `staging-smoke` workflow on
-`[self-hosted, two-selfhosted]` in a job container (it posts a real announcement
-to a throwaway channel and creates a real staging event). Dispatch only after
+The live smoke runs manually via the `staging-smoke` workflow in a job container
+(`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while
+public; TOG-12326). It posts a real announcement to a throwaway channel and
+creates a real staging event. Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
 Both probes are fixture-tested in `check` without real secrets.
 

@@ -16,7 +16,9 @@ concurrency:
 jobs:
   preflight:
     name: production-preflight
-    runs-on: [self-hosted, two-selfhosted]
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,7 +38,9 @@ jobs:
   deploy-production:
     name: deploy-production
     needs: preflight
-    runs-on: [self-hosted, two-selfhosted]
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     # Required reviewers + prevent-self-review are live repo settings. Preflight
     # refuses a missing/unprotected Environment before GitHub can auto-create it.
