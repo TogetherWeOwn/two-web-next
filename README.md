@@ -327,6 +327,8 @@ npm run check:worker-moderators                   # source deployment preflight
 npm run check:moderators -- --require-configured   # process-env fixture/local probe
 npm run smoke:internal-action -- \
   --discord-id=<snowflake> --role-key=<key> --channel-key=<throwaway>
+APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
+  --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
 The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
@@ -344,6 +346,15 @@ The live smoke runs manually via the `staging-smoke` workflow on
 to a throwaway channel and creates a real staging event). Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
 Both probes are fixture-tested in `check` without real secrets.
+
+The CallInternalAction drill (`drill:internal-action`) ports the remaining
+drill-only half of `docs/parity.md` §6: production web never dispatches
+CallInternalAction, so instead of a web route it drives the real queued
+producers and `handleCallInternalAction` (attempts=1) directly against staging.
+It refuses both the production bot host and the production web apex (`APP_URL`
+is mandatory and `https://togetherweown.com` is refused), performs a real
+staging role.assign and posts a real announcement to a throwaway channel, and
+never upserts events. Fixture-tested in `check` without real secrets.
 
 These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 

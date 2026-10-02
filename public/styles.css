@@ -53,7 +53,7 @@ dl.facts > div { display: block; }
 .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
 .filters .field { margin: 0; }
 .featured-form { overflow-wrap: anywhere; }
-.featured-table-scroll { max-width: 100%; overflow-x: auto; }
+.featured-table-scroll, .admin-table-scroll { max-width: 100%; overflow-x: auto; }
 .featured-table { min-width: 64rem; }
 .featured-table th, .featured-table td { overflow-wrap: normal; word-break: normal; }
 .featured-table th, .featured-table time { white-space: nowrap; }

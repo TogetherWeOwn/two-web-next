@@ -24,7 +24,8 @@
     "db:check": "drizzle-kit check",
     "check:moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs",
     "check:worker-moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=wrangler.jsonc --require-configured",
-    "smoke:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-smoke.mjs"
+    "smoke:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-smoke.mjs",
+    "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",
