@@ -153,10 +153,12 @@ migration or Neon branch creation is performed by its selftest.
   production unless `PRODUCTION_DEPLOY_ENABLED` is exactly `true` (the same
   flag used for production Worker deploys). Leave it unset/false until approved.
 - Provision `NEON_STAGING_DATABASE_URL` **only on the staging Environment** and
-  `NEON_PRODUCTION_DATABASE_URL` **only on the production Environment**, using
-  the authorized operator's secret-provisioning path. Verify the intended Neon
+  `PRODUCTION_DATABASE_URL` **only on the production Environment**, using
+  the authorized operator's secret-provisioning path. Verify the intended
   project/branch/database and direct endpoint out of band; a hostname alone
-  cannot distinguish staging from production. The driver pins port 5432, uses
+  cannot distinguish staging from production. Staging is Neon; production is
+  PlanetScale Postgres (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
+  pooled `6432` port). The driver pins port 5432, uses
   certificate-verified TLS, strips optional `channel_binding=prefer|disable`, and
   refuses `channel_binding=require` (unsupported by postgres.js) before connecting.
   Never weaken a required channel-binding policy just to run migrations; stop and
