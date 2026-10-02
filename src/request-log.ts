@@ -30,10 +30,15 @@ export function newRequestId(): string {
 
 /** Registered patterns include mount prefixes, but never resolved params. */
 export function requestRoute(c: Context): string {
-  // matchedRoutes includes middleware. Ignore wildcard-only matches so unknown
-  // URLs have one constant label, not the user-supplied path (or an identity).
+  // routeIndex is the handler that responded, so /events/new is not logged as
+  // a later /events/:key. A wildcard guard or 404 names the first endpoint the
+  // router would run, and wildcard-only matches get one constant label, never
+  // the user-supplied path (or an identity).
   // Source: https://hono.dev/docs/helpers/route#matchedroutes
-  return matchedRoutes(c).filter((r) => !r.path.endsWith("*")).at(-1)?.path ?? "unmatched";
+  const paths = matchedRoutes(c).map((r) => r.path);
+  const responded = paths[c.req.routeIndex];
+  if (responded && !responded.endsWith("*")) return responded;
+  return paths.find((path) => !path.endsWith("*")) ?? "unmatched";
 }
 
 export async function requestLog(c: Context, next: Next): Promise<void> {

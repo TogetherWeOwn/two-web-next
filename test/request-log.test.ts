@@ -5,10 +5,26 @@ import { registerErrorHandlers } from "../src/errors";
 import type { Env } from "../src/env";
 import { newRequestId, requestLog, safeRequestId } from "../src/request-log";
 
+// Lets one test make the real app's outer post-processing throw.
+const post = vi.hoisted(() => ({ fail: false }));
+vi.mock("../src/headers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/headers")>();
+  return {
+    ...actual,
+    robotsTag: async (...args: Parameters<typeof actual.robotsTag>) => {
+      await actual.robotsTag(...args);
+      if (post.fail) throw new RangeError("post-processing cookie-secret");
+    },
+  };
+});
+
 const env = { APP_URL: "https://example.test", SESSION_SECRET: "fixture-only" } as Env;
 const RAY = "0123456789abcdef-LHR";
 const PERSONAL = ["cookie-secret", "bearer-secret", "query-secret", "198.51.100.42", "123456789012345678"];
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  post.fail = false;
+  vi.restoreAllMocks();
+});
 
 function logs(spy: { mock: { calls: unknown[][] } }) {
   return spy.mock.calls.map(([line]) => JSON.parse(String(line)));
@@ -79,6 +95,35 @@ describe("structured request logs (local fixtures only)", () => {
     for (const value of [...PERSONAL, "private-id"]) expect(JSON.stringify([...log.mock.calls, ...error.mock.calls])).not.toContain(value);
   });
 
+  it("names the handler that responded when static and param routes overlap", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const router = new Hono();
+    router.use("*", requestLog);
+    router.get("/events/new", (c) => c.text("form"));
+    router.get("/events/skip", (_c, next) => next());
+    router.get("/events/:key", (c) => c.text("event"));
+    for (const [path, route] of [["/events/new", "/events/new"], ["/events/skip", "/events/:key"], ["/events/abc", "/events/:key"]]) {
+      log.mockClear();
+      expect((await router.request(path)).status).toBe(200);
+      expect(logs(log)).toEqual([expect.objectContaining({ route, status: 200 })]);
+    }
+  });
+
+  it("tags and logs the final 500 when the real app's outer post-processing throws", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    post.fail = true;
+    const res = await app.request("/discord?token=query-secret", { headers: { "cf-ray": RAY, cookie: "s=cookie-secret" } }, env as never);
+    expect(res.status).toBe(500);
+    expect(res.headers.get("x-request-id")).toBe(RAY);
+    expect(logs(log)).toEqual([expect.objectContaining({ event: "http.request", route: "/discord", status: 500, request_id: RAY })]);
+    const alerts = error.mock.calls.filter(([line]) => typeof line === "string" && line.startsWith("{"));
+    expect(alerts.map(([line]) => JSON.parse(String(line)))).toEqual([
+      expect.objectContaining({ event: "error.alert", exception: "RangeError", route: "/discord", request_id: RAY }),
+    ]);
+    for (const value of ["cookie-secret", "query-secret"]) expect(JSON.stringify([...log.mock.calls, ...error.mock.calls])).not.toContain(value);
+  });
+
   it("logs downstream response replacements, not the original 200", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const router = new Hono();
@@ -127,6 +172,7 @@ describe("structured request logs (local fixtures only)", () => {
       ["/up", 503, "/up"], ["/discord", 302, "/discord"],
       ["/members/123456789012345678", 302, "/members/:user"],
       ["/admin/events/123456789012345678", 302, "/admin/events/:key"],
+      ["/admin/events/new", 302, "/admin/events/new"],
       ["/no-such-path/123456789012345678", 404, "unmatched"],
     ] as const) {
       log.mockClear();

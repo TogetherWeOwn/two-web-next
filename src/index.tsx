@@ -27,7 +27,7 @@ import { imageHosts } from "./image-policy";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
-import { registerErrorHandlers } from "./errors";
+import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
@@ -108,8 +108,14 @@ const staticSecurityHeaders = secureHeaders({
 });
 
 app.use("*", (c, next) => requestLog(c, async () => {
-  await staticSecurityHeaders(c, next);
-  await robotsTag(c, async () => {});
+  try {
+    await staticSecurityHeaders(c, next);
+    await robotsTag(c, async () => {});
+  } catch (err) {
+    // Handler errors already became responses; one thrown by this
+    // post-processing would skip requestLog, so settle the final 500 here.
+    c.res = await internalErrorHandler(err, c);
+  }
 }));
 
 // TrustHosts re-expression (W16: TOG-10110): refuse foreign Host values
