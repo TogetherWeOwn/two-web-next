@@ -5,7 +5,10 @@ import { databaseOptions } from "../db/connection";
 import { isDatabaseUnavailable } from "../db/errors";
 import { DEFAULT_CONFIG, type IngressConfig, type Answer, admitAgentEvent } from "./service";
 
-type IngressEnv = { Bindings: Env; Variables: { agentEventHandler: (body: unknown) => Promise<Answer> } };
+type IngressEnv = {
+  Bindings: Env;
+  Variables: { agentEventHandler: (body: unknown) => Promise<Answer> };
+};
 
 export function ingressConfig(env: Env): IngressConfig {
   const routePerMinute = Number(env.AGENT_EVENTS_ROUTE_PER_MINUTE);
@@ -15,7 +18,10 @@ export function ingressConfig(env: Env): IngressConfig {
     callerAgentId: env.AGENT_EVENTS_CALLER_AGENT_ID ?? "",
     stagingGuildId: env.AGENT_EVENTS_GUILD_ID || DEFAULT_CONFIG.stagingGuildId,
     productionGuildId: env.AGENT_EVENTS_PRODUCTION_GUILD_ID || DEFAULT_CONFIG.productionGuildId,
-    routePerMinute: Number.isInteger(routePerMinute) && routePerMinute > 0 ? routePerMinute : DEFAULT_CONFIG.routePerMinute,
+    routePerMinute:
+      Number.isInteger(routePerMinute) && routePerMinute > 0
+        ? routePerMinute
+        : DEFAULT_CONFIG.routePerMinute,
   };
 }
 
@@ -29,10 +35,20 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   c.header("cache-control", "no-store");
   const cfg = ingressConfig(c.env);
   if (!cfg.enabled) {
-    return c.json({ reason: "ingress_disabled", message: "The agent event ingress is not enabled in this environment." }, 404);
+    return c.json(
+      {
+        reason: "ingress_disabled",
+        message: "The agent event ingress is not enabled in this environment.",
+      },
+      404,
+    );
   }
   const url = c.env.AGENT_DB?.connectionString;
-  if (!url) return c.json({ reason: "ingress_unavailable", message: "The agent event store is not configured." }, 503);
+  if (!url)
+    return c.json(
+      { reason: "ingress_unavailable", message: "The agent event store is not configured." },
+      503,
+    );
 
   // Release idle sockets even if an admitted upload never reaches EOF.
   const sql = postgres(url, databaseOptions);
@@ -41,7 +57,8 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     // a second shield hit when the parsed body reaches the service.
     const ip = c.req.header("cf-connecting-ip") ?? null;
     const admitted = await admitAgentEvent(sql, cfg, bearer(c.req.header("authorization")), ip);
-    if (!("handle" in admitted)) return c.json(admitted.body, admitted.status as 200, admitted.headers);
+    if (!("handle" in admitted))
+      return c.json(admitted.body, admitted.status as 200, admitted.headers);
     c.set("agentEventHandler", admitted.handle);
     await next();
   } catch (err) {
@@ -49,7 +66,13 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     if (isDatabaseUnavailable(err)) {
       c.header("cache-control", "no-store, private");
       c.header("Vary", "Accept");
-      return c.json({ reason: "ingress_unavailable", message: "The agent event store is temporarily unavailable. Try again shortly." }, 503);
+      return c.json(
+        {
+          reason: "ingress_unavailable",
+          message: "The agent event store is temporarily unavailable. Try again shortly.",
+        },
+        503,
+      );
     }
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   } finally {
@@ -73,7 +96,13 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
     if (isDatabaseUnavailable(err)) {
       c.header("cache-control", "no-store, private");
       c.header("Vary", "Accept");
-      return c.json({ reason: "ingress_unavailable", message: "The agent event store is temporarily unavailable. Try again shortly." }, 503);
+      return c.json(
+        {
+          reason: "ingress_unavailable",
+          message: "The agent event store is temporarily unavailable. Try again shortly.",
+        },
+        503,
+      );
     }
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   }

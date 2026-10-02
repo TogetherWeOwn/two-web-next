@@ -7,13 +7,22 @@ import { rulesLastUpdated } from "../src/rules-last-updated";
 import { rulesLastUpdated as exportedRulesLastUpdated } from "../src/index";
 
 vi.mock("postgres", () => ({
-  default: vi.fn(() => { throw new Error("rules must not connect to a database"); }),
+  default: vi.fn(() => {
+    throw new Error("rules must not connect to a database");
+  }),
 }));
 
 const warning = "Invalid community.rules_last_updated — hiding /rules stamp";
 const impossibleDates = [
-  "2026-02-30", "2026-02-31", "2026-04-31", "2026-06-31",
-  "2026-09-31", "2026-11-31", "2026-02-29", "1900-02-29", "2100-02-29",
+  "2026-02-30",
+  "2026-02-31",
+  "2026-04-31",
+  "2026-06-31",
+  "2026-09-31",
+  "2026-11-31",
+  "2026-02-29",
+  "1900-02-29",
+  "2100-02-29",
   "0100-02-29",
 ];
 
@@ -63,7 +72,8 @@ describe("rules last-updated calendar validation", () => {
 
   it("trims surrounding whitespace without changing formatting", () => {
     expect(rulesLastUpdated(" \t2026-09-01\n ")).toEqual({
-      iso: "2026-09-01", label: "1 September 2026",
+      iso: "2026-09-01",
+      label: "1 September 2026",
     });
     expect(console.warn).not.toHaveBeenCalled();
   });
@@ -74,9 +84,18 @@ describe("rules last-updated calendar validation", () => {
   });
 
   it.each([
-    "someday", "2026-00-01", "2026-13-01", "2026-01-00", "2026-01-32",
-    "2026-9-01", "2026-09-1", "026-09-01", "02026-09-01",
-    "2026-09-01T00:00:00Z", "2026/09/01", "-2026-09-01",
+    "someday",
+    "2026-00-01",
+    "2026-13-01",
+    "2026-01-00",
+    "2026-01-32",
+    "2026-9-01",
+    "2026-09-1",
+    "026-09-01",
+    "02026-09-01",
+    "2026-09-01T00:00:00Z",
+    "2026/09/01",
+    "-2026-09-01",
   ])("retains malformed-value fallback for %s", (raw) => {
     expect(rulesLastUpdated(raw)).toBeNull();
     expect(console.warn).toHaveBeenCalledExactlyOnceWith(warning);
@@ -95,14 +114,25 @@ const env: Env = {
 
 describe("DB-free rules route calendar stamp", () => {
   it.each(impossibleDates)("returns 200 without a stamp or dependencies for %s", async (raw) => {
-    const fetch = vi.fn(() => { throw new Error("rules must not fetch dependencies"); });
-    vi.stubGlobal("fetch", fetch);
-    const SESSION_STORE = new Proxy({}, {
-      get: () => { throw new Error("rules must not read sessions"); },
+    const fetch = vi.fn(() => {
+      throw new Error("rules must not fetch dependencies");
     });
-    const res = await app.request("/rules", {
-      headers: { cookie: "__Host-two_session=forged" },
-    }, { ...env, SESSION_STORE, RULES_LAST_UPDATED: raw });
+    vi.stubGlobal("fetch", fetch);
+    const SESSION_STORE = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("rules must not read sessions");
+        },
+      },
+    );
+    const res = await app.request(
+      "/rules",
+      {
+        headers: { cookie: "__Host-two_session=forged" },
+      },
+      { ...env, SESSION_STORE, RULES_LAST_UPDATED: raw },
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
     expect(res.headers.getSetCookie()).toHaveLength(0);

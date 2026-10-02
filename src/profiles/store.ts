@@ -25,21 +25,23 @@ export function createDbProfileStore(connection: Db): ProfileStore {
   const db = memberReadDb(connection);
   return {
     async find(id) {
-      const rows = await keyedMemberRead(() => db
-        .select({
-          id: users.id,
-          profileUserId: profiles.userId,
-          username: users.username,
-          avatar: users.avatar,
-          bio: profiles.bio,
-          games: profiles.games,
-          timezone: profiles.timezone,
-          joinedAt: users.createdAt,
-        })
-        .from(users)
-        .leftJoin(profiles, eq(profiles.userId, users.id))
-        .where(eq(users.id, id))
-        .limit(1));
+      const rows = await keyedMemberRead(() =>
+        db
+          .select({
+            id: users.id,
+            profileUserId: profiles.userId,
+            username: users.username,
+            avatar: users.avatar,
+            bio: profiles.bio,
+            games: profiles.games,
+            timezone: profiles.timezone,
+            joinedAt: users.createdAt,
+          })
+          .from(users)
+          .leftJoin(profiles, eq(profiles.userId, users.id))
+          .where(eq(users.id, id))
+          .limit(1),
+      );
       const r = rows[0];
       return r ? { ...r, games: r.games ?? [] } : null;
     },
@@ -53,7 +55,9 @@ export function createDbProfileStore(connection: Db): ProfileStore {
 }
 
 /** Test double with the same contract. */
-export function createMemoryProfileStore(seed: MemberView[] = []): ProfileStore & { rows: Map<string, MemberView> } {
+export function createMemoryProfileStore(
+  seed: MemberView[] = [],
+): ProfileStore & { rows: Map<string, MemberView> } {
   const rows = new Map(seed.map((m) => [m.id, m]));
   return {
     rows,

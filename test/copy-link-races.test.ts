@@ -31,8 +31,20 @@ async function settle() {
 function browser(opts: { copied?: boolean } = {}) {
   const toast = { textContent: "" };
   const active = { focus: vi.fn() };
-  const selection = { rangeCount: 0, getRangeAt: vi.fn(), removeAllRanges: vi.fn(), addRange: vi.fn() };
-  const field = { value: "", className: "", tabIndex: 0, setAttribute: vi.fn(), select: vi.fn(), remove: vi.fn() };
+  const selection = {
+    rangeCount: 0,
+    getRangeAt: vi.fn(),
+    removeAllRanges: vi.fn(),
+    addRange: vi.fn(),
+  };
+  const field = {
+    value: "",
+    className: "",
+    tabIndex: 0,
+    setAttribute: vi.fn(),
+    select: vi.fn(),
+    remove: vi.fn(),
+  };
   const attributes = new Map([["data-copy-link", canonical]]);
   let click: (e: Click) => void = () => {};
   const link = {
@@ -151,36 +163,39 @@ describe("Copy-link attempt ordering", () => {
     expect(b.setTimeout).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["success", "failure"] as const)("clears prior %s feedback while the next attempt is pending", async (outcome) => {
-    const b = browser({ copied: false });
-    b.click();
-    if (outcome === "success") b.writes[0]!.resolve();
-    else b.writes[0]!.reject(new Error("denied"));
-    await settle();
-    expect(b.toast.textContent).toBe(outcome === "success" ? copiedText : failedText);
-    const [priorTimer, priorReset] = b.timers.entries().next().value!;
-    const fallbackCalls = b.exec.mock.calls.length;
+  it.each(["success", "failure"] as const)(
+    "clears prior %s feedback while the next attempt is pending",
+    async (outcome) => {
+      const b = browser({ copied: false });
+      b.click();
+      if (outcome === "success") b.writes[0]!.resolve();
+      else b.writes[0]!.reject(new Error("denied"));
+      await settle();
+      expect(b.toast.textContent).toBe(outcome === "success" ? copiedText : failedText);
+      const [priorTimer, priorReset] = b.timers.entries().next().value!;
+      const fallbackCalls = b.exec.mock.calls.length;
 
-    b.click(); // new owner remains pending beyond the previous toast's lifetime
-    expect(b.toast.textContent).toBe("");
-    expect(b.clearTimeout).toHaveBeenLastCalledWith(priorTimer);
-    expect(b.timers.size).toBe(0);
-    priorReset(); // even an already-queued old callback may not write feedback
-    await settle();
-    expect(b.toast.textContent).toBe("");
-    expect(b.exec).toHaveBeenCalledTimes(fallbackCalls);
+      b.click(); // new owner remains pending beyond the previous toast's lifetime
+      expect(b.toast.textContent).toBe("");
+      expect(b.clearTimeout).toHaveBeenLastCalledWith(priorTimer);
+      expect(b.timers.size).toBe(0);
+      priorReset(); // even an already-queued old callback may not write feedback
+      await settle();
+      expect(b.toast.textContent).toBe("");
+      expect(b.exec).toHaveBeenCalledTimes(fallbackCalls);
 
-    if (outcome === "success") b.writes[1]!.reject(new Error("denied"));
-    else b.writes[1]!.resolve();
-    await settle();
-    const latestText = outcome === "success" ? failedText : copiedText;
-    expect(b.toast.textContent).toBe(latestText);
-    expect(b.timers.size).toBe(1);
-    priorReset(); // the old callback cannot clear the new owner's eventual result
-    expect(b.toast.textContent).toBe(latestText);
-    b.timers.values().next().value!();
-    expect(b.toast.textContent).toBe("");
-  });
+      if (outcome === "success") b.writes[1]!.reject(new Error("denied"));
+      else b.writes[1]!.resolve();
+      await settle();
+      const latestText = outcome === "success" ? failedText : copiedText;
+      expect(b.toast.textContent).toBe(latestText);
+      expect(b.timers.size).toBe(1);
+      priorReset(); // the old callback cannot clear the new owner's eventual result
+      expect(b.toast.textContent).toBe(latestText);
+      b.timers.values().next().value!();
+      expect(b.toast.textContent).toBe("");
+    },
+  );
 
   it("lets a still-current failed attempt report honestly", async () => {
     const b = browser({ copied: false });

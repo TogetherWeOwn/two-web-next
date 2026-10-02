@@ -20,7 +20,13 @@ vi.mock("../src/headers", async (importOriginal) => {
 
 const env = { APP_URL: "https://example.test", SESSION_SECRET: "fixture-only" } as Env;
 const RAY = "0123456789abcdef-LHR";
-const PERSONAL = ["cookie-secret", "bearer-secret", "query-secret", "198.51.100.42", "123456789012345678"];
+const PERSONAL = [
+  "cookie-secret",
+  "bearer-secret",
+  "query-secret",
+  "198.51.100.42",
+  "123456789012345678",
+];
 afterEach(() => {
   post.fail = false;
   vi.restoreAllMocks();
@@ -35,7 +41,9 @@ function fixture() {
   router.use("*", requestLog);
   registerErrorHandlers(router);
   router.get("/members/:user", (c) => c.text("ok"));
-  router.get("/boom/:id", () => { throw new Error(PERSONAL.join(" ")); });
+  router.get("/boom/:id", () => {
+    throw new Error(PERSONAL.join(" "));
+  });
   router.get("/redirect", (c) => c.redirect("/members/123", 302));
   router.get("/denied", (c) => c.text("Forbidden", 403));
   router.get("/limited", (c) => c.json({ error: "throttled" }, 429));
@@ -54,30 +62,50 @@ describe("structured request logs (local fixtures only)", () => {
   it("emits exactly one allowlisted JSON line with a Ray ID and no request data", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const req = new Request(`https://example.test/members/${PERSONAL[4]}?token=${PERSONAL[2]}`, {
-      headers: { "cf-ray": RAY, "x-request-id": "client-controlled", cookie: PERSONAL[0]!, authorization: `Bearer ${PERSONAL[1]}`, "cf-connecting-ip": PERSONAL[3]! },
+      headers: {
+        "cf-ray": RAY,
+        "x-request-id": "client-controlled",
+        cookie: PERSONAL[0]!,
+        authorization: `Bearer ${PERSONAL[1]}`,
+        "cf-connecting-ip": PERSONAL[3]!,
+      },
     });
     Object.defineProperty(req, "cf", { value: { colo: "LHR", city: "private-city" } });
     const res = await fixture().fetch(req, env);
     expect(res.headers.get("x-request-id")).toBe(RAY);
     expect(log).toHaveBeenCalledTimes(1);
-    expect(logs(log)).toEqual([{
-      event: "http.request", request_id: RAY, method: "GET", route: "/members/:user",
-      status: 200, duration_ms: expect.any(Number), colo: "LHR",
-    }]);
+    expect(logs(log)).toEqual([
+      {
+        event: "http.request",
+        request_id: RAY,
+        method: "GET",
+        route: "/members/:user",
+        status: 200,
+        duration_ms: expect.any(Number),
+        colo: "LHR",
+      },
+    ]);
     expect(logs(log)[0].duration_ms).toBeGreaterThanOrEqual(0);
-    for (const value of [...PERSONAL, "client-controlled", "private-city"]) expect(JSON.stringify(log.mock.calls)).not.toContain(value);
+    for (const value of [...PERSONAL, "client-controlled", "private-city"])
+      expect(JSON.stringify(log.mock.calls)).not.toContain(value);
   });
 
   it.each([
-    ["/redirect", 302, "/redirect"], ["/denied", 403, "/denied"], ["/limited", 429, "/limited"],
-    ["/cached", 304, "/cached"], ["/missing/private-id?secret=secret", 404, "unmatched"],
-    ["/api/items/private-id", 200, "/api/items/:id"], ["/admin/events/private-id", 403, "/admin/events/:id"],
+    ["/redirect", 302, "/redirect"],
+    ["/denied", 403, "/denied"],
+    ["/limited", 429, "/limited"],
+    ["/cached", 304, "/cached"],
+    ["/missing/private-id?secret=secret", 404, "unmatched"],
+    ["/api/items/private-id", 200, "/api/items/:id"],
+    ["/admin/events/private-id", 403, "/admin/events/:id"],
   ])("logs final status and an ID for %s", async (path, status, route) => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const res = await fixture().request(path, {}, env);
     const id = res.headers.get("x-request-id");
     expect(id).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
-    expect(logs(log)).toEqual([expect.objectContaining({ request_id: id, route, status, colo: null })]);
+    expect(logs(log)).toEqual([
+      expect.objectContaining({ request_id: id, route, status, colo: null }),
+    ]);
     expect(res.status).toBe(status);
     expect(JSON.stringify(log.mock.calls)).not.toContain("private-id");
   });
@@ -85,14 +113,27 @@ describe("structured request logs (local fixtures only)", () => {
   it("correlates a handled 500 with its alert without logging the exception message", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await fixture().request("/boom/private-id?token=query-secret", { headers: { "cf-ray": RAY } }, env);
+    const res = await fixture().request(
+      "/boom/private-id?token=query-secret",
+      { headers: { "cf-ray": RAY } },
+      env,
+    );
     expect(res.status).toBe(500);
     expect(res.headers.get("x-request-id")).toBe(RAY);
-    expect(logs(log)).toEqual([expect.objectContaining({ request_id: RAY, status: 500, route: "/boom/:id" })]);
-    const alerts = error.mock.calls.filter(([line]) => typeof line === "string" && line.startsWith("{"));
+    expect(logs(log)).toEqual([
+      expect.objectContaining({ request_id: RAY, status: 500, route: "/boom/:id" }),
+    ]);
+    const alerts = error.mock.calls.filter(
+      ([line]) => typeof line === "string" && line.startsWith("{"),
+    );
     expect(alerts).toHaveLength(1);
-    expect(JSON.parse(String(alerts[0]![0]))).toMatchObject({ event: "error.alert", request_id: RAY, route: "/boom/:id" });
-    for (const value of [...PERSONAL, "private-id"]) expect(JSON.stringify([...log.mock.calls, ...error.mock.calls])).not.toContain(value);
+    expect(JSON.parse(String(alerts[0]![0]))).toMatchObject({
+      event: "error.alert",
+      request_id: RAY,
+      route: "/boom/:id",
+    });
+    for (const value of [...PERSONAL, "private-id"])
+      expect(JSON.stringify([...log.mock.calls, ...error.mock.calls])).not.toContain(value);
   });
 
   it("names the handler that responded when static and param routes overlap", async () => {
@@ -102,7 +143,11 @@ describe("structured request logs (local fixtures only)", () => {
     router.get("/events/new", (c) => c.text("form"));
     router.get("/events/skip", (_c, next) => next());
     router.get("/events/:key", (c) => c.text("event"));
-    for (const [path, route] of [["/events/new", "/events/new"], ["/events/skip", "/events/:key"], ["/events/abc", "/events/:key"]] as const) {
+    for (const [path, route] of [
+      ["/events/new", "/events/new"],
+      ["/events/skip", "/events/:key"],
+      ["/events/abc", "/events/:key"],
+    ] as const) {
       log.mockClear();
       expect((await router.request(path)).status).toBe(200);
       expect(logs(log)).toEqual([expect.objectContaining({ route, status: 200 })]);
@@ -113,45 +158,77 @@ describe("structured request logs (local fixtures only)", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     post.fail = true;
-    const res = await app.request("/discord?token=query-secret", { headers: { "cf-ray": RAY, cookie: "s=cookie-secret" } }, env as never);
+    const res = await app.request(
+      "/discord?token=query-secret",
+      { headers: { "cf-ray": RAY, cookie: "s=cookie-secret" } },
+      env as never,
+    );
     expect(res.status).toBe(500);
     expect(res.headers.get("x-request-id")).toBe(RAY);
-    expect(logs(log)).toEqual([expect.objectContaining({ event: "http.request", route: "/discord", status: 500, request_id: RAY })]);
-    const alerts = error.mock.calls.filter(([line]) => typeof line === "string" && line.startsWith("{"));
-    expect(alerts.map(([line]) => JSON.parse(String(line)))).toEqual([
-      expect.objectContaining({ event: "error.alert", exception: "RangeError", route: "/discord", request_id: RAY }),
+    expect(logs(log)).toEqual([
+      expect.objectContaining({
+        event: "http.request",
+        route: "/discord",
+        status: 500,
+        request_id: RAY,
+      }),
     ]);
-    for (const value of ["cookie-secret", "query-secret"]) expect(JSON.stringify([...log.mock.calls, ...error.mock.calls])).not.toContain(value);
+    const alerts = error.mock.calls.filter(
+      ([line]) => typeof line === "string" && line.startsWith("{"),
+    );
+    expect(alerts.map(([line]) => JSON.parse(String(line)))).toEqual([
+      expect.objectContaining({
+        event: "error.alert",
+        exception: "RangeError",
+        route: "/discord",
+        request_id: RAY,
+      }),
+    ]);
+    for (const value of ["cookie-secret", "query-secret"])
+      expect(JSON.stringify([...log.mock.calls, ...error.mock.calls])).not.toContain(value);
   });
 
   it("logs downstream response replacements, not the original 200", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const router = new Hono();
     router.use("*", requestLog);
-    router.use("*", async (c, next) => { await next(); c.res = c.text("unavailable", 503); });
+    router.use("*", async (c, next) => {
+      await next();
+      c.res = c.text("unavailable", 503);
+    });
     router.get("/read", (c) => c.text("ok"));
     const res = await router.request("/read");
     expect(res.status).toBe(503);
-    expect(logs(log)).toEqual([expect.objectContaining({ status: 503, request_id: res.headers.get("x-request-id") })]);
+    expect(logs(log)).toEqual([
+      expect.objectContaining({ status: 503, request_id: res.headers.get("x-request-id") }),
+    ]);
   });
 
-  it.each(["cookie-secret", "123456789012345678", "0123456789abcdef-IP-secret"])("rejects forged cf-ray %s", async (ray) => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const res = await fixture().request("/denied", { headers: { "cf-ray": ray } }, env);
-    expect(res.headers.get("x-request-id")).not.toBe(ray);
-    expect(res.headers.get("x-request-id")).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
-    expect(JSON.stringify(log.mock.calls)).not.toContain(ray);
-  });
+  it.each(["cookie-secret", "123456789012345678", "0123456789abcdef-IP-secret"])(
+    "rejects forged cf-ray %s",
+    async (ray) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const res = await fixture().request("/denied", { headers: { "cf-ray": ray } }, env);
+      expect(res.headers.get("x-request-id")).not.toBe(ray);
+      expect(res.headers.get("x-request-id")).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+      expect(JSON.stringify(log.mock.calls)).not.toContain(ray);
+    },
+  );
 
   it("adds the header to HEAD responses and only accepts a colo code", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const req = new Request("https://example.test/members/private-id", { method: "HEAD", headers: { "cf-ray": RAY } });
+    const req = new Request("https://example.test/members/private-id", {
+      method: "HEAD",
+      headers: { "cf-ray": RAY },
+    });
     Object.defineProperty(req, "cf", { value: { colo: "198.51.100.42" } });
     const res = await fixture().fetch(req, env);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("");
     expect(res.headers.get("x-request-id")).toBe(RAY);
-    expect(logs(log)).toEqual([expect.objectContaining({ method: "HEAD", route: "/members/:user", colo: null })]);
+    expect(logs(log)).toEqual([
+      expect.objectContaining({ method: "HEAD", route: "/members/:user", colo: null }),
+    ]);
     expect(JSON.stringify(log.mock.calls)).not.toContain("198.51.100.42");
   });
 
@@ -169,7 +246,8 @@ describe("structured request logs (local fixtures only)", () => {
   it("is mounted on the real app including errors, redirects and guarded sub-apps", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     for (const [path, status, route] of [
-      ["/up", 503, "/up"], ["/discord", 302, "/discord"],
+      ["/up", 503, "/up"],
+      ["/discord", 302, "/discord"],
       ["/members/123456789012345678", 302, "/members/:user"],
       ["/admin/events/123456789012345678", 302, "/admin/events/:key"],
       ["/admin/events/new", 302, "/admin/events/new"],

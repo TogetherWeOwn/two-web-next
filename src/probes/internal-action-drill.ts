@@ -19,7 +19,11 @@
 // stay in the caller's environment; nothing here logs bodies or secrets —
 // check details carry outcomes and a single-use carrier UUID only.
 
-import { dispatchAnnouncement, dispatchRoleAssign, handleCallInternalAction } from "../jobs/call-internal-action";
+import {
+  dispatchAnnouncement,
+  dispatchRoleAssign,
+  handleCallInternalAction,
+} from "../jobs/call-internal-action";
 import type { BotClient, QueueMessage } from "../jobs/types";
 import { BotTerminalError } from "../jobs/types";
 import type { Outcome } from "../jobs/sync-event";
@@ -69,7 +73,9 @@ export function resolveDrillWebOrigin(rawAppUrl: string | undefined): string {
     url.search ||
     url.hash
   ) {
-    throw new BotTerminalError("APP_URL must be an HTTP(S) URL without credentials, query or fragment.");
+    throw new BotTerminalError(
+      "APP_URL must be an HTTP(S) URL without credentials, query or fragment.",
+    );
   }
   // DNS names are case-insensitive, and a trailing root dot names the same host.
   const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
@@ -150,7 +156,9 @@ export async function runInternalActionDrill(
 
   const [roleMsg, annMsg] = sent;
   if (roleMsg?.kind !== "role-assign" || annMsg?.kind !== "announcement") {
-    throw new Error("internal-action drill: producers did not capture one role-assign and one announcement");
+    throw new Error(
+      "internal-action drill: producers did not capture one role-assign and one announcement",
+    );
   }
 
   // `unknown` on purpose: the member types idempotencyKey as literal null,
@@ -168,7 +176,9 @@ export async function runInternalActionDrill(
   check(
     "announcement.post dispatched with a UUID carrier",
     UUID_RE.test(carrier),
-    UUID_RE.test(carrier) ? `carrier=${carrier}` : "carrier is not a UUID (a retry would post twice)",
+    UUID_RE.test(carrier)
+      ? `carrier=${carrier}`
+      : "carrier is not a UUID (a retry would post twice)",
   );
 
   await handle("role.assign handled", () => handleCallInternalAction(roleMsg, 1, bot));
