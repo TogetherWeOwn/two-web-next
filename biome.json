@@ -49,6 +49,7 @@
         "public/theme.css",
         "public/profile-theme.css",
         "public/schedule-theme.css",
+        "public/event-theme.css",
         "ci/a11y.mjs",
         "ci/featured-proof/**"
       ],
