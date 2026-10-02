@@ -11,13 +11,21 @@ type Capture = {
   pending: number;
   response?: Response;
 };
-export type NonSensitiveRead = "events" | "featured" | "join-funnel" | "going-counts" | "search-widget" | "timeouts";
+export type NonSensitiveRead =
+  | "events"
+  | "featured"
+  | "join-funnel"
+  | "going-counts"
+  | "search-widget"
+  | "timeouts";
 type ReadPermit = { capture: Capture; queries: number; classification?: NonSensitiveRead };
 const captures = new AsyncLocalStorage<Capture>();
 const permits = new AsyncLocalStorage<ReadPermit>();
 
 export class MemberReadRefused extends Error {
-  constructor() { super("Member read contract refused."); }
+  constructor() {
+    super("Member read contract refused.");
+  }
 }
 
 export function refuseMemberRead(): never {
@@ -32,11 +40,17 @@ export function keyedMemberRead<T>(read: () => PromiseLike<T>): Promise<T> {
 }
 
 /** The DB adapter checks this classification; it is not a blanket exemption. */
-export function nonSensitiveRead<T>(classification: NonSensitiveRead, read: () => PromiseLike<T>): Promise<T> {
+export function nonSensitiveRead<T>(
+  classification: NonSensitiveRead,
+  read: () => PromiseLike<T>,
+): Promise<T> {
   return permittedRead(read, classification);
 }
 
-async function permittedRead<T>(read: () => PromiseLike<T>, classification?: NonSensitiveRead): Promise<T> {
+async function permittedRead<T>(
+  read: () => PromiseLike<T>,
+  classification?: NonSensitiveRead,
+): Promise<T> {
   const capture = captures.getStore();
   if (!capture) return read();
   capture.pending++;
@@ -46,7 +60,9 @@ async function permittedRead<T>(read: () => PromiseLike<T>, classification?: Non
     const result = await permits.run(permit, async () => await read());
     if (permit.queries !== 1) refuseMemberRead();
     return result;
-  } finally { capture.pending--; }
+  } finally {
+    capture.pending--;
+  }
 }
 
 /** The DB adapter calls this BEFORE executing a statement, not at declaration. */
@@ -58,7 +74,9 @@ export function memberQueryPermit(): ReadPermit | undefined {
   return permit;
 }
 
-export function memberReadActive(): boolean { return captures.getStore() !== undefined; }
+export function memberReadActive(): boolean {
+  return captures.getStore() !== undefined;
+}
 
 /** Non-SQL stores must declare the actual returned owners, including empty reads. */
 export function declareMemberResult(keys: unknown[]): void {
@@ -73,11 +91,19 @@ export function captureMemberKeys(capture: Capture, keys: unknown[]) {
 }
 
 /** HTML rendering finishes inside the boundary, never as a streamed response. */
-export async function bufferedMemberHtml(c: Context, body: string | Promise<string>, status: ContentfulStatusCode = 200): Promise<Response> {
+export async function bufferedMemberHtml(
+  c: Context,
+  body: string | Promise<string>,
+  status: ContentfulStatusCode = 200,
+): Promise<Response> {
   const html = await body;
   // Hono JSX nodes are escaped HTML values with a buffered toString renderer.
   const escaped = html as unknown as { isEscaped?: boolean; toString?: unknown } | null;
-  if (typeof html !== "string" && !(escaped?.isEscaped === true && typeof escaped.toString === "function")) refuseMemberRead();
+  if (
+    typeof html !== "string" &&
+    !(escaped?.isEscaped === true && typeof escaped.toString === "function")
+  )
+    refuseMemberRead();
   c.res = await c.html(html, status);
   const capture = captures.getStore();
   if (capture) capture.response = c.res;
@@ -85,7 +111,11 @@ export async function bufferedMemberHtml(c: Context, body: string | Promise<stri
 }
 
 /** Construct only known buffered bytes. Ordinary Response.body is a stream too. */
-export function bufferedMemberText(c: Context, body: string, status: ContentfulStatusCode = 200): Response {
+export function bufferedMemberText(
+  c: Context,
+  body: string,
+  status: ContentfulStatusCode = 200,
+): Response {
   if (typeof body !== "string") refuseMemberRead();
   const response = c.text(body, status);
   c.res = response;
@@ -104,12 +134,20 @@ export async function memberReadBoundary(
 ): Promise<void> {
   const capture: Capture = { subjects: new Set(), failed: false, pending: 0 };
   await captures.run(capture, async () => {
-    try { await next(); } catch { capture.failed = true; }
+    try {
+      await next();
+    } catch {
+      capture.failed = true;
+    }
     if (c.error) capture.failed = true;
     const declared = typeof declaration === "function" ? declaration() : declaration;
     // Anonymous event pages may return explicitly classified public data only.
     // null is deliberate; missing/invalid viewers never authorize member data.
-    if (!declared || (declared.viewer === null ? capture.subjects.size > 0 : !/^\d{10,25}$/.test(declared.viewer))) capture.failed = true;
+    if (
+      !declared ||
+      (declared.viewer === null ? capture.subjects.size > 0 : !/^\d{10,25}$/.test(declared.viewer))
+    )
+      capture.failed = true;
     // Classification is tied to this exact response. A later stream (declared
     // or not) cannot borrow an earlier buffered response's approval.
     if (capture.failed || capture.pending !== 0 || capture.response !== c.res) {
@@ -122,11 +160,16 @@ export async function memberReadBoundary(
     const subjects = [...capture.subjects].filter((key) => key !== declared!.viewer).sort();
     if (subjects.length === 0) return;
     try {
-      const recorded = await captures.exit(() => write({
-        viewerDiscordId: declared!.viewer!, viewerUserId: declared!.viewer!,
-        resource: declared!.resource, action: declared!.action,
-        route: declared!.route, subjectUserIds: subjects,
-      }));
+      const recorded = await captures.exit(() =>
+        write({
+          viewerDiscordId: declared!.viewer!,
+          viewerUserId: declared!.viewer!,
+          resource: declared!.resource,
+          action: declared!.action,
+          route: declared!.route,
+          subjectUserIds: subjects,
+        }),
+      );
       if (!recorded) throw new MemberReadRefused();
     } catch (error) {
       // No SQL, parameters, route URL, subject keys or exception messages.

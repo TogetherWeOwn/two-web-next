@@ -6,7 +6,9 @@ import { buildAuditWorker } from "./a11y-build.mjs";
 
 // Discover real registration order offline; never invoke a request handler.
 export async function loadAuditWorkerRoutes() {
-  const scratch = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "a11y-route-test-"));
+  const scratch = await mkdtemp(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "a11y-route-test-"),
+  );
   try {
     await symlink(resolve("node_modules"), join(scratch, "node_modules"), "dir");
     const bundle = join(scratch, "worker.mjs");

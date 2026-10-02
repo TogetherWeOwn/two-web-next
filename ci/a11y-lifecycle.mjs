@@ -9,7 +9,11 @@ export async function stopChildProcess(child) {
   const exited = once(child, "exit");
   child.kill("SIGTERM");
   const timer = setTimeout(() => child.kill("SIGKILL"), 5000);
-  try { await exited; } finally { clearTimeout(timer); }
+  try {
+    await exited;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // All acquisitions and scratch-writing startup operations pass through this
@@ -25,17 +29,22 @@ export function createAuditLifecycle() {
   };
   const track = (operation, dispose) => {
     assertRunning();
-    const work = Promise.resolve().then(() => {
-      assertRunning();
-      return operation();
-    }).then((resource) => {
-      if (dispose) disposers.push(() => dispose(resource));
-      assertRunning();
-      return resource;
-    });
+    const work = Promise.resolve()
+      .then(() => {
+        assertRunning();
+        return operation();
+      })
+      .then((resource) => {
+        if (dispose) disposers.push(() => dispose(resource));
+        assertRunning();
+        return resource;
+      });
     pending.add(work);
     // Both branches handle rejection without creating an unhandled promise.
-    void work.then(() => pending.delete(work), () => pending.delete(work));
+    void work.then(
+      () => pending.delete(work),
+      () => pending.delete(work),
+    );
     return work;
   };
   const stop = () => {
@@ -45,9 +54,17 @@ export function createAuditLifecycle() {
       await Promise.allSettled([...pending]);
       const errors = [];
       for (const dispose of disposers.reverse()) {
-        try { await dispose(); } catch (error) { errors.push(error); }
+        try {
+          await dispose();
+        } catch (error) {
+          errors.push(error);
+        }
       }
-      if (errors.length) throw new AggregateError(errors, `Audit cleanup failed: ${errors.map((error) => error.message).join("; ")}`);
+      if (errors.length)
+        throw new AggregateError(
+          errors,
+          `Audit cleanup failed: ${errors.map((error) => error.message).join("; ")}`,
+        );
     })();
     return stopped;
   };

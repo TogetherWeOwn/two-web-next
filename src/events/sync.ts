@@ -15,6 +15,7 @@
 
 import type { Env } from "../env";
 import type { EventStatus } from "../admin/validation";
+import { safeRequestId } from "../request-log";
 
 export const SYNC_DEBOUNCE_SECONDS = 10;
 export const SYNC_UNIQUE_FOR_SECONDS = 300;
@@ -31,10 +32,14 @@ export type SyncMessage = {
   action: SyncAction;
   /** Fixed at build time and carried unchanged across every retry. */
   idempotencyKey: string;
+  /** Originating HTTP request; optional for scheduled/legacy messages. */
+  requestId?: string;
 };
 
 /** The queue producer binding (Cloudflare Queues). Optional until the queue is provisioned. */
-export type SyncQueue = { send(message: SyncMessage, options?: { delaySeconds?: number }): Promise<void> };
+export type SyncQueue = {
+  send(message: SyncMessage, options?: { delaySeconds?: number }): Promise<void>;
+};
 
 export function actionFor(status: EventStatus): SyncAction | null {
   if (status === "published") return "event.upsert";
@@ -43,14 +48,26 @@ export function actionFor(status: EventStatus): SyncAction | null {
   return null;
 }
 
-export function buildSyncMessage(eventKey: string, status: EventStatus): SyncMessage | null {
+export function buildSyncMessage(
+  eventKey: string,
+  status: EventStatus,
+  requestId?: string,
+): SyncMessage | null {
   const action = actionFor(status);
   if (!action) return null;
-  return { dedupeKey: eventKey, eventKey, action, idempotencyKey: crypto.randomUUID() };
+  return {
+    dedupeKey: eventKey,
+    eventKey,
+    action,
+    idempotencyKey: crypto.randomUUID(),
+    requestId: safeRequestId(requestId),
+  };
 }
 
 export function nextBackoffSeconds(attempt: number): number {
-  return SYNC_BACKOFF_SECONDS[attempt - 1] ?? SYNC_BACKOFF_SECONDS[SYNC_BACKOFF_SECONDS.length - 1]!;
+  return (
+    SYNC_BACKOFF_SECONDS[attempt - 1] ?? SYNC_BACKOFF_SECONDS[SYNC_BACKOFF_SECONDS.length - 1]!
+  );
 }
 
 type EnvWithQueue = Env & { EVENT_SYNC_QUEUE?: SyncQueue };
@@ -60,18 +77,31 @@ type EnvWithQueue = Env & { EVENT_SYNC_QUEUE?: SyncQueue };
  * it logs the due sync so a transition without a carrier is visible, never silent.
  * Never throws: the row is committed and correct, the reconcile pass (W13) is the backstop.
  */
-export async function enqueueEventSync(env: Env, eventKey: string, status: EventStatus): Promise<SyncMessage | null> {
-  const message = buildSyncMessage(eventKey, status);
+export async function enqueueEventSync(
+  env: Env,
+  eventKey: string,
+  status: EventStatus,
+  requestId?: string,
+): Promise<SyncMessage | null> {
+  const message = buildSyncMessage(eventKey, status, requestId);
   if (!message) return null;
   const queue = (env as EnvWithQueue).EVENT_SYNC_QUEUE;
   if (!queue) {
-    console.warn("event write-back due but EVENT_SYNC_QUEUE is not bound", { eventKey, action: message.action });
+    console.warn("event write-back due but EVENT_SYNC_QUEUE is not bound", {
+      eventKey,
+      action: message.action,
+      request_id: message.requestId,
+    });
     return message;
   }
   try {
     await queue.send(message, { delaySeconds: SYNC_DEBOUNCE_SECONDS });
   } catch (err) {
-    console.error("event write-back enqueue failed; reconcile will re-dispatch", { eventKey, error: String(err) });
+    console.error("event write-back enqueue failed; reconcile will re-dispatch", {
+      eventKey,
+      exception: err instanceof Error ? err.name : typeof err,
+      request_id: message.requestId,
+    });
   }
   return message;
 }

@@ -4,22 +4,35 @@ import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { internalErrorHandler, maintenanceHandler, rateLimitExceeded } from "../src/errors";
-import { concretePath, EVENT_KEY, HTML_READS, NON_HTML_READS, pageShellFixture } from "./helpers/page-shells";
+import {
+  concretePath,
+  EVENT_KEY,
+  HTML_READS,
+  NON_HTML_READS,
+  pageShellFixture,
+} from "./helpers/page-shells";
 
 function assertShell(html: string) {
   expect(html.match(/<main\b[^>]*>/g)).toHaveLength(1);
   expect(html.match(/\bid="main"/g)).toHaveLength(1);
-  expect(html).toMatch(/<main id="main" tabindex="-1">/);
+  const main = html.match(/<main\b[^>]*>/)![0];
+  expect(main).toContain('id="main"');
+  expect(main).toContain('tabindex="-1"');
   expect(html.match(/<a\b[^>]*href="#main"[^>]*>/g)).toHaveLength(1);
   // First child of body is stronger than first anchor: no button/input/positive
   // tabindex can silently get ahead of the bypass link.
-  expect(html).toMatch(/<body(?: class="base-theme (?:homepage|content|join|profile)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/);
+  expect(html).toMatch(
+    /<body(?: class="base-theme (?:homepage|content|join|profile|schedule)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/,
+  );
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   expect(html).toContain('rel="stylesheet" href="/styles.css"');
 }
 
 function assertInventory(router: { routes: { method: string; path: string }[] }) {
-  const actual = router.routes.filter((route) => route.method === "GET").map((route) => route.path).sort();
+  const actual = router.routes
+    .filter((route) => route.method === "GET")
+    .map((route) => route.path)
+    .sort();
   // The event read boundary encloses its existing GET registration.
   expect(actual).toEqual([...HTML_READS, ...NON_HTML_READS].sort());
 }
@@ -27,7 +40,12 @@ function assertInventory(router: { routes: { method: string; path: string }[] })
 beforeEach(() => {
   // Even a swallowed fetch error is a test failure: nothing reaches Discord,
   // a preview service or a staging/production database in this suite.
-  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("page-shell tests must remain local"); }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => {
+      throw new Error("page-shell tests must remain local");
+    }),
+  );
 });
 afterEach(() => {
   expect(fetch).not.toHaveBeenCalled();
@@ -43,17 +61,99 @@ it("classifies every mounted GET route, so new HTML pages cannot escape coverage
 });
 
 describe("every GET HTML route uses an accessible page shell (local fixtures)", () => {
-  it.each(HTML_READS)("%s: one first-tab skip link, one focusable main, labelled navs", async (pattern) => {
-    const response = await pageShellFixture().request(concretePath(pattern));
+  it.each(HTML_READS)(
+    "%s: one first-tab skip link, one focusable main, labelled navs",
+    async (pattern) => {
+      const response = await pageShellFixture().request(concretePath(pattern));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      assertShell(await response.text());
+    },
+  );
+});
+
+it.each([
+  "/events",
+  "/events?view=calendar&month=2030-01",
+  "/events?q=no-such-event",
+  "/events/past",
+])("%s opts into the shared schedule theme without vendor scripts", async (path) => {
+  const html = await (await pageShellFixture().request(path)).text();
+  assertShell(html);
+  expect(html).toContain('<body class="base-theme schedule-theme">');
+  expect(html).toContain('rel="stylesheet" href="/theme.css"');
+  expect(html).toContain('rel="stylesheet" href="/schedule-theme.css"');
+  expect(html).toContain('class="bar site-header"');
+  expect(html).toContain('<a href="/events" aria-current="page">Events</a>');
+  expect(html).toContain('<nav aria-label="Site">');
+  expect(html).toContain('class="schedule-heading"');
+  const scripts =
+    path === "/events/past"
+      ? ['<script src="/islands/past-events.js" defer="">']
+      : [
+          '<script src="/islands/events-calendar.js" defer="">',
+          // Main's signed-in tab recovery controller is first-party, not vendor JS.
+          '<script src="/islands/auth-status.js" defer data-testid="auth-tab-sync">',
+        ];
+  expect(html.match(/<script\b[^>]*>/g)).toEqual(scripts);
+});
+
+it.each([
+  "/events",
+  "/events?q=game%20night",
+  "/events?view=calendar&month=2030-01",
+  "/events?view=calendar&month=2030-01&q=no-such-event&past=1",
+])("%s: the guest schedule-heading Join CTA preserves the calendar destination", async (path) => {
+  const { env } = pageShellFixture();
+  const response = await app.request(`${env.APP_URL}${path}`, {}, env);
+  expect(response.status).toBe(200);
+  const heading = (await response.text()).match(/<div class="schedule-heading">(.*?)<\/div>/)![1]!;
+  expect(heading).toContain(`href="/join?next=${encodeURIComponent(path)}">Join the Discord</a>`);
+});
+
+it.each([
+  ["/events/past", "/events/past"],
+  ["/events/past?page=1", "/events/past"],
+  ["/events/past?page=3", "/events/past?page=3"],
+] as const)(
+  "%s: the archive header Sign in CTA preserves the normalized archive destination",
+  async (path, next) => {
+    const { env } = pageShellFixture();
+    const response = await app.request(`${env.APP_URL}${path}`, {}, env);
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/html");
-    assertShell(await response.text());
-  });
+    const header = (await response.text()).match(/<header\b[^>]*>(.*?)<\/header>/)![1]!;
+    expect(header).toContain(
+      `href="/auth/discord?next=${encodeURIComponent(next)}" data-testid="signin"`,
+    );
+  },
+);
+
+it("keeps event detail outside the schedule-only theme", async () => {
+  const html = await (await pageShellFixture().request(`/e/${EVENT_KEY}`)).text();
+  expect(html).not.toContain('href="/theme.css"');
+  expect(html).not.toContain('href="/schedule-theme.css"');
+  expect(html).not.toContain('class="events-page"');
+});
+
+it("keeps schedule layout in its own self-contained sheet", () => {
+  const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
+  expect(css.length).toBeLessThan(6000);
+  expect(css).toContain("@media (max-width: 48rem)");
+  expect(css).not.toMatch(/@import|https:\/\/|@font-face/);
+  // Every rule stays scoped to the schedule main, never the shared chrome.
+  for (const rule of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+    for (const selector of rule[1]!.split(/,(?![^(]*\))/))
+      expect(selector.trim()).toMatch(/^\.events-page /);
+  }
 });
 
 it("serves a recovery HTML shell and bool-only status to guests without a session", async () => {
   const { env } = pageShellFixture();
-  const recovery = await app.request(new URL("/auth/recover?next=%2Fprofile", env.APP_URL).toString(), {}, env);
+  const recovery = await app.request(
+    new URL("/auth/recover?next=%2Fprofile", env.APP_URL).toString(),
+    {},
+    env,
+  );
   expect(recovery.status).toBe(200);
   expect(recovery.headers.get("content-type")).toContain("text/html");
   const html = await recovery.text();
@@ -97,16 +197,23 @@ it.each([
   assertShell(await response.text());
 });
 
-it.each([429, 500, 503])("branded %i pages preserve the same bypass and landmarks", async (status) => {
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  const errors = new Hono();
-  errors.get("/", (c) => status === 429 ? rateLimitExceeded(c)
-    : status === 503 ? maintenanceHandler("https://discord.gg/fixture")(c)
-    : internalErrorHandler(new Error("fixture failure"), c));
-  const response = await errors.request("/");
-  expect(response.status).toBe(status);
-  assertShell(await response.text());
-});
+it.each([429, 500, 503])(
+  "branded %i pages preserve the same bypass and landmarks",
+  async (status) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const errors = new Hono();
+    errors.get("/", (c) =>
+      status === 429
+        ? rateLimitExceeded(c)
+        : status === 503
+          ? maintenanceHandler("https://discord.gg/fixture")(c)
+          : internalErrorHandler(new Error("fixture failure"), c),
+    );
+    const response = await errors.request("/");
+    expect(response.status).toBe(status);
+    assertShell(await response.text());
+  },
+);
 
 it("keeps bypass visibility and keyboard focus styling in external CSS", () => {
   const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf8");

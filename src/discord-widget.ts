@@ -40,12 +40,22 @@ export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): D
     const previous = verdict?.guildId === guildId ? verdict.available : true;
     let available: boolean;
     try {
-      const res = await discordFetch(`https://discord.com/api/v10/guilds/${guildId}/widget.json`, {}, deps.fetch);
+      const res = await discordFetch(
+        `https://discord.com/api/v10/guilds/${guildId}/widget.json`,
+        {},
+        deps.fetch,
+      );
       available = res.status === 429 ? previous : res.ok;
-      if (!available && previous) console.warn("discord widget unavailable; rendering the join fallback", { status: res.status });
+      if (!available && previous)
+        console.warn("discord widget unavailable; rendering the join fallback", {
+          status: res.status,
+        });
     } catch (error) {
       available = false;
-      if (previous) console.warn("discord widget unavailable; rendering the join fallback", { exception: (error as Error).name });
+      if (previous)
+        console.warn("discord widget unavailable; rendering the join fallback", {
+          exception: (error as Error).name,
+        });
     }
     verdict = { guildId, available, checkedAt: now() };
   }
@@ -56,7 +66,9 @@ export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): D
       if (!src) return null;
       const current = verdict?.guildId === guildId ? verdict : null;
       if (background && !inflight && (!current || now() - current.checkedAt >= ttlMs)) {
-        inflight = probe(guildId!).finally(() => { inflight = null; });
+        inflight = probe(guildId!).finally(() => {
+          inflight = null;
+        });
         background(inflight);
       }
       return current?.available === false ? null : src;

@@ -16,16 +16,26 @@ describe("deployed queue wrapper's probe gate (mocked SQL, no network)", () => {
     { APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: undefined, pages: false },
   ])("uses qaEnabled for $APP_URL / token $QA_AUTH_TOKEN", async ({ pages, ...gate }) => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const ack = vi.fn(), retry = vi.fn();
-    const batch = { messages: [{ body: { kind: "alert-probe" }, attempts: 1, ack, retry }] } as unknown as MessageBatch;
+    const ack = vi.fn(),
+      retry = vi.fn();
+    const batch = {
+      messages: [{ body: { kind: "alert-probe" }, attempts: 1, ack, retry }],
+    } as unknown as MessageBatch;
     const env = {
-      ...baseEnv, ...gate, DB: { connectionString: "postgres://agent_test@agent-testdb:5432/two_web_next" },
+      ...baseEnv,
+      ...gate,
+      DB: { connectionString: "postgres://agent_test@agent-testdb:5432/two_web_next" },
     } as JobsEnv;
     await handleQueue(batch, env);
     expect(ack).toHaveBeenCalledOnce();
     expect(retry).not.toHaveBeenCalled();
-    const critical = errors.mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith('{"level":"critical"'));
-    if (pages) expect(critical.map((line) => JSON.parse(line))).toMatchObject([{ event: "queue.failing", job: "AlertProbe", attempts: 1 }]);
+    const critical = errors.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.startsWith('{"level":"critical"'));
+    if (pages)
+      expect(critical.map((line) => JSON.parse(line))).toMatchObject([
+        { event: "queue.failing", job: "AlertProbe", attempts: 1 },
+      ]);
     else expect(errors).not.toHaveBeenCalled();
     expect(db.end).toHaveBeenCalled();
   });
