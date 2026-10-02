@@ -184,5 +184,7 @@ jobs:
         run: node --test ci/production-deploy-gate.test.mjs
       - name: Build (wrangler dry run)
         run: npx wrangler deploy --dry-run --outdir dist
+      - name: Build alert Tail Worker (wrangler dry run)
+        run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail
       - name: Production build (wrangler dry run, no deployment)
         run: npx wrangler deploy --dry-run --env production --outdir dist-production

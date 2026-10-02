@@ -102,11 +102,11 @@ describe("bounded admin validation formatter reuse", () => {
     }
   });
 
-  it("preserves gap errors, earliest folds, carrier seconds, UTC ordering and form errors when warm", async () => {
+  it("preserves gap errors, latest folds, carrier seconds, UTC ordering and form errors when warm", async () => {
     const { wallToUtc, utcToWall, parseEventForm, ValidationError } = await import("../src/admin/validation");
     for (let i = 0; i < 3; i++) {
-      expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T00:30:00.000Z");
-      expect(wallToUtc("2026-04-05 01:45", "Australia/Lord_Howe").toISOString()).toBe("2026-04-04T14:45:00.000Z");
+      expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe("2026-10-25T01:30:00.000Z");
+      expect(wallToUtc("2026-04-05 01:45", "Australia/Lord_Howe").toISOString()).toBe("2026-04-04T15:15:00.000Z");
       for (const [wall, timezone] of [["2026-03-29 01:30", "Europe/London"], ["2026-10-04 02:15", "Australia/Lord_Howe"]]) {
         try {
           wallToUtc(wall!, timezone!);
