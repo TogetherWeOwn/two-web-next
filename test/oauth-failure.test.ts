@@ -686,7 +686,14 @@ describe("adjacent auth log paths stay bounded", () => {
       SESSION_STORE: throwing,
     } as Env);
     expect(res.status).toBe(503);
-    expect(await res.text()).toContain("Profiles temporarily unavailable");
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(res.headers.get("cache-control")).toContain("private");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.getSetCookie()).toEqual([]);
+    const body = await res.text();
+    expect(body).toContain('<a class="brand" href="/"');
+    expect(body).not.toMatch(/ECONNREFUSED|postgres:\/\/|db\.internal/);
+    expect(body).not.toContain(SECRET);
     const gateLine = logs.filter((l) =>
       JSON.stringify(l.args).includes("could not resolve the session"),
     );
