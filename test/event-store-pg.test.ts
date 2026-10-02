@@ -53,11 +53,6 @@ describe.skipIf(!process.env.DATABASE_URL)("pg EventStore adapter", () => {
       returning id`) as { id: number }[];
     return { id: row!.id, eventKey };
   }
-  async function seedRsvp(eventId: number, userId: string, updatedAt: Date): Promise<void> {
-    await sql`insert into rsvps (event_id, user_id, status, created_at, updated_at)
-      values (${eventId}, ${userId}, 'going', ${updatedAt}, ${updatedAt})`;
-  }
-
   describe("closeFinished", () => {
     it("closes only finished published rows and returns rows changed", async () => {
       const finished = await seedEvent({

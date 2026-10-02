@@ -14,18 +14,22 @@ test("the required check keeps full coverage in isolated serial threads inside m
   assert.equal(manifest.scripts["test:coverage"], `vitest ${args.join(" ")}`);
   assert.equal(manifest.scripts["pretest:coverage"], undefined);
   assert.equal(manifest.scripts["posttest:coverage"], undefined);
-  // main owns the budget (raised 10 -> 20 for shared-runner container setup);
+  // main owns the budget (raised 10 -> 20 -> 40 for shared-runner container setup);
   // isolated threads must fit inside it, never widen it.
   const budget = Number(check.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
-  assert.ok(budget > 0 && budget <= 20, `check timeout-minutes ${budget} exceeds main's 20`);
+  assert.ok(budget > 0 && budget <= 40, `check timeout-minutes ${budget} exceeds main's 40`);
   const step = check.match(
-    /      - name: Check \(typecheck \+ coverage gate\)\n([\s\S]*?)(?=      - )/,
+    /      - name: Check \(lint \+ typecheck \+ coverage gate\)\n([\s\S]*?)(?=      - )/,
   );
   assert.equal(
     step?.[1].match(/^        run: (.+)$/m)?.[1],
-    "npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
+    "npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
   );
-  assert.doesNotMatch(step[1], /continue-on-error:|\bif:/);
+  // Only the docs-only scope gate (TOG-11811) may guard the step; nothing may bypass it.
+  assert.doesNotMatch(step[1], /continue-on-error:/);
+  assert.deepEqual(step[1].match(/^        if:.*$/gm) ?? [], [
+    "        if: needs.scope.outputs.docs_only != 'true'",
+  ]);
   const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
   assert.match(config, /include: \["test\/\*\*\/\*\.test\.ts", "test\/\*\*\/\*\.test\.mjs"\]/);
   assert.match(config, /fileParallelism: false/);
