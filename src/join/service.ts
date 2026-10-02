@@ -77,7 +77,11 @@ export type ThrottleVerdict = { limited: false } | { limited: true; retryAfter: 
  * (legacy funnel.php made the same call for the leaves: no throttle at all
  * rather than a cache-backed one that 500s when the database is down).
  */
-export async function checkJoinThrottle(sql: Sql | null, bucket: string, max: number): Promise<ThrottleVerdict> {
+export async function checkJoinThrottle(
+  sql: Sql | null,
+  bucket: string,
+  max: number,
+): Promise<ThrottleVerdict> {
   if (!sql) return { limited: false };
   const rows = await sql<{ n: number; wait: number }[]>`
     SELECT count(*)::int AS n,
@@ -124,14 +128,23 @@ export async function migrateJoin(sql: Sql): Promise<void> {
 /** One queryable row per terminal join path. Null store = no-op (funnel stays up). */
 export async function recordAttempt(
   sql: Sql | null,
-  attempt: { outcome: JoinOutcome; source: string | null; requestId: string | null; discordId: string | null },
+  attempt: {
+    outcome: JoinOutcome;
+    source: string | null;
+    requestId: string | null;
+    discordId: string | null;
+  },
 ): Promise<void> {
   if (!sql) return;
   await sql`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
     VALUES (${attempt.outcome}, ${attempt.source}, ${attempt.requestId}, ${attempt.discordId})`;
 }
 
-export type BotAdd = (guildId: string, userId: string, accessToken: string) => Promise<{
+export type BotAdd = (
+  guildId: string,
+  userId: string,
+  accessToken: string,
+) => Promise<{
   result: JoinResult;
   requestId: string | null;
 }>;
@@ -145,7 +158,13 @@ export function liveBotAdd(botToken: string): BotAdd {
 }
 
 export type JoinFinish =
-  | { kind: "signed_in"; outcome: JoinOutcome; redirect: string; requestId: string | null; discordId: string }
+  | {
+      kind: "signed_in";
+      outcome: JoinOutcome;
+      redirect: string;
+      requestId: string | null;
+      discordId: string;
+    }
   | { kind: "recoverable"; outcome: JoinOutcome; requestId: string | null };
 
 /**
@@ -174,5 +193,11 @@ export async function finishJoin(
   if (result === "failed") return { kind: "recoverable", outcome: "degraded", requestId };
   const outcome: JoinOutcome = result === "joined" ? "added" : "already_member";
   const notice = result === "joined" ? "joined" : "already_member";
-  return { kind: "signed_in", outcome, redirect: next ?? `/?n=${notice}`, requestId, discordId: userId };
+  return {
+    kind: "signed_in",
+    outcome,
+    redirect: next ?? `/?n=${notice}`,
+    requestId,
+    discordId: userId,
+  };
 }

@@ -5,14 +5,23 @@ import { FALLBACK_INVITE, inviteDestination } from "../src/invite";
 import { Home, type Notice } from "../src/pages";
 
 const member: Session = {
-  id: "member-1", username: "Member", avatar: null, member: true, moderator: false,
+  id: "member-1",
+  username: "Member",
+  avatar: null,
+  member: true,
+  moderator: false,
 };
 
 async function render(inviteUrl: string | undefined, session: Session | null, notice: Notice) {
   return await jsx(Home, {
-    session, notice, inviteUrl, appUrl: "https://next.example.test",
+    session,
+    notice,
+    inviteUrl,
+    appUrl: "https://next.example.test",
     counts: { memberCount: null, onlineCount: null, ranks: [] },
-    upcomingEvents: [], eventsUnavailable: false, featured: [],
+    upcomingEvents: [],
+    eventsUnavailable: false,
+    featured: [],
   }).toString();
 }
 
@@ -26,8 +35,14 @@ const destinations = [
   { name: "HTTP invite", url: "http://discord.gg/example" },
   { name: "protocol-relative invite", url: "//discord.gg/example" },
   { name: "lookalike host", url: "https://discord.gg.example.test/invite" },
-  { name: "discord.gg campaign", url: "https://discord.gg/example?utm_source=web&utm_campaign=home#join" },
-  { name: "discord.com campaign", url: "https://discord.com/invite/example?utm_source=web&utm_campaign=home#join" },
+  {
+    name: "discord.gg campaign",
+    url: "https://discord.gg/example?utm_source=web&utm_campaign=home#join",
+  },
+  {
+    name: "discord.com campaign",
+    url: "https://discord.com/invite/example?utm_source=web&utm_campaign=home#join",
+  },
 ];
 
 beforeEach(() => {
@@ -44,9 +59,15 @@ describe.each([
     const destination = url === undefined ? FALLBACK_INVITE : inviteDestination(url);
     if (url?.includes("?utm_source=web")) expect(destination).toBe(url);
     const html = await render(url, session, notice);
-    const inviteLinks = [...html.matchAll(/<a\b[^>]*href="(?!\/discord")([^"]*)"[^>]*>(Open Discord|Join with an invite link instead)<\/a>/g)];
+    const inviteLinks = [
+      ...html.matchAll(
+        /<a\b[^>]*href="(?!\/discord")([^"]*)"[^>]*>(Open Discord|Join with an invite link instead)<\/a>/g,
+      ),
+    ];
     expect(inviteLinks).toHaveLength(links);
-    expect(inviteLinks.map((link) => link[1])).toEqual(Array(links).fill(destination.replaceAll("&", "&amp;")));
+    expect(inviteLinks.map((link) => link[1])).toEqual(
+      Array(links).fill(destination.replaceAll("&", "&amp;")),
+    );
     if (destination === FALLBACK_INVITE) expect(html).not.toContain(`href="${url}"`);
   });
 });
@@ -66,7 +87,9 @@ it.each([
   expect(html.includes(`href="${FALLBACK_INVITE}">Open Discord`)).toBe(!join);
   expect(html.includes('data-testid="signin"')).toBe(session === null);
   expect(html.includes('data-testid="home-events-join"')).toBe(session === null);
-  expect(html).toContain("Signed in, but we couldn&#39;t add you to the Discord automatically. Use the invite link below.");
+  expect(html).toContain(
+    "Signed in, but we couldn&#39;t add you to the Discord automatically. Use the invite link below.",
+  );
   expect(html).toContain("Join with an invite link instead");
   expect(html).not.toContain("data-island");
 });

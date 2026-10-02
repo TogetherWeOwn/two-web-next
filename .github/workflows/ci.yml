@@ -11,21 +11,58 @@ on:
 
 permissions:
   contents: read
+  # The scope job lists the PR's changed files via the API.
+  pull-requests: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Cheap change-scope gate (TOG-11811): a PR that only touches prose
+  # (`docs/**`, root `*.md`) that no gate, test or build reads fast-passes the
+  # heavy jobs below instead of occupying two runner slots for 20 minutes.
+  # ci/change-scope.sh fails closed. `check` still reports success under its
+  # own name, so the required check keeps gating merges (paths-ignore would
+  # leave it missing and block the PR, so it is deliberately not used here).
+  scope:
+    name: scope
+    # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+      - id: scope
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          bash ci/change-scope.sh "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" >> "$GITHUB_OUTPUT"
+
   a11y:
     name: a11y
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     # Overflow switch (TOG ops, 2026-10-01): stays on self-hosted unless repo vars
     # CI_OVERFLOW_RUNNER (JSON runs-on, e.g. ["ubuntu-latest"]), CI_OVERFLOW_JOBS
     # (JSON job ids) and CI_OVERFLOW_EVENTS (JSON event names) all select this job.
     # Flip back without a PR by deleting CI_OVERFLOW_RUNNER. Private repo: hosted
     # minutes come from the included allowance; an rbx1 guard reverts at 45k.
     runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
     # its own network namespace; localhost:5432 is forwarded to the service.
@@ -82,14 +119,15 @@ jobs:
   # A failing audit must also prevent the existing required check from passing.
   check:
     name: check
-    needs: a11y
+    needs: [a11y, scope]
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
     runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    # Container setup and serial SQL coverage exceeded 10m on shared runners.
-    # Keep the job bounded; the seeded property suite retains its hard 10s limit.
-    timeout-minutes: 20
+    # Container setup and serial SQL coverage takes 17-20m on the slowest shared
+    # runners, so 20m cancelled green runs (TOG-12177). Keep the job bounded; the
+    # seeded property suite retains its hard 10s limit.
+    timeout-minutes: 40
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -104,16 +142,22 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
+      - name: Docs-only fast pass (no code changed)
+        if: needs.scope.outputs.docs_only == 'true'
+        run: echo "Docs-only change per the scope job; required check passes without the heavy suite."
       - name: Require successful accessibility audit
+        if: needs.scope.outputs.docs_only != 'true'
         env:
           A11Y_RESULT: ${{ needs.a11y.result }}
         run: test "$A11Y_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.scope.outputs.docs_only != 'true'
         with:
           # Migration history needs the base commit; fresh (hosted/overflow)
           # workspaces lack it, unlike reused self-hosted ones.
           fetch-depth: 0
       - name: Job-private localhost:5432 forward to the Postgres service
+        if: needs.scope.outputs.docs_only != 'true'
         run: |
           # On hosted/overflow runners the job container's root does not own the
           # runner-owned checkout, so Git refuses it as dubious ownership.
@@ -123,38 +167,62 @@ jobs:
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
       - uses: actions/setup-node@v7
+        if: needs.scope.outputs.docs_only != 'true'
         with:
           node-version: 24
           cache: npm
       - name: Dependency audit selftest (local fixtures)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run deps:audit:selftest
       - name: Dependency audit (lockfile, including dev dependencies)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run deps:audit
       - run: npm ci
+        if: needs.scope.outputs.docs_only != 'true'
       - name: Seeded admin properties (10s budget, local fixtures)
+        if: needs.scope.outputs.docs_only != 'true'
         # Skip npm's extra process startup; keep the same suite and hard budget.
         run: timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
       - name: Public-route smoke selftest (loopback fixtures)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run test:smoke
       - name: Apply migrations
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Migration workflow selftest (isolated Postgres, no Neon/network APIs)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run db:migrate:selftest
+        env:
+          MIGRATION_TEST_DATABASE_URL: postgres://postgres:ci@postgres:5432/postgres
       # Exercise the exact pre-deploy invocation on the same migrated service.
       - name: Configuration drift check + selftest
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run config:check
-      - name: Check (typecheck + coverage gate)
-        run: npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
+      - name: Biome gate selftest (intentional violations)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: bash ci/biome-selftest.sh
+      - name: Check (lint + typecheck + coverage gate)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/staging-deploy-gate-selftest.mjs
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npm run test:cutover
+      - name: Shadow-compare selftest (loopback only)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run test:shadow
       - name: Coverage job summary
-        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage report
-        if: always() && hashFiles('coverage/coverage-summary.json') != ''
+        if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-${{ github.sha }}
@@ -162,10 +230,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Neon backup selftest (stubbed, no secrets)
+        if: needs.scope.outputs.docs_only != 'true'
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
+        if: needs.scope.outputs.docs_only != 'true'
         run: bash ci/check-migration-numbers.sh
       - name: Pre-flip probe selftests (fixtures, no secrets)
+        if: needs.scope.outputs.docs_only != 'true'
         run: |
           npm run check:moderators
           DISCORD_MODERATOR_ROLE_IDS=508654771276873729 npm run check:moderators -- --require-configured
@@ -179,8 +250,17 @@ jobs:
           fi
 
       - name: Production deploy gate selftest (fixtures, no secrets or network)
+        if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/production-deploy-gate.test.mjs
+      - name: Production secrets preflight selftest (stubbed wrangler, no secrets or network)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/check-production-secrets.test.mjs
       - name: Build (wrangler dry run)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --outdir dist
+      - name: Build alert Tail Worker (wrangler dry run)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail
       - name: Production build (wrangler dry run, no deployment)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --env production --outdir dist-production

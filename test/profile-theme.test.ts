@@ -7,22 +7,50 @@ import type { MemberView } from "../src/profiles/store";
 import type { MemberStats } from "../src/profiles/stats";
 
 const member: MemberView = {
-  id: "100000000000000001", username: "Player <script>", avatar: null,
-  bio: "A bio <b>with markup</b>", games: ["Chess", "Go <script>"], timezone: "Europe/London",
-  rank: "Existing rank", joinedAt: new Date("2024-06-15T00:00:00Z"),
+  id: "100000000000000001",
+  username: "Player <script>",
+  avatar: null,
+  bio: "A bio <b>with markup</b>",
+  games: ["Chess", "Go <script>"],
+  timezone: "Europe/London",
+  rank: "Existing rank",
+  joinedAt: new Date("2024-06-15T00:00:00Z"),
 };
-const stats: MemberStats = { rankKey: "community_regular", joinedAt: new Date("2025-01-01T00:00:00Z"), tenureDays: 0, isCurrentMember: true, milestones: [] };
-const render = (overrides = {}) => ProfilePage({ member, isOwner: true, appUrl: "https://next.example.test", ...overrides })!.toString();
+const stats: MemberStats = {
+  rankKey: "community_regular",
+  joinedAt: new Date("2025-01-01T00:00:00Z"),
+  tenureDays: 0,
+  isCurrentMember: true,
+  milestones: [],
+};
+const render = (overrides = {}) =>
+  ProfilePage({
+    member,
+    isOwner: true,
+    appUrl: "https://next.example.test",
+    ...overrides,
+  })!.toString();
 
 describe("member profile base theme", () => {
   it("loads the base tokens and profile-only layout without changing other shells", () => {
     const html = render();
-    expect(html).toContain('<body class="profile-theme"><a class="skip-link"');
+    expect(html).toContain('<body class="base-theme profile-theme"><a class="skip-link"');
     expect(html).toContain('rel="stylesheet" href="/theme.css"');
     expect(html).toContain('rel="stylesheet" href="/profile-theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     expect(Layout({ title: "Leaf" })!.toString()).not.toContain("/profile-theme.css");
-    expect(Home({ session: null, notice: null, inviteUrl: "/discord", appUrl: "https://next.example.test", counts: { memberCount: null, onlineCount: null, ranks: [] }, upcomingEvents: [], eventsUnavailable: false, featured: [] })!.toString()).not.toContain("/profile-theme.css");
+    expect(
+      Home({
+        session: null,
+        notice: null,
+        inviteUrl: "/discord",
+        appUrl: "https://next.example.test",
+        counts: { memberCount: null, onlineCount: null, ranks: [] },
+        upcomingEvents: [],
+        eventsUnavailable: false,
+        featured: [],
+      })!.toString(),
+    ).not.toContain("/profile-theme.css");
   });
 
   it("groups identity, about and games while escaping every member value", () => {
@@ -63,7 +91,8 @@ describe("member profile base theme", () => {
     const html = render();
     expect(html).toContain('method="post" action="/members/100000000000000001"');
     expect(html).toContain('name="_method" value="PATCH"');
-    for (const field of ["bio", "games_text", "timezone", "website", "formOpenedAt"]) expect(html).toContain(`name="${field}"`);
+    for (const field of ["bio", "games_text", "timezone", "website", "formOpenedAt"])
+      expect(html).toContain(`name="${field}"`);
     expect(html).toContain('<label class="profile-field">Bio <textarea');
     expect(html).toContain('<label class="profile-field">Games (one per line) <textarea');
     expect(html).toContain('<label class="profile-field">Timezone <input');
@@ -76,11 +105,16 @@ describe("member profile base theme", () => {
     const html = render({ joinResult: "already_member" });
     expect(html).toContain('class="notice" role="status" data-testid="join-result"');
     expect(html).toContain('href="/discord" data-testid="reinvite-link"');
-    expect(html.indexOf('data-testid="join-result"')).toBeLessThan(html.indexOf('class="profile-player"'));
+    expect(html.indexOf('data-testid="join-result"')).toBeLessThan(
+      html.indexOf('class="profile-player"'),
+    );
   });
 
   it("keeps accessible server errors and submitted values", () => {
-    const html = render({ errors: { timezone: "Choose a valid timezone" }, values: { bio: "New <bio>", games_text: "Chess\nGo", timezone: "Invalid/Zone" } });
+    const html = render({
+      errors: { timezone: "Choose a valid timezone" },
+      values: { bio: "New <bio>", games_text: "Chess\nGo", timezone: "Invalid/Zone" },
+    });
     expect(html).toContain('<div role="alert" tabindex="-1" data-testid="profile-error"><ul>');
     expect(html).toContain("New &lt;bio&gt;");
     expect(html).toContain('value="Invalid/Zone"');

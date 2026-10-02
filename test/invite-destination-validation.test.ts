@@ -93,10 +93,13 @@ afterEach(() => {
 });
 
 describe("inviteDestination", () => {
-  it.each(validInvites)("serializes an approved invite without changing its meaning: %s", (configured) => {
-    expect(inviteDestination(configured)).toBe(new URL(configured).href);
-    expect(console.error).not.toHaveBeenCalled();
-  });
+  it.each(validInvites)(
+    "serializes an approved invite without changing its meaning: %s",
+    (configured) => {
+      expect(inviteDestination(configured)).toBe(new URL(configured).href);
+      expect(console.error).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(invalidInvites)("falls back without logging the configured value: %s", (configured) => {
     expect(inviteDestination(configured)).toBe(FALLBACK_INVITE);
@@ -114,7 +117,10 @@ describe("inviteDestination", () => {
 describe("GET /discord invite floor", () => {
   it.each<[string, string]>([
     ...malformedInvites.map((configured): [string, string] => [configured, FALLBACK_INVITE]),
-    ...campaignInvites.map((configured): [string, string] => [configured, new URL(configured).href]),
+    ...campaignInvites.map((configured): [string, string] => [
+      configured,
+      new URL(configured).href,
+    ]),
     [validInvites[7]!, validInvites[7]!],
     [validInvites[8]!, validInvites[8]!],
     ["https://discord.com/login", FALLBACK_INVITE],
@@ -123,15 +129,27 @@ describe("GET /discord invite floor", () => {
     ["https://discord.gg:8443/Ab12", FALLBACK_INVITE],
     ["", FALLBACK_INVITE],
   ])("redirects safely without dependencies or cookies: %s", async (configured, destination) => {
-    const dependency = vi.fn(() => { throw new Error("invite floor must not read dependencies"); });
+    const dependency = vi.fn(() => {
+      throw new Error("invite floor must not read dependencies");
+    });
     const e = { ...env, DISCORD_INVITE_URL: configured };
-    for (const key of ["DATABASE_URL", "DB", "SESSION_STORE", "SESSION_SECRET", "COUNTS_SNAPSHOT_KV"]) {
+    for (const key of [
+      "DATABASE_URL",
+      "DB",
+      "SESSION_STORE",
+      "SESSION_SECRET",
+      "COUNTS_SNAPSHOT_KV",
+    ]) {
       Object.defineProperty(e, key, { get: dependency });
     }
     vi.stubGlobal("fetch", dependency);
     vi.stubGlobal("caches", { open: dependency });
 
-    const res = await app.request("/discord", { headers: { cookie: "__Host-two_session=synthetic" } }, e);
+    const res = await app.request(
+      "/discord",
+      { headers: { cookie: "__Host-two_session=synthetic" } },
+      e,
+    );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(destination);
     const resolved = new URL(res.headers.get("location")!, env.APP_URL);
@@ -150,8 +168,14 @@ describe("GET /discord invite floor", () => {
 describe("join recovery invite", () => {
   it.each<[string, string]>([
     ...malformedInvites.map((configured): [string, string] => [configured, FALLBACK_INVITE]),
-    ...campaignInvites.map((configured): [string, string] => [configured, new URL(configured).href]),
-    ["https://discord.com/invite/Ab_12-cD?utm_source=web#campaign", "https://discord.com/invite/Ab_12-cD?utm_source=web#campaign"],
+    ...campaignInvites.map((configured): [string, string] => [
+      configured,
+      new URL(configured).href,
+    ]),
+    [
+      "https://discord.com/invite/Ab_12-cD?utm_source=web#campaign",
+      "https://discord.com/invite/Ab_12-cD?utm_source=web#campaign",
+    ],
     ["https://discord.com/login", FALLBACK_INVITE],
     ["https://discord.com/oauth2/authorize", FALLBACK_INVITE],
     ["https://synthetic-user:synthetic-password@discord.gg/Ab12", FALLBACK_INVITE],
@@ -162,7 +186,9 @@ describe("join recovery invite", () => {
       DISCORD_INVITE_URL: configured,
       JOIN_DEPS: { store: async () => null },
     };
-    const network = vi.fn(() => { throw new Error("recovery must not call Discord"); });
+    const network = vi.fn(() => {
+      throw new Error("recovery must not call Discord");
+    });
     vi.stubGlobal("fetch", network);
     const res = await app.request("/join/callback?error=access_denied", {}, e);
     expect(res.status).toBe(200);

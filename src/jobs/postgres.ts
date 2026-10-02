@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import { createPostgresSessionStore, type Sql as SessionSql } from "../sessions";
-import type { SingleFlight, } from "./cron";
+import type { SingleFlight } from "./cron";
 import type { AgePrunedTable, PruneStores, QueueLedger, TxClient, UniqueLock } from "./types";
 
 type Sql = ReturnType<typeof postgres>;
@@ -35,9 +35,15 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // Table names cannot be parameterized in postgres.js tagged templates, so
   // each age-pruned table gets its own static statement (same MassPrunable
   // shape as legacy: `... where <age column> < ${cutoff}`).
+  // Access logs are append-only audit rows (drizzle/1018): the database refuses
+  // to delete one unless it is strictly older than 90 days by its own clock. A
+  // caller clock running ahead must skip, not raise on, the rows in between.
   const accessLog: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (await sql`delete from member_data_access_logs where occurred_at < ${cutoff} returning 1`).length,
+      (
+        await sql`delete from member_data_access_logs where occurred_at < ${cutoff}
+          and occurred_at < clock_timestamp() - interval '2160 hours' returning 1`
+      ).length,
   };
   const joinAttempts: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
@@ -45,7 +51,8 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   };
   const idempotencyKeys: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (await sql`delete from agent_event_idempotency_keys where created_at < ${cutoff} returning 1`).length,
+      (await sql`delete from agent_event_idempotency_keys where created_at < ${cutoff} returning 1`)
+        .length,
   };
   const searchLog: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
@@ -158,15 +165,18 @@ export type QueueDepth = {
  * counted even when claimed, same as legacy). Throws on driver/table error — the
  * caller maps that to `queue.status: unknown`, never a 500.
  */
-export async function pgQueueDepth(sql: Sql): Promise<QueueDepth> {
+export async function pgQueueDepth(sql: Sql | postgres.TransactionSql): Promise<QueueDepth> {
+  // Health setup precedes this statement inside a transaction. now() would
+  // freeze availability at BEGIN; use one measurement-time clock instead.
+  // https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT
   const [row] = await sql`
     select
-      count(*) filter (where available_at <= now() and reserved_at is null)::int as pending,
-      count(*) filter (where available_at > now())::int as delayed,
+      count(*) filter (where available_at <= statement_timestamp() and reserved_at is null)::int as pending,
+      count(*) filter (where available_at > statement_timestamp())::int as delayed,
       count(*) filter (where reserved_at is not null)::int as reserved,
       count(*)::int as total,
       (select count(*)::int from queue_failed_jobs) as failed,
-      extract(epoch from now() - (min(created_at) filter (where available_at <= now() and reserved_at is null)))::int
+      extract(epoch from statement_timestamp() - (min(created_at) filter (where available_at <= statement_timestamp() and reserved_at is null)))::int
         as oldest_pending_age_seconds
     from queue_jobs`;
   if (!row) throw new Error("queue depth query returned no row");

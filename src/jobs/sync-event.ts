@@ -2,6 +2,7 @@ import { SYNC_EVENT, backoffFor } from "./constants";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
 import { BotTerminalError, BotTransportError } from "./types";
 import type { BotClient, EventStore, UniqueLock } from "./types";
+import { safeRequestId } from "../request-log";
 
 export type Outcome = { done: true } | { retryInSeconds: number } | { failed: string };
 
@@ -14,6 +15,7 @@ export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },
   lock: UniqueLock,
   eventKey: string,
+  requestId?: string,
 ): Promise<boolean> {
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
   const key = uniqueKey(eventKey);
@@ -21,7 +23,13 @@ export async function dispatchSyncEvent(
   if (!leaseToken) return false;
   try {
     await queue.send(
-      { kind: "sync-event", eventKey, idempotencyKey: crypto.randomUUID(), leaseToken },
+      {
+        kind: "sync-event",
+        eventKey,
+        idempotencyKey: crypto.randomUUID(),
+        leaseToken,
+        requestId: safeRequestId(requestId),
+      },
       { delaySeconds: SYNC_EVENT.debounceSeconds },
     );
   } catch (err) {
@@ -29,9 +37,13 @@ export async function dispatchSyncEvent(
     // Like terminal cleanup, a wedged DELETE must not hold dispatch hostage.
     // TTL recovers a stuck lease; a late DELETE remains fenced by this token.
     let t: ReturnType<typeof setTimeout>;
-    const timeout = new Promise<void>((resolve) => { t = setTimeout(resolve, LOCK_TIMEOUT_MS); });
+    const timeout = new Promise<void>((resolve) => {
+      t = setTimeout(resolve, LOCK_TIMEOUT_MS);
+    });
     await Promise.race([
-      Promise.resolve().then(() => lock.release(key, leaseToken)).catch(() => {}),
+      Promise.resolve()
+        .then(() => lock.release(key, leaseToken))
+        .catch(() => {}),
       timeout,
     ]).finally(() => clearTimeout(t));
     throw err;
@@ -59,7 +71,8 @@ export async function handleSyncEvent(
   try {
     answer = await deps.bot.upsertEvent(event.payload, msg.idempotencyKey);
   } catch (e) {
-    if (e instanceof BotTransportError) return retry(backoffFor(SYNC_EVENT.backoffSeconds, attempts));
+    if (e instanceof BotTransportError)
+      return retry(backoffFor(SYNC_EVENT.backoffSeconds, attempts));
     // Class-only: the terminal message can carry tokens or personal data.
     if (e instanceof BotTerminalError) return { failed: terminalFailureReason() };
     throw e;
@@ -67,11 +80,20 @@ export async function handleSyncEvent(
   if (!answer.ok) {
     if (!answer.retryable) {
       // Class-only: keep the job and sanitized code, never the provider message.
-      return { failed: botRefusalReason(`event.upsert for ${sanitizeQueueScope(msg.eventKey)}`, answer.code) };
+      return {
+        failed: botRefusalReason(
+          `event.upsert for ${sanitizeQueueScope(msg.eventKey)}`,
+          answer.code,
+        ),
+      };
     }
     // The bot's number beats ours: on a 429 it knows where the ceiling is.
     return retry(answer.retryAfterSeconds ?? backoffFor(SYNC_EVENT.backoffSeconds, attempts));
   }
-  await deps.events.recordMirrored(msg.eventKey, answer.discordEventId, (deps.now ?? (() => new Date()))());
+  await deps.events.recordMirrored(
+    msg.eventKey,
+    answer.discordEventId,
+    (deps.now ?? (() => new Date()))(),
+  );
   return { done: true };
 }

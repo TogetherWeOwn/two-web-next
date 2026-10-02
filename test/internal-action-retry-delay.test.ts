@@ -17,7 +17,11 @@ const fail = (retryAfterSeconds: unknown): BotFailure => ({
   retryAfterSeconds: retryAfterSeconds as number | null,
 });
 
-const ann = { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } } as const;
+const ann = {
+  kind: "announcement",
+  idempotencyKey: "k",
+  action: { channelKey: "c", body: "b" },
+} as const;
 
 function botWith(retryAfterSeconds: unknown): BotClient {
   return {
@@ -31,7 +35,8 @@ function memLedger() {
   const ledger: QueueLedger = {
     enqueued: async (j) => void rows.set(j.jobId, { state: "pending", availableAt: j.availableAt }),
     reserved: async (id) => void rows.set(id, { ...rows.get(id), state: "reserved" } as never),
-    released: async (id, at) => void rows.set(id, { ...rows.get(id), state: "released", availableAt: at } as never),
+    released: async (id, at) =>
+      void rows.set(id, { ...rows.get(id), state: "released", availableAt: at } as never),
     dequeued: async (id) => void rows.delete(id),
     failed: async (id) => void rows.set(id, { state: "failed" }),
   };
@@ -41,10 +46,19 @@ function memLock(): UniqueLock {
   return { acquire: async () => null, release: async () => {} };
 }
 function msg(body: unknown, attempts = 1, jobId?: string) {
-  const r = { body: jobId ? { ...(body as object), jobId } : body, attempts, acked: false, retried: undefined as number | undefined };
+  const r = {
+    body: jobId ? { ...(body as object), jobId } : body,
+    attempts,
+    acked: false,
+    retried: undefined as number | undefined,
+  };
   return Object.assign(r, {
-    ack() { r.acked = true; },
-    retry(o?: { delaySeconds?: number }) { r.retried = o?.delaySeconds; },
+    ack() {
+      r.acked = true;
+    },
+    retry(o?: { delaySeconds?: number }) {
+      r.retried = o?.delaySeconds;
+    },
   });
 }
 const store = () => ({
@@ -104,9 +118,17 @@ describe("handleCallInternalAction retry admission (TOG-11629)", () => {
   );
 
   it("admits the role.assign path the same way", async () => {
-    const role = { kind: "role-assign", idempotencyKey: null, action: { userId: "u", roleKey: "r" } } as const;
-    expect(await handleCallInternalAction({ ...role }, 1, botWith(NaN))).toEqual({ retryInSeconds: FALLBACK });
-    expect(await handleCallInternalAction({ ...role }, 2, botWith(30))).toEqual({ retryInSeconds: 30 });
+    const role = {
+      kind: "role-assign",
+      idempotencyKey: null,
+      action: { userId: "u", roleKey: "r" },
+    } as const;
+    expect(await handleCallInternalAction({ ...role }, 1, botWith(NaN))).toEqual({
+      retryInSeconds: FALLBACK,
+    });
+    expect(await handleCallInternalAction({ ...role }, 2, botWith(30))).toEqual({
+      retryInSeconds: 30,
+    });
   });
 
   it("feeds one admitted value to both the ledger and Queue.retry", async () => {
