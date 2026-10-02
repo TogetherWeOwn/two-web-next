@@ -1,5 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
 export function assertProductionRequest(env) {
@@ -53,7 +56,20 @@ export function assertProductionTarget(configText) {
   }
 }
 
-export async function checkProductionGate(env, fetchEnvironment = fetch) {
+// The checkout must be the dispatch SHA itself: deploy-production.yml checks
+// out `github.sha` in both gate jobs, so a newer main head never deploys.
+function currentCheckoutSha() {
+  // The job container may not own the host checkout; trust only this path,
+  // only for this command (https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory).
+  return execFileSync("git", ["-c", `safe.directory=${resolve(".")}`, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+}
+
+export async function checkProductionGate(env, fetchEnvironment = fetch, options = {}) {
+  // checkoutSha stays lazy so disabled/unprotected requests refuse before any
+  // subprocess or CI lookup. Tests pass it explicitly; the CLI resolves it.
+  let { checkoutSha, fetchCi = fetchEnvironment } = options;
   // Refuse before any API request, and before the protected deploy job can start.
   assertProductionRequest(env);
   if (!env.GITHUB_TOKEN || !/^[\w.-]+\/[\w.-]+$/.test(env.GITHUB_REPOSITORY ?? "")) {
@@ -74,6 +90,20 @@ export async function checkProductionGate(env, fetchEnvironment = fetch) {
     throw new Error(`Cannot verify production Environment protection (HTTP ${response.status})`);
   }
   assertProductionProtection(await response.json());
+  // Exact-SHA green main CI, shared with the staging gate: a red or pending
+  // ci.yml run on this SHA must never reach production.
+  checkoutSha ??= currentCheckoutSha();
+  return requireSuccessfulCi(
+    {
+      eventName: env.GITHUB_EVENT_NAME,
+      event: { repository: { full_name: env.GITHUB_REPOSITORY } },
+      repository: env.GITHUB_REPOSITORY,
+      ref: env.GITHUB_REF,
+      sha: env.GITHUB_SHA,
+      checkoutSha,
+    },
+    { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -82,9 +112,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       assertProductionCredentials(process.env);
       console.log("Production-only Cloudflare credentials are present");
     } else {
-      await checkProductionGate(process.env);
+      const evidence = await checkProductionGate(process.env);
       assertProductionTarget(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
-      console.log("Production dispatch, enable flag, review protection and target checks passed");
+      console.log(
+        `Production dispatch, enable flag, review protection, target and exact-SHA CI checks passed: ${evidence.sha}, full CI run ${evidence.runId}, attempt ${evidence.runAttempt}`,
+      );
     }
   } catch (error) {
     // Do not print request/response bodies or credentials on a failed API call.

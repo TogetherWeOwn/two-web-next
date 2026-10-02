@@ -26,11 +26,12 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Refuse disabled, non-main, unprotected or placeholder deployment
+      - name: Refuse disabled, non-main, unprotected, untested or placeholder deployment
         run: node ci/production-deploy-gate.mjs
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_SHA: ${{ github.sha }}
 
   deploy-production:
     name: deploy-production
@@ -57,6 +58,7 @@ jobs:
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_SHA: ${{ github.sha }}
       - run: npm ci --include=dev
       # No migrations, queue creation or SQL tests here: provisioning and W16
       # rehearsal are separate operator work. CI uses disposable SQL services.
