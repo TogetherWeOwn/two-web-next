@@ -7,6 +7,12 @@ export default defineConfig({
     exclude: [...configDefaults.exclude, "test/smoke.test.mjs", "test/json-smoke.test.mjs"],
     // Live suites truncate shared tables in one database, so files run serially.
     fileParallelism: false,
+    // Hang detectors, not performance budgets: shared self-hosted runners are 4-5x
+    // slower than hosted ones and DB-heavy tests blew the 5s/10s defaults under load
+    // (TOG-12177). Deliberate per-test limits and timing asserts are listed in
+    // docs/ci-load-sensitive-tests.md.
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}", "tail/**/*.ts"],

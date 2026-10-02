@@ -35,6 +35,14 @@ paths = ['''^test/auth-admission\.test\.ts$''']
 regexes = ['''^fixture-signing-secret-at-least-32-bytes$''']
 
 [[allowlists]]
+description = "Synthetic event ULID in the request-correlation fixture, not a credential (TOG-10838)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^01ARYZ6S41TSV4RRFFQ69G5FAV$''']
+paths = ['''^test/request-correlation\.test\.ts$''']
+
+[[allowlists]]
 description = "Synthetic ULID event key in the W15 login-return DB fixture, not a credential"
 targetRules = ["generic-api-key"]
 regexes = ['''01J0AABBCCDDEEFFGGHHMMNNPP''']
