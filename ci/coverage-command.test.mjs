@@ -10,11 +10,14 @@ const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.me
 const check = workflow.slice(workflow.indexOf("\n  check:\n"));
 const args = ["run", "--coverage", "--pool=threads"];
 
-test("the required check keeps full coverage in isolated serial threads inside the original job budget", async () => {
+test("the required check keeps full coverage in isolated serial threads inside main's job budget", async () => {
   assert.equal(manifest.scripts["test:coverage"], `vitest ${args.join(" ")}`);
   assert.equal(manifest.scripts["pretest:coverage"], undefined);
   assert.equal(manifest.scripts["posttest:coverage"], undefined);
-  assert.match(check, /^    timeout-minutes: 10$/m);
+  // main owns the budget (raised 10 -> 20 for shared-runner container setup);
+  // isolated threads must fit inside it, never widen it.
+  const budget = Number(check.match(/^    timeout-minutes: (\d+)$/m)?.[1]);
+  assert.ok(budget > 0 && budget <= 20, `check timeout-minutes ${budget} exceeds main's 20`);
   const step = check.match(/      - name: Check \(typecheck \+ coverage gate\)\n([\s\S]*?)(?=      - )/);
   assert.equal(step?.[1].match(/^        run: (.+)$/m)?.[1],
     "npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs");
