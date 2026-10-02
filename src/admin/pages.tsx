@@ -1,14 +1,29 @@
 // Admin pages (W11 pt1). Plain server-rendered tables + forms in this repo's
-// JSX idiom — no client JS, no component framework. Moderators get labelled
+// JSX idiom, with a small event-editor navigation guard. Moderators get labelled
 // fields and field errors; every form posts back to its own route.
 
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { cloneElement, isValidElement } from "hono/jsx";
 import type { Actor } from "./guard";
-import { SkipLink } from "../pages";
-import type { EventRow, FeaturedRow } from "./store";
+import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
+import { FeaturedContentItem, SkipLink } from "../pages";
+import type { EventListRow, EventRow, FeaturedRow } from "./store";
+import { goingCountText } from "../islands/contracts";
 import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
+import { featuredListUrl, joinAttemptsUrl, rosterUrl, type FeaturedListQuery, type JoinAttemptsQuery, type RosterQuery, type SortOrder } from "./table-list";
+
+const TableSortHeader: FC<{ label: string; active: boolean; order: SortOrder; url: (order: SortOrder) => string }> = ({ label, active, order, url }) => {
+  const next = active && order === "asc" ? "desc" : "asc";
+  return (
+    <th scope="col" aria-sort={active ? (order === "asc" ? "ascending" : "descending") : "none"}>
+      <a href={url(next)} aria-label={`Sort by ${label.toLowerCase()} ${next === "asc" ? "ascending" : "descending"}`}>
+        {label}{active ? (order === "asc" ? " ↑" : " ↓") : ""}
+      </a>
+    </th>
+  );
+};
 
 const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
   <html lang="en">
@@ -122,10 +137,10 @@ export const AdminDashboard: FC<{ actor: Actor; funnel?: Record<string, number>;
   </Shell>
 );
 
-export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: string; outcomes: readonly string[] }> = ({
+export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQuery; hasNext: boolean; outcomes: readonly string[] }> = ({
   rows,
-  outcome,
-  q,
+  query,
+  hasNext,
   outcomes,
 }) => (
   <Shell title="Join attempts">
@@ -135,13 +150,13 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
       <form method="get" action="/admin/join-attempts" class="filters">
         <div class="field">
           <label for="q">Discord id or request id</label>
-          <input id="q" name="q" type="search" value={q} />
+          <input id="q" name="q" type="search" value={query.q} />
         </div>
         <div class="field">
           <label for="outcome">Outcome</label>
           <select id="outcome" name="outcome">
             {["", ...outcomes].map((o) => (
-              <option value={o} selected={o === outcome}>
+              <option value={o} selected={o === query.outcome}>
                 {o === "" ? "All" : o}
               </option>
             ))}
@@ -151,14 +166,16 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           <button type="submit" class="btn">Filter</button>
         </div>
       </form>
+      <p id="join-attempts-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="admin-table-scroll" role="region" aria-label="Join attempts list" aria-describedby="join-attempts-scroll-hint" tabindex={0} data-testid="join-attempts-table-scroll">
       <table class="admin-table" data-testid="join-attempts-table">
         <thead>
           <tr>
-            <th>Outcome</th>
-            <th>Source</th>
-            <th>Discord id</th>
-            <th>Request id</th>
-            <th>Attempted</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Source</th>
+            <th scope="col">Discord id</th>
+            <th scope="col">Request id</th>
+            <th scope="col">Attempted</th>
           </tr>
         </thead>
         <tbody>
@@ -181,6 +198,12 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; outcome: string; q: 
           )}
         </tbody>
       </table>
+      </div>
+      <nav aria-label="Join attempt pages" class="actions">
+        {query.page > 1 ? <a rel="prev" href={joinAttemptsUrl(query, query.page - 1)}>Previous</a> : null}
+        <span>Page {query.page}</span>
+        {hasNext ? <a rel="next" href={joinAttemptsUrl(query, query.page + 1)}>Next</a> : null}
+      </nav>
     </section>
   </Shell>
 );
@@ -230,7 +253,25 @@ const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuer
   );
 };
 
-export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
+/**
+ * Going-only seat fill for one admin list row. Maybe/Waitlist/Not going never
+ * occupy a seat (same rule as the fill filter); uncapped events show "N going".
+ * A capped event at or over capacity carries a Full badge, and an
+ * over-capacity row (more Going than seats) carries an Over capacity badge.
+ */
+const EventFillCell: FC<{ row: EventListRow }> = ({ row }) => (
+  <td data-testid={`event-fill-${row.eventKey}`}>
+    {goingCountText(row.goingCount, row.capacity)}
+    {row.capacity !== null && row.goingCount >= row.capacity ? (
+      <span data-testid={`event-fill-badge-${row.eventKey}`}> Full</span>
+    ) : null}
+    {row.capacity !== null && row.goingCount > row.capacity ? (
+      <span data-testid={`event-over-capacity-${row.eventKey}`}> Over capacity</span>
+    ) : null}
+  </td>
+);
+
+export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
@@ -282,19 +323,22 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
       </p>
+      <p id="events-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="admin-table-scroll" role="region" aria-label="Events list" aria-describedby="events-scroll-hint" tabindex={0} data-testid="events-table-scroll">
       <table class="admin-table" data-testid="events-table">
         <thead>
           <tr>
             <EventSortHeader label="Title" sort="title" query={query} />
             <EventSortHeader label="Status" sort="status" query={query} />
-            <EventSortHeader label="Starts" sort="starts_at" query={query} />
+            <EventSortHeader label="Starts (UTC)" sort="starts_at" query={query} />
+            <th scope="col">Fill</th>
             <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colspan={4} data-testid="events-empty">
+              <td colspan={5} data-testid="events-empty">
                 No events yet.
               </td>
             </tr>
@@ -305,7 +349,8 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
                   <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
                 </td>
                 <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
-                <td>{r.startsAt.toISOString()}</td>
+                <td><time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time></td>
+                <EventFillCell row={r} />
                 <td>
                   {r.status === "draft" ? (
                     <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
@@ -324,6 +369,7 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
           )}
         </tbody>
       </table>
+      </div>
       <nav aria-label="Event pages" class="actions">
         {query.page > 1 ? <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a> : null}
         <span>Page {query.page}</span>
@@ -341,16 +387,39 @@ type FieldProps = {
   children: (id: string) => unknown;
 };
 
-const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
+/**
+ * Merge association tokens, dropping exact duplicates so re-wiring is idempotent.
+ */
+const mergeDescribedBy = (existing: unknown, added: string): string => {
+  const tokens = [...String(existing ?? "").split(/\s+/), ...added.split(/\s+/)].filter(Boolean);
+  return [...new Set(tokens)].join(" ");
+};
+
+/**
+ * Shared admin field wrapper. Field owns hint/error association: it mints ids
+ * for its hint and error nodes and merges them into the child input's
+ * `aria-describedby` (appended after any inline wiring, never clobbering it),
+ * plus `aria-invalid` when an error is present. Consumers pass a bare control.
+ */
+export const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
   const err = errors[name];
   const id = `f-${name.replace(/[^a-z0-9]+/gi, "-")}`;
+  const owned = [hint ? `${id}-hint` : "", err ? `${id}-error` : ""].filter(Boolean).join(" ");
+  const node = children(id);
+  const control =
+    owned && isValidElement(node)
+      ? cloneElement(node, {
+          "aria-invalid": err ? "true" : undefined,
+          "aria-describedby": mergeDescribedBy(node.props["aria-describedby"], owned),
+        })
+      : node;
   return (
     <div class="field">
       <label for={id}>{label}</label>
-      {children(id)}
-      {hint ? <p class="hint">{hint}</p> : null}
+      {control}
+      {hint ? <p id={`${id}-hint`} class="hint">{hint}</p> : null}
       {err ? (
-        <p class="error" role="alert" data-testid={`error-${name}`}>
+        <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>
           {err}
         </p>
       ) : null}
@@ -369,7 +438,8 @@ export const EventFormPage: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   roster?: RosterEntry[];
-}> = ({ mode, row, values, errors, roster }) => {
+  rosterQuery?: RosterQuery;
+}> = ({ mode, row, values, errors, roster, rosterQuery = { q: "", sort: "answered", order: "desc" } }) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
@@ -380,12 +450,13 @@ export const EventFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action}>
+        <form method="post" action={action} data-event-editor=""
+          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={100} required />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} maxlength={100} />}
+            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
             {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
@@ -405,7 +476,7 @@ export const EventFormPage: FC<{
             {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} maxlength={255} />}
+            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
@@ -459,27 +530,39 @@ export const EventFormPage: FC<{
           </section>
         ) : null}
         {mode === "edit" && roster ? (
-          <section aria-label="RSVP roster" data-testid="rsvp-roster">
+          <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
             <h2>RSVPs ({roster.length})</h2>
-            <table class="admin-table">
+            <p class="hint">Save event changes before searching or sorting the roster.</p>
+            <form method="get" action={`${action}#rsvp-roster`} class="filters">
+              <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
+              <input type="hidden" name="roster_order" value={rosterQuery.order} />
+              <div class="field">
+                <label for="roster-q">Search members</label>
+                <input id="roster-q" name="roster_q" type="search" value={rosterQuery.q} />
+              </div>
+              <div class="field"><button type="submit" class="btn">Search</button></div>
+            </form>
+            <p id="roster-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+            <div class="admin-table-scroll" role="region" aria-label="RSVP roster list" aria-describedby="roster-scroll-hint" tabindex={0} data-testid="roster-table-scroll">
+            <table class="admin-table" data-testid="roster-table">
               <thead>
                 <tr>
-                  <th>Member</th>
-                  <th>Status</th>
-                  <th>Answered</th>
+                  <th scope="col">Member</th>
+                  <TableSortHeader label="Status" active={rosterQuery.sort === "status"} order={rosterQuery.order} url={(order) => rosterUrl(row!.eventKey, rosterQuery, { sort: "status", order })} />
+                  <TableSortHeader label="Answered" active={rosterQuery.sort === "answered"} order={rosterQuery.order} url={(order) => rosterUrl(row!.eventKey, rosterQuery, { sort: "answered", order })} />
                 </tr>
               </thead>
               <tbody>
                 {roster.length === 0 ? (
                   <tr>
                     <td colspan={3} data-testid="roster-empty">
-                      No RSVPs yet.
+                      {rosterQuery.q ? "No RSVPs match this member search." : "No RSVPs yet."}
                     </td>
                   </tr>
                 ) : (
                   roster.map((r) => (
                     <tr key={r.userId}>
-                      <td>{r.username ?? r.userId}</td>
+                      <td>{r.username?.trim() || "Unknown member"}</td>
                       <td>{r.status}</td>
                       <td>{r.answeredAt.toISOString()}</td>
                     </tr>
@@ -487,34 +570,57 @@ export const EventFormPage: FC<{
                 )}
               </tbody>
             </table>
+            </div>
           </section>
         ) : null}
       </section>
+      <script type="module" src="/islands/admin-event-text-limits.js" />
+      <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
 };
 
-export const FeaturedPage: FC<{ rows: FeaturedRow[] }> = ({ rows }) => (
+export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; now?: Date }> = ({ rows, query, now = new Date() }) => (
   <Shell title="Featured content">
     <section>
       <h1>Featured content</h1>
       <p>
         <a class="btn" href="/admin/featured/new" data-testid="new-featured">New featured slot</a>
       </p>
-      <table class="admin-table" data-testid="featured-table">
+      <form method="get" action="/admin/featured" class="filters">
+        <input type="hidden" name="sort" value={query.sort} />
+        <input type="hidden" name="order" value={query.order} />
+        <div class="field">
+          <label for="q">Search titles</label>
+          <input id="q" name="q" type="search" value={query.q} />
+        </div>
+        <div class="field">
+          <label for="published">Published</label>
+          <select id="published" name="published">
+            <option value="" selected={query.published === ""}>All</option>
+            <option value="1" selected={query.published === "1"}>Published</option>
+            <option value="0" selected={query.published === "0"}>Unpublished</option>
+          </select>
+        </div>
+        <div class="field"><button type="submit" class="btn">Filter</button></div>
+      </form>
+      <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="featured-table-scroll" role="region" aria-label="Featured content list" aria-describedby="featured-scroll-hint" tabindex={0} data-testid="featured-table-scroll">
+      <table class="admin-table featured-table" data-testid="featured-table">
         <thead>
           <tr>
-            <th>Title</th>
-            <th>Published</th>
-            <th>Position</th>
-            <th>Window (UTC)</th>
+            <th scope="col">Title</th>
+            <th scope="col">Status</th>
+            <TableSortHeader label="Position" active={query.sort === "position"} order={query.order} url={(order) => featuredListUrl(query, { sort: "position", order })} />
+            <th scope="col">Window (UTC)</th>
+            <TableSortHeader label="Last changed" active={query.sort === "updated_at"} order={query.order} url={(order) => featuredListUrl(query, { sort: "updated_at", order })} />
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colspan={4} data-testid="featured-empty">
-                No featured content yet.
+              <td colspan={5} data-testid="featured-empty">
+                {query.q || query.published ? "No featured content matches these filters." : "No featured content yet."}
               </td>
             </tr>
           ) : (
@@ -523,16 +629,19 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[] }> = ({ rows }) => (
                 <td>
                   <a href={`/admin/featured/${r.id}`}>{r.title}</a>
                 </td>
-                <td data-testid={`featured-published-${r.id}`}>{r.isPublished ? "yes" : "no"}</td>
+                <td data-testid={`featured-status-${r.id}`}><FeaturedStatusBadge row={r} now={now} /></td>
                 <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
                 <td>
-                  {r.startsAt ? r.startsAt.toISOString() : "—"} → {r.endsAt ? r.endsAt.toISOString() : "—"}
+                  <span class="featured-window-bound">{r.startsAt ? <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time> : "—"}</span>
+                  <span class="featured-window-bound">→ {r.endsAt ? <time datetime={r.endsAt.toISOString()}>{r.endsAt.toISOString()}</time> : "—"}</span>
                 </td>
+                <td><time datetime={r.updatedAt.toISOString()}>{r.updatedAt.toISOString()}</time></td>
               </tr>
             ))
           )}
         </tbody>
       </table>
+      </div>
     </section>
   </Shell>
 );
@@ -542,19 +651,35 @@ export const FeaturedFormPage: FC<{
   row?: FeaturedRow;
   values: Record<string, unknown>;
   errors: Record<string, string>;
-}> = ({ mode, row, values, errors }) => {
+  now?: Date;
+  appUrl: string;
+  imageHosts?: string;
+}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked = values.is_published === "on" || values.is_published === true || values.is_published === "true";
   return (
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
-      <section>
+      <section class="featured-form">
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
+        {mode === "edit" && row ? (
+          <section class="featured-preview" aria-labelledby="featured-preview-heading" data-testid="featured-preview">
+            <h2 id="featured-preview-heading">Homepage preview</h2>
+            <p>Last saved content, checked at <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to refresh this preview.</p>
+            <p>Status: <FeaturedStatusBadge row={row} now={now} /></p>
+            {currentlyVisible(row, now) ? (
+              <FeaturedContentItem row={row} appUrl={appUrl} imageHosts={imageHosts} />
+            ) : (
+              <p data-testid="featured-preview-hidden">This slot is not currently visible on the homepage.</p>
+            )}
+          </section>
+        ) : null}
         {Object.keys(errors).length > 0 ? (
           <p class="notice" role="alert" data-testid="form-errors">
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action}>
+        <form method="post" action={action} data-event-editor=""
+          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Headline" errors={errors}>
             {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={255} required />}
           </Field>
@@ -564,7 +689,7 @@ export const FeaturedFormPage: FC<{
           <Field name="url" label="Link (full http(s) URL, or empty)" errors={errors}>
             {(id) => <input id={id} name="url" type="url" value={val(values, "url")} />}
           </Field>
-          <Field name="image_url" label="Image URL" errors={errors} hint="Full URL on this site or https://cdn.discordapp.com. Other image hosts are blocked by the site's security policy.">
+          <Field name="image_url" label="Image URL" errors={errors} hint="HTTPS URL on cdn.discordapp.com or a configured approved public host. Other image hosts are blocked by the site's security policy.">
             {(id) => <input id={id} name="image_url" type="url" value={val(values, "image_url")} />}
           </Field>
           <Field
@@ -584,10 +709,10 @@ export const FeaturedFormPage: FC<{
               <input id={id} name="position" type="text" inputmode="numeric" value={val(values, "position") || "0"} />
             )}
           </Field>
-          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
+          <Field name="starts_at" label="Show from (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} />}
           </Field>
-          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm, or empty)" errors={errors}>
+          <Field name="ends_at" label="Show until (UTC, YYYY-MM-DD HH:mm[:ss[.ffffff]], or empty)" errors={errors}>
             {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} />}
           </Field>
           <div class="actions">
@@ -607,6 +732,7 @@ export const FeaturedFormPage: FC<{
           </form>
         ) : null}
       </section>
+      <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
 };

@@ -34,7 +34,10 @@ export const joinAttempts = pgTable(
     discordId: text("discord_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("join_attempts_created_at_idx").on(t.createdAt)],
+  (t) => [
+    index("join_attempts_created_at_idx").on(t.createdAt),
+    index("join_attempts_outcome_index").on(t.outcome),
+  ],
 );
 
 export type JoinAttempt = typeof joinAttempts.$inferSelect;
@@ -178,6 +181,8 @@ export type ProfileRow = typeof profiles.$inferSelect;
 export const jobUniqueLocks = pgTable("job_unique_locks", {
   key: text("key").primaryKey(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  // Null only for pre-fencing leases; expiry replaces them with a new owner.
+  ownerToken: uuid("owner_token"),
 });
 
 // N3 (TOG-9895): the countable queue ledger behind GET /up. Cloudflare Queues holds the
@@ -203,9 +208,11 @@ export const queueJobs = pgTable("queue_jobs", {
 });
 
 // Terminal failures, mirroring legacy `failed_jobs`: reported by /up, never thresholded.
+// One outcome per dispatch jobId, not event key: transport redelivery must not
+// inflate failed depth, while independent dispatches for one event remain visible.
 export const queueFailedJobs = pgTable("queue_failed_jobs", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
-  jobId: uuid("job_id").notNull(),
+  jobId: uuid("job_id").notNull().unique("queue_failed_jobs_job_id_unique"),
   kind: text("kind").notNull(),
   key: text("key"),
   reason: text("reason").notNull(),

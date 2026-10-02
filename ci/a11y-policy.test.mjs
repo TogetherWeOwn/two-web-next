@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { auditCases, auditDatabaseUrl, assertNoViolations, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
+import { loadAuditWorkerRoutes } from "./a11y-test-worker.mjs";
 
 const coverage = {
   "/": { cases: [{ path: "/" }] },
@@ -28,6 +29,22 @@ test("removed routes and unexplained exclusions fail", () => {
   assert.throws(() => auditCases(routes.slice(1), coverage), /stale=\//);
   assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { skip: true } }), /exclusion reason/);
   assert.throws(() => auditCases([{ method: "GET", path: "/" }], { "/": { cases: [] } }), /No audit cases/);
+});
+
+test("legacy aliases are non-documents while canonical admin destinations remain audited", async () => {
+  const aliases = [
+    "/auth/discord/redirect", "/admin/events/create", "/admin/events/:key/edit",
+    "/admin/featured-contents", "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
+  ];
+  const destinations = ["/admin/events/new", "/admin/events/:key", "/admin/featured", "/admin/featured/new", "/admin/featured/:id"];
+  const worker = await loadAuditWorkerRoutes();
+  const cases = auditCases(worker.routes, worker.coverage);
+  for (const alias of aliases) {
+    assert.equal(worker.coverage[alias]?.skip, true, alias);
+    assert.match(worker.coverage[alias].reason, /alias redirects/, alias);
+    assert(!cases.some((entry) => entry.route === alias), alias);
+  }
+  for (const destination of destinations) assert(cases.some((entry) => entry.route === destination), destination);
 });
 
 test("refuse staging, production and ambiguous database configuration before connecting", () => {
@@ -86,6 +103,34 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
     const execution = spawnSync("bash", ["-c", guard[1]], { env: { A11Y_RESULT: result } });
     assert.equal(execution.status, result === "success" ? 0 : 1, `Audit result ${result || "missing"}`);
+  }
+});
+
+test("the required CI job has a bounded coverage allowance without relaxing its gates", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  assert(check, "Required check job must exist");
+  assert.match(check.split("\n    steps:\n")[0], /\n    timeout-minutes: 20\n/);
+  assert.match(check, /\n      - run: npm ci\n/);
+  const steps = check.split(/\n      - /).slice(1);
+  for (const command of [
+    "npm run deps:audit:selftest",
+    "npm run deps:audit",
+    "timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads",
+    "npm run test:smoke",
+    "npm run db:migrate",
+    "npm run config:check",
+    "npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs",
+    "npm run test:cutover",
+    "bash ci/neon-backup-selftest.sh",
+    "bash ci/check-migration-numbers.sh",
+    "node --test ci/production-deploy-gate.test.mjs",
+    "npx wrangler deploy --dry-run --outdir dist",
+    "npx wrangler deploy --dry-run --env production --outdir dist-production",
+  ]) {
+    const step = steps.find((entry) => entry.split("\n").includes(`        run: ${command}`));
+    assert(step, `Required gate missing: ${command}`);
+    assert.doesNotMatch(step, /^        (?:if|continue-on-error):/m, `Required gate must not be bypassed: ${command}`);
   }
 });
 

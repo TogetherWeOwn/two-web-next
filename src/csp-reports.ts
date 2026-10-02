@@ -19,6 +19,7 @@
 
 import type { Context } from "hono";
 import type { Env } from "./env";
+import { redactCspReportUri } from "./csp-report-uri";
 
 /** Largest report body accepted, in bytes. Bigger bodies are dropped. */
 export const MAX_CSP_REPORT_BYTES = 8192;
@@ -32,9 +33,12 @@ type CspReportFields = {
   "violated-directive"?: unknown;
   effectiveDirective?: unknown;
   "document-uri"?: unknown;
+  documentURL?: unknown;
   url?: unknown;
   "source-file"?: unknown;
+  sourceFile?: unknown;
   "line-number"?: unknown;
+  lineNumber?: unknown;
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -53,10 +57,17 @@ export function extractCspReport(raw: string): CspReportFields | null {
   }
   // Classic `report-uri` shape: {"csp-report": {...}}.
   if (isRecord(decoded) && isRecord(decoded["csp-report"])) return decoded["csp-report"] as CspReportFields;
-  // Reporting API shape: [{...}, ...] — take the first report body.
+  // Reporting API shape: [{...}, ...] — still handle only the first report.
   if (Array.isArray(decoded) && isRecord(decoded[0])) {
-    const first = decoded[0] as Record<string, unknown>;
-    return isRecord(first["body"]) ? (first["body"] as CspReportFields) : (first as CspReportFields);
+    const first = decoded[0];
+    // Typed envelopes must be CSP violations with an object body. Keep the
+    // legacy untyped body/flat shapes, but never log another report type as CSP.
+    if ("type" in first && (first.type !== "csp-violation" || !isRecord(first.body))) return null;
+    if (!isRecord(first.body)) return first as CspReportFields;
+    // Preserve the envelope URL as a fallback, below the body document fields.
+    return typeof first.url === "string"
+      ? { ...first.body, url: firstString(first.body.url, first.url) }
+      : first.body as CspReportFields;
   }
   return null;
 }
@@ -71,7 +82,7 @@ const firstNumber = (...vals: unknown[]): number | null => {
   return null;
 };
 
-/** Fixed-key log line. Non-scalar values collapse to null — never nested attacker data. */
+/** Fixed-key log line. URI credentials are removed; non-scalars collapse to null. */
 export function cspReportLogFields(report: CspReportFields): {
   blocked_uri: string | null;
   violated_directive: string | null;
@@ -80,11 +91,11 @@ export function cspReportLogFields(report: CspReportFields): {
   line_number: number | null;
 } {
   return {
-    blocked_uri: firstString(report["blocked-uri"], report.blockedURL),
+    blocked_uri: redactCspReportUri(firstString(report["blocked-uri"], report.blockedURL)),
     violated_directive: firstString(report["violated-directive"], report.effectiveDirective),
-    document_uri: firstString(report["document-uri"], report.url),
-    source_file: firstString(report["source-file"]),
-    line_number: firstNumber(report["line-number"]),
+    document_uri: redactCspReportUri(firstString(report["document-uri"], report.documentURL, report.url)),
+    source_file: redactCspReportUri(firstString(report["source-file"], report.sourceFile)),
+    line_number: firstNumber(report["line-number"], report.lineNumber),
   };
 }
 

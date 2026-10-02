@@ -16,7 +16,7 @@ vi.mock("../src/events/reads", async (importOriginal) => ({
 }));
 
 const event: PublicEvent = {
-  id: 1, eventKey: EVENT_KEY, title: "Friday night games", description: null, game: null,
+  id: 1, icsSequence: 1n, eventKey: EVENT_KEY, title: "Friday night games", description: null, game: null,
   startsAt: new Date("2099-11-04T20:00:00Z"), endsAt: new Date("2099-11-04T22:00:00Z"),
   timezone: "UTC", location: null, capacity: null, status: "published", discordEventId: null,
   discordSyncFailedAt: null, discordSyncFailureCode: null,
@@ -70,7 +70,7 @@ describe("guest event pages with unavailable session storage", () => {
   it("a usable signed token still resolves storage and fails closed on session DDL failure", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await request(await signedCookie("two_test-token"));
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(503);
     expect(await res.text()).not.toContain(SUBJECT.username);
     expect(connect).toHaveBeenCalledTimes(1);
     expect(ddl).toHaveBeenCalledTimes(1);

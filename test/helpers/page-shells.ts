@@ -13,7 +13,7 @@ export const MEMBER_ID = "100000000000000001";
 export const EVENT_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 export const HTML_READS = [
-  "/", "/about", "/faq", "/rules", "/privacy", "/join", "/join/callback",
+  "/", "/about", "/faq", "/rules", "/privacy", "/join", "/join/callback", "/auth/recover",
   "/events", "/events/past", "/e/:key", "/profile", "/members/:user",
   "/admin", "/admin/events", "/admin/events/new", "/admin/events/:key",
   "/admin/featured", "/admin/featured/new", "/admin/featured/:id", "/admin/join-attempts", "/admin/join-attempts/:id",
@@ -22,8 +22,10 @@ export const HTML_READS = [
 // Redirects, feeds and machine endpoints have no HTML success page. Their branded
 // error responses are covered separately; new GET routes must be classified here.
 export const NON_HTML_READS = [
-  "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback",
-  "/sitemap_index.xml", "/robots.txt", "/up",
+  "/discord", "/join/discord", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect",
+  "/admin/events/create", "/admin/events/:key/edit", "/admin/featured-contents",
+  "/admin/featured-contents/create", "/admin/featured-contents/:id/edit",
+  "/sitemap_index.xml", "/robots.txt", "/up", "/auth/status", // Bool-only JSON, never an HTML document.
   "/events.json", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 
@@ -33,7 +35,7 @@ export const concretePath = (pattern: string) => pattern
 export function pageShellFixture(status = "published") {
   const now = new Date("2030-01-01T20:00:00Z");
   const event: typeof events.$inferSelect = {
-    id: 1, eventKey: EVENT_KEY, title: "Fixture game night", game: "Chess", description: "Play together.",
+    id: 1, icsSequence: 1n, eventKey: EVENT_KEY, title: "Fixture game night", game: "Chess", description: "Play together.",
     startsAt: now, endsAt: new Date("2030-01-01T22:00:00Z"), timezone: "UTC", location: "Lobby",
     capacity: null, status, discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
     createdBy: MEMBER_ID, rsvpOpen: true,
@@ -54,7 +56,7 @@ export function pageShellFixture(status = "published") {
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "users"')) {
       return { rows: params.includes(MEMBER_ID)
-        ? [[MEMBER_ID, "Fixture member", null, "A local bio.", ["Chess"], "UTC", now.toISOString()]] : [] };
+        ? [[MEMBER_ID, MEMBER_ID, "Fixture member", null, "A local bio.", ["Chess"], "UTC", now.toISOString()]] : [] };
     }
     if (sql.includes('from "events"')) {
       if (sql.includes('"events"."id" <>')) return { rows: [] }; // No neighboring/related fixture rows.

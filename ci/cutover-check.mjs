@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { headerIndexingRules } from './robots-directives.mjs';
 
 const exec = promisify(execFile);
 export const ORIGIN_HEADER = 'x-two-origin';
@@ -25,6 +26,7 @@ export const URL_CASES = [
   { frozen: '/join/discord', path: '/join/discord', status: 302, redirect: 'oauth' },
   { frozen: '/join/callback', path: '/join/callback', status: 200 },
   { frozen: '/auth/discord', path: '/auth/discord', status: 302, redirect: 'oauth' },
+  { frozen: '/auth/discord/redirect', path: '/auth/discord/redirect', status: 302, redirect: '/auth/discord', noStore: true },
   { frozen: '/auth/discord/callback', path: '/auth/discord/callback', status: 302, redirect: '/?n=signin_failed' },
   { frozen: '/events/past', path: '/events/past', status: 200, html: true, indexable: false },
   { frozen: '/e/{key}', path: '/e/{key}', status: 200, html: true, indexable: true },
@@ -42,7 +44,7 @@ export const URL_CASES = [
   // Retired URLs from legacy ci/live-seo-probe.mjs plus PHP/Livewire endpoints.
   ...['/about-us/', '/news/', '/members', '/gamipress/points/', '/events/month/2024-01/',
     '/this-url-never-existed-abc123xyz/', '/wp-json/', '/wp-login.php',
-    '/livewire/livewire.js', '/livewire/update', '/auth/discord/redirect'].map(path =>
+    '/livewire/livewire.js', '/livewire/update'].map(path =>
     ({ frozen: path, path, status: 404 })),
 ];
 
@@ -146,6 +148,36 @@ export async function dnsAnswers(name, resolver) {
   return [...new Set(answers.flat())];
 }
 
+// RFC 9111/9110: commas separate directives only outside quoted strings.
+// no-store takes no argument; malformed fields fail closed, even after a match.
+function hasNoStore(header = '') {
+  if (/[\r\n]/.test(header)) return false;
+  const fields = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i < header.length; i++) {
+    const char = header[i];
+    if (escaped) escaped = false;
+    else if (quoted && char === '\\') escaped = true;
+    else if (char === '"') quoted = !quoted;
+    else if (!quoted && char === ',') {
+      fields.push(header.slice(start, i));
+      start = i + 1;
+    }
+  }
+  if (quoted || escaped) return false;
+  fields.push(header.slice(start));
+  let found = false;
+  for (const field of fields) {
+    if (/^[ \t]*$/.test(field)) continue;
+    const directive = field.match(/^[ \t]*([!#$%&'*+.^_`|~\da-z-]+)(?:[ \t]*=[ \t]*([!#$%&'*+.^_`|~\da-z-]+|"(?:[\t\x20\x21\x23-\x5b\x5d-\x7e\x80-\xff]|\\[\t\x20-\x7e\x80-\xff])*"))?[ \t]*$/i);
+    if (!directive) return false;
+    if (directive[1].toLowerCase() === 'no-store' && directive[2] === undefined) found = true;
+  }
+  return found;
+}
+
 function tags(html, name) {
   return [...html.matchAll(new RegExp(`<${name}\\b[^>]*>`, 'gi'))].map(match => {
     const attrs = {};
@@ -162,23 +194,8 @@ function absoluteOn(value, origin) {
   try { const url = new URL(value); return url.origin === origin && !url.username && !url.password; }
   catch { return false; }
 }
-// Directive names, not values: max-image-preview: none does not mean noindex.
-// Source: https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag
-const valuedDirectives = new Set(['max-snippet', 'max-image-preview', 'max-video-preview', 'unavailable_after']);
 function indexingRules(header, html) {
-  const rules = [];
-  for (const field of Array.isArray(header) ? header : [header ?? '']) {
-    let crawler = '*';
-    for (let token of field.toLowerCase().split(',')) {
-      token = token.trim();
-      const scope = token.match(/^([\w*-]+):\s*(.*)$/);
-      if (scope && !valuedDirectives.has(scope[1])) {
-        crawler = scope[1];
-        token = scope[2];
-      }
-      if (['noindex', 'none'].includes(token)) rules.push({ crawler, source: 'header' });
-    }
-  }
+  const rules = headerIndexingRules(header);
   for (const tag of tags(html, 'meta')) {
     const name = tag.name?.toLowerCase();
     if (!['robots', 'googlebot', 'googlebot-news', 'bingbot'].includes(name)) continue;
@@ -293,7 +310,7 @@ export async function runChecks(options, { resolver = new Resolver({ timeout: 30
   await measure(`${origin}/up`, (up, record) => {
     record('target-origin', up?.status === 200 && up.headers[ORIGIN_HEADER] === NEXT_IDENTITY,
       `expected 200 + ${ORIGIN_HEADER}: ${NEXT_IDENTITY}`);
-    record('target-up-no-store', /\bno-store\b/i.test(up?.headers['cache-control'] ?? ''), 'identity response must not be cached');
+    record('target-up-no-store', hasNoStore(up?.headers['cache-control']), 'identity response must not be cached');
   });
   const expectedIdentity = options.phase === 'before' ? options.legacyIdentity : NEXT_IDENTITY;
   await measure(`${apex}/up`, (up, record) => {
@@ -345,6 +362,8 @@ export async function runChecks(options, { resolver = new Resolver({ timeout: 30
     await measure(url, (response, record) => {
       record(`url:${path}`, response?.status === row.status, `expected ${row.status}, received ${response?.status ?? 'no response'}`);
       if (!response) return;
+      if (row.noStore) record(`no-store:${path}`, hasNoStore(response.headers['cache-control']),
+        'redirect must not be cached');
       if (row.redirect) {
         let location;
         try { location = new URL(response.headers.location, url); } catch { /* fails below */ }
@@ -353,7 +372,7 @@ export async function runChecks(options, { resolver = new Resolver({ timeout: 30
           ok = location?.protocol === 'https:' && !location.username && !location.password &&
             ((location.hostname === 'discord.gg' && /^\/[\w-]+$/.test(location.pathname)) ||
             (location.hostname === 'discord.com' && /^\/invite\/[\w-]+$/.test(location.pathname)));
-          record('discord-no-store', /\bno-store\b/i.test(response.headers['cache-control'] ?? ''), 'invite must not be cached');
+          record('discord-no-store', hasNoStore(response.headers['cache-control']), 'invite must not be cached');
         } else if (row.redirect === 'oauth') {
           const callback = path.startsWith('/join') ? '/join/callback' : '/auth/discord/callback';
           ok = location?.origin === 'https://discord.com' && location.pathname === '/oauth2/authorize' &&

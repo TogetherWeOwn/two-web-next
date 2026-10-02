@@ -12,6 +12,7 @@ import { assertNoViolations, auditCases, redactAuditLog, WCAG_AA_TAGS } from "./
 import { AUDIT_BROWSER_OPTIONS, createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 import { buildAuditWorker } from "./a11y-build.mjs";
 import { assertAuditContent } from "./a11y-content.mjs";
+import { assertHomeInteractions, assertProfileInteractions } from "./a11y-interactions.mjs";
 
 const output = resolve("artifacts/a11y");
 const lifecycle = createAuditLifecycle();
@@ -45,12 +46,6 @@ try {
   await mkdir(output, { recursive: true });
   scratch = await lifecycle.acquire(() => mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "two-a11y-")), (path) => rm(path, { recursive: true, force: true }));
   await lifecycle.run(() => symlink(resolve("node_modules"), join(scratch, "node_modules"), "dir"));
-  const fixtureBundle = join(scratch, "fixtures.mjs");
-  await lifecycle.run(() => build({ entryPoints: ["ci/a11y-fixtures.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: fixtureBundle,
-    define: { "import.meta.url": JSON.stringify(pathToFileURL(resolve("test/helpers/member-data-db.ts")).href) } }));
-  const { fixtures } = await lifecycle.run(() => import(pathToFileURL(fixtureBundle).href));
-  const database = process.env.DATABASE_URL || "postgres://agent_test@agent-testdb:5432/two_web_next";
-  fixture = await lifecycle.acquire(() => fixtures(database), (resource) => resource.dispose());
   // Route discovery and Wrangler use one bundle with isolated bot read models.
   const bundled = join(scratch, "routes.mjs");
   await lifecycle.run(() => buildAuditWorker(bundled));
@@ -58,6 +53,13 @@ try {
   const scenarios = auditCases(routes, coverage);
   assert(scenarios.length > 0, "Empty accessibility coverage");
   report.coverage = { registered: [...new Set(routes.filter((r) => r.method === "GET").map((r) => r.path))], exclusions: Object.entries(coverage).filter(([, entry]) => entry.skip).map(([route, entry]) => ({ route, reason: entry.reason })) };
+
+  const fixtureBundle = join(scratch, "fixtures.mjs");
+  await lifecycle.run(() => build({ entryPoints: ["ci/a11y-fixtures.ts"], bundle: true, packages: "external", platform: "node", format: "esm", outfile: fixtureBundle,
+    define: { "import.meta.url": JSON.stringify(pathToFileURL(resolve("test/helpers/member-data-db.ts")).href) } }));
+  const { fixtures } = await lifecycle.run(() => import(pathToFileURL(fixtureBundle).href));
+  const database = process.env.DATABASE_URL || "postgres://agent_test@agent-testdb:5432/two_web_next";
+  fixture = await lifecycle.acquire(() => fixtures(database), (resource) => resource.dispose());
 
   const port = await lifecycle.run(freePort);
   const origin = `https://127.0.0.1:${port}`;
@@ -81,7 +83,8 @@ try {
   let ready = false;
   while (Date.now() < deadline && server.exitCode === null && server.signalCode === null) {
     lifecycle.assertRunning();
-    try { ready = (await readiness.get(`${origin}/up`, { timeout: 1000 })).ok(); } catch {}
+    // Startup only: /up now requires the real DB/ledger, absent in this fixture worker.
+    try { ready = (await readiness.get(`${origin}/robots.txt`, { timeout: 1000 })).ok(); } catch {}
     if (ready) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -123,6 +126,7 @@ try {
         assert(await page.evaluate(() => document.styleSheets.length > 0), "Stylesheet must be loaded for contrast checks");
         assert.deepEqual(resourceErrors, [], "Unexpected script/stylesheet failures");
         result.contentAssertions = await assertAuditContent(page, scenario);
+        result.interactionAssertions = [...await assertHomeInteractions(page, scenario), ...await assertProfileInteractions(page, scenario)];
         const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
         result.violations = results.violations;
         result.incomplete = results.incomplete;

@@ -17,7 +17,7 @@ const SECRET = "test-session-secret-at-least-32-bytes-long";
 function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
-    id: 1, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
+    id: 1, icsSequence: 1n, eventKey: KEY, title: "Chess night", game: "Chess", description: "Bring a friend & a board.",
     startsAt: start, endsAt: new Date("2030-01-10T22:00:00Z"), timezone: "UTC",
     location: "The lobby & voice channel", capacity: 10, status: "published", rsvpOpen: true,
     discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
@@ -42,7 +42,7 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
     row, queries, env,
     async cookie(moderator = false, expired = false) {
       const token = newSessionToken();
-      await store.create({ tokenHash: await hashToken(token), userId: "member", username: "member", avatar: null,
+      await store.create({ tokenHash: await hashToken(token), userId: "100000000000000001", username: "member", avatar: null,
         member: true, moderator, expiresAt: new Date(Date.now() + (expired ? -1000 : 3600_000)) });
       return (await serializeSigned("__Host-two_session", token, SECRET, {
         path: "/", secure: true, httpOnly: true, sameSite: "Lax",
