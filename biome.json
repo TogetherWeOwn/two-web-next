@@ -89,12 +89,6 @@
       "includes": ["public/islands/member-profile.js"],
       "linter": {
         "rules": {
-          "correctness": {
-            "noUnusedVariables": {
-              "level": "error",
-              "options": { "ignore": { "variable": ["x"] } }
-            }
-          },
           "nursery": { "noFloatingPromises": "off" }
         }
       }
