@@ -205,6 +205,18 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # SvelteKit spike (TOG-12247): the web/ workspace has its own lockfile and
+      # typecheck. web/node_modules is installed here so the Kit steps never run
+      # on a partial workspace.
+      - name: Install Kit workspace dependencies
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm ci --prefix web
+      - name: Kit typecheck (svelte-check, warnings fail)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run check --prefix web
+      - name: Kit archive parity (Hono vs SvelteKit section contract)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node ci/kit-preview-e2e.mjs
       - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/staging-deploy-gate-selftest.mjs
