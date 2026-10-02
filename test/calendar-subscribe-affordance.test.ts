@@ -9,6 +9,7 @@ const event: PublicEvent = {
   startsAt: start, endsAt: new Date("2026-10-10T22:00:00Z"), timezone: "UTC",
   capacity: 10, status: "published", rsvpOpen: true, goingCount: 3, icsSequence: 1n,
   discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
+  syncRevision: 1, syncedRevision: 0,
   createdBy: null, recurrenceFrequency: null, recurrenceCount: null,
   recurrenceEndsOn: null, parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
 };

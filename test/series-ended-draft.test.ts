@@ -7,6 +7,7 @@
 // cancellation stays legal. Test-only: no src change expected.
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
+import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
@@ -14,9 +15,16 @@ import { getEvent } from "../src/admin/store";
 import { newEventKey } from "../src/admin/validation";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import { pgEventStore } from "../src/jobs/events";
+import { handleSyncEvent } from "../src/jobs/sync-event";
+import type { BotClient, QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, testDatabaseUrl, type MemberDataFixture } from "./helpers/member-data-db";
+
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
 
 const NOW = new Date("2026-09-30T12:00:00Z");
 const APP_URL = "https://next.example.test";
@@ -33,7 +41,9 @@ describe("series-ended-draft test containment", () => {
 describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   const store = createMemorySessionStore(() => Date.now());
+  type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
   const sent: SyncMessage[] = [];
+  let realPostgres: typeof postgres;
   const env = {
     APP_URL,
     DISCORD_CLIENT_ID: "client-id",
@@ -44,21 +54,37 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     SESSION_SECRET,
     get ADMIN_DB() { return fixture.db; },
     SESSION_STORE: store,
-    EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
+    get DB() { return { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href }; },
+    SYNC_EVENT_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
   } as unknown as Env;
 
   beforeAll(async () => {
+    realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres")).default;
+    vi.mocked(postgres).mockImplementation(realPostgres);
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 5 });
+    // The tracked producer's ledger/lock client must stay inside the owned schema and test-URL guard.
+    vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}> = {}) => {
+      const safe = testDatabaseUrl(raw);
+      return realPostgres(safe.href, {
+        ...opts, password: () => safe.password,
+        connection: { ...opts.connection, search_path: fixture.schemaName },
+      });
+    }) as typeof postgres);
   });
   beforeEach(async () => {
     await fixture.reset();
     await fixture.client`delete from web_throttle_hits`;
+    await fixture.client`delete from queue_jobs`;
+    await fixture.client`delete from job_unique_locks`;
     sent.length = 0;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
   });
   afterEach(() => vi.useRealTimers());
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    if (realPostgres) vi.mocked(postgres).mockImplementation(realPostgres);
+    await fixture?.dispose();
+  });
 
   async function cookieFor(userId = ACTOR.id, moderator = true): Promise<string> {
     const token = newSessionToken();
@@ -136,7 +162,23 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     expect((await json("POST", `/events/${parent.eventKey}/cancel`)).status).toBe(200);
     expect((await getEvent(fixture.db, parent.eventKey))?.status).toBe("cancelled");
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ eventKey: parent.eventKey, action: "event.cancel" });
+    expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: parent.eventKey });
+    // The consumer decides the action from the row at send time: cancelled → event.cancel.
+    const calls: string[] = [];
+    const bot = {
+      cancelEvent: async (p: { eventKey: string }) => (calls.push(`cancel:${p.eventKey}`),
+        { ok: true, requestId: null, discordEventId: "discord-1" }),
+      upsertEvent: async (p: { eventKey: string }) => (calls.push(`upsert:${p.eventKey}`),
+        { ok: true, requestId: null, discordEventId: "discord-1" }),
+    } as unknown as BotClient;
+    // Own raw pool: drizzle's date serializers on fixture.client reject native Date parameters.
+    const sql = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
+    try {
+      await expect(handleSyncEvent(sent[0]!, 1, { bot, events: pgEventStore(sql) })).resolves.toEqual({ done: true });
+    } finally {
+      await sql.end({ timeout: 1 });
+    }
+    expect(calls).toEqual([`cancel:${parent.eventKey}`]);
   });
 
   it("POST publish refuses a series-child draft of an ended parent the same way", async () => {
