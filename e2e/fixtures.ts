@@ -34,8 +34,13 @@ export async function qaLogin(context: BrowserContext, identity: "qa-member" | "
   if (!token) throw new Error("Missing ephemeral CI QA token");
   // APIRequestContext shares the browser's cookie jar; no manufactured cookie
   // or saved production identity. Don't follow login redirects in this helper.
+  // APIRequestContext sends no Origin or Fetch Metadata (unlike the browser
+  // fetch the specs use after login), but main #84 requires same-origin
+  // evidence on every unsafe method. Send the local origin explicitly: the
+  // E2E worker translates exactly this value to the virtual staging origin
+  // the gate expects, and foreign origins are still never translated.
   const response = await context.request.post(`/auth/qa/${identity}`, {
-    headers: { "X-TWO-QA-Auth": token },
+    headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
     maxRedirects: 0,
   });
   expect(response.status()).toBe(204);
