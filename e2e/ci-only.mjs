@@ -1,5 +1,5 @@
 export function requireGithubRunner(env = process.env) {
-  // Private repo: self-hosted Linux runners (job container). RUNNER_ENVIRONMENT
+  // Public repo: standard GitHub-hosted ubuntu-latest runners. RUNNER_ENVIRONMENT
   // is not a default GitHub variable, so it cannot gate anything. The invariant
   // is GitHub Actions on Linux; the controller never sets GITHUB_ACTIONS.
   if (env.GITHUB_ACTIONS !== "true" || env.RUNNER_OS !== "Linux") {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { requireGithubRunner, requireTestDatabase } from "./ci-only.mjs";
 
-const runner = { GITHUB_ACTIONS: "true", RUNNER_OS: "Linux", RUNNER_ENVIRONMENT: "self-hosted" };
+const runner = { GITHUB_ACTIONS: "true", RUNNER_OS: "Linux", RUNNER_ENVIRONMENT: "github-hosted" };
 
 test("browser runner runs in GitHub Actions on Linux and refuses the controller", () => {
   // RUNNER_ENVIRONMENT is not a default GitHub variable; any value (or none)
