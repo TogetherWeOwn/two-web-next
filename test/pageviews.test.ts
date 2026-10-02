@@ -23,29 +23,43 @@ const base: Env = {
 type DataPoint = { blobs: (string | null)[]; doubles: number[] };
 
 function fakeDataset(points: DataPoint[]): NonNullable<Env["PAGE_VIEWS"]> {
-  return { writeDataPoint: (event) => { points.push(event as DataPoint); } };
+  return {
+    writeDataPoint: (event) => {
+      points.push(event as DataPoint);
+    },
+  };
 }
 
 describe("page-view field derivation (no PII stored)", () => {
-  it.each([["US", "US"], ["us", "US"], ["gb", "GB"]])("keeps the 2-letter country code: %s", (input, expected) => {
+  it.each([
+    ["US", "US"],
+    ["us", "US"],
+    ["gb", "GB"],
+  ])("keeps the 2-letter country code: %s", (input, expected) => {
     expect(countryOf(input)).toBe(expected);
   });
 
-  it.each([[undefined], [null], [""], ["XXL"], ["12"], [123], [{}]])("maps %s to unknown", (input) => {
-    expect(countryOf(input)).toBe("unknown");
-  });
+  it.each([[undefined], [null], [""], ["XXL"], ["12"], [123], [{}]])(
+    "maps %s to unknown",
+    (input) => {
+      expect(countryOf(input)).toBe("unknown");
+    },
+  );
 
   it("stores only the referrer host, never the URL or query", () => {
     expect(referrerHostOf("https://search.example.com/q?secret=abc")).toBe("search.example.com");
     expect(referrerHostOf("HTTPS://UPPER.EXAMPLE/Path")).toBe("upper.example");
   });
 
-  it.each([[null, ""], [undefined, ""], ["", ""], ["not a url", ""], ["https://direct", "direct"]])(
-    "maps %s to %s",
-    (input, expected) => {
-      expect(referrerHostOf(input)).toBe(expected);
-    },
-  );
+  it.each([
+    [null, ""],
+    [undefined, ""],
+    ["", ""],
+    ["not a url", ""],
+    ["https://direct", "direct"],
+  ])("maps %s to %s", (input, expected) => {
+    expect(referrerHostOf(input)).toBe(expected);
+  });
 
   it.each([
     ["Mozilla/5.0 (compatible; Googlebot/2.1)", 1],
@@ -61,9 +75,13 @@ describe("page-view field derivation (no PII stored)", () => {
 describe("recordPageView on the mounted worker", () => {
   it("writes one data point per HTML GET with template, status and derived fields", async () => {
     const points: DataPoint[] = [];
-    const res = await app.request("/about", {
-      headers: { referer: "https://search.example.com/q?secret=abc", "user-agent": "curl/8.0" },
-    }, { ...base, PAGE_VIEWS: fakeDataset(points) });
+    const res = await app.request(
+      "/about",
+      {
+        headers: { referer: "https://search.example.com/q?secret=abc", "user-agent": "curl/8.0" },
+      },
+      { ...base, PAGE_VIEWS: fakeDataset(points) },
+    );
     expect(res.status).toBe(200);
     await res.text();
     expect(points).toHaveLength(1);
@@ -73,7 +91,11 @@ describe("recordPageView on the mounted worker", () => {
 
   it("groups unmatched paths as 404", async () => {
     const points: DataPoint[] = [];
-    const res = await app.request("/no-such-page-xyz", {}, { ...base, PAGE_VIEWS: fakeDataset(points) });
+    const res = await app.request(
+      "/no-such-page-xyz",
+      {},
+      { ...base, PAGE_VIEWS: fakeDataset(points) },
+    );
     expect(res.status).toBe(404);
     await res.text();
     expect(points).toHaveLength(1);
@@ -84,11 +106,15 @@ describe("recordPageView on the mounted worker", () => {
   it("skips non-GET, non-HTML and unbound requests without touching the response", async () => {
     const points: DataPoint[] = [];
     const withBinding = { ...base, PAGE_VIEWS: fakeDataset(points) };
-    const post = await app.request("/csp-reports", {
-      method: "POST",
-      headers: { "content-type": "application/csp-report" },
-      body: "{}",
-    }, withBinding);
+    const post = await app.request(
+      "/csp-reports",
+      {
+        method: "POST",
+        headers: { "content-type": "application/csp-report" },
+        body: "{}",
+      },
+      withBinding,
+    );
     expect(post.status).toBe(204);
     const json = await app.request("/robots.txt", {}, withBinding);
     expect(json.status).toBe(200);
@@ -100,10 +126,18 @@ describe("recordPageView on the mounted worker", () => {
   });
 
   it("never breaks the page when the dataset throws", async () => {
-    const res = await app.request("/about", {}, {
-      ...base,
-      PAGE_VIEWS: { writeDataPoint: () => { throw new Error("wae down"); } },
-    });
+    const res = await app.request(
+      "/about",
+      {},
+      {
+        ...base,
+        PAGE_VIEWS: {
+          writeDataPoint: () => {
+            throw new Error("wae down");
+          },
+        },
+      },
+    );
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("About Together We Own");
   });

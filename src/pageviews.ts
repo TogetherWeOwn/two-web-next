@@ -17,7 +17,8 @@ const DATASET_BLOBS = 3;
 
 // Conservative bot tokens matched against the transient User-Agent value.
 // The UA string itself is never stored — only the 0/1 outcome.
-const BOT_PATTERN = /bot|crawl|spider|slurp|mediapartners|baidu|yandex|sogou|exabot|facebot|ia_archiver/i;
+const BOT_PATTERN =
+  /bot|crawl|spider|slurp|mediapartners|baidu|yandex|sogou|exabot|facebot|ia_archiver/i;
 
 // Cloudflare exposes the request country as a 2-letter code on raw.cf.
 // Anything else (local dev, tests, "XX"/"T1" passthrough aside) is unknown.
