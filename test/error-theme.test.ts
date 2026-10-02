@@ -37,7 +37,7 @@ function errors() {
 }
 
 function assertTheme(html: string) {
-  expect(html).toContain('<body class="homepage-theme"><a class="skip-link"');
+  expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
   expect(html).toContain('href="/theme.css"');
   expect(html).toContain('href="/fonts/display-latin-700.woff2"');
   expect(html).toContain('<header class="bar site-header">');
