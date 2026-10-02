@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventGonePage, EventPage, PastEventsPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
 import type { Session } from "../src/env";
-import { loginUrl } from "../src/islands/contracts";
 import { Layout } from "../src/pages";
 
 const start = new Date("2030-01-10T20:00:00Z");
@@ -42,7 +41,7 @@ describe("event detail theme", () => {
 
   it("keeps guest entry points, sharing and island mounts", () => {
     const html = render();
-    expect(html).toContain(`href="${loginUrl(`/e/${e.eventKey}`)}" data-testid="signin"`);
+    expect(html).toContain(`href="/auth/discord?next=${encodeURIComponent(`/e/${e.eventKey}`)}" data-testid="signin"`);
     expect(html).toContain(`href="/join?next=${encodeURIComponent(`/e/${e.eventKey}`)}"`);
     expect(html).toContain('data-testid="event-join-pitch"');
     expect(html).toContain('data-island="going-count"');

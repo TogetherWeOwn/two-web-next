@@ -111,7 +111,7 @@ describe.skipIf(!process.env.DATABASE_URL)("DST-paired page/JSON/ICS agreement (
       const page = await app.request(`/e/${key(n)}`, {}, env);
       expect(page.status).toBe(200);
       const html = await page.text();
-      const time = html.match(new RegExp(`<p>\\s*<time datetime="${iso}">([^<]*)</time>\\s*</p>`));
+      const time = html.match(new RegExp(`<dd>\\s*<time datetime="${iso}">([^<]*)</time>\\s*</dd>`));
       expect(time, "show-page <time> carries the stored instant").not.toBeNull();
       // Visible text is the host-zone wall clock of that instant.
       expect(time![1]).toContain(wall.slice(11));

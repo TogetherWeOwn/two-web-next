@@ -2,7 +2,7 @@
 
 `/e/:key` opts into the existing self-hosted base theme and a detail-only stylesheet, `public/event-theme.css`. Calendar and past-event listings stay on their existing shell. The purchased match overview's centered heading, compact metadata strip and lineup treatment map to event title/game, When/Where/going count, and member-only attendee links. No template artwork, third-party assets, framework or new island ships.
 
-The shared `ThemeHeader` retains the homepage's sign-in/logout controls. The cancelled route still returns before session reads: its themed header deliberately omits account controls. Route statuses, cache headers, authorization and attendee access logging are unchanged. Normal detail still renders JSON-LD, share metadata, calendar links, copy-link/toast and going-count mounts. Cancelled detail retains 410, noindex and EventCancelled JSON-LD without sharing, RSVP or attendee UI.
+The shared `SiteHeader` retains the homepage's sign-in/logout controls. The cancelled route still returns before session reads: its themed header deliberately omits account controls. Route statuses, cache headers, authorization and attendee access logging are unchanged. Normal detail still renders JSON-LD, share metadata, calendar links, copy-link/toast and going-count mounts. Cancelled detail retains 410, noindex and EventCancelled JSON-LD without sharing, RSVP actions or attendee UI.
 
 Existing previous/next and related-event behavior had already landed on main when this slice started. It is preserved and styled, not reimplemented. Empty discovery data renders no fake links or content. No RSVP behavior is added; the pre-existing implementation-dependent RSVP tests remain explicitly skipped.
 
