@@ -67,6 +67,11 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Moderator role-config preflight (production env, before any deploy)
+        # Read env.production.vars only: Wrangler does not inherit top-level
+        # vars into named environments. Fails closed when the production env
+        # declares no moderators.
+        run: npm run check:worker-moderators-production
       - name: Deploy reviewed production target
         run: npx wrangler deploy --env production
         env:
