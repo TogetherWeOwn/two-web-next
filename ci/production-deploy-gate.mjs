@@ -34,6 +34,20 @@ export function assertProductionProtection(environment) {
   }
 }
 
+export function assertRollbackVersionId(versionId) {
+  // Worker Version IDs are lowercase UUIDs: the same format wrangler rollback
+  // itself requires. Reject empty values, wrong shapes and shell metacharacters
+  // before the id ever reaches a shell command or the Cloudflare API.
+  if (
+    typeof versionId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(versionId)
+  ) {
+    throw new Error(
+      "Rollback version_id must be a Worker Version ID (lowercase UUID); list versions with `wrangler versions list`",
+    );
+  }
+}
+
 export function assertProductionTarget(configText) {
   const bindings = readWranglerConfig(configText).env?.production?.hyperdrive;
   const database = Array.isArray(bindings)
@@ -81,6 +95,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (process.argv[2] === "--credentials") {
       assertProductionCredentials(process.env);
       console.log("Production-only Cloudflare credentials are present");
+    } else if (process.argv[2] === "--version-id") {
+      assertRollbackVersionId(process.env.ROLLBACK_VERSION_ID);
+      console.log("Rollback version_id is a valid Worker Version ID");
     } else {
       await checkProductionGate(process.env);
       assertProductionTarget(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
