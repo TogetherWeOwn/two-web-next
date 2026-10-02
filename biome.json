@@ -58,8 +58,7 @@
         "test/import-audit.test.ts",
         "test/import-events-rsvps.test.ts",
         "test/import-events-target-separation.test.ts",
-        "test/import-backfill-portable.test.ts",
-        "test/jobs-reconcile-counting.test.ts"
+        "test/import-backfill-portable.test.ts"
       ],
       "formatter": { "lineWidth": 140 }
     },
