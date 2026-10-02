@@ -11,6 +11,7 @@ import { sameOrigin } from "../src/same-origin";
 import type { ViewerRsvp } from "../src/events/reads";
 import * as rsvpService from "../src/events/rsvp";
 import {
+  EVENT_CANCELLED_TESTID,
   EVENT_FULL_TESTID,
   GOING_COUNT_TESTID,
   GOING_UPDATED_EVENT,
@@ -365,23 +366,34 @@ describe("rsvp-button SSR/server drift", () => {
   });
 
   it.each([
-    ["cancelled", {}, "Cancelled", 410],
-    ["draft", {}, "Not published yet", 200],
-    ["past", {}, "This one has been and gone", 200],
-    ["published", { endsAt: new Date("2020-01-01T22:00:00Z") }, "This one has been and gone", 200],
+    ["draft", {}, "Not published yet"],
+    ["past", {}, "This one has been and gone"],
+    ["published", { endsAt: new Date("2020-01-01T22:00:00Z") }, "This one has been and gone"],
   ] as const)(
     "closes %s, including clock-ended Published, without action controls",
-    async (status, over, copy, code) => {
+    async (status, over, copy) => {
       const p = page({ status, ...over });
       p.as({ ...viewer, moderator: true });
       const res = await p.request();
       const html = mount(await res.text());
-      expect(res.status).toBe(code);
+      expect(res.status).toBe(200);
       expect(html).toContain(`role="status" data-testid="${RSVP_CLOSED_TESTID}">${copy}`);
       expect(html).not.toContain("data-action");
-      if (status === "cancelled") expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     },
   );
+
+  it("answers cancelled with 410 and the notice alone, never a closed RSVP control", async () => {
+    const p = page({ status: "cancelled" });
+    p.as({ ...viewer, moderator: true });
+    const res = await p.request();
+    const html = await res.text();
+    expect(res.status).toBe(410);
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(html).toContain(`data-testid="${EVENT_CANCELLED_TESTID}">Cancelled`);
+    expect(mount(html)).toBe("");
+    expect(html).not.toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
+    expect(html).not.toContain("/islands/rsvp-button.js");
+  });
 
   it("preserves draft authorization", async () => {
     const p = page({ status: "draft" });
