@@ -196,7 +196,7 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
     for (const path of ["/events.json", `/events/${EVENT_KEY}`]) {
       const res = await request(path, { headers: { accept } });
       expect(res.status).toBe(accept === "text/html" ? 302 : 401);
-      if (accept === "text/html") expect(res.headers.get("location")).toBe(`/auth/discord?next=${encodeURIComponent(path)}`);
+      if (accept === "text/html") expect(res.headers.get("location")).toBe(`/join/discord?next=${encodeURIComponent(path)}`);
       const body = await res.text();
       for (const personal of [...PERSONAL_STRINGS, SUBJECT.userId]) expect(body).not.toContain(personal);
     }

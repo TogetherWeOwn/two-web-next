@@ -1,5 +1,6 @@
 import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
+import { safeRequestId } from "../request-log";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
@@ -24,9 +25,14 @@ const JOBS = {
   "role-assign": { queue: "two-internal-action", job: "CallInternalAction", tries: CALL_INTERNAL_ACTION.tries },
 } as const;
 
-function alertFailing(kind: QueueMessage["kind"], attempts: number, exception: string, probeId?: string) {
+function alertFailing(
+  kind: QueueMessage["kind"],
+  attempts: number,
+  exception: string,
+  ids: { probeId?: string; requestId?: string },
+) {
   const j = JOBS[kind];
-  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception, probeId });
+  alertQueueFailing({ connection: "cloudflare-queues", queue: j.queue, job: j.job, attempts, exception, ...ids });
 }
 
 /** Queue consumer for both queues. Terminal outcomes ack (max_retries is only a backstop). */
@@ -43,6 +49,7 @@ export async function consume(
       m.ack();
       continue;
     }
+    const requestId = safeRequestId(body.requestId);
     const jobId = typeof body.jobId === "string" ? body.jobId : null;
     const key = body.kind === "sync-event" ? uniqueKey(body.eventKey) : null;
     // Ledger transitions are best-effort: a stale ledger row is a visible backlog
@@ -109,7 +116,7 @@ export async function consume(
       // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
       if (m.attempts >= JOBS[body.kind].tries) {
         alertFailing(body.kind, m.attempts, queueExceptionClass(e),
-          e instanceof AlertProbeError ? e.probeId : undefined);
+          { probeId: e instanceof AlertProbeError ? e.probeId : undefined, requestId });
         // Out of tries: a terminal failure, not a phantom pending row — and not
         // a retry either. The job already spent its tries (the transport's
         // max_retries is only a backstop above this cap), so ack it and free
@@ -133,7 +140,7 @@ export async function consume(
     }
     if ("failed" in outcome) {
       console.error("job failed", body.kind, outcome.failed);
-      alertFailing(body.kind, m.attempts, outcome.failed);
+      alertFailing(body.kind, m.attempts, outcome.failed, { requestId });
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));

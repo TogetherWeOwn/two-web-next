@@ -593,10 +593,9 @@ export function shouldRefreshGoing(detailKey: string, islandKey: string): boolea
  * surface: two-web PR #431 (TOG-7297 all-clear) with the clock-ended hole
  * tracked as TOG-7419.
  *
- * Slice state: no binder and no SSR exist yet (TOG-9839, gated on W9 routes
- * TOG-9688). This section is the build-from contract; the drift tests
- * (test/islands-rsvp-button.test.ts) pin it and skip the binder/SSR/server
- * rows with the blocker named.
+ * Slice 2 adds the SSR form and shipped binder. Drift tests execute both.
+ * Writes serialize until the response body settles; an abort cannot undo a
+ * transaction, so repeated activations during saving fire no replacement.
  *
  * NOTE on re-spec §2: it lists PUT statuses as "going / waitlisted / none".
  * Legacy accepts the full RsvpStatus enum and "none" is the withdraw
@@ -623,6 +622,8 @@ export const RSVP_SYNC_FAILED_TESTID = "rsvp-sync-failed";
 export const RSVP_SYNCED_TESTID = "rsvp-synced";
 export const RSVP_RATE_LIMITED_TESTID = "rsvp-rate-limited";
 export const RSVP_FAILED_TESTID = "rsvp-failed";
+export const RSVP_UNKNOWN_TESTID = "rsvp-unknown";
+export const RSVP_REFRESH_TESTID = "rsvp-refresh";
 export const RSVP_SESSION_EXPIRED_TESTID = "rsvp-session-expired";
 
 /** Full legacy RsvpStatus enum: the PUT body accepts every value. */
@@ -713,6 +714,8 @@ export const RSVP_COPY = {
   synced: "Synced to Discord.",
   failedTitle: "That RSVP didn't save.",
   failedAction: "Try once more.",
+  unknown: "We couldn't confirm your RSVP. Check the event before trying again.",
+  refresh: "Refresh the event",
   paused: "RSVPs are paused for this event — check back soon.",
   sessionExpired: "Your session expired.",
   guestCta: "Log in with Discord",
@@ -784,7 +787,7 @@ export function rsvpFocusTargets(
  * Discord sends the member back to the page. Null for a bare link.
  */
 export function loginUrl(returnTo: string | null): string {
-  return returnTo ? `/auth/discord?next=${encodeURIComponent(returnTo)}` : "/auth/discord";
+  return returnTo ? `/join/discord?next=${encodeURIComponent(returnTo)}` : "/join/discord";
 }
 
 /** Shared write budget, both verbs, per member (legacy RsvpRateLimit). */

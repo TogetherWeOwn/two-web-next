@@ -286,8 +286,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     }
     try {
       const { row, writeBack, childWriteBacks } = await updateEvent(db, c.get("adminActor"), key, input);
-      if (writeBack) await dispatchWriteBack(c.env, writeBack);
-      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
+      if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
+      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
       return c.redirect(`/admin/events/${row.eventKey}`, 303);
     } catch (err) {
       if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
@@ -312,7 +312,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         const { row, writeBack } = action === "rsvp-pause" || action === "rsvp-reopen"
           ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
           : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
-        if (writeBack) await dispatchWriteBack(c.env, writeBack);
+        if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         return c.redirect(`/admin/events/${row.eventKey}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
