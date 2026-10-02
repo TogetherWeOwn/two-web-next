@@ -4,15 +4,18 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
 import type { Env } from "./env";
-import { notFoundSuggestions, type SuggestedEvent } from "./events/suggestions";
+import type { SuggestedEvent } from "./events/suggestions";
 import { inviteDestination } from "./invite";
+import { cachedNotFoundSuggestions } from "./not-found-suggestions";
 import { RecoveryShell } from "./pages";
 import { bufferedMemberHtml, bufferedMemberText, memberReadActive } from "./member-reads";
+import { withPinnedAssetCache } from "./pinned-assets";
 import { requestRoute } from "./request-log";
 
 // Branded error pages (N2 slice, TOG-9906). Ports of the four legacy two-web
 // errors/*.blade.php views (TOG-5626/TOG-6788). No session or cookie reads.
-// Only 404 attempts a bounded, optional DB read — every shell works without it.
+// Only 404 attempts a bounded, optional, per-isolate cached DB read — every
+// shell works without it.
 const NOINDEX = "noindex, nofollow";
 
 const JOIN_HREF = "/auth/discord";
@@ -200,7 +203,7 @@ export function notFoundResponse(
 }
 
 export async function notFoundHandler(c: Context): Promise<Response> {
-  return notFoundResponse(c, await notFoundSuggestions(c.env));
+  return notFoundResponse(c, await cachedNotFoundSuggestions(c.env, c.req.path));
 }
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
@@ -340,7 +343,9 @@ export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
       const asset = await c.env.ASSETS.fetch(c.req.raw);
       // ASSETS responses have immutable headers; outer security middleware
       // needs a writable copy. Preserve the streaming body and asset metadata.
-      if (asset.status !== 404) return new Response(asset.body, asset);
+      // Pinned fonts pick up the year-long immutable header here (TOG-12550).
+      if (asset.status !== 404)
+        return withPinnedAssetCache(c.req.url, new Response(asset.body, asset));
     }
     return notFoundHandler(c);
   });
