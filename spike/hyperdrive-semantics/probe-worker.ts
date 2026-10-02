@@ -12,10 +12,16 @@ type Check = { name: string; pass: boolean; detail: string };
 export function isTestDatabase(connectionString: string): boolean {
   try {
     const url = new URL(connectionString);
-    return (url.protocol === "postgres:" || url.protocol === "postgresql:") &&
-      url.hostname === "agent-testdb" && (url.port === "" || url.port === "5432") &&
-      url.username === "agent_test" && url.password === "" &&
-      url.pathname === "/agent_test" && url.search === "" && url.hash === "";
+    return (
+      (url.protocol === "postgres:" || url.protocol === "postgresql:") &&
+      url.hostname === "agent-testdb" &&
+      (url.port === "" || url.port === "5432") &&
+      url.username === "agent_test" &&
+      url.password === "" &&
+      url.pathname === "/agent_test" &&
+      url.search === "" &&
+      url.hash === ""
+    );
   } catch {
     return false;
   }
@@ -26,18 +32,31 @@ const app = new Hono<{ Bindings: Env }>();
 app.post("/spike-run", async (c) => {
   const cs = c.env.TEST_DB_CONNECTION_STRING ?? c.env.DB?.connectionString;
   // Reject before opening a connection or executing any SQL. Do not print URLs.
-  if (!cs || !isTestDatabase(cs)) return c.json({ ok: false, error: "test_database_required" }, 400);
-  if (new URL(c.req.url).search) return c.json({ ok: false, error: "query_options_not_supported" }, 400);
+  if (!cs || !isTestDatabase(cs))
+    return c.json({ ok: false, error: "test_database_required" }, 400);
+  if (new URL(c.req.url).search)
+    return c.json({ ok: false, error: "query_options_not_supported" }, 400);
   const schema = "w1_spike_" + crypto.randomUUID().replaceAll("-", "");
   const clients: ReturnType<typeof postgres>[] = [];
   const open = () => {
     // Do not let omitted URL fields select ambient PGPORT/PGPASSWORD values.
     // postgres.js treats an empty password string as absent; a function is explicit.
     const sql = postgres({
-      host: "agent-testdb", port: 5432, username: "agent_test", database: "agent_test",
-      password: () => "", ssl: false,
-      max: 1, fetch_types: false, prepare: false, connect_timeout: 5,
-      connection: { application_name: "w1-local-control", statement_timeout: 5000, lock_timeout: 2000 },
+      host: "agent-testdb",
+      port: 5432,
+      username: "agent_test",
+      database: "agent_test",
+      password: () => "",
+      ssl: false,
+      max: 1,
+      fetch_types: false,
+      prepare: false,
+      connect_timeout: 5,
+      connection: {
+        application_name: "w1-local-control",
+        statement_timeout: 5000,
+        lock_timeout: 2000,
+      },
     });
     clients.push(sql);
     return sql;
@@ -87,28 +106,46 @@ app.post("/spike-run", async (c) => {
         await rb`SET LOCAL lock_timeout = '250ms'`;
         let blocked = false;
         try {
-          await rb.unsafe(`SELECT id FROM ${schema}.spike_events WHERE event_key = 'evt-cap1' FOR UPDATE`);
+          await rb.unsafe(
+            `SELECT id FROM ${schema}.spike_events WHERE event_key = 'evt-cap1' FOR UPDATE`,
+          );
         } catch (err) {
           if ((err as { code?: string }).code !== "55P03") throw err;
           blocked = true;
         }
         await rb`ROLLBACK`;
-        await ra.unsafe(`INSERT INTO ${schema}.spike_rsvps (event_id, user_id, status)
-          VALUES ($1, 11, 'going')`, [event.id]);
+        await ra.unsafe(
+          `INSERT INTO ${schema}.spike_rsvps (event_id, user_id, status)
+          VALUES ($1, 11, 'going')`,
+          [event.id],
+        );
         await ra`COMMIT`;
         // Retry under the same event lock and execute the capacity decision.
         await rb`BEGIN`;
-        const [capacity] = await rb.unsafe(`SELECT capacity FROM ${schema}.spike_events
-          WHERE id = $1 FOR UPDATE`, [event.id]);
-        const [count] = await rb.unsafe(`SELECT count(*)::int AS n FROM ${schema}.spike_rsvps
-          WHERE event_id = $1 AND status = 'going'`, [event.id]);
+        const [capacity] = await rb.unsafe(
+          `SELECT capacity FROM ${schema}.spike_events
+          WHERE id = $1 FOR UPDATE`,
+          [event.id],
+        );
+        const [count] = await rb.unsafe(
+          `SELECT count(*)::int AS n FROM ${schema}.spike_rsvps
+          WHERE event_id = $1 AND status = 'going'`,
+          [event.id],
+        );
         if (!capacity || !count) throw new Error("missing_capacity_count");
         const refused = count.n >= capacity.capacity;
-        if (!refused) await rb.unsafe(`INSERT INTO ${schema}.spike_rsvps (event_id, user_id, status)
-          VALUES ($1, 22, 'going')`, [event.id]);
+        if (!refused)
+          await rb.unsafe(
+            `INSERT INTO ${schema}.spike_rsvps (event_id, user_id, status)
+          VALUES ($1, 22, 'going')`,
+            [event.id],
+          );
         await rb`COMMIT`;
-        checks.push({ name: "(a) FOR UPDATE", pass: blocked && refused && count.n === 1,
-          detail: `blocked_55P03=${blocked} second_seat_refused=${refused} going=${count.n}` });
+        checks.push({
+          name: "(a) FOR UPDATE",
+          pass: blocked && refused && count.n === 1,
+          detail: `blocked_55P03=${blocked} second_seat_refused=${refused} going=${count.n}`,
+        });
 
         // (b) Transaction-scoped single-flight. No session-lock pooler claim.
         await ra`BEGIN`;
@@ -121,13 +158,24 @@ app.post("/spike-run", async (c) => {
         const [free] = await rb`SELECT pg_try_advisory_xact_lock(${key.id}) AS ok`;
         await rb`COMMIT`;
         if (!held || !free) throw new Error("missing_advisory_result");
-        checks.push({ name: "(b) advisory xact lock", pass: held.ok === false && free.ok === true,
-          detail: `concurrent_refused=${held.ok === false} reacquired=${free.ok === true}` });
+        checks.push({
+          name: "(b) advisory xact lock",
+          pass: held.ok === false && free.ok === true,
+          detail: `concurrent_refused=${held.ok === false} reacquired=${free.ok === true}`,
+        });
       } finally {
-        try { await rb`ROLLBACK`; } finally { rb.release(); }
+        try {
+          await rb`ROLLBACK`;
+        } finally {
+          rb.release();
+        }
       }
     } finally {
-      try { await ra`ROLLBACK`; } finally { ra.release(); }
+      try {
+        await ra`ROLLBACK`;
+      } finally {
+        ra.release();
+      }
     }
 
     // (c) Native containment and planner index use, not a forced index plan.
@@ -145,12 +193,26 @@ app.post("/spike-run", async (c) => {
     const [count] = await admin.unsafe(`SELECT count(*)::int AS n FROM ${schema}.spike_access_logs
       WHERE subject_user_ids @> '[424242]'::jsonb`);
     if (!count) throw new Error("missing_containment_count");
-    const usesGin = plan.some((row) => String(row["QUERY PLAN"]).includes("spike_access_logs_subject_user_ids_gin"));
-    checks.push({ name: "(c) jsonb+GIN", pass: usesGin && count.n === 1,
-      detail: `uses_gin=${usesGin} rows=2001 hits=${count.n}` });
+    const usesGin = plan.some((row) =>
+      String(row["QUERY PLAN"]).includes("spike_access_logs_subject_user_ids_gin"),
+    );
+    checks.push({
+      name: "(c) jsonb+GIN",
+      pass: usesGin && count.n === 1,
+      detail: `uses_gin=${usesGin} rows=2001 hits=${count.n}`,
+    });
     const passed = checks.filter((check) => check.pass).length;
-    return c.json({ ok: passed === 3, path: "local-worker-direct-agent-testdb", version: server.version,
-      passed, total: 3, checks }, passed === 3 ? 200 : 500);
+    return c.json(
+      {
+        ok: passed === 3,
+        path: "local-worker-direct-agent-testdb",
+        version: server.version,
+        passed,
+        total: 3,
+        checks,
+      },
+      passed === 3 ? 200 : 500,
+    );
   } finally {
     try {
       if (created) await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`);

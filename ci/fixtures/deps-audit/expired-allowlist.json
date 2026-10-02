@@ -1,12 +1,14 @@
 {
   "version": 1,
-  "exceptions": [{
-    "package": "fixture-package",
-    "severity": "high",
-    "range": "<2.0.0",
-    "advisoryIds": [100001],
-    "reviewed": "2026-09-01",
-    "expires": "2026-09-30",
-    "reason": "Synthetic exception for expiry selftest only"
-  }]
+  "exceptions": [
+    {
+      "package": "fixture-package",
+      "severity": "high",
+      "range": "<2.0.0",
+      "advisoryIds": [100001],
+      "reviewed": "2026-09-01",
+      "expires": "2026-09-30",
+      "reason": "Synthetic exception for expiry selftest only"
+    }
+  ]
 }

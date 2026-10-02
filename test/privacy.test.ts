@@ -83,7 +83,9 @@ describe("policy versioning contract", () => {
   });
 
   it("renders headings, bold, code, and wrapped list items", () => {
-    const html = renderPolicyMarkdown("## Title\n\nHello **bold** and `code`.\n\n- **First item** — lead,\n  wrapped continuation.\n- Second.\n");
+    const html = renderPolicyMarkdown(
+      "## Title\n\nHello **bold** and `code`.\n\n- **First item** — lead,\n  wrapped continuation.\n- Second.\n",
+    );
     expect(html).toContain("<h2>Title</h2>");
     expect(html).toContain("<p>Hello <strong>bold</strong> and <code>code</code>.</p>");
     expect(html).toContain("<li><strong>First item</strong> — lead, wrapped continuation.</li>");

@@ -72,7 +72,9 @@ describe("occurrences across spring-forward gaps", () => {
     const s = wallToUtc("2027-03-21 01:30", "Europe/London");
     const e = wallToUtc("2027-03-21 02:30", "Europe/London");
     expect(occurrences(s, e, "Europe/London", "weekly", 4).size).toBe(4);
-    expect(occurrences(s, e, "Europe/London", "weekly", 4, new Date(Date.UTC(2027, 2, 28))).size).toBe(2);
+    expect(
+      occurrences(s, e, "Europe/London", "weekly", 4, new Date(Date.UTC(2027, 2, 28))).size,
+    ).toBe(2);
     expect(occurrences(s, e, "Europe/London", "weekly", 2).size).toBe(2);
   });
 });
