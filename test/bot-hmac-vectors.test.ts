@@ -46,7 +46,9 @@ const referenceCanonical = (timestamp: string, nonce: string, body: string): str
   ["POST", "/internal/actions", timestamp, nonce, referenceDigest(body)].join("\n");
 
 const referenceSign = (secret: string, timestamp: string, nonce: string, body: string): string =>
-  `sha256=${createHmac("sha256", secret).update(referenceCanonical(timestamp, nonce, body), "utf8").digest("hex")}`;
+  `sha256=${createHmac("sha256", secret)
+    .update(referenceCanonical(timestamp, nonce, body), "utf8")
+    .digest("hex")}`;
 
 // The bot's verification rule (INTERNAL_ACTIONS.md §1): recompute over the
 // received bytes and constant-time compare; a wrong signature and an unknown
@@ -92,8 +94,7 @@ const VECTORS = [
     body: '{"action":"event.upsert","event_key":"movie-night-2026-09-01"}',
     timestamp: 1787173135,
     nonce: "9f1c0a2b3d4e5f60718293a4b5c6d7e8",
-    signature:
-      "sha256=3604fc650acae867427205ec8da5dc6dc7e379e264c9014a2d947368d95a1224",
+    signature: "sha256=3604fc650acae867427205ec8da5dc6dc7e379e264c9014a2d947368d95a1224",
   },
   {
     label: "reference role.assign",
@@ -101,8 +102,7 @@ const VECTORS = [
     body: '{"action":"role.assign","discord_id":"900000000000009999","role_key":"rocketleague"}',
     timestamp: 1787173135,
     nonce: "9f1c0d3e5a7b9c1d3e5f7a9b0c2d4e6f",
-    signature:
-      "sha256=a2159435259369a4460b5d94202f44219f3e22fb17ed24c8a4394948bc6251a0",
+    signature: "sha256=a2159435259369a4460b5d94202f44219f3e22fb17ed24c8a4394948bc6251a0",
   },
   {
     label: "reference announcement.post",
@@ -110,8 +110,7 @@ const VECTORS = [
     body: '{"action":"announcement.post","channel_key":"qa-throwaway","body":"héllo / world «ok»"}',
     timestamp: 1787173135,
     nonce: "9f1c0d3e5a7b9c1d3e5f7a9b0c2d4e6f",
-    signature:
-      "sha256=d75833b1faf35524dbce628cf26a14bc71084f9eea37d645c2160cc9039afd51",
+    signature: "sha256=d75833b1faf35524dbce628cf26a14bc71084f9eea37d645c2160cc9039afd51",
   },
 ] as const;
 
@@ -166,7 +165,13 @@ describe("HMAC verification vectors", () => {
         signature: v.signature.slice(0, -1),
         body: v.body,
       },
-      { ...row, kind: "unknown key id", keyId: "web-staging", signature: v.signature, body: v.body },
+      {
+        ...row,
+        kind: "unknown key id",
+        keyId: "web-staging",
+        signature: v.signature,
+        body: v.body,
+      },
     ].map((r) => ({ ...r, goodSignature: v.signature, goodBody: v.body }));
   });
 
@@ -253,7 +258,11 @@ describe("verification freshness (expired timestamps)", () => {
     // skew window is ±120 seconds, so a millisecond stamp reads as expired.
     vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
     const { client, seen } = stubClient([
-      jsonResponse(200, { ok: true, result: { outcome: "created", event_id: "d1" }, request_id: "r1" }),
+      jsonResponse(200, {
+        ok: true,
+        result: { outcome: "created", event_id: "d1" },
+        request_id: "r1",
+      }),
     ]);
     await client.upsertEvent(EVENT, UUID_1);
     expect(seen).toHaveLength(1);
@@ -295,7 +304,11 @@ function stubClient(responses: Response[]) {
     if (!next) throw new Error("no more stubbed responses");
     return next;
   });
-  return { client: createBotClient({ ...OPTS, fetchFn: fetchFn as unknown as typeof fetch }), seen, fetchFn };
+  return {
+    client: createBotClient({ ...OPTS, fetchFn: fetchFn as unknown as typeof fetch }),
+    seen,
+    fetchFn,
+  };
 }
 
 const announced = (messageId = "m1", requestId = "r1") =>
@@ -360,10 +373,19 @@ describe("idempotency-key rows", () => {
   it("reads updated as a distinct outcome from created", async () => {
     // InternalActionClientTest.php:173-184.
     const { client } = stubClient([
-      jsonResponse(200, { ok: true, result: { outcome: "updated", event_id: "999" }, request_id: "r1" }),
+      jsonResponse(200, {
+        ok: true,
+        result: { outcome: "updated", event_id: "999" },
+        request_id: "r1",
+      }),
     ]);
     const result = await client.upsertEvent(EVENT, UUID_1);
-    expect(result).toMatchObject({ ok: true, outcome: "updated", discordEventId: "999", replayed: false });
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "updated",
+      discordEventId: "999",
+      replayed: false,
+    });
   });
 });
 
@@ -389,11 +411,13 @@ describe("bot error-code dataset (table-driven)", () => {
     "returns the wire retryable answer for $code ($status)",
     async ({ status, code, retryable }) => {
       // InternalActionClientTest.php:317-329.
-      const { client } = stubClient([jsonResponse(status, {
-        ok: false,
-        error: { code, message: "the bot said no", retryable },
-        request_id: "01JERROR0123456789",
-      })]);
+      const { client } = stubClient([
+        jsonResponse(status, {
+          ok: false,
+          error: { code, message: "the bot said no", retryable },
+          request_id: "01JERROR0123456789",
+        }),
+      ]);
       const failure = await client.upsertEvent(EVENT, UUID_1);
       expect(failure).toMatchObject({
         ok: false,
@@ -411,11 +435,13 @@ describe("bot error-code dataset (table-driven)", () => {
     async ({ status, code, retryable }) => {
       // InternalActionClientTest.php:331-347: never branch on the status —
       // the status gets 409 wrong in both directions.
-      const { client } = stubClient([jsonResponse(status, {
-        ok: false,
-        error: { code, message: "the bot said no" },
-        request_id: "01JERROR0123456789",
-      })]);
+      const { client } = stubClient([
+        jsonResponse(status, {
+          ok: false,
+          error: { code, message: "the bot said no" },
+          request_id: "01JERROR0123456789",
+        }),
+      ]);
       const failure = await client.upsertEvent(EVENT, UUID_1);
       expect(failure).toMatchObject({ ok: false, code, retryable });
     },
@@ -425,8 +451,16 @@ describe("bot error-code dataset (table-driven)", () => {
     // InternalActionClientTest.php:349-366: the assertion that catches a
     // status-code implementation.
     const { client } = stubClient([
-      jsonResponse(409, { ok: false, error: { code: "in_progress", message: "busy", retryable: true }, request_id: "r" }),
-      jsonResponse(409, { ok: false, error: { code: "replayed", message: "done", retryable: false }, request_id: "r" }),
+      jsonResponse(409, {
+        ok: false,
+        error: { code: "in_progress", message: "busy", retryable: true },
+        request_id: "r",
+      }),
+      jsonResponse(409, {
+        ok: false,
+        error: { code: "replayed", message: "done", retryable: false },
+        request_id: "r",
+      }),
     ]);
     expect(await client.upsertEvent(EVENT, UUID_1)).toMatchObject({ ok: false, retryable: true });
     expect(await client.upsertEvent(EVENT, UUID_2)).toMatchObject({ ok: false, retryable: false });
@@ -436,32 +470,64 @@ describe("bot error-code dataset (table-driven)", () => {
     // InternalActionClientTest.php:368-378: if the running bot contradicts
     // its own markdown, do what the running bot says.
     const { client } = stubClient([
-      jsonResponse(409, { ok: false, error: { code: "replayed", message: "?", retryable: true }, request_id: "r" }),
+      jsonResponse(409, {
+        ok: false,
+        error: { code: "replayed", message: "?", retryable: true },
+        request_id: "r",
+      }),
     ]);
-    expect(await client.upsertEvent(EVENT, UUID_1)).toMatchObject({ ok: false, code: "replayed", retryable: true });
+    expect(await client.upsertEvent(EVENT, UUID_1)).toMatchObject({
+      ok: false,
+      code: "replayed",
+      retryable: true,
+    });
   });
 
   it("treats an unknown code as not retryable", async () => {
     // InternalActionClientTest.php:380-396: the table grows; an unknown code
     // must not crash us and must not become a retry loop.
     const { client } = stubClient([
-      jsonResponse(418, { ok: false, error: { code: "something_new", message: "from a future bot" }, request_id: "01JNEW" }),
+      jsonResponse(418, {
+        ok: false,
+        error: { code: "something_new", message: "from a future bot" },
+        request_id: "01JNEW",
+      }),
     ]);
     const failure = await client.upsertEvent(EVENT, UUID_1);
-    expect(failure).toMatchObject({ ok: false, code: "something_new", retryable: false, requestId: "01JNEW" });
+    expect(failure).toMatchObject({
+      ok: false,
+      code: "something_new",
+      retryable: false,
+      requestId: "01JNEW",
+    });
   });
 
   it("surfaces retry-after in seconds on a 429, and null everywhere else", async () => {
     // InternalActionClientTest.php:414-453: the doc says seconds; an
     // HTTP-date is legal per RFC but is not what this endpoint sends.
     const { client } = stubClient([
-      jsonResponse(429, { ok: false, error: { code: "rate_limited", message: "slow", retryable: true }, request_id: "r" }, { "Retry-After": "42" }),
-      jsonResponse(429, { ok: false, error: { code: "rate_limited", message: "slow", retryable: true }, request_id: "r" }),
-      jsonResponse(500, { ok: false, error: { code: "internal", message: "x", retryable: true }, request_id: "r" }, { "Retry-After": "9" }),
+      jsonResponse(
+        429,
+        {
+          ok: false,
+          error: { code: "rate_limited", message: "slow", retryable: true },
+          request_id: "r",
+        },
+        { "Retry-After": "42" },
+      ),
+      jsonResponse(429, {
+        ok: false,
+        error: { code: "rate_limited", message: "slow", retryable: true },
+        request_id: "r",
+      }),
+      jsonResponse(
+        500,
+        { ok: false, error: { code: "internal", message: "x", retryable: true }, request_id: "r" },
+        { "Retry-After": "9" },
+      ),
     ]);
     expect(await client.upsertEvent(EVENT, UUID_1)).toMatchObject({ retryAfterSeconds: 42 });
     expect(await client.upsertEvent(EVENT, UUID_2)).toMatchObject({ retryAfterSeconds: null });
     expect(await client.upsertEvent(EVENT, UUID_1)).toMatchObject({ retryAfterSeconds: null });
   });
-
 });
