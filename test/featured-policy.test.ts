@@ -69,7 +69,13 @@ const after = new Date(now.getTime() + 1000);
 
 describe("featured policy statement (pure, DB-free)", () => {
   it("refuses guests and non-moderators, admits moderators on every write verb", () => {
-    for (const decide of [canManageFeaturedContent, canCreateFeaturedContent, canUpdateFeaturedContent, canDeleteFeaturedContent, canPublishFeaturedContent]) {
+    for (const decide of [
+      canManageFeaturedContent,
+      canCreateFeaturedContent,
+      canUpdateFeaturedContent,
+      canDeleteFeaturedContent,
+      canPublishFeaturedContent,
+    ]) {
       expect(decide(null), decide.name).toBe(false);
       expect(decide(undefined), decide.name).toBe(false);
       expect(decide({ moderator: false }), decide.name).toBe(false);
@@ -78,13 +84,27 @@ describe("featured policy statement (pure, DB-free)", () => {
   });
 
   it("public visibility is exactly currentlyVisible: start inclusive, end exclusive", () => {
-    expect(isFeaturedPubliclyVisible({ isPublished: false, startsAt: before, endsAt: after }, now)).toBe(false);
-    expect(isFeaturedPubliclyVisible({ isPublished: true, startsAt: null, endsAt: null }, now)).toBe(true);
-    expect(isFeaturedPubliclyVisible({ isPublished: true, startsAt: now, endsAt: after }, now)).toBe(true);
-    expect(isFeaturedPubliclyVisible({ isPublished: true, startsAt: before, endsAt: now }, now)).toBe(false);
-    expect(isFeaturedPubliclyVisible({ isPublished: true, startsAt: before, endsAt: after }, now)).toBe(true);
-    expect(isFeaturedPubliclyVisible({ isPublished: true, startsAt: after, endsAt: null }, now)).toBe(false);
-    expect(isFeaturedPubliclyVisible({ isPublished: true, startsAt: null, endsAt: before }, now)).toBe(false);
+    expect(
+      isFeaturedPubliclyVisible({ isPublished: false, startsAt: before, endsAt: after }, now),
+    ).toBe(false);
+    expect(
+      isFeaturedPubliclyVisible({ isPublished: true, startsAt: null, endsAt: null }, now),
+    ).toBe(true);
+    expect(
+      isFeaturedPubliclyVisible({ isPublished: true, startsAt: now, endsAt: after }, now),
+    ).toBe(true);
+    expect(
+      isFeaturedPubliclyVisible({ isPublished: true, startsAt: before, endsAt: now }, now),
+    ).toBe(false);
+    expect(
+      isFeaturedPubliclyVisible({ isPublished: true, startsAt: before, endsAt: after }, now),
+    ).toBe(true);
+    expect(
+      isFeaturedPubliclyVisible({ isPublished: true, startsAt: after, endsAt: null }, now),
+    ).toBe(false);
+    expect(
+      isFeaturedPubliclyVisible({ isPublished: true, startsAt: null, endsAt: before }, now),
+    ).toBe(false);
   });
 
   it("names exactly the three mounted admin write routes", () => {
@@ -95,18 +115,26 @@ describe("featured policy statement (pure, DB-free)", () => {
     ]);
     // Hono lists one entry per handler in the middleware stack: dedupe like
     // the inventory guard (test/helpers/route-inventory.ts) before comparing.
-    const mounted = [...new Set(rawApp.routes
-      .filter((r) => r.method === "POST" && r.path.includes("featured"))
-      .map((r) => `${r.method} ${r.path}`))].sort();
+    const mounted = [
+      ...new Set(
+        rawApp.routes
+          .filter((r) => r.method === "POST" && r.path.includes("featured"))
+          .map((r) => `${r.method} ${r.path}`),
+      ),
+    ].sort();
     expect(mounted).toEqual([...FEATURED_WRITE_ROUTES].sort());
   });
 });
 
 describe("featured write surface (DB-free source allowlist)", () => {
   it("registers exactly the three moderator write routes, no public featured writer", () => {
-    const writes = [...new Set(adminApp(createMemorySessionStore())
-      .routes.filter((r) => r.method === "POST" && r.path.includes("featured"))
-      .map((r) => `${r.method} ${r.path}`))].sort();
+    const writes = [
+      ...new Set(
+        adminApp(createMemorySessionStore())
+          .routes.filter((r) => r.method === "POST" && r.path.includes("featured"))
+          .map((r) => `${r.method} ${r.path}`),
+      ),
+    ].sort();
     expect(writes).toEqual(["POST /featured", "POST /featured/:id", "POST /featured/:id/delete"]);
   });
 
@@ -119,11 +147,16 @@ describe("featured write surface (DB-free source allowlist)", () => {
   });
 
   it("deleteFeatured is defined once and called only from the admin delete route", () => {
-    expect(filesMatching(/deleteFeatured\(/)).toEqual(["src/admin/routes.tsx", "src/admin/store.ts"]);
+    expect(filesMatching(/deleteFeatured\(/)).toEqual([
+      "src/admin/routes.tsx",
+      "src/admin/store.ts",
+    ]);
   });
 
   it("no migration points a foreign key at featured_contents (safe delete)", () => {
-    const referrers = drizzleFiles().filter((path) => /REFERENCES[^;]*featured_contents/i.test(read(path)));
+    const referrers = drizzleFiles().filter((path) =>
+      /REFERENCES[^;]*featured_contents/i.test(read(path)),
+    );
     expect(referrers).toEqual([]);
   });
 });
@@ -144,9 +177,15 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
   // Refusals go through the mounted app: only there does a guest POST take
   // the real OAuth 302 (child-root adminApp alone answers the recovery 303).
   const mounted = (path: string, init?: RequestInit, cookie?: string) =>
-    app.request(path, { ...init, headers: { ...(init?.headers ?? {}), ...(cookie ? { cookie } : {}) } }, {
-      ...env, ADMIN_DB: fixture.db, SESSION_STORE: sessions,
-    } as EnvWithAdminDb);
+    app.request(
+      path,
+      { ...init, headers: { ...(init?.headers ?? {}), ...(cookie ? { cookie } : {}) } },
+      {
+        ...env,
+        ADMIN_DB: fixture.db,
+        SESSION_STORE: sessions,
+      } as EnvWithAdminDb,
+    );
 
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
@@ -163,7 +202,13 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
   it("guest writes bounce to OAuth and member writes 403, never 2xx, rows byte-identical", async () => {
     await fixture.db.insert(featuredContents).values({ title: "Seed slot", position: 0 });
     const draft = { title: "Guest slot", body: "Hello", position: "1" };
-    const publishWindow = { title: "Seed slot", is_published: "on", position: "0", starts_at: "2026-11-04 09:05", ends_at: "2026-11-04 11:15" };
+    const publishWindow = {
+      title: "Seed slot",
+      is_published: "on",
+      position: "0",
+      starts_at: "2026-11-04 09:05",
+      ends_at: "2026-11-04 11:15",
+    };
     const beforeRows = await rows();
     expect(beforeRows).toHaveLength(1);
 
@@ -180,11 +225,15 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
       expect(guest.status, `guest POST ${path}`).toBe(302);
       expect(guest.headers.get("location")).toBe("/auth/discord");
 
-      const member = await mounted(path, {
-        method: "POST",
-        headers: { origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(fields),
-      }, memberCookie);
+      const member = await mounted(
+        path,
+        {
+          method: "POST",
+          headers: { origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams(fields),
+        },
+        memberCookie,
+      );
       expect(member.status, `member POST ${path}`).toBe(403);
     }
     expect(await rows()).toEqual(beforeRows);
@@ -201,17 +250,36 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
   });
 
   it("moderator full CRUD including the publish window, all audited", async () => {
-    const create = await admin().request("/featured", form({ title: "Policy slot", body: "Hello", position: "2" }, modCookie), bindings());
+    const create = await admin().request(
+      "/featured",
+      form({ title: "Policy slot", body: "Hello", position: "2" }, modCookie),
+      bindings(),
+    );
     expect(create.status).toBe(303);
-    const id = Number(new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop());
+    const id = Number(
+      new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop(),
+    );
 
     const publish = await admin().request(
       `/featured/${id}`,
-      form({ title: "Policy slot", body: "Hello", is_published: "on", position: "0", starts_at: "2026-09-30 11:00", ends_at: "2026-09-30 13:00" }, modCookie),
+      form(
+        {
+          title: "Policy slot",
+          body: "Hello",
+          is_published: "on",
+          position: "0",
+          starts_at: "2026-09-30 11:00",
+          ends_at: "2026-09-30 13:00",
+        },
+        modCookie,
+      ),
       bindings(),
     );
     expect(publish.status).toBe(303);
-    const [row] = await fixture.db.select().from(featuredContents).where(eq(featuredContents.id, id));
+    const [row] = await fixture.db
+      .select()
+      .from(featuredContents)
+      .where(eq(featuredContents.id, id));
     expect(row).toMatchObject({ isPublished: true, position: 0 });
 
     const del = await admin().request(
@@ -248,12 +316,16 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
     vi.setSystemTime(now);
     try {
       const res = await app.request("/", {}, {
-        ...env, ADMIN_DB: fixture.db, SESSION_STORE: createMemorySessionStore(),
+        ...env,
+        ADMIN_DB: fixture.db,
+        SESSION_STORE: createMemorySessionStore(),
       } as EnvWithAdminDb);
       expect(res.status).toBe(200);
       const html = await res.text();
-      for (const title of ["Inside", "Open", "Start exact"]) expect(html).toContain(`<h3>${title}</h3>`);
-      for (const title of ["Draft", "Future", "Past", "End exact"]) expect(html).not.toContain(`<h3>${title}</h3>`);
+      for (const title of ["Inside", "Open", "Start exact"])
+        expect(html).toContain(`<h3>${title}</h3>`);
+      for (const title of ["Draft", "Future", "Past", "End exact"])
+        expect(html).not.toContain(`<h3>${title}</h3>`);
       expect(html.match(/data-testid="featured-item"/g)).toHaveLength(3);
     } finally {
       vi.useRealTimers();
@@ -261,9 +333,15 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
   });
 
   it("safe delete removes the row, audits it, and a second delete 404s", async () => {
-    const create = await admin().request("/featured", form({ title: "Doomed slot" }, modCookie), bindings());
+    const create = await admin().request(
+      "/featured",
+      form({ title: "Doomed slot" }, modCookie),
+      bindings(),
+    );
     expect(create.status).toBe(303);
-    const id = Number(new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop());
+    const id = Number(
+      new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop(),
+    );
 
     const first = await admin().request(
       `/featured/${id}/delete`,
