@@ -60,6 +60,13 @@ export default {
     const headers = new Headers(request.headers);
     if (headers.get("origin") === localOrigin) headers.set("origin", STAGING_APP_URL);
     const virtual = new URL(url.pathname + url.search, STAGING_APP_URL);
+    // TrustHosts (src/trust-hosts.ts, main #31) requires the Host header and
+    // the request URL to share the environment's APP_URL hostname. The copied
+    // browser Host (localhost:8787) would refuse every virtual request —
+    // including the Playwright webServer readiness poll — before routing. This
+    // header never leaves the local process: the mapped request goes straight
+    // to worker.fetch in-process.
+    headers.set("host", virtual.host);
     const mapped = new Request(virtual, {
       method: request.method,
       headers,
