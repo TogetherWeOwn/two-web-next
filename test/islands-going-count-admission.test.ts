@@ -23,7 +23,7 @@ class Badge {
   spots: TextTarget | null;
   announcement = new TextTarget("You're going. ");
 
-  constructor(readonly key: string, readonly capacity: string) {
+  constructor(readonly key: string, public capacity: string) {
     this.count = new TextTarget(capacity ? `2 of ${capacity} going` : "2 going");
     this.spots = capacity ? new TextTarget(`${Number(capacity) - 2} of ${capacity} spots left`) : null;
   }
@@ -32,6 +32,9 @@ class Badge {
     if (name === "data-event-key") return this.key;
     if (name === "data-capacity") return this.capacity;
     return null;
+  }
+  setAttribute(name: string, value: string) {
+    if (name === "data-capacity") this.capacity = String(value);
   }
   querySelector(selector: string) {
     if (selector === "[data-count]") return this.count;
