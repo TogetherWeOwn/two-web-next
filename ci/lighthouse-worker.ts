@@ -110,7 +110,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         }
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc` &&
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc` &&
           params.length === 1 &&
           isInstant(params[0])
         ) {

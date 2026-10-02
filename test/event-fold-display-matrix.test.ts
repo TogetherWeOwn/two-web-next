@@ -20,7 +20,9 @@ import app from "./app";
 import { events } from "../src/db/admin-schema";
 import { users, profiles } from "../src/db/schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
+
+type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 

@@ -291,7 +291,7 @@ jobs:
   bundle-budget:
     needs: scope
     if: needs.scope.outputs.docs_only != 'true'
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'bundle-budget') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -305,7 +305,7 @@ jobs:
   lighthouse:
     needs: scope
     if: needs.scope.outputs.docs_only != 'true'
-    runs-on: [self-hosted, two-selfhosted]
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'lighthouse') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:
       image: node:24-bookworm

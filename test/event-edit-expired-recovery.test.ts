@@ -15,7 +15,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
+
+type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 import { fixtureDiscord, mergeCookies } from "./fixtures/session-recovery";
