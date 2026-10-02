@@ -10,6 +10,8 @@ export const coverage = {
   "/discord": skip("External invite redirect, not an HTML page"),
   "/join/discord": skip("OAuth redirect, never contact Discord in CI"),
   "/auth/discord": skip("OAuth redirect, never contact Discord in CI"),
+  "/auth/status": skip("Bool-only JSON liveness probe, not an HTML document"),
+  "/auth/recover": { cases: [{ path: "/auth/recover?next=%2Fprofile" }] },
   "/auth/discord/callback": skip("OAuth callback redirects to the audited homepage notices"),
   "/auth/discord/redirect": skip("Legacy login alias redirects to the non-document OAuth start route"),
   "/admin/events/create": skip("Legacy admin alias redirects to the audited /admin/events/new form"),

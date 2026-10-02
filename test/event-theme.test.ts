@@ -25,7 +25,7 @@ afterEach(() => { expect(fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); }
 describe("event detail theme", () => {
   it("reuses base assets and scopes the match overview to detail pages", () => {
     const html = render();
-    expect(html).toContain('<body class="homepage-theme event-theme">');
+    expect(html).toContain('<body class="base-theme event-theme">');
     expect(html).toContain('href="/theme.css"');
     expect(html).toContain('href="/event-theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');

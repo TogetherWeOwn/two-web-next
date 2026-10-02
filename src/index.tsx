@@ -40,10 +40,12 @@ import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { consumeLoginReturn, LOGIN_INTENDED_COOKIE, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody } from "./up";
+import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 import { rulesLastUpdated } from "./rules-last-updated";
+import { authStatus, authStatusScript, clearAuthStatus, enableAuthStatus } from "./auth-status";
+import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding, expiredWriteBanner } from "./write-recovery";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
@@ -115,6 +117,10 @@ app.use("*", trustHosts());
 
 // Before throttles, session rotation, body parsing, or any mounted handler.
 app.use("*", sameOrigin);
+app.use("*", authStatusScript);
+app.use("*", expiredWriteBanner);
+app.get("/auth/status", (c) => authStatus(c, () => storeFor(c)));
+app.get("/auth/recover", recoveryLanding);
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
@@ -211,6 +217,7 @@ async function issueSession(
     sameSite: "Lax",
     maxAge: SESSION_TTL_SECONDS,
   });
+  await enableAuthStatus(c, store, await hashToken(token));
 }
 
 async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): Promise<Session | null> {
@@ -227,6 +234,7 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
   // the old row in the same statement. A replayed cookie finds no row: guest.
+  const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
   const rotated = await store
     .rotate(await hashToken(token), {
@@ -236,6 +244,7 @@ async function readSession(c: Context<{ Bindings: Env }>, rotateToken = true): P
     })
     .catch(() => false);
   if (!rotated) return null;
+  await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -395,12 +404,9 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
-// `GET /up` — the deploy/uptime signal with queue depth folded in (N3: TOG-9895;
-// ports two-web HealthCheckController + QueueHealth on routes/funnel.php's empty
-// stack). No session, cookie or auth on this path, and the queue read can never
-// sink the endpoint: a backlog answers 200 `degraded`, an unreachable or
-// unconfigured ledger 200 `unknown` — `curl -f` must keep passing through the
-// outage it reports on. `no-store` so a monitor never reads a stale 200.
+// `GET /up` — session-free DB/schema readiness plus the existing queue signal.
+// DB/ledger failure or pending web migrations answers 503; queue-only degraded
+// or unknown remains 200. `no-store` so a monitor never reads a stale response.
 // Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
 type EnvWithDepth = Env & { QUEUE_DEPTH_STORE?: ReturnType<typeof postgres> };
@@ -409,25 +415,39 @@ app.get("/up", async (c) => {
   // Fixed app identity for the cutover probe, including unknown/degraded reads.
   c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
-  // The queue ledger lives in the same Postgres as the rest of the W13 backend:
-  // the Hyperdrive `DB` binding when present, else DATABASE_URL (local/dev).
-  const url = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
-  let sql: EnvWithDepth["QUEUE_DEPTH_STORE"] | null = injected ?? null;
+  // Readiness must probe the database selected by the web stores. Preserve the
+  // queue's existing Hyperdrive-first selection without falling back on failure.
+  const url = databaseUrl(c.env);
+  const queueUrl = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
+  const shared = url === queueUrl;
+  const owned = new Set<ReturnType<typeof postgres>>();
+  const connect = (target: string | undefined, max: number) => {
+    if (injected) return injected;
+    if (!target) return null;
+    try {
+      const client = postgres(target, { max, idle_timeout: 10, connect_timeout: 3, fetch_types: false });
+      owned.add(client);
+      return client;
+    } catch (err) {
+      console.warn("Health check could not build the database client.", { exception: err instanceof Error ? err.name : typeof err });
+      return null;
+    }
+  };
   try {
     c.header("cache-control", "no-store");
-    // Client construction can throw (malformed URL); that is `unknown`, never a 500.
-    if (!sql && url) {
-      try {
-        sql = postgres(url, { max: 1, idle_timeout: 10, connect_timeout: 10 });
-      } catch (err) {
-        console.warn("Health check could not build the queue client.", { exception: err instanceof Error ? err.name : typeof err });
-      }
-    }
-    const client = sql;
-    return c.json(await upBody(client ? () => pgQueueDepth(client) : null));
+    // Two slots when shared, one per client otherwise: queue cannot starve DB.
+    const sql = connect(url, shared ? 2 : 1);
+    const queueSql = shared ? sql : connect(queueUrl, 1);
+    const body = await upBody(queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null, sql);
+    return c.json(body, upHttpStatus(body));
   } finally {
-    // Per-request client; an injected double owns its own lifecycle.
-    if (sql && !injected) await sql.end({ timeout: 1 }).catch(() => {});
+    // Close request-owned clients without waiting to drain. Transaction-local
+    // server limits bound active queries; disconnect alone is not cancellation.
+    // An injected client owns its own lifecycle.
+    for (const sql of owned) {
+      const closed = sql.end({ timeout: 0 }).catch(() => {});
+      try { c.executionCtx.waitUntil(closed); } catch { void closed; }
+    }
   }
 });
 
@@ -464,6 +484,7 @@ app.get("/auth/discord/callback", async (c) => {
   // Consume the return journey on every terminal path — success, denial and
   // failure all clear it (legacy forget on login_next + url.intended).
   const returnTo = await consumeLoginReturn(c);
+  const expiredWrite = await consumeExpiredWrite(c);
   const code = c.req.query("code");
   const state = c.req.query("state");
   // A consent-screen refusal arrives as an `error` param before any code
@@ -514,6 +535,7 @@ app.get("/auth/discord/callback", async (c) => {
     member: join !== "failed",
     moderator,
   });
+  await flashExpiredWrite(c, expiredWrite);
   // A failed auto-join keeps the recovery landing even when a destination
   // was remembered: the session is a non-member one, so a member-only gate
   // (/profile, /members/*) would answer bare 403 and swallow the failure
@@ -553,8 +575,13 @@ registerEventRoutes(
 app.post("/logout", throttle("logout", WRITE_THROTTLE_PER_MINUTE), requestBodyLimit("action"), async (c) => {
   const store = await storeFor(c);
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (token) await store.revoke(await hashToken(token)).catch(() => {});
+  if (token) {
+    try { await store.revoke(await hashToken(token)); }
+    catch { return c.text("Sign-out temporarily unavailable", 503); }
+  }
   deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
+  clearAuthStatus(c);
+  await consumeExpiredWrite(c);
   return c.redirect("/", 303);
 });
 

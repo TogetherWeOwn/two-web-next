@@ -4,10 +4,12 @@
 
 import type { ZeroResultSearch } from "../events/search-log";
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { cloneElement, isValidElement } from "hono/jsx";
 import type { Actor } from "./guard";
 import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
 import { FeaturedContentItem, SkipLink } from "../pages";
-import type { EventRow, FeaturedRow } from "./store";
+import type { EventListRow, EventRow, FeaturedRow } from "./store";
+import { goingCountText } from "../islands/contracts";
 import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 import { featuredListUrl, joinAttemptsUrl, rosterUrl, type FeaturedListQuery, type JoinAttemptsQuery, type RosterQuery, type SortOrder } from "./table-list";
@@ -164,14 +166,16 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQ
           <button type="submit" class="btn">Filter</button>
         </div>
       </form>
+      <p id="join-attempts-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="admin-table-scroll" role="region" aria-label="Join attempts list" aria-describedby="join-attempts-scroll-hint" tabindex={0} data-testid="join-attempts-table-scroll">
       <table class="admin-table" data-testid="join-attempts-table">
         <thead>
           <tr>
-            <th>Outcome</th>
-            <th>Source</th>
-            <th>Discord id</th>
-            <th>Request id</th>
-            <th>Attempted</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Source</th>
+            <th scope="col">Discord id</th>
+            <th scope="col">Request id</th>
+            <th scope="col">Attempted</th>
           </tr>
         </thead>
         <tbody>
@@ -194,6 +198,7 @@ export const JoinAttemptsPage: FC<{ rows: JoinAttemptRow[]; query: JoinAttemptsQ
           )}
         </tbody>
       </table>
+      </div>
       <nav aria-label="Join attempt pages" class="actions">
         {query.page > 1 ? <a rel="prev" href={joinAttemptsUrl(query, query.page - 1)}>Previous</a> : null}
         <span>Page {query.page}</span>
@@ -248,7 +253,25 @@ const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuer
   );
 };
 
-export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
+/**
+ * Going-only seat fill for one admin list row. Maybe/Waitlist/Not going never
+ * occupy a seat (same rule as the fill filter); uncapped events show "N going".
+ * A capped event at or over capacity carries a Full badge, and an
+ * over-capacity row (more Going than seats) carries an Over capacity badge.
+ */
+const EventFillCell: FC<{ row: EventListRow }> = ({ row }) => (
+  <td data-testid={`event-fill-${row.eventKey}`}>
+    {goingCountText(row.goingCount, row.capacity)}
+    {row.capacity !== null && row.goingCount >= row.capacity ? (
+      <span data-testid={`event-fill-badge-${row.eventKey}`}> Full</span>
+    ) : null}
+    {row.capacity !== null && row.goingCount > row.capacity ? (
+      <span data-testid={`event-over-capacity-${row.eventKey}`}> Over capacity</span>
+    ) : null}
+  </td>
+);
+
+export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNext: boolean }> = ({ rows, query, hasNext }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
@@ -300,19 +323,22 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
       </p>
+      <p id="events-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+      <div class="admin-table-scroll" role="region" aria-label="Events list" aria-describedby="events-scroll-hint" tabindex={0} data-testid="events-table-scroll">
       <table class="admin-table" data-testid="events-table">
         <thead>
           <tr>
             <EventSortHeader label="Title" sort="title" query={query} />
             <EventSortHeader label="Status" sort="status" query={query} />
-            <EventSortHeader label="Starts" sort="starts_at" query={query} />
+            <EventSortHeader label="Starts (UTC)" sort="starts_at" query={query} />
+            <th scope="col">Fill</th>
             <th scope="col">Actions</th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colspan={4} data-testid="events-empty">
+              <td colspan={5} data-testid="events-empty">
                 No events yet.
               </td>
             </tr>
@@ -323,7 +349,8 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
                   <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
                 </td>
                 <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
-                <td>{r.startsAt.toISOString()}</td>
+                <td><time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time></td>
+                <EventFillCell row={r} />
                 <td>
                   {r.status === "draft" ? (
                     <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
@@ -342,6 +369,7 @@ export const EventsPage: FC<{ rows: EventRow[]; query: EventListQuery; hasNext: 
           )}
         </tbody>
       </table>
+      </div>
       <nav aria-label="Event pages" class="actions">
         {query.page > 1 ? <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a> : null}
         <span>Page {query.page}</span>
@@ -359,14 +387,37 @@ type FieldProps = {
   children: (id: string) => unknown;
 };
 
-const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
+/**
+ * Merge association tokens, dropping exact duplicates so re-wiring is idempotent.
+ */
+const mergeDescribedBy = (existing: unknown, added: string): string => {
+  const tokens = [...String(existing ?? "").split(/\s+/), ...added.split(/\s+/)].filter(Boolean);
+  return [...new Set(tokens)].join(" ");
+};
+
+/**
+ * Shared admin field wrapper. Field owns hint/error association: it mints ids
+ * for its hint and error nodes and merges them into the child input's
+ * `aria-describedby` (appended after any inline wiring, never clobbering it),
+ * plus `aria-invalid` when an error is present. Consumers pass a bare control.
+ */
+export const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
   const err = errors[name];
   const id = `f-${name.replace(/[^a-z0-9]+/gi, "-")}`;
+  const owned = [hint ? `${id}-hint` : "", err ? `${id}-error` : ""].filter(Boolean).join(" ");
+  const node = children(id);
+  const control =
+    owned && isValidElement(node)
+      ? cloneElement(node, {
+          "aria-invalid": err ? "true" : undefined,
+          "aria-describedby": mergeDescribedBy(node.props["aria-describedby"], owned),
+        })
+      : node;
   return (
     <div class="field">
       <label for={id}>{label}</label>
-      {children(id)}
-      {hint ? <p class="hint">{hint}</p> : null}
+      {control}
+      {hint ? <p id={`${id}-hint`} class="hint">{hint}</p> : null}
       {err ? (
         <p id={`${id}-error`} class="error" role="alert" data-testid={`error-${name}`}>
           {err}
@@ -399,26 +450,22 @@ export const EventFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action} data-event-editor={mode === "edit" ? "" : undefined}
-          data-event-draft={mode === "edit" && Object.keys(errors).length > 0 ? "" : undefined}>
+        <form method="post" action={action} data-event-editor=""
+          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Title" errors={errors}>
-            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required
-              aria-invalid={errors.title ? "true" : undefined} aria-describedby={errors.title ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="title" type="text" value={val(values, "title")} data-event-text-limit={100} required />}
           </Field>
           <Field name="game" label="Game" errors={errors}>
-            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100}
-              aria-invalid={errors.game ? "true" : undefined} aria-describedby={errors.game ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="game" type="text" value={val(values, "game")} data-event-text-limit={100} />}
           </Field>
           <Field name="description" label="Description" errors={errors}>
             {(id) => <textarea id={id} name="description" rows={4}>{val(values, "description")}</textarea>}
           </Field>
           <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required
-              aria-invalid={errors.starts_at ? "true" : undefined} aria-describedby={errors.starts_at ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />}
           </Field>
           <Field name="ends_at" label="Ends (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
-            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required
-              aria-invalid={errors.ends_at ? "true" : undefined} aria-describedby={errors.ends_at ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="ends_at" type="text" value={val(values, "ends_at")} required />}
           </Field>
           <Field
             name="timezone"
@@ -426,12 +473,10 @@ export const EventFormPage: FC<{
             errors={errors}
             hint="The IANA zone the wall time above is typed in. Storage is UTC."
           >
-            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"}
-              aria-invalid={errors.timezone ? "true" : undefined} aria-describedby={errors.timezone ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="timezone" type="text" value={val(values, "timezone") || "Europe/London"} />}
           </Field>
           <Field name="location" label="Location" errors={errors}>
-            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255}
-              aria-invalid={errors.location ? "true" : undefined} aria-describedby={errors.location ? `${id}-error` : undefined} />}
+            {(id) => <input id={id} name="location" type="text" value={val(values, "location")} data-event-text-limit={255} />}
           </Field>
           <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
             {(id) => <input id={id} name="capacity" type="text" inputmode="numeric" value={val(values, "capacity")} />}
@@ -497,7 +542,9 @@ export const EventFormPage: FC<{
               </div>
               <div class="field"><button type="submit" class="btn">Search</button></div>
             </form>
-            <table class="admin-table">
+            <p id="roster-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+            <div class="admin-table-scroll" role="region" aria-label="RSVP roster list" aria-describedby="roster-scroll-hint" tabindex={0} data-testid="roster-table-scroll">
+            <table class="admin-table" data-testid="roster-table">
               <thead>
                 <tr>
                   <th scope="col">Member</th>
@@ -523,11 +570,12 @@ export const EventFormPage: FC<{
                 )}
               </tbody>
             </table>
+            </div>
           </section>
         ) : null}
       </section>
       <script type="module" src="/islands/admin-event-text-limits.js" />
-      {mode === "edit" ? <script src="/islands/admin-event-editor.js" defer /> : null}
+      <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
 };
@@ -630,7 +678,8 @@ export const FeaturedFormPage: FC<{
             Check the highlighted fields and try again.
           </p>
         ) : null}
-        <form method="post" action={action}>
+        <form method="post" action={action} data-event-editor=""
+          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}>
           <Field name="title" label="Headline" errors={errors}>
             {(id) => <input id={id} name="title" type="text" value={val(values, "title")} maxlength={255} required />}
           </Field>
@@ -683,6 +732,7 @@ export const FeaturedFormPage: FC<{
           </form>
         ) : null}
       </section>
+      <script src="/islands/admin-event-editor.js" defer />
     </Shell>
   );
 };

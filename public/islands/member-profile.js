@@ -1,8 +1,13 @@
-// MemberProfile island binder (TOG-9842, W10 slice 5).
+// MemberProfile island binder (TOG-9842, W10 slice 5; save deadline TOG-11625).
 //
 // Progressive enhancement over the SSR edit form (the no-JS path posts
 // `_method=PATCH` and gets a 303). Budget: exactly one PATCH per save, none
-// on cancel or on client-side validation failure. No polling.
+// on cancel or on client-side validation failure. No polling. One owned
+// client deadline (SAVE_DEADLINE_MS, mirroring PROFILE_SAVE_DEADLINE_MS)
+// covers fetch plus response-body completion: on expiry the binder aborts the
+// owned fetch where AbortController exists, shows uncertain-result feedback
+// with the draft intact, and releases the controls. A late completion after
+// expiry changes nothing; there is no automatic resend.
 // Outcomes: saved → "Profile saved." + re-edit control (or keep a newer draft),
 // focus on the confirmation; Cancel resets to the last accepted values and
 // ignores pending completions. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
@@ -19,6 +24,34 @@
   var editControl = root.querySelector('[data-testid="profile-edit-control"]');
   var inflight = false;
   var generation = 0;
+  // Owned client deadline for one save: fetch plus response-body completion
+  // (TOG-11625; mirrors PROFILE_SAVE_DEADLINE_MS in src/islands/contracts.ts).
+  var SAVE_DEADLINE_MS = 10000;
+  var abortable = typeof AbortController !== "undefined";
+  // The deadline needs both timer globals; harnesses with a partial fake
+  // clock (setTimeout only) get the pre-deadline admission behavior.
+  var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
+  var deadlineTimer = null;
+  var currentAbort = null;
+
+  function clearDeadline() {
+    if (deadlineTimer !== null) {
+      if (canTimeout) clearTimeout(deadlineTimer);
+      deadlineTimer = null;
+    }
+    currentAbort = null;
+  }
+
+  var sessionExpired = false;
+
+  function expiredNotice() {
+    sessionExpired = true;
+    notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
+  }
+  if (typeof window !== "undefined") window.addEventListener("two:session-expired", function (event) {
+    event.preventDefault();
+    expiredNotice();
+  });
 
   function accepted(body) {
     // Match the server's normalization; success returns no profile fields.
@@ -99,7 +132,7 @@
     if (loginLink) {
       el.appendChild(document.createTextNode(" "));
       var a = document.createElement("a");
-      a.href = "/auth/discord?next=" + encodeURIComponent(location.pathname);
+      a.href = "/auth/recover?next=" + encodeURIComponent(location.pathname + (location.search || ""));
       a.textContent = "Log in with Discord";
       el.appendChild(a);
     }
@@ -110,21 +143,81 @@
   function clearNotices() {
     root.querySelectorAll("[data-testid^='profile-']").forEach(function (n) {
       var t = n.getAttribute("data-testid");
-      if (t === "profile-error" || t === "profile-save-failed" || t === "profile-session-expired" || t === "profile-saved") n.remove();
+      if (t === "profile-session-expired" && sessionExpired) return;
+      if (t === "profile-error" || t === "profile-save-failed" || t === "profile-session-expired" || t === "profile-saved" || t === "profile-uncertain") n.remove();
     });
+  }
+
+  var SAVE_FAILED_COPY = "Could not save your profile. Your changes are still here — try again.";
+  var GENERIC_INVALID_COPY = "Could not save your profile. Check the form and try again.";
+  var ERROR_BOUND = 500;
+
+  function boundError(text) {
+    var chars = Array.from(String(text));
+    return chars.length > ERROR_BOUND ? chars.slice(0, ERROR_BOUND).join("") : chars.join("");
+  }
+
+  function isSavedAck(j) {
+    return !!j && typeof j === "object" && !Array.isArray(j) && j.saved === true;
+  }
+
+  function validationMessages(j) {
+    var out = [];
+    if (j && typeof j === "object" && !Array.isArray(j)) {
+      var bag = j.errors;
+      if (bag && typeof bag === "object" && !Array.isArray(bag)) {
+        Object.keys(bag).forEach(function (k) {
+          var m = bag[k];
+          if (typeof m === "string" && m.trim() !== "") out.push(boundError(m));
+        });
+      }
+    }
+    return out.length ? out : [GENERIC_INVALID_COPY];
+  }
+
+  function saveFailed() {
+    notice("profile-save-failed", "alert", SAVE_FAILED_COPY);
+  }
+
+  function showUncertain(request) {
+    // Bounded uncertain-result feedback: the save did not settle within the
+    // owned deadline. The result may still have gone through, so this is a
+    // role=status notice — never the save-failed alert, never a rollback.
+    // The draft stays intact, nothing is resent, and ownership of feedback
+    // has moved on from this request: focus stays where the member left it.
+    // Timeout ownership ends here: invalidate the timed-out request so a
+    // late completion can never replace newer feedback or mutate the
+    // accepted baseline.
+    if (request !== generation) return;
+    generation++;
+    var controller = currentAbort;
+    clearDeadline();
+    inflight = false;
+    if (controller) {
+      try { controller.abort(); } catch (x) {}
+    }
+    var old = root.querySelector('[data-testid="profile-uncertain"]');
+    if (old) old.remove();
+    var el = document.createElement("div");
+    el.setAttribute("data-testid", "profile-uncertain");
+    el.setAttribute("role", "status");
+    el.textContent = "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.";
+    form.parentNode.insertBefore(el, form);
   }
 
   function errorList(errors) {
     var old = root.querySelector('[data-testid="profile-error"]');
     if (old) old.remove();
+    var list = Array.isArray(errors) && errors.length ? errors : [GENERIC_INVALID_COPY];
     var alert = document.createElement("div");
     alert.setAttribute("role", "alert");
     alert.setAttribute("tabindex", "-1");
     alert.setAttribute("data-testid", "profile-error");
     var ul = document.createElement("ul");
-    errors.forEach(function (m) {
+    list.forEach(function (m) {
       var li = document.createElement("li");
-      li.textContent = m;
+      // textContent keeps server strings literal; bound above for 422 maps.
+      li.textContent = typeof m === "string" ? boundError(m) : GENERIC_INVALID_COPY;
       ul.appendChild(li);
     });
     alert.appendChild(ul);
@@ -143,8 +236,16 @@
   form.addEventListener("reset", function () {
     // Cancel discards the draft, not an already accepted server write. A late
     // completion must neither change this UI nor unlock a newer request.
+    // Cancel also disposes the owned deadline timer/abort listener; the next
+    // save starts clean and the form is immediately usable.
     var cancelled = ++generation;
+    var controller = currentAbort;
+    clearDeadline();
+    if (controller) {
+      try { controller.abort(); } catch (x) {}
+    }
     inflight = false;
+    sessionExpired = false;
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
@@ -158,6 +259,7 @@
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
     if (inflight) return;
+    if (sessionExpired) return expiredNotice();
     var f = form.elements;
     var body = {
       bio: f.bio.value,
@@ -171,34 +273,95 @@
     if (errs.length) return errorList(errs);
     inflight = true;
     var request = ++generation;
-    fetch("/members/" + encodeURIComponent(id), {
+    // The owned deadline covers the whole write: fetch plus response-body
+    // completion. On expiry the request no longer owns feedback — late
+    // completions are dropped by the generation guard, and the uncertain
+    // notice is the only visible change. No automatic resend, no second
+    // PATCH: the member retries explicitly after the controls release.
+    if (canTimeout) {
+      deadlineTimer = setTimeout(function () {
+        showUncertain(request);
+      }, SAVE_DEADLINE_MS);
+    }
+    var init = {
       method: "PATCH",
       headers: { "content-type": "application/json", accept: "application/json" },
       credentials: "same-origin",
       redirect: "manual",
       body: JSON.stringify(body),
-    })
+    };
+    if (abortable) {
+      currentAbort = new AbortController();
+      init.signal = currentAbort.signal;
+    }
+    fetch("/members/" + encodeURIComponent(id), init)
       .then(function (res) {
         if (request !== generation) return;
-        if (res.ok) {
-          accepted(body);
-          notice("profile-saved", "status", "Profile saved.");
+        if (res.status === 422) {
+          // The owned deadline still covers the response body: keep the
+          // timer until the validation payload completes. A body that
+          // arrives after expiry is dropped by the generation guard.
+          var invalid = function (j) {
+            if (request !== generation) return;
+            clearDeadline();
+            errorList(validationMessages(j));
+          };
+          var rejected = function () {
+            if (request !== generation) return;
+            clearDeadline();
+            errorList([]);
+          };
+          try {
+            var problems = res.json();
+            if (problems && typeof problems.then === "function") return problems.then(invalid, rejected);
+            invalid(problems);
+          } catch (e) {
+            rejected();
+          }
           return;
         }
-        if (res.status === 422) {
-          return res.json().then(function (j) {
+        if (res.ok) {
+          // The save counts only with the server's explicit acknowledgement.
+          // Any other 2xx body keeps the draft and reports a retryable failure.
+          var admit = function (j) {
             if (request !== generation) return;
-            errorList(Object.keys(j.errors || {}).map(function (k) { return j.errors[k]; }));
-          });
+            clearDeadline();
+            if (isSavedAck(j)) {
+              accepted(body);
+              notice("profile-saved", "status", "Profile saved.");
+            } else {
+              saveFailed();
+            }
+          };
+          var unproven = function () {
+            if (request !== generation) return;
+            clearDeadline();
+            saveFailed();
+          };
+          try {
+            var ack = res.json();
+            if (ack && typeof ack.then === "function") return ack.then(admit, unproven);
+            admit(ack);
+          } catch (e) {
+            unproven();
+          }
+          return;
         }
         if (res.status === 401 || res.status === 419 || res.type === "opaqueredirect" || res.status === 302) {
-          return notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
+          clearDeadline();
+          return expiredNotice();
         }
-        notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
+        clearDeadline();
+        saveFailed();
       })
-      .catch(function () {
+      .catch(function (err) {
+        // The owned abort ends the request's timeout ownership: the uncertain
+        // notice is already shown (or superseded), so swallow the AbortError.
+        // Every other rejection is a genuine fast failure with input kept.
         if (request !== generation) return;
-        notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
+        clearDeadline();
+        if (err && err.name === "AbortError") return;
+        saveFailed();
       })
       .then(function () {
         if (request === generation) inflight = false;
