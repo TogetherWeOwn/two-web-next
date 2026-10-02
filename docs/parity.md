@@ -10,10 +10,12 @@ Flip gate (owner): re-run before W16; the DNS flip needs **0 unmapped rows**.
 A row is mapped when it names a card or is **dropped, with a reason**.
 `✅ done` = merged to `main`. Everything else names the owning card.
 
-W-card statuses at refresh time (2026-10-01):
-W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 ✅, W6 ✅, W7 ✅, W8 ✅, W9 ✅, W11 ✅, W12 ✅,
-W13 ✅, W14 ✅, S1 ✅ · W10 partial (slices 1/3/4/5 ✅, slice 2 blocked
-[TOG-9839](/TOG/issues/TOG-9839)) · W15 ⛔ ([TOG-9697](/TOG/issues/TOG-9697)) ·
+W-card statuses at refresh time (2026-10-01; W10/W15 updated 2026-10-02):
+W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 ✅, W6 ✅, W7 ✅, W8 ✅, W9 ✅, W10 ✅
+(slices 1–5, incl. slice 2 RsvpButton island PR #98;
+[TOG-9839](/TOG/issues/TOG-9839) done), W11 ✅, W12 ✅,
+W13 ✅, W14 ✅, S1 ✅ · W15 ✅ ([TOG-9697](/TOG/issues/TOG-9697) done,
+QA PASS on main `ea51a83e`) ·
 W16 ⛔ ([TOG-10112](/TOG/issues/TOG-10112), parent [TOG-9698](/TOG/issues/TOG-9698)).
 
 Database-outage acceptance is maintained separately in
@@ -33,7 +35,7 @@ is not evidence that a configured-but-unreachable DB already meets them.
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`, join-result confirmation + member reinvite) | ✅ one-shot `join_result` banner on `/`, `/join`, `/profile`, `/events`, `/e/{key}` with `data-testid="reinvite-link"` → `/discord` (merged PR #46); expired-grant vs outage classification (200 "Join approval expired" vs 503 "Discord is unreachable"; status governs, untrusted bodies never parsed) + bounded OAuth log redaction | W6 ✅ + [TOG-10356](/TOG/issues/TOG-10356) ✅ + [TOG-10355](/TOG/issues/TOG-10355) ✅ |
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list + island UI (`test/islands-events-calendar.test.ts`) | W8 ✅ + W10 slice 3 ✅ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page + island UI (`test/islands-past-events.test.ts`) | W8 ✅ + W10 slice 4 ✅ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links; prev/next + related merged (PR #58; `test/event-navigation.test.ts`); RsvpButton island binder pending | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) ✅ + [TOG-10823](/TOG/issues/TOG-10823) ✅ + [TOG-10821](/TOG/issues/TOG-10821) (blocked) |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links; prev/next + related merged (PR #58; `test/event-navigation.test.ts`); RsvpButton island shipped (PR #98; `test/islands-rsvp-binder.test.ts`) | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) ✅ + [TOG-10823](/TOG/issues/TOG-10823) ✅ + [TOG-10821](/TOG/issues/TOG-10821) (blocked) |
 | `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
 | `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
 | `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
@@ -49,7 +51,7 @@ is not evidence that a configured-but-unreachable DB already meets them.
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes + `event-write` throttle (`test/throttle.test.ts`) | W8 ✅ + W11 ✅ |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ routes + status machine (`test/admin-reads.test.ts` publish/cancel parity); tracked write-back via W13 `SYNC_EVENT_QUEUE` (PR #68) | W8 ✅ + W11 ✅ + [TOG-10815](/TOG/issues/TOG-10815) |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | ✅ `POST /events/:key/rsvp-pause`, `POST /events/:key/rsvp-reopen`, `POST /admin/events/:key/rsvp-pause`, `POST /admin/events/:key/rsvp-reopen`: moderator-only, published/non-ended, row-locked idempotent toggles; each flip uses the Discord sync queue (`test/rsvp-toggle.test.ts`) | [TOG-10817](/TOG/issues/TOG-10817) ✅ |
-| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, full-event waitlisting + FIFO promotion under FOR UPDATE (`test/rsvp.test.ts`, `test/rsvp-waitlist.test.ts`); outage saves seat pending then recovers synced (`test/rsvp-writeback-outage.test.ts`, PR #247) | W9 ✅ + W10 slice 2 blocked ([TOG-9839](/TOG/issues/TOG-9839)) |
+| `PUT|DELETE /events/{event}/rsvp` (named `rsvp-writes` 12/min shared bucket + in-controller limiter, honeypot decoy) | ✅ PUT 201/200, DELETE 204, 405 other verbs, one shared 12/min per-member budget (advisory-locked, atomic), honeypot decoy, full-event waitlisting + FIFO promotion under FOR UPDATE (`test/rsvp.test.ts`, `test/rsvp-waitlist.test.ts`); outage saves seat pending then recovers synced (`test/rsvp-writeback-outage.test.ts`, PR #247) | W9 ✅ + W10 slice 2 ✅ ([TOG-9839](/TOG/issues/TOG-9839) done, PR #98) |
 
 Event-page navigation uses `starts_at, id` order, omitting absent neighbors.
 Related links prefer the same non-null game, then fill to three by `starts_at, id`,
@@ -110,7 +112,7 @@ no public version/clock endpoint or redirect alias remains.
 | Legacy component | Next status | Card |
 |---|---|---|
 | GoingCount (badge, `going-count-updated` broadcast, one count query) | ✅ contract + binder + drift tests (`test/islands-going-count*.test.ts`, `test/going-count-ssr-binder.test.ts`) | W10 slice 1 ✅ |
-| RsvpButton (all states, honeypot swallow, throttle copy, focus) | contract + drift tests ✅ (`test/islands-rsvp-button.test.ts`); binder pending | W10 slice 2 blocked ([TOG-9839](/TOG/issues/TOG-9839)) |
+| RsvpButton (all states, honeypot swallow, throttle copy, focus) | ✅ island shipped (`src/events/rsvp-button.tsx` + `public/islands/rsvp-button.js`, mounted in `src/events/pages.tsx`); contract + drift + binder tests (`test/islands-rsvp-button.test.ts`, `test/islands-rsvp-binder.test.ts`, PR #98) | W10 slice 2 ✅ ([TOG-9839](/TOG/issues/TOG-9839) done) |
 | EventsCalendar (list+grid one pass, `?q=` search + logging, month math, Discord transients) | ✅ server side (search + logging, TOG-10105 ✅) + island UI (`test/islands-events-calendar.test.ts`) | W10 slice 3 ✅ |
 | PastEvents (20/page, canonicals, no RSVP controls) | ✅ island UI (`test/islands-past-events.test.ts`) | W10 slice 4 ✅ |
 | MemberProfile (view/edit, PATCH validation, spam trap, focus) | ✅ island UI (`test/islands-member-profile.test.ts`, `test/member-profile-edit-lifecycle.test.ts`); expired-save drafts preserved until reset (PR #239) | W10 slice 5 ✅ |
@@ -149,7 +151,7 @@ no public version/clock endpoint or redirect alias remains.
 | `bot:internal-action-smoke` (live-against-staging QA) | ✅ ported (PR #38): `src/probes/bot-smoke.ts` + `bin/internal-action-smoke.mjs`, fixture-pinned in `test/probes.test.ts` (signer + staging guard, production host refused); staging-only drill entry merged (PR #267; `test/internal-action-drill.test.ts`) | [TOG-10112](/TOG/issues/TOG-10112) (blocked; parent [TOG-9698](/TOG/issues/TOG-9698)) + [TOG-11706](/TOG/issues/TOG-11706) ✅ |
 | `queue:check-depth` (box probe) | dropped as a command (no box on Workers) — replaced by `GET /up` | **N3** ✅ ([TOG-9895](/TOG/issues/TOG-9895)) |
 | `error-alert:probe`, `queue:poison-probe` (drills) | ✅ re-expressed as Vitest tests (`test/drill-probes.test.ts`: error-alert 1-per-fingerprint/5min critical line against a fixture logger; poison-queue fixture isolated from ordinary queued work; fixture-only, no staging/prod) | [TOG-11732](/TOG/issues/TOG-11732) ✅ |
-| `ci:session-cookie` (perf-budget session minter) | no equivalent | W15 ⛔ ([TOG-9697](/TOG/issues/TOG-9697); verify scope, drop if no budget job) |
+| `ci:session-cookie` (perf-budget session minter) | dropped (no-op): no perf-budget gate in Next CI and no producer/minter exists; W15 pest→vitest port is done ([TOG-9697](/TOG/issues/TOG-9697) ✅, QA PASS on main `ea51a83e`) | W15 ✅ |
 | `inspire` | stock scaffold | dropped (no-op) |
 
 ## 8. Mail, notifications, webhooks
