@@ -579,14 +579,26 @@ test("main CI runs are never cancelled in progress and finish in push order", ()
   // deploy over, a newer one.
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   const block = ci.match(/^concurrency:\n  group: (.+)\n  cancel-in-progress: \$\{\{ (.+) \}\}\n/m);
-  assert(block, "ci.yml concurrency must group per-PR-or-ref and exempt main from cancel-in-progress");
+  assert(
+    block,
+    "ci.yml concurrency must group per-PR-or-ref and exempt main from cancel-in-progress",
+  );
   // GitHub expression dereference is null-safe (missing pull_request reads as
   // null); emulate that with optional chaining so main-push contexts evaluate.
-  const nullSafe = (expr) => expr.replaceAll("github.event.pull_request.number", "github.event.pull_request?.number");
-  const groupOf = new Function("github", `return \`${nullSafe(block[1]).replaceAll("${{ ", "${").replaceAll(" }}", "}")}\`;`);
+  const nullSafe = (expr) =>
+    expr.replaceAll("github.event.pull_request.number", "github.event.pull_request?.number");
+  const groupOf = new Function(
+    "github",
+    `return \`${nullSafe(block[1]).replaceAll("${{ ", "${").replaceAll(" }}", "}")}\`;`,
+  );
   const cancelsOf = new Function("github", `return (${nullSafe(block[2])});`);
   const main = (sha) => ({ workflow: "ci", event: {}, ref: "refs/heads/main", sha });
-  const pr = (number, ref) => ({ workflow: "ci", event: { pull_request: { number } }, ref, sha: "x" });
+  const pr = (number, ref) => ({
+    workflow: "ci",
+    event: { pull_request: { number } },
+    ref,
+    sha: "x",
+  });
   // Main pushes share one group (serialized, in order) and are never cancelled.
   assert.equal(groupOf(main("aaa")), groupOf(main("bbb")));
   assert.equal(cancelsOf(main("aaa")), false);
