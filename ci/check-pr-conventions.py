@@ -36,6 +36,47 @@ def header_errors(text):
     return errs
 
 
+def strip_reference_comments(body):
+    """Remove HTML comments through EOF, but not Markdown code literals."""
+    tokens = re.compile(
+        r"^ {0,3}(?P<fence>`{3,}[^`\n]*|~{3,}[^\n]*)(?:\n|$)|`+|<!--", re.M
+    )
+    parts = []
+    pos = 0
+    while match := tokens.search(body, pos):
+        parts.append(body[pos:match.start()])
+        token = match.group()
+        end = match.end()
+        if match.group("fence"):
+            marker = re.match(r"`+|~+", match.group("fence")).group()
+            closing = re.search(
+                rf"^ {{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*\r?$",
+                body[end:], flags=re.M,
+            )
+            end = end + closing.end() if closing else len(body)
+        else:
+            escapes = len(body[:match.start()]) - len(body[:match.start()].rstrip("\\"))
+            if escapes % 2:
+                parts.append(token)
+                pos = end
+                continue
+            if token == "<!--":
+                closing = body.find("-->", end)
+                pos = closing + 3 if closing >= 0 else len(body)
+                continue
+            # Inline code closes with the same backtick run, within its paragraph.
+            paragraph = re.search(r"\r?\n[ \t]*\r?\n", body[end:])
+            limit = end + paragraph.start() if paragraph else len(body)
+            for closing in re.finditer(r"`+", body[end:limit]):
+                if closing.group() == token:
+                    end += closing.end()
+                    break
+        parts.append(body[match.start():end])
+        pos = end
+    parts.append(body[pos:])
+    return "".join(parts)
+
+
 def check_pr(title, body, author, require_card_ref):
     failed = False
     if author.endswith("[bot]") and author.startswith(("dependabot", "renovate")):
@@ -52,7 +93,9 @@ def check_pr(title, body, author, require_card_ref):
         failed = True
         print("::error title=PR body::The description is empty. Say what changed, why, "
               "and how it was tested (see the PR template).")
-    if require_card_ref and not re.search(r"\bTOG-\d+\b", body):
+    if require_card_ref and not re.search(
+        r"^[ \t]*Refs:[ \t]+TOG-\d+[ \t]*\r?$", strip_reference_comments(body), flags=re.M
+    ):
         failed = True
         print("::error title=Card reference::Add 'Refs: TOG-1234' to the PR body.")
     return failed

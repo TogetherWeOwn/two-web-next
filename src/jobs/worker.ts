@@ -42,7 +42,10 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
   const ledgerSql = sqlFor(env);
   try {
     await consume(batch, {
-      bot, events, lock: pgUniqueLock(sql), ledger: pgQueueLedger(ledgerSql),
+      bot,
+      events,
+      lock: pgUniqueLock(sql),
+      ledger: pgQueueLedger(ledgerSql),
       probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
     });
   } finally {
@@ -53,7 +56,10 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: JobsEnv): P
   }
 }
 
-export async function handleScheduled(controller: ScheduledController, env: JobsEnv): Promise<void> {
+export async function handleScheduled(
+  controller: ScheduledController,
+  env: JobsEnv,
+): Promise<void> {
   const sql = sqlFor(env);
   // Dispatch commits its ledger row and uniqueness lock before the external
   // queue send. A later reconciliation rollback must not erase accepted jobs,
@@ -69,11 +75,12 @@ export async function handleScheduled(controller: ScheduledController, env: Jobs
     await runScheduled(controller.cron, pgSingleFlight(sql), {
       // Prune queries use the reserved client (outer max:1 pool would deadlock).
       // Reconcile's dispatch side effects use an independent autocommit pool.
-      reconcile: () => reconcileEvents({
-        events,
-        queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
-        lock: pgUniqueLock(dispatchSql),
-      }),
+      reconcile: () =>
+        reconcileEvents({
+          events,
+          queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
+          lock: pgUniqueLock(dispatchSql),
+        }),
       prune: (db) => pruneModelTables(pgPruneStores(db)),
     });
   } finally {

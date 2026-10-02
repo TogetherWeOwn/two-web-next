@@ -25,9 +25,18 @@ import { sameOrigin } from "../src/same-origin";
 import { JOIN_RESULT_COOKIE } from "../src/return-journey";
 import { recordAccess } from "../src/admin/store";
 import { profilesApp, PROFILE_WRITE_THROTTLE_PER_MINUTE } from "../src/profiles/routes";
-import { createDbProfileStore, createMemoryProfileStore, type MemberView } from "../src/profiles/store";
+import {
+  createDbProfileStore,
+  createMemoryProfileStore,
+  type MemberView,
+} from "../src/profiles/store";
 import { validateProfile } from "../src/profiles/validation";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -44,7 +53,12 @@ const env: Env = {
 const ALICE = { userId: "100000000000000001", username: "alice", member: true, moderator: false };
 const BOB = { userId: "100000000000000002", username: "bob", member: true, moderator: false };
 const MOD = { userId: "100000000000000003", username: "mod", member: true, moderator: true };
-const OUTSIDER = { userId: "100000000000000004", username: "outsider", member: false, moderator: false };
+const OUTSIDER = {
+  userId: "100000000000000004",
+  username: "outsider",
+  member: false,
+  moderator: false,
+};
 
 async function cookieFor(store: SessionStore, row: typeof ALICE): Promise<string> {
   const token = newSessionToken();
@@ -67,12 +81,24 @@ async function cookieFor(store: SessionStore, row: typeof ALICE): Promise<string
 }
 
 const seedMembers = (): MemberView[] => [
-  { id: ALICE.userId, username: "alice", avatar: null, bio: "Alice bio <b>x</b>", games: ["Chess", "Go"], timezone: "Europe/London" },
+  {
+    id: ALICE.userId,
+    username: "alice",
+    avatar: null,
+    bio: "Alice bio <b>x</b>",
+    games: ["Chess", "Go"],
+    timezone: "Europe/London",
+  },
   { id: BOB.userId, username: "bob", avatar: "abc123", bio: null, games: [], timezone: null },
   { id: MOD.userId, username: "mod", avatar: null, bio: null, games: [], timezone: null },
 ];
 
-function harness(opts: { logDown?: boolean; throttle?: (b: string) => Promise<{ limited: false } | { limited: true; retryAfter: number }> } = {}) {
+function harness(
+  opts: {
+    logDown?: boolean;
+    throttle?: (b: string) => Promise<{ limited: false } | { limited: true; retryAfter: number }>;
+  } = {},
+) {
   const sessions = createMemorySessionStore();
   const store = createMemoryProfileStore(seedMembers());
   const log: AccessEntry[] = [];
@@ -95,10 +121,16 @@ function harness(opts: { logDown?: boolean; throttle?: (b: string) => Promise<{ 
 describe("exposure matrix: who sees what (memory doubles)", () => {
   it("guest: reads go to OAuth, writes to explicit recovery, nothing rendered or logged", async () => {
     const { app, log } = harness();
-    for (const [method, path] of [["GET", "/profile"], ["GET", `/members/${ALICE.userId}`], ["PATCH", `/members/${ALICE.userId}`]] as const) {
+    for (const [method, path] of [
+      ["GET", "/profile"],
+      ["GET", `/members/${ALICE.userId}`],
+      ["PATCH", `/members/${ALICE.userId}`],
+    ] as const) {
       const res = await app.request(path, { method }, env);
       expect(res.status, `${method} ${path}`).toBe(method === "PATCH" ? 303 : 302);
-      expect(res.headers.get("location")).toBe(method === "PATCH" ? "/auth/recover?next=%2Fprofile" : "/auth/discord");
+      expect(res.headers.get("location")).toBe(
+        method === "PATCH" ? "/auth/recover?next=%2Fprofile" : "/auth/discord",
+      );
       expect(await res.text()).not.toContain("alice");
     }
     expect(log).toHaveLength(0);
@@ -106,7 +138,11 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
 
   it("a cookie with no live session row is a guest (revoked/expired/forged)", async () => {
     const { app } = harness();
-    const res = await app.request("/profile", { headers: { cookie: "__Host-two_session=garbage" } }, env);
+    const res = await app.request(
+      "/profile",
+      { headers: { cookie: "__Host-two_session=garbage" } },
+      env,
+    );
     expect(res.status).toBe(302);
   });
 
@@ -114,18 +150,25 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
     const { app, sessions, store, log } = harness();
     const cookie = await cookieFor(sessions, BOB);
     const find = vi.spyOn(store, "find");
-    const fail = vi.spyOn(sessions, "get").mockRejectedValue(new Error(`private-query ${BOB.userId} ${ALICE.userId}`));
+    const fail = vi
+      .spyOn(sessions, "get")
+      .mockRejectedValue(new Error(`private-query ${BOB.userId} ${ALICE.userId}`));
     const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const response = await app.request(`/members/${ALICE.userId}`, { headers: { cookie } }, env);
       expect(response.status).toBe(503);
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(await response.text()).not.toMatch(/alice|private-query|10000000000000000/);
-      expect(diagnostic).toHaveBeenCalledExactlyOnceWith("profiles could not resolve the session; refusing.", { exception: "Error" });
+      expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+        "profiles could not resolve the session; refusing.",
+        { exception: "Error" },
+      );
       expect(find).not.toHaveBeenCalled();
       expect(log).toHaveLength(0);
     } finally {
-      fail.mockRestore(); find.mockRestore(); diagnostic.mockRestore();
+      fail.mockRestore();
+      find.mockRestore();
+      diagnostic.mockRestore();
     }
   });
 
@@ -142,7 +185,11 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
 
   it("member sees another member's public profile, escaped, private-no-store, noindex", async () => {
     const { app, sessions } = harness();
-    const res = await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, BOB) } }, env);
+    const res = await app.request(
+      `/members/${ALICE.userId}`,
+      { headers: { cookie: await cookieFor(sessions, BOB) } },
+      env,
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const html = await res.text();
@@ -158,14 +205,30 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
 
   it("moderator sees exactly what a member sees on a profile (no extra fields, no edit form on others)", async () => {
     const { app, sessions } = harness();
-    const asMember = await (await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, BOB) } }, env)).text();
-    const asMod = await (await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, MOD) } }, env)).text();
+    const asMember = await (
+      await app.request(
+        `/members/${ALICE.userId}`,
+        { headers: { cookie: await cookieFor(sessions, BOB) } },
+        env,
+      )
+    ).text();
+    const asMod = await (
+      await app.request(
+        `/members/${ALICE.userId}`,
+        { headers: { cookie: await cookieFor(sessions, MOD) } },
+        env,
+      )
+    ).text();
     expect(asMod).toBe(asMember);
   });
 
   it("owner sees the edit form on their own profile; /profile is the viewer's own", async () => {
     const { app, sessions } = harness();
-    const res = await app.request("/profile", { headers: { cookie: await cookieFor(sessions, ALICE) } }, env);
+    const res = await app.request(
+      "/profile",
+      { headers: { cookie: await cookieFor(sessions, ALICE) } },
+      env,
+    );
     const html = await res.text();
     expect(res.status).toBe(200);
     expect(html).toContain("Edit your profile");
@@ -185,7 +248,11 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
 describe("member-access-log (memory doubles)", () => {
   it("reading another member writes exactly one row naming viewer, subject and route name", async () => {
     const { app, sessions, log } = harness();
-    await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, BOB) } }, env);
+    await app.request(
+      `/members/${ALICE.userId}`,
+      { headers: { cookie: await cookieFor(sessions, BOB) } },
+      env,
+    );
     expect(log).toHaveLength(1);
     expect(log[0]).toMatchObject({
       viewerDiscordId: BOB.userId,
@@ -196,30 +263,46 @@ describe("member-access-log (memory doubles)", () => {
     });
   });
 
-  it.each(["/profile", `/members/${ALICE.userId}`])("HEAD %s leaves the banner for exactly one visible GET", async (path) => {
-    const { app, sessions } = harness();
-    const session = await cookieFor(sessions, BOB);
-    const flash = (await serializeSigned(JOIN_RESULT_COOKIE, "already_member", SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
-    const cookie = `${session}; ${flash}`;
-    const head = await app.request(path, { method: "HEAD", headers: { cookie } }, env);
-    expect(head.status).toBe(200);
-    expect(await head.text()).toBe("");
-    expect(head.headers.getSetCookie().some((c) => c.startsWith(`${JOIN_RESULT_COOKIE}=`))).toBe(false);
+  it.each(["/profile", `/members/${ALICE.userId}`])(
+    "HEAD %s leaves the banner for exactly one visible GET",
+    async (path) => {
+      const { app, sessions } = harness();
+      const session = await cookieFor(sessions, BOB);
+      const flash = (
+        await serializeSigned(JOIN_RESULT_COOKIE, "already_member", SESSION_SECRET, {
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        })
+      ).split(";")[0]!;
+      const cookie = `${session}; ${flash}`;
+      const head = await app.request(path, { method: "HEAD", headers: { cookie } }, env);
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
+      expect(head.headers.getSetCookie().some((c) => c.startsWith(`${JOIN_RESULT_COOKIE}=`))).toBe(
+        false,
+      );
 
-    const first = await app.request(path, { headers: { cookie } }, env);
-    expect(first.status).toBe(200);
-    expect(first.headers.get("cache-control")).toBe("private, no-store");
-    expect(await first.text()).toContain('data-testid="join-result"');
-    expect(first.headers.getSetCookie().join("\n")).toContain(`${JOIN_RESULT_COOKIE}=; Max-Age=0`);
-    const second = await app.request(path, { headers: { cookie: session } }, env);
-    expect(await second.text()).not.toContain('data-testid="join-result"');
-  });
+      const first = await app.request(path, { headers: { cookie } }, env);
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("private, no-store");
+      expect(await first.text()).toContain('data-testid="join-result"');
+      expect(first.headers.getSetCookie().join("\n")).toContain(
+        `${JOIN_RESULT_COOKIE}=; Max-Age=0`,
+      );
+      const second = await app.request(path, { headers: { cookie: session } }, env);
+      expect(await second.text()).not.toContain('data-testid="join-result"');
+    },
+  );
 
   it("a moderator's read is logged the same as a member's", async () => {
     const { app, sessions, log } = harness();
-    await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, MOD) } }, env);
+    await app.request(
+      `/members/${ALICE.userId}`,
+      { headers: { cookie: await cookieFor(sessions, MOD) } },
+      env,
+    );
     expect(log.map((l) => l.viewerDiscordId)).toEqual([MOD.userId]);
   });
 
@@ -231,7 +314,11 @@ describe("member-access-log (memory doubles)", () => {
 
   it("never records a URL, username or bio: the row carries ids and a route name only", async () => {
     const { app, sessions, log } = harness();
-    await app.request(`/members/${ALICE.userId}?q=secret-search`, { headers: { cookie: await cookieFor(sessions, BOB) } }, env);
+    await app.request(
+      `/members/${ALICE.userId}?q=secret-search`,
+      { headers: { cookie: await cookieFor(sessions, BOB) } },
+      env,
+    );
     const dump = JSON.stringify(log);
     expect(dump).not.toContain("secret-search");
     expect(dump).not.toContain("alice");
@@ -241,7 +328,11 @@ describe("member-access-log (memory doubles)", () => {
   it("fails closed: log down → 503 and the profile is not served (enforce is the default)", async () => {
     const { app, sessions } = harness({ logDown: true });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, BOB) } }, env);
+    const res = await app.request(
+      `/members/${ALICE.userId}`,
+      { headers: { cookie: await cookieFor(sessions, BOB) } },
+      env,
+    );
     expect(res.status).toBe(503);
     const body = await res.text();
     expect(body).not.toContain("alice");
@@ -249,57 +340,76 @@ describe("member-access-log (memory doubles)", () => {
     spy.mockRestore();
   });
 
-  it.each(["already_member", "added"])("audit-failure 503 preserves %s until one successful display", async (result) => {
-    const opts = { logDown: true };
-    const { app, sessions, log } = harness(opts);
-    const session = await cookieFor(sessions, BOB);
-    const flash = (await serializeSigned(JOIN_RESULT_COOKIE, result, SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
-    const jar = new Map([session, flash].map((pair) => [pair.slice(0, pair.indexOf("=")), pair]));
-    const apply = (res: Response) => {
-      for (const cookie of res.headers.getSetCookie()) {
-        const pair = cookie.split(";")[0]!;
-        const name = pair.slice(0, pair.indexOf("="));
-        if (/max-age=0/i.test(cookie)) jar.delete(name);
-        else jar.set(name, pair);
+  it.each(["already_member", "added"])(
+    "audit-failure 503 preserves %s until one successful display",
+    async (result) => {
+      const opts = { logDown: true };
+      const { app, sessions, log } = harness(opts);
+      const session = await cookieFor(sessions, BOB);
+      const flash = (
+        await serializeSigned(JOIN_RESULT_COOKIE, result, SESSION_SECRET, {
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        })
+      ).split(";")[0]!;
+      const jar = new Map([session, flash].map((pair) => [pair.slice(0, pair.indexOf("=")), pair]));
+      const apply = (res: Response) => {
+        for (const cookie of res.headers.getSetCookie()) {
+          const pair = cookie.split(";")[0]!;
+          const name = pair.slice(0, pair.indexOf("="));
+          if (/max-age=0/i.test(cookie)) jar.delete(name);
+          else jar.set(name, pair);
+        }
+      };
+      const get = () =>
+        app.request(
+          `/members/${ALICE.userId}`,
+          {
+            headers: { cookie: [...jar.values()].join("; ") },
+          },
+          env,
+        );
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const refused = await get();
+        expect(refused.status).toBe(503);
+        expect(refused.headers.get("cache-control")).toBe("private, no-store");
+        const refusedBody = await refused.text();
+        expect(refusedBody).toContain("Together We Own");
+        expect(refusedBody).toContain('<a class="brand" href="/"');
+        expect(refusedBody).not.toContain("alice");
+        expect(log).toHaveLength(0);
+        expect(spy).toHaveBeenCalled();
+        apply(refused);
+        expect(jar.get(JOIN_RESULT_COOKIE)).toBe(flash);
+
+        opts.logDown = false;
+        const first = await get();
+        expect(first.status).toBe(200);
+        expect(first.headers.get("cache-control")).toBe("private, no-store");
+        const html = await first.text();
+        expect(html).toContain('data-testid="join-result"');
+        if (result === "already_member") expect(html).toContain('data-testid="reinvite-link"');
+        else
+          expect(html).toContain(
+            "You are in. Finish Discord&#39;s rules screening before you can post.",
+          );
+        expect(log).toHaveLength(1);
+        expect(log[0]?.subjectUserIds).toEqual([ALICE.userId]);
+        apply(first);
+        expect(jar.has(JOIN_RESULT_COOKIE)).toBe(false);
+
+        const second = await get();
+        expect(second.status).toBe(200);
+        expect(await second.text()).not.toContain('data-testid="join-result"');
+        expect(log).toHaveLength(2);
+      } finally {
+        spy.mockRestore();
       }
-    };
-    const get = () => app.request(`/members/${ALICE.userId}`, {
-      headers: { cookie: [...jar.values()].join("; ") },
-    }, env);
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const refused = await get();
-      expect(refused.status).toBe(503);
-      expect(refused.headers.get("cache-control")).toBe("private, no-store");
-      expect(await refused.text()).toBe("Member data is temporarily unavailable.");
-      expect(log).toHaveLength(0);
-      expect(spy).toHaveBeenCalled();
-      apply(refused);
-      expect(jar.get(JOIN_RESULT_COOKIE)).toBe(flash);
-
-      opts.logDown = false;
-      const first = await get();
-      expect(first.status).toBe(200);
-      expect(first.headers.get("cache-control")).toBe("private, no-store");
-      const html = await first.text();
-      expect(html).toContain('data-testid="join-result"');
-      if (result === "already_member") expect(html).toContain('data-testid="reinvite-link"');
-      else expect(html).toContain("You are in. Finish Discord&#39;s rules screening before you can post.");
-      expect(log).toHaveLength(1);
-      expect(log[0]?.subjectUserIds).toEqual([ALICE.userId]);
-      apply(first);
-      expect(jar.has(JOIN_RESULT_COOKIE)).toBe(false);
-
-      const second = await get();
-      expect(second.status).toBe(200);
-      expect(await second.text()).not.toContain('data-testid="join-result"');
-      expect(log).toHaveLength(2);
-    } finally {
-      spy.mockRestore();
-    }
-  });
+    },
+  );
 
   it("MEMBER_ACCESS_LOG_ENFORCE=false cannot bypass the keyed read boundary", async () => {
     const { app, sessions } = harness({ logDown: true });
@@ -317,9 +427,18 @@ describe("member-access-log (memory doubles)", () => {
 });
 
 describe("PATCH /members/:user (memory doubles)", () => {
-  const form = (cookie: string, fields: Record<string, string>, extra: Record<string, string> = {}) => ({
+  const form = (
+    cookie: string,
+    fields: Record<string, string>,
+    extra: Record<string, string> = {},
+  ) => ({
     method: "PATCH" as const,
-    headers: { cookie, origin: APP_URL, "content-type": "application/x-www-form-urlencoded", ...extra },
+    headers: {
+      cookie,
+      origin: APP_URL,
+      "content-type": "application/x-www-form-urlencoded",
+      ...extra,
+    },
     body: new URLSearchParams(fields),
   });
 
@@ -327,29 +446,53 @@ describe("PATCH /members/:user (memory doubles)", () => {
     const { app, sessions, store } = harness();
     const res = await app.request(
       `/members/${ALICE.userId}`,
-      form(await cookieFor(sessions, ALICE), { bio: "  hello  ", games_text: "Chess\n Go \n\nChess\r\nDoom", timezone: "America/New_York" }),
+      form(await cookieFor(sessions, ALICE), {
+        bio: "  hello  ",
+        games_text: "Chess\n Go \n\nChess\r\nDoom",
+        timezone: "America/New_York",
+      }),
       env,
     );
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe(`/members/${ALICE.userId}`);
-    expect(store.rows.get(ALICE.userId)).toMatchObject({ bio: "hello", games: ["Chess", "Go", "Doom"], timezone: "America/New_York" });
+    expect(store.rows.get(ALICE.userId)).toMatchObject({
+      bio: "hello",
+      games: ["Chess", "Go", "Doom"],
+      timezone: "America/New_York",
+    });
   });
 
   it("the edit form's POST + _method=PATCH works the same", async () => {
     const { app, sessions, store } = harness();
     const res = await app.request(
       `/members/${ALICE.userId}`,
-      { ...form(await cookieFor(sessions, ALICE), { _method: "PATCH", bio: "via form", games_text: "", timezone: "" }), method: "POST" },
+      {
+        ...form(await cookieFor(sessions, ALICE), {
+          _method: "PATCH",
+          bio: "via form",
+          games_text: "",
+          timezone: "",
+        }),
+        method: "POST",
+      },
       env,
     );
     expect(res.status).toBe(303);
-    expect(store.rows.get(ALICE.userId)).toMatchObject({ bio: "via form", games: [], timezone: null });
+    expect(store.rows.get(ALICE.userId)).toMatchObject({
+      bio: "via form",
+      games: [],
+      timezone: null,
+    });
   });
 
   it("a member cannot edit someone else's profile, and neither can a moderator", async () => {
     const { app, sessions, store } = harness();
     for (const who of [BOB, MOD]) {
-      const res = await app.request(`/members/${ALICE.userId}`, form(await cookieFor(sessions, who), { bio: "pwned", games_text: "" }), env);
+      const res = await app.request(
+        `/members/${ALICE.userId}`,
+        form(await cookieFor(sessions, who), { bio: "pwned", games_text: "" }),
+        env,
+      );
       expect(res.status, who.username).toBe(403);
     }
     expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
@@ -360,7 +503,11 @@ describe("PATCH /members/:user (memory doubles)", () => {
     const mounted = new Hono<{ Bindings: Env }>().use("*", sameOrigin).route("/", app);
     const res = await mounted.request(
       `/members/${ALICE.userId}`,
-      form(await cookieFor(sessions, ALICE), { bio: "x", games_text: "" }, { origin: "https://evil.example" }),
+      form(
+        await cookieFor(sessions, ALICE),
+        { bio: "x", games_text: "" },
+        { origin: "https://evil.example" },
+      ),
       env,
     );
     expect(res.status).toBe(403);
@@ -386,38 +533,57 @@ describe("PATCH /members/:user (memory doubles)", () => {
     expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
   });
 
-  it.each([false, true])("upload read failures return 400 without saving (partial: %s)", async (partial) => {
-    const { app, sessions, store } = harness();
-    const escaped = vi.fn((_err: Error, c: Context) => c.text("Internal Server Error", 500));
-    app.onError(escaped);
-    const save = vi.spyOn(store, "save");
-    let reads = 0;
-    const body = new ReadableStream({
-      pull(controller) {
-        if (partial && reads++ === 0) controller.enqueue(new TextEncoder().encode('{"bio":'));
-        else controller.error(new Error("fixture upload failure, do not expose"));
-      },
-    }, { highWaterMark: 0 });
-    const response = await app.request(new Request(`http://localhost/members/${ALICE.userId}`, {
-      method: "PATCH", body, duplex: "half",
-      headers: { cookie: await cookieFor(sessions, ALICE), "content-type": "application/json" },
-    } as RequestInit), undefined, env);
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe("Bad request");
-    expect(escaped).not.toHaveBeenCalled();
-    expect(save).not.toHaveBeenCalled();
-    expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
-  });
+  it.each([false, true])(
+    "upload read failures return 400 without saving (partial: %s)",
+    async (partial) => {
+      const { app, sessions, store } = harness();
+      const escaped = vi.fn((_err: Error, c: Context) => c.text("Internal Server Error", 500));
+      app.onError(escaped);
+      const save = vi.spyOn(store, "save");
+      let reads = 0;
+      const body = new ReadableStream(
+        {
+          pull(controller) {
+            if (partial && reads++ === 0) controller.enqueue(new TextEncoder().encode('{"bio":'));
+            else controller.error(new Error("fixture upload failure, do not expose"));
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const response = await app.request(
+        new Request(`http://localhost/members/${ALICE.userId}`, {
+          method: "PATCH",
+          body,
+          duplex: "half",
+          headers: { cookie: await cookieFor(sessions, ALICE), "content-type": "application/json" },
+        } as RequestInit),
+        undefined,
+        env,
+      );
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe("Bad request");
+      expect(escaped).not.toHaveBeenCalled();
+      expect(save).not.toHaveBeenCalled();
+      expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
+    },
+  );
 
   it("throttles at 30/min per member with the one 429 envelope", async () => {
     let n = 0;
     const { app, sessions } = harness({
-      throttle: async () => (++n > PROFILE_WRITE_THROTTLE_PER_MINUTE ? { limited: true, retryAfter: 17 } : { limited: false }),
+      throttle: async () =>
+        ++n > PROFILE_WRITE_THROTTLE_PER_MINUTE
+          ? { limited: true, retryAfter: 17 }
+          : { limited: false },
     });
     const cookie = await cookieFor(sessions, ALICE);
     let last!: Response;
     for (let i = 0; i < PROFILE_WRITE_THROTTLE_PER_MINUTE + 1; i++) {
-      last = await app.request(`/members/${ALICE.userId}`, form(cookie, { bio: `b${i}`, games_text: "" }, { accept: "application/json" }), env);
+      last = await app.request(
+        `/members/${ALICE.userId}`,
+        form(cookie, { bio: `b${i}`, games_text: "" }, { accept: "application/json" }),
+        env,
+      );
     }
     expect(last.status).toBe(429);
     expect(last.headers.get("retry-after")).toBe("17");
@@ -442,7 +608,10 @@ describe("validateProfile", () => {
 describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   let db: Db;
-  beforeAll(async () => { fixture = await createMemberDataFixture(process.env.DATABASE_URL!); db = fixture.db; });
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
   afterEach(() => fixture?.reset());
   afterAll(() => fixture?.dispose());
   const wipe = () => fixture.reset();
@@ -452,7 +621,9 @@ describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-te
       { id: ALICE.userId, username: "alice", member: true },
       { id: BOB.userId, username: "bob", member: true },
     ]);
-    await db.insert(profiles).values({ userId: ALICE.userId, bio: "live bio", games: ["Chess"], timezone: "UTC" });
+    await db
+      .insert(profiles)
+      .values({ userId: ALICE.userId, bio: "live bio", games: ["Chess"], timezone: "UTC" });
     const sessions = createMemorySessionStore();
     const app = profilesApp({
       sessionStore: sessions,
@@ -468,7 +639,9 @@ describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-te
     const bob = { cookie: await cookieFor(sessions, BOB) };
     expect((await app.request(`/members/${ALICE.userId}`, { headers: bob }, env)).status).toBe(200);
     expect((await app.request(`/members/${ALICE.userId}`, { headers: bob }, env)).status).toBe(200);
-    expect((await app.request(`/members/999999999999999999`, { headers: bob }, env)).status).toBe(404);
+    expect((await app.request(`/members/999999999999999999`, { headers: bob }, env)).status).toBe(
+      404,
+    );
     expect((await app.request(`/profile`, { headers: bob }, env)).status).toBe(200);
     const rows = await db.select().from(memberDataAccessLogs);
     expect(rows).toHaveLength(2);
@@ -495,23 +668,37 @@ describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-te
   it("PATCH persists through Postgres, survives a roster refresh, and is visible on the next read", async () => {
     const { app, sessions } = await setup();
     const cookie = await cookieFor(sessions, BOB);
-    const res = await app.request(`/members/${BOB.userId}`, {
-      method: "PATCH",
-      headers: { cookie, origin: APP_URL, "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ bio: "bob writes", games_text: "Doom\nQuake", timezone: "Europe/Paris" }),
-    }, env);
+    const res = await app.request(
+      `/members/${BOB.userId}`,
+      {
+        method: "PATCH",
+        headers: { cookie, origin: APP_URL, "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          bio: "bob writes",
+          games_text: "Doom\nQuake",
+          timezone: "Europe/Paris",
+        }),
+      },
+      env,
+    );
     expect(res.status).toBe(303);
     const again = await app.request(`/members/${BOB.userId}`, { headers: { cookie } }, env);
     const html = await again.text();
     expect(html).toContain("bob writes");
     expect(html).toContain("Quake");
     // A second save is an update, not a duplicate row.
-    await app.request(`/members/${BOB.userId}`, {
-      method: "PATCH",
-      headers: { cookie, origin: APP_URL, "content-type": "application/json" },
-      body: JSON.stringify({ bio: "v2", games: [], timezone: null }),
-    }, env);
-    expect((await db.select().from(profiles)).filter((p) => p.userId === BOB.userId)).toHaveLength(1);
+    await app.request(
+      `/members/${BOB.userId}`,
+      {
+        method: "PATCH",
+        headers: { cookie, origin: APP_URL, "content-type": "application/json" },
+        body: JSON.stringify({ bio: "v2", games: [], timezone: null }),
+      },
+      env,
+    );
+    expect((await db.select().from(profiles)).filter((p) => p.userId === BOB.userId)).toHaveLength(
+      1,
+    );
   });
 
   it("a throwing sink with real profile rows refuses the read (503)", async () => {
@@ -525,7 +712,11 @@ describe.skipIf(!process.env.DATABASE_URL)("member journeys, live rows (agent-te
       },
     });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await app.request(`/members/${ALICE.userId}`, { headers: { cookie: await cookieFor(sessions, BOB) } }, env);
+    const res = await app.request(
+      `/members/${ALICE.userId}`,
+      { headers: { cookie: await cookieFor(sessions, BOB) } },
+      env,
+    );
     expect(res.status).toBe(503);
     spy.mockRestore();
   });

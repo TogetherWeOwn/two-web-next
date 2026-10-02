@@ -24,7 +24,9 @@ export class RequestClients {
       }
     });
     this.pending.add(request);
-    const release = () => { this.pending.delete(request); };
+    const release = () => {
+      this.pending.delete(request);
+    };
     void request.then(release, release);
     return request;
   }

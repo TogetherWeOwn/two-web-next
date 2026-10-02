@@ -191,13 +191,21 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Migration workflow selftest (isolated Postgres, no Neon/network APIs)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run db:migrate:selftest
+        env:
+          MIGRATION_TEST_DATABASE_URL: postgres://postgres:ci@postgres:5432/postgres
       # Exercise the exact pre-deploy invocation on the same migrated service.
       - name: Configuration drift check + selftest
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run config:check
-      - name: Check (typecheck + coverage gate)
+      - name: Biome gate selftest (intentional violations)
         if: needs.scope.outputs.docs_only != 'true'
-        run: npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
+        run: bash ci/biome-selftest.sh
+      - name: Check (lint + typecheck + coverage gate)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
@@ -207,6 +215,9 @@ jobs:
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run test:cutover
+      - name: Shadow-compare selftest (loopback only)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run test:shadow
       - name: Coverage job summary
         if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
@@ -245,6 +256,7 @@ jobs:
         if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --outdir dist
       - name: Build alert Tail Worker (wrangler dry run)
+        if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail
       - name: Production build (wrangler dry run, no deployment)
         if: needs.scope.outputs.docs_only != 'true'

@@ -13,7 +13,13 @@ export async function createUsersProfilesFixture(raw: string) {
   const suffix = randomUUID().replaceAll("-", "");
   const legacySchema = `legacy_up_${suffix}`;
   const nextSchema = `next_up_${suffix}`;
-  const options = { max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
+  const options = {
+    max: 1,
+    port: 5432,
+    connect_timeout: 5,
+    password: () => url.password,
+    onnotice: () => {},
+  };
   const admin = postgres(url.href, options);
   const legacy = postgres(url.href, { ...options, connection: { search_path: legacySchema } });
   const next = postgres(url.href, { ...options, connection: { search_path: nextSchema } });
@@ -24,8 +30,13 @@ export async function createUsersProfilesFixture(raw: string) {
     disposed = true;
     try {
       await Promise.all([legacy.end(), next.end()]);
-      if (created) await admin.unsafe(`DROP SCHEMA "${legacySchema}" CASCADE; DROP SCHEMA "${nextSchema}" CASCADE`);
-    } finally { await admin.end(); }
+      if (created)
+        await admin.unsafe(
+          `DROP SCHEMA "${legacySchema}" CASCADE; DROP SCHEMA "${nextSchema}" CASCADE`,
+        );
+    } finally {
+      await admin.end();
+    }
   };
   try {
     await admin.begin(async (sql) => {
