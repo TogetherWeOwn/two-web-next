@@ -289,9 +289,13 @@ test("manual production workflow uses private-repo runners and production-only s
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 2);
+    // Credentials check, production Tail deploy, app deploy: all production-only.
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 3);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
+  const tailDeploy = workflow.indexOf(
+    "run: npx wrangler deploy --config tail/wrangler.jsonc --env production",
+  );
   const deploy = workflow.indexOf("run: npx wrangler deploy --env production");
-  assert.ok(credentialCheck > 0 && credentialCheck < deploy);
+  assert.ok(credentialCheck > 0 && credentialCheck < tailDeploy && tailDeploy < deploy);
 });

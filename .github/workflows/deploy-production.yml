@@ -67,6 +67,12 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy production alert Tail Worker first
+        # The app's env.production.tail_consumers binding needs the consumer to exist first.
+        run: npx wrangler deploy --config tail/wrangler.jsonc --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy reviewed production target
         run: npx wrangler deploy --env production
         env:

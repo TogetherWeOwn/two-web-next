@@ -67,6 +67,9 @@
       "name": "two-web-next-production",
       "workers_dev": false,
       "preview_urls": false,
+      // tail_consumers are not inherited from the top level: Wrangler needs
+      // this repeated in every named environment that must page.
+      "tail_consumers": [{ "service": "two-web-next-alerts-production" }],
       // Cutover target only, NOT a DNS change or authorization to claim the apex.
       "routes": [{ "pattern": "togetherweown.com", "custom_domain": true }],
       "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
