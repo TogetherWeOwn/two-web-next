@@ -41,7 +41,7 @@ import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { consumeLoginReturn, LOGIN_INTENDED_COOKIE, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
+import { configReadiness, upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
@@ -412,8 +412,9 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
-// `GET /up` — session-free DB/schema readiness plus the existing queue signal.
-// DB/ledger failure or pending web migrations answers 503; queue-only degraded
+// `GET /up` — session-free DB/schema and secret-presence readiness plus the
+// existing queue signal. A missing required secret, DB/ledger failure or
+// pending web migrations answers 503; queue-only degraded
 // or unknown remains 200. `no-store` so a monitor never reads a stale response.
 // Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
@@ -446,7 +447,7 @@ app.get("/up", async (c) => {
     // Two slots when shared, one per client otherwise: queue cannot starve DB.
     const sql = connect(url, shared ? 2 : 1);
     const queueSql = shared ? sql : connect(queueUrl, 1);
-    const body = await upBody(queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null, sql);
+    const body = await upBody(queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null, sql, configReadiness(c.env));
     return c.json(body, upHttpStatus(body));
   } finally {
     // Close request-owned clients without waiting to drain. Transaction-local

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Sql, TransactionSql } from "postgres";
 import app from "./app";
 import type { Env } from "../src/env";
-import { databaseReadiness, pendingWebMigrations, QUEUE_CRITICAL_AT, QUEUE_READ_TIMEOUT_MS, QUEUE_WARN_AT, upBody, WEB_MIGRATIONS, withHealthReadTimeout } from "../src/up";
+import { configReadiness, databaseReadiness, missingSecrets, pendingWebMigrations, QUEUE_CRITICAL_AT, QUEUE_READ_TIMEOUT_MS, QUEUE_WARN_AT, REQUIRED_SECRETS, upBody, WEB_MIGRATIONS, withHealthReadTimeout } from "../src/up";
 import { healthSql } from "./helpers/up";
 
 const env: Env = {
@@ -130,6 +130,73 @@ describe("GET /up", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ db: "error", pending_migrations: null, queue: { status: "unknown" } });
     expect(res.headers.get("x-two-origin")).toBe("two-web-next");
+  });
+});
+
+describe("/up required Worker secrets", () => {
+  const secretValues = REQUIRED_SECRETS.map((name) => env[name]);
+  const without = (name: string, value: "absent" | "" | "  ", base: Env) => {
+    const next = { ...base } as Record<string, unknown>;
+    if (value === "absent") delete next[name];
+    else next[name] = value;
+    return next as Env;
+  };
+
+  it("lists missing names in a fixed order and adds nothing when all are present", () => {
+    expect(missingSecrets(env)).toEqual([]);
+    expect(configReadiness(env)).toEqual({});
+    expect(missingSecrets({})).toEqual(["SESSION_SECRET", "DISCORD_CLIENT_SECRET", "DISCORD_BOT_TOKEN"]);
+  });
+  it("answers 200 with the unchanged body shape when every secret is present", async () => {
+    const res = await app.request("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["db", "pending_migrations", "queue", "status"]);
+    expect(body).toEqual({ status: "healthy", db: "ok", pending_migrations: 0, queue: healthyQueue });
+  });
+  it.each(REQUIRED_SECRETS.flatMap((name) => (["absent", "", "  "] as const).map((value) => [name, value] as const)))(
+    "answers 503 config:missing when %s is %j, naming neither secret nor value", async (name, value) => {
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const res = await app.request("/up", {}, without(name, value, withStore(healthSql({ queue: [depthRow()] }))));
+        expect(res.status).toBe(503);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+        expect(res.headers.get("x-two-origin")).toBe("two-web-next");
+        const text = await res.text();
+        expect(JSON.parse(text)).toEqual({ status: "degraded", db: "ok", pending_migrations: 0, config: "missing", queue: healthyQueue });
+        for (const secret of [...REQUIRED_SECRETS, ...secretValues]) expect(text).not.toContain(secret);
+        // Server-side only, names only.
+        expect(warning).toHaveBeenCalledExactlyOnceWith("Health check found required Worker secrets missing.", { missing: [name] });
+        for (const secret of secretValues) expect(JSON.stringify(warning.mock.calls)).not.toContain(secret);
+      } finally { warning.mockRestore(); }
+    },
+  );
+  it("still answers 503 for a DB failure with every secret present, adding no config key", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const res = await app.request("/up", {}, withStore(healthSql({ ping: new Error("down"), queue: [depthRow()] })));
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ status: "degraded", db: "error", pending_migrations: null, queue: healthyQueue });
+    } finally { warning.mockRestore(); }
+  });
+  it("reports both a DB failure and missing secrets in one 503", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const broken = REQUIRED_SECRETS.reduce((next, name) => without(name, "absent", next), env);
+      const res = await app.request("/up", {}, broken);
+      expect(res.status).toBe(503);
+      const text = await res.text();
+      expect(JSON.parse(text)).toEqual({ status: "degraded", db: "error", pending_migrations: null, config: "missing",
+        queue: { ...unknownQueue, detail: "queue ledger is not configured." } });
+      for (const name of REQUIRED_SECRETS) expect(text).not.toContain(name);
+      expect(warning).toHaveBeenCalledWith("Health check found required Worker secrets missing.", { missing: [...REQUIRED_SECRETS] });
+    } finally { warning.mockRestore(); }
+  });
+  it("missing config degrades a healthy queue body without touching queue measurements", async () => {
+    const body = await upBody(async () => ({
+      pending: 1, delayed: 0, reserved: 0, total: 1, failed: 0, oldestPendingAgeSeconds: 1,
+    }), healthSql(), { config: "missing" });
+    expect(body).toMatchObject({ status: "degraded", db: "ok", pending_migrations: 0, config: "missing", queue: { status: "healthy", pending: 1 } });
   });
 });
 
