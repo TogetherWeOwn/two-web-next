@@ -87,9 +87,8 @@ jobs:
     if: always()
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
     runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    # Container setup, the full check and serial SQL coverage need headroom
-    # on shared runners; keep the job bounded without relaxing either gate.
-    # The seeded property suite retains its hard 10s limit.
+    # Container setup and serial SQL coverage exceeded 10m on shared runners.
+    # Keep the job bounded; the seeded property suite retains its hard 10s limit.
     timeout-minutes: 20
     # Real Postgres so the advisory-lock single-flight test runs in CI (skipped when DATABASE_URL is unset).
     # Self-hosted runners share one Docker host, so a published 5432 (and
@@ -145,18 +144,16 @@ jobs:
         run: npm run db:migrate:selftest
         env:
           MIGRATION_TEST_DATABASE_URL: postgres://postgres:ci@postgres:5432/postgres
-      # Exercise the exact pre-deploy invocation (including a11y selftests),
-      # then keep the existing coverage ratchet. No shared agent-testdb writes.
-      - name: Check (full pre-deploy invocation)
-        run: npm run check
+      # Exercise the exact pre-deploy invocation on the same migrated service.
+      - name: Configuration drift check + selftest
+        run: npm run config:check
+      - name: Check (typecheck + coverage gate)
+        run: npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      - name: Coverage gate
-        run: npm run test:coverage
-        env:
-          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-          AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
+        run: node --test ci/staging-deploy-gate-selftest.mjs
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
         run: npm run test:cutover
       - name: Coverage job summary

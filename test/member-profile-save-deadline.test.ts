@@ -17,7 +17,7 @@ function deferred<T>() {
 }
 
 type ResponseFixture = { ok: boolean; status: number; type?: string; json?: () => Promise<unknown> };
-const success = () => ({ ok: true, status: 200 });
+const success = () => ({ ok: true, status: 200, json: async () => ({ saved: true, message: "Profile saved." }) });
 const flush = async (rounds = 5) => {
   for (let i = 0; i < rounds; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 };
