@@ -279,6 +279,9 @@ function page(
     icsSequence: 0n,
     syncRevision: 1,
     syncedRevision: 0,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     ...over,
   };
   const queries: { sql: string; params: unknown[] }[] = [];

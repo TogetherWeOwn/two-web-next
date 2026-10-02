@@ -48,6 +48,9 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     createdBy: null,
     recurrenceFrequency: null,
     recurrenceCount: null,
@@ -134,7 +137,7 @@ describe("DST-paired cross-surface agreement", () => {
     // [slug, host wall, stored UTC instant, host zone]
     ["dst-summer", "2026-07-15 20:00", "2026-07-15T19:00:00.000Z", "Europe/London"], // BST
     ["dst-winter", "2026-01-15 20:00", "2026-01-15T20:00:00.000Z", "Europe/London"], // GMT
-    ["fold-bst", "2026-10-25 01:30", "2026-10-25T00:30:00.000Z", "Europe/London"], // first occurrence
+    ["fold-bst", "2026-10-25 01:30", "2026-10-25T01:30:00.000Z", "Europe/London"], // second occurrence (#289)
   ])("%s renders one wall instant on page, JSON, ICS and RSS", async (slug, wall, iso, zone) => {
     const startsAt = new Date(iso);
     const e = event({

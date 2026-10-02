@@ -145,8 +145,15 @@
     {
       "idx": 20,
       "version": "7",
-      "when": 1790902431106,
-      "tag": "1019_event-sync-revisions",
+      "when": 1790954753239,
+      "tag": "1019_shared-agent-events",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790954753240,
+      "tag": "1020_event-sync-revisions",
       "breakpoints": true
     }
   ]

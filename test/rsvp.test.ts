@@ -766,23 +766,32 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       expect((await put(ev.key, who, "going")).status).toBe(201);
       await client`delete from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
       let release!: () => void;
+      let ready!: () => void;
       const held = new Promise<void>((r) => (release = r));
+      const acquired = new Promise<void>((r) => (ready = r));
       const holder = client.begin(async (tx) => {
         await tx`select id from rsvps where event_id = ${ev.id} and user_id = ${who} for update`;
+        ready();
         await held;
       });
-      await new Promise((r) => setTimeout(r, 200));
+      await acquired;
       const pending = verb === "DELETE" ? call("DELETE", ev.key, who) : put(ev.key, who, "maybe");
-      await new Promise((r) => setTimeout(r, 1200));
-      const [tr] = await client`select clock_timestamp() as t`;
-      release();
-      await holder;
+      let releasedAt!: Date;
+      try {
+        expect(await waitForLock('%from "rsvps"%for update%')).toBe(true);
+        const [tr] = await client`select clock_timestamp() as t`;
+        releasedAt = new Date(tr!.t);
+      } finally {
+        release();
+        await holder;
+        await pending;
+      }
       expect((await pending).status).toBeLessThan(300);
       const [hit] =
         await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
-      expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
+      expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(releasedAt.getTime());
     }
-  });
+  }, 30_000);
   // Runs last (named zz_): after every delete, raw throttle statement and
   // lock holder in this file, the objects outside the owned schema must be
   // intact — the executable proof that cleanup stayed scoped. Two halves:
