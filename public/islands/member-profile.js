@@ -10,7 +10,8 @@
 // expiry changes nothing; there is no automatic resend.
 // Outcomes: saved → "Profile saved." + re-edit control (or keep a newer draft),
 // focus on the confirmation; Cancel resets to the last accepted values and
-// ignores pending completions. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
+// ignores pending completions, but a newer save waits until the cancelled
+// write settles or its deadline expires. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
 // expired notice with login link, input kept; anything else → save-failed
 // alert, input kept. Copy and testids mirror src/islands/contracts.ts.
 
@@ -22,9 +23,11 @@
   var id = root.getAttribute("data-member-id");
   var edit = root.querySelector('[data-testid="profile-edit-again"]');
   var editControl = root.querySelector('[data-testid="profile-edit-control"]');
-  // pending: a PATCH is unsettled at the transport level. Cancel does not clear
-  // it (abort/ignore is not server rollback), so a newer save cannot overtake an
-  // older write that may still commit. Not solved: cross-tab or unknown-outcome races.
+  // pending: a PATCH is unsettled at the transport level. Cancel neither aborts
+  // nor clears it (abort/ignore is not server rollback), so a newer save cannot
+  // overtake an older write that may still commit. Only settlement or the owned
+  // deadline (the unknown-outcome boundary) releases it. Not solved: cross-tab
+  // races or a write that commits after its deadline.
   var pending = false;
   var pendingRequest = 0;
   var generation = 0;
@@ -152,26 +155,27 @@
     });
   }
 
-  function showUncertain(request) {
+  function expire(request) {
+    // Deadline expiry is the documented unknown-outcome boundary: the request
+    // is abandoned (aborted where possible) and the pending guard released, so
+    // the member may retry explicitly. This holds for a cancelled write too.
+    if (!pending || request !== pendingRequest) return;
+    var controller = currentAbort;
+    clearDeadline();
+    pending = false;
+    if (controller) {
+      try { controller.abort(); } catch (x) {}
+    }
+    // A cancelled write no longer owns feedback: release it silently.
+    if (request !== generation) return;
     // Bounded uncertain-result feedback: the save did not settle within the
     // owned deadline. The result may still have gone through, so this is a
     // role=status notice — never the save-failed alert, never a rollback.
     // The draft stays intact, nothing is resent, and ownership of feedback
     // has moved on from this request: focus stays where the member left it.
-    // Timeout ownership ends here: invalidate the timed-out request so a
-    // late completion can never replace newer feedback or mutate the
-    // accepted baseline.
-    if (request !== generation) return;
+    // Invalidate the timed-out request so a late completion can never replace
+    // newer feedback or mutate the accepted baseline.
     generation++;
-    var controller = currentAbort;
-    clearDeadline();
-    inflight = false;
-    // Deadline expiry is the documented unknown-outcome boundary: the request
-    // is abandoned and the member may retry explicitly.
-    pending = false;
-    if (controller) {
-      try { controller.abort(); } catch (x) {}
-    }
     var old = root.querySelector('[data-testid="profile-uncertain"]');
     if (old) old.remove();
     var el = document.createElement("div");
@@ -209,16 +213,10 @@
 
   form.addEventListener("reset", function () {
     // Cancel discards the draft, not an already accepted server write. A late
-    // completion must not change this UI; the pending guard stays until it settles.
-    // Cancel also disposes the owned deadline timer/abort listener; the abort
-    // settles the transport request, which is what releases the pending guard.
+    // completion must not change this UI. Cancel does not abort the pending
+    // write (abort is not server rollback): it keeps its owned deadline, and
+    // the guard holds until it settles or expires.
     var cancelled = ++generation;
-    var controller = currentAbort;
-    clearDeadline();
-    if (controller) {
-      try { controller.abort(); } catch (x) {}
-    }
-    inflight = false;
     sessionExpired = false;
     form.hidden = false;
     if (editControl) editControl.hidden = true;
@@ -255,7 +253,7 @@
     // PATCH: the member retries explicitly after the controls release.
     if (canTimeout) {
       deadlineTimer = setTimeout(function () {
-        showUncertain(request);
+        expire(request);
       }, SAVE_DEADLINE_MS);
     }
     var init = {
@@ -273,7 +271,6 @@
       .then(function (res) {
         if (request !== generation) return;
         if (res.ok) {
-          clearDeadline();
           accepted(body);
           notice("profile-saved", "status", "Profile saved.");
           return;
@@ -284,15 +281,12 @@
           // arrives after expiry is dropped by the generation guard.
           return res.json().then(function (j) {
             if (request !== generation) return;
-            clearDeadline();
             errorList(Object.keys(j.errors || {}).map(function (k) { return j.errors[k]; }));
           });
         }
         if (res.status === 401 || res.status === 419 || res.type === "opaqueredirect" || res.status === 302) {
-          clearDeadline();
           return expiredNotice();
         }
-        clearDeadline();
         notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
       })
       .catch(function (err) {
@@ -300,12 +294,16 @@
         // notice is already shown (or superseded), so swallow the AbortError.
         // Every other rejection is a genuine fast failure with input kept.
         if (request !== generation) return;
-        clearDeadline();
         if (err && err.name === "AbortError") return;
         notice("profile-save-failed", "alert", "Could not save your profile. Your changes are still here — try again.");
       })
       .then(function () {
-        if (pendingRequest === request) pending = false;
+        // Settlement owns the transport state, cancelled or not: release the
+        // guard and dispose the deadline. An expired request has already
+        // released both, and a newer request owns them now.
+        if (!pending || pendingRequest !== request) return;
+        pending = false;
+        clearDeadline();
       });
   });
 })();
