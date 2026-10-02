@@ -118,7 +118,8 @@ editor's separate browser warning for unsaved changes is not action approval.
 
 A fresh time in the daylight-saving **gap** is rejected; choose a real time and
 ask engineering if the intended instant is unclear. A fresh repeated-hour time
-uses the first occurrence; there is no occurrence chooser. Unchanged edit times
+uses the second occurrence (after the clocks go back, e.g. 01:30 GMT on
+25 October 2026), as the old site did; there is no occurrence chooser. Unchanged edit times
 preserve the stored instant. Do not move them just to make the form save.
 
 The form's navigation **Cancel** link only leaves the editor. It is different

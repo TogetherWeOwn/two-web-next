@@ -126,7 +126,7 @@ describe.skipIf(!url)("served reads refuse JS-unrepresentable windows (isolated 
       const archive = await listPast(db, 1);
       expect(archive.rows.map((row) => row.eventKey)).toEqual([FINITE]);
       const json = await listJson(db, { limit: 20, offset: 0, includeDrafts: false });
-      expect(json.map((row) => row.eventKey)).toEqual([FINITE]);
+      expect(json.rows.map((row) => row.eventKey)).toEqual([FINITE]);
 
       // The pages themselves stay 200 with only the poison row archived.
       await client`delete from events where event_key = ${FINITE}`;

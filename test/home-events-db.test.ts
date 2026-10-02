@@ -21,12 +21,13 @@ describe.skipIf(!url)("homepage read cancellation (isolated test DB)", () => {
   }, 30_000);
 
   it.each(["events", "rsvps"] as const)("cancels the read blocked on %s and leaves no lock-waiting backend", async (table) => {
-    // Trace the protected read separately from setup; never log connection or row data.
+    // Trace setup separately from the protected read; never log connection or row data.
     const started = Date.now();
     const trace = (phase: string) => console.info("Home cancellation phase", { table, phase, elapsedMs: Date.now() - started });
     trace("fixture:ready");
     const { client, db, schemaName } = fixture!;
     const eventKey = `home-timeout-${crypto.randomUUID()}`;
+    trace("event:seeding");
     await client`insert into events (event_key, title, starts_at, ends_at, status)
       values (${eventKey}, 'Home timeout fixture', '2070-01-01T18:00:00Z', '2070-01-01T20:00:00Z', 'published')`;
     trace("event:seeded");

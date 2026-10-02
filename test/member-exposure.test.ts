@@ -24,7 +24,7 @@ const OTHER_READS = [
   "/", "/discord", "/about", "/faq", "/rules", "/privacy", "/join", "/join/discord", "/join/callback",
   "/sitemap_index.xml", "/robots.txt", "/up", "/auth/discord", "/auth/discord/callback", "/auth/discord/redirect",
   "/auth/status", "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
-  "/events", "/events/past", "/events.json", "/e/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
+  "/events", "/events/past", "/events.json", "/events/:key", "/e/:key", "/events.ics", "/events.rss", "/events/:file{.+\\.ics}",
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) => router.routes
   .filter((r) => r.method === "GET" || r.method === "ALL")
@@ -192,10 +192,13 @@ describe.skipIf(!process.env.DATABASE_URL)("member exposure on the mounted worke
     expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
   });
 
-  it("guest member-adjacent JSON is refused without returning attendees", async () => {
-    const res = await request("/events.json");
-    expect(res.status).toBe(401); // W8 JSON denial, rather than Laravel's login redirect.
-    const body = await res.text();
-    for (const personal of [...PERSONAL_STRINGS, SUBJECT.userId]) expect(body).not.toContain(personal);
+  it.each(["application/json", "text/html"])("guest %s member-adjacent JSON is refused without returning attendees", async (accept) => {
+    for (const path of ["/events.json", `/events/${EVENT_KEY}`]) {
+      const res = await request(path, { headers: { accept } });
+      expect(res.status).toBe(accept === "text/html" ? 302 : 401);
+      if (accept === "text/html") expect(res.headers.get("location")).toBe(`/auth/discord?next=${encodeURIComponent(path)}`);
+      const body = await res.text();
+      for (const personal of [...PERSONAL_STRINGS, SUBJECT.userId]) expect(body).not.toContain(personal);
+    }
   });
 });

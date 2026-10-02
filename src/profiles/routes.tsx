@@ -33,7 +33,7 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle, migrateJoin } from "../join/service";
 import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
-import { PROFILE_COPY, profileTrapTripped } from "../islands/contracts";
+import { PROFILE_COPY, PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD, profileTrapTripped } from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { createDbProfileStore, type ProfileStore } from "./store";
 import { validateProfile } from "./validation";
@@ -42,6 +42,11 @@ import { MEMBER_STATS_BUDGET_MS, memberStatsWithBudget, readMemberStats, readOwn
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
 const SESSION_COOKIE = "__Host-two_session";
 const SNOWFLAKE = /^\d{10,25}$/;
+// UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
+// username, avatar, member…) refuses the whole write: no body key can name
+// another member or a roster column past the owner check.
+const WRITABLE_FIELDS = new Set(["bio", "games", "games_text", "timezone", PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD]);
+const UNSUPPORTED_FIELDS = "Only your bio, games and timezone can be changed.";
 
 type Verdict = Awaited<ReturnType<typeof checkJoinThrottle>>;
 
@@ -211,7 +216,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
     // otherwise an omitted key would silently wipe the stored list.
     if (!isJson && input.games === undefined && input.games_text === undefined) input.games = [];
 
-    const result = validateProfile(input);
+    const result = Object.keys(input).every((key) => WRITABLE_FIELDS.has(key))
+      ? validateProfile(input)
+      : { ok: false as const, errors: { fields: UNSUPPORTED_FIELDS } };
     if (!result.ok) {
       if ((c.req.header("accept") ?? "").includes("application/json")) return c.json({ errors: result.errors }, 422);
       c.status(422);
