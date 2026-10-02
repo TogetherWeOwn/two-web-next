@@ -76,6 +76,8 @@ function eventRow(over: Partial<EventRow> = {}): EventRow {
     recurrenceIndex: null,
     createdAt: start,
     updatedAt: start,
+    syncRevision: 1,
+    syncedRevision: 0,
     ...over,
   };
 }

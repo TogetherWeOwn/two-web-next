@@ -84,6 +84,10 @@
     {
       "path": "drizzle/1019_shared-agent-events.sql",
       "sha256": "c9b0f5a4006fcb646cf6a1d15a2d3c3d3bf618861d2eea4becf98e89d95ef773"
+    },
+    {
+      "path": "drizzle/1020_event-sync-revisions.sql",
+      "sha256": "33ad25cddd846eae9ba35c1265fc1584fcfa4c8ad3334e03ecfba556824be8f8"
     }
   ]
 }

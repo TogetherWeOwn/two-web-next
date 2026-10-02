@@ -603,14 +603,16 @@ Measurements from [src/jobs/postgres.ts](../src/jobs/postgres.ts):
 
 Do not remove the binding or inject an alternate credential to mask a configured
 outage: **missing configuration is not the same as an unreachable database**.
-Normal web stores prefer `DATABASE_URL`, otherwise `DB.connectionString`
-([src/db/connection.ts](../src/db/connection.ts)); failure does not try the
-other connection. `/up` DB/schema readiness uses that same web-store selection;
-only its queue slice prefers `DB`, then `DATABASE_URL`. Jobs prefer `HYPERDRIVE`,
-then `DB`, then `DATABASE_URL`. A successful public fallback is **not** evidence
-that private reads or writes are available; do not relax their authentication,
-persistence or required-audit gates. Never test production; staging E2E needs
-verified staging bindings.
+Web stores, `/up` (DB/schema readiness and its queue slice) and jobs prefer
+nonempty `DATABASE_URL`, otherwise `DB.connectionString`
+([src/db/connection.ts](../src/db/connection.ts)), so `/up` measures the same
+queue ledger the producers and consumer write. Jobs retain `HYPERDRIVE` only as a
+legacy fallback when both are absent. A selected connection's construction/read
+failure never tries another backend or credential. The removed `/db-ping`,
+`/health` and `/healthz` routes are ordinary unknown paths (404), not diagnostics.
+A successful public fallback is **not** evidence that private reads or writes are
+available; do not relax their authentication, persistence or required-audit gates.
+Never test production; staging E2E needs verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
@@ -667,8 +669,8 @@ binding/DB recovery to the Director and authorized custodian; never credential-h
 ## Queue containment, drain and failed-job replay
 
 **Current implementation gate:** [src/jobs/worker.ts](../src/jobs/worker.ts)
-uses `notWired` EventStore/BotClient adapters. The configured W13 consumers
-cannot currently perform successful event/bot work. Do not resume delivery or
+uses a real event store but a `notWired` BotClient adapter. The configured W13
+consumers cannot currently perform successful live bot work. Do not resume delivery or
 replay real messages until the Director has accepted a reviewed adapter fix and
 local acceptance evidence. Queue depth falling under these stubs can mean retry
 exhaustion and terminal acknowledgement, not successful draining.
@@ -759,27 +761,76 @@ Message contracts from [src/jobs/types.ts](../src/jobs/types.ts):
 | `two-internal-action` / `INTERNAL_ACTION_QUEUE` | `kind: "role-assign"`, `action: { userId, roleKey }`, `idempotencyKey: null`, optional `jobId` |
 
 The tracking producer supplies `jobId`; it is not the bot idempotency key.
-The consumer routes by `kind` and caps sync work at 6 attempts, internal actions
-at 5. Policy-controlled retry delays are `10,60,300,900,3600` seconds for sync
-and `5,15,60,180` for internal actions. These apply to handled retryable outcomes
-and `BotTransportError`, not every throw; `retryAfterSeconds` can override them.
-Below the cap, generic errors (including today's ordinary `notWired` errors)
-call `m.retry()` without `delaySeconds`, leaving timing to the transport. At the
-cap they are recorded as terminal failures and acknowledged without another
-retry. Do not assume the arrays provide a guaranteed containment window.
-See [consumer error paths](../src/jobs/consumer.ts).
+W8 web/RSVP writes and cron use the same tracked W13 sync carrier. The first
+attempt snapshots current status/action/payload/revision in `event_sync_attempts`;
+retries and recovery keep that request's key and payload immutable. Later
+mutations stay dirty until the pending request resolves, then use a new key.
+Drafts/past rows do not start requests. Preparation alone is not a request:
+first claims atomically recheck the current status/revision, synchronization and
+same-revision definitive-refusal eligibility. A stale never-attempted snapshot
+becomes `obsolete`, without a bot call or marking the event synced, even if its
+preparation waited behind another identity's settlement. The pending slot is
+then free for a newer eligible revision. Attempted requests retain their
+immutable identity even if the event becomes past. Reconciliation selects those
+attempted recovery candidates independently of eligibility to start a new
+request, then checks their deadline and remaining budget before sending.
+The bot HTTP adapter remains unwired; this is not proof of live Discord delivery.
 
-Transport `max_retries: 10` is only a backstop. Calling a producer again mints a
-new key; role assignments have no key. The sync uniqueness lock lasts 300
-seconds (shorter than the longest policy retry), so neither ledger nor lock
-proves exactly-once downstream effects. Sync reads current event state, not a
-snapshot.
+Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
+tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
+Sync requests independently persist `request_attempts` and `next_attempt_at`:
+claims durably set eligibility to null **before** bot I/O. Only a committed
+result can reopen that fence: backoff (`10,60,300,900,3600`) and authoritative
+Retry-After select the next absolute deadline. A failed deadline write retries
+that same Date (or exhausted null), never shorter generic backoff. If both writes
+fail, the consumer carries the known remaining wait on that delivery, but the
+request remains closed across new carriers and reconciliation. The old
+300-second uniqueness TTL is not permission to send again. A concurrent carrier
+waits 300 seconds without bot I/O; carrier exhaustion never clears the fence.
 
-The separate W8 carrier [src/events/sync.ts](../src/events/sync.ts) uses
-`action`/`dedupeKey`, not W13 `kind`. `EVENT_SYNC_QUEUE` is unbound in current
-config; missing binding only logs, send errors are logged/swallowed. Do not send
-W8 bodies to W13 queues or assume creating `two-web-next-event-sync` alone fixes
-this integration.
+A worker lost after claiming, or unable to commit its result, cannot automatically
+regain request eligibility. Preserve its key/payload/count and reconcile the
+remote result in the bounded reviewed recovery below before committing an
+appropriate deadline or settlement. This intentional fail-closed condition may
+require operator recovery even before six requests; it avoids guessing a wait
+shorter than a response that could not be saved. Ordinary transport retries
+remain automatic when their backoff write commits. Reconciliation skips
+legitimately delayed, null-fenced and exhausted requests even after lock expiry.
+
+A carrier failure is **not** a resolved bot request. Transport loss or a failed
+local completion retains a `pending` snapshot, even after all six automatic
+request attempts. At that cap, automatic reconciliation pauses that request
+(and newer revisions); its null `next_attempt_at` or exhausted count is an
+explicit operator-recovery condition. Preserve the snapshot and failed ledger
+history. A bounded, reviewed recovery must reconcile remote effects and renew
+only the original request's budget/eligibility, **never** its key, action,
+payload or revision. Preserve a positive `request_attempts` count: zero means
+never attempted, not renewed budget. This runbook does not authorize a live reset or provide a
+blind replay command. A `failed` snapshot instead means a definitive refusal:
+automatic dispatch of that unchanged revision is suppressed; a meaningful
+subsequent mutation is eligible. Retrying an unchanged refused revision likewise
+requires an explicit reviewed operator action, not deleting history.
+
+Best-effort successor checks/dispatch time out after two seconds. These timers
+do not cancel SQL: ledger and lock traffic use pools separate from the handler,
+so a blocked cleanup cannot starve the next message's snapshot/claim. Successor
+SQL uses lazy per-operation pools (2-second connect, 5-second statement timeout,
+1-second close), not the three pools closed when the consumer returns. The
+production queue entry passes `ExecutionContext`; `waitUntil` preserves successor
+settlement for at most 30 seconds without delaying ACK/handler return. Rejected
+sends and late/failed ledger inserts compensate by their exact `jobId` with a
+fresh usable pool, even after handler shutdown; no send starts after cancellation.
+An already-started send accepted late retains its tracked row. A send unresolved
+past that bounded lifetime, or a failed compensation, remains visible: do not
+infer successful cleanup or delete rows by age. Reconcile transport evidence
+before any reviewed operator correction; dirty revisions alone cannot remove
+an orphan row.
+
+Reconciliation holds its advisory single-flight lock throughout the pass, but
+commits close/materialization in a shorter write transaction before queue I/O;
+unrelated slow sends cannot retain recurring-parent row locks. Dirty revision
+reconciliation remains the delivery backstop. Ledger/locks alone still do not
+prove exactly-once remote effects. See [consumer error paths](../src/jobs/consumer.ts).
 
 ## Backups and restore drill
 

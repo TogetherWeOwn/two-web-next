@@ -48,6 +48,8 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, going = 3) {
     recurrenceIndex: null,
     createdAt: start,
     updatedAt: start,
+    syncRevision: 1,
+    syncedRevision: 0,
     ...over,
   };
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];

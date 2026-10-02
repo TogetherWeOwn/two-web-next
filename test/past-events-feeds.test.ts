@@ -56,6 +56,8 @@ function eventRow(n: number): typeof events.$inferSelect {
     recurrenceIndex: null,
     createdAt: date,
     updatedAt: date,
+    syncRevision: 1,
+    syncedRevision: 0,
   };
 }
 

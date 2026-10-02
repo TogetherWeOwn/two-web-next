@@ -83,6 +83,8 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
       capacity: null,
       status: "published",
       discordEventId: null,
+      syncRevision: 1,
+      syncedRevision: 0,
       discordSyncFailedAt: null,
       discordSyncFailureCode: null,
       agentGrantId: null,

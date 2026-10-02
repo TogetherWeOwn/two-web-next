@@ -55,6 +55,8 @@ function event(
     discordEventId: "discord-event-id",
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    syncRevision: 1,
+    syncedRevision: 0,
     agentGrantId: null,
     proofMarker: null,
     agentVersion: 1,

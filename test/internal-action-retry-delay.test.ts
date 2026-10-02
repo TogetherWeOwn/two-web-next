@@ -62,6 +62,13 @@ function msg(body: unknown, attempts = 1, jobId?: string) {
   });
 }
 const store = () => ({
+  prepareSync: async () => null,
+  completeSync: async () => {},
+  claimSync: async () => null,
+  deferSync: async () => {},
+  failSync: async () => {},
+  needsSync: async () => false,
+  pendingSync: async () => null,
   find: async () => null,
   recordMirrored: async () => {},
   closeFinished: async () => 0,

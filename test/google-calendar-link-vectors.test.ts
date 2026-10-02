@@ -32,6 +32,8 @@ const row = (overrides: Partial<EventRow> = {}): EventRow => ({
   createdAt: new Date("2026-07-01T12:00:00Z"),
   updatedAt: new Date("2026-07-01T12:00:00Z"),
   icsSequence: 0n,
+  syncRevision: 1,
+  syncedRevision: 0,
   ...overrides,
 });
 

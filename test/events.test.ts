@@ -10,20 +10,29 @@
 // W8: events sync carrier (unit, no DB) + public pages / JSON / moderator round-trips
 // (agent-testdb; skipped without DATABASE_URL like test/admin.test.ts).
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
-import {
-  SYNC_BACKOFF_SECONDS,
-  SYNC_DEBOUNCE_SECONDS,
-  buildSyncMessage,
-  enqueueEventSync,
-  nextBackoffSeconds,
-  type SyncMessage,
-} from "../src/events/sync";
+import { buildSyncMessage, enqueueEventSync } from "../src/events/sync";
+import { SYNC_EVENT, backoffFor } from "../src/jobs/constants";
+import type { QueueMessage } from "../src/jobs/types";
+
+// Carrier integration (real ledger/unique lock) lives in event-writeback.test.ts.
+// This suite covers message construction and public route behavior in isolation.
+vi.mock("../src/jobs/worker", () => ({
+  // Mirrors the real signature: the producer only ever emits the sync-event
+  // variant, so the jobId spread stays assignable now alert-probe exists.
+  enqueueSyncEvent: async (env: Env, message: Extract<QueueMessage, { kind: "sync-event" }>) => {
+    await env.SYNC_EVENT_QUEUE!.send(
+      { ...message, jobId: crypto.randomUUID() },
+      { delaySeconds: 10 },
+    );
+    return true;
+  },
+}));
 import {
   createMemorySessionStore,
   hashToken,
@@ -45,8 +54,8 @@ const baseEnv: Env = {
 
 describe("event sync carrier", () => {
   it("builds upsert for published, cancel for cancelled, nothing for draft/past", () => {
-    expect(buildSyncMessage("K", "published")?.action).toBe("event.upsert");
-    expect(buildSyncMessage("K", "cancelled")?.action).toBe("event.cancel");
+    expect(buildSyncMessage("K", "published")?.kind).toBe("sync-event");
+    expect(buildSyncMessage("K", "cancelled")?.kind).toBe("sync-event");
     expect(buildSyncMessage("K", "draft")).toBeNull();
     expect(buildSyncMessage("K", "past")).toBeNull();
   });
@@ -54,32 +63,36 @@ describe("event sync carrier", () => {
   it("keys the message on the event (unique per eventKey) and mints a fresh idempotency key per build", () => {
     const a = buildSyncMessage("01ABC", "published")!;
     const b = buildSyncMessage("01ABC", "published")!;
-    expect(a.dedupeKey).toBe("01ABC");
+    expect(a.kind).toBe("sync-event");
     expect(a.eventKey).toBe("01ABC");
     expect(a.idempotencyKey).not.toBe(b.idempotencyKey);
   });
 
   it("enqueues with the 10 s debounce delay and the legacy backoff schedule", async () => {
-    const sent: { m: SyncMessage; o?: { delaySeconds?: number } }[] = [];
+    const sent: { m: QueueMessage; o?: { delaySeconds?: number } }[] = [];
     const env = {
       ...baseEnv,
-      EVENT_SYNC_QUEUE: {
-        send: async (m: SyncMessage, o?: { delaySeconds?: number }) => void sent.push({ m, o }),
+      SYNC_EVENT_QUEUE: {
+        send: async (m: QueueMessage, o?: { delaySeconds?: number }) => {
+          sent.push({ m, o });
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+        },
       },
     };
     const msg = await enqueueEventSync(env, "01ABC", "published");
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.m).toEqual(msg);
-    expect(sent[0]!.o?.delaySeconds).toBe(SYNC_DEBOUNCE_SECONDS);
-    expect(SYNC_DEBOUNCE_SECONDS).toBe(10);
-    expect([...SYNC_BACKOFF_SECONDS]).toEqual([10, 60, 300, 900, 3600]);
-    expect(nextBackoffSeconds(9)).toBe(3600);
+    expect(sent[0]!.m).toMatchObject(msg!);
+    expect(sent[0]!.m.jobId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(sent[0]!.o?.delaySeconds).toBe(SYNC_EVENT.debounceSeconds);
+    expect(SYNC_EVENT.debounceSeconds).toBe(10);
+    expect([...SYNC_EVENT.backoffSeconds]).toEqual([10, 60, 300, 900, 3600]);
+    expect(backoffFor(SYNC_EVENT.backoffSeconds, 9)).toBe(3600);
   });
 
   it("never throws when the queue rejects or is unbound", async () => {
     const failing = {
       ...baseEnv,
-      EVENT_SYNC_QUEUE: {
+      SYNC_EVENT_QUEUE: {
         send: async () => {
           throw new Error("down");
         },
@@ -178,12 +191,16 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
   let fixture: MemberDataFixture;
   let db: Db;
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  // Routes only enqueue the sync-event variant; narrowing keeps idempotencyKey
+  // readable now the alert-probe variant (no idempotency key) exists.
+  const sent: Extract<QueueMessage, { kind: "sync-event" }>[] = [];
   const env = {
     ...baseEnv,
     SESSION_STORE: store,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-    EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+    SYNC_EVENT_QUEUE: {
+      send: async (m: Extract<QueueMessage, { kind: "sync-event" }>) => void sent.push(m),
+    },
   } as unknown as Env;
   // Sessions rotate on every authenticated view (a replayed cookie is a guest), so each
   // request mints a fresh cookie.
@@ -259,11 +276,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     const pub = await write("POST", `/events/${key.event_key}/publish`, MOD);
     expect(pub.status).toBe(200);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({
-      eventKey: key.event_key,
-      dedupeKey: key.event_key,
-      action: "event.upsert",
-    });
+    expect(sent[0]).toMatchObject({ eventKey: key.event_key, kind: "sync-event" });
     expect(sent[0]!.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
 
     const page = await req(`/e/${key.event_key}`);
@@ -287,7 +300,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     const cancel = await write("POST", `/events/${key.event_key}/cancel`, MOD);
     expect(cancel.status).toBe(200);
     expect(sent).toHaveLength(2);
-    expect(sent[1]).toMatchObject({ action: "event.cancel", eventKey: key.event_key });
+    expect(sent[1]).toMatchObject({ kind: "sync-event", eventKey: key.event_key });
     expect(sent[1]!.idempotencyKey).not.toBe(sent[0]!.idempotencyKey);
 
     const gone = await req(`/e/${key.event_key}`);

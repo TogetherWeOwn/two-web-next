@@ -38,11 +38,6 @@
       }
     ]
   },
-  // W8 write-back carrier. Still NOT bound: a producer binding to a queue that does not exist fails
-  // `wrangler deploy`, and the W8 SyncMessage shape differs from W13's QueueMessage above. After the
-  // operator runs `wrangler queues create two-web-next-event-sync`, append
-  //   { "binding": "EVENT_SYNC_QUEUE", "queue": "two-web-next-event-sync" }
-  // to producers. Until then src/events/sync.ts logs each due write-back (never silent, never throws).
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
