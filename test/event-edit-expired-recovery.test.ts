@@ -1,4 +1,9 @@
 // route-inventory: PATCH /events/:key
+// route-inventory: POST /events
+// route-inventory: POST /events/:key/publish
+// route-inventory: POST /events/:key/cancel
+// route-inventory: POST /events/:key/rsvp-pause
+// route-inventory: POST /events/:key/rsvp-reopen
 // Expired-session recovery for moderator event JSON writes (TOG-12621): a
 // presented bearer with no live row is an expired guest, not an unknown
 // guest — the gate bounces through expiredWriteBounce, so JSON callers keep
@@ -133,6 +138,56 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const res = await patch(undefined, { title: "Unsaved edit" });
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({ error: "unauthenticated" });
+    });
+
+    // JSON-only routes never negotiate: a header-less fetch must not follow a
+    // 303 to a 200 page and read a dropped write as success.
+    const recoveryBody = { error: "Unauthorized", recovery: "/auth/recover?next=%2Fevents" };
+    const expectJsonRecovery = async (res: Response) => {
+      expect(res.status).toBe(401);
+      expect(res.headers.get("location")).toBeNull();
+      expect(await res.json()).toEqual(recoveryBody);
+    };
+    const rows = async () =>
+      (await fixture.db.select().from(events)).map(({ title, status, rsvpOpen }) => ({
+        title,
+        status,
+        rsvpOpen,
+      }));
+
+    it.each(["publish", "cancel", "rsvp-pause", "rsvp-reopen"])(
+      "an expired bearer on bodiless %s with no Accept gets the JSON 401",
+      async (action) => {
+        const before = await rows();
+        const dead = await cookieFor("event-moderator", true, new Date(0));
+        const res = await req(`/events/${EVENT_KEY}/${action}`, {
+          method: "POST",
+          headers: { cookie: dead, origin: APP_URL },
+        });
+        await expectJsonRecovery(res);
+        expect(await rows()).toEqual(before);
+        expect(sent).toEqual([]);
+      },
+    );
+
+    it.each([
+      ["PATCH", `/events/${EVENT_KEY}`],
+      ["POST", "/events"],
+    ])("an expired bearer on a form-bodied %s %s gets the JSON 401", async (method, path) => {
+      const before = await rows();
+      const dead = await cookieFor("event-moderator", true, new Date(0));
+      const res = await req(path, {
+        method,
+        headers: {
+          cookie: dead,
+          origin: APP_URL,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ title: "Unsaved edit" }).toString(),
+      });
+      await expectJsonRecovery(res);
+      expect(await rows()).toEqual(before);
+      expect(sent).toEqual([]);
     });
 
     it("a live non-moderator still gets 403", async () => {

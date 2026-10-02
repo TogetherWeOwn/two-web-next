@@ -24,10 +24,11 @@ import type { Env, Session } from "../env";
 import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
 import { databaseUnavailable, NotFoundPage, rateLimitExceeded } from "../errors";
-import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
+import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { safeNext } from "../join/service";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
+import { expiredWriteBounce } from "../write-recovery";
 import { discordEventsSource } from "./discord-transients";
 import {
   RSVP_HONEY_FIELD,
@@ -552,13 +553,15 @@ export function registerEventRoutes(
     // Non-rotating: concurrent writes with one cookie must all authenticate.
     // A presented bearer with no live row (expired/revoked/rotated) is an
     // expired guest, not an unknown guest: writes recover through
-    // expiredWriteBounce (JSON keeps 401 with a recovery link), matching the
-    // profile/admin gates (TOG-10357/TOG-12399). A request with no cookie at
-    // all keeps the bare unauthenticated refusal the admission pins assert.
+    // expiredWriteBounce, matching the profile/admin gates (TOG-10357/TOG-12399).
+    // These routes are JSON-only, so the bounce is always 401 with a recovery
+    // link, never a 303 a header-less fetch would follow to a 200 page. A
+    // request with no cookie at all keeps the bare unauthenticated refusal the
+    // admission pins assert.
     const session = await readFragmentSession(c);
     if (!session) {
       const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
-      if (token) return bounceToLogin(c);
+      if (token) return expiredWriteBounce(c, true);
       return c.json({ error: "unauthenticated" }, 401);
     }
     if (!session.moderator) return c.json({ error: "forbidden" }, 403);
