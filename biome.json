@@ -1,0 +1,105 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["**", "!!**/node_modules", "!!**/dist", "!!drizzle/meta", "!package-lock.json"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "rules": {
+      "preset": "none",
+      "correctness": {
+        "noConstAssign": "error",
+        "noInvalidConstructorSuper": "error",
+        "noUnreachable": "error",
+        "noUnreachableSuper": "error",
+        "noUnsafeFinally": "error",
+        "noUnusedVariables": "error"
+      },
+      "suspicious": {
+        "noDebugger": "error",
+        "noDoubleEquals": "error",
+        "noDuplicateCase": "error",
+        "noDuplicateClassMembers": "error",
+        "noDuplicateObjectKeys": "error",
+        "noDuplicateParameters": "error",
+        "noFallthroughSwitchClause": "error",
+        "noSparseArray": "error"
+      },
+      "nursery": {
+        "noFloatingPromises": "error"
+      }
+    }
+  },
+  "assist": {
+    "enabled": false
+  },
+  "overrides": [
+    {
+      "includes": [
+        "public/styles.css",
+        "public/theme.css",
+        "public/profile-theme.css",
+        "public/schedule-theme.css",
+        "ci/a11y.mjs",
+        "ci/featured-proof/**"
+      ],
+      "formatter": { "enabled": false }
+    },
+    {
+      "includes": [
+        "test/import-audit.test.ts",
+        "test/import-events-rsvps.test.ts",
+        "test/import-events-target-separation.test.ts",
+        "test/import-backfill-portable.test.ts"
+      ],
+      "formatter": { "lineWidth": 140 }
+    },
+    {
+      "includes": ["spike/hyperdrive-semantics/staging-checks.ts"],
+      "linter": {
+        "rules": {
+          "correctness": { "noUnsafeFinally": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["public/islands/events-calendar.js"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedVariables": {
+              "level": "error",
+              "options": { "ignore": { "variable": ["e"] } }
+            }
+          },
+          "nursery": { "noFloatingPromises": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["public/islands/member-profile.js"],
+      "linter": {
+        "rules": {
+          "nursery": { "noFloatingPromises": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["public/islands/past-events.js"],
+      "linter": {
+        "rules": {
+          "nursery": { "noFloatingPromises": "off" }
+        }
+      }
+    }
+  ]
+}

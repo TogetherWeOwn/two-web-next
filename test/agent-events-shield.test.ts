@@ -30,8 +30,14 @@ const cfg = (routePerMinute: number): IngressConfig => ({
   routePerMinute,
 });
 const FIELDS = {
-  title: "Agent proof event", game: "Helldivers 2", description: "One uniquely labelled staging proof.",
-  starts_at: "2026-10-01 20:00", ends_at: "2026-10-01 22:00", timezone: "Europe/London", location: "Voice: General", capacity: 4,
+  title: "Agent proof event",
+  game: "Helldivers 2",
+  description: "One uniquely labelled staging proof.",
+  starts_at: "2026-10-01 20:00",
+  ends_at: "2026-10-01 22:00",
+  timezone: "Europe/London",
+  location: "Voice: General",
+  capacity: 4,
 };
 
 describe("throttle envelope (pure, two-web TOG-6788)", () => {
@@ -61,8 +67,12 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
   let n = 0;
   const key = () => `shield-key-${++n}`;
 
-  const call = (body: unknown, token: string | null, route: number, ip: string | null = "127.0.0.1") =>
-    handleAgentEvent(sql, cfg(route), body, token, ip);
+  const call = (
+    body: unknown,
+    token: string | null,
+    route: number,
+    ip: string | null = "127.0.0.1",
+  ) => handleAgentEvent(sql, cfg(route), body, token, ip);
 
   async function grant(token: string, agent: string = CALLER, guild: string = STAGING) {
     await sql.unsafe(
@@ -72,13 +82,18 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
   }
 
   const audits = async (reason: string) =>
-    (await sql`SELECT count(*)::int AS n FROM agent_event_audits WHERE reason_code = ${reason}`)[0]!.n as number;
+    (await sql`SELECT count(*)::int AS n FROM agent_event_audits WHERE reason_code = ${reason}`)[0]!
+      .n as number;
 
   beforeAll(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!); // Must run before postgres() or any DDL.
     // postgres.js treats password: "" as absent and falls back to PGPASSWORD.
     // A callback pins the authorized empty test password without that fallback.
-    const validated = { port: 5432, password: () => url.password, onnotice: (() => {}) as () => void };
+    const validated = {
+      port: 5432,
+      password: () => url.password,
+      onnotice: (() => {}) as () => void,
+    };
     admin = postgres(url.href, { ...validated, max: 1 });
     await admin.unsafe(`CREATE SCHEMA ${schemaName}`);
     sql = postgres(url.href, { ...validated, max: 8, connection: { search_path: schemaName } });
@@ -103,7 +118,10 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     const eventKey = created.body.event_key as string;
 
     const updated = await req({
-      op: "update", idempotency_key: key(), event_key: eventKey, version: 1,
+      op: "update",
+      idempotency_key: key(),
+      event_key: eventKey,
+      version: 1,
       fields: { ...FIELDS, title: "Agent proof event, reconciled" },
     });
     expect(updated.status).toBe(200);
@@ -111,7 +129,9 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     // Three more distinct mutating attempts on the quota (all 409s, all
     // counted by both layers): five hits, still under the shield of 8.
     for (let i = 0; i < 3; i++) {
-      expect((await req({ op: "create", idempotency_key: key(), fields: FIELDS })).status).toBe(409);
+      expect((await req({ op: "create", idempotency_key: key(), fields: FIELDS })).status).toBe(
+        409,
+      );
     }
     // Three more hits spend the shield of 8; the ninth is refused by the
     // outer layer — 429 JSON, never a stack.
@@ -132,12 +152,10 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     await grant(b);
     // Each credential creates its one owned event at the default shield,
     // before the budget is tightened for the measured phase.
-    const keyA = (
-      await call({ op: "create", idempotency_key: key(), fields: FIELDS }, a, 60)
-    ).body.event_key as string;
-    const keyB = (
-      await call({ op: "create", idempotency_key: key(), fields: FIELDS }, b, 60)
-    ).body.event_key as string;
+    const keyA = (await call({ op: "create", idempotency_key: key(), fields: FIELDS }, a, 60)).body
+      .event_key as string;
+    const keyB = (await call({ op: "create", idempotency_key: key(), fields: FIELDS }, b, 60)).body
+      .event_key as string;
     expect(keyA).toBeTruthy();
     expect(keyB).toBeTruthy();
     // Cache::flush() equivalent: the setup hits must not spend the measured budget.
@@ -152,7 +170,9 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
 
     // The second credential hashes to its own bucket: still answered while
     // the first is throttled.
-    expect((await call({ op: "read", idempotency_key: key(), event_key: keyB }, b, 2)).status).toBe(200);
+    expect((await call({ op: "read", idempotency_key: key(), event_key: keyB }, b, 2)).status).toBe(
+      200,
+    );
   });
 
   it("refuses an unauthenticated flood at the shield before the database runs", async () => {
@@ -182,8 +202,10 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     const farToken = `sh-far-${schemaName}`;
     const validToken = `sh-valid-${schemaName}`;
     await grant(validToken);
-    const nearMiss = () => call({ op: "create", idempotency_key: key(), fields: FIELDS }, nearToken, 3);
-    const farMiss = () => call({ op: "create", idempotency_key: key(), fields: FIELDS }, farToken, 3);
+    const nearMiss = () =>
+      call({ op: "create", idempotency_key: key(), fields: FIELDS }, nearToken, 3);
+    const farMiss = () =>
+      call({ op: "create", idempotency_key: key(), fields: FIELDS }, farToken, 3);
 
     const near = await nearMiss();
     const far = await farMiss();
@@ -213,7 +235,11 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     expect(farAgain.body.reason).toBe("unauthenticated");
 
     // The valid caller is unaffected: its own bucket, its own budget.
-    const valid = await call({ op: "create", idempotency_key: key(), fields: FIELDS }, validToken, 3);
+    const valid = await call(
+      { op: "create", idempotency_key: key(), fields: FIELDS },
+      validToken,
+      3,
+    );
     expect(valid.status).toBe(201);
 
     // Only the unthrottled misses wrote rows (3 near + 2 far).
@@ -226,7 +252,11 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
   const deepBody = () => {
     const body: Record<string, unknown> = { op: "create", idempotency_key: key() };
     let cur = body;
-    for (let i = 0; i < 500; i++) { const nxt: Record<string, unknown> = {}; cur.nest = nxt; cur = nxt; }
+    for (let i = 0; i < 500; i++) {
+      const nxt: Record<string, unknown> = {};
+      cur.nest = nxt;
+      cur = nxt;
+    }
     return body;
   };
 
@@ -257,7 +287,11 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     const r = await call({ op: "create", idempotency_key: key() }, null, 60, "127.0.0.33");
     expect(r.status).toBe(401);
     expect(r.body.reason).toBe("unauthenticated");
-    expect((await sql`SELECT count(*)::int AS n FROM agent_event_hits WHERE at < now() - interval '5 minutes'`)[0]!.n as number).toBe(0);
+    expect(
+      (
+        await sql`SELECT count(*)::int AS n FROM agent_event_hits WHERE at < now() - interval '5 minutes'`
+      )[0]!.n as number,
+    ).toBe(0);
   });
 
   it("admits a fresh credential while an unrelated stale row is locked", async () => {
@@ -312,9 +346,14 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
       // Hold the exact advisory lock the shield takes: `agent-event-hits:`
       // + its `shield:<credential-hash>` bucket.
       await holder.unsafe("BEGIN");
-      await holder`SELECT pg_advisory_xact_lock(hashtextextended(${"agent-event-hits:shield:" + await sha256Hex(token)}, 0))`;
+      await holder`SELECT pg_advisory_xact_lock(hashtextextended(${"agent-event-hits:shield:" + (await sha256Hex(token))}, 0))`;
       const start = Date.now();
-      const r = await handleAgentEvent(sql, { ...cfg(60), lockWaitMs: 50 }, { op: "create", idempotency_key: key() }, token);
+      const r = await handleAgentEvent(
+        sql,
+        { ...cfg(60), lockWaitMs: 50 },
+        { op: "create", idempotency_key: key() },
+        token,
+      );
       const elapsed = Date.now() - start;
       // Retryable 503 audited as load — not a hung connection waiting on the holder.
       expect(r.status).toBe(503);

@@ -53,12 +53,18 @@
 
   function expiredNotice() {
     sessionExpired = true;
-    notice("profile-session-expired", "alert", "Your session expired. Your changes are still here.", true);
+    notice(
+      "profile-session-expired",
+      "alert",
+      "Your session expired. Your changes are still here.",
+      true,
+    );
   }
-  if (typeof window !== "undefined") window.addEventListener("two:session-expired", function (event) {
-    event.preventDefault();
-    expiredNotice();
-  });
+  if (typeof window !== "undefined")
+    window.addEventListener("two:session-expired", function (event) {
+      event.preventDefault();
+      expiredNotice();
+    });
 
   function accepted(body) {
     // Match the server's normalization; success returns no profile fields.
@@ -121,7 +127,7 @@
     if (tz) {
       try {
         new Intl.DateTimeFormat("en", { timeZone: tz });
-      } catch (x) {
+      } catch {
         e.push("Choose a valid IANA timezone, e.g. Europe/London.");
       }
     }
@@ -139,7 +145,8 @@
     if (loginLink) {
       el.appendChild(document.createTextNode(" "));
       var a = document.createElement("a");
-      a.href = "/auth/recover?next=" + encodeURIComponent(location.pathname + (location.search || ""));
+      a.href =
+        "/auth/recover?next=" + encodeURIComponent(location.pathname + (location.search || ""));
       a.textContent = "Log in with Discord";
       el.appendChild(a);
     }
@@ -151,7 +158,14 @@
     root.querySelectorAll("[data-testid^='profile-']").forEach(function (n) {
       var t = n.getAttribute("data-testid");
       if (t === "profile-session-expired" && sessionExpired) return;
-      if (t === "profile-error" || t === "profile-save-failed" || t === "profile-session-expired" || t === "profile-saved" || t === "profile-uncertain") n.remove();
+      if (
+        t === "profile-error" ||
+        t === "profile-save-failed" ||
+        t === "profile-session-expired" ||
+        t === "profile-saved" ||
+        t === "profile-uncertain"
+      )
+        n.remove();
     });
   }
 
@@ -195,7 +209,9 @@
     clearDeadline();
     pending = false;
     if (controller) {
-      try { controller.abort(); } catch (x) {}
+      try {
+        controller.abort();
+      } catch {}
     }
     // A cancelled write no longer owns feedback: release it silently.
     if (request !== generation) return;
@@ -212,7 +228,8 @@
     var el = document.createElement("div");
     el.setAttribute("data-testid", "profile-uncertain");
     el.setAttribute("role", "status");
-    el.textContent = "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.";
+    el.textContent =
+      "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.";
     form.parentNode.insertBefore(el, form);
   }
 
@@ -236,13 +253,14 @@
     alert.focus();
   }
 
-  if (edit) edit.addEventListener("click", function () {
-    clearNotices();
-    form.hidden = false;
-    if (editControl) editControl.hidden = true;
-    var heading = root.querySelector('[id="edit-heading"]');
-    if (heading) heading.focus();
-  });
+  if (edit)
+    edit.addEventListener("click", function () {
+      clearNotices();
+      form.hidden = false;
+      if (editControl) editControl.hidden = true;
+      var heading = root.querySelector('[id="edit-heading"]');
+      if (heading) heading.focus();
+    });
 
   form.addEventListener("reset", function () {
     // Cancel discards the draft, not an already accepted server write. A late
@@ -317,9 +335,10 @@
           };
           try {
             var problems = res.json();
-            if (problems && typeof problems.then === "function") return problems.then(invalid, rejected);
+            if (problems && typeof problems.then === "function")
+              return problems.then(invalid, rejected);
             invalid(problems);
-          } catch (e) {
+          } catch {
             rejected();
           }
           return;
@@ -344,12 +363,17 @@
             var ack = res.json();
             if (ack && typeof ack.then === "function") return ack.then(admit, unproven);
             admit(ack);
-          } catch (e) {
+          } catch {
             unproven();
           }
           return;
         }
-        if (res.status === 401 || res.status === 419 || res.type === "opaqueredirect" || res.status === 302) {
+        if (
+          res.status === 401 ||
+          res.status === 419 ||
+          res.type === "opaqueredirect" ||
+          res.status === 302
+        ) {
           return expiredNotice();
         }
         saveFailed();

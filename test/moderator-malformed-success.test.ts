@@ -93,12 +93,14 @@ describe("moderator recompute contains malformed successful Discord responses", 
     // injection point is a body that errors after a valid prefix — the token-
     // bearing error must stay contained and read exactly like non-JSON.
     const payload = new TextEncoder().encode(JSON.stringify({ roles: [ROLE_ID] }));
-    const response = new Response(new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(payload);
-        c.error(new Error(`body read ${BOT_TOKEN}`, { cause: new Error(PAYLOAD) }));
-      },
-    }));
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(payload);
+          c.error(new Error(`body read ${BOT_TOKEN}`, { cause: new Error(PAYLOAD) }));
+        },
+      }),
+    );
     const fetch = stubResponse(response);
     await expect(recomputeModerator(opts)).resolves.toBe(false);
     expectLookup(fetch);
@@ -108,26 +110,36 @@ describe("moderator recompute contains malformed successful Discord responses", 
   });
 
   it("settles false when the provider fetch rejects without logging the exception", async () => {
-    const fetch = vi.fn().mockRejectedValue(new TypeError(`request ${BOT_TOKEN}`, {
-      cause: new Error(PAYLOAD),
-    }));
+    const fetch = vi.fn().mockRejectedValue(
+      new TypeError(`request ${BOT_TOKEN}`, {
+        cause: new Error(PAYLOAD),
+      }),
+    );
     vi.stubGlobal("fetch", fetch);
     await expect(recomputeModerator(opts)).resolves.toBe(false);
     expectLookup(fetch);
     expect(diagnostics).toEqual([]);
   });
 
-  it.each([401, 403, 404, 429, 500, 503])("HTTP %i denies even a body claiming the allowed role", async (status) => {
-    const response = Response.json({ roles: [ROLE_ID], diagnostic: `${PAYLOAD} ${BOT_TOKEN}` }, { status });
-    const json = vi.spyOn(response, "json");
-    const fetch = stubResponse(response);
-    await expect(recomputeModerator(opts)).resolves.toBe(false);
-    expectLookup(fetch);
-    expect(json).not.toHaveBeenCalled();
-    expect(diagnostics).toEqual(status === 404 ? [] : [
-      { level: "warn", args: ["moderator recompute lookup failed", { status }] },
-    ]);
-  });
+  it.each([401, 403, 404, 429, 500, 503])(
+    "HTTP %i denies even a body claiming the allowed role",
+    async (status) => {
+      const response = Response.json(
+        { roles: [ROLE_ID], diagnostic: `${PAYLOAD} ${BOT_TOKEN}` },
+        { status },
+      );
+      const json = vi.spyOn(response, "json");
+      const fetch = stubResponse(response);
+      await expect(recomputeModerator(opts)).resolves.toBe(false);
+      expectLookup(fetch);
+      expect(json).not.toHaveBeenCalled();
+      expect(diagnostics).toEqual(
+        status === 404
+          ? []
+          : [{ level: "warn", args: ["moderator recompute lookup failed", { status }] }],
+      );
+    },
+  );
 });
 
 describe("moderator recompute preserves string-role intersection semantics", () => {
@@ -136,9 +148,21 @@ describe("moderator recompute preserves string-role intersection semantics", () 
     ["unmatched snowflake", [OTHER_ROLE_ID], false],
     ["empty role list", [], false],
     ["display name", ["SySOp"], false],
-    ["numeric/object roles are not coerced", [Number(ROLE_ID), { id: ROLE_ID }, null, false], false],
-    ["mixed array without an admitted intersection", [OTHER_ROLE_ID, Number(ROLE_ID), { id: ROLE_ID }, PAYLOAD], false],
-    ["mixed array retains its matching string", [null, Number(ROLE_ID), { id: ROLE_ID }, ROLE_ID, PAYLOAD], true],
+    [
+      "numeric/object roles are not coerced",
+      [Number(ROLE_ID), { id: ROLE_ID }, null, false],
+      false,
+    ],
+    [
+      "mixed array without an admitted intersection",
+      [OTHER_ROLE_ID, Number(ROLE_ID), { id: ROLE_ID }, PAYLOAD],
+      false,
+    ],
+    [
+      "mixed array retains its matching string",
+      [null, Number(ROLE_ID), { id: ROLE_ID }, ROLE_ID, PAYLOAD],
+      true,
+    ],
   ] satisfies [string, unknown[], boolean][])("%s", async (_name, roles, expected) => {
     const fetch = stubResponse(Response.json({ roles, diagnostic: PAYLOAD }));
     await expect(recomputeModerator(opts)).resolves.toBe(expected);

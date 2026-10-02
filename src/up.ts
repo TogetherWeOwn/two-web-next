@@ -25,13 +25,18 @@ import type { QueueDepth } from "./jobs/postgres";
 export const WEB_MIGRATIONS = journal.entries.filter((entry) => /^1\d{3}_/.test(entry.tag));
 
 export function pendingWebMigrations(rows: readonly { created_at: unknown }[]): number {
-  const applied = new Set(rows.map(({ created_at }) => {
-    if ((typeof created_at !== "number" && typeof created_at !== "string")
-      || !/^\d+$/.test(String(created_at)) || !Number.isSafeInteger(Number(created_at))) {
-      throw new Error("Invalid migration timestamp");
-    }
-    return Number(created_at);
-  }));
+  const applied = new Set(
+    rows.map(({ created_at }) => {
+      if (
+        (typeof created_at !== "number" && typeof created_at !== "string") ||
+        !/^\d+$/.test(String(created_at)) ||
+        !Number.isSafeInteger(Number(created_at))
+      ) {
+        throw new Error("Invalid migration timestamp");
+      }
+      return Number(created_at);
+    }),
+  );
   return WEB_MIGRATIONS.filter((entry) => !applied.has(entry.when)).length;
 }
 
@@ -46,9 +51,11 @@ const HEALTH_RESPONSE_MARGIN_MS = 250;
 // https://developers.cloudflare.com/hyperdrive/concepts/connection-pooling/
 // https://www.postgresql.org/docs/current/runtime-config-client.html#RUNTIME-CONFIG-CLIENT-STATEMENT
 export async function withHealthReadTimeout<T>(
-  sql: Sql, read: (tx: TransactionSql) => Promise<T>, deadline = Date.now() + QUEUE_READ_TIMEOUT_MS,
+  sql: Sql,
+  read: (tx: TransactionSql) => Promise<T>,
+  deadline = Date.now() + QUEUE_READ_TIMEOUT_MS,
 ): Promise<T> {
-  return await sql.begin("read only", async (tx) => {
+  return (await sql.begin("read only", async (tx) => {
     const remaining = deadline - Date.now() - HEALTH_RESPONSE_MARGIN_MS;
     if (remaining <= 1) throw new Error("Health read deadline elapsed");
     const statement = Math.min(HEALTH_STATEMENT_TIMEOUT_MS, remaining);
@@ -57,9 +64,10 @@ export async function withHealthReadTimeout<T>(
       set_config('lock_timeout', ${`${lock}ms`}, true)`;
     // The successful setup reply can consume budget too. Refuse the read if
     // its installed server limit no longer fits; do not start another SET loop.
-    if (statement > deadline - Date.now() - HEALTH_RESPONSE_MARGIN_MS) throw new Error("Health read deadline elapsed");
+    if (statement > deadline - Date.now() - HEALTH_RESPONSE_MARGIN_MS)
+      throw new Error("Health read deadline elapsed");
     return read(tx);
-  }) as T;
+  })) as T;
 }
 
 export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadiness> {
@@ -67,20 +75,31 @@ export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadin
   if (!sql) return { db, pending_migrations: null };
   try {
     const deadline = Date.now() + QUEUE_READ_TIMEOUT_MS;
-    const pending_migrations = await withTimeout((async () => {
-      // Volatile clock_timestamp() prevents Hyperdrive query caching from
-      // turning a cached ping/ledger into false readiness after an outage:
-      // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
-      const ping = await withHealthReadTimeout(sql, async (tx) => tx`SELECT clock_timestamp() AS checked_at`, deadline);
-      if (ping.length !== 1) throw new Error("Missing database ping result");
-      db = "ok";
-      // Drizzle 0.45 records journal.when as created_at, not the filename/tag:
-      // https://orm.drizzle.team/docs/drizzle-kit-migrate#applied-migrations-log-in-the-database
-      const rows = await withHealthReadTimeout(sql, async (tx) => tx<{ created_at: unknown }[]>`
+    const pending_migrations = await withTimeout(
+      (async () => {
+        // Volatile clock_timestamp() prevents Hyperdrive query caching from
+        // turning a cached ping/ledger into false readiness after an outage:
+        // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
+        const ping = await withHealthReadTimeout(
+          sql,
+          async (tx) => tx`SELECT clock_timestamp() AS checked_at`,
+          deadline,
+        );
+        if (ping.length !== 1) throw new Error("Missing database ping result");
+        db = "ok";
+        // Drizzle 0.45 records journal.when as created_at, not the filename/tag:
+        // https://orm.drizzle.team/docs/drizzle-kit-migrate#applied-migrations-log-in-the-database
+        const rows = await withHealthReadTimeout(
+          sql,
+          async (tx) => tx<{ created_at: unknown }[]>`
         SELECT created_at, clock_timestamp() AS checked_at FROM drizzle.__drizzle_migrations
-      `, deadline);
-      return pendingWebMigrations(rows);
-    })(), QUEUE_READ_TIMEOUT_MS);
+      `,
+          deadline,
+        );
+        return pendingWebMigrations(rows);
+      })(),
+      QUEUE_READ_TIMEOUT_MS,
+    );
     return { db, pending_migrations };
   } catch (err) {
     console.warn("Health check could not establish database/schema readiness.", {
@@ -93,7 +112,11 @@ export async function databaseReadiness(sql: Sql | null): Promise<DatabaseReadin
 // Secrets without which sign-in or join cannot work. Presence only: no shape
 // or strength check, and the body never names which one is absent. The
 // server-side warning lists names, never values (TOG-12400).
-export const REQUIRED_SECRETS = ["SESSION_SECRET", "DISCORD_CLIENT_SECRET", "DISCORD_BOT_TOKEN"] as const;
+export const REQUIRED_SECRETS = [
+  "SESSION_SECRET",
+  "DISCORD_CLIENT_SECRET",
+  "DISCORD_BOT_TOKEN",
+] as const;
 type RequiredSecret = (typeof REQUIRED_SECRETS)[number];
 
 export type ConfigReadiness = { config?: "missing" };
@@ -149,12 +172,18 @@ type QueueHealth = { status: "healthy" | "degraded"; queue: QueuePayload };
 export type UpBody = QueueHealth & DatabaseReadiness & ConfigReadiness;
 
 export async function upBody(
-  measure: (() => Promise<QueueDepth>) | null, sql: Sql | null = null, config: ConfigReadiness = {},
+  measure: (() => Promise<QueueDepth>) | null,
+  sql: Sql | null = null,
+  config: ConfigReadiness = {},
 ): Promise<UpBody> {
   // Parallel deadlines keep a hung DB + hung queue inside one 3 s window.
   const [queue, database] = await Promise.all([queueBody(measure), databaseReadiness(sql)]);
   const ready = { ...database, ...config };
-  return { ...queue, ...ready, status: upHttpStatus(ready) === 503 ? "degraded" : queue.status };
+  return {
+    ...queue,
+    ...ready,
+    status: upHttpStatus(ready) === 503 ? "degraded" : queue.status,
+  };
 }
 
 function unknownQueue(detail: string | null): QueuePayload {
@@ -179,7 +208,8 @@ function unknownQueue(detail: string | null): QueuePayload {
  */
 async function queueBody(measure: (() => Promise<QueueDepth>) | null): Promise<QueueHealth> {
   // Legacy: `queue driver 'x' has no countable depth.` — here: no ledger to read.
-  if (!measure) return { status: "healthy", queue: unknownQueue("queue ledger is not configured.") };
+  if (!measure)
+    return { status: "healthy", queue: unknownQueue("queue ledger is not configured.") };
 
   let depth: QueueDepth;
   try {

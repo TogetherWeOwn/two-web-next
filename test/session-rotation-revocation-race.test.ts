@@ -89,7 +89,12 @@ describe("memory rotation eligibility", () => {
     now = Date.now();
     store = createMemorySessionStore(() => now);
   });
-  eligibilityContract(() => ({ store, expire: async () => { now = Date.now() + 3600_000; } }));
+  eligibilityContract(() => ({
+    store,
+    expire: async () => {
+      now = Date.now() + 3600_000;
+    },
+  }));
 });
 
 // Safe target validation precedes driver construction. Every write, constraint
@@ -104,8 +109,12 @@ describe.skipIf(!url)("postgres rotation eligibility", () => {
     await migrate(sql as unknown as Sql);
     store = createPostgresSessionStore(sql as unknown as Sql);
   });
-  beforeEach(async () => { await sql`delete from web_sessions`; });
-  afterAll(async () => { await fixture?.dispose(); });
+  beforeEach(async () => {
+    await sql`delete from web_sessions`;
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
   eligibilityContract(() => ({
     store,
     expire: async (hash) => {
@@ -118,10 +127,16 @@ describe.skipIf(!url)("postgres rotation eligibility", () => {
     const source = session("no-op-source");
     await store.create(source);
     const before = await sql`select * from web_sessions where token_hash = ${source.tokenHash}`;
-    expect(await store.rotate(source.tokenHash, {
-      ...source, moderator: true, expiresAt: new Date(source.expiresAt.getTime() + 3600_000),
-    })).toBe(true);
-    expect(await sql`select * from web_sessions where token_hash = ${source.tokenHash}`).toEqual(before);
+    expect(
+      await store.rotate(source.tokenHash, {
+        ...source,
+        moderator: true,
+        expiresAt: new Date(source.expiresAt.getTime() + 3600_000),
+      }),
+    ).toBe(true);
+    expect(await sql`select * from web_sessions where token_hash = ${source.tokenHash}`).toEqual(
+      before,
+    );
   });
 
   async function waitForBlocked(blocker: number) {
@@ -136,60 +151,74 @@ describe.skipIf(!url)("postgres rotation eligibility", () => {
     throw new Error("rotation did not reach the held row lock");
   }
 
-  it.each([false, true])("refuses committed revocation after a row-lock wait (same hash: %s)", async (sameHash) => {
-    const source = session("locked-revoke-source");
-    const replacement = session(sameHash ? source.tokenHash : "locked-revoke-replacement");
-    await store.create(source);
-    expect(await store.get(source.tokenHash)).not.toBeNull();
-    let rotation: Promise<boolean> | undefined;
-    try {
-      await sql.begin(async (tx) => {
-        const [holder] = await tx`select pg_backend_pid() as pid`;
-        await tx`select token_hash from web_sessions where token_hash = ${source.tokenHash} for update`;
-        rotation = store.rotate(source.tokenHash, replacement);
-        await waitForBlocked(holder!.pid);
-        await createPostgresSessionStore(tx as unknown as Sql).revoke(source.tokenHash);
-      }); // Revocation commits before the waiting rotation can acquire the lock.
-      expect(await rotation).toBe(false);
-      expect(await store.get(replacement.tokenHash)).toBeNull();
-      const rows = await sql`select token_hash, revoked_at from web_sessions`;
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ token_hash: source.tokenHash, revoked_at: expect.any(Date) });
-    } finally { await rotation; }
-  });
+  it.each([false, true])(
+    "refuses committed revocation after a row-lock wait (same hash: %s)",
+    async (sameHash) => {
+      const source = session("locked-revoke-source");
+      const replacement = session(sameHash ? source.tokenHash : "locked-revoke-replacement");
+      await store.create(source);
+      expect(await store.get(source.tokenHash)).not.toBeNull();
+      let rotation: Promise<boolean> | undefined;
+      try {
+        await sql.begin(async (tx) => {
+          const [holder] = await tx`select pg_backend_pid() as pid`;
+          await tx`select token_hash from web_sessions where token_hash = ${source.tokenHash} for update`;
+          rotation = store.rotate(source.tokenHash, replacement);
+          await waitForBlocked(holder!.pid);
+          await createPostgresSessionStore(tx as unknown as Sql).revoke(source.tokenHash);
+        }); // Revocation commits before the waiting rotation can acquire the lock.
+        expect(await rotation).toBe(false);
+        expect(await store.get(replacement.tokenHash)).toBeNull();
+        const rows = await sql`select token_hash, revoked_at from web_sessions`;
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          token_hash: source.tokenHash,
+          revoked_at: expect.any(Date),
+        });
+      } finally {
+        await rotation;
+      }
+    },
+  );
 
-  it.each([false, true])("rechecks wall clock after an unchanged row-lock wait (same hash: %s)", async (sameHash) => {
-    const source = session("locked-expiry-source");
-    const replacement = session(sameHash ? source.tokenHash : "locked-expiry-replacement");
-    await store.create(source);
-    expect(await store.get(source.tokenHash)).not.toBeNull();
-    // Set expiry before taking the lock: the holder must not update the tuple.
-    // Otherwise Postgres may re-evaluate a pre-lock WHERE clause after an update,
-    // hiding the bug in a plain DELETE ... expires_at > clock_timestamp().
-    await sql`update web_sessions set expires_at = clock_timestamp() + interval '3 seconds'
+  it.each([false, true])(
+    "rechecks wall clock after an unchanged row-lock wait (same hash: %s)",
+    async (sameHash) => {
+      const source = session("locked-expiry-source");
+      const replacement = session(sameHash ? source.tokenHash : "locked-expiry-replacement");
+      await store.create(source);
+      expect(await store.get(source.tokenHash)).not.toBeNull();
+      // Set expiry before taking the lock: the holder must not update the tuple.
+      // Otherwise Postgres may re-evaluate a pre-lock WHERE clause after an update,
+      // hiding the bug in a plain DELETE ... expires_at > clock_timestamp().
+      await sql`update web_sessions set expires_at = clock_timestamp() + interval '3 seconds'
       where token_hash = ${source.tokenHash}`;
-    let rotation: Promise<boolean> | undefined;
-    try {
-      await sql.begin(async (tx) => {
-        const [holder] = await tx`select pg_backend_pid() as pid`;
-        await tx`select token_hash from web_sessions where token_hash = ${source.tokenHash} for update`;
-        rotation = store.rotate(source.tokenHash, replacement);
-        await waitForBlocked(holder!.pid);
-        const [before] = await tx`select expires_at > clock_timestamp() as live from web_sessions
+      let rotation: Promise<boolean> | undefined;
+      try {
+        await sql.begin(async (tx) => {
+          const [holder] = await tx`select pg_backend_pid() as pid`;
+          await tx`select token_hash from web_sessions where token_hash = ${source.tokenHash} for update`;
+          rotation = store.rotate(source.tokenHash, replacement);
+          await waitForBlocked(holder!.pid);
+          const [before] = await tx`select expires_at > clock_timestamp() as live from web_sessions
           where token_hash = ${source.tokenHash}`;
-        expect(before!.live).toBe(true);
-        await tx`select pg_sleep(greatest(0, extract(epoch from expires_at - clock_timestamp()))::float8 + 0.01)
+          expect(before!.live).toBe(true);
+          await tx`select pg_sleep(greatest(0, extract(epoch from expires_at - clock_timestamp()))::float8 + 0.01)
           from web_sessions where token_hash = ${source.tokenHash}`;
-        const [after] = await tx`select expires_at > now() as transaction_live,
+          const [after] = await tx`select expires_at > now() as transaction_live,
           expires_at <= clock_timestamp() as expired from web_sessions where token_hash = ${source.tokenHash}`;
-        expect(after).toMatchObject({ transaction_live: true, expired: true });
-      });
-      expect(await rotation).toBe(false);
-      expect(await store.get(replacement.tokenHash)).toBeNull();
-      const rows = await sql`select token_hash from web_sessions`;
-      expect(rows).toEqual([{ token_hash: source.tokenHash }]);
-    } finally { await rotation; }
-  }, 10_000);
+          expect(after).toMatchObject({ transaction_live: true, expired: true });
+        });
+        expect(await rotation).toBe(false);
+        expect(await store.get(replacement.tokenHash)).toBeNull();
+        const rows = await sql`select token_hash from web_sessions`;
+        expect(rows).toEqual([{ token_hash: source.tokenHash }]);
+      } finally {
+        await rotation;
+      }
+    },
+    10_000,
+  );
 
   it("does not renew an expired session using an older transaction's now()", async () => {
     const source = session("old-transaction-source");
@@ -202,7 +231,9 @@ describe.skipIf(!url)("postgres rotation eligibility", () => {
         expires_at <= clock_timestamp() as expired from web_sessions where token_hash = ${source.tokenHash}`;
       expect(row).toMatchObject({ transaction_live: true, expired: true });
       const txStore = createPostgresSessionStore(tx as unknown as Sql);
-      expect(await txStore.rotate(source.tokenHash, session("old-transaction-replacement"))).toBe(false);
+      expect(await txStore.rotate(source.tokenHash, session("old-transaction-replacement"))).toBe(
+        false,
+      );
       expect(await txStore.rotate(source.tokenHash, source)).toBe(false);
     });
     expect(await store.get("old-transaction-replacement")).toBeNull();
@@ -214,12 +245,17 @@ describe.skipIf(!url)("postgres rotation eligibility", () => {
     await sql`alter table web_sessions add constraint rotation_fixture_username
       check (username <> 'invalid-replacement')`;
     try {
-      await expect(store.rotate(source.tokenHash, {
-        ...session("rollback-replacement"), username: "invalid-replacement",
-      })).rejects.toMatchObject({ code: "23514" });
+      await expect(
+        store.rotate(source.tokenHash, {
+          ...session("rollback-replacement"),
+          username: "invalid-replacement",
+        }),
+      ).rejects.toMatchObject({ code: "23514" });
       expect(await store.get(source.tokenHash)).toMatchObject({ username: source.username });
       expect(await store.get("rollback-replacement")).toBeNull();
-      expect(await sql`select token_hash from web_sessions`).toEqual([{ token_hash: source.tokenHash }]);
+      expect(await sql`select token_hash from web_sessions`).toEqual([
+        { token_hash: source.tokenHash },
+      ]);
     } finally {
       await sql`alter table web_sessions drop constraint rotation_fixture_username`;
     }
