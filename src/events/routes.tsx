@@ -489,8 +489,8 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         endsAtUtc: existing.endsAt.toISOString(),
       });
       const { row, writeBack, childWriteBacks } = await updateEvent(db, { id: who.id, username: who.username }, key, input);
-      if (writeBack) await dispatchWriteBack(c.env, writeBack);
-      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb);
+      if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
+      for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
       const updated = await getPublicEvent(db, row.eventKey);
       return c.json({ data: eventJson(updated!) });
     } catch (err) {
@@ -511,7 +511,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
         const { row, writeBack } = action === "rsvp-pause" || action === "rsvp-reopen"
           ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
           : await transitionEvent(db, actor, key, action === "publish" ? "published" : "cancelled");
-        if (writeBack) await dispatchWriteBack(c.env, writeBack);
+        if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         return c.json({ data: eventJson(await withGoingCount(db, row)) });
       } catch (err) {
         if (err instanceof ValidationError) return invalid(c, err);
@@ -567,7 +567,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
       if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
       return closed(c, r.why);
     }
-    await dispatchRsvpSync(c.env, r.eventKey, r.mirrored);
+    await dispatchRsvpSync(c.env, r.eventKey, r.mirrored, c.get("requestId"));
     return c.json(rsvpBody(r.answer), r.created ? 201 : 200);
   };
   app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => putRsvp(c, await body(c)));
@@ -591,7 +591,7 @@ export function registerEventRoutes(app: App, readSession: SessionReader, readFr
     const key = c.req.param("key") ?? "";
     const r = await withdrawRsvp(db, eventKeyAllowed(key, c.env.APP_URL) ? key : "", who.id);
     if (r.limited) return rateLimitExceeded(c, r.retryAfter);
-    await dispatchRsvpSync(c.env, key, r.status);
+    await dispatchRsvpSync(c.env, key, r.status, c.get("requestId"));
     return c.body(null, 204);
   };
   app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) => deleteRsvp(c, await body(c).catch(() => ({}))));

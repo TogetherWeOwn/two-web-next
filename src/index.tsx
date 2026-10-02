@@ -27,7 +27,7 @@ import { imageHosts } from "./image-policy";
 import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
-import { registerErrorHandlers } from "./errors";
+import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
 import { dbFor } from "./admin/db";
@@ -42,6 +42,7 @@ import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import { consumeLoginReturn, LOGIN_INTENDED_COOKIE, rememberLoginNext, takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
+import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 import { rulesLastUpdated } from "./rules-last-updated";
@@ -106,10 +107,16 @@ const staticSecurityHeaders = secureHeaders({
   reportingEndpoints: [{ name: "csp-endpoint", url: CSP_REPORT_ENDPOINT }],
 });
 
-app.use("*", async (c, next) => {
-  await staticSecurityHeaders(c, next);
-  await robotsTag(c, async () => {});
-});
+app.use("*", (c, next) => requestLog(c, async () => {
+  try {
+    await staticSecurityHeaders(c, next);
+    await robotsTag(c, async () => {});
+  } catch (err) {
+    // Handler errors already became responses; one thrown by this
+    // post-processing would skip requestLog, so settle the final 500 here.
+    c.res = await internalErrorHandler(err, c);
+  }
+}));
 
 // TrustHosts re-expression (W16: TOG-10110): refuse foreign Host values
 // before routing. Mounted after secureHeaders (refusals leave hardened) and
