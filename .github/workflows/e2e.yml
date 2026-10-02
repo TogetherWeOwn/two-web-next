@@ -1,0 +1,71 @@
+name: e2e
+
+# Browser smoke for the critical journeys (docs/critical-journeys.md).
+# Public repo: standard GitHub-hosted ubuntu-latest runners only — never paid
+# larger runners or Blacksmith. The Postgres service is disposable per job;
+# the guard in e2e/ci-only.mjs permits only that target, never staging or
+# production. Browsers run here in CI only, never on the controller.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-smoke:
+    name: browser-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://agent_test@127.0.0.1:5432/two_web_next
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Verify CI isolation
+        run: node e2e/prepare.mjs
+      - name: Apply migrations to disposable Postgres
+        run: npm run db:migrate
+      - name: Seed journey fixtures
+        run: node e2e/seed.mjs
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Critical browser journeys
+        run: npm run e2e
+      - name: Failure traces and report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove ephemeral QA material
+        if: always()
+        run: rm -f e2e/.dev.vars
