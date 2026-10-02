@@ -491,10 +491,9 @@ export function registerEventRoutes(
             // store outage or a rotated cookie can never turn the static
             // cancellation into a 500 (TOG-10356 review).
             c.header("cache-control", "private, no-store");
-            const returnTo = c.req.path + new URL(c.req.url).search;
             return bufferedMemberHtml(
               c,
-              <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} returnTo={returnTo} />,
+              <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />,
               410,
             );
           }

@@ -133,6 +133,28 @@ describe("event detail theme", () => {
     expect(html).not.toContain('data-testid="event-related"');
   });
 
+  it("stacks related title, date and location without separator glyphs", () => {
+    const link = {
+      id: 2,
+      eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+      startsAt: start,
+      timezone: "UTC",
+    };
+    const html = render({
+      related: [
+        { ...link, title: "Go night", location: "Lounge <b>" },
+        { ...link, id: 3, eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "Quiz", location: null },
+      ],
+    });
+    const related = html.split('<ul class="event-related-grid">')[1]!.split("</ul>")[0]!;
+    expect(related).not.toContain("·");
+    expect(related).toContain('data-testid="event-related-link">Go night <time datetime=');
+    expect(related).toContain(
+      '</time> <span class="event-related-location">Lounge &lt;b&gt;</span></a>',
+    );
+    expect(related).toMatch(/Quiz <time datetime="[^"]+">[^<]+<\/time><\/a>/);
+  });
+
   it("gives the cancelled state the same chrome without session, sharing or RSVP actions", () => {
     const jsonLd = '{"eventStatus":"https://schema.org/EventCancelled"}';
     const html = EventGonePage({ e: { ...e, status: "cancelled" }, jsonLd })!.toString();
@@ -143,8 +165,8 @@ describe("event detail theme", () => {
     expect(html).toContain('name="robots" content="noindex, nofollow"');
     expect(html).toContain(`<script type="application/ld+json">${jsonLd}</script>`);
     expect(html).toContain('href="/events">See upcoming events');
-    expect(html).toContain('<div class="event-rsvp"><section data-island="rsvp-button"');
-    expect(html).toContain('data-testid="rsvp-closed">Cancelled');
+    const visible = html.replace(/<head>[\s\S]*?<\/head>|<script[\s\S]*?<\/script>|<[^>]+>/g, " ");
+    expect(visible.match(/cancel/gi)).toEqual(["Cancel"]);
     for (const absent of [
       'rel="canonical"',
       'property="og:',
@@ -156,6 +178,9 @@ describe("event detail theme", () => {
       "/logout",
       "event-attendee-grid",
       "event-join-pitch",
+      'data-island="rsvp-button"',
+      'data-testid="rsvp-closed"',
+      "/islands/rsvp-button.js",
     ]) {
       expect(html).not.toContain(absent);
     }
