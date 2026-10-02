@@ -37,8 +37,8 @@ describe("homepage theme", () => {
   });
 
   it.each([
-    [null, "/auth/discord"],
-    ["/events", "/auth/discord?next=%2Fevents"],
+    [null, "/join/discord"],
+    ["/events", "/join/discord?next=%2Fevents"],
   ])("shares the existing login return link in the schedule header (%s)", (loginReturnTo, href) => {
     const html = SiteHeader({ active: "events", loginReturnTo })!.toString();
     expect(html).toContain(`href="${href}" data-testid="signin"`);
@@ -47,7 +47,7 @@ describe("homepage theme", () => {
 
   it("retains the guest sign-in and join OAuth entry points", () => {
     const html = render();
-    expect(html).toMatch(/href="\/auth\/discord"[^>]*data-testid="signin"/);
+    expect(html).toMatch(/href="\/join\/discord"[^>]*data-testid="signin"/);
     expect(html).toMatch(/href="\/auth\/discord"[^>]*data-testid="join"/);
     expect(html).toContain('href="/events"');
     expect(html).toContain('data-testid="home-events-join"');
