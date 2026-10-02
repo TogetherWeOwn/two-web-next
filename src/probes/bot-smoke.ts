@@ -16,7 +16,12 @@
 
 import { BotTerminalError } from "../jobs/types";
 import type { BotFailure } from "../jobs/types";
-import type { AnnouncementResult, BotActionClient, EventUpsertResult, RoleAssignResult } from "../bot/client";
+import type {
+  AnnouncementResult,
+  BotActionClient,
+  EventUpsertResult,
+  RoleAssignResult,
+} from "../bot/client";
 
 export type SmokeArgs = {
   discordId: string;
@@ -36,7 +41,9 @@ export type SmokeReport = { checks: SmokeCheck[]; failures: string[]; ok: boolea
  */
 export function stagingEndpoint(rawUrl: string | undefined, productionUrl?: string): string {
   if (!rawUrl || rawUrl.trim() === "") {
-    throw new BotTerminalError("Bot is not configured: BOT_ENDPOINT_URL is missing (staging bot URL).");
+    throw new BotTerminalError(
+      "Bot is not configured: BOT_ENDPOINT_URL is missing (staging bot URL).",
+    );
   }
   const parse = (raw: string | undefined, name: string): URL => {
     let url: URL;
@@ -45,8 +52,17 @@ export function stagingEndpoint(rawUrl: string | undefined, productionUrl?: stri
     } catch {
       throw new BotTerminalError(`${name} must be a valid HTTP(S) URL.`);
     }
-    if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
-      throw new BotTerminalError(`${name} must be an HTTP(S) URL without credentials, query or fragment.`);
+    if (
+      !["https:", "http:"].includes(url.protocol) ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      throw new BotTerminalError(
+        `${name} must be an HTTP(S) URL without credentials, query or fragment.`,
+      );
     }
     return url;
   };
@@ -74,7 +90,8 @@ function describe(a: Answer | null): string {
   if (!ok(a)) {
     return `refused ${a.status} ${a.code} retryable=${a.retryable ? "true" : "false"} request_id=${a.requestId ?? "(none)"}`;
   }
-  if ("messageId" in a) return `message_id=${a.messageId} replayed=${a.replayed ? "true" : "false"} request_id=${a.requestId ?? "(none)"}`;
+  if ("messageId" in a)
+    return `message_id=${a.messageId} replayed=${a.replayed ? "true" : "false"} request_id=${a.requestId ?? "(none)"}`;
   if ("discordEventId" in a && "outcome" in a)
     return `outcome=${a.outcome} event_id=${a.discordEventId} request_id=${a.requestId ?? "(none)"}`;
   return `outcome=${(a as RoleAssignResult).outcome} request_id=${a.requestId ?? "(none)"}`;
@@ -102,7 +119,9 @@ export async function runBotSmoke(
       return await call();
     } catch (e) {
       if (e instanceof BotTerminalError) throw e;
-      failures.push(`${label} threw ${e instanceof Error ? e.constructor.name : typeof e}: ${e instanceof Error ? e.message : String(e)}`);
+      failures.push(
+        `${label} threw ${e instanceof Error ? e.constructor.name : typeof e}: ${e instanceof Error ? e.message : String(e)}`,
+      );
       return null;
     }
   };
@@ -115,8 +134,13 @@ export async function runBotSmoke(
 
   // announcement.post — needs key. The same key retried must replay, not post twice.
   const key = crypto.randomUUID();
-  const announcement = { channelKey: args.channelKey, body: `TOG-10112 smoke run. Ignore. ${now().toISOString()}` };
-  const first = await attempt("announcement.post", () => client.postAnnouncement(announcement, key));
+  const announcement = {
+    channelKey: args.channelKey,
+    body: `TOG-10112 smoke run. Ignore. ${now().toISOString()}`,
+  };
+  const first = await attempt("announcement.post", () =>
+    client.postAnnouncement(announcement, key),
+  );
   if (first !== null) check("announcement.post is ok", ok(first), describe(first));
   const replay = await attempt("announcement.post retried with the same idempotency key", () =>
     client.postAnnouncement(announcement, key),

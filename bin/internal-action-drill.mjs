@@ -32,11 +32,11 @@ const discordId = opt("discord-id");
 const roleKey = opt("role-key");
 const channelKey = opt("channel-key");
 
-const missing = ["discord-id", "role-key", "channel-key"].filter(
-  (n) => opt(n) === "",
-);
+const missing = ["discord-id", "role-key", "channel-key"].filter((n) => opt(n) === "");
 if (missing.length > 0) {
-  console.error(`internal-action-drill: missing required option(s): ${missing.map((n) => `--${n}`).join(" ")}`);
+  console.error(
+    `internal-action-drill: missing required option(s): ${missing.map((n) => `--${n}`).join(" ")}`,
+  );
   process.exit(2);
 }
 

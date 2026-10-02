@@ -14,7 +14,10 @@ import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { liveDiscordEventsSource, type DiscordEventsSource } from "../src/events/discord-transients";
+import {
+  liveDiscordEventsSource,
+  type DiscordEventsSource,
+} from "../src/events/discord-transients";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
   CALENDAR_DAY_TESTID,
@@ -76,7 +79,10 @@ import {
 const APP_URL = "https://next.example.test";
 const INVITE = "https://discord.gg/invite";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
-const binder = readFileSync(new NodeURL("../public/islands/events-calendar.js", import.meta.url), "utf8");
+const binder = readFileSync(
+  new NodeURL("../public/islands/events-calendar.js", import.meta.url),
+  "utf8",
+);
 
 const baseEnv = {
   APP_URL,
@@ -94,20 +100,46 @@ function eventRow(over: Partial<typeof events.$inferSelect> = {}): typeof events
   const start = over.startsAt ?? new Date(Date.UTC(2030, 0, 10 + n, 20));
   const end = over.endsAt ?? new Date(start.getTime() + 7200_000);
   return {
-    id: n, icsSequence: 1n, eventKey: `ev-${n}`, title: `Game night ${n}`, game: null, description: null,
-    startsAt: start, endsAt: end, timezone: "Europe/London", location: null, capacity: null,
-    status: "published", discordEventId: null, discordSyncFailedAt: null, discordSyncFailureCode: null,
-    createdBy: null, rsvpOpen: true,
-    recurrenceFrequency: null, recurrenceCount: null, recurrenceEndsOn: null,
-    parentEventId: null, recurrenceIndex: null, createdAt: start, updatedAt: start,
+    id: n,
+    icsSequence: 1n,
+    eventKey: `ev-${n}`,
+    title: `Game night ${n}`,
+    game: null,
+    description: null,
+    startsAt: start,
+    endsAt: end,
+    timezone: "Europe/London",
+    location: null,
+    capacity: null,
+    status: "published",
+    discordEventId: null,
+    discordSyncFailedAt: null,
+    discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
+    createdBy: null,
+    rsvpOpen: true,
+    recurrenceFrequency: null,
+    recurrenceCount: null,
+    recurrenceEndsOn: null,
+    parentEventId: null,
+    recurrenceIndex: null,
+    createdAt: start,
+    updatedAt: start,
     ...over,
   };
 }
 
 function transient(id: string, start: Date, title = `Discord raid ${id}`): DiscordTransient {
   return {
-    discordId: id, status: "scheduled", title, description: null, location: null,
-    startsAt: start, endsAt: new Date(start.getTime() + 3600_000),
+    discordId: id,
+    status: "scheduled",
+    title,
+    description: null,
+    location: null,
+    startsAt: start,
+    endsAt: new Date(start.getTime() + 3600_000),
   };
 }
 
@@ -141,30 +173,55 @@ function calendar(
     if (sql.includes('from "rsvps"')) return { rows: [] };
     // Identity probes ignore search, visibility and the past drawer's limit.
     if (sql.startsWith('select "discord_event_id" from "events"')) {
-      return { rows: [...up, ...past].filter((r) => params.includes(r.discordEventId)).map((r) => [r.discordEventId]) };
+      return {
+        rows: [...up, ...past]
+          .filter((r) => params.includes(r.discordEventId))
+          .map((r) => [r.discordEventId]),
+      };
     }
     let rows = /"ends_at" </.test(sql) ? past : up;
     // The fake honors the draft clause: guest reads carry it, moderator reads don't.
     if (sql.includes("'draft'")) rows = rows.filter((r) => r.status !== "draft");
     // And the bound LIKE term: title/description ILIKE %term% (term arrives
     // LIKE-escaped — % → \% — so unescape before matching).
-    const bound = params.find((p): p is string => typeof p === "string" && p.startsWith("%") && p.endsWith("%"));
+    const bound = params.find(
+      (p): p is string => typeof p === "string" && p.startsWith("%") && p.endsWith("%"),
+    );
     if (bound) {
       const term = bound.slice(1, -1).replace(/\\(.)/g, "$1").toLowerCase();
-      rows = rows.filter((r) => r.title.toLowerCase().includes(term) || (r.description ?? "").toLowerCase().includes(term));
+      rows = rows.filter(
+        (r) =>
+          r.title.toLowerCase().includes(term) ||
+          (r.description ?? "").toLowerCase().includes(term),
+      );
     }
     if (sql.includes("limit")) rows = rows.slice(0, Number(params.at(-1)));
     return { rows: rows.map(encode) };
   });
   // pg-proxy has no transactions; model the analytics write without a real DB.
   Object.assign(db, {
-    transaction: async (fn: (tx: Db) => Promise<void>) => fn({
-      execute: async () => {},
-      insert: () => ({ values: async (row: (typeof logs)[number]) => { logs.push(row); } }),
-    } as unknown as Db),
+    transaction: async (fn: (tx: Db) => Promise<void>) =>
+      fn({
+        execute: async () => {},
+        insert: () => ({
+          values: async (row: (typeof logs)[number]) => {
+            logs.push(row);
+          },
+        }),
+      } as unknown as Db),
   });
-  const env = { ...baseEnv, ...extraEnv, ADMIN_DB: db as unknown as Db, DISCORD_EVENTS: source } as unknown as Env;
-  return { env, queries, logs, request: (path: string, init?: RequestInit) => app.request(path, init, env) };
+  const env = {
+    ...baseEnv,
+    ...extraEnv,
+    ADMIN_DB: db as unknown as Db,
+    DISCORD_EVENTS: source,
+  } as unknown as Env;
+  return {
+    env,
+    queries,
+    logs,
+    request: (path: string, init?: RequestInit) => app.request(path, init, env),
+  };
 }
 
 async function moderatorCookie(env: Record<string, unknown>): Promise<string> {
@@ -199,10 +256,23 @@ async function memberAuth(moderator = false, expiresAt = new Date(Date.now() + 3
   const store = createMemorySessionStore();
   const token = newSessionToken();
   const hash = await hashToken(token);
-  await store.create({ tokenHash: hash, userId: "member", username: "member", avatar: null, member: true, moderator, expiresAt });
-  const cookie = (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-    path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-  })).split(";")[0]!;
+  await store.create({
+    tokenHash: hash,
+    userId: "member",
+    username: "member",
+    avatar: null,
+    member: true,
+    moderator,
+    expiresAt,
+  });
+  const cookie = (
+    await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    })
+  ).split(";")[0]!;
   return { store, hash, cookie };
 }
 
@@ -213,12 +283,22 @@ describe("EventsCalendar review regressions", () => {
     const auth = await memberAuth();
     let release!: () => void;
     let entered!: () => void;
-    const gate = new Promise<void>((r) => { release = r; });
-    const reached = new Promise<void>((r) => { entered = r; });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const reached = new Promise<void>((r) => {
+      entered = r;
+    });
     let calls = 0;
     const source: DiscordEventsSource = {
       lastReadFailed: () => false,
-      upcoming: async () => { if (++calls === 1) { entered(); await gate; } return []; },
+      upcoming: async () => {
+        if (++calls === 1) {
+          entered();
+          await gate;
+        }
+        return [];
+      },
     };
     const src = calendar([eventRow()], [], source, { SESSION_STORE: auth.store });
     const controller = new AbortController();
@@ -238,17 +318,22 @@ describe("EventsCalendar review regressions", () => {
     }
   });
 
-  it.each([false, true])("does not publicly cache any authenticated page or fragment (moderator=%s)", async (moderator) => {
-    const auth = await memberAuth(moderator);
-    const src = calendar([eventRow()], [], okSource(), { SESSION_STORE: auth.store });
-    const fragment = await src.request("/events", { headers: { cookie: auth.cookie, ...fragmentHeaders } });
-    expect(fragment.headers.get("cache-control")).toBe("private, no-store");
-    expect(fragment.headers.get("set-cookie")).toBeNull();
-    const page = await src.request("/events", { headers: { cookie: auth.cookie } });
-    expect(page.headers.get("cache-control")).toBe("private, no-store");
-    expect(page.headers.get("set-cookie")).toContain("__Host-two_session=");
-    expect(await auth.store.get(auth.hash)).toBeNull(); // Full-page rotation remains intact.
-  });
+  it.each([false, true])(
+    "does not publicly cache any authenticated page or fragment (moderator=%s)",
+    async (moderator) => {
+      const auth = await memberAuth(moderator);
+      const src = calendar([eventRow()], [], okSource(), { SESSION_STORE: auth.store });
+      const fragment = await src.request("/events", {
+        headers: { cookie: auth.cookie, ...fragmentHeaders },
+      });
+      expect(fragment.headers.get("cache-control")).toBe("private, no-store");
+      expect(fragment.headers.get("set-cookie")).toBeNull();
+      const page = await src.request("/events", { headers: { cookie: auth.cookie } });
+      expect(page.headers.get("cache-control")).toBe("private, no-store");
+      expect(page.headers.get("set-cookie")).toContain("__Host-two_session=");
+      expect(await auth.store.get(auth.hash)).toBeNull(); // Full-page rotation remains intact.
+    },
+  );
 
   it("rejects revoked, expired and wrongly signed fragment cookies", async () => {
     const revoked = await memberAuth();
@@ -257,35 +342,58 @@ describe("EventsCalendar review regressions", () => {
     const wrong = await memberAuth();
     for (const auth of [revoked, expired, wrong]) {
       const cookie = auth === wrong ? auth.cookie + "tampered" : auth.cookie;
-      const html = await (await calendar([eventRow()], [], okSource(), { SESSION_STORE: auth.store })
-        .request("/events", { headers: { cookie, ...fragmentHeaders } })).text();
+      const html = await (
+        await calendar([eventRow()], [], okSource(), { SESSION_STORE: auth.store }).request(
+          "/events",
+          { headers: { cookie, ...fragmentHeaders } },
+        )
+      ).text();
       expect(html).toContain('data-testid="signin"');
     }
   });
 
-  it.each(["VOLLEYBALL", "100%_\\", "  chess  "])("applies the same literal title/description search to transients: %s", async (query) => {
-    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const matchingTitle = transient("title", new Date(Date.UTC(2030, 0, 12)), `Night ${query.trim().toLowerCase()}`);
-    const matchingDescription = transient("description", new Date(Date.UTC(2030, 0, 13)), "Other night");
-    matchingDescription.description = `Play ${query.trim().toLowerCase()} with us`;
-    const unrelated = transient("unrelated", new Date(Date.UTC(2030, 0, 14)), "Unrelated night");
-    const src = calendar([], [], okSource([matchingTitle, matchingDescription, unrelated]));
-    const html = await (await src.request("/events?q=" + encodeURIComponent(query))).text();
-    expect(cardKeys(html)).toEqual(["discord-title", "discord-description"]);
-    expect(html).not.toContain("Unrelated night");
-    expect(JSON.parse(String(spy.mock.calls.find((c) => c[0] === "event_search")![1]))).toEqual({
-      event: "event_search", query: normalizeEventSearch(query), results: 2,
-    });
-    const miss = await (await src.request("/events?q=no-match")).text();
-    expect(miss).toContain(EVENTS_EMPTY_SEARCH_TESTID);
-    expect(cardKeys(miss)).toEqual([]);
-    expect(JSON.parse(String(spy.mock.calls.at(-1)![1])).results).toBe(0);
-  });
+  it.each(["VOLLEYBALL", "100%_\\", "  chess  "])(
+    "applies the same literal title/description search to transients: %s",
+    async (query) => {
+      const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+      const matchingTitle = transient(
+        "title",
+        new Date(Date.UTC(2030, 0, 12)),
+        `Night ${query.trim().toLowerCase()}`,
+      );
+      const matchingDescription = transient(
+        "description",
+        new Date(Date.UTC(2030, 0, 13)),
+        "Other night",
+      );
+      matchingDescription.description = `Play ${query.trim().toLowerCase()} with us`;
+      const unrelated = transient("unrelated", new Date(Date.UTC(2030, 0, 14)), "Unrelated night");
+      const src = calendar([], [], okSource([matchingTitle, matchingDescription, unrelated]));
+      const html = await (await src.request("/events?q=" + encodeURIComponent(query))).text();
+      expect(cardKeys(html)).toEqual(["discord-title", "discord-description"]);
+      expect(html).not.toContain("Unrelated night");
+      expect(JSON.parse(String(spy.mock.calls.find((c) => c[0] === "event_search")![1]))).toEqual({
+        event: "event_search",
+        query: normalizeEventSearch(query),
+        results: 2,
+      });
+      const miss = await (await src.request("/events?q=no-match")).text();
+      expect(miss).toContain(EVENTS_EMPTY_SEARCH_TESTID);
+      expect(cardKeys(miss)).toEqual([]);
+      expect(JSON.parse(String(spy.mock.calls.at(-1)![1])).results).toBe(0);
+    },
+  );
 
   it("links upcoming and past persisted titles to detail pages but keeps transients display-only", async () => {
     const up = eventRow({ eventKey: "up-link" });
     const past = eventRow({ eventKey: "past-link", startsAt: new Date(0), endsAt: new Date(1) });
-    const html = await (await calendar([up], [past], okSource([transient("display", new Date(Date.UTC(2030, 0, 12)))])).request("/events?past=1")).text();
+    const html = await (
+      await calendar(
+        [up],
+        [past],
+        okSource([transient("display", new Date(Date.UTC(2030, 0, 12)))]),
+      ).request("/events?past=1")
+    ).text();
     expect(html).toContain('href="/e/up-link"');
     expect(html).toContain('href="/e/past-link"');
     expect(html).not.toContain('href="/e/discord-display"');
@@ -300,14 +408,21 @@ describe("EventsCalendar review regressions", () => {
     expect(list).toContain('id="event-grid-link"');
   });
 
-  it.each(["list", "calendar"])("marks the active %s navigation link with valid link ARIA", async (view) => {
-    const html = await (await calendar([eventRow()], [], okSource()).request(`/events?view=${view}`)).text();
-    expect(html).not.toContain("aria-pressed");
-    expect(html).toContain(`aria-current="page" data-testid="events-view-${view}"`);
-    // Primary navigation also marks Events current; each navigation set has one active link.
-    const views = html.match(/<div[^>]*aria-label="How to show the events"[^>]*>(.*?)<\/div>/)![1]!;
-    expect(views.match(/aria-current="page"/g)).toHaveLength(1);
-  });
+  it.each(["list", "calendar"])(
+    "marks the active %s navigation link with valid link ARIA",
+    async (view) => {
+      const html = await (
+        await calendar([eventRow()], [], okSource()).request(`/events?view=${view}`)
+      ).text();
+      expect(html).not.toContain("aria-pressed");
+      expect(html).toContain(`aria-current="page" data-testid="events-view-${view}"`);
+      // Primary navigation also marks Events current; each navigation set has one active link.
+      const views = html.match(
+        /<div[^>]*aria-label="How to show the events"[^>]*>(.*?)<\/div>/,
+      )![1]!;
+      expect(views.match(/aria-current="page"/g)).toHaveLength(1);
+    },
+  );
 
   it("suppresses both the visible and live search miss when the read fails", async () => {
     const html = await (await calendar([], [], failedSource()).request("/events?q=x")).text();
@@ -319,32 +434,62 @@ describe("EventsCalendar review regressions", () => {
 });
 
 describe("EventsCalendar second-review regressions", () => {
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
-
-  it.each(["title", "description", "draft", "past-limit"])("suppresses persisted identities independently of %s eligibility", async (variant) => {
-    const log = vi.spyOn(console, "info").mockImplementation(() => {});
-    const start = new Date(Date.UTC(2030, 0, 12));
-    const canonical = eventRow({ eventKey: "canonical", title: "Go tournament", discordEventId: "same-id", startsAt: start });
-    const stale = transient("same-id", start, "Chess tournament");
-    if (variant === "description") { stale.title = "Other night"; stale.description = "Chess tournament"; }
-    if (variant === "draft") { canonical.status = "draft"; canonical.title = "Chess draft"; }
-    const past = variant === "past-limit"
-      ? [...Array.from({ length: EVENTS_PAST_DRAWER_LIMIT }, () => eventRow({ title: "Chess archive", startsAt: new Date(0), endsAt: new Date(1) })),
-        { ...canonical, title: "Chess canonical", startsAt: new Date(0), endsAt: new Date(1) }]
-      : [];
-    const src = calendar(variant === "past-limit" ? [] : [canonical], past, okSource([stale]));
-    const html = await (await src.request("/events?q=chess")).text();
-    expect(cardKeys(html)).not.toContain("discord-same-id");
-    expect(cardKeys(html)).not.toContain("canonical");
-    expect(cardKeys(html)).toHaveLength(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
-    if (variant !== "past-limit") expect(html).toContain(EVENTS_EMPTY_SEARCH_TESTID);
-    expect(JSON.parse(String(log.mock.calls.find((c) => c[0] === "event_search")![1])).results)
-      .toBe(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
-    const probe = src.queries.find((q) => q.sql.startsWith('select "discord_event_id" from "events"'))!;
-    expect(probe.params).toEqual(["same-id"]);
-    expect(probe.sql).not.toMatch(/ilike|draft|ends_at|limit/);
-    expect(src.queries.some((q) => q.params.includes("%chess%"))).toBe(true);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
+
+  it.each(["title", "description", "draft", "past-limit"])(
+    "suppresses persisted identities independently of %s eligibility",
+    async (variant) => {
+      const log = vi.spyOn(console, "info").mockImplementation(() => {});
+      const start = new Date(Date.UTC(2030, 0, 12));
+      const canonical = eventRow({
+        eventKey: "canonical",
+        title: "Go tournament",
+        discordEventId: "same-id",
+        startsAt: start,
+      });
+      const stale = transient("same-id", start, "Chess tournament");
+      if (variant === "description") {
+        stale.title = "Other night";
+        stale.description = "Chess tournament";
+      }
+      if (variant === "draft") {
+        canonical.status = "draft";
+        canonical.title = "Chess draft";
+      }
+      const past =
+        variant === "past-limit"
+          ? [
+              ...Array.from({ length: EVENTS_PAST_DRAWER_LIMIT }, () =>
+                eventRow({ title: "Chess archive", startsAt: new Date(0), endsAt: new Date(1) }),
+              ),
+              {
+                ...canonical,
+                title: "Chess canonical",
+                startsAt: new Date(0),
+                endsAt: new Date(1),
+              },
+            ]
+          : [];
+      const src = calendar(variant === "past-limit" ? [] : [canonical], past, okSource([stale]));
+      const html = await (await src.request("/events?q=chess")).text();
+      expect(cardKeys(html)).not.toContain("discord-same-id");
+      expect(cardKeys(html)).not.toContain("canonical");
+      expect(cardKeys(html)).toHaveLength(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
+      if (variant !== "past-limit") expect(html).toContain(EVENTS_EMPTY_SEARCH_TESTID);
+      expect(
+        JSON.parse(String(log.mock.calls.find((c) => c[0] === "event_search")![1])).results,
+      ).toBe(variant === "past-limit" ? EVENTS_PAST_DRAWER_LIMIT : 0);
+      const probe = src.queries.find((q) =>
+        q.sql.startsWith('select "discord_event_id" from "events"'),
+      )!;
+      expect(probe.params).toEqual(["same-id"]);
+      expect(probe.sql).not.toMatch(/ilike|draft|ends_at|limit/);
+      expect(src.queries.some((q) => q.params.includes("%chess%"))).toBe(true);
+    },
+  );
 
   it.each([
     [1, -3600_000, null, true], // Scheduled voice/stage events can have no end even after their nominal start.
@@ -354,26 +499,40 @@ describe("EventsCalendar second-review regressions", () => {
     [2, -3600_000, -1, false], // Explicit elapsed ends remain authoritative.
     [3, -3600_000, null, false], // Completed/cancelled rows never become transients.
     [4, 3600_000, null, false],
-  ])("resolves live Discord status=%s start=%s end=%s visibility=%s", async (status, startOffset, endOffset, visible) => {
-    const now = Date.now();
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify([{
-      id: "voice", name: "Voice game night", status,
-      scheduled_start_time: new Date(now + startOffset).toISOString(),
-      scheduled_end_time: endOffset === null ? null : new Date(now + endOffset).toISOString(),
-    }]), { headers: { "content-type": "application/json" } }));
-    vi.stubGlobal("fetch", fetchMock);
-    const source = liveDiscordEventsSource(baseEnv);
-    const html = await (await calendar([], [], source).request("/events")).text();
-    expect(cardKeys(html)).toEqual(visible ? ["discord-voice"] : []);
-    expect(html.includes(EVENTS_EMPTY_NEVER_TESTID)).toBe(!visible);
-    expect(source.lastReadFailed()).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(html).not.toContain('href="/e/discord-voice"');
-    if (visible && endOffset === null) {
-      const [row] = await source.upcoming();
-      expect(row).toMatchObject({ endsAt: null, status: status === 2 ? "active" : "scheduled" });
-    }
-  });
+  ])(
+    "resolves live Discord status=%s start=%s end=%s visibility=%s",
+    async (status, startOffset, endOffset, visible) => {
+      const now = Date.now();
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify([
+              {
+                id: "voice",
+                name: "Voice game night",
+                status,
+                scheduled_start_time: new Date(now + startOffset).toISOString(),
+                scheduled_end_time:
+                  endOffset === null ? null : new Date(now + endOffset).toISOString(),
+              },
+            ]),
+            { headers: { "content-type": "application/json" } },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const source = liveDiscordEventsSource(baseEnv);
+      const html = await (await calendar([], [], source).request("/events")).text();
+      expect(cardKeys(html)).toEqual(visible ? ["discord-voice"] : []);
+      expect(html.includes(EVENTS_EMPTY_NEVER_TESTID)).toBe(!visible);
+      expect(source.lastReadFailed()).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(html).not.toContain('href="/e/discord-voice"');
+      if (visible && endOffset === null) {
+        const [row] = await source.upcoming();
+        expect(row).toMatchObject({ endsAt: null, status: status === 2 ? "active" : "scheduled" });
+      }
+    },
+  );
 });
 
 /* ----------------------------------------------------------- contract pins */
@@ -393,16 +552,26 @@ describe("EventsCalendar contract drift", () => {
   });
 
   it("pins URL rules: q raw + non-blank, view/month only for calendar, past flag", () => {
-    const s = (o: Partial<CalendarState>): CalendarState => ({ view: "list", month: "2026-10", q: "", past: false, ...o });
+    const s = (o: Partial<CalendarState>): CalendarState => ({
+      view: "list",
+      month: "2026-10",
+      q: "",
+      past: false,
+      ...o,
+    });
     expect(calendarUrl(s({}))).toBe("/events");
     expect(calendarUrl(s({ q: "  " }))).toBe("/events");
     expect(calendarUrl(s({ q: "game night" }))).toBe("/events?q=game+night");
     expect(calendarUrl(s({ past: true }))).toBe("/events?past=1");
-    expect(calendarUrl(s({ view: "calendar", month: "2026-11" }))).toBe("/events?view=calendar&month=2026-11");
+    expect(calendarUrl(s({ view: "calendar", month: "2026-11" }))).toBe(
+      "/events?view=calendar&month=2026-11",
+    );
     // view/month ride along whenever the state is calendar — the force-to-list
     // for a search is resolved server-side at parse, not in the URL builder.
     expect(calendarUrl(s({ q: "x" }))).toBe("/events?q=x");
-    expect(calendarUrl(s({ q: "x", view: "calendar", month: "2026-10" }))).toBe("/events?q=x&view=calendar&month=2026-10");
+    expect(calendarUrl(s({ q: "x", view: "calendar", month: "2026-10" }))).toBe(
+      "/events?q=x&view=calendar&month=2026-10",
+    );
   });
 
   it("pins parsing and fallback behaviour", () => {
@@ -423,13 +592,23 @@ describe("EventsCalendar contract drift", () => {
     expect(normalizeEventSearch("   ")).toBeNull();
     expect(normalizeEventSearch("x".repeat(300))).toBe("x".repeat(255));
     expect(escapeLikeTerm("100%_\\")).toBe("100\\%\\_\\\\");
-    expect(eventSearchLogEntry(" GaMe ", 7)).toEqual({ event: "event_search", query: "game", results: 7 });
+    expect(eventSearchLogEntry(" GaMe ", 7)).toEqual({
+      event: "event_search",
+      query: "game",
+      results: 7,
+    });
     expect(eventSearchLogEntry("   ", 7)).toBeNull();
   });
 
   it("pins the empty-state precedence and Monday-first whole-week grid", () => {
     const s = (o: Partial<Parameters<typeof calendarEmptyState>[0]>) =>
-      calendarEmptyState({ searching: false, upcomingEmpty: true, pastEmpty: true, readFailed: false, ...o });
+      calendarEmptyState({
+        searching: false,
+        upcomingEmpty: true,
+        pastEmpty: true,
+        readFailed: false,
+        ...o,
+      });
     expect(s({})).toBe("never");
     expect(s({ pastEmpty: false })).toBe("gap");
     expect(s({ readFailed: true })).toBe("error");
@@ -457,7 +636,13 @@ describe("EventsCalendar SSR drift", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("mounts the island: list default, toggle anchors, stable search, live regions, binder", async () => {
-    const up = [eventRow({ title: "Sunday Squad", startsAt: new Date(Date.UTC(2030, 0, 10, 20)), endsAt: new Date(Date.UTC(2030, 0, 10, 22)) })];
+    const up = [
+      eventRow({
+        title: "Sunday Squad",
+        startsAt: new Date(Date.UTC(2030, 0, 10, 20)),
+        endsAt: new Date(Date.UTC(2030, 0, 10, 22)),
+      }),
+    ];
     const source = calendar(up, [], okSource());
     const res = await source.request("/events");
     const html = await res.text();
@@ -480,7 +665,11 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events"`);
     // Read order: upcoming rows, their grouped going aggregate, then the past
     // drawer read (empty page → no aggregate). Never a per-card query.
-    expect(source.queries.map((q) => (q.sql.includes("rsvps") ? "rsvps" : "events"))).toEqual(["events", "rsvps", "events"]);
+    expect(source.queries.map((q) => (q.sql.includes("rsvps") ? "rsvps" : "events"))).toEqual([
+      "events",
+      "rsvps",
+      "events",
+    ]);
     expect(source.queries[1]!.sql).toContain('group by "rsvps"."event_id"');
   });
 
@@ -493,7 +682,9 @@ describe("EventsCalendar SSR drift", () => {
     expect(up.sql).toContain("ilike");
     expect(up.params.filter((p) => p === "%100\\% legit%")).toHaveLength(2);
     expect(up.sql).toContain("'draft'"); // guests never see drafts, even in search
-    expect(html).toContain(`data-testid="${EVENTS_SEARCH_STATUS_TESTID}">${eventsSearchHitCopy("100% legit")}`);
+    expect(html).toContain(
+      `data-testid="${EVENTS_SEARCH_STATUS_TESTID}">${eventsSearchHitCopy("100% legit")}`,
+    );
     expect(html).toContain('data-view="list"');
     expect(html).toContain(`data-testid="${EVENTS_SEARCH_CLEAR_TESTID}"`);
     // view=calendar is overridden by the search (server-side force-list).
@@ -532,7 +723,11 @@ describe("EventsCalendar SSR drift", () => {
   });
 
   it("reveals past matches inside a search without the drawer flag", async () => {
-    const pastRow = eventRow({ title: "Last jam", startsAt: new Date(Date.UTC(2020, 0, 1)), endsAt: new Date(Date.UTC(2020, 0, 1, 2)) });
+    const pastRow = eventRow({
+      title: "Last jam",
+      startsAt: new Date(Date.UTC(2020, 0, 1)),
+      endsAt: new Date(Date.UTC(2020, 0, 1, 2)),
+    });
     const source = calendar([eventRow()], [pastRow], okSource());
     const html = await (await source.request("/events?q=jam")).text();
     expect(html).toContain(`data-testid="${EVENTS_PAST_LIST_TESTID}"`);
@@ -541,7 +736,11 @@ describe("EventsCalendar SSR drift", () => {
   });
 
   it("opens the past drawer on ?past=1 with the status line; toggle links there when closed", async () => {
-    const pastRow = eventRow({ title: "Old one", startsAt: new Date(Date.UTC(2020, 0, 1)), endsAt: new Date(Date.UTC(2020, 0, 1, 2)) });
+    const pastRow = eventRow({
+      title: "Old one",
+      startsAt: new Date(Date.UTC(2020, 0, 1)),
+      endsAt: new Date(Date.UTC(2020, 0, 1, 2)),
+    });
     const source = calendar([eventRow()], [pastRow], okSource());
     const closed = await (await source.request("/events")).text();
     expect(closed).toContain(`href="/events?past=1" data-testid="${EVENTS_PAST_TOGGLE_TESTID}"`);
@@ -556,8 +755,16 @@ describe("EventsCalendar SSR drift", () => {
   });
 
   it("renders the month grid: Monday-first weekdays, label, day links, prev/next anchors", async () => {
-    const up = [eventRow({ title: "Grid night", startsAt: new Date(Date.UTC(2030, 0, 15, 20)), endsAt: new Date(Date.UTC(2030, 0, 15, 22)) })];
-    const html = await (await calendar(up, [], okSource()).request("/events?view=calendar&month=2030-01")).text();
+    const up = [
+      eventRow({
+        title: "Grid night",
+        startsAt: new Date(Date.UTC(2030, 0, 15, 20)),
+        endsAt: new Date(Date.UTC(2030, 0, 15, 22)),
+      }),
+    ];
+    const html = await (
+      await calendar(up, [], okSource()).request("/events?view=calendar&month=2030-01")
+    ).text();
     expect(html).toContain('data-view="calendar"');
     expect(html).toContain(`data-testid="${CALENDAR_MONTH_TESTID}">January 2030`);
     expect(html).toContain(`data-testid="${CALENDAR_MONTH_STATUS_TESTID}">January 2030`);
@@ -588,7 +795,11 @@ describe("EventsCalendar SSR drift", () => {
     expect(never).toContain(EVENTS_EMPTY_COPY.neverTitle);
     expect(never).toContain(INVITE);
 
-    const pastRow = eventRow({ title: "Long ago", startsAt: new Date(Date.UTC(2020, 0, 1)), endsAt: new Date(Date.UTC(2020, 0, 1, 2)) });
+    const pastRow = eventRow({
+      title: "Long ago",
+      startsAt: new Date(Date.UTC(2020, 0, 1)),
+      endsAt: new Date(Date.UTC(2020, 0, 1, 2)),
+    });
     const gap = await (await calendar([], [pastRow], okSource()).request("/events")).text();
     expect(gap).toContain(`data-testid="${EVENTS_EMPTY_GAP_TESTID}"`);
     expect(gap).toContain(EVENTS_EMPTY_COPY.gapTitle);
@@ -605,17 +816,29 @@ describe("EventsCalendar SSR drift", () => {
     expect(errSearch).toContain(EVENTS_EMPTY_ERROR_TESTID);
     expect(errSearch).not.toContain(EVENTS_EMPTY_SEARCH_TESTID);
 
-    const miss = await (await calendar([], [pastRow], okSource()).request("/events?q=nomatch")).text();
+    const miss = await (
+      await calendar([], [pastRow], okSource()).request("/events?q=nomatch")
+    ).text();
     expect(miss).toContain(`data-testid="${EVENTS_EMPTY_SEARCH_TESTID}"`);
     expect(miss).toContain(EVENTS_EMPTY_COPY.searchMissTitle);
     expect(miss).toContain(`data-testid="${EVENTS_SEARCH_CLEAR_EMPTY_TESTID}"`);
   });
 
   it("merges Discord transients in start order with the rsvp link and no going count", async () => {
-    const late = eventRow({ title: "Local late", startsAt: new Date(Date.UTC(2030, 0, 20, 20)), endsAt: new Date(Date.UTC(2030, 0, 20, 22)) });
-    const early = eventRow({ title: "Local early", startsAt: new Date(Date.UTC(2030, 0, 5, 20)), endsAt: new Date(Date.UTC(2030, 0, 5, 22)) });
+    const late = eventRow({
+      title: "Local late",
+      startsAt: new Date(Date.UTC(2030, 0, 20, 20)),
+      endsAt: new Date(Date.UTC(2030, 0, 20, 22)),
+    });
+    const early = eventRow({
+      title: "Local early",
+      startsAt: new Date(Date.UTC(2030, 0, 5, 20)),
+      endsAt: new Date(Date.UTC(2030, 0, 5, 22)),
+    });
     const trans = transient("d1", new Date(Date.UTC(2030, 0, 12, 20)));
-    const html = await (await calendar([early, late], [], okSource([trans])).request("/events")).text();
+    const html = await (
+      await calendar([early, late], [], okSource([trans])).request("/events")
+    ).text();
     const keys = cardKeys(html);
     expect(keys.indexOf("discord-d1")).toBeGreaterThan(keys.indexOf(early.eventKey));
     expect(keys.indexOf(late.eventKey)).toBeGreaterThan(keys.indexOf("discord-d1"));
@@ -628,66 +851,92 @@ describe("EventsCalendar SSR drift", () => {
     const local = eventRow({ title: "Synced", discordEventId: "d1" });
     const ended = transient("d2", new Date(Date.UTC(2020, 0, 1)));
     ended.endsAt = new Date(Date.UTC(2020, 0, 1, 2));
-    const html = await (await calendar([local], [], okSource([transient("d1", new Date(Date.UTC(2030, 0, 1))), ended])).request("/events")).text();
+    const html = await (
+      await calendar(
+        [local],
+        [],
+        okSource([transient("d1", new Date(Date.UTC(2030, 0, 1))), ended]),
+      ).request("/events")
+    ).text();
     expect(cardKeys(html)).toEqual([local.eventKey]);
   });
 
   it.each([
     [APP_URL, APP_URL, "noindex, nofollow"],
     ["https://togetherweown.com", "https://togetherweown.com", "noindex, follow"],
-  ])("preserves search analytics, no-store and NUL sanitization with trusted APP_URL=%s on %s", async (appUrl, servingUrl, robotsTag) => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    const src = calendar([eventRow({ title: "Chess  night" })], [], okSource(), { APP_URL: appUrl });
-    const res = await src.request(`${servingUrl}/events?q=%20CHESS%20%20night%20`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
-    // Non-apex trusted hosts keep the middleware's staging posture.
-    expect(res.headers.get("x-robots-tag")).toBe(robotsTag);
-    expect(await res.text()).toContain("Chess  night");
-    expect(src.logs).toEqual([{ normalizedQuery: "chess night", resultCount: 1 }]);
-    await src.request(`${servingUrl}/events?q=%00`);
-    await src.request(`${servingUrl}/events?q=Chess%00%20%20night`);
-    expect(src.logs).toEqual([
-      { normalizedQuery: "chess night", resultCount: 1 },
-      { normalizedQuery: "chess night", resultCount: 1 },
-    ]);
-    expect(src.queries.flatMap((q) => q.params).some((p) => typeof p === "string" && p.includes("\u0000"))).toBe(false);
-  });
+  ])(
+    "preserves search analytics, no-store and NUL sanitization with trusted APP_URL=%s on %s",
+    async (appUrl, servingUrl, robotsTag) => {
+      vi.spyOn(console, "info").mockImplementation(() => {});
+      const src = calendar([eventRow({ title: "Chess  night" })], [], okSource(), {
+        APP_URL: appUrl,
+      });
+      const res = await src.request(`${servingUrl}/events?q=%20CHESS%20%20night%20`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+      // Non-apex trusted hosts keep the middleware's staging posture.
+      expect(res.headers.get("x-robots-tag")).toBe(robotsTag);
+      expect(await res.text()).toContain("Chess  night");
+      expect(src.logs).toEqual([{ normalizedQuery: "chess night", resultCount: 1 }]);
+      await src.request(`${servingUrl}/events?q=%00`);
+      await src.request(`${servingUrl}/events?q=Chess%00%20%20night`);
+      expect(src.logs).toEqual([
+        { normalizedQuery: "chess night", resultCount: 1 },
+        { normalizedQuery: "chess night", resultCount: 1 },
+      ]);
+      expect(
+        src.queries
+          .flatMap((q) => q.params)
+          .some((p) => typeof p === "string" && p.includes("\u0000")),
+      ).toBe(false);
+    },
+  );
 
   it.each([
     ["https://togetherweown.com", APP_URL],
     [APP_URL, "https://togetherweown.com"],
-  ])("refuses searches on a foreign serving host before reads or analytics with APP_URL=%s on %s", async (appUrl, servingUrl) => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    const source = okSource();
-    const upcoming = vi.spyOn(source, "upcoming");
-    const src = calendar([eventRow({ title: "Chess  night" })], [], source, { APP_URL: appUrl });
-    // Keep the original mismatched-host cases; W16 now deliberately refuses
-    // them before the event route, not just with a different robots header.
-    for (const query of ["%20CHESS%20%20night%20", "%00", "Chess%00%20%20night"]) {
-      const res = await rawApp.request(`${servingUrl}/events?q=${query}`, {}, src.env);
-      expect(res.status).toBe(404);
-      expect(res.headers.get("cache-control")).toBe("no-store, private");
-      expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-      expect(res.headers.getSetCookie()).toHaveLength(0);
-      const html = await res.text();
-      expect(html).toContain("We cannot find that page");
-      expect(html).not.toContain("Chess  night");
-    }
-    expect(src.queries).toEqual([]);
-    expect(src.logs).toEqual([]);
-    expect(upcoming).not.toHaveBeenCalled();
-    expect(info.mock.calls.filter((c) => c[0] === "event_search")).toHaveLength(0);
-  });
+  ])(
+    "refuses searches on a foreign serving host before reads or analytics with APP_URL=%s on %s",
+    async (appUrl, servingUrl) => {
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      const source = okSource();
+      const upcoming = vi.spyOn(source, "upcoming");
+      const src = calendar([eventRow({ title: "Chess  night" })], [], source, { APP_URL: appUrl });
+      // Keep the original mismatched-host cases; W16 now deliberately refuses
+      // them before the event route, not just with a different robots header.
+      for (const query of ["%20CHESS%20%20night%20", "%00", "Chess%00%20%20night"]) {
+        const res = await rawApp.request(`${servingUrl}/events?q=${query}`, {}, src.env);
+        expect(res.status).toBe(404);
+        expect(res.headers.get("cache-control")).toBe("no-store, private");
+        expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+        expect(res.headers.getSetCookie()).toHaveLength(0);
+        const html = await res.text();
+        expect(html).toContain("We cannot find that page");
+        expect(html).not.toContain("Chess  night");
+      }
+      expect(src.queries).toEqual([]);
+      expect(src.logs).toEqual([]);
+      expect(upcoming).not.toHaveBeenCalled();
+      expect(info.mock.calls.filter((c) => c[0] === "event_search")).toHaveLength(0);
+    },
+  );
 
   it("logs a normalized search with the visible count and nothing else", async () => {
     const spy = vi.spyOn(console, "info").mockImplementation(() => {});
     const up = [eventRow({ title: "Jam night" })];
-    const pastRow = eventRow({ title: "Past jam", startsAt: new Date(Date.UTC(2020, 0, 1)), endsAt: new Date(Date.UTC(2020, 0, 1, 2)) });
+    const pastRow = eventRow({
+      title: "Past jam",
+      startsAt: new Date(Date.UTC(2020, 0, 1)),
+      endsAt: new Date(Date.UTC(2020, 0, 1, 2)),
+    });
     await calendar(up, [pastRow], okSource()).request("/events?q=%20%20JAM%20%20");
     const line = spy.mock.calls.find((c) => c[0] === "event_search");
     expect(line).toBeTruthy();
-    expect(JSON.parse(String(line![1]))).toEqual({ event: "event_search", query: "jam", results: 2 });
+    expect(JSON.parse(String(line![1]))).toEqual({
+      event: "event_search",
+      query: "jam",
+      results: 2,
+    });
     expect(String(line![1])).not.toMatch(/user|session|ip/i);
     // No search, no line.
     spy.mockClear();
@@ -698,8 +947,13 @@ describe("EventsCalendar SSR drift", () => {
 
 /* --------------------------------------------------------- binder harness */
 type Click = {
-  defaultPrevented: boolean; button: number; ctrlKey?: boolean; metaKey?: boolean;
-  shiftKey?: boolean; altKey?: boolean; target: { closest: (sel: string) => Link | null };
+  defaultPrevented: boolean;
+  button: number;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  target: { closest: (sel: string) => Link | null };
   preventDefault: () => void;
 };
 type Link = { href: string; hash: string; target: string; hasAttribute: (name: string) => boolean };
@@ -715,20 +969,39 @@ class Node {
   dataset: Record<string, string> = {};
   attributes = new Map<string, string>();
   listeners = new Map<string, (e: unknown) => void>();
-  setAttribute(k: string, v: string) { this.attributes.set(k, v); }
-  getAttribute(k: string) { return this.attributes.get(k) ?? null; }
-  removeAttribute(k: string) { this.attributes.delete(k); }
-  replaceChildren(...children: unknown[]) { this.childNodes = children; }
-  focus() { this.focused = true; }
-  addEventListener(type: string, fn: (e: unknown) => void) { this.listeners.set(type, fn); }
-  closest() { return this === inputNode ? formNode : null; }
+  setAttribute(k: string, v: string) {
+    this.attributes.set(k, v);
+  }
+  getAttribute(k: string) {
+    return this.attributes.get(k) ?? null;
+  }
+  removeAttribute(k: string) {
+    this.attributes.delete(k);
+  }
+  replaceChildren(...children: unknown[]) {
+    this.childNodes = children;
+  }
+  focus() {
+    this.focused = true;
+  }
+  addEventListener(type: string, fn: (e: unknown) => void) {
+    this.listeners.set(type, fn);
+  }
+  closest() {
+    return this === inputNode ? formNode : null;
+  }
 }
 
 // Nodes the binder binds to, in zone order: head, actions, miss, content.
 let formNode: Node;
 let inputNode: Node;
 
-const LIVE_IDS = ["events-view-status", "events-search-status", "events-past-status", "calendar-month-status"];
+const LIVE_IDS = [
+  "events-view-status",
+  "events-search-status",
+  "events-past-status",
+  "calendar-month-status",
+];
 
 function browser(entry = "/events") {
   const zones = { head: new Node(), actions: new Node(), miss: new Node(), content: new Node() };
@@ -740,13 +1013,20 @@ function browser(entry = "/events") {
   inputNode = new Node();
   inputNode.value = "";
   formNode = new Node();
-  const liveNodes = Object.fromEntries(LIVE_IDS.map((id) => [id, new Node()] as [string, Node])) as Record<string, Node>;
+  const liveNodes = Object.fromEntries(
+    LIVE_IDS.map((id) => [id, new Node()] as [string, Node]),
+  ) as Record<string, Node>;
   const canonical = new Node();
   canonical.href = `${APP_URL}/events`;
   const og = new Node();
   og.content = canonical.href;
   const root = new Node();
-  root.dataset = { view: "list", month: "2026-09", past: "", loadError: EVENTS_CALENDAR_FETCH_FAILED };
+  root.dataset = {
+    view: "list",
+    month: "2026-09",
+    past: "",
+    loadError: EVENTS_CALENDAR_FETCH_FAILED,
+  };
   let click: (event: Click) => void = () => {};
   let popstate: () => void = () => {};
   const focusables: Record<string, Node> = {};
@@ -760,33 +1040,70 @@ function browser(entry = "/events") {
       if (live && liveNodes[live]) return liveNodes[live];
       return focusables[selector] ?? null;
     },
-    querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? [zones.head, zones.actions, zones.miss, zones.content] : []),
-    addEventListener: (_type: string, listener: typeof click) => { click = listener; },
+    querySelectorAll: (selector: string) =>
+      selector === "[data-cal-zone]" ? [zones.head, zones.actions, zones.miss, zones.content] : [],
+    addEventListener: (_type: string, listener: typeof click) => {
+      click = listener;
+    },
     contains: () => true,
   });
   const history: string[] = [];
   const reloads: string[] = [];
-  const location = { href: new URL(entry, APP_URL).href, origin: APP_URL, assign: (href: string) => reloads.push(href) };
-  const requests: { url: string; init: RequestInit; resolve: (r: { ok: boolean; text: () => Promise<string> }) => void; reject: (e: Error) => void }[] = [];
+  const location = {
+    href: new URL(entry, APP_URL).href,
+    origin: APP_URL,
+    assign: (href: string) => reloads.push(href),
+  };
+  const requests: {
+    url: string;
+    init: RequestInit;
+    resolve: (r: { ok: boolean; text: () => Promise<string> }) => void;
+    reject: (e: Error) => void;
+  }[] = [];
   const parsedPages = new Map<string, { querySelector: (s: string) => unknown }>();
   const timers = new Map<number, () => void>();
   let nextTimer = 0;
   runInNewContext(binder, {
-    URL, AbortController,
-    setTimeout: (fn: () => void) => { const id = ++nextTimer; timers.set(id, fn); return id; },
-    clearTimeout: (id: number) => { timers.delete(id); },
+    URL,
+    AbortController,
+    setTimeout: (fn: () => void) => {
+      const id = ++nextTimer;
+      timers.set(id, fn);
+      return id;
+    },
+    clearTimeout: (id: number) => {
+      timers.delete(id);
+    },
     document: {
       querySelector: (s: string) =>
-        s === '[data-island="events-calendar"]' ? mount : s.startsWith("link") ? canonical : s.startsWith("meta") ? og : null,
+        s === '[data-island="events-calendar"]'
+          ? mount
+          : s.startsWith("link")
+            ? canonical
+            : s.startsWith("meta")
+              ? og
+              : null,
       importNode: (n: unknown) => n,
     },
     window: {
       location,
-      history: { pushState: (_s: unknown, _t: string, url: string) => { history.push(url); location.href = APP_URL + url; } },
-      addEventListener: (_type: string, listener: () => void) => { popstate = listener; },
+      history: {
+        pushState: (_s: unknown, _t: string, url: string) => {
+          history.push(url);
+          location.href = APP_URL + url;
+        },
+      },
+      addEventListener: (_type: string, listener: () => void) => {
+        popstate = listener;
+      },
     },
-    DOMParser: class { parseFromString(html: string) { return parsedPages.get(html); } },
-    fetch: (url: string, init: RequestInit) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
+    DOMParser: class {
+      parseFromString(html: string) {
+        return parsedPages.get(html);
+      }
+    },
+    fetch: (url: string, init: RequestInit) =>
+      new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })),
   });
 
   function fireTimer() {
@@ -798,9 +1115,22 @@ function browser(entry = "/events") {
 
   function clickLink(href: string, modifiers: Partial<Click> = {}, attrs: string[] = []) {
     const url = new URL(href, APP_URL);
-    const link: Link = { href: url.href, hash: url.hash, target: "", hasAttribute: (n) => attrs.includes(n) };
+    const link: Link = {
+      href: url.href,
+      hash: url.hash,
+      target: "",
+      hasAttribute: (n) => attrs.includes(n),
+    };
     let prevented = false;
-    click({ defaultPrevented: false, button: 0, target: { closest: () => link }, preventDefault: () => { prevented = true; }, ...modifiers });
+    click({
+      defaultPrevented: false,
+      button: 0,
+      target: { closest: () => link },
+      preventDefault: () => {
+        prevented = true;
+      },
+      ...modifiers,
+    });
     return prevented;
   }
 
@@ -808,21 +1138,46 @@ function browser(entry = "/events") {
   function finish(
     i: number,
     page: string,
-    opts: { content?: unknown[]; head?: unknown[]; actions?: unknown[]; miss?: unknown[]; view?: string; month?: string; past?: string; statuses?: string[]; input?: string } = {},
+    opts: {
+      content?: unknown[];
+      head?: unknown[];
+      actions?: unknown[];
+      miss?: unknown[];
+      view?: string;
+      month?: string;
+      past?: string;
+      statuses?: string[];
+      input?: string;
+    } = {},
   ) {
-    const src = (name: string, kids: unknown[]) => { const n = new Node(); n.attributes.set("data-cal-zone", name); n.childNodes = kids; return n; };
-    const sourceZones = [src("head", opts.head ?? ["head2"]), src("actions", opts.actions ?? []), src("miss", opts.miss ?? []), src("content", opts.content ?? ["new content"])];
+    const src = (name: string, kids: unknown[]) => {
+      const n = new Node();
+      n.attributes.set("data-cal-zone", name);
+      n.childNodes = kids;
+      return n;
+    };
+    const sourceZones = [
+      src("head", opts.head ?? ["head2"]),
+      src("actions", opts.actions ?? []),
+      src("miss", opts.miss ?? []),
+      src("content", opts.content ?? ["new content"]),
+    ];
     const next = {
       dataset: { view: opts.view ?? "list", month: opts.month ?? "2026-09", past: opts.past ?? "" },
       querySelectorAll: (s: string) => (s === "[data-cal-zone]" ? sourceZones : []),
     };
-    const statusNodes = (opts.statuses ?? ["v", "s", "p", "m"]).map((t) => { const n = new Node(); n.textContent = t; return n; });
+    const statusNodes = (opts.statuses ?? ["v", "s", "p", "m"]).map((t) => {
+      const n = new Node();
+      n.textContent = t;
+      return n;
+    });
     const srcInput = new Node();
     srcInput.attributes.set("value", opts.input ?? "");
     const pageObj = {
       querySelector: (s: string) => {
         if (s === '[data-island="events-calendar"]') return next;
-        if (s.startsWith("link")) return { href: `${APP_URL}${page.startsWith("/") ? page : "/events"}` };
+        if (s.startsWith("link"))
+          return { href: `${APP_URL}${page.startsWith("/") ? page : "/events"}` };
         const live = /data-testid="([^"]+)"/.exec(s)?.[1];
         if (live === "events-search") return srcInput;
         const liveIdx = LIVE_IDS.indexOf(live ?? "");
@@ -835,11 +1190,36 @@ function browser(entry = "/events") {
   }
   const settle = () => new Promise((resolve) => setImmediate(resolve));
   return {
-    root: mount, zones, skeleton, feedback, input: inputNode, form: formNode, liveNodes, canonical, og,
-    requests, history, reloads, location, timers, focusables,
-    clickLink, finish, settle, fireTimer, popstate: () => popstate(),
+    root: mount,
+    zones,
+    skeleton,
+    feedback,
+    input: inputNode,
+    form: formNode,
+    liveNodes,
+    canonical,
+    og,
+    requests,
+    history,
+    reloads,
+    location,
+    timers,
+    focusables,
+    clickLink,
+    finish,
+    settle,
+    fireTimer,
+    popstate: () => popstate(),
     inputEvent: () => inputNode.listeners.get("input")!({}),
-    submit: () => { let prevented = false; formNode.listeners.get("submit")!({ preventDefault: () => { prevented = true; } }); return prevented; },
+    submit: () => {
+      let prevented = false;
+      formNode.listeners.get("submit")!({
+        preventDefault: () => {
+          prevented = true;
+        },
+      });
+      return prevented;
+    },
   };
 }
 
@@ -848,7 +1228,8 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     const src = calendar([eventRow({ title: "Jam" })], [], okSource());
     const opened = await (await src.request("/events?past=1")).text();
     const closed = await (await src.request("/events")).text();
-    const actions = (html: string) => html.match(/<span data-cal-zone="actions">([\s\S]*?)<\/span>/)![1]!;
+    const actions = (html: string) =>
+      html.match(/<span data-cal-zone="actions">([\s\S]*?)<\/span>/)![1]!;
     expect(actions(opened)).toBe('<input type="hidden" name="past" value="1"/>');
     expect(actions(closed)).toBe("");
     const b = browser();
@@ -879,9 +1260,9 @@ describe("EventsCalendar shipped binder request/state drift", () => {
       b.input.value = query;
       b.submit();
       const url = new URL(b.requests.at(-1)!.url, APP_URL);
-      expect([...url.searchParams.keys()].sort()).toEqual([
-        ...(query.trim() ? ["q"] : []), ...(past ? ["past"] : []),
-      ].sort());
+      expect([...url.searchParams.keys()].sort()).toEqual(
+        [...(query.trim() ? ["q"] : []), ...(past ? ["past"] : [])].sort(),
+      );
       expect(url.searchParams.get("q")).toBe(query.trim() ? query : null);
       expect(url.searchParams.getAll("past")).toEqual(past ? ["1"] : []);
     }
@@ -891,7 +1272,8 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     const src = calendar([eventRow({ title: "Jam" })], [], okSource());
     const initial = await (await src.request("/events")).text();
     const searched = await (await src.request("/events?q=jam")).text();
-    const actions = (html: string) => html.match(/<span data-cal-zone="actions">([\s\S]*?)<\/span>/)?.[1];
+    const actions = (html: string) =>
+      html.match(/<span data-cal-zone="actions">([\s\S]*?)<\/span>/)?.[1];
     expect(actions(initial)).toBe("");
     expect(actions(searched)).toContain(`data-testid="${EVENTS_SEARCH_CLEAR_TESTID}"`);
     const b = browser();
@@ -1002,7 +1384,11 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     const b = browser("/events?q=x");
     b.liveNodes["events-search-status"]!.textContent = eventsSearchMissCopy("x");
     b.clickLink("/events?q=x");
-    b.finish(0, "error", { input: "x", statuses: ["list", status, "", ""], content: [EVENTS_EMPTY_ERROR_TESTID] });
+    b.finish(0, "error", {
+      input: "x",
+      statuses: ["list", status, "", ""],
+      content: [EVENTS_EMPTY_ERROR_TESTID],
+    });
     await b.settle();
     expect(b.liveNodes["events-search-status"]!.textContent).toBe("");
     expect(b.zones.content.childNodes).toEqual([EVENTS_EMPTY_ERROR_TESTID]);
@@ -1014,7 +1400,10 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     expect(binder).not.toMatch(/setInterval|events\.json|\/rsvp/);
     expect(b.clickLink("/events?view=calendar&month=2026-10")).toBe(true);
     expect(b.requests).toHaveLength(1);
-    expect(b.requests[0]).toMatchObject({ url: "/events?view=calendar&month=2026-10", init: { method: "GET" } });
+    expect(b.requests[0]).toMatchObject({
+      url: "/events?view=calendar&month=2026-10",
+      init: { method: "GET" },
+    });
     expect(b.requests[0]!.init.headers).toEqual({ accept: "text/html", ...fragmentHeaders });
     expect(b.skeleton.hidden).toBe(false);
     expect(b.zones.content.hidden).toBe(true);
