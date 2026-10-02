@@ -129,7 +129,7 @@ describe("middleware: foreign Host refused before routing", () => {
     }
     for (const good of ["next.example.test", "NEXT.EXAMPLE.TEST", "next.example.test:8443"]) {
       const res = await app.request(`${base.APP_URL}/up`, { headers: { host: good } }, base);
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(503); // admitted; no DB configured in this host fixture
     }
   });
 
@@ -137,7 +137,7 @@ describe("middleware: foreign Host refused before routing", () => {
     const bad = await app.request("https://evil.example.test/up", {}, base);
     expect(bad.status).toBe(404);
     const good = await app.request("https://next.example.test/up", {}, base);
-    expect(good.status).toBe(200);
+    expect(good.status).toBe(503);
   });
 
   it("X-Forwarded-Host is ignored: trusted Host + evil forward passes with APP_URL URLs", async () => {
@@ -153,9 +153,9 @@ describe("middleware: foreign Host refused before routing", () => {
 
 describe("middleware: per-env allowlist", () => {
   it("each environment accepts its own host", async () => {
-    expect((await app.request(`${staging().APP_URL}/up`, { headers: { host: "next.togetherweown.com" } }, staging())).status).toBe(200);
-    expect((await app.request(`${production.APP_URL}/up`, { headers: { host: "togetherweown.com" } }, production)).status).toBe(200);
-    expect((await app.request(`${base.APP_URL}/up`, { headers: { host: "next.example.test" } }, base)).status).toBe(200);
+    expect((await app.request(`${staging().APP_URL}/up`, { headers: { host: "next.togetherweown.com" } }, staging())).status).toBe(503);
+    expect((await app.request(`${production.APP_URL}/up`, { headers: { host: "togetherweown.com" } }, production)).status).toBe(503);
+    expect((await app.request(`${base.APP_URL}/up`, { headers: { host: "next.example.test" } }, base)).status).toBe(503);
   });
 
   it("staging never accepts the production host and vice versa (not a global list)", async () => {
@@ -242,7 +242,7 @@ describe("review regressions: fail closed at the Worker boundary", () => {
   it("loopback works only when it is the configured development host", async () => {
     for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
       const env = { ...base, APP_URL: `http://${host}:8787` };
-      expect((await app.request(`${env.APP_URL}/up`, { headers: { host: `${host}:8787` } }, env)).status).toBe(200);
+      expect((await app.request(`${env.APP_URL}/up`, { headers: { host: `${host}:8787` } }, env)).status).toBe(503);
       expect((await app.request(`${base.APP_URL}/up`, {}, env)).status).toBe(404);
     }
   });
@@ -252,7 +252,7 @@ describe("review regressions: fail closed at the Worker boundary", () => {
     expect(trustedHost(env.APP_URL)).toBe("2001:db8::1");
     expect((await app.request(`${env.APP_URL}/up`, {
       headers: { host: "[2001:0db8:0:0:0:0:0:1]:443" },
-    }, env)).status).toBe(200);
+    }, env)).status).toBe(503);
     expect((await app.request("https://[2001:db8::2]/up", {}, env)).status).toBe(404);
   });
 
