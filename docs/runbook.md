@@ -245,6 +245,25 @@ Use the explicit known-good version recorded before the release. Do not accept
 Wrangler's implicit previous-version default in a concurrent release incident.
 Keep required resources/bindings in place; never delete a queue to roll back.
 
+#### Production (one-click workflow)
+
+[.github/workflows/rollback-production.yml](../.github/workflows/rollback-production.yml)
+is the one-click production rollback: Actions → `rollback-production` → Run
+workflow, branch `main`, `version_id` set to the recorded known-good Worker
+Version ID. It reuses the same request gate
+(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`),
+the same `production` Environment approval (required reviewers, no
+self-review) and the same production-only Cloudflare credentials as a deploy,
+then runs `wrangler rollback <version_id> --name two-web-next-production`
+followed by the same `/up` smoke. The `version_id` input must be a lowercase
+Worker Version UUID and travels inputs → `env:` only, never through
+expression interpolation in a shell block. A rollback does **not** undo
+Postgres migrations, data writes, Discord side effects, queue messages or
+external-resource changes; keep the release workflow from redeploying the bad
+head. Record the rollback deployment and previous/current version IDs.
+
+#### Staging (manual)
+
 ```bash
 (
   set -euo pipefail
@@ -397,7 +416,7 @@ below, not its older `/up` row, define these outcomes.
 | `/events/:key/rsvp` (PUT/DELETE) | Session/transaction failure **500 HTML**; missing event DB **503 JSON**, auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
 | `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution failure **503**; subsequent read/save failure **500**. Missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
 | Implemented `/admin` routes | Session resolution failure **503**, later resource/dashboard query failure **500**; missing resource DB **503**. Default required access-log failure gives **503**; guest **302**, non-moderator **403**. |
-| `/api/agent-events` (POST) | Shared web database (`DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without either source **503**, service DB failure **500 JSON** `internal_error`. No separate `AGENT_DB` or connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
+| `/api/agent-events` (POST) | Shared web database (`AGENT_DB` when bound, else `DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without any source **503**, service DB failure **500 JSON** `internal_error` (or **503** `ingress_unavailable` when the database is unreachable). No connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
 
 Sources: [src/index.tsx](../src/index.tsx), [join routes](../src/join/route.ts),
 [event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx),

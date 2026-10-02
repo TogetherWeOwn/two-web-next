@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { DEFAULT_CONFIG, handleAgentEvent, type IngressEffects } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
@@ -57,7 +58,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
   beforeEach(async () => {
     await fixture.reset();
     await fixture.client`DELETE FROM agent_event_idempotency_keys`;
-    await fixture.client`DELETE FROM agent_event_audits`;
+    await clearAuditRows(fixture.client, ["agent_event_audits"]);
     await fixture.client`DELETE FROM agent_event_hits`;
     await fixture.client`DELETE FROM agent_event_grants`;
     sent.length = 0;

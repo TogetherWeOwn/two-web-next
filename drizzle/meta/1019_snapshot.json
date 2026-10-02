@@ -1,6 +1,6 @@
 {
-  "id": "714bd08d-9889-4a70-a875-ba617b9b355f",
-  "prevId": "2c244e22-9b9c-4ec1-8772-fa849a6aa970",
+  "id": "41c30f76-0742-4df0-a779-ef6049813ff0",
+  "prevId": "06182e61-6da0-4bcf-a235-19c9091cf6c7",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -417,6 +417,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "owner_token": {
+          "name": "owner_token",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -619,7 +625,15 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "queue_failed_jobs_job_id_unique": {
+          "name": "queue_failed_jobs_job_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "job_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1063,6 +1077,25 @@
           "primaryKey": false,
           "notNull": false
         },
+        "agent_grant_id": {
+          "name": "agent_grant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "proof_marker": {
+          "name": "proof_marker",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_version": {
+          "name": "agent_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "created_by": {
           "name": "created_by",
           "type": "text",
@@ -1126,25 +1159,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "0"
-        },
-        "agent_grant_id": {
-          "name": "agent_grant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "proof_marker": {
-          "name": "proof_marker",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "agent_version": {
-          "name": "agent_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
         }
       },
       "indexes": {
@@ -1222,12 +1236,12 @@
         }
       },
       "foreignKeys": {
-        "events_parent_event_id_events_id_fk": {
-          "name": "events_parent_event_id_events_id_fk",
+        "events_agent_grant_id_agent_event_grants_id_fk": {
+          "name": "events_agent_grant_id_agent_event_grants_id_fk",
           "tableFrom": "events",
-          "tableTo": "events",
+          "tableTo": "agent_event_grants",
           "columnsFrom": [
-            "parent_event_id"
+            "agent_grant_id"
           ],
           "columnsTo": [
             "id"
@@ -1235,12 +1249,12 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "events_agent_grant_id_agent_event_grants_id_fk": {
-          "name": "events_agent_grant_id_agent_event_grants_id_fk",
+        "events_parent_event_id_events_id_fk": {
+          "name": "events_parent_event_id_events_id_fk",
           "tableFrom": "events",
-          "tableTo": "agent_event_grants",
+          "tableTo": "events",
           "columnsFrom": [
-            "agent_grant_id"
+            "parent_event_id"
           ],
           "columnsTo": [
             "id"

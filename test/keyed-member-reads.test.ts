@@ -12,6 +12,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { events } from "../src/db/admin-schema";
 import { nonSensitiveRead } from "../src/member-reads";
 import { env, MEMBER, MODERATOR, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const declaration = { resource: "member", action: "list" as const, route: "test.existing-handler" };
@@ -312,7 +313,7 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
       if (!keyed) return deny(response);
       expect(response.status).toBe(200);
       expect(await logs()).toMatchObject([{ subjectUserIds: [SUBJECT.userId] }]);
-      await fixture.db.delete(memberDataAccessLogs);
+      await clearAuditRows(fixture.db, ["member_data_access_logs"]);
       const unwrapped = router(async (c) => {
         const rows = await execute();
         return bufferedMemberText(c, rows[0]!.name!);

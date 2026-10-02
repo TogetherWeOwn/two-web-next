@@ -11,7 +11,7 @@ import rsvpSyncStamp from "../drizzle/1006_rsvp-synced-at.sql?raw";
 import syncFailure from "../drizzle/1009_event-sync-failure.sql?raw";
 import rsvpLegacyOrder from "../drizzle/1010_rsvp-legacy-order.sql?raw";
 import icsSequence from "../drizzle/1014_event-ics-sequence.sql?raw";
-import sharedAgentColumns from "../drizzle/1015_shared-agent-events.sql?raw";
+import sharedAgentColumns from "../drizzle/1019_shared-agent-events.sql?raw";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
 const cfg = {
@@ -82,7 +82,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // from 0001, the shared events table from 1001, the seat tally from 1002,
       // later additive columns the shared-row queries select (1006/1009/1010
       // and 1014 without its backfill UPDATE, which needs no rows here), then
-      // the agent ownership columns from 1015 (without its data migration — no
+      // the agent ownership columns from 1019 (without its data migration — no
       // retired rows exist in this fresh schema).
       const columnAdds = sharedAgentColumns
         .split("--> statement-breakpoint")

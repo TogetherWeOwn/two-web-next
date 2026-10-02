@@ -8,6 +8,7 @@ import {
   type IngressConfig,
 } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
+import { clearAuditRows } from "./helpers/audit-rows";
 import {
   createMemberDataFixture,
   testDatabaseUrl,
@@ -165,7 +166,9 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
 
   it("refuses an unauthenticated flood at the shield before the database runs", async () => {
     // Earlier tests in this file created grants; the flood starts grant-free
-    // (cascades clear their events and idempotency rows; audits keep null).
+    // (cascades clear their events and idempotency rows). Audits are append-only
+    // (1018): the grant FK's SET NULL would be refused, so the owner clears them first.
+    await clearAuditRows(sql, ["agent_event_audits"]);
     await sql`DELETE FROM agent_event_grants`;
     const flood = () => call({ op: "create", idempotency_key: key(), fields: FIELDS }, null, 2);
     expect((await flood()).status).toBe(401);

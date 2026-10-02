@@ -4,6 +4,7 @@ import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { dispatchWriteBack } from "../admin/writeback";
 import { signedEventReader } from "../bot/event-read";
+import { isDatabaseUnavailable } from "../db/errors";
 import {
   DEFAULT_CONFIG,
   type IngressConfig,
@@ -93,6 +94,17 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     await next();
   } catch (err) {
     console.error("agent-events failed", (err as Error).name);
+    if (isDatabaseUnavailable(err)) {
+      c.header("cache-control", "no-store, private");
+      c.header("Vary", "Accept");
+      return c.json(
+        {
+          reason: "ingress_unavailable",
+          message: "The agent event store is temporarily unavailable. Try again shortly.",
+        },
+        503,
+      );
+    }
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   } finally {
     // Also close on 413, source failures, and shield refusals. Never close the
@@ -113,6 +125,17 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
     return c.json(a.body, a.status as 200, a.headers);
   } catch (err) {
     console.error("agent-events failed", (err as Error).name);
+    if (isDatabaseUnavailable(err)) {
+      c.header("cache-control", "no-store, private");
+      c.header("Vary", "Accept");
+      return c.json(
+        {
+          reason: "ingress_unavailable",
+          message: "The agent event store is temporarily unavailable. Try again shortly.",
+        },
+        503,
+      );
+    }
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   }
 }

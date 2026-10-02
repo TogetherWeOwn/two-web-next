@@ -6,8 +6,8 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
 - Off by default: `AGENT_EVENTS_ENABLED=true` turns it on; otherwise `404 ingress_disabled`, no DB touched.
 - Env: `AGENT_EVENTS_CALLER_AGENT_ID` (required, unset = every grant denied), `AGENT_EVENTS_GUILD_ID`,
   `AGENT_EVENTS_PRODUCTION_GUILD_ID`. Store selection is **the shared web database**:
-  nonempty `DATABASE_URL`, otherwise Hyperdrive `DB`. The old independent `AGENT_DB` binding is retired;
-  it is never a fallback after a connection failure. Grants/audits/replays must be in that same database.
+  nonempty `DATABASE_URL`, otherwise Hyperdrive `DB`; an optional `AGENT_DB` binding, when present,
+  overrides it. No selection is ever a fallback after a connection failure. Grants/audits/replays must be in that same database.
 - All five operations use `events`, including nullable unique `agent_grant_id` and `proof_marker`, and
   `agent_version` (default 1). Human rows have no machine owner. A grant still owns at most one proof event;
   known foreign keys are refused. `update` requires the last read's integer `version` and increments it once.
@@ -63,7 +63,7 @@ Source: [legacy service](https://github.com/TogetherWeOwn/two-web/blob/1a9a23555
 
 ## Migration / rollout
 
-`1015_shared-agent-events.sql` follows `1013_hot-path-indexes.sql` and `1014_event-ics-sequence.sql`
+`1019_shared-agent-events.sql` is the highest web migration (after `1018_audit-immutability.sql`; it was renumbered from the reserved 1015 gap so its journal `when` sorts last)
 and copies **every** temporary
 `agent_events` row into `events`, preserving keys, ownership, markers, versions, status and timestamps,
 then drops the temporary table. Audit/replay

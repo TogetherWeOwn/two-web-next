@@ -72,7 +72,7 @@ export const webThrottleHits = pgTable(
 
 // W14: scoped machine ingress for agent-originated events (ports two-web TOG-5510 Gate 2).
 // Grants, audits and replay keys support the shared events table (admin-schema.ts).
-// The temporary agent_events table was migrated and retired by 1015_shared-agent-events.
+// The temporary agent_events table was migrated and retired by 1019_shared-agent-events.
 export const agentEventGrants = pgTable(
   "agent_event_grants",
   {

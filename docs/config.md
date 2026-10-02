@@ -55,6 +55,7 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `BOT_KEY_ID` | Optional bot signing key identifier | dev/staging/prod | None | Missing ID fails observation closed; no implicit production key selection. |
 | `BOT_SHARED_SECRET` | Optional signing secret | dev: fixture value; staging/prod: separately authorized secret binding | None | Missing/invalid secret fails observation closed. Never logged or substituted; one attempt, 2.5 s deadline. |
 | `FEATURED_IMAGE_HOSTS` | Optional public var (comma-separated exact DNS hosts) | dev/staging/prod | Main Wrangler: blank; Discord CDN always allowed | Additional approved HTTPS image hosts (e.g. `images.unsplash.com`), shared by admin validation, rendering and CSP. Invalid, IP/private/reserved names are ignored; no wildcard or subdomain expansion. Unapproved remote images are rejected on writes and suppressed on reads. See [image policy](../README.md#image-and-frame-policy). |
+| `AGENT_DB` | Optional connection-string binding | dev: test injection; staging/prod: leave unbound so ingress shares the public events database | Unbound in Wrangler; falls back to the shared web database (`DATABASE_URL`, then `DB`) | When bound it overrides the shared database for ingress only (grants/audits/replays and events must then live there). Unbound with no shared database returns 503 `ingress_unavailable`; DB execution failures return 500 and never fail over. |
 | `AGENT_EVENTS_ENABLED` | Optional flag var | dev/staging: opt-in; prod: keep disabled pending separate authorization | Off | Only exact `true` or `1` enables ingress; otherwise 404 `ingress_disabled`. |
 | `AGENT_EVENTS_CALLER_AGENT_ID` | Optional caller allowlist var | dev/staging: admitted caller; prod: no production grant implied | Empty; nobody admitted | Unset/wrong caller denies grants with 403 `wrong_caller`. |
 | `AGENT_EVENTS_GUILD_ID` | Optional admitted guild var | dev/staging: staging guild; prod: no production grant implied | Code: staging guild `1545644954272137297` when absent/empty | A grant for another guild is denied with 403. Independent of web `DISCORD_GUILD_ID`. |
@@ -75,7 +76,7 @@ Do not assume setting `DATABASE_URL` overrides every binding:
 | Queue/scheduled jobs | `HYPERDRIVE`, then `DB`, then `DATABASE_URL` (nullish selection) | [`src/jobs/worker.ts`](../src/jobs/worker.ts) |
 | `/up` queue-depth read | `DB.connectionString`, then `DATABASE_URL` | [`src/index.tsx`](../src/index.tsx) |
 | Generic human-route throttle | `DATABASE_URL` only; fail-open on missing/erroring store | [`src/throttle.ts`](../src/throttle.ts) |
-| Agent-event ingress | Nonempty `DATABASE_URL`, then `DB.connectionString` (same as public events; no `AGENT_DB`) | [`src/agent-events/route.ts`](../src/agent-events/route.ts) |
+| Agent-event ingress | `AGENT_DB` when bound, otherwise nonempty `DATABASE_URL`, then `DB.connectionString` (same as public events) | [`src/agent-events/route.ts`](../src/agent-events/route.ts) |
 
 Local development must keep **all** supplied bindings test-only, not just the
 explicit URL. Tests must never use production/staging connections. No database

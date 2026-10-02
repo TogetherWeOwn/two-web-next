@@ -11,7 +11,8 @@ export type Env = AgentEventsEnv & {
   // hides the stamp instead of 500ing (ports two-web TOG-7323).
   RULES_LAST_UPDATED?: string;
   // Hyperdrive → shared Postgres for web reads, agent events, sessions,
-  // roster writes and /up. DATABASE_URL overrides it for local/dev use.
+  // roster writes and /up. DATABASE_URL overrides it for local/dev use. An
+  // optional AGENT_DB binding overrides the store for agent-event ingress only.
   DB?: { connectionString: string };
   // Secrets (wrangler secret put). The bot token must belong to the same Discord application as
   // DISCORD_CLIENT_ID: Discord only lets an application's own bot add a member with that

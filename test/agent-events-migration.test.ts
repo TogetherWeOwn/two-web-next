@@ -12,12 +12,12 @@ const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url).hr
 const journal = JSON.parse(readFileSync(`${migrationsFolder}/meta/_journal.json`, "utf8")) as {
   entries: { tag: string }[];
 };
-const migrationIndex = journal.entries.findIndex(({ tag }) => tag === "1015_shared-agent-events");
-if (migrationIndex < 1) throw new Error("Canonical migration 1015 is missing from the journal");
+const migrationIndex = journal.entries.findIndex(({ tag }) => tag === "1019_shared-agent-events");
+if (migrationIndex < 1) throw new Error("Canonical migration 1019 is missing from the journal");
 const migrations = readMigrationFiles({ migrationsFolder });
-const migration1015 = migrations[migrationIndex]!;
+const migration1019 = migrations[migrationIndex]!;
 
-// This fixture deliberately stops before 1015; createMemberDataFixture already
+// This fixture deliberately stops before 1019; createMemberDataFixture already
 // applies it. Keep all scratch DDL and cleanup local to this test file.
 async function createMigrationFixture(raw: string) {
   const url = testDatabaseUrl(raw); // Guard before constructing either driver.
@@ -76,7 +76,7 @@ async function createMigrationFixture(raw: string) {
     throw error;
   }
   // Match Drizzle's transactional migration boundary, including the final DROP.
-  const migrate = () => client.begin((sql) => apply(sql, migration1015.sql));
+  const migrate = () => client.begin((sql) => apply(sql, migration1019.sql));
   return { client, schemaName, migrate, dispose };
 }
 
@@ -215,7 +215,7 @@ async function catalog({ client, schemaName }: MigrationFixture) {
   };
 }
 
-it("appends the shared migration after calendar revisions with a linked, index-preserving snapshot", () => {
+it("appends the shared migration after the audit-immutability migration with a linked, index-preserving snapshot", () => {
   const entries = JSON.parse(readFileSync(`${migrationsFolder}/meta/_journal.json`, "utf8"))
     .entries as {
     idx: number;
@@ -224,12 +224,13 @@ it("appends the shared migration after calendar revisions with a linked, index-p
   }[];
   const previous = entries[migrationIndex - 1]!;
   const shared = entries[migrationIndex]!;
-  expect(previous.tag).toBe("1014_event-ics-sequence");
-  expect(entries[migrationIndex - 2]!.tag).toBe("1013_hot-path-indexes");
+  // Appended last (above every applied ledger `when`), never into an older gap.
+  expect(previous.tag).toBe("1018_audit-immutability");
+  expect(migrationIndex).toBe(entries.length - 1);
   expect(shared.idx).toBe(previous.idx + 1);
   expect(shared.when).toBeGreaterThan(previous.when);
-  const before = JSON.parse(readFileSync(`${migrationsFolder}/meta/1014_snapshot.json`, "utf8"));
-  const after = JSON.parse(readFileSync(`${migrationsFolder}/meta/1015_snapshot.json`, "utf8"));
+  const before = JSON.parse(readFileSync(`${migrationsFolder}/meta/1018_snapshot.json`, "utf8"));
+  const after = JSON.parse(readFileSync(`${migrationsFolder}/meta/1019_snapshot.json`, "utf8"));
   expect(after.tables["public.events"].columns.ics_sequence).toEqual(
     before.tables["public.events"].columns.ics_sequence,
   );
@@ -249,7 +250,7 @@ it("refuses a different agent-testdb database before connecting", async () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)(
-  "1015 populated shared-agent-events migration (owned test schema)",
+  "1019 populated shared-agent-events migration (owned test schema)",
   () => {
     let fixture: MigrationFixture;
     beforeEach(async () => {
@@ -509,32 +510,34 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
       const eventsBefore = await snapshot(sql, "events");
       const auditsBefore = await snapshot(sql, "agent_event_audits");
-      await sql`DELETE FROM agent_event_grants WHERE id = ${first.grant_id}`;
-      expect(await snapshot(sql, "events")).toEqual(
-        eventsBefore.map((row) => ({
-          ...row,
-          agent_grant_id: row.agent_grant_id === first.grant_id ? null : row.agent_grant_id,
-          // SET NULL changes the shared row, so the calendar trigger advances once.
-          ics_sequence:
-            row.agent_grant_id === first.grant_id ? Number(row.ics_sequence) + 1 : row.ics_sequence,
-        })),
-      );
-      // Audit evidence has its own SET NULL FK; replay keys retain their existing
-      // grant-delete CASCADE policy. Neither FK may delete the shared event.
-      const auditsAfter = await snapshot(sql, "agent_event_audits");
-      expect(auditsAfter).toEqual(
-        auditsBefore.map((row) => ({
-          ...row,
-          grant_id: row.grant_id === first.grant_id ? null : row.grant_id,
-        })),
-      );
+      // Audit evidence is append-only (1018): its grant FK's SET NULL is an UPDATE
+      // the trigger refuses, so a grant that has audit rows cannot be deleted.
+      await expect(
+        sql`DELETE FROM agent_event_grants WHERE id = ${first.grant_id}`,
+      ).rejects.toMatchObject({ code: "42501" });
+      expect(await snapshot(sql, "events")).toEqual(eventsBefore);
+      expect(await snapshot(sql, "agent_event_audits")).toEqual(auditsBefore);
+
+      // A grant with no audit rows deletes; its shared event survives (SET NULL).
+      const [spare] =
+        await sql`INSERT INTO agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
+        VALUES ('spare-agent', 'spare-company', 'spare-guild', ${await sha256Hex("spare-credential")}) RETURNING id`;
+      await sql`UPDATE events SET agent_grant_id = ${spare!.id} WHERE event_key = 'new-human-one'`;
+      const [owned] = await sql`SELECT ics_sequence FROM events WHERE event_key = 'new-human-one'`;
+      await sql`DELETE FROM agent_event_grants WHERE id = ${spare!.id}`;
+      const [kept] =
+        await sql`SELECT agent_grant_id, ics_sequence FROM events WHERE event_key = 'new-human-one'`;
+      expect(kept!.agent_grant_id).toBeNull();
+      // SET NULL changes the shared row, so the calendar trigger advances once.
+      expect(Number(kept!.ics_sequence)).toBe(Number(owned!.ics_sequence) + 1);
+      // Replay keys keep their grant-delete CASCADE policy; none belonged to the spare.
       expect(
         (
           await sql`SELECT count(*)::int AS n FROM agent_event_idempotency_keys WHERE grant_id = ${first.grant_id}`
         )[0]!.n,
-      ).toBe(0);
+      ).toBeGreaterThan(0);
       expect((await sql`SELECT count(*)::int AS n FROM agent_event_idempotency_keys`)[0]!.n).toBe(
-        legacyEvents.length - 1,
+        legacyEvents.length,
       );
     }, 30_000);
 
