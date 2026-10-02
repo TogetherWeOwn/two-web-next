@@ -197,7 +197,11 @@ describe("CSP report stream liveness", () => {
 
 describe("CSP stream controls", () => {
   it("accepts a small report split inside a UTF-8 scalar and logs only fixed fields", async () => {
-    const body = encode(JSON.stringify({ "csp-report": { "blocked-uri": "é", "evil-probe": "private-marker" } }));
+    // The multi-byte scalar rides `violated-directive` (a passthrough field):
+    // URI fields are redacted fail-closed since main's credential-redaction
+    // slice, so a relative `blocked-uri` can no longer carry the proof —
+    // redaction would mask a broken reassembly as `null`.
+    const body = encode(JSON.stringify({ "csp-report": { "blocked-uri": "inline", "violated-directive": "script-src é", "evil-probe": "private-marker" } }));
     const split = body.indexOf(0xc3) + 1;
     const cancel = vi.fn();
     const req = request(new ReadableStream<Uint8Array>({
@@ -212,7 +216,7 @@ describe("CSP stream controls", () => {
     expect(req.body!.locked).toBe(false);
     expect(cancel).not.toHaveBeenCalled();
     expect(console.warn).toHaveBeenCalledExactlyOnceWith("csp.report.violation", {
-      blocked_uri: "é", violated_directive: null, document_uri: null, source_file: null, line_number: null,
+      blocked_uri: "inline", violated_directive: "script-src é", document_uri: null, source_file: null, line_number: null,
     });
     expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain("private-marker");
   });
