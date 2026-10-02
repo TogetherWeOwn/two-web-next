@@ -10,6 +10,7 @@ import {
   testDatabaseUrl,
   type MemberDataFixture,
 } from "./helpers/member-data-db";
+import { clearAuditRows } from "./helpers/audit-rows";
 
 const state = vi.hoisted(() => ({
   schema: "",
@@ -94,7 +95,7 @@ describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route 
     state.schema = fixture.schemaName;
   });
   beforeEach(async () => {
-    await sql`DELETE FROM agent_event_audits`;
+    await clearAuditRows(sql, ["agent_event_audits"]);
     await sql`DELETE FROM agent_event_grants`;
     await sql`DELETE FROM agent_event_hits`;
     const [grant] =
