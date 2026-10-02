@@ -120,15 +120,24 @@ const sectionOf = (html) => {
   return match[0];
 };
 
+// Svelte SSR hydration markers have no Hono counterpart. Stripped to a fixed
+// point so no single removal can splice a new marker together.
+function stripHydrationMarkers(html) {
+  let previous;
+  do {
+    previous = html;
+    html = html.replace(/<!--\[[\d-]*-->|<!--\]-->/g, "");
+  } while (html !== previous);
+  return html;
+}
+
 // Page-owned serialization the two frameworks legitimately emit differently;
 // the archive section contract itself must be identical.
 function normalize(html) {
-  return html
+  return stripHydrationMarkers(html)
     // Boolean-attribute serialization differs per framework (bare, ="",
     // ="true"); the contract is presence, pinned separately by expectArchive.
     .replace(/=(?:""|"true")(?=[\s>])/g, "")
-    // Svelte SSR hydration markers have no Hono counterpart.
-    .replace(/<!--\[[\d-]*-->|<!--\]-->/g, "")
     // `>` escaping is serializer-owned (Hono emits &gt;, Svelte a bare >);
     // the security-relevant escapes (&amp;, &lt;, quotes) are pinned exactly.
     .replace(/&gt;/g, ">")
@@ -136,6 +145,10 @@ function normalize(html) {
     .replace(/>\s+</g, "><")
     .trim();
 }
+
+// The theme stylesheets hang every rule off the <body> class, so the Kit
+// shell (web/src/app.html) must carry the class Hono's Layout emits.
+const bodyClassOf = (html) => html.match(/<body(?:\s+class="([^"]*)")?[^>]*>/)?.[1] ?? null;
 
 const failures = [];
 function check(label, condition, detail = "") {
@@ -170,6 +183,7 @@ async function unitParity() {
     await buildKitBundle(scratch, kitBundle);
     const { archive } = await import(pathToFileURL(honoBundle).href);
     const { renderPage } = await import(pathToFileURL(kitBundle).href);
+    const appShell = readFileSync(new URL("src/app.html", webDir), "utf8");
 
     const states = [
       { path: "/events/past", page: 1, total: 25, pager: ["/events/past?page=2"] },
@@ -205,6 +219,10 @@ async function unitParity() {
 
       const same = normalize(sectionOf(honoHtml)) === normalize(sectionOf(kitHtml));
       check(`${path}: archive section is byte-identical (modulo boolean serialization)`, same, "section HTML differs");
+      // renderPage has no document shell; the Kit <body> comes from app.html.
+      const honoBody = bodyClassOf(honoHtml);
+      const kitBody = bodyClassOf(appShell);
+      check(`${path}: app.html body carries Hono's theme class`, honoBody !== null && kitBody === honoBody, `Hono ${JSON.stringify(honoBody)}, Kit ${JSON.stringify(kitBody)}`);
       if (!same && process.env.KIT_E2E_DUMP) {
         const { writeFileSync } = await import("node:fs");
         writeFileSync(process.env.KIT_E2E_DUMP + "-hono.html", sectionOf(honoHtml));
@@ -235,6 +253,9 @@ async function previewParity(kitBase, honoBase) {
     expectArchive(kitHtml, { keys, pager: [] });
     const same = normalize(sectionOf(kitHtml)) === normalize(sectionOf(honoHtml));
     check(`${path}: preview sections match staging`, same, "section HTML differs");
+    const kitBody = bodyClassOf(kitHtml);
+    const honoBody = bodyClassOf(honoHtml);
+    check(`${path}: preview body carries the staging theme class`, honoBody !== null && kitBody === honoBody, `Hono ${JSON.stringify(honoBody)}, Kit ${JSON.stringify(kitBody)}`);
   }
   // /api/* still reaches the unchanged Hono app through the Kit catch-all.
   const apiRes = await fetch(new URL("/api/agent-events", kitBase), {
