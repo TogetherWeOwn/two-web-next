@@ -178,7 +178,7 @@ describe("W15 auth/join in Miniflare", () => {
     });
     expect(login.status).toBe(302);
     expect(login.headers.get("location")).toBe("/?n=joined");
-    expect(login.headers.getSetCookie().join("\n")).toContain("Max-Age=2592000");
+    expect(login.headers.getSetCookie().join("\n")).toContain("Max-Age=7200");
     const view = await request("/", { headers: { cookie: cookie(login) } });
     expect(await view.text()).toContain("Worker Member");
     expect(cookie(view)).not.toBe(cookie(login));
