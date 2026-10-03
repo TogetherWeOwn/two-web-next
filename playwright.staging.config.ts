@@ -19,7 +19,8 @@ export default defineConfig({
   use: {
     baseURL: stagingOrigin,
     serviceWorkers: "block",
-    // Written by global-setup from real QA logins; never a checked-in session.
+    // Written by each spec file's beforeAll from real QA logins (global-setup
+    // no longer signs in); never a checked-in session.
     storageState: "e2e/staging/.auth/member.json",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
