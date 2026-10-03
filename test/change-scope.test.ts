@@ -118,3 +118,103 @@ describe("check job", () => {
     expect(unguarded.map((step) => step.split("\n")[0])).toEqual([]);
   });
 });
+
+describe("ci heavy-job scope gates", () => {
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+  const jobBlock = (id: string) =>
+    ci.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
+
+  it.each(["a11y", "lighthouse", "bundle-budget"])("%s still fast-passes docs-only PRs", (id) => {
+    const block = jobBlock(id);
+    // lighthouse and bundle-budget put needs: first (no name: line above it).
+    expect(block).toMatch(/(^|\n)    needs: scope\n/);
+    expect(block).toMatch(/\n    if: needs\.scope\.outputs\.docs_only != 'true'\n/);
+  });
+
+  it("check still runs on every verdict and gates on the audit result", () => {
+    const block = jobBlock("check");
+    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, scope\]\n/);
+    expect(block).toMatch(/\n    if: always\(\)\n/);
+  });
+});
+
+describe("e2e scope gate", () => {
+  const e2e = readFileSync(".github/workflows/e2e.yml", "utf8");
+  const scopeJob = e2e.split("\n  scope:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+  const smoke = e2e.split("\n  browser-smoke:\n")[1] ?? "";
+
+  it("mirrors the ci.yml docs-only gate instead of running unscoped", () => {
+    expect(scopeJob).toContain("bash ci/change-scope.sh");
+    expect(scopeJob).toContain("docs_only:");
+    expect(scopeJob).toContain("repos/$REPO/pulls/$PR_NUMBER/files");
+    expect(smoke).toMatch(/\n    needs: scope\n/);
+    expect(smoke).toMatch(/\n    if: needs\.scope\.outputs\.docs_only != 'true'\n/);
+  });
+
+  it("keeps the pull_request trigger unfiltered so the workflow always reports", () => {
+    const trigger = e2e.split(/\non:\n/)[1]?.split(/\n\S/)[0] ?? "";
+    const prBlock = trigger.match(/(?:^|\n)  pull_request:[^\n]*((?:\n {4,}[^\n]*)*)/)?.[1] ?? "";
+    expect(trigger).toMatch(/(^|\n)  pull_request:/);
+    expect(prBlock).not.toMatch(/\b(paths|paths-ignore|branches|branches-ignore):/);
+  });
+
+  it("stays on standard hosted runners and skips only the smoke, never a required check", () => {
+    expect(smoke).toMatch(/\n    runs-on: ubuntu-latest\n/);
+    // browser-smoke is not a required check: CONTRIBUTING names exactly
+    // check, gitleaks and pr-lint, so a docs-only skip never blocks a merge.
+    const section =
+      readFileSync("CONTRIBUTING.md", "utf8")
+        .split("### Branch protection and required checks")[1]
+        ?.split(/\n#{2,3} /)[0] ?? "";
+    expect(section).not.toContain("browser-smoke");
+  });
+});
+
+describe("changed-path fixture matrix", () => {
+  it("fast-passes docs-only PRs", () => {
+    expect(
+      scope([
+        ["docs/guide.md", ""],
+        ["README.md", ""],
+      ]).stdout,
+    ).toBe("docs_only=true");
+  });
+
+  it("runs the full suite for code PRs", () => {
+    expect(
+      scope([
+        ["docs/guide.md", ""],
+        ["src/app.ts", ""],
+      ]).stdout,
+    ).toBe("docs_only=false");
+  });
+
+  // Island sources, built outputs, stylesheets, fonts, icons and the manifest
+  // are executed or asserted by the suite (binder tests, bundle-budget drift,
+  // a11y resource errors, e2e clicks), so asset-only PRs must run everything.
+  const assetOnly = [
+    "assets/islands/rsvp-button.js",
+    "assets/styles.css",
+    "public/islands/rsvp-button.js",
+    "public/styles.css",
+    "public/event-theme.css",
+    "public/fonts/display-latin-700.woff2",
+    "public/icons/icon-192.png",
+    "public/site.webmanifest",
+    "public/logo.svg",
+    "public/favicon.ico",
+    "src/islands/contracts.ts",
+  ];
+  it.each(assetOnly.map((path) => [path] as [string]))(
+    "runs the full suite for island-asset path %s",
+    (path) => {
+      expect(scope([[path, ""]]).stdout).toBe("docs_only=false");
+    },
+  );
+
+  it("counts an asset source renamed into docs/ as code", () => {
+    expect(scope([["docs/rsvp-button.md", "assets/islands/rsvp-button.js"]]).stdout).toBe(
+      "docs_only=false",
+    );
+  });
+});
