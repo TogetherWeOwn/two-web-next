@@ -36,7 +36,7 @@ describe("required checks always report", () => {
         new RegExp(`\\n    name: ${context}\\n`).test(text),
       );
       expect(owners.map(({ name }) => name)).toHaveLength(1);
-      const { text } = owners[0];
+      const text = owners[0]?.text ?? "";
       expect(triggers(text)).toMatch(/(^|\n)  pull_request:/);
       expect(pullRequestBlock(text)).not.toMatch(
         /\b(paths|paths-ignore|branches|branches-ignore):/,
