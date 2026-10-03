@@ -21,8 +21,6 @@ import { events } from "../src/db/admin-schema";
 import { users, profiles } from "../src/db/schema";
 import type { Env } from "../src/env";
 import type { QueueMessage } from "../src/jobs/types";
-
-type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -84,6 +82,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     let env: Env;
     // Late-bound clock: the default captures the real Date.now before the fake.
     const store = createMemorySessionStore(() => Date.now());
+    type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
     const sent: SyncMessage[] = [];
 
     beforeAll(async () => {
@@ -98,7 +97,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         DISCORD_BOT_TOKEN: "bot-token",
         ADMIN_DB: fixture.db,
         SESSION_STORE: store,
-        EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
+        SYNC_EVENT_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
         // Deterministic calendar reads: no live Discord fetch behind the grid.
         DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
       } as unknown as Env;

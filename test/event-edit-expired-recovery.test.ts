@@ -16,8 +16,6 @@ import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import type { QueueMessage } from "../src/jobs/types";
-
-type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 import { fixtureDiscord, mergeCookies } from "./fixtures/session-recovery";
@@ -44,12 +42,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
   () => {
     let fixture: MemberDataFixture;
     const store = createMemorySessionStore();
+    type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
     const sent: SyncMessage[] = [];
     const env = {
       ...baseEnv,
       SESSION_STORE: store,
       DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-      EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+      SYNC_EVENT_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
     } as unknown as Env;
 
     const req = (path: string, init: RequestInit = {}) =>
