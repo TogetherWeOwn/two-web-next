@@ -20,12 +20,17 @@ const job = (text: string, id: string) =>
 
 describe("required checks always report", () => {
   it("CONTRIBUTING names exactly the checks the rulesets require", () => {
-    const line = readFileSync("CONTRIBUTING.md", "utf8")
-      .split("\n")
-      .find((l) => l.includes("are required checks on `main`"));
-    const named = [...(line?.split("are required checks")[0] ?? "").matchAll(/`([^`]+)`/g)].map(
-      (m) => m[1],
-    );
+    const section =
+      readFileSync("CONTRIBUTING.md", "utf8")
+        .split("### Branch protection and required checks")[1]
+        ?.split(/\n#{2,3} /)[0] ?? "";
+    // Each bullet is "`ruleset`: ... `check` ... must pass."; drop the ruleset name.
+    const named = section
+      .split(/\n- /)
+      .slice(1)
+      .flatMap((bullet) =>
+        [...(bullet.split("\n\n")[0] ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]).slice(1),
+      );
     expect(named).toEqual(required);
   });
 
@@ -46,7 +51,9 @@ describe("required checks always report", () => {
 
   it("check runs whatever its dependencies concluded and fails when the audit is not green", () => {
     const check = job(readFileSync(join(dir, "ci.yml"), "utf8"), "check");
-    expect(check).toMatch(/\n    needs: \[a11y, scope\]\n/);
+    // More gates may join `needs`; the guard below only relies on these two.
+    const needs = check.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
+    expect(needs).toEqual(expect.arrayContaining(["a11y", "scope"]));
     expect(check).toMatch(/\n    if: always\(\)\n/);
     expect(check).toContain('run: test "$A11Y_RESULT" = success');
   });
