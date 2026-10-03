@@ -1,25 +1,65 @@
 name: featured-offline-proof
 
+# Always runs on every PR: the trigger carries no `paths:` filter. A
+# workflow-level path filter would leave this workflow without any run when a
+# PR touches none of the proof inputs, so an aggregator job inside it could
+# never serve as a required check and the PR would wait forever. Relevance is
+# decided per PR by the `scope` job instead (ci/path-scope.sh fails closed),
+# the current-source proof is gated on that verdict, and the always-run
+# `featured-proof` aggregator below reports the conclusion. No ruleset change
+# here: requiring the aggregator is a human-admin step.
 on:
   pull_request:
-    paths:
-      - '.github/workflows/featured-offline-proof.yml'
-      - 'ci/featured-proof/**'
-      - 'src/admin/pages.tsx'
-      - 'src/admin/routes.tsx'
-      - 'src/featured-status.tsx'
-      - 'src/pages.tsx'
-      - 'public/styles.css'
   workflow_dispatch:
 
 permissions:
   contents: read
+  # The scope job lists the PR's changed files via the API.
+  pull-requests: read
 
 concurrency:
   group: featured-offline-proof-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Change-scope gate: only PRs touching the proof inputs run the browser
+  # proof. Manual dispatches and any doubt always count as relevant.
+  scope:
+    name: scope
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.scope.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Path-scope selftest (fixtures, no network)
+        run: bash ci/path-scope.sh --selftest
+      - id: scope
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          bash ci/path-scope.sh "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" -- \
+            ".github/workflows/featured-offline-proof.yml" \
+            "ci/featured-proof/**" \
+            "src/admin/pages.tsx" \
+            "src/admin/routes.tsx" \
+            "src/featured-status.tsx" \
+            "src/pages.tsx" \
+            "public/styles.css" >> "$GITHUB_OUTPUT"
+
   capture:
     if: github.event_name == 'workflow_dispatch'
     name: featured-offline-proof
@@ -85,7 +125,8 @@ jobs:
           retention-days: 14
 
   current-source:
-    if: github.event_name == 'pull_request'
+    needs: scope
+    if: github.event_name == 'pull_request' && needs.scope.outputs.relevant == 'true'
     name: featured-current-source-proof
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
@@ -132,3 +173,40 @@ jobs:
           path: ${{ runner.temp }}/featured-current-output/
           if-no-files-found: error
           retention-days: 14
+
+  # Always-run aggregator: reports the required-check conclusion even when
+  # the proof is skipped for an irrelevant PR. A skipped required check is
+  # mergeable, so this job explicitly fails when the scope verdict is not a
+  # clean bill or when a proof that should have run did not succeed. Name
+  # pinned equal to the id: a future ruleset requires `featured-proof`.
+  featured-proof:
+    name: featured-proof
+    needs: [scope, capture, current-source]
+    if: always()
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - name: Report the required-check conclusion
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          RELEVANT: ${{ needs.scope.outputs.relevant }}
+          CAPTURE_RESULT: ${{ needs.capture.result }}
+          PROOF_RESULT: ${{ needs.current-source.result }}
+        run: |
+          set -euo pipefail
+          if [ "$SCOPE_RESULT" != success ]; then
+            echo "::error::scope did not succeed; failing closed."
+            exit 1
+          fi
+          if [ "$EVENT_NAME" != pull_request ]; then
+            test "$CAPTURE_RESULT" = success
+            exit 0
+          fi
+          if [ "$RELEVANT" != true ]; then
+            echo "No featured-proof inputs changed; required check passes without the proof."
+            exit 0
+          fi
+          test "$PROOF_RESULT" = success
