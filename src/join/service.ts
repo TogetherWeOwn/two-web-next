@@ -85,7 +85,9 @@ export async function checkJoinThrottle(
   if (!sql) return { limited: false };
   // The native postgres.js store supports transactions; the session SQL seam
   // deliberately exposes only the statements needed by session stores.
-  const store = sql as Sql & { begin: (run: (tx: Sql) => Promise<ThrottleVerdict>) => Promise<ThrottleVerdict> };
+  const store = sql as Sql & {
+    begin: (run: (tx: Sql) => Promise<ThrottleVerdict>) => Promise<ThrottleVerdict>;
+  };
   const verdict = await store.begin(async (tx) => {
     await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
     // now() is transaction-start time, which can precede a long lock wait.
@@ -99,7 +101,8 @@ export async function checkJoinThrottle(
     return { limited: false };
   });
   // Global expiry cleanup must not prolong the per-bucket admission lock.
-  if (!verdict.limited) await sql`DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`;
+  if (!verdict.limited)
+    await sql`DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`;
   return verdict;
 }
 
