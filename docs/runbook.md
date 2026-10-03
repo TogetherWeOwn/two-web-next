@@ -104,9 +104,13 @@ approved account and binding isolation before any remote mutation.
 3. Normal path: merge to `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
    GitHub Environment `staging` gate. It installs dependencies, applies
-   migrations **only to its disposable Postgres**, runs `npm run check`, ensures
-   `two-sync-event` and `two-internal-action` exist, then deploys. The queue-create
-   step currently suppresses errors; it is not permission/provisioning evidence.
+   migrations to its disposable Postgres, runs `npm run check`, then plans,
+   applies and verifies the **staging web migrations** of the CI-verified SHA
+   against the Neon staging database (`ci/neon-migrate.mjs`, see
+   [Neon web schema migrations](#neon-web-schema-migrations-separate-operator-action)),
+   ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
+   failed migration step fails the job before any Cloudflare mutation. The
+   queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
    ([smoke checker](../bin/smoke.mjs)), covering 16 public routes: `/up`
    (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
@@ -123,18 +127,21 @@ approved account and binding isolation before any remote mutation.
 
    This deploys the current checkout. Do not run it from an unmerged working
    branch, and do not bypass the Environment gate to clear a blocked CI release.
-   Neither Worker deploy path migrates the live database. Use the separately
-   approved [Neon migration workflow](#neon-web-schema-migrations-separate-operator-action)
-   before deploying a schema-dependent Worker; coordinate with both bot and web
-   owners using `docs/db-migrations.md`.
+   A manual `npm run deploy` does not migrate any database, and neither deploy
+   path ever migrates production. Before a manual deploy of a schema-dependent
+   Worker, run the [Neon migration workflow](#neon-web-schema-migrations-separate-operator-action)
+   for the matching target; coordinate with both bot and web owners using
+   `docs/db-migrations.md`.
 5. Capture the resulting deployment/version IDs and workflow URL. `/up`
    reports only limited queue-ledger evidence (below), not successful private
    persistence. Source behavior and local tests are not proof of live isolation.
 
 ### Neon web schema migrations (separate operator action)
 
-[db-migrate.yml](../.github/workflows/db-migrate.yml) is a **remote mutation**,
-not a test or part of the default Worker deployment. This workflow's addition
+[db-migrate.yml](../.github/workflows/db-migrate.yml) is a **remote mutation**
+and not a test. It is the hand-dispatch path for staging recovery and the only
+path for production; the staging `deploy.yml` applies staging migrations on its
+own (see *Staging deploy integration* below). This workflow's addition
 ([TOG-11161](/TOG/issues/TOG-11161)) does not authorize its execution. No live
 migration or Neon branch creation is performed by its selftest.
 
@@ -218,15 +225,23 @@ writes; retain the prior branch as required by that procedure. Reconcile bot,
 queues and external side effects separately. Do not run an unreviewed down
 migration or assume restoring the Worker restores the database.
 
-**Opt-in deploy hook (off by default):** the workflow exposes `workflow_call`
-with `target` defaulting to `staging`; `deploy.yml` currently does **not** call
-it. A separately reviewed integration may add a reusable-workflow job before
-Worker deploy, then make deploy `needs` that successful job. Use the same merged
-`main` revision, pass `target: staging`, and do not pass/inherit DB secrets:
-this workflow loads its own Environment secrets. Coordinate concurrency so a
-new migration cannot race a schema-dependent release. Never automatically
-couple production apply to a Worker deploy or enable the hook just by merging
-schema SQL.
+**Staging deploy integration:** `deploy.yml` applies the staging web migrations
+itself ([TOG-12965](/TOG/issues/TOG-12965)): `plan`, the exact-SHA CI re-check,
+`apply` and `verify` run in the `deploy-staging` job (Environment `staging`, which
+holds `NEON_STAGING_DATABASE_URL`) after `npm run check` and before the first
+Cloudflare mutation, so new code never meets the old staging schema and a failed
+or lock-blocked migration leaves the previous Worker serving. It does not call
+`db-migrate.yml`: a reusable-workflow job would check out main's tip instead of the
+CI-verified SHA and would run before the test suite. The steps are hard-wired to
+`MIGRATION_TARGET=staging` and never see `PRODUCTION_DATABASE_URL` or
+`PRODUCTION_DEPLOY_ENABLED`; they share the DB advisory lock with `db-migrate`
+(an in-flight hand-dispatch makes the deploy fail with "Another web migration
+holds the database lock"; re-run the deploy after it finishes). The `staging`
+Environment has no required reviewers, so this adds no second approval. Because
+a migration can commit and a later step still fail, migrations must stay
+backward-compatible (expand/contract) with the Worker they precede. Rollback:
+revert the PR; `db-migrate.yml` stays dispatchable by hand. Never couple
+production apply to a Worker deploy or enable that by merging schema SQL.
 
 **Local/CI proof (no Neon/API calls):** `npm run db:migrate:selftest` uses only
 `agent-testdb` (`agent_test`, empty password) or the Actions Postgres service.
