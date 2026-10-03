@@ -224,6 +224,42 @@ describe("bot:internal-action-smoke orchestration (fixture client)", () => {
     expect(client.seen[0]).toBe(client.seen[1]);
   });
 
+  it("announcement-only mode never calls role.assign or event.upsert", async () => {
+    const calls: string[] = [];
+    const client = {
+      assignRole: async (): Promise<RoleAssignResult> => {
+        calls.push("role.assign");
+        throw new Error("must not be called");
+      },
+      postAnnouncement: async () => {
+        calls.push("announcement.post");
+        return {
+          ok: true,
+          requestId: "r2",
+          messageId: "m1",
+          replayed: calls.length > 1,
+        } as AnnouncementResult;
+      },
+      upsertEvent: async (): Promise<EventUpsertResult> => {
+        calls.push("event.upsert");
+        throw new Error("must not be called");
+      },
+    };
+    const r = await runBotSmoke(
+      client,
+      { announcementOnly: true, channelKey: "qa-throwaway" },
+      fixedNow,
+    );
+    expect(r.ok).toBe(true);
+    expect(calls).toEqual(["announcement.post", "announcement.post"]);
+    expect(r.checks.map((c) => c.label)).toEqual([
+      "announcement.post is ok",
+      "retry is ok",
+      "retry is flagged Idempotent-Replay",
+      "retry returns the original message_id",
+    ]);
+  });
+
   it("reuses byte-identical announcement payload with an advancing clock", async () => {
     const bodies: string[] = [];
     const client = stubClient((_key, body) => {
@@ -314,6 +350,26 @@ describe("internal-action-smoke CLI", () => {
     const r = run([], { BOT_ENDPOINT_URL: "https://bot-staging.internal.example" });
     expect(r.code).toBe(2);
     expect(r.out).toMatch(/--discord-id/);
+  });
+
+  it("--announcement-only needs only --channel-key (exit 2 without it)", () => {
+    const r = run(["--announcement-only"], {
+      BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
+    });
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--channel-key/);
+    expect(r.out).not.toMatch(/--discord-id|--role-key/);
+  });
+
+  it("--announcement-only still refuses the production host", () => {
+    const r = run(["--announcement-only", "--channel-key=qa-throwaway"], {
+      BOT_ENDPOINT_URL: "https://bot.internal.example",
+      BOT_PRODUCTION_URL: "https://bot.internal.example",
+      BOT_SHARED_SECRET: "x",
+      BOT_KEY_ID: "web-staging",
+    });
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/production/);
   });
 
   it("exit 2 when the target is the production host", () => {

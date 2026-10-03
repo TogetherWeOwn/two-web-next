@@ -261,6 +261,10 @@ jobs:
             echo "::error::smoke CLI ran without options; expected exit 2"
             exit 1
           fi
+          if npm run smoke:internal-action -- --announcement-only 2>/dev/null; then
+            echo "::error::announcement-only smoke ran without --channel-key; expected exit 2"
+            exit 1
+          fi
 
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: needs.scope.outputs.docs_only != 'true'
