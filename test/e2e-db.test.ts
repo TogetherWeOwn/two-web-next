@@ -93,7 +93,7 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
     expect(await hashToken("two_probe")).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("W15 QA login writes the 30-day expiry and an expired DB row cannot authenticate", async () => {
+  it("W15 QA login writes the 120-minute expiry and an expired DB row cannot authenticate", async () => {
     const qaEnv = {
       ...env,
       APP_URL: "https://next.togetherweown.com",
@@ -109,7 +109,7 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
       select token_hash, user_id, extract(epoch from (expires_at - created_at))::float8 as lifetime from web_sessions`;
     expect(rows).toHaveLength(1);
     expect(rows[0]!.user_id).toBe("900000000000001396");
-    expect(Math.abs(rows[0]!.lifetime - 30 * 24 * 60 * 60)).toBeLessThan(5);
+    expect(Math.abs(rows[0]!.lifetime - 120 * 60)).toBeLessThan(5);
     await sql`update web_sessions set expires_at = now() where token_hash = ${rows[0]!.token_hash}`;
     const expired = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, qaEnv);
     expect(await expired.text()).toContain("Sign in with Discord");
