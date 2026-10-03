@@ -55,6 +55,7 @@ function fakeStore() {
   const hits: { bucket: string; at: number }[] = [];
   const sql = (async (strings: TemplateStringsArray, ...v: unknown[]) => {
     const head = strings.join("?");
+    if (head.includes("pg_advisory_xact_lock")) return [];
     if (head.includes("SELECT count(*)")) {
       const rows = hits.filter((h) => h.bucket === v[0] && h.at > Date.now() - 60_000);
       return [{ n: rows.length, wait: 30 }];
@@ -63,6 +64,9 @@ function fakeStore() {
       hits.push({ bucket: v[0] as string, at: Date.now() });
     return [];
   }) as unknown as never;
+  (
+    sql as unknown as { begin: (run: (tx: unknown) => Promise<unknown>) => Promise<unknown> }
+  ).begin = (run) => run(sql);
   return { sql, hits };
 }
 

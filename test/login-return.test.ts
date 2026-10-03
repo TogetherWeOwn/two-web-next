@@ -8,6 +8,7 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import app from "./app";
 import type { Env } from "../src/env";
 import { events } from "../src/db/admin-schema";
@@ -55,7 +56,7 @@ function fakeSql() {
     throw new Error(`fakeSql: unexpected statement: ${head.slice(0, 80)}`);
   }) as unknown as Sql;
   (sql as { unsafe: (q: string) => Promise<unknown> }).unsafe = async () => [];
-  return sql;
+  return withThrottleTx(sql);
 }
 
 function isolated(extra: Record<string, unknown> = {}) {

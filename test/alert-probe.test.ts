@@ -8,6 +8,7 @@ import type { Env } from "../src/env";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 import { createTailWorker } from "../tail/worker";
 import { env as baseEnv } from "./helpers/member-data";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 
 const token = "test-only-probe-token";
 const staging = { ...baseEnv, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: token };
@@ -72,7 +73,7 @@ describe("staging alert probe gates", () => {
 
   it("throttles authorized probes, while disabled/bad-token calls never reach the counter", async () => {
     const send = vi.fn();
-    const store = vi.fn(async () => (async () => [{ n: 10, wait: 30 }]) as never);
+    const store = vi.fn(async () => withThrottleTx((async () => [{ n: 10, wait: 30 }]) as never));
     const env = {
       ...staging,
       THROTTLE_STORE: store,

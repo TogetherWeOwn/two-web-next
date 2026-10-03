@@ -2,6 +2,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
 import app from "./app";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import type { Env } from "../src/env";
 import {
   createMemorySessionStore,
@@ -100,7 +101,7 @@ function fixture(store: SessionStore, sql?: Sql) {
   const env = {
     ...baseEnv,
     SESSION_STORE: instrumented,
-    JOIN_DEPS: { store: async () => sql ?? fake },
+    JOIN_DEPS: { store: async () => sql ?? withThrottleTx(fake) },
   } as Env;
   return {
     store,

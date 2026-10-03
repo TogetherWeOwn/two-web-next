@@ -20,6 +20,7 @@
 // matching any secret scanner, and they are still unique enough to grep for.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import { createMemorySessionStore } from "../src/sessions";
 import {
   DiscordError,
@@ -112,7 +113,7 @@ function fakeSql() {
     throw new Error(`fakeSql: unexpected statement: ${head.slice(0, 80)}`);
   }) as unknown as Sql;
   (sql as { unsafe: (q: string) => Promise<unknown> }).unsafe = async () => [];
-  return { sql, attempts };
+  return { sql: withThrottleTx(sql), attempts };
 }
 
 /** Env with a memory session store + the fake journey store. */

@@ -28,6 +28,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeSigned } from "hono/utils/cookie";
 import app from "./app";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import type { Env } from "../src/env";
 import {
@@ -124,7 +125,7 @@ function isolated() {
   const e = {
     ...env,
     SESSION_STORE: instrumented,
-    JOIN_DEPS: { store: async () => fake.sql },
+    JOIN_DEPS: { store: async () => withThrottleTx(fake.sql) },
   } as unknown as Env;
   return { store, create, replace, fake, env: e };
 }
