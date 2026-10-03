@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Admit a complete branch inventory before any remote mutation."""
+
+import datetime
+import pathlib
+import re
+import sys
+
+
+def admit(prefix, keys):
+    if any(not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", part)
+           for part in prefix.split("/")):
+        raise ValueError("invalid branch prefix")
+    timestamp = r"([0-9]{8}T[0-9]{6}Z)"
+    # Archives are `<prefix>-<UTC>.dump` (daily) or
+    # `<prefix>-<UTC>-weekly-<UTC>.dump`; each may carry a `.digest.json`
+    # receipt sidecar line (docs/backup-integrity.md).
+    pattern = re.compile(re.escape(prefix) + "-" + timestamp
+                         + r"(?:-weekly-" + timestamp + r")?\.dump(?:\.digest\.json)?")
+    seen = set()
+    for key in keys:
+        match = pattern.fullmatch(key)
+        if not match:
+            raise ValueError("malformed or foreign-branch key")
+        for value in match.groups():
+            if value is not None:
+                datetime.datetime.strptime(value, "%Y%m%dT%H%M%SZ")
+        if key in seen:
+            raise ValueError("duplicate key")
+        seen.add(key)
+    return keys
+
+
+def is_missing(stderr):
+    # Wrangler's remote object GET emits this UserError only for a null object:
+    # https://github.com/cloudflare/workers-sdk/blob/main/packages/wrangler/src/r2/object.ts
+    # Do not treat generic 404/auth/transport errors as first-use initialization.
+    text = re.sub(r"\x1b\[[0-9;]*m", "", stderr.read_text(encoding="utf-8"))
+    errors = [line.strip() for line in text.splitlines() if "[ERROR]" in line]
+    return errors == ["✘ [ERROR] The specified key does not exist."]
+
+
+def main():
+    action = sys.argv[1]
+    if action == "missing":
+        return 0 if is_missing(pathlib.Path(sys.argv[2])) else 1
+    prefix, manifest = sys.argv[2], pathlib.Path(sys.argv[3])
+    # Match Bash's LF-delimited inventory exactly; do not normalize CRLF or
+    # control-character separators into keys that remote commands never saw.
+    with manifest.open(encoding="utf-8", newline="") as source:
+        text = source.read()
+    keys = text.split("\n") if text else []
+    if keys and keys[-1] == "":
+        keys.pop()
+    admit(prefix, keys)
+    if action == "append":
+        keys.extend(sys.argv[4:])
+        admit(prefix, keys)
+        manifest.write_text("\n".join(keys) + "\n", encoding="utf-8")
+    elif action != "validate":
+        raise ValueError("unknown manifest operation")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (ValueError, OSError, IndexError):
+        # Never echo untrusted inventory content or transport diagnostics.
+        print("neon-backup: manifest admission failed", file=sys.stderr)
+        sys.exit(1)
