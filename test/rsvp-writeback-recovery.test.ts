@@ -58,28 +58,36 @@ type SyncCarrier = Extract<QueueMessage, { kind: "sync-event" }>;
 
 // Producers now enqueue the W13 carrier directly; the W8 SyncMessage shape below
 // is what in-flight pre-integration carriers look like on the wire. The mapping
-// contract (same key, cancel/inconsistent carriers refused) is unchanged.
-const w8upsert = (eventKey: string, idempotencyKey = "11111111-1111-4111-8111-111111111111") => ({
+// contract (same key, inconsistent carriers refused) is unchanged.
+const w8carrier = (
+  eventKey: string,
+  action: string,
+  idempotencyKey = "11111111-1111-4111-8111-111111111111",
+) => ({
   dedupeKey: eventKey,
   eventKey,
-  action: "event.upsert",
+  action,
   idempotencyKey,
 });
+const w8upsert = (eventKey: string, idempotencyKey?: string) =>
+  w8carrier(eventKey, "event.upsert", idempotencyKey);
 
 describe("W8 write-back carrier reaches the sync-event job", () => {
-  it("maps the producer's event.upsert carrier with its idempotency key unchanged", () => {
-    const carrier = w8upsert("01WBCARRIER000000000000000");
-    expect(toQueueMessage(structuredClone(carrier))).toEqual({
-      kind: "sync-event",
-      eventKey: carrier.eventKey,
-      idempotencyKey: carrier.idempotencyKey,
-    });
-  });
+  it.each(["event.upsert", "event.cancel"])(
+    "maps the producer's %s carrier with its idempotency key unchanged",
+    (action) => {
+      const carrier = w8carrier("01WBCARRIER000000000000000", action);
+      expect(toQueueMessage(structuredClone(carrier))).toEqual({
+        kind: "sync-event",
+        eventKey: carrier.eventKey,
+        idempotencyKey: carrier.idempotencyKey,
+      });
+    },
+  );
 
-  it("leaves event.cancel and inconsistent carriers unrecognized", () => {
+  it("leaves inconsistent carriers unrecognized", () => {
     const upsert = w8upsert("01WBCARRIER000000000000000");
-    // A sync-event for a cancelled row would ask the bot to upsert it.
-    expect(toQueueMessage({ ...upsert, action: "event.cancel" })).toBeNull();
+    expect(toQueueMessage({ ...upsert, action: "event.reopen" })).toBeNull();
     expect(toQueueMessage({ ...upsert, dedupeKey: "another-event" })).toBeNull();
     expect(toQueueMessage({ ...upsert, idempotencyKey: null })).toBeNull();
     // A kind is judged by the W13 shape alone, never re-read as a W8 carrier.
