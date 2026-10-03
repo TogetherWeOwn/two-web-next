@@ -1,0 +1,62 @@
+name: staging-census
+
+# Read-only staging web_sessions census (counts only).
+# Operator tool for the staging session-sweep probe: runs inside GitHub where
+# the staging Neon secret already lives, so no agent principal ever holds it.
+# Single job, workflow_dispatch only, staging environment, one read-only
+# transaction. Prints COUNTS ONLY — never token_hash or session values.
+# No migrations, no writes, no rotation, staging only.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-census
+  cancel-in-progress: false
+
+jobs:
+  census:
+    name: census
+    # The org's two-selfhosted runner group refuses public repos:
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install psql client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends postgresql-client
+
+      - name: Read-only web_sessions census (counts only)
+        env:
+          # Staging Environment secret; never echoed, never written to a file.
+          # GitHub masks secret values in logs automatically.
+          NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NEON_STAGING_DATABASE_URL:-}" ]; then
+            echo "::error::NEON_STAGING_DATABASE_URL is not configured on the staging environment"
+            exit 1
+          fi
+          psql "$NEON_STAGING_DATABASE_URL" -v ON_ERROR_STOP=1 --pset footer=off <<'SQL'
+          begin read only;
+          set local statement_timeout = '30s';
+          select count(*) as total,
+            count(*) filter (where revoked_at is null) as live,
+            count(*) filter (where revoked_at is not null) as revoked
+            from web_sessions;
+          select date_trunc('minute', created_at) as created_min,
+            date_trunc('minute', revoked_at) as revoked_min,
+            count(*) as n
+            from web_sessions
+            where user_id = '900000000000001396'
+            group by 1, 2 order by 1, 2;
+          commit;
+          SQL
