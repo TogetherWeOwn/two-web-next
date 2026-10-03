@@ -14,6 +14,7 @@ import {
   hashToken,
   migrate,
   newSessionToken,
+  SESSION_TTL_SECONDS,
   type SessionStore,
   type Sql,
 } from "./sessions";
@@ -59,7 +60,7 @@ import {
   takeJoinResult,
 } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { upBody, upHttpStatus, withHealthReadTimeout } from "./up";
+import { configReadiness, upBody, upHttpStatus, withHealthReadTimeout } from "./up";
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
@@ -76,7 +77,6 @@ export { rulesLastUpdated } from "./rules-last-updated";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
@@ -108,6 +108,15 @@ const staticSecurityHeaders = secureHeaders({
   strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
+    // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
+    // <object>/<embed> anywhere in src/), base-uri 'self', connect-src
+    // 'self' (island fetch targets are same-origin paths). The remaining
+    // legacy delta — upgrade-insecure-requests — is left out: every source
+    // list is 'self' or an explicit https:// host, so an http: subresource is
+    // blocked rather than upgraded, and HTTPS itself is edge-owned (TOG-8729).
+    baseUri: ["'self'"],
+    connectSrc: ["'self'"],
+    objectSrc: ["'none'"],
     imgSrc: [
       "'self'",
       (c) =>
@@ -254,16 +263,33 @@ async function issueSession(
     });
   }
   const token = newSessionToken();
+  const tokenHash = await hashToken(token);
   const replacement = {
-    tokenHash: await hashToken(token),
+    tokenHash,
     ...row,
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
   };
   const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+  // Fresh authentication revokes the presented pre-login/pre-join token
+  // atomically with the insert (a failed insert leaves the prior session
+  // intact; see store.replace). The token is revoked by hash because it can
+  // belong to a different user (shared terminal).
   if (typeof prior === "string" && prior.startsWith("two_")) {
     await store.replace(await hashToken(prior), replacement);
   } else {
     await store.create(replacement);
+  }
+  // Session fixation (TOG-12284): additionally revoke every other live
+  // session for this user so only the newest survives. The fresh row already
+  // exists: a sweep failure warns and sign-in still succeeds (fail-open on the
+  // sweep, never a logout-on-login). Token-hash-only.
+  try {
+    await store.revokeUserSessions(row.userId, tokenHash);
+  } catch (err) {
+    console.warn("prior session sweep failed", {
+      user: row.userId,
+      exception: (err as Error)?.constructor?.name ?? "unknown",
+    });
   }
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",
@@ -514,8 +540,9 @@ app.post("/csp-reports", cspReportsRoute);
 
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
-// `GET /up` — session-free DB/schema readiness plus the existing queue signal.
-// DB/ledger failure or pending web migrations answers 503; queue-only degraded
+// `GET /up` — session-free DB/schema and secret-presence readiness plus the
+// existing queue signal. A missing required secret, DB/ledger failure or
+// pending web migrations answers 503; queue-only degraded
 // or unknown remains 200. `no-store` so a monitor never reads a stale response.
 // Test seam: QUEUE_DEPTH_STORE injects a Sql double; production bindings never
 // set it (same pattern as SESSION_STORE/ROSTER_STORE above).
@@ -525,11 +552,10 @@ app.get("/up", async (c) => {
   // Fixed app identity for the cutover probe, including unknown/degraded reads.
   c.header("x-two-origin", "two-web-next");
   const injected = (c.env as EnvWithDepth).QUEUE_DEPTH_STORE;
-  // Readiness must probe the database selected by the web stores. Preserve the
-  // queue's existing Hyperdrive-first selection without falling back on failure.
+  // Readiness and the queue slice both read the database the web stores and
+  // the queue producers/consumer select: explicit DATABASE_URL wins, DB only
+  // when absent, never as a retry after a failed connection.
   const url = databaseUrl(c.env);
-  const queueUrl = c.env.DB?.connectionString ?? c.env.DATABASE_URL;
-  const shared = url === queueUrl;
   const owned = new Set<ReturnType<typeof postgres>>();
   const connect = (target: string | undefined, max: number) => {
     if (injected) return injected;
@@ -552,12 +578,12 @@ app.get("/up", async (c) => {
   };
   try {
     c.header("cache-control", "no-store");
-    // Two slots when shared, one per client otherwise: queue cannot starve DB.
-    const sql = connect(url, shared ? 2 : 1);
-    const queueSql = shared ? sql : connect(queueUrl, 1);
+    // Two slots on the one client: the queue read cannot starve the DB read.
+    const sql = connect(url, 2);
     const body = await upBody(
-      queueSql ? () => withHealthReadTimeout(queueSql, pgQueueDepth) : null,
+      sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
       sql,
+      configReadiness(c.env),
     );
     return c.json(body, upHttpStatus(body));
   } finally {

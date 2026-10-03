@@ -32,6 +32,9 @@ function fixture(status: "draft" | "published" = "draft") {
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     createdBy: null,
     recurrenceFrequency: null,
     recurrenceCount: null,
@@ -39,6 +42,8 @@ function fixture(status: "draft" | "published" = "draft") {
     parentEventId: null,
     recurrenceIndex: null,
     icsSequence: 0n,
+    syncRevision: 1,
+    syncedRevision: 0,
     createdAt: new Date("2026-10-01T00:00:00Z"),
     updatedAt: new Date("2026-10-01T00:00:00Z"),
   };

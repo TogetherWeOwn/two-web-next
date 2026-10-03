@@ -469,9 +469,18 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
         { headers: { cookie: original.cookie } },
         disabled,
       );
-      expect(await res.text()).toContain("Automatic join is unavailable");
+      // Main's blank-bot contract (TOG-12680): the OAuth exchange and user
+      // lookup still run, but no bot-credentialed call is emitted and the
+      // callback renders recovery without a member session.
+      expect(await res.text()).toContain("We couldn&#39;t add you automatically");
       expect(sessionCookie(res)).toBeUndefined();
-      expect(fetch).not.toHaveBeenCalled();
+      expect(
+        fetch.mock.calls.filter(
+          ([u, init]) =>
+            String(u).includes("/members/") ||
+            String((init as RequestInit | undefined)?.headers ?? "").includes("Bot "),
+        ),
+      ).toHaveLength(0);
       expect(f.create).not.toHaveBeenCalled();
       expect(await f.attemptCount()).toBe(1);
       await app.request(
@@ -485,16 +494,6 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
 }
 
 contract("memory", () => createMemorySessionStore(() => Date.now()));
-
-it("an unconfigured join start does not even advertise OAuth", async () => {
-  const f = fixture(createMemorySessionStore());
-  const fetch = mockDiscord();
-  const res = await app.request("/join/discord", {}, { ...f.env, DISCORD_BOT_TOKEN: "" });
-  expect(res.headers.get("location")).toBe("/join");
-  expect(res.headers.getSetCookie()).toHaveLength(0);
-  expect(fetch).not.toHaveBeenCalled();
-  vi.unstubAllGlobals();
-});
 
 describe.skipIf(!url)("test-container persistence", () => {
   const sql = postgres(url!, { max: 8 }) as unknown as Sql & { end: () => Promise<void> };

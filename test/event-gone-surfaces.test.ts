@@ -147,8 +147,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
     }
     const html = await (await apex(`/e/${CANCELLED}`)).text();
     expect(html).toContain("<h1>Friday night games</h1>");
-    expect(html).toContain("This event was cancelled");
     expect(html).toContain('data-testid="event-cancelled">Cancelled');
+    const visible = html.replace(/<head>[\s\S]*?<\/head>|<script[\s\S]*?<\/script>|<[^>]+>/g, " ");
+    expect(visible.match(/cancel/gi)).toEqual(["Cancel"]);
+    expect(html).not.toContain('data-testid="rsvp-closed"');
     expect(html).toContain('href="/events">See upcoming events</a>');
     expect(html).toContain('name="robots" content="noindex, nofollow"');
     expect(jsonLdOf(html)).toMatchObject({

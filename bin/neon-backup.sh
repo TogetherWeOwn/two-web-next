@@ -48,11 +48,13 @@
 #     without a paired receipt are explicitly unverified; --require-verified
 #     also fails those. Missing new receipts always fail. See docs/backup-integrity.md.
 #
-# Connection: DATABASE_URL env only (e.g. NEON_STAGING_DATABASE_URL exported
-# as DATABASE_URL by the caller or the CI workflow). There is no argv, file,
-# or default-credential fallback: an unset DATABASE_URL is a hard error, so a
-# half-configured box can never silently dump the wrong database. Tests run
-# against agent-testdb / the Neon staging branch only, never prod.
+# Connection: DATABASE_URL env only (e.g. NEON_STAGING_DATABASE_URL or
+# PRODUCTION_DATABASE_URL exported as DATABASE_URL by the caller or the CI
+# workflow; production is the PlanetScale direct 5432 endpoint, never 6432).
+# There is no argv, file, or default-credential fallback: an unset
+# DATABASE_URL is a hard error, so a half-configured box can never silently
+# dump the wrong database. Tests run against agent-testdb / the Neon staging
+# branch only, never prod.
 #
 # Needs: pg_dump + psql (CI: postgres:17 image service / apt), wrangler with
 # CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.

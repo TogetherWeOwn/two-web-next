@@ -277,6 +277,7 @@ describe("DB-backed sessions and rotation", () => {
         return inner.rotate(o, r);
       },
       revoke: (h) => inner.revoke(h),
+      revokeUserSessions: (u, h) => inner.revokeUserSessions(u, h),
       sweepExpired: (now) => inner.sweepExpired(now),
     };
     const e = { ...env, SESSION_STORE: instrumented } as Env;

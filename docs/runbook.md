@@ -5,7 +5,8 @@ Start here for releases, queue incidents and database recovery; use
 [log-line alerts](runbook-alerts.md) for fingerprints and
 [shared Postgres](db-migrations.md) for migration ownership and backup policy.
 The [parity matrix](parity.md) records what is implemented versus still missing.
-Cutover/DNS changes are outside this runbook.
+The production cutover and its DNS changes are outside this runbook; only the
+staging rollback and DNS flip-back rehearsal is covered here.
 
 ## Safety and escalation
 
@@ -106,7 +107,13 @@ approved account and binding isolation before any remote mutation.
    migrations **only to its disposable Postgres**, runs `npm run check`, ensures
    `two-sync-event` and `two-internal-action` exist, then deploys. The queue-create
    step currently suppresses errors; it is not permission/provisioning evidence.
-   The final `/health` check is liveness only, not DB/queue acceptance.
+   The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
+   ([smoke checker](../bin/smoke.mjs)), covering 16 public routes: `/up`
+   (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
+   healthy/degraded/unknown) plus HTML/RSS/iCal/sitemap/robots/redirect/404
+   routes with CSP/nosniff/content-type/noindex/redirect assertions; queue
+   `degraded` or `unknown` is allowed. This is public-route liveness only,
+   not DB/schema readiness or queue-drain acceptance.
 4. An explicitly authorized manual deployment of the reviewed release uses:
 
    ```bash
@@ -120,9 +127,9 @@ approved account and binding isolation before any remote mutation.
    approved [Neon migration workflow](#neon-web-schema-migrations-separate-operator-action)
    before deploying a schema-dependent Worker; coordinate with both bot and web
    owners using `docs/db-migrations.md`.
-5. Capture the resulting deployment/version IDs and workflow URL. `/health`
-   does not exercise persistence; `/up` reports only limited dependency evidence
-   (below). Source behavior and local tests are not proof of live isolation.
+5. Capture the resulting deployment/version IDs and workflow URL. `/up`
+   reports only limited queue-ledger evidence (below), not successful private
+   persistence. Source behavior and local tests are not proof of live isolation.
 
 ### Neon web schema migrations (separate operator action)
 
@@ -146,10 +153,12 @@ migration or Neon branch creation is performed by its selftest.
   production unless `PRODUCTION_DEPLOY_ENABLED` is exactly `true` (the same
   flag used for production Worker deploys). Leave it unset/false until approved.
 - Provision `NEON_STAGING_DATABASE_URL` **only on the staging Environment** and
-  `NEON_PRODUCTION_DATABASE_URL` **only on the production Environment**, using
-  the authorized operator's secret-provisioning path. Verify the intended Neon
+  `PRODUCTION_DATABASE_URL` **only on the production Environment**, using
+  the authorized operator's secret-provisioning path. Verify the intended
   project/branch/database and direct endpoint out of band; a hostname alone
-  cannot distinguish staging from production. The driver pins port 5432, uses
+  cannot distinguish staging from production. Staging is Neon; production is
+  PlanetScale Postgres (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
+  pooled `6432` port). The driver pins port 5432, uses
   certificate-verified TLS, strips optional `channel_binding=prefer|disable`, and
   refuses `channel_binding=require` (unsupported by postgres.js) before connecting.
   Never weaken a required channel-binding policy just to run migrations; stop and
@@ -280,18 +289,216 @@ Worker's routes/domains. It does **not** undo Postgres migrations, data writes,
 Discord side effects, queue messages or external-resource changes. Check schema
 compatibility first; keep the release workflow from redeploying the bad head.
 Record the rollback deployment and previous/current version IDs. Do not claim a
-rollback was rehearsed unless there is an execution receipt.
+rollback was rehearsed unless there is an execution receipt; the staging
+receipt is in the rehearsal record below.
 
 Official references: [Wrangler rollback](https://developers.cloudflare.com/workers/wrangler/commands/workers/#rollback)
 and [rollback limits](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/#limits)
 (last 100 published versions; resource/class-lifecycle changes can prevent it).
 
+### Staging rehearsal: Worker rollback and DNS flip-back
+
+Staging only: host `next.togetherweown.com`, Worker `two-web-next`. Never run
+these steps against `togetherweown.com`, `www` or `two-web-next-production`;
+the production flip belongs to the W17 cutover card. Every command marked
+REMOTE MUTATION changes staging traffic for about 10 seconds.
+
+Credentials stay in the environment, never on argv. The rollback half needs
+Workers Scripts edit (`CLOUDFLARE_API_TOKEN`). The DNS half also needs Zone
+DNS edit on `togetherweown.com` plus Workers custom-domain edit (`CF_TOKEN`
+below). The deploy token has **no** DNS edit: on 2026-10-02 a record create
+returned `10000 Authentication error`. On any such error, stop and use the
+`Operator:` card; do not try another token.
+
+Shared helpers for one shell session (`RUN_DIR` is a private scratch
+directory; `cfapi` reads its token from `CF_TOKEN` and fails on API errors):
+
+```bash
+export RUN_DIR="$(mktemp -d)" CF_ACC="<account id>" CF_ZONE="<togetherweown.com zone id>"
+cfapi() { # usage: cfapi METHOD PATH [JSON]
+  node -e 'const [m,p,b]=process.argv.slice(1);
+    fetch("https://api.cloudflare.com/client/v4"+p,{method:m,body:b,headers:{
+      authorization:"Bearer "+process.env.CF_TOKEN,"content-type":"application/json"}})
+    .then(r=>r.json()).then(d=>{if(!d.success){console.error(JSON.stringify(d.errors));process.exit(1)}
+      console.log(JSON.stringify(d.result))})' "$@"
+}
+probe() { # one line per second: epoch-ms, HTTP status, X-TWO-Origin (blank if absent)
+  local i=0
+  while :; do
+    i=$((i + 1))
+    printf '%s %s\n' "$(date +%s%3N)" "$(curl -s -o /dev/null -D - --max-time 5 \
+      "https://next.togetherweown.com/up?rehearsal=$i" | tr -d '\r' |
+      awk 'NR==1{s=$2} tolower($1)=="x-two-origin:"{o=$2} END{print s, o}')"
+    sleep 1
+  done
+}
+served_versions() { # usage: served_versions FROM_MS TO_MS -> version switches, oldest first
+  CF_TOKEN="$CLOUDFLARE_API_TOKEN" cfapi POST "/accounts/$CF_ACC/workers/observability/telemetry/query" \
+    "{\"queryId\":\"rehearsal\",\"view\":\"events\",\"limit\":100,\"timeframe\":{\"from\":$1,\"to\":$2},
+      \"parameters\":{\"filters\":[{\"key\":\"\$metadata.service\",\"operation\":\"eq\",
+      \"type\":\"string\",\"value\":\"two-web-next\"}]}}" |
+  node -e 'const e=JSON.parse(require("fs").readFileSync(0)).events.events
+      .map(x=>[x.timestamp,x.$workers?.scriptVersion?.id]).sort((a,b)=>a[0]-b[0]);
+    let p;for(const[t,v]of e)if(v!==p){console.log(new Date(t).toISOString(),v);p=v}
+    console.log("events",e.length)'
+}
+```
+
+The telemetry query returns only the newest 100 events. Keep each window to
+40 seconds or less while one probe runs, and check the event count.
+
+**Worker rollback (N+1 to N and back)**
+
+1. Confirm that no deploy is running or queued:
+   `gh run list --workflow deploy.yml --limit 3`. A deploy during the
+   rehearsal overwrites the rollback.
+2. Record the versions from
+   `npx --no-install wrangler deployments list --name two-web-next --json`.
+   N+1 is the active version and N is the previous deployment's version. Map
+   each version to its commit with the `Current Version ID:` line in its deploy
+   job log; deploys are not tagged yet.
+3. Baseline: `node bin/smoke.mjs https://next.togetherweown.com | tee "$RUN_DIR/smoke-base.log"`.
+   Record any existing failures. The rehearsal compares against this
+   baseline; it does not require it to be green.
+4. In a second terminal, start the probe loop:
+   `probe | tee "$RUN_DIR/probe-rollback.log"`.
+5. Roll back, with timestamps:
+
+   ```bash
+   (
+     set -euo pipefail
+     : "${N_VERSION:?}"
+     # REMOTE MUTATION: staging Worker only.
+     echo "T0 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+     npx --no-install wrangler rollback "$N_VERSION" --name two-web-next \
+       -m "staging rollback rehearsal" -y
+     echo "T1 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+   )
+   ```
+
+6. Prove that N serves. After 60 seconds, run
+   `served_versions $((T0 - 4000)) $((T0 + 36000))`, then a second window
+   that starts 36 seconds after T0. Record three intervals from T0: the first
+   request served by N, the point after which no N+1 request appears
+   (settled), and the number of non-200 probes. Then run N's own smoke; the
+   HEAD smoke can expect an `/up` shape that N does not have yet:
+
+   ```bash
+   (
+     set -euo pipefail
+     : "${N_SHA:?}"
+     mkdir -p "$RUN_DIR/n" && git archive "$N_SHA" bin ci | tar -x -C "$RUN_DIR/n"
+     node "$RUN_DIR/n/bin/smoke.mjs" https://next.togetherweown.com | tee "$RUN_DIR/smoke-n.log"
+   )
+   ```
+
+   Run `served_versions` over the smoke window. Every event must show N.
+7. Roll forward with `wrangler rollback "$N1_VERSION"` (the same block as
+   step 5), prove N+1 the same way, then repeat the step 3 smoke. The result
+   must match the baseline. Confirm that `wrangler deployments list` shows
+   both rehearsal deployments with their messages.
+
+**DNS flip to the legacy target and back**
+
+8. Record the starting state and the legacy target:
+
+   ```bash
+   (
+     set -euo pipefail
+     cfapi GET "/accounts/$CF_ACC/workers/domains?hostname=next.togetherweown.com" | tee "$RUN_DIR/cd-before.json"
+     cfapi GET "/zones/$CF_ZONE/dns_records?name=next.togetherweown.com" | tee "$RUN_DIR/dns-before.json"
+     cfapi GET "/zones/$CF_ZONE/dns_records?name=staging.togetherweown.com" | tee "$RUN_DIR/legacy.json"
+   )
+   ```
+
+   Expect one custom domain (`service` `two-web-next`) and one read-only
+   proxied `AAAA 100::` record owned by the Worker. Set `CD_ID`,
+   `LEGACY_A` and `LEGACY_AAAA` from these files. The legacy records are
+   proxied with `ttl` 1 (auto).
+9. Run `probe | tee "$RUN_DIR/probe-dns.log"` in the second terminal. The
+   signal is the `two-web-next` marker on `/up`, which only Next sends.
+10. Flip to legacy. Between the two calls the host has no record, so keep
+    them in one block:
+
+    ```bash
+    (
+      set -euo pipefail
+      : "${CD_ID:?}" "${LEGACY_A:?}" "${LEGACY_AAAA:?}"
+      rec() { printf '{"type":"%s","name":"next.togetherweown.com","content":"%s","proxied":true,"ttl":1,"comment":"staging flip-back rehearsal"}' "$1" "$2"; }
+      # REMOTE MUTATION: staging host only.
+      echo "D0 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+      cfapi DELETE "/accounts/$CF_ACC/workers/domains/$CD_ID"
+      cfapi POST "/zones/$CF_ZONE/dns_records" "$(rec A "$LEGACY_A")"
+      cfapi POST "/zones/$CF_ZONE/dns_records" "$(rec AAAA "$LEGACY_AAAA")"
+      echo "D1 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+    )
+    ```
+
+11. Record the time from D0 to the first probe without the marker, and to the
+    start of 10 consecutive probes without it. Also record the status that
+    the legacy edge returns. Legacy Traefik has no router for `next.*`, so a
+    404 or 5xx is expected and is not an app failure.
+12. Flip back. Delete the rehearsal records, then re-attach the custom domain:
+
+    ```bash
+    (
+      set -euo pipefail
+      # REMOTE MUTATION: staging host only.
+      echo "B0 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+      cfapi GET "/zones/$CF_ZONE/dns_records?name=next.togetherweown.com" |
+        node -e 'for (const r of JSON.parse(require("fs").readFileSync(0)))
+          if (r.comment === "staging flip-back rehearsal") console.log(r.id)' |
+        while read -r id; do cfapi DELETE "/zones/$CF_ZONE/dns_records/$id"; done
+      cfapi PUT "/accounts/$CF_ACC/workers/domains" \
+        "{\"hostname\":\"next.togetherweown.com\",\"service\":\"two-web-next\",\"environment\":\"production\",\"zone_id\":\"$CF_ZONE\"}"
+      echo "B1 $(date +%s%3N)" | tee -a "$RUN_DIR/times"
+    )
+    ```
+
+    If the `PUT` fails, `npx --no-install wrangler triggers deploy` re-applies
+    the custom domain from `wrangler.jsonc` without uploading code. If that
+    also fails, staging has no record: escalate on the incident card at once.
+13. Record the time from B0 to the first probe with the marker, and to the
+    start of 10 consecutive probes with it. Repeat the step 3 smoke; it must
+    match the baseline.
+14. Read back as in step 8. Expect exactly one custom domain and only the
+    Worker's read-only record. The custom-domain ID can change.
+15. Post the timings, version IDs, smoke results and discrepancies on the W16
+    card, and keep `$RUN_DIR` until the card is closed.
+
+Rehearsal record:
+
+| Date (UTC) | Step | Command | First request on target | Settled | Non-200 probes |
+|---|---|---|---|---|---|
+| 2026-10-02 00:53 | rollback `62871bf4` (8cb9cff) to `60663623` (0515ef4) | 5.2 s | +8.9 s | +12.3 s | 0 of 150 |
+| 2026-10-02 00:55 | roll forward `60663623` to `62871bf4` | 5.5 s | +6.6 s | +10.7 s | 0 of 90 |
+| pending | DNS flip to legacy and back | needs a DNS-edit principal | | | |
+
+Notes from the 2026-10-02 run:
+
+- Both versions send the same `/up` marker, so only telemetry
+  (`$workers.scriptVersion.id`) proves which version served a request.
+  Requests from one client alternated between versions for about 4 seconds
+  before they settled.
+- The HEAD smoke failed the same 9 assertions on both versions: `/events`,
+  `/events.rss` and `/events.ics` returned 500, and `/up` lacked the fields
+  that HEAD expects. N's own smoke passed `/up` and failed only the 8
+  events assertions. The failures were present before the rehearsal.
+- For proxied records, resolvers only ever receive Cloudflare anycast
+  addresses (`ttl` 1, auto). The DNS flip therefore depends on how fast
+  Cloudflare applies edge configuration, not on resolver TTL expiry.
+
 ## Read `/up` without mistaking liveness for readiness
 
+`/health`, `/healthz` and `/db-ping` are **retired**, unregistered diagnostic
+paths: GET returns ordinary **404**, not health or DB evidence. The generic 404
+page may try optional event suggestions and tolerates their DB failure; it is
+not a DB-free diagnostic. See [retired-route fixtures](../test/db-ping.test.ts).
+
 `GET /robots.txt` is DB-free and can check local Worker startup; it does not
-prove deployment readiness. `/health` and `/healthz` are removed (404).
-`GET /up` is **readiness**: a read-only DB ping and web migration-ledger read,
-plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
+prove deployment readiness.
+`GET /up` is **readiness**: a required-secret presence check, a read-only DB
+ping and web migration-ledger read, plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
 
 DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty
@@ -333,6 +540,16 @@ Sources: [PostgreSQL statement/lock timeouts](https://www.postgresql.org/docs/cu
 | DB reachable, ledger read fails/times out | 503 | `ok` | `null` | `degraded` |
 | No usable DB configuration, failed/hung ping | 503 | `error` | `null` | `degraded` |
 
+**Required secrets.** `SESSION_SECRET`, `DISCORD_CLIENT_SECRET` and
+`DISCORD_BOT_TOKEN` must be present and nonempty (whitespace-only counts as
+empty). If any is missing, `/up` answers 503 with top-level `status: degraded`
+and `config: "missing"`, alongside the DB and queue fields above. The body never
+names the secret; the Worker log line `Health check found required Worker
+secrets missing.` lists the missing names only, never values. A ready Worker's
+body has no `config` key. This is a presence check only: a wrong value still
+reports ready and fails at sign-in. Fix by setting the secret (an Operator step
+for staging/production), not by weakening the probe.
+
 Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready**:
 
 | Queue ledger outcome | Top-level `status` when DB/schema ready | `queue.status` / measurements |
@@ -355,12 +572,16 @@ production DBs or credentials for tests. The contract is [src/up.ts](../src/up.t
 
 ```bash
 env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
-  npm run test -- test/up.test.ts test/deploy-smoke.test.ts
+  npm run test -- test/up.test.ts test/deploy-smoke.test.ts \
+    test/db-ping.test.ts test/runbook-diagnostics.test.ts
 DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
   npm run test -- test/up-db.test.ts
 ```
 
-Source: [Drizzle migration log defaults](https://orm.drizzle.team/docs/drizzle-kit-migrate#applied-migrations-log-in-the-database).
+Readiness shipped in [#111](https://github.com/TogetherWeOwn/two-web-next/pull/111)
+([`ad22be7`](https://github.com/TogetherWeOwn/two-web-next/commit/ad22be7)); this section
+matches main [`eed3c8b`](https://github.com/TogetherWeOwn/two-web-next/tree/eed3c8b8976986d6aeb7f97e1b656d7bbbaf85c7)
+(2026-10-02). Source: [Drizzle migration log defaults](https://orm.drizzle.team/docs/drizzle-kit-migrate#applied-migrations-log-in-the-database).
 
 `warn_at: 20` and `critical_at: 100` are reported thresholds; the implementation
 has **no separate critical status**. `failed`, `delayed`, `reserved` or `total`
@@ -384,13 +605,16 @@ Measurements from [src/jobs/postgres.ts](../src/jobs/postgres.ts):
 
 Do not remove the binding or inject an alternate credential to mask a configured
 outage: **missing configuration is not the same as an unreachable database**.
-Normal web stores prefer `DATABASE_URL`, otherwise `DB.connectionString`
-([src/db/connection.ts](../src/db/connection.ts)); failure does not try the
-other connection. `/up` DB/schema readiness uses that same web-store selection;
-only its queue slice prefers `DB`, then `DATABASE_URL`. Jobs prefer `HYPERDRIVE`,
-then `DB`, then `DATABASE_URL`. The removed `/db-ping`, `/health` and `/healthz` routes are
-ordinary unknown paths (404), not diagnostics. Never test production; staging
-E2E needs verified staging bindings.
+Web stores, `/up` (DB/schema readiness and its queue slice) and jobs prefer
+nonempty `DATABASE_URL`, otherwise `DB.connectionString`
+([src/db/connection.ts](../src/db/connection.ts)), so `/up` measures the same
+queue ledger the producers and consumer write. Jobs retain `HYPERDRIVE` only as a
+legacy fallback when both are absent. A selected connection's construction/read
+failure never tries another backend or credential. The removed `/db-ping`,
+`/health` and `/healthz` routes are ordinary unknown paths (404), not diagnostics.
+A successful public fallback is **not** evidence that private reads or writes are
+available; do not relax their authentication, persistence or required-audit gates.
+Never test production; staging E2E needs verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
@@ -406,7 +630,7 @@ below, not its older `/up` row, define these outcomes.
 | `/discord`, `/auth/discord` (GET) | Stay **302** to invite / OAuth start, DB-free. |
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |
 | `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
-| `/` (GET) | **Not guaranteed 200**: session-store migration/read failures can become **500**. Missing DB gives guest shell; a migration-cached guest may stay 200. Rotation failure alone falls back to guest. |
+| `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
 | `/auth/discord/callback` (GET) | Session create/store failure **500**; roster-write-only failure is caught. Invalid state/Discord exchange failure redirects **302** before persistence. |
 | `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
 | `/auth/qa/:identity` (POST) | Enabled/authorized session failure **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
@@ -416,13 +640,25 @@ below, not its older `/up` row, define these outcomes.
 | `/events/:key/rsvp` (PUT/DELETE) | Session/transaction failure **500 HTML**; missing event DB **503 JSON**, auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
 | `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution failure **503**; subsequent read/save failure **500**. Missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
 | Implemented `/admin` routes | Session resolution failure **503**, later resource/dashboard query failure **500**; missing resource DB **503**. Default required access-log failure gives **503**; guest **302**, non-moderator **403**. |
-| `/api/agent-events` (POST) | Separate `AGENT_DB`: disabled **404**, enabled without binding **503**, service DB failure **500 JSON** `internal_error`. Browser `DB` failure alone need not affect this ingress. |
+| `/api/agent-events` (POST) | Shared web database (`AGENT_DB` when bound, else `DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without any source **503**, service DB failure **500 JSON** `internal_error` (or **503** `ingress_unavailable` when the database is unreachable). No connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
 
 Sources: [src/index.tsx](../src/index.tsx), [join routes](../src/join/route.ts),
 [event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
-[error handler](../src/errors.tsx).
+[error handler](../src/errors.tsx). The homepage fallback is already present at
+[`eed3c8b`, `src/index.tsx:271–277`](https://github.com/TogetherWeOwn/two-web-next/blob/eed3c8b8976986d6aeb7f97e1b656d7bbbaf85c7/src/index.tsx#L271-L277),
+not conditional on an unmerged outage fix. Offline evidence:
+[session/event failure fixtures](../test/home-events.test.ts),
+[counts failure fixtures](../test/home-counts.test.ts) and
+[DB-construction/featured failure fixtures](../test/featured-outage.test.ts).
+These are local doubles, not deployed outage acceptance.
+
+Pending [#92](https://github.com/TogetherWeOwn/two-web-next/pull/92), inspected at
+[`826e77d`](https://github.com/TogetherWeOwn/two-web-next/commit/826e77d535325624b00d01c2a702d0617f26323a),
+adds broader sanitized DB-outage 503 responses, homepage session-unavailable UI
+and best-effort logout setup. Those changes are **not shipped in this snapshot**;
+retain the current private-route 500/503 distinctions above until it merges.
 
 Shared human throttles and profile throttles fail open on store error; the shared
 human throttle currently uses only `DATABASE_URL`, not Hyperdrive. Optional
@@ -435,11 +671,14 @@ binding/DB recovery to the Director and authorized custodian; never credential-h
 ## Queue containment, drain and failed-job replay
 
 **Current implementation gate:** [src/jobs/worker.ts](../src/jobs/worker.ts)
-uses `notWired` EventStore/BotClient adapters. The configured W13 consumers
-cannot currently perform successful event/bot work. Do not resume delivery or
-replay real messages until the Director has accepted a reviewed adapter fix and
-local acceptance evidence. Queue depth falling under these stubs can mean retry
-exhaustion and terminal acknowledgement, not successful draining.
+sends through the signed bot client (`botClientFor`). An environment without
+`BOT_ENDPOINT_URL`, `BOT_KEY_ID` and `BOT_SHARED_SECRET` fails every bot job
+terminally (`BotTerminalError`, a `queue.failing` alert, no bot request): queue
+depth falling there means terminal failure, not successful draining. Check the
+three bindings are present before resuming delivery or replaying real messages;
+provisioning them is an Operator step. `event.cancel` is also opt-in on the bot
+(`TWO_INTERNAL_ALLOW_EVENT_CANCEL`); without it a cancelled-event sync is a
+definitive `action_not_allowed` refusal.
 
 For an authorized queue incident, contain delivery without deleting messages:
 
@@ -527,27 +766,76 @@ Message contracts from [src/jobs/types.ts](../src/jobs/types.ts):
 | `two-internal-action` / `INTERNAL_ACTION_QUEUE` | `kind: "role-assign"`, `action: { userId, roleKey }`, `idempotencyKey: null`, optional `jobId` |
 
 The tracking producer supplies `jobId`; it is not the bot idempotency key.
-The consumer routes by `kind` and caps sync work at 6 attempts, internal actions
-at 5. Policy-controlled retry delays are `10,60,300,900,3600` seconds for sync
-and `5,15,60,180` for internal actions. These apply to handled retryable outcomes
-and `BotTransportError`, not every throw; `retryAfterSeconds` can override them.
-Below the cap, generic errors (including today's ordinary `notWired` errors)
-call `m.retry()` without `delaySeconds`, leaving timing to the transport. At the
-cap they are recorded as terminal failures and acknowledged without another
-retry. Do not assume the arrays provide a guaranteed containment window.
-See [consumer error paths](../src/jobs/consumer.ts).
+W8 web/RSVP writes and cron use the same tracked W13 sync carrier. The first
+attempt snapshots current status/action/payload/revision in `event_sync_attempts`;
+retries and recovery keep that request's key and payload immutable. Later
+mutations stay dirty until the pending request resolves, then use a new key.
+Drafts/past rows do not start requests. Preparation alone is not a request:
+first claims atomically recheck the current status/revision, synchronization and
+same-revision definitive-refusal eligibility. A stale never-attempted snapshot
+becomes `obsolete`, without a bot call or marking the event synced, even if its
+preparation waited behind another identity's settlement. The pending slot is
+then free for a newer eligible revision. Attempted requests retain their
+immutable identity even if the event becomes past. Reconciliation selects those
+attempted recovery candidates independently of eligibility to start a new
+request, then checks their deadline and remaining budget before sending.
+The bot HTTP adapter remains unwired; this is not proof of live Discord delivery.
 
-Transport `max_retries: 10` is only a backstop. Calling a producer again mints a
-new key; role assignments have no key. The sync uniqueness lock lasts 300
-seconds (shorter than the longest policy retry), so neither ledger nor lock
-proves exactly-once downstream effects. Sync reads current event state, not a
-snapshot.
+Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
+tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
+Sync requests independently persist `request_attempts` and `next_attempt_at`:
+claims durably set eligibility to null **before** bot I/O. Only a committed
+result can reopen that fence: backoff (`10,60,300,900,3600`) and authoritative
+Retry-After select the next absolute deadline. A failed deadline write retries
+that same Date (or exhausted null), never shorter generic backoff. If both writes
+fail, the consumer carries the known remaining wait on that delivery, but the
+request remains closed across new carriers and reconciliation. The old
+300-second uniqueness TTL is not permission to send again. A concurrent carrier
+waits 300 seconds without bot I/O; carrier exhaustion never clears the fence.
 
-The separate W8 carrier [src/events/sync.ts](../src/events/sync.ts) uses
-`action`/`dedupeKey`, not W13 `kind`. `EVENT_SYNC_QUEUE` is unbound in current
-config; missing binding only logs, send errors are logged/swallowed. Do not send
-W8 bodies to W13 queues or assume creating `two-web-next-event-sync` alone fixes
-this integration.
+A worker lost after claiming, or unable to commit its result, cannot automatically
+regain request eligibility. Preserve its key/payload/count and reconcile the
+remote result in the bounded reviewed recovery below before committing an
+appropriate deadline or settlement. This intentional fail-closed condition may
+require operator recovery even before six requests; it avoids guessing a wait
+shorter than a response that could not be saved. Ordinary transport retries
+remain automatic when their backoff write commits. Reconciliation skips
+legitimately delayed, null-fenced and exhausted requests even after lock expiry.
+
+A carrier failure is **not** a resolved bot request. Transport loss or a failed
+local completion retains a `pending` snapshot, even after all six automatic
+request attempts. At that cap, automatic reconciliation pauses that request
+(and newer revisions); its null `next_attempt_at` or exhausted count is an
+explicit operator-recovery condition. Preserve the snapshot and failed ledger
+history. A bounded, reviewed recovery must reconcile remote effects and renew
+only the original request's budget/eligibility, **never** its key, action,
+payload or revision. Preserve a positive `request_attempts` count: zero means
+never attempted, not renewed budget. This runbook does not authorize a live reset or provide a
+blind replay command. A `failed` snapshot instead means a definitive refusal:
+automatic dispatch of that unchanged revision is suppressed; a meaningful
+subsequent mutation is eligible. Retrying an unchanged refused revision likewise
+requires an explicit reviewed operator action, not deleting history.
+
+Best-effort successor checks/dispatch time out after two seconds. These timers
+do not cancel SQL: ledger and lock traffic use pools separate from the handler,
+so a blocked cleanup cannot starve the next message's snapshot/claim. Successor
+SQL uses lazy per-operation pools (2-second connect, 5-second statement timeout,
+1-second close), not the three pools closed when the consumer returns. The
+production queue entry passes `ExecutionContext`; `waitUntil` preserves successor
+settlement for at most 30 seconds without delaying ACK/handler return. Rejected
+sends and late/failed ledger inserts compensate by their exact `jobId` with a
+fresh usable pool, even after handler shutdown; no send starts after cancellation.
+An already-started send accepted late retains its tracked row. A send unresolved
+past that bounded lifetime, or a failed compensation, remains visible: do not
+infer successful cleanup or delete rows by age. Reconcile transport evidence
+before any reviewed operator correction; dirty revisions alone cannot remove
+an orphan row.
+
+Reconciliation holds its advisory single-flight lock throughout the pass, but
+commits close/materialization in a shorter write transaction before queue I/O;
+unrelated slow sends cannot retain recurring-parent row locks. Dirty revision
+reconciliation remains the delivery backstop. Ledger/locks alone still do not
+prove exactly-once remote effects. See [consumer error paths](../src/jobs/consumer.ts).
 
 ## Backups and restore drill
 

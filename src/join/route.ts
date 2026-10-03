@@ -168,9 +168,6 @@ export function registerJoinRoutes(
   });
 
   app.get("/join/discord", async (c) => {
-    // An unconfigured bot cannot accept a handoff. Do not send the browser to
-    // Discord or mint a journey that could later produce a member session.
-    if (c.env.DISCORD_BOT_TOKEN.trim() === "") return c.redirect("/join", 302);
     const limited = await throttled(c);
     if (limited) return limited;
     const source = sanitizeSource(c.req.query("source"));
@@ -273,13 +270,6 @@ export function registerJoinRoutes(
       return recover(
         "Join link expired",
         "That join link expired. Approvals last ten minutes — try again below.",
-      );
-    }
-    if (c.env.DISCORD_BOT_TOKEN.trim() === "") {
-      await recordAttempt(sql, { outcome: "degraded", source, requestId: null, discordId: null });
-      return recover(
-        "Automatic join is unavailable",
-        "Use the invite link below to join the server directly.",
       );
     }
 

@@ -21,16 +21,82 @@ function fixturePage(scenario, changed = {}) {
 const home = { route: "/", path: "/", status: 200 };
 const owner = { route: "/profile", path: "/profile", status: 200 };
 
+for (const identity of ["guest", "member", "moderator"]) {
+  test(`event content requires the ${identity} visibility state before axe`, async () => {
+    const scenario = { route: "/e/:key", status: 200, identity, state: "going" };
+    const attendees = identity === "member" ? 1 : 0;
+    const pitch = identity === "guest" ? 1 : 0;
+    const expectations = contentExpectations(scenario);
+    assert.equal(
+      expectations.find((item) => item.selector === '[data-testid="event-attendees"]').count,
+      attendees,
+    );
+    assert.equal(
+      expectations.find((item) => item.selector === '[data-testid="event-join-pitch"]').count,
+      pitch,
+    );
+    await assertAuditContent(fixturePage(scenario), scenario);
+    for (const [selector, expected] of [
+      ['[data-testid="event-attendees"]', attendees],
+      ['[data-testid="event-join-pitch"]', pitch],
+    ]) {
+      await assert.rejects(
+        assertAuditContent(
+          fixturePage(scenario, { [selector]: { count: 1 - expected } }),
+          scenario,
+        ),
+        /Fixture content count/,
+      );
+    }
+  });
+}
+
+test("the waitlisted event fixture cannot silently render as going", async () => {
+  const scenario = { route: "/e/:key", status: 200, identity: "member", state: "waitlisted" };
+  await assertAuditContent(fixturePage(scenario), scenario);
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(scenario, { ".event-hero h1": { attributes: { "data-waitlist-position": "" } } }),
+      scenario,
+    ),
+    /Fixture content attribute/,
+  );
+  assert(
+    coverage[scenario.route].cases.some(
+      (item) => item.state === "going" && item.identity === "member",
+    ),
+  );
+  assert(
+    coverage[scenario.route].cases.some(
+      (item) => item.state === "waitlisted" && item.identity === "member",
+    ),
+  );
+  assert.deepEqual(contentExpectations({ ...scenario, status: 410 }), []);
+});
+
 test("404 audit distinguishes populated suggestions from their empty fallback", async () => {
   const populated = { route: "/__a11y/404", status: 404 };
   const empty = { route: "/__a11y/404-empty", status: 404 };
   for (const scenario of [populated, empty])
     await assertAuditContent(fixturePage(scenario), scenario);
   const cards = '[data-testid="error-event-suggestions"] .card';
-  await assert.rejects(
-    assertAuditContent(fixturePage(populated, { [cards]: { count: 0 } }), populated),
-    /Fixture content count/,
-  );
+  assert.equal(contentExpectations(populated).find((item) => item.selector === cards).count, 2);
+  for (const count of [0, 1, 3])
+    await assert.rejects(
+      assertAuditContent(fixturePage(populated, { [cards]: { count } }), populated),
+      /Fixture content count/,
+    );
+  for (const key of ["01J00000000000000000000015", "01J00000000000000000000019"]) {
+    const link = `${cards} > a[href="/e/${key}"]`;
+    await assert.rejects(
+      assertAuditContent(fixturePage(populated, { [link]: { count: 0 } }), populated),
+      /Fixture content count/,
+    );
+    await assert.rejects(
+      assertAuditContent(fixturePage(populated, { [link]: { text: "Wrong event" } }), populated),
+      /Fixture content text/,
+    );
+  }
   await assert.rejects(
     assertAuditContent(fixturePage(empty, { [cards]: { count: 1 } }), empty),
     /Fixture content count/,

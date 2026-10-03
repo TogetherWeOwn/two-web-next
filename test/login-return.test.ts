@@ -692,6 +692,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
       revoke: async () => {
         throw new Error("store down");
       },
+      revokeUserSessions: async () => {
+        throw new Error("store down");
+      },
       sweepExpired: async () => {
         throw new Error("store down");
       },

@@ -18,6 +18,11 @@ import {
   type OAuthJourneyStore,
 } from "./oauth-journeys";
 
+/** Session lifetime: 120-minute sliding window (legacy parity, `docs/parity.md`).
+ * Login and every authenticated-page rotation re-stamp the DB expiry and the
+ * cookie Max-Age; the session-status probe cookie follows the same value. */
+export const SESSION_TTL_SECONDS = 60 * 120;
+
 export type DbSessionRow = {
   userId: string;
   username: string;
@@ -44,6 +49,10 @@ export type SessionStore = {
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<boolean>;
   revoke: (tokenHash: string) => Promise<void>;
+  /** Fresh login (TOG-12284): revoke every live session for this user except
+   * the freshly issued token, so a pre-login/pre-join token — and any older
+   * concurrent login — cannot survive sign-in. Hash-only, like revoke. */
+  revokeUserSessions: (userId: string, exceptTokenHash: string) => Promise<void>;
   /** Expiry GC (W13 model:prune): delete rows reads can no longer see. Returns rows removed. */
   sweepExpired: (now: Date) => Promise<number>;
 };
@@ -182,6 +191,10 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       await sql`update web_sessions set revoked_at = now()
         where token_hash = ${tokenHash} and revoked_at is null`;
     },
+    async revokeUserSessions(userId, exceptTokenHash) {
+      await sql`update web_sessions set revoked_at = now()
+        where user_id = ${userId} and token_hash != ${exceptTokenHash} and revoked_at is null`;
+    },
     async sweepExpired(now) {
       // `<=`: reads require expires_at > now(), so a row expiring exactly at
       // `now` is already invisible. Idempotent: a second pass matches nothing.
@@ -254,6 +267,11 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async revoke(hash) {
       rows.delete(hash);
+    },
+    async revokeUserSessions(userId, exceptTokenHash) {
+      for (const [hash, r] of rows) {
+        if (hash !== exceptTokenHash && r.userId === userId) rows.delete(hash);
+      }
     },
     async sweepExpired(now) {
       const t = now.getTime();

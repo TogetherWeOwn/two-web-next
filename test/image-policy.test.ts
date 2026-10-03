@@ -57,6 +57,26 @@ describe("featured image policy (local fixtures)", () => {
   ])("returns an image_url field error for %s", (url) => imageError(url, configured));
 
   it.each([
+    "https://@cdn.discordapp.com/photo.png",
+    "https://:@cdn.discordapp.com/photo.png",
+    "https://@images.unsplash.com/photo.png",
+  ])("returns an image_url field error for empty userinfo %s", (url) =>
+    imageError(url, configured),
+  );
+
+  it("refuses wildcard hosts in cover URLs and drops them from configuration", () => {
+    expect(imageHosts("*.evil.com")).toEqual(["cdn.discordapp.com"]);
+    imageError("https://*.evil.com/photo.png", "*.evil.com");
+    imageError("https://evil.com/photo.png", "*.evil.com");
+  });
+
+  it("refuses non-default ports and non-HTTPS schemes on approved hosts", () => {
+    imageError("https://cdn.discordapp.com:80/photo.png", configured);
+    imageError("https://images.unsplash.com:8443/photo.png", configured);
+    imageError("ftp://images.unsplash.com/photo.png", configured);
+  });
+
+  it.each([
     "localhost",
     "a.localhost",
     "internal",

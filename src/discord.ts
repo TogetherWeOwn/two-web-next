@@ -215,6 +215,10 @@ export async function addGuildMember(
   accessToken: string,
   botToken: string,
 ): Promise<JoinResult> {
+  // Fail closed on an unconfigured bot token (TOG-12687): a blank token must
+  // emit zero bot-credentialed calls, so the callers degrade to the invite
+  // fallback instead of sending `Bot ` with nothing after it.
+  if (!botToken || botToken.trim().length === 0) return "failed";
   let res: Response;
   try {
     res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
