@@ -178,3 +178,90 @@ describe("per-key canonical letter case (fixture-only)", () => {
     }
   });
 });
+
+describe("per-key canonical edge cases (fixture-only)", () => {
+  // Alternating letter case, not just all-lowercase: still one hop to canonical.
+  const mixedCase = KEY.split("")
+    .map((ch, i) => (i % 2 ? ch.toLowerCase() : ch))
+    .join("");
+  // Fully percent-encoded lowercase key: Hono decodes the param, so the
+  // redirect still fires and emits the plain canonical URL (no double hop).
+  const encodedLower = KEY.toLowerCase()
+    .split("")
+    .map((ch) => `%${ch.charCodeAt(0).toString(16)}`)
+    .join("");
+  // 26 chars but outside the ULID alphabet (I is excluded): garbage, not canonical.
+  const badAlphabet = `${KEY.slice(0, 25)}I`;
+
+  it("301s a mixed-case ULID .ics to the canonical URL, without a DB read", async () => {
+    expect(mixedCase).not.toBe(KEY);
+    expect(mixedCase).not.toBe(KEY.toLowerCase());
+    const f = fixture();
+    const moved = await f.request(`/events/${mixedCase}.ics`);
+    expect(moved.status).toBe(301);
+    expect(moved.headers.get("location")).toBe(`/events/${KEY}.ics`);
+    expect(f.queryCount()).toBe(0);
+  });
+
+  it("301s a percent-encoded ULID .ics to the plain canonical URL in one hop", async () => {
+    const f = fixture();
+    const moved = await f.request(`/events/${encodedLower}.ics`);
+    expect(moved.status).toBe(301);
+    expect(moved.headers.get("location")).toBe(`/events/${KEY}.ics`);
+    expect(f.queryCount()).toBe(0);
+    // The redirect target is the canonical URL itself: following it serves,
+    // never re-redirects.
+    const served = await f.request(moved.headers.get("location")!);
+    expect(served.status).toBe(200);
+    expect(await served.text()).toContain("BEGIN:VEVENT");
+  });
+
+  it("301s mixed-case and percent-encoded JSON show keys before any session read", async () => {
+    for (const variant of [mixedCase, encodedLower]) {
+      const f = fixture();
+      const moved = await f.request(`/events/${variant}`, {
+        headers: { accept: "application/json" },
+      });
+      expect(moved.status, variant).toBe(301);
+      expect(moved.headers.get("location"), variant).toBe(`/events/${KEY}`);
+      expect(f.queryCount(), variant).toBe(0);
+    }
+  });
+
+  it("404s trailing-slash per-key URLs without redirecting", async () => {
+    for (const path of [
+      `/events/${KEY}/`,
+      `/events/${KEY}.ics/`,
+      `/events/${KEY.toLowerCase()}/`,
+      `/events/${KEY.toLowerCase()}.ics/`,
+    ]) {
+      const response = await fixture().request(path);
+      expect(response.status, path).toBe(404);
+      expect(response.headers.get("location"), path).toBeNull();
+      expect(response.headers.get("content-type"), path).toContain("text/html");
+    }
+  });
+
+  it("404s non-ULID garbage .ics keys without redirecting", async () => {
+    for (const path of ["/events/!!!.ics", `/events/${KEY}!.ics`, `/events/${badAlphabet}.ics`]) {
+      const response = await fixture().request(path);
+      expect(response.status, path).toBe(404);
+      expect(response.headers.get("location"), path).toBeNull();
+      expect(response.headers.get("content-type"), path).toContain("text/html");
+    }
+  });
+
+  it("404s non-ULID garbage JSON show keys without redirecting", async () => {
+    for (const path of [
+      "/events/!!!",
+      `/events/${KEY}!`,
+      `/events/${badAlphabet}`,
+      `/events/${KEY}EXTRA`,
+    ]) {
+      const response = await jsonGet(fixture(), path);
+      expect(response.status, path).toBe(404);
+      expect(response.headers.get("location"), path).toBeNull();
+      expect(await response.json(), path).toEqual({ error: "not_found" });
+    }
+  });
+});
