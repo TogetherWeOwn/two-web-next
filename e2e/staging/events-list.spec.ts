@@ -19,7 +19,17 @@ test("staging events list searches, clears and steps the calendar month", async 
   const miss = `staging-miss-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
   await page.getByTestId("events-search").fill(miss);
   await page.getByRole("button", { name: "Search", exact: true }).click();
-  await expect(page.getByTestId("events-empty-search")).toBeVisible();
+  // Staging flake: when a slow episode pushes the Discord read past its 1s
+  // deadline, the search renders the error state instead of the miss block
+  // (error beats search-miss by contract). Retry once through the Retry link;
+  // a persistent breakage still fails on the second attempt below.
+  const missBlock = page.getByTestId("events-empty-search");
+  const errorBlock = page.getByTestId("events-empty-error");
+  await expect(missBlock.or(errorBlock)).toBeVisible();
+  if (await errorBlock.isVisible()) {
+    await page.getByTestId("events-retry").click();
+  }
+  await expect(missBlock).toBeVisible();
   await expect(page.getByTestId("events-empty-search")).toContainText(
     "Nothing matches that search.",
   );
