@@ -10,9 +10,10 @@
 // the write path the read tests cannot: the admin surface exposes zero write
 // routes for join_attempts, and every funnel row flows through the single
 // controller insert (recordAttempt in src/join/service.ts, called only from
-// src/join/route.ts). The only deleter is the W13 retention prune
-// (age-only, src/jobs/postgres.ts). Test-only: the policy holds, so no
-// product change ships here.
+// src/join/route.ts). The deleters are the W13 retention prune (age-only,
+// src/jobs/postgres.ts) and the TOG-12548 member-erasure operator command
+// (subject-scoped `where discord_id`, src/member-erasure.ts). Test-only: the
+// policy holds, so no product change ships here.
 import { readFileSync, readdirSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -88,9 +89,11 @@ describe("join-attempt write policy: single controller insert (DB-free source al
     expect(read("src/join/service.ts").match(/INSERT INTO join_attempts/g)).toHaveLength(1);
   });
 
-  it("exactly one age-only deleter, in the retention prune store", () => {
+  it("exactly two deleters: the age-only retention prune and the subject-scoped member erasure", () => {
     const deleters = filesMatching(/delete from join_attempts/);
-    expect(deleters).toEqual(["src/jobs/postgres.ts"]);
+    expect(deleters).toEqual(["src/jobs/postgres.ts", "src/member-erasure.ts"]);
+    // The erasure delete is subject-scoped (one member's rows), never age-based.
+    expect(read("src/member-erasure.ts")).toMatch(/delete from join_attempts where discord_id = /);
   });
 
   it("no UPDATE of join_attempts anywhere in src/", () => {
@@ -141,17 +144,29 @@ describe.skipIf(!process.env.DATABASE_URL)("join-attempt write policy (agent-tes
     // Keyed member reads fail closed on non-owner keys: seed the users row
     // and use a valid Discord-shaped owner id, like the sibling suites.
     await fixture.db.insert(users).values({
-      id: SUBJECT.userId, username: SUBJECT.username, member: SUBJECT.member,
+      id: SUBJECT.userId,
+      username: SUBJECT.username,
+      member: SUBJECT.member,
     });
-    await fixture.db.insert(joinAttempts).values({ outcome: "added", source: "site", requestId: "policy-req", discordId: SUBJECT.userId });
+    await fixture.db.insert(joinAttempts).values({
+      outcome: "added",
+      source: "site",
+      requestId: "policy-req",
+      discordId: SUBJECT.userId,
+    });
   });
   afterAll(() => fixture?.dispose());
 
   it("admin list + detail reads leave the rows byte-identical", async () => {
     const before = await rows();
     expect(before).toHaveLength(1);
-    expect((await app().request("/join-attempts", { headers: { cookie } }, bindings())).status).toBe(200);
-    expect((await app().request(`/join-attempts/${before[0]!.id}`, { headers: { cookie } }, bindings())).status).toBe(200);
+    expect(
+      (await app().request("/join-attempts", { headers: { cookie } }, bindings())).status,
+    ).toBe(200);
+    expect(
+      (await app().request(`/join-attempts/${before[0]!.id}`, { headers: { cookie } }, bindings()))
+        .status,
+    ).toBe(200);
     expect(await rows()).toEqual(before);
   });
 
@@ -161,7 +176,11 @@ describe.skipIf(!process.env.DATABASE_URL)("join-attempt write policy (agent-tes
       for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const) {
         const res = await app().request(
           path,
-          { method, headers: { cookie, origin: env.APP_URL, "content-type": "application/json" }, body: "{}" },
+          {
+            method,
+            headers: { cookie, origin: env.APP_URL, "content-type": "application/json" },
+            body: "{}",
+          },
           bindings(),
         );
         expect(res.status, `${method} ${path}`).toBe(404);

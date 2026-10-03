@@ -87,7 +87,11 @@ export function checkModerators(
   // None of the five doomed snowflakes may appear.
   const found = configured.filter((id) => id in DOOMED_MODERATOR_ROLE_IDS);
   if (found.length === 0) {
-    record("PASS", "no-doomed-roles", "none of the 5 ban/kick roles scheduled for deletion are present");
+    record(
+      "PASS",
+      "no-doomed-roles",
+      "none of the 5 ban/kick roles scheduled for deletion are present",
+    );
   } else {
     const described = found.map((id) => `${id} = ${DOOMED_MODERATOR_ROLE_IDS[id]!}`).join("; ");
     record(
@@ -99,9 +103,17 @@ export function checkModerators(
 
   // The signed-off value is exactly one ID.
   if (configured.length === 0) {
-    record("UNKNOWN", "is-sysop", "nothing configured, so there is nothing to compare against TOG-106");
+    record(
+      "UNKNOWN",
+      "is-sysop",
+      "nothing configured, so there is nothing to compare against TOG-106",
+    );
   } else if (configured.length === 1 && configured[0] === SYSOP_MODERATOR_ROLE_ID) {
-    record("PASS", "is-sysop", `exactly SySOp (${SYSOP_MODERATOR_ROLE_ID}), which is the value signed off on TOG-106`);
+    record(
+      "PASS",
+      "is-sysop",
+      `exactly SySOp (${SYSOP_MODERATOR_ROLE_ID}), which is the value signed off on TOG-106`,
+    );
   } else if (!configured.includes(SYSOP_MODERATOR_ROLE_ID)) {
     record(
       "FAIL",

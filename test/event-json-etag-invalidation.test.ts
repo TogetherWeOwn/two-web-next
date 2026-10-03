@@ -10,7 +10,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const APP_URL = "https://next.example.test";
@@ -33,27 +38,43 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
     // No DATABASE_URL on the app env: throttle degrades to allow and the DB
     // comes from the injected ADMIN_DB, like test/rsvp-waitlist.test.ts.
     env = {
-      APP_URL, SESSION_SECRET, SESSION_STORE: store, ADMIN_DB: fixture.db,
-      DISCORD_CLIENT_ID: "client-id", DISCORD_CLIENT_SECRET: "client-secret",
-      DISCORD_GUILD_ID: "326474832151838730", DISCORD_INVITE_URL: "https://discord.gg/invite",
+      APP_URL,
+      SESSION_SECRET,
+      SESSION_STORE: store,
+      ADMIN_DB: fixture.db,
+      DISCORD_CLIENT_ID: "client-id",
+      DISCORD_CLIENT_SECRET: "client-secret",
+      DISCORD_GUILD_ID: "326474832151838730",
+      DISCORD_INVITE_URL: "https://discord.gg/invite",
       DISCORD_BOT_TOKEN: "bot-token",
-      EVENT_SYNC_QUEUE: { send: async () => {} },
+      SYNC_EVENT_QUEUE: { send: async () => {} },
     } as unknown as Env;
   });
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   const cookieFor = async (moderator: boolean, userId?: string) => {
     const id = userId ?? (moderator ? "w15-json-etag-mod" : "w15-json-etag-member");
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: id, username: id,
-      avatar: null, member: true, moderator,
+      tokenHash: await hashToken(token),
+      userId: id,
+      username: id,
+      avatar: null,
+      member: true,
+      moderator,
       expiresAt: new Date(Date.now() + 3600_000),
     });
     // Fragment sessions do not rotate, so one cookie serves the whole case.
-    return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
+    return (
+      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
   };
 
   const jsonGet = (eventKey: string, cookie: string, etag?: string) => {
@@ -66,14 +87,22 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
     await fixture.reset();
     await fixture.db.insert(events).values([
       {
-        eventKey: PUBLISHED_KEY, title: PUBLISHED_TITLE, status: "published",
-        startsAt: new Date("2099-03-10T20:00:00Z"), endsAt: new Date("2099-03-10T22:00:00Z"),
-        timezone: "UTC", location: "Voice",
+        eventKey: PUBLISHED_KEY,
+        title: PUBLISHED_TITLE,
+        status: "published",
+        startsAt: new Date("2099-03-10T20:00:00Z"),
+        endsAt: new Date("2099-03-10T22:00:00Z"),
+        timezone: "UTC",
+        location: "Voice",
       },
       {
-        eventKey: DRAFT_KEY, title: DRAFT_TITLE, status: "draft",
-        startsAt: new Date("2099-03-11T20:00:00Z"), endsAt: new Date("2099-03-11T22:00:00Z"),
-        timezone: "UTC", location: "Private voice channel",
+        eventKey: DRAFT_KEY,
+        title: DRAFT_TITLE,
+        status: "draft",
+        startsAt: new Date("2099-03-11T20:00:00Z"),
+        endsAt: new Date("2099-03-11T22:00:00Z"),
+        timezone: "UTC",
+        location: "Private voice channel",
       },
     ]);
   };
@@ -89,11 +118,15 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
     expect(await first.text()).toContain(PUBLISHED_TITLE);
 
     // Title edit through the real moderator PATCH route.
-    const patched = await app.request(`/events/${PUBLISHED_KEY}`, {
-      method: "PATCH",
-      headers: { cookie: mod, origin: APP_URL, "content-type": "application/json" },
-      body: JSON.stringify({ title: "Renamed game night" }),
-    }, env);
+    const patched = await app.request(
+      `/events/${PUBLISHED_KEY}`,
+      {
+        method: "PATCH",
+        headers: { cookie: mod, origin: APP_URL, "content-type": "application/json" },
+        body: JSON.stringify({ title: "Renamed game night" }),
+      },
+      env,
+    );
     expect(patched.status).toBe(200);
 
     // Stale validator: 200 with the renamed body and a changed ETag, never 304.

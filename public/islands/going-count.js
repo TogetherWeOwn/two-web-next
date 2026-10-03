@@ -14,6 +14,7 @@
 (function () {
   var MOUNT = '[data-island="going-count"]';
   var EVENT = "going-count-updated";
+  var REFRESHED = "going-count-refreshed";
   var URL = "/events.json";
   var latest = new Map();
 
@@ -44,6 +45,21 @@
       : going + " going";
   }
 
+  function capacityFor(row, node) {
+    var capacity;
+    if (Object.prototype.hasOwnProperty.call(row, "capacity")) {
+      // Explicit null is authoritative: the event is now unbounded.
+      capacity = row.capacity;
+    } else {
+      // Legacy aggregate fixtures omit capacity; only a known SSR value
+      // can fill that gap. Missing/malformed attributes are not unbounded.
+      var raw = node.getAttribute("data-capacity");
+      if (raw === null || (raw !== "" && !/^\d+$/.test(raw))) return;
+      capacity = raw === "" ? null : Number(raw);
+    }
+    if (capacity === null || (Number.isSafeInteger(capacity) && capacity > 0)) return capacity;
+  }
+
   function spotsLeftText(going, capacity) {
     var left = Math.max(0, capacity - going);
     return left <= 0 ? "Full" : left + " of " + capacity + " spots left";
@@ -54,7 +70,9 @@
     // fails. An older completion must never replace the last good state.
     var request = {};
     latest.set(key, request);
-    fetch(URL + "?event_key=" + encodeURIComponent(key), { headers: { accept: "application/json" } })
+    fetch(URL + "?event_key=" + encodeURIComponent(key), {
+      headers: { accept: "application/json" },
+    })
       .then(function (res) {
         if (!res.ok) throw new Error("events " + res.status);
         return res.json();
@@ -69,33 +87,42 @@
         if (!row || !Number.isSafeInteger(row.going_count) || row.going_count < 0) return;
         // The keyed snapshot carries the current cap (`eventJson`); a
         // moderator capacity edit between SSR and refresh must move both
-        // displays, not just the count. An absent key is an older shape:
-        // keep this refresh on the SSR cap. Any other malformed capacity
-        // rejects the row as a whole, like a malformed count.
+        // displays, not just the count. Any malformed snapshot capacity
+        // rejects the row as a whole, like a malformed count. Rows without
+        // the key are an older shape: each badge keeps its strictly
+        // validated SSR cap instead.
         var fromSnapshot = row.capacity !== undefined;
-        if (fromSnapshot && row.capacity !== null &&
-            (!Number.isSafeInteger(row.capacity) || row.capacity < 1)) return;
+        if (
+          fromSnapshot &&
+          row.capacity !== null &&
+          (!Number.isSafeInteger(row.capacity) || row.capacity < 1)
+        )
+          return;
         var snapshotCapacity = fromSnapshot ? row.capacity : null;
-        nodes.forEach(function (node) {
-          var capacity;
-          if (fromSnapshot) {
-            capacity = snapshotCapacity;
-            node.setAttribute("data-capacity", capacity === null ? "" : String(capacity));
-          } else {
-            var raw = node.getAttribute("data-capacity");
-            capacity = raw === "" || raw === null ? null : Number(raw);
-          }
+        var capacities = nodes.map(function (node) {
+          if (fromSnapshot) return snapshotCapacity;
+          return capacityFor(row, node);
+        });
+        nodes.forEach(function (node, index) {
+          var capacity = capacities[index];
+          if (capacity === undefined) return;
+          node.setAttribute("data-capacity", capacity === null ? "" : String(capacity));
           var count = node.querySelector("[data-count]");
           if (count) count.textContent = countText(row.going_count, capacity);
           var spots = node.querySelector("[data-spots]");
           if (capacity === null) {
-            // A lifted cap leaves no seats to count: restore the uncapped
-            // shape SSR renders (no spots line) rather than a stale number.
-            // A newly introduced cap without a spots node only moves the
-            // count; the line materializes on the next full render — the
-            // binder patches nodes in place, never invents markup.
-            if (fromSnapshot && spots && typeof spots.remove === "function") spots.remove();
+            // A lifted cap leaves no seats to count: hide the stale line
+            // and, where the DOM supports it, remove it so a later read
+            // cannot compute against the retired number. A newly introduced
+            // cap without a spots node only moves the count; the line
+            // materializes on the next full render - the binder patches
+            // nodes in place, never invents markup.
+            if (spots) {
+              spots.hidden = true;
+              if (typeof spots.remove === "function") spots.remove();
+            }
           } else if (spots) {
+            spots.hidden = false;
             spots.textContent = spotsLeftText(row.going_count, capacity);
           }
           var ann = node.querySelector("[data-announcement]");
@@ -104,6 +131,21 @@
             ann.textContent = t ? t + " " : "";
           }
         });
+        // One accepted snapshot per read, not per badge. Conflicting or
+        // unknown legacy fallback caps cannot truthfully describe this key.
+        var capacity = capacities[0];
+        if (
+          capacity === undefined ||
+          !capacities.every(function (value) {
+            return value === capacity;
+          })
+        )
+          return;
+        document.dispatchEvent(
+          new CustomEvent(REFRESHED, {
+            detail: { eventKey: key, goingCount: row.going_count, capacity: capacity },
+          }),
+        );
       })
       .catch(function () {
         // Keep the last known-good badge; the button island already

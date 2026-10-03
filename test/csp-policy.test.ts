@@ -15,10 +15,12 @@ const env: Env = {
 function directives(res: Response): Record<string, string> {
   const csp = res.headers.get("content-security-policy");
   expect(csp).not.toBeNull();
-  return Object.fromEntries(csp!.split(";").map((part) => {
-    const [name, ...sources] = part.trim().split(/\s+/);
-    return [name, sources.join(" ")];
-  }));
+  return Object.fromEntries(
+    csp!.split(";").map((part) => {
+      const [name, ...sources] = part.trim().split(/\s+/);
+      return [name, sources.join(" ")];
+    }),
+  );
 }
 
 describe("route CSP (local fixtures, no DB)", () => {
@@ -45,7 +47,19 @@ describe("route CSP (local fixtures, no DB)", () => {
     if (method === "GET") expect(await res.text()).not.toContain("<iframe");
   });
 
-  it.each(["/about", "/faq", "/privacy", "/join/discord", "/join/callback", "/join/recovery", "/join/", "/JOIN", "/admin", "/profile", "/missing"])("%s does not gain iframe permission", async (path) => {
+  it.each([
+    "/about",
+    "/faq",
+    "/privacy",
+    "/join/discord",
+    "/join/callback",
+    "/join/recovery",
+    "/join/",
+    "/JOIN",
+    "/admin",
+    "/profile",
+    "/missing",
+  ])("%s does not gain iframe permission", async (path) => {
     const res = await app.request(path, {}, env);
     expect(directives(res)["frame-src"]).toBe("'none'");
   });
@@ -56,22 +70,44 @@ describe("route CSP (local fixtures, no DB)", () => {
   });
 
   it("shares configured exact image hosts across routes, without broad sources", async () => {
-    const configured = { ...env, FEATURED_IMAGE_HOSTS: "images.unsplash.com,*.evil.com,localhost,10.0.0.1,evil.com;script-src *" };
+    const configured = {
+      ...env,
+      FEATURED_IMAGE_HOSTS:
+        "images.unsplash.com,*.evil.com,localhost,10.0.0.1,evil.com;script-src *",
+    };
     for (const path of ["/join", "/about", "/admin", "/missing"]) {
       const res = await app.request(path, {}, configured);
-      expect(directives(res)["img-src"]).toBe("'self' https://cdn.discordapp.com https://images.unsplash.com");
+      expect(directives(res)["img-src"]).toBe(
+        "'self' https://cdn.discordapp.com https://images.unsplash.com",
+      );
       expect(directives(res)["script-src"]).toBe("'self'");
     }
     // No module-global configuration leaks between requests.
-    expect(directives(await app.request("/about", {}, env))["img-src"])
-      .toBe("'self' https://cdn.discordapp.com");
+    expect(directives(await app.request("/about", {}, env))["img-src"]).toBe(
+      "'self' https://cdn.discordapp.com",
+    );
   });
 
-  it.each(["localdomain", "localhost.localdomain", "cdn.localhost.localdomain", "alt", "images.alt", "cdn.images.alt", "corp", "images.corp", "cdn.images.corp", "mail", "images.mail", "cdn.images.mail"])("omits configured reserved namespace %s from CSP", async (host) => {
+  it.each([
+    "localdomain",
+    "localhost.localdomain",
+    "cdn.localhost.localdomain",
+    "alt",
+    "images.alt",
+    "cdn.images.alt",
+    "corp",
+    "images.corp",
+    "cdn.images.corp",
+    "mail",
+    "images.mail",
+    "cdn.images.mail",
+  ])("omits configured reserved namespace %s from CSP", async (host) => {
     const configured = { ...env, FEATURED_IMAGE_HOSTS: `images.unsplash.com,${host}` };
     for (const path of ["/join", "/about"]) {
       const res = await app.request(path, {}, configured);
-      expect(directives(res)["img-src"]).toBe("'self' https://cdn.discordapp.com https://images.unsplash.com");
+      expect(directives(res)["img-src"]).toBe(
+        "'self' https://cdn.discordapp.com https://images.unsplash.com",
+      );
     }
   });
 

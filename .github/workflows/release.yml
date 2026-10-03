@@ -8,10 +8,10 @@ name: release
 # Required-checks fix: PRs opened with GITHUB_TOKEN trigger no workflows, so
 # the required `check` / `gitleaks` / `pr-lint` would never run on the release
 # PR and it could never merge. The dispatch job below calls `gh workflow run`
-# (workflow_dispatch IS allowed from GITHUB_TOKEN) for ci / secret-scan on the
-# release branch, plus the pr-lint dispatch path that validates the open PR
-# via the API. The check runs land on the PR head SHA, which is what required
-# checks match on. No App key or PAT in Actions secrets.
+# (workflow_dispatch IS allowed from GITHUB_TOKEN) for ci / pr-gates on the
+# release branch. The pr-gates dispatch path validates the open PR via the API
+# (pr_number input). The check runs land on the PR head SHA, which is what
+# required checks match on. No App key or PAT in Actions secrets.
 
 on:
   push:
@@ -30,7 +30,9 @@ concurrency:
 jobs:
   release-please:
     name: release-please
-    runs-on: [self-hosted, two-selfhosted]
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
       prs_created: ${{ steps.release.outputs.prs_created }}
@@ -46,7 +48,9 @@ jobs:
     name: dispatch-checks
     needs: release-please
     if: needs.release-please.outputs.prs_created == 'true'
-    runs-on: [self-hosted, two-selfhosted]
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - env:
@@ -63,5 +67,4 @@ jobs:
           ")
           echo "Release PR #$PR_NUMBER on branch $HEAD_BRANCH; dispatching required checks."
           gh workflow run ci.yml --ref "$HEAD_BRANCH"
-          gh workflow run secret-scan.yml --ref "$HEAD_BRANCH"
-          gh workflow run pr-lint.yml --ref "$HEAD_BRANCH" -f pr_number="$PR_NUMBER"
+          gh workflow run pr-gates.yml --ref "$HEAD_BRANCH" -f pr_number="$PR_NUMBER"

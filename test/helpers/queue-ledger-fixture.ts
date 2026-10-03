@@ -19,7 +19,13 @@ export async function createLedgerFixture(raw: string) {
   const schemaName = `qledger_${randomUUID().replaceAll("-", "")}`;
   // postgres.js treats password: "" as absent and falls back to PGPASSWORD.
   // A callback pins the authorized empty test password without that fallback.
-  const options = { max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
+  const options = {
+    max: 1,
+    port: 5432,
+    connect_timeout: 5,
+    password: () => url.password,
+    onnotice: () => {},
+  };
   const admin = postgres(url.href, options);
   const sql = postgres(url.href, { ...options, connection: { search_path: schemaName } });
   let created = false;
