@@ -64,9 +64,12 @@ workflow or change repository scanning settings as part of the dependency gate.
 
 Releases are automated with [release-please](https://github.com/googleapis/release-please)
 (`release-please-config.json` + `.release-please-manifest.json`, release-type
-`node`). Merge a conventional commit to `main` and release-please opens or
-updates a release PR; merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z`
-and publishes a GitHub Release. Never tag or release by hand.
+`node`). The `release` workflow regenerates the release PR on a weekly schedule
+or a manual dispatch, not on every merge to `main` (a push only publishes).
+Merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
+Release. Cut one with the short freeze procedure in
+[`docs/releases.md`](docs/releases.md#cutting-a-release). Never tag or release
+by hand.
 
 `CHANGELOG.md` uses the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
