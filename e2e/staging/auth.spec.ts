@@ -18,26 +18,33 @@ test("staging QA moderator session opens the admin event list", async ({ browser
   }
 });
 
-test("staging QA rejects a bad token and an unknown identity with 404", async ({ browser }) => {
-  const origin = stagingOrigin;
-  const context = await browser.newContext({ baseURL: origin });
-  try {
-    const bad = await context.request.post("/auth/qa/qa-member", {
-      headers: { "X-TWO-QA-Auth": "staging-e2e-wrong-token", Origin: origin },
-      maxRedirects: 0,
-    });
-    expect(bad.status()).toBe(404);
-    const token = process.env.QA_AUTH_TOKEN ?? "";
-    // The real token is in the header here; keep a transport error's request
-    // headers out of the report.
-    const unknown = await sendTokenRequest("staging QA unknown-identity probe", token, () =>
-      context.request.post("/auth/qa/no-such-identity", {
-        headers: { "X-TWO-QA-Auth": token, Origin: origin },
+test.describe("negative QA cases", () => {
+  // The real token is in a request header here. A trace records the request
+  // headers, and the failure artifacts are public, so this test records none
+  // (the sweep in ci/scrub-qa-token.py is the backstop, TOG-13046).
+  test.use({ trace: "off" });
+
+  test("staging QA rejects a bad token and an unknown identity with 404", async ({ browser }) => {
+    const origin = stagingOrigin;
+    const context = await browser.newContext({ baseURL: origin });
+    try {
+      const bad = await context.request.post("/auth/qa/qa-member", {
+        headers: { "X-TWO-QA-Auth": "staging-e2e-wrong-token", Origin: origin },
         maxRedirects: 0,
-      }),
-    );
-    expect(unknown.status()).toBe(404);
-  } finally {
-    await context.close();
-  }
+      });
+      expect(bad.status()).toBe(404);
+      const token = process.env.QA_AUTH_TOKEN ?? "";
+      // A transport error's text carries the request headers; keep them out of
+      // the report.
+      const unknown = await sendTokenRequest("staging QA unknown-identity probe", token, () =>
+        context.request.post("/auth/qa/no-such-identity", {
+          headers: { "X-TWO-QA-Auth": token, Origin: origin },
+          maxRedirects: 0,
+        }),
+      );
+      expect(unknown.status()).toBe(404);
+    } finally {
+      await context.close();
+    }
+  });
 });
