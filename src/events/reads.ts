@@ -413,26 +413,35 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
 export async function listJson(
   db: Db,
   opts: { limit: number; offset: number; includeDrafts: boolean; eventKey?: string },
-): Promise<{ rows: PublicEvent[]; total: number }> {
+): Promise<{ rows: PublicEvent[]; total: number; page: number }> {
   const visible = opts.includeDrafts
     ? sql`true`
     : inArray(events.status, ["published", "cancelled", "past"]);
   const match = opts.eventKey === undefined ? undefined : eq(events.eventKey, opts.eventKey);
   const predicate = and(visible, match);
   const [total] = await db.select({ n: count() }).from(events).where(predicate);
+  const n = Number(total?.n ?? 0);
+  // Bound the scan before issuing it: a page past the end clamps to the last
+  // page, so OFFSET stays inside the collection instead of skipping past every
+  // row (a ~1e10 OFFSET is a full-table scan that slows/times out). The
+  // division also absorbs an unaligned or non-finite requested offset back to
+  // a page whose recomputed offset is always issued.
+  const lastPage = Math.max(1, Math.ceil(n / opts.limit));
+  const page = Math.min(Math.max(1, Math.floor(opts.offset / opts.limit) + 1), lastPage);
   const rows = await db
     .select()
     .from(events)
     .where(predicate)
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(opts.limit)
-    .offset(opts.offset);
+    .offset((page - 1) * opts.limit);
   // `eventJson` serializes both boundaries unguarded (`toISOString()`), so a
   // poison row would 500 the whole member collection instead of dropping out.
   // Like `listPast`, the total still counts it so page boundaries stay stable.
   return {
     rows: await withGoing(db, rows.filter(isRenderableEventWindow)),
-    total: Number(total?.n ?? 0),
+    total: n,
+    page,
   };
 }
 

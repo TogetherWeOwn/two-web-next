@@ -372,7 +372,13 @@ export function registerEventRoutes(
     const eventKey = c.req.query("event_key");
     if (eventKey !== undefined && !eventKeyAllowed(eventKey, c.env.APP_URL))
       return c.json({ error: "invalid_event_key" }, 422);
-    const { rows, total } = await listJson(db, {
+    // listJson bounds the scan to the last page (the COUNT runs first), so
+    // the response echoes the clamped page rather than the raw request.
+    const {
+      rows,
+      total,
+      page: clamped,
+    } = await listJson(db, {
       limit,
       offset: (page - 1) * limit,
       includeDrafts: session.moderator,
@@ -389,10 +395,10 @@ export function registerEventRoutes(
     }));
     return jsonResponse(c, {
       data,
-      page,
+      page: clamped,
       limit,
       meta: {
-        current_page: page,
+        current_page: clamped,
         per_page: limit,
         total,
         last_page: Math.max(1, Math.ceil(total / limit)),

@@ -382,8 +382,9 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       "published",
     ]);
     const outside = await collection("?per_page=3&page=4");
-    expect(outside.data).toEqual([]);
-    expect(outside.meta).toEqual({ current_page: 4, per_page: 3, total: 9, last_page: 3 });
+    expect(outside).toEqual(await collection("?per_page=3&page=3"));
+    expect(outside.meta).toEqual({ current_page: 3, per_page: 3, total: 9, last_page: 3 });
+    expect(outside.page).toBe(3);
   });
 
   it("defaults to 20, clamps per_page to 100, preserves limit alias and gives per_page precedence", async () => {
@@ -681,8 +682,9 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(shown.data[0]?.event_key).toBe(draftKey);
     expect(shown.meta.total).toBe(1);
     const second = await collection(`?event_key=${key}&per_page=1&page=2`);
-    expect(second.data).toEqual([]);
-    expect(second.meta).toEqual({ current_page: 2, per_page: 1, total: 1, last_page: 1 });
+    expect(second.data).toEqual((await collection(`?event_key=${key}&per_page=1`)).data);
+    expect(second.meta).toEqual({ current_page: 1, per_page: 1, total: 1, last_page: 1 });
+    expect(second.page).toBe(1);
     const missing = await collection(`?event_key=${String(98).padStart(26, "0")}`);
     expect(missing.data).toEqual([]);
     expect(missing.meta.total).toBe(0);
