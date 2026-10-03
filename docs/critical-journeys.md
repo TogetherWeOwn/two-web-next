@@ -97,6 +97,7 @@ Coverage reuses the CI journey logic with staging-safe setup:
 | Fixture event, RSVP going, withdraw, waitlist join + leave, cancel | `e2e/staging/event-rsvp.spec.ts` | Moderator draft → publish; member PUT 201, `You're in`, reload persists; DELETE 204, going returns; capacity-1 fixture: moderator fills the seat, member waitlist-join asserts `#1 in line`, leave returns the join control; every fixture cancelled in `finally` through the request API (no cleanup page) |
 | QA member keyboard profile edit | `e2e/staging/profile.spec.ts` | Same 1000 ms floor and Tab flow as CI; PATCH 200; `Profile saved.` focused; unique bio and games survive reload |
 | Moderator draft create and cancel | `e2e/staging/admin.spec.ts` | `Create draft` → `Status: draft`; guest draft 403; `Cancel event` → `Status: cancelled`; guest cancelled 410. Never publishes |
+| Join funnel CTA, entries, QA profile | `e2e/staging/join.spec.ts` | Guest: homepage `join` CTA href `/auth/discord`, `/join` one-click href `/join/discord`, both entries 302 to Discord authorize with no follow; QA member session opens `/profile` (`QA Member`) with the tested staging revision recorded as a report annotation |
 
 The list spec also runs as `mobile-375` (375×812 viewport) and
 `reduced-motion` (`reducedMotion: reduce`) projects. Cleanup is structural:
