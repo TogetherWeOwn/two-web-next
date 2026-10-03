@@ -76,6 +76,11 @@ jobs:
       - run: npm run check
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # Deploy build step: regenerate the served public/ assets from assets/
+      # with esbuild --minify and refuse drift. Deterministic: a no-op when
+      # CI's drift check passed, so the deployed bytes are the reviewed bytes.
+      - name: Build minified public assets (esbuild, drift fails closed)
+        run: npm run build:assets:check
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators

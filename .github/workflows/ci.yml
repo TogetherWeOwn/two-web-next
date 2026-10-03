@@ -314,7 +314,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      # The checker uses only Node built-ins; no install/build/network needed.
+          cache: npm
+      - run: npm ci --include=dev
+      # The served public/ files are the deterministic esbuild output of
+      # assets/; fail when a source changed without its rebuilt output.
+      - run: node ci/minify-assets.mjs --selftest
+      - run: node ci/minify-assets.mjs --check
+      # The checker uses only Node built-ins; no network needed.
       - run: node ci/check-bundle-budget.mjs --selftest
       - run: node ci/check-bundle-budget.mjs
 

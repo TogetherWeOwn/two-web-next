@@ -145,12 +145,16 @@ URL. CI migrates its own `postgres:17` service before running `npm run check`.
 
 ### Islands and build checks
 
-`public/islands/*.js` are checked-in browser scripts, with contracts in
-`src/islands/contracts.ts`. **There is no separate islands build command** and
-no frontend framework bundle to generate. Wrangler serves `public/` as static
-assets; island tests verify the scripts and server-rendered mount contracts.
+`assets/islands/*.js` and `assets/styles.css` are the reviewed browser sources,
+with contracts in `src/islands/contracts.ts`. `npm run build:assets` minifies
+them with esbuild into the checked-in `public/islands/*.js` and
+`public/styles.css` that Wrangler serves as static assets; there is no
+frontend framework bundle to generate. Island and stylesheet tests execute the
+minified bytes, so edit the source, rebuild, and commit both.
 
 ```sh
+npm run build:assets                 # regenerate public/ from assets/
+npm run build:assets:check           # fail when the output drifted
 npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
