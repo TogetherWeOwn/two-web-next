@@ -16,7 +16,7 @@ steps against `togetherweown.com`, `www`, or
 - Out of scope (needs a DNS-edit principal): DNS flip to the legacy
   target and back. The deploy credential has no DNS edit, so the DNS
   half stays pending until an authorized operator runs it per
-  [runbook.md](runbook.md#dns-flip-to-the-legacy-target-and-back).
+  [runbook.md](runbook.md#staging-rehearsal-worker-rollback-and-dns-flip-back).
 
 ## Ordered revert steps (staging rehearsal)
 
