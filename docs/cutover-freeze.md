@@ -1,13 +1,18 @@
-# Cutover freeze window and member announcement (draft)
+# Cutover freeze window and member announcement (proposed)
+
+Proposed window, pending CEO go/no-go on the cutover card: freeze
+`2026-10-14 00:00 UTC` to `2026-10-18 00:00 UTC`. The flip target is
+14–16 Oct; the tail to 18 Oct covers the 48h post-flip watch. If the CEO
+defers, this file moves to the new dates in a follow-up docs PR.
 
 Staging-safe draft: prose plus read-only commands only. No production
 mutation. Production cutover execution, DNS changes and any database or
 secret step stay in the separately approved operator procedure; this file
 only drafts the freeze notice and the member-facing words.
 
-## Freeze window (draft text for the release card and ops channel)
+## Freeze window (proposed text for the release card and ops channel)
 
-> Freeze from `<UTC start>` to `<UTC end>`: no merges to `main` except the
+> Freeze from `2026-10-14 00:00 UTC` to `2026-10-18 00:00 UTC`: no merges to `main` except the
 > reviewed cutover release and Director-approved Sev-1 fixes. The freeze
 > lifts when the 48h post-flip watch exits; the lifter posts the lift on
 > the same card. See the short release freeze in
@@ -27,8 +32,8 @@ Read-only checks (no mutation, no credentials):
 ## Member announcement: Discord (draft)
 
 > Hi everyone — the website moves to its new home soon.
-> From `<UTC start>` to `<UTC end>` the site is frozen: please hold profile
-> and event edits until we say it is over.
+> From `2026-10-14 00:00 UTC` to `2026-10-18 00:00 UTC` the site is frozen:
+> please hold profile and event edits until we say it is over.
 > Sign-in stays Discord-only, profiles and RSVPs carry over, and our
 > privacy page now shows version 2 (same Privacy link in the site footer;
 > Discord chats stay under Discord's own policy).
@@ -37,7 +42,7 @@ Read-only checks (no mutation, no credentials):
 
 ## Member announcement: site banner (draft)
 
-> Moving to our new site soon — edits frozen `<dates UTC>`. Privacy page
+> Moving to our new site soon — edits frozen `14–18 Oct UTC`. Privacy page
 > updated to version 2; details in Discord.
 
 The banner links to the relative path `/privacy`, never a pasted URL.
