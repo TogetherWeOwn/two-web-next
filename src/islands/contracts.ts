@@ -969,6 +969,15 @@ export function profileClientErrors(input: {
   return errors;
 }
 
+/**
+ * Admin event/featured editor session-expiry notice (TOG-12399): the island
+ * vetoes the probe reload so the unsaved draft stays reachable, releases the
+ * dirty guard for the recovery trip, and shows this durable notice with the
+ * recovery link from the event detail.
+ */
+export const ADMIN_SESSION_EXPIRED_TESTID = "admin-session-expired";
+export const ADMIN_SESSION_EXPIRED_COPY = "Your session expired. Your changes are still here.";
+
 export type ProfileOutcome =
   | "saved"
   | "invalid"

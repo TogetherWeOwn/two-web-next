@@ -29,25 +29,76 @@ export function eventEditorBrowser({
     ...Object.entries(initial),
   ]);
   const listeners = new Map<string, () => void>();
+  type FakeElement = {
+    tag: string;
+    attrs: Record<string, string>;
+    children: FakeElement[];
+    textContent: string;
+    href: string;
+    focused: boolean;
+    setAttribute: (k: string, v: string) => void;
+    appendChild: (c: FakeElement) => void;
+    focus: () => void;
+    remove: () => void;
+  };
+  const created: FakeElement[] = [];
+  const makeElement = (tag: string): FakeElement => {
+    const el: FakeElement = {
+      tag,
+      attrs: {},
+      children: [],
+      textContent: "",
+      href: "",
+      focused: false,
+      setAttribute: (k, v) => {
+        el.attrs[k] = v;
+      },
+      appendChild: (c) => {
+        el.children.push(c);
+      },
+      focus: () => {
+        el.focused = true;
+      },
+      remove: () => {
+        const i = created.indexOf(el);
+        if (i >= 0) created.splice(i, 1);
+      },
+    };
+    created.push(el);
+    return el;
+  };
+  const inserted: { node: FakeElement; before: unknown }[] = [];
   const editor = {
     addEventListener: (kind: string, fn: () => void) => listeners.set(kind, fn),
     hasAttribute: (name: string) => draft && name === "data-event-draft",
+    parentNode: {
+      insertBefore: (node: FakeElement, before: unknown) => {
+        inserted.push({ node, before });
+      },
+    },
   };
   const search = { q: "", listeners: new Map<string, () => void>() };
   const windowListeners = new Map<
     string,
-    (event: { preventDefault: () => void; returnValue?: string }) => void
+    (event: { preventDefault: () => void; returnValue?: string; detail?: unknown }) => void
   >();
   runInNewContext(binder, {
     document: {
-      querySelector: (selector: string) =>
-        !missing && selector === "[data-event-editor]" ? editor : null,
+      querySelector: (selector: string) => {
+        if (selector === "[data-event-editor]") return missing ? null : editor;
+        const found = created.find(
+          (el) => `[data-testid="${el.attrs["data-testid"]}"]` === selector,
+        );
+        return found ?? null;
+      },
+      createElement: makeElement,
     },
     window: {
       addEventListener: (
         kind: string,
-        fn: (event: { preventDefault: () => void; returnValue?: string }) => void,
+        fn: (event: { preventDefault: () => void; returnValue?: string; detail?: unknown }) => void,
       ) => windowListeners.set(kind, fn),
+      location: { origin: "https://next.example", pathname: "/admin/events/abc", search: "" },
     },
     FormData: class {
       constructor(form: unknown) {
@@ -57,6 +108,7 @@ export function eventEditorBrowser({
         return values[Symbol.iterator]();
       }
     },
+    URL: NodeURL,
     URLSearchParams,
   });
   return {
@@ -64,11 +116,19 @@ export function eventEditorBrowser({
     search,
     windowListeners,
     listeners,
+    created,
+    inserted,
+    editor,
     navigate(kind: "search" | "sort" | "save") {
       if (kind === "save") listeners.get("submit")?.();
       if (kind === "search") search.listeners.get("submit")?.();
       const event = { preventDefault: vi.fn(), returnValue: undefined as string | undefined };
       windowListeners.get("beforeunload")?.(event);
+      return event;
+    },
+    expireSession(recoveryUrl: unknown = "/auth/recover?next=%2Fadmin%2Fevents%2Fabc") {
+      const event = { preventDefault: vi.fn(), detail: { recoveryUrl } };
+      windowListeners.get("two:session-expired")?.(event);
       return event;
     },
   };

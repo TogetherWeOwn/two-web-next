@@ -80,8 +80,10 @@ describe("RSVP toggle guards (no database)", () => {
         baseEnv,
       );
       expect((await app.request(path, { method: "POST" }, baseEnv)).status, path).toBe(403);
-      expect(guest.status, path).toBe(path.startsWith("/admin/") ? 302 : 401);
-      if (path.startsWith("/admin/")) expect(guest.headers.get("location")).toBe("/auth/discord");
+      expect(guest.status, path).toBe(path.startsWith("/admin/") ? 303 : 401);
+      if (path.startsWith("/admin/")) {
+        expect(guest.headers.get("location")).toBe("/auth/recover?next=%2Fadmin%2Fevents%2Fabc");
+      }
       expect(
         (
           await app.request(
