@@ -156,10 +156,13 @@ with `bash ci/biome-selftest.sh`.
 The rule set is deliberately opt-in (`preset: none`): basic correctness checks,
 unused variables and floating promises, not opinionated style or accessibility
 rewrites. Generated Drizzle metadata, the npm lockfile and build/dependency
-outputs are excluded. The existing island scripts retain narrow compatibility
-exceptions: `events-calendar.js` permits the unused catch variable `e`, and
-it, `member-profile.js` and `past-events.js` disable `noFloatingPromises` for
-their existing fire-and-forget handlers. The staging spike
+outputs are excluded. The existing island sources under `assets/islands/`
+retain narrow compatibility exceptions: `events-calendar.js` permits the
+unused catch variable `e`, and it, `member-profile.js` and `past-events.js`
+disable `noFloatingPromises` for their existing fire-and-forget handlers.
+The minified build output under `public/islands/` skips both lint and format:
+it is reviewed as bytes, with `npm run build:assets:check` failing on drift.
+The staging spike
 `staging-checks.ts` disables only `noUnsafeFinally` for its existing fail-closed
 cleanup-verification throw in `finally`; its control flow remains unchanged.
 All other files keep the selected rules. Tightening these exceptions is separate
@@ -168,7 +171,8 @@ The four standalone importer tests (`import-audit.test.ts`,
 `import-events-rsvps.test.ts`, `import-events-target-separation.test.ts` and
 `import-backfill-portable.test.ts`) use a 140-column formatter override to keep their
 existing `@ts-expect-error` imports on one line; wrapping would detach the directive
-from TypeScript's module diagnostic. `public/styles.css`, `public/theme.css`,
+from TypeScript's module diagnostic. `assets/styles.css`, `public/styles.css`,
+`public/theme.css`,
 `public/profile-theme.css`, `public/schedule-theme.css`, `public/event-theme.css` and
 `ci/a11y.mjs` are not formatted because existing regression tests assert exact stylesheet bytes,
 source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,

@@ -97,8 +97,13 @@ describe("Avatar island DOM fixture", () => {
 
 describe("Avatar stylesheet drift", () => {
   it("reserves 64×64 for both states and does not override hidden with display:flex/block", () => {
-    expect(css).toMatch(/\.avatar \{[^}]*width: 64px;[^}]*height: 64px;[^}]*flex-shrink: 0;/);
-    expect(css).toContain(".avatar img, .avatar-initial { width: 100%; height: 100%; }");
-    expect(css).toContain(".avatar [hidden] { display: none; }");
+    // Whitespace-tolerant: the served stylesheet is the minified build output.
+    expect(css).toMatch(
+      /\.avatar\s*\{[^}]*width:\s*64px;[^}]*height:\s*64px;[^}]*flex-shrink:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.avatar img,\s*\.avatar-initial\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%/,
+    );
+    expect(css).toMatch(/\.avatar \[hidden\]\s*\{\s*display:\s*none/);
   });
 });

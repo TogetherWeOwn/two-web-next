@@ -111,7 +111,8 @@ describe("member-profile requests fired", () => {
   it("binder sends a single PATCH and none on cancel", () => {
     const js = readFileSync("public/islands/member-profile.js", "utf8");
     expect(js.match(/fetch\(/g)?.length).toBe(1);
-    expect(js).toContain('method: "PATCH"');
+    // Whitespace-tolerant: the served binder is the minified build output.
+    expect(js).toMatch(/method:\s*"PATCH"/);
     expect(js).toContain('addEventListener("reset"');
   });
 });
@@ -258,13 +259,16 @@ describe("member-profile states rendered", () => {
   });
   it("binder carries every state's copy", () => {
     const js = readFileSync("public/islands/member-profile.js", "utf8");
+    // The served binder is minified: the em dash in the save-failed copy is
+    // a — escape there, so compare with escapes resolved.
+    const unescaped = js.replace(/\\u2014/g, "—");
     for (const c of [
       PROFILE_COPY.saved,
       PROFILE_COPY.saveFailed,
       PROFILE_COPY.sessionExpired,
       PROFILE_COPY.logIn,
     ])
-      expect(js).toContain(c);
+      expect(unescaped).toContain(c);
     for (const t of [
       "profile-saved",
       "profile-error",

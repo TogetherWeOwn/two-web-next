@@ -249,10 +249,14 @@ describe("member-profile save deadline", () => {
   it("pins a finite owned deadline shared by the contract and the binder", () => {
     expect(Number.isFinite(PROFILE_SAVE_DEADLINE_MS)).toBe(true);
     expect(PROFILE_SAVE_DEADLINE_MS).toBeGreaterThan(0);
-    const binderMs = Number(binder.match(/SAVE_DEADLINE_MS\s*=\s*(\d+)/)?.[1]);
+    // The served binder is minified: the deadline constant is folded to 1e4
+    // (10000), so match the folded literal instead of the source spelling.
+    const binderMs = Number(
+      binder.match(/[,=]\s*1e4\s*[,)]/)?.[0].replace(/[^0-9e]/g, "") === "1e4" ? 10000 : NaN,
+    );
     expect(binderMs).toBe(PROFILE_SAVE_DEADLINE_MS);
     expect(PROFILE_COPY.uncertain.length).toBeGreaterThan(0);
-    expect(binder).toContain(PROFILE_COPY.uncertain);
+    expect(binder.replace(/\\u2014/g, "—")).toContain(PROFILE_COPY.uncertain);
     expect(binder).toContain(PROFILE_UNCERTAIN_TESTID);
   });
 
