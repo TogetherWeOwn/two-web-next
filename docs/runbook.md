@@ -560,6 +560,62 @@ Notes from the 2026-10-02 run:
   addresses (`ttl` 1, auto). The DNS flip therefore depends on how fast
   Cloudflare applies edge configuration, not on resolver TTL expiry.
 
+## 48h post-flip watch
+
+The cutover is not done at the DNS flip: the new site stays under a 48h
+watch with the freeze in [cutover-freeze.md](cutover-freeze.md) in force
+until the watch exits. Everything in this section is read-only or GET-only:
+no production writes, migrations, credential changes or queue purges. Any
+Sev-1 goes to containment below and the production rollback pointer, never
+to a live fix or a credential swap.
+
+**What to check:**
+
+- Pager: `error.alert` / `queue.failing` delivery for the whole 48h, per
+  [runbook-alerts.md](runbook-alerts.md) (redacted Tail receipts; source
+  traces stay the diagnostic fallback).
+- `GET /up` on the apex: HTTP 200 with `db:ok`, `pending_migrations:0` and
+  the existing queue envelope, the same readiness bar as the production
+  deploy smoke in
+  [.github/workflows/deploy-production.yml](../.github/workflows/deploy-production.yml).
+- `node ci/cutover-check.mjs --phase after --target togetherweown.com --json`
+  (the [after gate](cutover-check.md#phase-contract-and-prerequisites)):
+  unauthenticated, GET-only, no database client. OAuth start/callback
+  routes can record throttles, so run it only inside this watch, never as
+  a casual probe.
+- Lighthouse against the production origin once within 24h, held to the
+  repo thresholds in [ci/lighthouserc.cjs](../ci/lighthouserc.cjs) (LCP,
+  CLS, server response time); thresholds are never relaxed to turn a
+  build green.
+- Playwright GET-only guest journeys (homepage, static leaves, events
+  list, one published event, robots/sitemap): no sign-in, no RSVP, no
+  join, no writes of any kind.
+
+```bash
+(
+  set -euo pipefail
+  curl -sS --max-time 10 https://togetherweown.com/up
+  node ci/cutover-check.mjs --phase after --target togetherweown.com --json
+)
+```
+
+**Cadence:** pager continuously; `/up` every 15 minutes for the first 4h,
+then hourly; the full after-gate at flip+1h, +24h and +48h; Lighthouse and
+the GET-only journeys once within the first 24h.
+
+**Exit criteria:** 48h elapse with no Sev-1 — no pager storm, `/up` 200
+with `db:ok` and zero pending migrations throughout, after-gates green,
+Lighthouse and guest journeys within budget. The DevOps & Reliability
+Engineer records the exit on the cutover card and lifts the freeze there.
+
+**On a Sev-1** (pager storm, `/up` non-200 or `db:error`/pending nonzero,
+a red after-gate, or member-visible breakage): contain per the queue and
+outage sections above, then roll back with the one-click
+[rollback-production](../.github/workflows/rollback-production.yml)
+workflow to the version ID recorded before the release. A Worker rollback
+does not undo schema, data or Discord side effects. The 48h clock restarts
+after the re-flip.
+
 ## Read `/up` without mistaking liveness for readiness
 
 `/health`, `/healthz` and `/db-ping` are **retired**, unregistered diagnostic
