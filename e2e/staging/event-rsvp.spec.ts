@@ -1,5 +1,12 @@
 import { test, expect } from "./fixtures";
 import { memberStorageState, moderatorStorageState } from "./fixtures";
+import { loginQaIdentities } from "./qa-login";
+
+// Fresh sessions per file: event pages rotate the bearer on read, so a stored
+// token is single-use across files.
+test.beforeAll(async () => {
+  await loginQaIdentities();
+});
 
 // Moderator owns the journey: a draft is created, published for the RSVP, and
 // cancelled in `finally` so the fixture never lingers. Publishing and RSVP
