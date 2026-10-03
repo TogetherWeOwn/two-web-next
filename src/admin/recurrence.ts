@@ -115,6 +115,22 @@ function str(v: unknown): string | null {
   return t === "" ? null : t;
 }
 
+// Number() rounds before we see it: "3.0000000000000001" reads as exactly 3, so
+// the decimal literal itself must name a whole number. Once the exponent shifts
+// the point, every digit right of it is zero. Non-decimal Number() forms (0x,
+// 0b, 0o, Infinity) are integer literals or already fail Number.isInteger.
+const COUNT_DECIMAL = /^[+-]?(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/;
+
+function isWholeCountLiteral(raw: string): boolean {
+  const m = COUNT_DECIMAL.exec(raw);
+  if (!m) return true;
+  const digits = m[1] + (m[2] ?? "");
+  const shift = (m[2]?.length ?? 0) - Number(m[3] ?? "0");
+  if (shift <= 0) return true;
+  if (shift >= digits.length) return /^0*$/.test(digits);
+  return digits.endsWith("0".repeat(shift));
+}
+
 /**
  * Read the rule out of the create/edit form, or null for a one-off. Unknown
  * frequencies, out-of-range counts, unparsable dates and a repeat-until that
@@ -133,9 +149,9 @@ export function parseRecurrenceForm(data: Record<string, unknown>): RecurrenceIn
   const countRaw = str(data.recurrence_count);
   if (countRaw !== null) {
     const n = Number(countRaw);
-    if (!Number.isFinite(n) || Math.trunc(n) < 1 || Math.trunc(n) > MAX_OCCURRENCES) {
+    if (!Number.isInteger(n) || n < 1 || n > MAX_OCCURRENCES || !isWholeCountLiteral(countRaw)) {
       fields.recurrence_count = `Occurrences must be between 1 and ${MAX_OCCURRENCES}.`;
-    } else count = Math.trunc(n);
+    } else count = n;
   }
 
   let endsOn: Date | null = null;

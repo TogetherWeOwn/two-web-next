@@ -264,6 +264,7 @@ describe("DB-backed sessions and rotation", () => {
     const seen: string[] = [];
     const inner = createMemorySessionStore();
     const instrumented: SessionStore = {
+      ...inner,
       create: (s) => {
         seen.push(s.tokenHash);
         return inner.create(s);

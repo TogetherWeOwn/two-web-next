@@ -7,7 +7,9 @@
 # promotion, rotation retention (7 daily / 4 weekly), dry-run deletes nothing,
 # check detects a missing key, an unset DATABASE_URL refuses before touching
 # anything, and a passwordless DATABASE_URL is accepted (agent-testdb trust
-# auth). The dump payload carries a distinctive marker that must never appear
+# auth). It also runs ci/backup-manifest-admission-selftest, which proves an
+# unreadable, malformed, duplicate or foreign-branch manifest refuses before
+# any remote mutation. The dump payload carries a distinctive marker that must never appear
 # in the script's stdout (password-hygiene: DATABASE_URL holds a fake
 # password and the script must not echo it).
 #
@@ -67,7 +69,9 @@ case "$op" in
     cp "$file" "$dest"
     ;;
   get)
-    [ -f "$dest" ] || exit 1
+    # Wrangler's explicit null-object diagnostic (first-use initialization);
+    # any other failed GET is a transport/auth error the script must refuse.
+    [ -f "$dest" ] || { echo "✘ [ERROR] The specified key does not exist." >&2; exit 1; }
     if [ "$pipe" = 1 ]; then cat "$dest"; else cp "$dest" "$file"; fi
     ;;
   delete)
@@ -114,17 +118,17 @@ ok "promote-weekly names a weekly copy"
 # 5. Seed old fixtures: 6 extra dailies + 5 extra weeklies via the stub, then
 #    append them to the remote manifest the same way the script does.
 "$WRANGLER_BIN" r2 object get "test-bucket/$MANIFEST" --file "$T/m.txt" --remote >/dev/null
-i=0
-while [ "$i" -lt 6 ]; do
+i=1
+while [ "$i" -le 6 ]; do
   k="neon/staging-staging-2025010${i}T000000Z.dump"
   echo "old" > "$T/old.dump"
   "$WRANGLER_BIN" r2 object put "test-bucket/$k" --file "$T/old.dump" --remote >/dev/null
   printf '%s\n' "$k" >> "$T/m.txt"
   i=$((i + 1))
 done
-i=0
-while [ "$i" -lt 5 ]; do
-  k="neon/staging-staging-2024010${i}T000000Z.dump-weekly-2024010${i}T000000Z.dump"
+i=1
+while [ "$i" -le 5 ]; do
+  k="neon/staging-staging-2024010${i}T000000Z-weekly-2024010${i}T000000Z.dump"
   "$WRANGLER_BIN" r2 object put "test-bucket/$k" --file "$T/old.dump" --remote >/dev/null
   printf '%s\n' "$k" >> "$T/m.txt"
   i=$((i + 1))
@@ -173,5 +177,14 @@ ok "default bucket is two-web-next-backups"
 UNWIRED="$(grep 'wr r2 object' "$BIN" | grep -vc 'BACKUP_JURISDICTION' || true)"
 [ "$UNWIRED" = 0 ] || fail "$UNWIRED r2 object call(s) lack --jurisdiction"
 ok "every r2 object call passes --jurisdiction"
+
+# 11. Manifest admission (TOG-11194): unreadable/foreign/malformed/duplicate
+# manifests must refuse before any remote mutation. Own local fake R2; run it
+# from this entrypoint so the required CI step covers it too.
+if ! python3 ci/backup-manifest-admission-selftest > "$T/admission.log" 2>&1; then
+  cat "$T/admission.log" >&2
+  fail "manifest admission selftest failed"
+fi
+ok "manifest admission selftest passes"
 
 echo "selftest: $PASS passed"

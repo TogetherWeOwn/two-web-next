@@ -366,7 +366,7 @@ describe("W15 join landing and recovery parity", () => {
       const calls = mockDiscord();
       const start = await startJoin(e, "?source=web-homepage&next=/events");
       const res = await app.request(
-        `/join/callback?error=${error}&error_description=never-echo`,
+        `/join/callback?error=${error}&error_description=never-echo&state=${start.state}`,
         { headers: { cookie: start.cookie } },
         e,
       );
@@ -381,9 +381,10 @@ describe("W15 join landing and recovery parity", () => {
           `__Host-two_join_${name}=; Max-Age=0`,
         );
       }
-      // Simulate the browser after the deletion cookies: no stale attribution.
+      // Neither an empty browser jar nor replayed original cookies can append
+      // another terminal attempt for the already consumed journey.
       await app.request("/join/callback?error=access_denied", {}, e);
-      expect(fake.attempts[1]?.source).toBeNull();
+      expect(fake.attempts).toHaveLength(1);
     },
   );
 
@@ -500,9 +501,10 @@ describe("GET /join/callback (synchronous bot add + sign-in)", () => {
   it("renders the recovery page (never an error echo) when consent is denied", async () => {
     const { fake, env: e } = isolated();
     const calls = mockDiscord();
+    const start = await startJoin(e);
     const res = await app.request(
-      "/join/callback?error=access_denied&error_description=ashould-never-appear",
-      {},
+      `/join/callback?error=access_denied&error_description=ashould-never-appear&state=${start.state}`,
+      { headers: { cookie: start.cookie } },
       e,
     );
     expect(res.status).toBe(200);
@@ -525,7 +527,7 @@ describe("GET /join/callback (synchronous bot add + sign-in)", () => {
       expect(await res.text()).toContain("Join link expired");
     }
     expect(calls).toHaveLength(0);
-    expect(fake.attempts).toHaveLength(2);
+    expect(fake.attempts).toHaveLength(0);
   });
 
   it("503s the recovery page when Discord is unreachable", async () => {

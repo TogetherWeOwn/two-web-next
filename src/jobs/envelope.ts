@@ -57,16 +57,16 @@ export function isQueueMessage(value: unknown): value is QueueMessage {
  * ledger row: it releases no lock and stamps no ledger transition, exactly
  * like a pre-fencing sync-event.
  *
- * Only `event.upsert` maps. `event.cancel` has no consumer yet (BotClient has
- * no cancel call), and a sync-event for a cancelled row would ask the bot to
- * upsert it, so a cancel carrier stays unrecognized. Anything carrying `kind`
- * is judged by the W13 shape alone.
+ * Both `event.upsert` and `event.cancel` map. The job snapshots the current
+ * row at send time — a cancelled row asks the bot to cancel it, never to
+ * upsert it — so the action only selects in-flight carriers worth keeping.
+ * Anything carrying `kind` is judged by the W13 shape alone.
  */
 export function toQueueMessage(value: unknown): QueueMessage | null {
   if (isQueueMessage(value)) return value;
   if (!isRecord(value) || "kind" in value) return null;
   if (
-    value.action !== "event.upsert" ||
+    (value.action !== "event.upsert" && value.action !== "event.cancel") ||
     typeof value.eventKey !== "string" ||
     value.dedupeKey !== value.eventKey ||
     typeof value.idempotencyKey !== "string"

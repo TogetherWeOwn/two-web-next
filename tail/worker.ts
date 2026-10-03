@@ -6,6 +6,15 @@ export type TailEnv = { OPS_ALERT_WEBHOOK_URL?: string; UPTIME_URL?: string };
 export const MUTE_MS = 5 * 60 * 1000;
 const MAX_TRACKED = 500;
 
+// Exact app script names this pager accepts. Wrangler does not inherit
+// tail_consumers into named environments, so production traces arrive under
+// the production app name. Never match by prefix: a prefix wildcard would
+// page for foreign Workers in the same account.
+export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
+  "two-web-next",
+  "two-web-next-production",
+]);
+
 // Uptime prober: two attempts per cron run, at least 10 s apart, each with a
 // 10 s timeout. Page only when both fail. Silent failures (dead route,
 // DNS/edge outage, Worker never running) produce no Tail log, so the Tail
@@ -241,7 +250,7 @@ export function createTailWorker(
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no parsing, no logging, no outbound work.
       for (const trace of events) {
-        if (trace.scriptName !== "two-web-next") continue;
+        if (!trace.scriptName || !APP_SCRIPT_NAMES.has(trace.scriptName)) continue;
         for (const log of trace.logs) {
           if (log.level !== "error") continue;
           for (const argument of log.message) {

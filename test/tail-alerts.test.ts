@@ -1,6 +1,15 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { ALERT_ROUTES, DeliveryMute, MUTE_MS, createTailWorker, parseAlert } from "../tail/worker";
+import {
+  ALERT_ROUTES,
+  APP_SCRIPT_NAMES,
+  DeliveryMute,
+  MUTE_MS,
+  createTailWorker,
+  parseAlert,
+} from "../tail/worker";
+// @ts-expect-error JSONC comment/trailing-comma stripper has no declaration file.
+import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { ALERT_WINDOW_MS, AlertRateLimit, alertRequestError } from "../src/alerts";
 
 const timestamp = Date.parse("2026-10-01T00:00:00Z");
@@ -341,8 +350,33 @@ describe("Tail delivery", () => {
     );
     expect(send).not.toHaveBeenCalled();
   });
-});
 
+  it("pages production script traces exactly like staging ones", async () => {
+    const { worker, send } = fixture();
+    await worker.tail([trace([requestAlert], timestamp, "two-web-next-production")], env);
+    expect(send).toHaveBeenCalledTimes(1);
+    const calls = send.mock.calls as unknown as [string, RequestInit][];
+    expect(calls[0]![0]).toBe(`${secret}?wait=true`);
+    expect(JSON.parse(JSON.parse(calls[0]![1].body as string).content)).toMatchObject({
+      event: "error.alert",
+      route: "/join",
+    });
+  });
+
+  it("accepts only the staging and production app scripts, never a prefix of them", async () => {
+    expect([...APP_SCRIPT_NAMES].sort()).toEqual(["two-web-next", "two-web-next-production"]);
+    const { worker, send } = fixture();
+    await worker.tail(
+      [
+        trace([requestAlert], timestamp, "two-web-next-production-evil"),
+        trace([requestAlert], timestamp, "two-web-nextx"),
+        trace([requestAlert], timestamp, "other"),
+      ],
+      env,
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+});
 describe("Tail scheduled uptime prober", () => {
   const uptime = "https://next.togetherweown.com/up";
   const upEnv = { OPS_ALERT_WEBHOOK_URL: secret, UPTIME_URL: uptime };
@@ -504,5 +538,30 @@ describe("Tail delivery memory accounting", () => {
     mute.finish("overflow", false);
     now += MUTE_MS;
     expect(mute.begin("f500")).toBe(true);
+  });
+});
+
+describe("Production Tail pager wiring", () => {
+  it("env.production consumes the production alerts Worker, not the staging one", () => {
+    const app = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const production = (app.env as Record<string, Record<string, unknown> | undefined>).production;
+    expect(production?.tail_consumers).toEqual([{ service: "two-web-next-alerts-production" }]);
+    // The top-level staging consumer is untouched by the production wiring.
+    expect(app.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
+  });
+
+  it("the production alerts Worker exists under its own name with no staging leakage", () => {
+    const tail = readWranglerConfig(readFileSync("tail/wrangler.jsonc", "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(tail.name).toBe("two-web-next-alerts");
+    const production = (tail.env as Record<string, Record<string, unknown> | undefined>).production;
+    expect(production?.name).toBe("two-web-next-alerts-production");
+    expect(production?.tail_consumers).toBeUndefined();
+    expect(production?.workers_dev).toBe(false);
   });
 });

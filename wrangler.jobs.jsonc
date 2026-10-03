@@ -1,0 +1,70 @@
+// two-web-jobs: queue consumers + cron triggers only, no fetch handler (TOG-12247 spike).
+// Shares src/db and the domain modules with the web front; one wrangler config per Worker.
+//
+// NOT deployed at top level yet. A queue has exactly one consumer, and wrangler.jsonc
+// (two-web-next) still owns two-sync-event / two-internal-action plus the crons. The
+// cutover PR moves the `consumers` and `triggers` blocks from wrangler.jsonc into this
+// top level in one change; until then the top level only produces, never consumes, so
+// an accidental deploy cannot steal staging's consumers or double-run its crons.
+// test/jobs-worker-config.test.ts pins both properties.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "two-web-jobs",
+  "main": "src/jobs-worker.ts",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "workers_dev": false,
+  "preview_urls": false,
+  "triggers": { "crons": [] },
+  "queues": {
+    "producers": [
+      { "queue": "two-sync-event", "binding": "SYNC_EVENT_QUEUE" },
+      { "queue": "two-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
+    ]
+  },
+  "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],
+  "vars": {
+    "APP_URL": "https://next.togetherweown.com"
+  },
+  "env": {
+    // Spike evidence target: its own queues, the staging Hyperdrive, no route, no
+    // workers.dev URL and no tail consumer (no alert noise). Tear down with
+    // `npx wrangler delete --config wrangler.jobs.jsonc --env preview` and
+    // `npx wrangler queues delete <name>` for both queues below.
+    "preview": {
+      "name": "two-web-jobs-preview",
+      "workers_dev": false,
+      "preview_urls": false,
+      // Reconcile only (src/jobs/constants.ts RECONCILE_CRON): prune is a daily
+      // midnight delete that staging's own cron already runs on this database.
+      "triggers": { "crons": ["*/10 * * * *"] },
+      "queues": {
+        "producers": [
+          { "queue": "two-web-jobs-preview-sync-event", "binding": "SYNC_EVENT_QUEUE" },
+          { "queue": "two-web-jobs-preview-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
+        ],
+        "consumers": [
+          {
+            "queue": "two-web-jobs-preview-sync-event",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "two-web-jobs-preview-internal-action",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
+        ]
+      },
+      "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],
+      // Never the staging APP_URL: qaEnabled() stays false, so an alert-probe
+      // message is acked as done and can never page.
+      "vars": {
+        "APP_URL": "https://two-web-jobs-preview.invalid"
+      }
+    }
+  }
+}

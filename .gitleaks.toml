@@ -28,6 +28,13 @@ targetRules = ["generic-api-key"]
 regexes = ['''01ARZ3NDEKTSV4RRFFQ69G5FAV''', '''01ARZ3NDEKTSV4RRFFQ69G5FAW''']
 
 [[allowlists]]
+description = "Synthetic signing key used only by the isolated auth admission fixture, including its committed history"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^test/auth-admission\.test\.ts$''']
+regexes = ['''^fixture-signing-secret-at-least-32-bytes$''']
+
+[[allowlists]]
 description = "Synthetic event ULID in the request-correlation fixture, not a credential (TOG-10838)"
 targetRules = ["generic-api-key"]
 condition = "AND"

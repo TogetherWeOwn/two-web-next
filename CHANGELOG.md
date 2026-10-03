@@ -4,6 +4,7 @@
 
 ### Added
 
+- Internal-action smoke `--announcement-only` mode (and `announcement_only` workflow input) for receivers that support `announcement.post` alone; skips `role.assign` and `event.upsert`.
 - Network-free moderator configuration preflight and staging-only signed internal-action smoke, with production-host/redirect refusal and idempotent announcement replay checks.
 - Weekly event series with timezone-aware recurrence input and idempotent occurrence materialization during event reconciliation.
 - Legacy auth, session, join and QA-login acceptance mapping with explicit parity gaps; Hono, Miniflare/workerd and test-container Postgres regression coverage.

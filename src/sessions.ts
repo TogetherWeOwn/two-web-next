@@ -11,6 +11,13 @@
 // The cookie carries a random token (`two_` + 32 bytes, base64url); the DB
 // stores only its SHA-256 hex. Nothing session-shaped lives in KV.
 
+import {
+  createMemoryOAuthJourneyStore,
+  createPostgresOAuthJourneyStore,
+  migrateOAuthJourneys,
+  type OAuthJourneyStore,
+} from "./oauth-journeys";
+
 /** Session lifetime: 120-minute sliding window (legacy parity, `docs/parity.md`).
  * Login and every authenticated-page rotation re-stamp the DB expiry and the
  * cookie Max-Age; the session-status probe cookie follows the same value. */
@@ -25,7 +32,13 @@ export type DbSessionRow = {
 };
 
 export type SessionStore = {
+  journeys: OAuthJourneyStore;
   create: (session: DbSessionRow & { tokenHash: string; expiresAt: Date }) => Promise<void>;
+  /** Fresh authentication: revoke the supplied prior token and insert atomically. */
+  replace: (
+    oldTokenHash: string,
+    replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
+  ) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
   /** Non-authenticating probe key, stable across rotation of a live session. */
   statusHash: (tokenHash: string) => Promise<string | null>;
@@ -77,6 +90,7 @@ const MIGRATION = [
 
 export async function migrate(sql: Sql): Promise<void> {
   for (const stmt of MIGRATION) await sql.unsafe(stmt);
+  await migrateOAuthJourneys(sql);
 }
 
 function toRow(r: Record<string, unknown>): DbSessionRow {
@@ -91,6 +105,20 @@ function toRow(r: Record<string, unknown>): DbSessionRow {
 
 export function createPostgresSessionStore(sql: Sql): SessionStore {
   return {
+    journeys: createPostgresOAuthJourneyStore(sql),
+    async replace(oldTokenHash, replacement) {
+      if (oldTokenHash === replacement.tokenHash)
+        throw new Error("Session replacement must use a fresh token");
+      // Both writes are one statement. An insert failure rolls back revocation;
+      // unlike rotation, an unknown prior cookie does not veto fresh login.
+      await sql`with revoked as (
+          update web_sessions set revoked_at = now()
+          where token_hash = ${oldTokenHash} and revoked_at is null returning 1
+        )
+        insert into web_sessions (token_hash, user_id, username, avatar, member, moderator, expires_at)
+        values (${replacement.tokenHash}, ${replacement.userId}, ${replacement.username},
+          ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt})`;
+    },
     async create(s) {
       await sql`
         insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
@@ -189,6 +217,18 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     return r;
   };
   return {
+    journeys: createMemoryOAuthJourneyStore(clock),
+    async replace(oldHash, replacement) {
+      if (oldHash === replacement.tokenHash || rows.has(replacement.tokenHash)) {
+        throw new Error("Session replacement must use a fresh token");
+      }
+      rows.delete(oldHash);
+      rows.set(replacement.tokenHash, {
+        ...replacement,
+        expiresAt: replacement.expiresAt.getTime(),
+        statusHash: replacement.tokenHash,
+      });
+    },
     async create(s) {
       rows.set(s.tokenHash, { ...s, expiresAt: s.expiresAt.getTime(), statusHash: s.tokenHash });
     },
