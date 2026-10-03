@@ -138,7 +138,7 @@ describe("QA identity admission before session issuance", () => {
       expect(cookies).toHaveLength(2);
       const cookie = cookies.find((c) => c.startsWith(SESSION_COOKIE + "="))!;
       const status = cookies.find((c) => c.startsWith("__Host-two_session_status="))!;
-      for (const flag of ["Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=2592000"])
+      for (const flag of ["Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=7200"])
         expect(status).toContain(flag);
       expect(status).not.toMatch(/Domain=/i);
       for (const flag of [
@@ -147,7 +147,7 @@ describe("QA identity admission before session issuance", () => {
         "Secure",
         "HttpOnly",
         "SameSite=Lax",
-        "Max-Age=2592000",
+        "Max-Age=7200",
       ]) {
         expect(cookie).toContain(flag);
       }
@@ -161,7 +161,7 @@ describe("QA identity admission before session issuance", () => {
       expect(fixture.create).toHaveBeenCalledWith({
         ...row,
         tokenHash,
-        expiresAt: new Date(NOW + 30 * 24 * 60 * 60 * 1000),
+        expiresAt: new Date(NOW + 120 * 60 * 1000),
       });
     },
   );

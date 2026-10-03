@@ -183,6 +183,9 @@ go hunting for them.
 | Legacy | Next status | Card |
 |---|---|---|
 | `secureHeaders`-equivalent (CSP on web+admin+leaves, static anti-framing/sniffing globally) | ✅ global secureHeaders (stricter: no inline/eval — no Livewire to need it) | W3 ✅/W4 ✅ |
+| `AddSecurityHeaders::HEADERS` (nosniff, strict-origin-when-cross-origin, X-Frame-Options DENY, Permissions-Policy camera/microphone/geolocation) | ✅ byte-identical `SECURITY_HEADERS` (`src/headers.ts`), pinned against the legacy table in `test/w16b-env-parity.test.ts` | W16b ✅ [TOG-11942](/TOG/issues/TOG-11942) |
+| `AddContentSecurityPolicy` directive set | Deltas, each pinned in `test/w16b-env-parity.test.ts`: **stricter** — `script-src`/`style-src` `'self'` (no `unsafe-inline`/`unsafe-eval`; only JSON-LD data blocks are inline), `img-src` self + Discord CDN + exact allowlist (no `https:`/`data:`), `frame-src` Discord widget on `/join` only; **added** — `form-action 'self'` (TOG-7095's admin-logout breakage cannot recur: logout posts same-origin `/logout`), report sink `/csp-reports`; **kept/restored** — `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `connect-src 'self'` (every island fetch is a same-origin path); **omitted** — `upgrade-insecure-requests` (every source list is `'self'` or an explicit `https://` host, so an `http:` subresource is blocked, not upgraded) and HSTS (edge-owned, TOG-8729) | W16b ✅ [TOG-11942](/TOG/issues/TOG-11942) |
+| Per-env robots/sitemap + staging noindex | Robots `Sitemap:` and every sitemap `<loc>` name the serving env's own origin; robots body is allow-shaped in every env (as legacy), staging's crawl bar is `X-Robots-Tag: noindex, nofollow` on HTML. Staging deploy smoke (`bin/smoke.mjs`) asserts same-origin robots + sitemap and HTML noindex | W16b ✅ [TOG-11942](/TOG/issues/TOG-11942) |
 | One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; RSVP writes ✅ (rateLimitExceeded); other human routes as they land | W14 ✅ + W9 ✅ |
 | Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes) | ✅ `src/throttle.ts` + every-POST-throttled audit (`test/throttle.test.ts`) | **N5** ✅ |
 | VerifyCsrfToken on unsafe web methods | Central same-origin guard for POST/PUT/PATCH/DELETE, two exact machine exemptions, mounted-route audit; no CSRF token scheme ([policy](same-origin.md)) | [TOG-10850](/TOG/issues/TOG-10850) |
@@ -226,7 +229,7 @@ go hunting for them.
 | `content/privacy-policy-v1.md` (live source) | ❌ see N1 | **N1** |
 | `content/faq-preview*.md` (docs-only), `content/welcome/*` (unwired drafts) | copy inlined / never wired | dropped (docs-only / dead) |
 | Design-lab routes (non-prod visual experiments) | ✅ correctly absent | dropped (never production) |
-| DB sessions, 120-min sliding lifetime | ✅ DB-backed + rotation; **divergence**: 30 d rotating TTL (Worker-compatible; no sliding lottery) — CPO decision, verify at W16 | W5 ✅ |
+| DB sessions, 120-min sliding lifetime | ✅ DB-backed + rotation; 120-minute window re-stamped on login and every authenticated page view (`SESSION_TTL_SECONDS`, `src/sessions.ts`), status cookie follows it. No divergence: the earlier 30 d CPO divergence is withdrawn (privacy v2 keeps the v1 "no remember-me" promise, [TOG-12556](/TOG/issues/TOG-12556)) | W5 ✅ + [TOG-12928](/TOG/issues/TOG-12928) |
 | Session cookie `__Host-`, HttpOnly, Lax; OAuth state bound to signed cookie | ✅ | W5 ✅ |
 
 ## 13. New cards created by this matrix (all in TWO Web Next, one PR each)

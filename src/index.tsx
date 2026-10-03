@@ -14,6 +14,7 @@ import {
   hashToken,
   migrate,
   newSessionToken,
+  SESSION_TTL_SECONDS,
   type SessionStore,
   type Sql,
 } from "./sessions";
@@ -77,7 +78,6 @@ export { rulesLastUpdated } from "./rules-last-updated";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
@@ -109,6 +109,15 @@ const staticSecurityHeaders = secureHeaders({
   strictTransportSecurity: false,
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
+    // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
+    // <object>/<embed> anywhere in src/), base-uri 'self', connect-src
+    // 'self' (island fetch targets are same-origin paths). The remaining
+    // legacy delta — upgrade-insecure-requests — is left out: every source
+    // list is 'self' or an explicit https:// host, so an http: subresource is
+    // blocked rather than upgraded, and HTTPS itself is edge-owned (TOG-8729).
+    baseUri: ["'self'"],
+    connectSrc: ["'self'"],
+    objectSrc: ["'none'"],
     imgSrc: [
       "'self'",
       (c) =>
