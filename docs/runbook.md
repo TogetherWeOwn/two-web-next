@@ -142,7 +142,7 @@ approved account and binding isolation before any remote mutation.
 and not a test. It is the hand-dispatch path for staging recovery and the only
 path for production; the staging `deploy.yml` applies staging migrations on its
 own (see *Staging deploy integration* below). This workflow's addition
-([TOG-11161](/TOG/issues/TOG-11161)) does not authorize its execution. No live
+does not authorize its execution. No live
 migration or Neon branch creation is performed by its selftest.
 
 **Before enabling or dispatching:**
@@ -226,7 +226,7 @@ queues and external side effects separately. Do not run an unreviewed down
 migration or assume restoring the Worker restores the database.
 
 **Staging deploy integration:** `deploy.yml` applies the staging web migrations
-itself ([TOG-12965](/TOG/issues/TOG-12965)): `plan`, the exact-SHA CI re-check,
+itself: `plan`, the exact-SHA CI re-check,
 `apply` and `verify` run in the `deploy-staging` job (Environment `staging`, which
 holds `NEON_STAGING_DATABASE_URL`) after `npm run check` and before the first
 Cloudflare mutation, so new code never meets the old staging schema and a failed
