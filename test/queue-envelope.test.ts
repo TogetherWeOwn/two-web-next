@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { consume } from "../src/jobs/consumer";
 import { uniqueKey, type Outcome } from "../src/jobs/sync-event";
+import { SyncRetryPersistenceError } from "../src/jobs/types";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
 const handlers = vi.hoisted(() => ({ sync: vi.fn(), internal: vi.fn() }));
@@ -144,6 +145,47 @@ describe("queue envelope batch isolation", () => {
       expect(console.warn).toHaveBeenCalledExactlyOnceWith("queue malformed message discarded");
       expect(console.error).not.toHaveBeenCalled();
     });
+  });
+
+  it("preserves a known retry deadline between malformed and completed siblings", async () => {
+    const now = new Date("2030-01-01T00:00:00Z");
+    handlers.sync.mockRejectedValueOnce(
+      new SyncRetryPersistenceError(
+        new Date(now.getTime() + 37_000),
+        new Error("result write failed"),
+      ),
+    );
+    const invalid = message({ ...sync, eventKey: null, jobId: "untrusted-job" });
+    const waiting = message({ ...sync, jobId: "waiting-job" });
+    const completed = message({ ...sync, eventKey: "event-2", jobId: "completed-job" });
+    const needsSync = vi.fn(async () => true);
+    const dispatchPending = vi.fn(async () => {});
+    const deps = { ...dependencies(), now: () => now, needsSync, dispatchPending };
+
+    await consume({ messages: [invalid, waiting, completed] }, deps);
+
+    expect(invalid.ack).toHaveBeenCalledExactlyOnceWith();
+    expect(invalid.retry).not.toHaveBeenCalled();
+    expect(waiting.retry).toHaveBeenCalledExactlyOnceWith({ delaySeconds: 37 });
+    expect(waiting.ack).not.toHaveBeenCalled();
+    expect(completed.ack).toHaveBeenCalledExactlyOnceWith();
+    expect(completed.retry).not.toHaveBeenCalled();
+    expect(handlers.sync).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(deps.ledger.reserved).mock.calls).toEqual([
+      ["waiting-job"],
+      ["completed-job"],
+    ]);
+    expect(deps.ledger.released).toHaveBeenCalledExactlyOnceWith("waiting-job", expect.any(Date));
+    expect(deps.ledger.dequeued).toHaveBeenCalledExactlyOnceWith("completed-job");
+    expect(deps.ledger.failed).not.toHaveBeenCalled();
+    expect(deps.lock.release).toHaveBeenCalledExactlyOnceWith(uniqueKey("event-2"), leaseToken);
+    expect(needsSync).toHaveBeenCalledExactlyOnceWith("event-2");
+    expect(dispatchPending).toHaveBeenCalledExactlyOnceWith("event-2", expect.any(AbortSignal));
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith("queue malformed message discarded");
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      "sync retry result persistence failed",
+      "sync retry result could not be persisted; request remains fenced",
+    );
   });
 
   describe.each([false, true])("synthetic probe QA enabled: %s", (probeEnabled) => {

@@ -70,6 +70,9 @@ function row(over: Partial<EventListRow> & { eventKey: string }): EventListRow {
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     createdBy: null,
     rsvpOpen: true,
     recurrenceFrequency: null,
@@ -80,6 +83,8 @@ function row(over: Partial<EventListRow> & { eventKey: string }): EventListRow {
     createdAt: at,
     updatedAt: at,
     icsSequence: 0n,
+    syncRevision: 0,
+    syncedRevision: 0,
     goingCount: 0,
     ...rest,
   };

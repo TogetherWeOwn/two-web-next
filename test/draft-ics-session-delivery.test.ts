@@ -34,6 +34,9 @@ function fixture(status: "draft" | "published" = "draft") {
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
+    agentGrantId: null,
+    proofMarker: null,
+    agentVersion: 1,
     createdBy: null,
     recurrenceFrequency: null,
     recurrenceCount: null,
@@ -41,6 +44,8 @@ function fixture(status: "draft" | "published" = "draft") {
     parentEventId: null,
     recurrenceIndex: null,
     icsSequence: 0n,
+    syncRevision: 1,
+    syncedRevision: 0,
     createdAt: new Date("2026-10-01T00:00:00Z"),
     updatedAt: new Date("2026-10-01T00:00:00Z"),
   };
@@ -119,7 +124,7 @@ async function replacement(
   const replacements = cookies.filter((cookie) => cookie.startsWith(`${COOKIE}=`));
   expect(replacements).toHaveLength(1);
   const setCookie = replacements[0]!;
-  for (const flag of ["Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=2592000"]) {
+  for (const flag of ["Path=/", "Secure", "HttpOnly", "SameSite=Lax", "Max-Age=7200"]) {
     expect(setCookie.split("; ")).toContain(flag);
   }
   expect(setCookie).not.toMatch(/(?:^|;\s*)Domain=/i);

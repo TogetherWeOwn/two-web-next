@@ -76,6 +76,18 @@
     {
       "path": "drizzle/1017_queue_failed_job_identity.sql",
       "sha256": "0d9ff9974410a51c700904c24b2e1e5cb178287048a5053b2e70541abf4ac6b5"
+    },
+    {
+      "path": "drizzle/1018_audit-immutability.sql",
+      "sha256": "7dc14b470a68bc3a8a308af47f7216fdde32badf8bf5c23e3ccce2428f12e627"
+    },
+    {
+      "path": "drizzle/1019_shared-agent-events.sql",
+      "sha256": "c9b0f5a4006fcb646cf6a1d15a2d3c3d3bf618861d2eea4becf98e89d95ef773"
+    },
+    {
+      "path": "drizzle/1020_event-sync-revisions.sql",
+      "sha256": "33ad25cddd846eae9ba35c1265fc1584fcfa4c8ad3334e03ecfba556824be8f8"
     }
   ]
 }
