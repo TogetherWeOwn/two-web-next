@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import app from "./app";
 import { FeaturedFormPage } from "../src/admin/pages";
 import type { Env } from "../src/env";
+import { featuredImageAllowed, featuredImageSrc } from "../src/featured-image";
 import { imageHosts, isFeaturedImageUrl } from "../src/image-policy";
 import type { FeaturedRow } from "../src/admin/store";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "../src/events/pages";
@@ -255,21 +256,16 @@ describe("featured cover-image CSP agreement", () => {
     for (const origin of expected) {
       const url = `${origin}/photo.jpg`;
       expect(isFeaturedImageUrl(url, cspEnv.FEATURED_IMAGE_HOSTS)).toBe(true);
-      expect(
-        url.startsWith(`${origin}/`),
-        `${url} accepted by validation but blocked by img-src`,
-      ).toBe(true);
+      expect(featuredImageSrc(url, cspEnv.APP_URL, cspEnv.FEATURED_IMAGE_HOSTS)).toBe(url);
     }
   });
 
-  it("no refused violation class would ever render under the deployed img-src", async () => {
+  it("no CSP-blockable violation class would ever render under the deployed img-src", async () => {
     const res = await app.request("/about", {}, cspEnv);
     const sources = imgSrcOf(res.headers.get("content-security-policy")!);
     for (const url of [
       "http://cdn.discordapp.com/photo.jpg",
       "data:image/png;base64,AAAA",
-      "https://user:password@cdn.discordapp.com/photo.jpg",
-      "https://@cdn.discordapp.com/photo.jpg",
       "https://cdn.discordapp.com:8443/photo.jpg",
       "https://*.evil.com/photo.jpg",
       "https://unapproved.com/photo.jpg",
@@ -280,5 +276,53 @@ describe("featured cover-image CSP agreement", () => {
         `${url} refused by validation but renderable under img-src`,
       ).toBe(false);
     }
+  });
+
+  // CSP source matching ignores userinfo, so `https://@cdn.discordapp.com/…`
+  // and `https://user:pw@cdn.discordapp.com/…` DO match the img-src host. The
+  // CSP cannot block them, so validation and the render path are the only
+  // guards; the origin-prefix model above would be vacuous for these rows.
+  it.each([
+    "https://user:password@cdn.discordapp.com/photo.jpg",
+    "https://@cdn.discordapp.com/photo.jpg",
+    "https://:@cdn.discordapp.com/photo.jpg",
+    "https://@images.unsplash.com/photo.jpg",
+  ])("userinfo cover URL %s is refused by validation and render, not by CSP", (url) => {
+    expect(isFeaturedImageUrl(url, cspEnv.FEATURED_IMAGE_HOSTS)).toBe(false);
+    expect(featuredImageAllowed(url, cspEnv.APP_URL, cspEnv.FEATURED_IMAGE_HOSTS)).toBe(false);
+    expect(featuredImageSrc(url, cspEnv.APP_URL, cspEnv.FEATURED_IMAGE_HOSTS)).toBeNull();
+  });
+});
+
+// TOG-12859 review: pin the render-path userinfo pre-check in
+// featuredImageAllowed/featuredImageSrc. Same-site is the load-bearing case:
+// the same-origin branch never reaches isFeaturedImageUrl, so the pre-check is
+// the only thing refusing `https://@<site>/…` (new URL() drops the empty
+// username, leaving username === "" and origin === site.origin).
+describe("featured cover-image render-path userinfo guard", () => {
+  const site = cspEnv.APP_URL;
+  const hosts = cspEnv.FEATURED_IMAGE_HOSTS;
+
+  it.each([
+    "https://@next.example.test/x.png",
+    "https://:@next.example.test/x.png",
+    "https://user@next.example.test/x.png",
+    "https://user:password@next.example.test/x.png",
+  ])("same-site userinfo %s is not rendered", (url) => {
+    expect(featuredImageAllowed(url, site, hosts)).toBe(false);
+    expect(featuredImageSrc(url, site, hosts)).toBeNull();
+  });
+
+  it.each([
+    ["/photo@2x.png", "/photo@2x.png"],
+    ["https://next.example.test/photo@2x.png", "/photo@2x.png"],
+    ["https://cdn.discordapp.com/a@2x.png", "https://cdn.discordapp.com/a@2x.png"],
+    [
+      "https://images.unsplash.com/a@2x.png?u=x@y#@z",
+      "https://images.unsplash.com/a@2x.png?u=x@y#@z",
+    ],
+  ])("benign @ outside the authority stays allowed: %s", (url, src) => {
+    expect(featuredImageAllowed(url, site, hosts)).toBe(true);
+    expect(featuredImageSrc(url, site, hosts)).toBe(src);
   });
 });
