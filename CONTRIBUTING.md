@@ -19,7 +19,11 @@ version.
   Thinking Path, Linked Issues or Issue Description, What Changed, Verification,
   Risks, Model Used, and the Checklist. Use short, active sentences.
 - Link a public GitHub issue with `Closes #123`, or describe the problem in the PR.
-  No card reference is required.
+  No card reference is required. `docs`, `chore`, `build`, `ci`, `style`, `test` and
+  `revert` PRs need no linked issue.
+- Search first. Look for an open or recent PR that touches the same area, and link
+  what you find. `feat`, `fix`, `perf`, `refactor` and `security` PRs tick the
+  duplicate-search box in the checklist.
 - Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
   followed by digits), private URLs, tokens or secrets in any title, body, commit,
   comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
@@ -48,10 +52,17 @@ GitHub does not enforce an approval count here. Team policy does: an independent
 reviewer, who did not write the change, reviews the exact head SHA that merges, CI
 is green on that SHA, and a new push needs a new review.
 
-`pr-lint` lives in `.github/workflows/pr-gates.yml` and `ci/check-pr-conventions.py`.
-It fails on a title that is not a Conventional Commits header, a title over 100
-characters or ending in a period, and an empty body. Its internal-ID check is a
-warning today; `INTERNAL_ID_LEVEL` in the workflow turns it into an error.
+`pr-lint` lives in `.github/workflows/pr-gates.yml` and runs through
+`ci/pr-lint-output.py check`: first `ci/check-pr-conventions.py` (it fails on a
+title that is not a Conventional Commits header, a title over 100 characters or
+ending in a period, and an empty body; its internal-ID check is a warning
+today, and `INTERNAL_ID_LEVEL` in the workflow turns it into an error), then
+`.github/scripts/pr_standards.py` for pull requests when the workflow sets
+`PR_STANDARDS_MODE`. The upstream body, branch and reference rules start as
+warnings (`PR_STANDARDS_MODE: "warn"`); the flip to `"error"` is a separate
+one-line change once the repo's open PRs are clear. The script is unit-tested
+beside it: `python3 -m unittest discover -s .github/scripts -p
+'test_pr_standards.py'`.
 
 ## Dependency security and static analysis
 
