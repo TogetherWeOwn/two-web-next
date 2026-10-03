@@ -25,7 +25,13 @@ const env: Env = {
 // Every other way a request reaches Postgres or a queue: connection strings,
 // throttle hits, join_attempts (JOIN_DEPS), agent ingress. Unset, but read.
 const PERSISTENCE = [
-  "DB", "DATABASE_URL", "AGENT_DB", "THROTTLE_STORE", "JOIN_DEPS", "QUEUE_DEPTH_STORE", "INTERNAL_ACTION_QUEUE",
+  "DB",
+  "DATABASE_URL",
+  "AGENT_DB",
+  "THROTTLE_STORE",
+  "JOIN_DEPS",
+  "QUEUE_DEPTH_STORE",
+  "INTERNAL_ACTION_QUEUE",
 ];
 
 // No DB bindings or live credentials: even persistence selection is observable.
@@ -37,7 +43,9 @@ function isolated(overrides: Partial<Env> = {}) {
   const selectPersistence = vi.fn(() => undefined);
   // Every 404 page reads upcoming events (src/events/suggestions.ts) through
   // ADMIN_DB; a failing seam keeps that read apart and the suggestions empty.
-  const readSuggestions = vi.fn(async () => { throw new Error("no suggestions in this fixture"); });
+  const readSuggestions = vi.fn(async () => {
+    throw new Error("no suggestions in this fixture");
+  });
   const bindings = Object.defineProperties(
     { ...env, ...overrides },
     {
@@ -47,7 +55,15 @@ function isolated(overrides: Partial<Env> = {}) {
       ...Object.fromEntries(PERSISTENCE.map((key) => [key, { get: selectPersistence }])),
     },
   );
-  return { bindings, store, create, selectSessionStore, selectRosterStore, selectPersistence, readSuggestions };
+  return {
+    bindings,
+    store,
+    create,
+    selectSessionStore,
+    selectRosterStore,
+    selectPersistence,
+    readSuggestions,
+  };
 }
 
 const login = (bindings: Env, identity: string, token = TOKEN) =>
@@ -190,33 +206,42 @@ describe("QA identity admission before session issuance", () => {
 // persistence it touches is the 404 page's own event-suggestion read.
 describe("QA seam accepts POST only", () => {
   const rows = ["GET", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"].flatMap((method) =>
-    ["qa-member", "qa-moderator"].map((identity) => [method, identity] as const));
+    ["qa-member", "qa-moderator"].map((identity) => [method, identity] as const),
+  );
 
   // Same headers for the baseline and the probe: only method and identity differ.
   const send = (bindings: Env, method: string, identity: string) =>
-    app.request(`/auth/qa/${identity}`, {
-      method, headers: { origin: STAGING_APP_URL, [QA_HEADER]: TOKEN, "cf-ray": RAY },
-    }, bindings);
+    app.request(
+      `/auth/qa/${identity}`,
+      {
+        method,
+        headers: { origin: STAGING_APP_URL, [QA_HEADER]: TOKEN, "cf-ray": RAY },
+      },
+      bindings,
+    );
 
-  it.each(rows)("%s /auth/qa/%s is the unknown-identity 404 with no side effects", async (method, identity) => {
-    const unknown = isolated();
-    const baseline = await send(unknown.bindings, "POST", "not-a-qa-identity");
-    // Production serves GET/HEAD misses from static assets before the 404 page.
-    const assets = { fetch: vi.fn(async () => new Response("no such asset", { status: 404 })) };
-    const fixture = isolated({ ASSETS: assets });
-    const response = await send(fixture.bindings, method, identity);
+  it.each(rows)(
+    "%s /auth/qa/%s is the unknown-identity 404 with no side effects",
+    async (method, identity) => {
+      const unknown = isolated();
+      const baseline = await send(unknown.bindings, "POST", "not-a-qa-identity");
+      // Production serves GET/HEAD misses from static assets before the 404 page.
+      const assets = { fetch: vi.fn(async () => new Response("no such asset", { status: 404 })) };
+      const fixture = isolated({ ASSETS: assets });
+      const response = await send(fixture.bindings, method, identity);
 
-    expect(baseline.status).toBe(404);
-    expect(response.status).toBe(404);
-    expect([...response.headers]).toEqual([...baseline.headers]);
-    expect(await response.text()).toBe(method === "HEAD" ? "" : await baseline.text());
-    expect(response.headers.getSetCookie()).toHaveLength(0);
-    expect(assets.fetch).toHaveBeenCalledTimes(method === "GET" || method === "HEAD" ? 1 : 0);
-    expect(fixture.selectSessionStore).not.toHaveBeenCalled();
-    expect(fixture.selectRosterStore).not.toHaveBeenCalled();
-    expect(fixture.selectPersistence).not.toHaveBeenCalled();
-    expect(fixture.create).not.toHaveBeenCalled();
-    expect(fixture.readSuggestions).toHaveBeenCalledTimes(1);
-    expect(unknown.readSuggestions).toHaveBeenCalledTimes(1);
-  });
+      expect(baseline.status).toBe(404);
+      expect(response.status).toBe(404);
+      expect([...response.headers]).toEqual([...baseline.headers]);
+      expect(await response.text()).toBe(method === "HEAD" ? "" : await baseline.text());
+      expect(response.headers.getSetCookie()).toHaveLength(0);
+      expect(assets.fetch).toHaveBeenCalledTimes(method === "GET" || method === "HEAD" ? 1 : 0);
+      expect(fixture.selectSessionStore).not.toHaveBeenCalled();
+      expect(fixture.selectRosterStore).not.toHaveBeenCalled();
+      expect(fixture.selectPersistence).not.toHaveBeenCalled();
+      expect(fixture.create).not.toHaveBeenCalled();
+      expect(fixture.readSuggestions).toHaveBeenCalledTimes(1);
+      expect(unknown.readSuggestions).toHaveBeenCalledTimes(1);
+    },
+  );
 });
