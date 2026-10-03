@@ -28,14 +28,26 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { dispatchWriteBack } from "../src/admin/writeback";
-import { activityLog, events, featuredContents, memberDataAccessLogs } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import {
+  activityLog,
+  events,
+  featuredContents,
+  memberDataAccessLogs,
+} from "../src/db/admin-schema";
+import type { Db } from "../src/db/index";
+import { clearAuditRows } from "./helpers/audit-rows";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
-import { createMemorySessionStore, hashToken, newSessionToken, type SessionStore } from "../src/sessions";
+import {
+  createMemorySessionStore,
+  hashToken,
+  newSessionToken,
+  type SessionStore,
+} from "../src/sessions";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
 
@@ -76,7 +88,7 @@ async function cookieFor(
   return serialized.split(";")[0]!;
 }
 
-const MOD = { userId: "111", username: "mod", moderator: true };
+const MOD = { userId: "100000000000000111", username: "mod", moderator: true };
 const PLEB = { userId: "222", username: "pleb", moderator: false };
 
 describe("admin guard pins (memory store, no DB)", () => {
@@ -91,7 +103,15 @@ describe("admin guard pins (memory store, no DB)", () => {
     const app = adminApp(store);
     const cookie = await cookieFor(store, PLEB);
     const headers = { cookie };
-    for (const path of ["/", "/events", "/events/new", "/events/abc", "/featured", "/featured/new", "/featured/1"]) {
+    for (const path of [
+      "/",
+      "/events",
+      "/events/new",
+      "/events/abc",
+      "/featured",
+      "/featured/new",
+      "/featured/1",
+    ]) {
       const res = await app.request(path, { headers }, env);
       expect(res.status, `GET ${path}`).toBe(403);
     }
@@ -123,12 +143,18 @@ describe("admin guard pins (memory store, no DB)", () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store, MOD);
     // Same-origin is an outer-app concern, not part of panel authorization.
-    const mounted = new Hono<{ Bindings: Env }>().use("*", sameOrigin).route("/admin", adminApp(store));
-    const res = await mounted.request("/admin/events", {
-      method: "POST",
-      headers: { cookie, origin: "https://evil.test" },
-      body: new URLSearchParams({ title: "x" }),
-    }, env);
+    const mounted = new Hono<{ Bindings: Env }>()
+      .use("*", sameOrigin)
+      .route("/admin", adminApp(store));
+    const res = await mounted.request(
+      "/admin/events",
+      {
+        method: "POST",
+        headers: { cookie, origin: "https://evil.test" },
+        body: new URLSearchParams({ title: "x" }),
+      },
+      env,
+    );
     expect(res.status).toBe(403);
   });
 
@@ -152,12 +178,18 @@ describe("admin guard pins (memory store, no DB)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
-  const store = createMemorySessionStore();
-  const modId = `admintest-mod-${Date.now()}`;
+  let fixture: MemberDataFixture;
+  let db: Db;
+  const store = createMemorySessionStore(() => Date.now());
+  const modId = "100000000000000111";
   let cookie = "";
-  // Sessions resolve through the memory store; admin tables through ADMIN_DB.
-  const liveEnv = { ...env, ADMIN_DB: db } as Env;
+  // Sessions resolve through the memory store; admin tables through an isolated schema.
+  const liveEnv = () => ({ ...env, ADMIN_DB: db }) as Env;
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(() => fixture?.dispose());
 
   const form = (fields: Record<string, string>) => ({
     method: "POST" as const,
@@ -166,8 +198,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
   });
 
   beforeEach(async () => {
-    await db.delete(memberDataAccessLogs);
-    await db.delete(activityLog);
+    await clearAuditRows(db, ["member_data_access_logs", "activity_log"]);
     await db.delete(events);
     await db.delete(featuredContents);
     cookie = await cookieFor(store, { userId: modId, username: "mod", moderator: true });
@@ -175,8 +206,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
   });
 
   afterEach(async () => {
-    await db.delete(memberDataAccessLogs);
-    await db.delete(activityLog);
+    vi.useRealTimers();
+    await clearAuditRows(db, ["member_data_access_logs", "activity_log"]);
     await db.delete(events);
     await db.delete(featuredContents);
   });
@@ -197,10 +228,12 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         location: "Voice",
         capacity: "8",
       }),
-      liveEnv,
+      liveEnv(),
     );
     expect(create.status).toBe(303);
-    const key = new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop()!;
+    const key = new URL(create.headers.get("location")!, "https://x.test").pathname
+      .split("/")
+      .pop()!;
 
     const [draft] = await db.select().from(events).where(eq(events.eventKey, key));
     expect(draft?.status).toBe("draft");
@@ -213,25 +246,33 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         ends_at: "2026-11-04 23:00",
         timezone: "Europe/London",
       }),
-      liveEnv,
+      liveEnv(),
     );
     expect(edit.status).toBe(303);
 
     const publish = await app().request(
       `/events/${key}/publish`,
       { method: "POST", headers: { cookie, origin: APP_URL } },
-      liveEnv,
+      liveEnv(),
     );
     expect(publish.status).toBe(303);
-    expect(dispatchWriteBack).toHaveBeenCalledWith(expect.anything(), { eventKey: key, status: "published" });
+    expect(dispatchWriteBack).toHaveBeenCalledWith(
+      expect.anything(),
+      { eventKey: key, status: "published" },
+      undefined,
+    );
 
     const cancel = await app().request(
       `/events/${key}/cancel`,
       { method: "POST", headers: { cookie, origin: APP_URL } },
-      liveEnv,
+      liveEnv(),
     );
     expect(cancel.status).toBe(303);
-    expect(dispatchWriteBack).toHaveBeenCalledWith(expect.anything(), { eventKey: key, status: "cancelled" });
+    expect(dispatchWriteBack).toHaveBeenCalledWith(
+      expect.anything(),
+      { eventKey: key, status: "cancelled" },
+      undefined,
+    );
 
     const [final] = await db.select().from(events).where(eq(events.eventKey, key));
     expect(final?.status).toBe("cancelled");
@@ -245,27 +286,37 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const republish = await app().request(
       `/events/${key}/publish`,
       { method: "POST", headers: { cookie, origin: APP_URL } },
-      liveEnv,
+      liveEnv(),
     );
     expect(republish.status).toBe(422);
   });
 
   it("invalid event input re-renders the form with field errors (422)", async () => {
-    const res = await app().request("/events", form({ title: "", starts_at: "nope", ends_at: "nope" }), liveEnv);
+    const res = await app().request(
+      "/events",
+      form({ title: "", starts_at: "nope", ends_at: "nope" }),
+      liveEnv(),
+    );
     expect(res.status).toBe(422);
     const html = await res.text();
     expect(html).toContain("Give the event a title.");
   });
 
   it("featured CRUD: create → publish toggle → reorder → delete, audited", async () => {
-    const create = await app().request("/featured", form({ title: "Slot one", body: "Hello", position: "2" }), liveEnv);
+    const create = await app().request(
+      "/featured",
+      form({ title: "Slot one", body: "Hello", position: "2" }),
+      liveEnv(),
+    );
     expect(create.status).toBe(303);
-    const id = Number(new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop());
+    const id = Number(
+      new URL(create.headers.get("location")!, "https://x.test").pathname.split("/").pop(),
+    );
 
     const update = await app().request(
       `/featured/${id}`,
       form({ title: "Slot one", body: "Hello", is_published: "on", position: "0" }),
-      liveEnv,
+      liveEnv(),
     );
     expect(update.status).toBe(303);
     const [row] = await db.select().from(featuredContents).where(eq(featuredContents.id, id));
@@ -275,16 +326,21 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const del = await app().request(
       `/featured/${id}/delete`,
       { method: "POST", headers: { cookie, origin: APP_URL } },
-      liveEnv,
+      liveEnv(),
     );
     expect(del.status).toBe(303);
-    expect(await db.select().from(featuredContents).where(eq(featuredContents.id, id))).toHaveLength(0);
+    expect(
+      await db.select().from(featuredContents).where(eq(featuredContents.id, id)),
+    ).toHaveLength(0);
 
     const audits = await db.select().from(activityLog);
     expect(audits).toHaveLength(3);
   });
 
   it("scheduled featured content preserves links, images and UTC dates in list/edit reads", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T20:00:00Z"));
+    cookie = await cookieFor(store, { userId: modId, username: "mod", moderator: true });
     const fields = {
       title: "Scheduled game night",
       body: "Bring your board",
@@ -296,7 +352,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       starts_at: "2026-11-04 09:05",
       ends_at: "2026-11-04 11:15",
     };
-    const create = await app().request("/featured", form(fields), liveEnv);
+    const create = await app().request("/featured", form(fields), liveEnv());
     expect(create.status).toBe(303);
     const id = Number(new URL(create.headers.get("location")!, APP_URL).pathname.split("/").pop());
     expect(create.headers.get("location")).toBe(`/admin/featured/${id}`);
@@ -316,18 +372,23 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const auditsBeforeReads = await db.select().from(activityLog);
     expect(auditsBeforeReads).toHaveLength(1);
 
-    const list = await app().request("/featured", { headers: { cookie } }, liveEnv);
+    const list = await app().request("/featured", { headers: { cookie } }, liveEnv());
     expect(list.status).toBe(200);
     const listHtml = await list.text();
     expect(listHtml).toContain(`href="/admin/featured/${id}">${fields.title}</a>`);
-    expect(listHtml).toContain(`data-testid="featured-published-${id}">yes</td>`);
+    expect(listHtml).toContain(
+      `data-testid="featured-status-${id}"><span class="featured-status featured-status-scheduled" data-status="scheduled">scheduled</span></td>`,
+    );
     expect(listHtml).toContain(`data-testid="featured-position-${id}">2</td>`);
     expect(listHtml).toContain("2026-11-04T09:05:00.000Z");
     expect(listHtml).toContain("2026-11-04T11:15:00.000Z");
 
-    const edit = await app().request(`/featured/${id}`, { headers: { cookie } }, liveEnv);
+    const edit = await app().request(`/featured/${id}`, { headers: { cookie } }, liveEnv());
     expect(edit.status).toBe(200);
     const editHtml = await edit.text();
+    expect(editHtml).toContain('data-status="scheduled">scheduled</span>');
+    expect(editHtml).toContain('data-testid="featured-preview-hidden"');
+    expect(editHtml).not.toContain('data-testid="featured-item"');
     expect(editHtml).toContain(`action="/admin/featured/${id}"`);
     expect(editHtml).toContain(`action="/admin/featured/${id}/delete"`);
     expect(editHtml).toContain(`name="title" type="text" value="${fields.title}"`);
@@ -337,13 +398,15 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(editHtml).toContain(`name="image_alt" type="text" value="${fields.image_alt}"`);
     expect(editHtml).toMatch(/name="is_published"[^>]*checked/);
     expect(editHtml).toContain('name="position" type="text" inputmode="numeric" value="2"');
-    expect(editHtml).toContain(`name="starts_at" type="text" value="${fields.starts_at}"`);
-    expect(editHtml).toContain(`name="ends_at" type="text" value="${fields.ends_at}"`);
+    expect(editHtml).toContain(
+      `name="starts_at" type="text" value="${fields.starts_at}:00.000000"`,
+    );
+    expect(editHtml).toContain(`name="ends_at" type="text" value="${fields.ends_at}:00.000000"`);
     expect(await db.select().from(activityLog)).toEqual(auditsBeforeReads);
     expect(dispatchWriteBack).not.toHaveBeenCalled();
   });
 
-  it("admin reads emit access-log rows; non-moderator reads stay 403", async () => {
+  it("event metadata reads have no member subjects; non-moderator reads stay 403", async () => {
     await app().request(
       "/events",
       form({
@@ -352,23 +415,23 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         ends_at: "2026-11-04 22:00",
         timezone: "Europe/London",
       }),
-      liveEnv,
+      liveEnv(),
     );
 
-    const list = await app().request("/events", { headers: { cookie } }, liveEnv);
+    const list = await app().request("/events", { headers: { cookie } }, liveEnv());
     expect(list.status).toBe(200);
     const logs = await db.select().from(memberDataAccessLogs);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]?.resource).toBe("events");
-    expect(logs[0]?.action).toBe("list");
-    expect(logs[0]?.route).toBe("admin.events.index");
-    expect(logs[0]?.subjectCount).toBe(1);
-    expect(logs[0]?.viewerDiscordId).toBe(modId);
+    // Event metadata is explicitly non-sensitive; event IDs are not member keys.
+    expect(logs).toHaveLength(0);
 
     // The same read as a non-moderator 403s and logs nothing new.
-    const plebCookie = await cookieFor(store, { userId: "pleb-live", username: "pleb", moderator: false });
-    const denied = await app().request("/events", { headers: { cookie: plebCookie } }, liveEnv);
+    const plebCookie = await cookieFor(store, {
+      userId: "pleb-live",
+      username: "pleb",
+      moderator: false,
+    });
+    const denied = await app().request("/events", { headers: { cookie: plebCookie } }, liveEnv());
     expect(denied.status).toBe(403);
-    expect(await db.select().from(memberDataAccessLogs)).toHaveLength(1);
+    expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
   });
 });

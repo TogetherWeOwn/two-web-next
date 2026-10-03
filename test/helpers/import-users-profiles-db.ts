@@ -13,7 +13,13 @@ export async function createUsersProfilesFixture(raw: string) {
   const suffix = randomUUID().replaceAll("-", "");
   const legacySchema = `legacy_up_${suffix}`;
   const nextSchema = `next_up_${suffix}`;
-  const options = { max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
+  const options = {
+    max: 1,
+    port: 5432,
+    connect_timeout: 5,
+    password: () => url.password,
+    onnotice: () => {},
+  };
   const admin = postgres(url.href, options);
   const legacy = postgres(url.href, { ...options, connection: { search_path: legacySchema } });
   const next = postgres(url.href, { ...options, connection: { search_path: nextSchema } });
@@ -24,8 +30,13 @@ export async function createUsersProfilesFixture(raw: string) {
     disposed = true;
     try {
       await Promise.all([legacy.end(), next.end()]);
-      if (created) await admin.unsafe(`DROP SCHEMA "${legacySchema}" CASCADE; DROP SCHEMA "${nextSchema}" CASCADE`);
-    } finally { await admin.end(); }
+      if (created)
+        await admin.unsafe(
+          `DROP SCHEMA "${legacySchema}" CASCADE; DROP SCHEMA "${nextSchema}" CASCADE`,
+        );
+    } finally {
+      await admin.end();
+    }
   };
   try {
     await admin.begin(async (sql) => {
@@ -34,16 +45,25 @@ export async function createUsersProfilesFixture(raw: string) {
     created = true;
     await next.unsafe(usersMigration);
     await next.unsafe(profilesMigration);
+    await legacy.unsafe(fixture);
   } catch (error) {
     await dispose();
     throw error;
   }
   const reset = async () => {
     if (disposed) throw new Error("Import fixture is disposed");
-    await legacy.unsafe("DROP TABLE IF EXISTS profiles; DROP TABLE IF EXISTS users");
-    await legacy.unsafe(fixture);
-    await next`delete from profiles`;
-    await next`delete from users`;
+    // Keep the fixture DDL stable; reset only rows and serial identities between tests.
+    await legacy.begin(async (sql) => {
+      await sql`delete from profiles`;
+      await sql`delete from users`;
+      await sql`select setval(pg_get_serial_sequence('users', 'id'), 1, false),
+        setval(pg_get_serial_sequence('profiles', 'id'), 1, false)`;
+      await sql.unsafe(fixture.slice(fixture.indexOf("INSERT INTO users ")));
+    });
+    await next.begin(async (sql) => {
+      await sql`delete from profiles`;
+      await sql`delete from users`;
+    });
   };
   const scopedUrl = (schema: string) => {
     const scoped = new URL(url.href);

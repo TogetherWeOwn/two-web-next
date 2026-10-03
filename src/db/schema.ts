@@ -1,4 +1,17 @@
-import { bigserial, boolean, index, integer, jsonb, pgTable, smallint, text, timestamp, unique, uuid, varchar } from "drizzle-orm/pg-core";
+import {
+  bigserial,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  smallint,
+  text,
+  timestamp,
+  unique,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 
 // First data slice (W3): Discord users who have signed in. Sessions stay in
 // signed cookies; this table is the durable roster (member = in the TWO guild
@@ -34,7 +47,10 @@ export const joinAttempts = pgTable(
     discordId: text("discord_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("join_attempts_created_at_idx").on(t.createdAt)],
+  (t) => [
+    index("join_attempts_created_at_idx").on(t.createdAt),
+    index("join_attempts_outcome_index").on(t.outcome),
+  ],
 );
 
 export type JoinAttempt = typeof joinAttempts.$inferSelect;
@@ -55,8 +71,8 @@ export const webThrottleHits = pgTable(
 );
 
 // W14: scoped machine ingress for agent-originated events (ports two-web TOG-5510 Gate 2).
-// Tables mirror two-web's agent_event_* migration; `agent_events` is the minimal proof-event
-// table these five operations act on until the events slice lands.
+// Grants, audits and replay keys support the shared events table (admin-schema.ts).
+// The temporary agent_events table was migrated and retired by 1019_shared-agent-events.
 export const agentEventGrants = pgTable(
   "agent_event_grants",
   {
@@ -116,7 +132,10 @@ export const agentEventAudits = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("agent_event_audits_grant_created_idx").on(t.grantId, t.createdAt), index("agent_event_audits_event_key_idx").on(t.eventKey)],
+  (t) => [
+    index("agent_event_audits_grant_created_idx").on(t.grantId, t.createdAt),
+    index("agent_event_audits_event_key_idx").on(t.eventKey),
+  ],
 );
 
 // One row per counted (non-replay) request; the budget is the rows in the last 60 s.
@@ -128,33 +147,6 @@ export const agentEventHits = pgTable(
     at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("agent_event_hits_bucket_at_idx").on(t.bucket, t.at)],
-);
-
-export const agentEvents = pgTable(
-  "agent_events",
-  {
-    eventKey: varchar("event_key", { length: 26 }).primaryKey(),
-    // One proof event per grant, enforced by the database (the quota backstop under concurrency).
-    agentGrantId: uuid("agent_grant_id")
-      .notNull()
-      .unique()
-      .references(() => agentEventGrants.id, { onDelete: "cascade" }),
-    proofMarker: text("proof_marker").notNull().unique(),
-    // Optimistic-concurrency counter, bumped only by agent writes.
-    agentVersion: integer("agent_version").notNull().default(1),
-    status: varchar("status", { length: 16 }).notNull().default("draft"),
-    title: varchar("title", { length: 100 }).notNull(),
-    game: varchar("game", { length: 100 }),
-    description: varchar("description", { length: 1000 }),
-    // Naive local wall times ("YYYY-MM-DD HH:MM") interpreted in `timezone`.
-    startsAt: varchar("starts_at", { length: 16 }).notNull(),
-    endsAt: varchar("ends_at", { length: 16 }).notNull(),
-    timezone: varchar("timezone", { length: 64 }).notNull(),
-    location: varchar("location", { length: 255 }).notNull(),
-    capacity: integer("capacity"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
 );
 
 // W7: member-authored profile (ports two-web `profiles`). Split from `users` on
@@ -178,6 +170,8 @@ export type ProfileRow = typeof profiles.$inferSelect;
 export const jobUniqueLocks = pgTable("job_unique_locks", {
   key: text("key").primaryKey(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  // Null only for pre-fencing leases; expiry replaces them with a new owner.
+  ownerToken: uuid("owner_token"),
 });
 
 // N3 (TOG-9895): the countable queue ledger behind GET /up. Cloudflare Queues holds the
@@ -203,9 +197,11 @@ export const queueJobs = pgTable("queue_jobs", {
 });
 
 // Terminal failures, mirroring legacy `failed_jobs`: reported by /up, never thresholded.
+// One outcome per dispatch jobId, not event key: transport redelivery must not
+// inflate failed depth, while independent dispatches for one event remain visible.
 export const queueFailedJobs = pgTable("queue_failed_jobs", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
-  jobId: uuid("job_id").notNull(),
+  jobId: uuid("job_id").notNull().unique("queue_failed_jobs_job_id_unique"),
   kind: text("kind").notNull(),
   key: text("key"),
   reason: text("reason").notNull(),

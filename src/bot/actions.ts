@@ -29,7 +29,10 @@ const charLen = (s: string): number => [...s].length;
 const blank = (v: string): boolean => v.trim() === "";
 
 export function assertIdempotencyKey(key: string): void {
-  if (!isUuid(key)) throw new InvalidActionRequestError(`An idempotency key is a UUID; got ${JSON.stringify(key)}.`);
+  if (!isUuid(key))
+    throw new InvalidActionRequestError(
+      `An idempotency key is a UUID; got ${JSON.stringify(key)}.`,
+    );
 }
 
 export type RoleAssignment = { discordId: string; roleKey: string };
@@ -96,7 +99,9 @@ const toWholeSeconds = (d: Date): number => Math.floor(d.getTime() / 1000);
 
 export function eventUpsertPayload(e: EventUpsert): ActionPayload {
   if (blank(e.eventKey)) {
-    throw new InvalidActionRequestError("An event.upsert needs an event_key: it is how the bot finds the event to update.");
+    throw new InvalidActionRequestError(
+      "An event.upsert needs an event_key: it is how the bot finds the event to update.",
+    );
   }
   if (blank(e.name)) throw new InvalidActionRequestError("An event.upsert needs a name.");
   if (charLen(e.name) > EVENT_MAX_NAME) {

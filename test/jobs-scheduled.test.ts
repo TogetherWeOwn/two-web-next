@@ -21,19 +21,28 @@ vi.mock(import("../src/jobs/cron"), async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    reconcileEvents: (deps: Parameters<typeof actual.reconcileEvents>[0]) => actual.reconcileEvents({
-      ...deps,
-      events: { ...deps.events, closeFinished: async () => 0, materializeSeries: async () => 0, staleEventKeys: async () => state.keys },
-    }),
+    reconcileEvents: (deps: Parameters<typeof actual.reconcileEvents>[0]) =>
+      actual.reconcileEvents({
+        ...deps,
+        writeTransaction: undefined, // this fixture substitutes the write phase
+        events: {
+          ...deps.events,
+          closeFinished: async () => 0,
+          materializeSeries: async () => 0,
+          staleEventKeys: async () => state.keys,
+          pendingSync: async () => null,
+        },
+      }),
   };
 });
 
 const controller = (cron: string) => ({ cron, scheduledTime: Date.now(), noRetry() {} });
-const envFor = (send: (body: unknown) => Promise<unknown>) => ({
-  DATABASE_URL: process.env.DATABASE_URL!,
-  SYNC_EVENT_QUEUE: { send },
-  INTERNAL_ACTION_QUEUE: { send: async () => {} },
-}) as unknown as JobsEnv;
+const envFor = (send: (body: unknown) => Promise<unknown>) =>
+  ({
+    DATABASE_URL: process.env.DATABASE_URL!,
+    SYNC_EVENT_QUEUE: { send },
+    INTERNAL_ACTION_QUEUE: { send: async () => {} },
+  }) as unknown as JobsEnv;
 
 describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", () => {
   let fixture: JobsFixture | undefined;
@@ -52,8 +61,12 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
     vi.mocked(postgres).mockImplementation(((raw: string, options: postgres.Options<{}>) => {
       const url = testDatabaseUrl(raw);
       return realPostgres(url.href, {
-        ...options, port: 5432, connect_timeout: 5, password: () => url.password,
-        connection: { search_path: schemaName }, onnotice: () => {},
+        ...options,
+        port: 5432,
+        connect_timeout: 5,
+        password: () => url.password,
+        connection: { search_path: schemaName },
+        onnotice: () => {},
       });
     }) as typeof postgres);
   });
@@ -67,15 +80,20 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
     const accepted: QueueMessage[] = [];
     const env = envFor(async (body) => {
       const message = body as QueueMessage;
-      if (message.kind === "sync-event" && message.eventKey === "second") throw new Error("later send failed");
+      if (message.kind === "sync-event" && message.eventKey === "second")
+        throw new Error("later send failed");
       accepted.push(message);
     });
-    await expect(handleScheduled(controller(RECONCILE_CRON), env)).rejects.toThrow("later send failed");
+    await expect(handleScheduled(controller(RECONCILE_CRON), env)).rejects.toThrow(
+      "later send failed",
+    );
     expect(accepted).toHaveLength(1);
     const rows = await sql`select job_id, key from queue_jobs`;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ job_id: accepted[0]!.jobId, key: uniqueKey("first") });
-    expect(await sql`select key from job_unique_locks where key = ${uniqueKey("first")}`).toHaveLength(1);
+    expect(
+      await sql`select key from job_unique_locks where key = ${uniqueKey("first")}`,
+    ).toHaveLength(1);
     // Flight rollback has released the advisory lock; this accepted job stays
     // observable while the failed send's compensated ledger row does not.
     state.keys = [];
@@ -91,11 +109,15 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
       expect(message.jobId).toBeDefined();
       const [row] = await sql`select job_id from queue_jobs where job_id = ${message.jobId!}::uuid`;
       expect(row).toBeDefined();
-      expect(await sql`select key from job_unique_locks where key = ${uniqueKey("first")}`).toHaveLength(1);
+      expect(
+        await sql`select key from job_unique_locks where key = ${uniqueKey("first")}`,
+      ).toHaveLength(1);
       const ledger = pgQueueLedger(sql);
       await ledger.reserved(message.jobId!);
       await ledger.dequeued(message.jobId!);
-      await pgUniqueLock(sql).release(uniqueKey("first"));
+      expect(message.kind).toBe("sync-event");
+      if (message.kind === "sync-event")
+        await pgUniqueLock(sql).release(uniqueKey("first"), message.leaseToken!);
       consumed = true;
     });
     await handleScheduled(controller(RECONCILE_CRON), env);

@@ -1,5 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
+import { memberReadDb } from "../db/member-reads";
+import { declareMemberResult, keyedMemberRead } from "../member-reads";
 import { profiles, users } from "../db/schema";
 import type { ProfileAttrs } from "./validation";
 
@@ -19,23 +21,27 @@ export type ProfileStore = {
   save: (id: string, attrs: ProfileAttrs) => Promise<void>;
 };
 
-export function createDbProfileStore(db: Db): ProfileStore {
+export function createDbProfileStore(connection: Db): ProfileStore {
+  const db = memberReadDb(connection);
   return {
     async find(id) {
-      const rows = await db
-        .select({
-          id: users.id,
-          username: users.username,
-          avatar: users.avatar,
-          bio: profiles.bio,
-          games: profiles.games,
-          timezone: profiles.timezone,
-          joinedAt: users.createdAt,
-        })
-        .from(users)
-        .leftJoin(profiles, eq(profiles.userId, users.id))
-        .where(eq(users.id, id))
-        .limit(1);
+      const rows = await keyedMemberRead(() =>
+        db
+          .select({
+            id: users.id,
+            profileUserId: profiles.userId,
+            username: users.username,
+            avatar: users.avatar,
+            bio: profiles.bio,
+            games: profiles.games,
+            timezone: profiles.timezone,
+            joinedAt: users.createdAt,
+          })
+          .from(users)
+          .leftJoin(profiles, eq(profiles.userId, users.id))
+          .where(eq(users.id, id))
+          .limit(1),
+      );
       const r = rows[0];
       return r ? { ...r, games: r.games ?? [] } : null;
     },
@@ -49,12 +55,16 @@ export function createDbProfileStore(db: Db): ProfileStore {
 }
 
 /** Test double with the same contract. */
-export function createMemoryProfileStore(seed: MemberView[] = []): ProfileStore & { rows: Map<string, MemberView> } {
+export function createMemoryProfileStore(
+  seed: MemberView[] = [],
+): ProfileStore & { rows: Map<string, MemberView> } {
   const rows = new Map(seed.map((m) => [m.id, m]));
   return {
     rows,
     async find(id) {
-      return rows.get(id) ?? null;
+      const member = rows.get(id) ?? null;
+      declareMemberResult(member ? [member.id] : []);
+      return member;
     },
     async save(id, attrs) {
       const m = rows.get(id);

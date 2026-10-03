@@ -1,0 +1,70 @@
+name: staging-smoke
+
+# W16 cutover rehearsal: live-against-staging QA for the bot's internal
+# actions (TOG-10112). Manual only (`workflow_dispatch`) — it posts a REAL
+# announcement to a throwaway channel and creates a REAL staging event, so it
+# never runs on a schedule and never against production.
+#
+# Setup: `staging` secrets BOT_ENDPOINT_URL (staging bot), BOT_SHARED_SECRET;
+# `staging` vars BOT_KEY_ID and BOT_PRODUCTION_URL. The latter is mandatory.
+# Inputs name the throwaway channel, role key and QA user, never shell source.
+# The CLI refuses the production hostname regardless of port; redirects fail.
+# This workflow is NOT permission to bypass the staging isolation/custody hold.
+
+on:
+  workflow_dispatch:
+    inputs:
+      discord_id:
+        description: "QA user snowflake to assign the role to"
+        required: true
+        type: string
+      role_key:
+        description: "A key from the bot role allowlist, not a role ID"
+        required: true
+        type: string
+      channel_key:
+        description: "A THROWAWAY channel key — a real announcement gets posted"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-smoke
+  cancel-in-progress: false
+
+jobs:
+  internal-action-smoke:
+    name: internal-action-smoke
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    container:
+      image: node:24-bookworm
+    timeout-minutes: 10
+    environment:
+      name: staging
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Moderator role-config probe (pre-smoke gate)
+        run: npm run check:worker-moderators
+      - name: Internal-action smoke against the staging bot
+        run: >-
+          npm run smoke:internal-action --
+          --discord-id="$SMOKE_DISCORD_ID"
+          --role-key="$SMOKE_ROLE_KEY"
+          --channel-key="$SMOKE_CHANNEL_KEY"
+        env:
+          SMOKE_DISCORD_ID: ${{ inputs.discord_id }}
+          SMOKE_ROLE_KEY: ${{ inputs.role_key }}
+          SMOKE_CHANNEL_KEY: ${{ inputs.channel_key }}
+          BOT_ENDPOINT_URL: ${{ secrets.BOT_ENDPOINT_URL }}
+          BOT_SHARED_SECRET: ${{ secrets.BOT_SHARED_SECRET }}
+          BOT_KEY_ID: ${{ vars.BOT_KEY_ID }}
+          BOT_PRODUCTION_URL: ${{ vars.BOT_PRODUCTION_URL }}

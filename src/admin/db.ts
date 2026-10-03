@@ -4,6 +4,7 @@
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import type { Db } from "../db/index";
+import { memberReadDb } from "../db/member-reads";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import * as adminSchema from "../db/admin-schema";
 import * as baseSchema from "../db/schema";
@@ -15,10 +16,10 @@ export type EnvWithAdminDb = Env & { ADMIN_DB?: Db };
 // Variables stay assignable (hono's Context is invariant over Variables).
 export async function dbFor(c: { env: Env }): Promise<Db | null> {
   const injected = (c.env as EnvWithAdminDb).ADMIN_DB;
-  if (injected) return injected;
+  if (injected) return memberReadDb(injected);
   const url = databaseUrl(c.env);
   if (!url) return null;
   const { default: postgres } = await import("postgres");
   const client = postgres(url, databaseOptions);
-  return drizzle(client, { schema: { ...baseSchema, ...adminSchema } });
+  return memberReadDb(drizzle(client, { schema: { ...baseSchema, ...adminSchema } }));
 }

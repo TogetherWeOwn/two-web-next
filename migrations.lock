@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "migrations": [
+    {
+      "path": "drizzle/0000_init-users.sql",
+      "sha256": "acbd3f4490ad2bef81ad4f8313ee90026108cca3e53742f49ee28259a5434bac"
+    },
+    {
+      "path": "drizzle/0001_agent-events.sql",
+      "sha256": "1a5cfa32665caf5c31813701b049d0f6aa74f6e3b1ed2c7c63adc6292cf6256e"
+    },
+    {
+      "path": "drizzle/1000_join-attempts-throttle.sql",
+      "sha256": "a090ad581382596b19e3b9c01dc9aaef662c8c6b31bc0e4961aac85d8c0021af"
+    },
+    {
+      "path": "drizzle/1001_admin-slice.sql",
+      "sha256": "6cacb3c1f66528dfe28eb62d603cfe2a2498f85c7cc8064d76f61cbff2ac516f"
+    },
+    {
+      "path": "drizzle/1002_rsvps.sql",
+      "sha256": "07a93195a37e2b77189174556b25dc832f6a3f3ab4ce928f5fc34ed373ebc532"
+    },
+    {
+      "path": "drizzle/1003_profiles.sql",
+      "sha256": "6d7760dec4d848a54d923f0dceb8caf134e2198fc198c9c8d739731a570c8666"
+    },
+    {
+      "path": "drizzle/1004_job-unique-locks.sql",
+      "sha256": "8c63a4161c988bfb7c83abc237f618fe499511b82e54943ba365d1ea510ffeab"
+    },
+    {
+      "path": "drizzle/1005_event-search-logs.sql",
+      "sha256": "2ce86b88a8ef48dcbbd7791d54c7943926e05a79a88b456bde9b0154e545935e"
+    },
+    {
+      "path": "drizzle/1006_rsvp-synced-at.sql",
+      "sha256": "668b1dfffb0111c290a5c70f57162b2e5e7ec407445841cbb39c503fbb7a467e"
+    },
+    {
+      "path": "drizzle/1007_queue-ledger.sql",
+      "sha256": "59c18c89ada69e2500dff18996b98376f4adff99cfddfef233df7f629676fe32"
+    },
+    {
+      "path": "drizzle/1008_agent-event-idempotency-prune-idx.sql",
+      "sha256": "7724544d699737757de17210b521f5428ec38e2a8b9a59db1cb4e7894522a930"
+    },
+    {
+      "path": "drizzle/1009_event-sync-failure.sql",
+      "sha256": "afc7c481c60cb0dc838c5921472114be1a5daecc177a0ff03f92477edd6b1bdb"
+    },
+    {
+      "path": "drizzle/1010_rsvp-legacy-order.sql",
+      "sha256": "ee57e436cbc33ce100dcd7ea77fe9e659b1c62555c76515d1d544a92405fef7b"
+    },
+    {
+      "path": "drizzle/1011_legacy-audit-evidence.sql",
+      "sha256": "42129a578cf810fa1d79e8def327b45fcbde6cb16c28ec3289b592687fcb9fe6"
+    },
+    {
+      "path": "drizzle/1012_content-funnel-import-keys.sql",
+      "sha256": "7613a399374c469ea6ea99222f474c4952ef634b771b1e4b8919bd82b2580333"
+    },
+    {
+      "path": "drizzle/1013_hot-path-indexes.sql",
+      "sha256": "59dce971f700f4632f68281a2736e3095a1447a3c8baf5da14b69135c109ed0f"
+    },
+    {
+      "path": "drizzle/1014_event-ics-sequence.sql",
+      "sha256": "f2eb79671d76facb7eca4265e4ec6cf18fe4748bfe335a55cf5eda937095afd2"
+    },
+    {
+      "path": "drizzle/1016_job-lock-ownership.sql",
+      "sha256": "49f191d69fc38303b59fa6d649f741d426a9c0457bf950771a2f2512a4792b58"
+    },
+    {
+      "path": "drizzle/1017_queue_failed_job_identity.sql",
+      "sha256": "0d9ff9974410a51c700904c24b2e1e5cb178287048a5053b2e70541abf4ac6b5"
+    },
+    {
+      "path": "drizzle/1018_audit-immutability.sql",
+      "sha256": "7dc14b470a68bc3a8a308af47f7216fdde32badf8bf5c23e3ccce2428f12e627"
+    },
+    {
+      "path": "drizzle/1019_shared-agent-events.sql",
+      "sha256": "c9b0f5a4006fcb646cf6a1d15a2d3c3d3bf618861d2eea4becf98e89d95ef773"
+    },
+    {
+      "path": "drizzle/1020_event-sync-revisions.sql",
+      "sha256": "33ad25cddd846eae9ba35c1265fc1584fcfa4c8ad3334e03ecfba556824be8f8"
+    }
+  ]
+}

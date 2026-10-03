@@ -12,8 +12,11 @@ def admit(prefix, keys):
            for part in prefix.split("/")):
         raise ValueError("invalid branch prefix")
     timestamp = r"([0-9]{8}T[0-9]{6}Z)"
+    # Archives are `<prefix>-<UTC>.dump` (daily) or
+    # `<prefix>-<UTC>-weekly-<UTC>.dump`; each may carry a `.digest.json`
+    # receipt sidecar line (docs/backup-integrity.md).
     pattern = re.compile(re.escape(prefix) + "-" + timestamp
-                         + r"(?:-weekly-" + timestamp + r")?\.dump")
+                         + r"(?:-weekly-" + timestamp + r")?\.dump(?:\.digest\.json)?")
     seen = set()
     for key in keys:
         match = pattern.fullmatch(key)
@@ -51,7 +54,7 @@ def main():
         keys.pop()
     admit(prefix, keys)
     if action == "append":
-        keys.append(sys.argv[4])
+        keys.extend(sys.argv[4:])
         admit(prefix, keys)
         manifest.write_text("\n".join(keys) + "\n", encoding="utf-8")
     elif action != "validate":

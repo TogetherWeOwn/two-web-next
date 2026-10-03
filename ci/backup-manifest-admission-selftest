@@ -14,6 +14,7 @@ DAILY = PREFIX + "-20260930T000000Z.dump"
 NEW = PREFIX + "-20261001T123456Z.dump"
 WEEKLY = PREFIX + "-20260930T000000Z-weekly-20261001T123456Z.dump"
 FOREIGN = "neon/main-main-20260901T000000Z.dump"
+RECEIPT_SUFFIX = ".digest.json"
 MANIFEST = PREFIX + "/MANIFEST.txt"
 
 FAKE_R2 = r'''#!/usr/bin/env python3
@@ -62,8 +63,7 @@ else:
 '''
 FAKE_DUMP = r'''#!/usr/bin/env python3
 import pathlib, sys
-assert sys.argv[1:3] == ["-Fc", "-f"]
-pathlib.Path(sys.argv[3]).write_bytes(b"SYNTHETIC-DUMP\n")
+pathlib.Path(sys.argv[sys.argv.index("-f") + 1]).write_bytes(b"SYNTHETIC-DUMP\n")
 '''
 FAKE_DATE = '''#!/usr/bin/env python3
 import sys
@@ -100,15 +100,22 @@ class ManifestAdmission(unittest.TestCase):
             "FAKE_LOG": str(self.log),
         }
 
-    def seed(self, keys):
+    def seed(self, keys, receipts=()):
         for key in keys:
             if key:
                 dest = self.store / key
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(b"SYNTHETIC-ARCHIVE\n")
+        # Receipts are real digest sidecars (docs/backup-integrity.md), written
+        # by the repo's own helper over the synthetic archive bytes.
+        for key in receipts:
+            receipt = self.store / (key + RECEIPT_SUFFIX)
+            subprocess.run([str(ROOT / "bin/backup/integrity-helper"), "write",
+                            str(self.store / key), key, str(receipt)],
+                           check=True, capture_output=True)
         manifest = self.store / MANIFEST
         manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text("".join(key + "\n" for key in keys))
+        manifest.write_text("".join(key + "\n" for key in [*keys, *(k + RECEIPT_SUFFIX for k in receipts)]))
 
     def run_backup(self, command, *args, branch="staging"):
         return subprocess.run(["bash", str(ROOT / "bin/neon-backup.sh"), command, branch, *args],
@@ -146,7 +153,7 @@ class ManifestAdmission(unittest.TestCase):
             self.refuse_without_mutation(command)
         result = self.run_backup("backup")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.store / MANIFEST).read_text(), NEW + "\n")
+        self.assertEqual((self.store / MANIFEST).read_text(), NEW + "\n" + NEW + RECEIPT_SUFFIX + "\n")
         self.assertEqual((self.store / NEW).read_bytes(), b"SYNTHETIC-DUMP\n")
 
     def test_failed_read_with_notfound_diagnostic_discards_partial_file(self):
@@ -157,14 +164,15 @@ class ManifestAdmission(unittest.TestCase):
                                        'and not dest.is_file() and os.environ.get("FAKE_FAILURE"):'))
         result = self.run_backup("backup")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.store / MANIFEST).read_text(), NEW + "\n")
+        self.assertEqual((self.store / MANIFEST).read_text(), NEW + "\n" + NEW + RECEIPT_SUFFIX + "\n")
 
     def test_valid_append_preserves_daily_and_weekly(self):
         old_weekly = PREFIX + "-20260901T000000Z-weekly-20260907T000000Z.dump"
         self.seed([old_weekly, DAILY])
         result = self.run_backup("backup")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.store / MANIFEST).read_text().splitlines(), sorted([old_weekly, DAILY, NEW]))
+        self.assertEqual((self.store / MANIFEST).read_text().splitlines(),
+                         sorted([old_weekly, DAILY, NEW, NEW + RECEIPT_SUFFIX]))
 
     def test_empty_manifest_is_valid(self):
         self.seed([])
@@ -174,14 +182,18 @@ class ManifestAdmission(unittest.TestCase):
         self.seed([DAILY])
         (self.store / MANIFEST).write_text(DAILY)
         self.assertEqual(self.run_backup("backup").returncode, 0)
-        self.assertEqual((self.store / MANIFEST).read_text().splitlines(), [DAILY, NEW])
+        self.assertEqual((self.store / MANIFEST).read_text().splitlines(), [DAILY, NEW, NEW + RECEIPT_SUFFIX])
 
     def test_invalid_entries_reject_entire_inventory(self):
         bad_keys = [FOREIGN, DAILY, "arbitrary.dump", PREFIX + "-20260230T000000Z.dump",
                     PREFIX + "-20260930T250000Z.dump", DAILY + "-weekly-20261001T000000Z.dump",
                     PREFIX + "-20260930T000000Z-weekly-invalid.dump",
                     PREFIX + "-20260930T000000Z.dump ", DAILY + "\r", DAILY + "\v" + NEW,
-                    "", "../main.dump"]
+                    "", "../main.dump",
+                    # Receipt sidecars are admitted only for a valid branch archive.
+                    FOREIGN + RECEIPT_SUFFIX, PREFIX + "-20260930T000000Z" + RECEIPT_SUFFIX,
+                    DAILY + RECEIPT_SUFFIX + ".bak", DAILY + RECEIPT_SUFFIX + RECEIPT_SUFFIX,
+                    DAILY + RECEIPT_SUFFIX + "\r"]
         for key in bad_keys:
             for command in ("backup", "promote-weekly", "rotate", "check"):
                 with self.subTest(key=key, command=command):
@@ -214,11 +226,25 @@ class ManifestAdmission(unittest.TestCase):
             self.refuse_without_mutation(command)
 
     def test_valid_promotion_uses_actual_key_pattern(self):
-        self.seed([DAILY])
+        self.seed([DAILY], receipts=[DAILY])
         result = self.run_backup("promote-weekly")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.store / WEEKLY).read_bytes(), (self.store / DAILY).read_bytes())
-        self.assertEqual((self.store / MANIFEST).read_text().splitlines(), sorted([DAILY, WEEKLY]))
+        self.assertEqual((self.store / MANIFEST).read_text().splitlines(),
+                         sorted([DAILY, DAILY + RECEIPT_SUFFIX, WEEKLY, WEEKLY + RECEIPT_SUFFIX]))
+
+    def test_duplicate_receipt_is_rejected(self):
+        self.seed([DAILY], receipts=[DAILY])
+        with (self.store / MANIFEST).open("a") as manifest:
+            manifest.write(DAILY + RECEIPT_SUFFIX + "\n")
+        for command in ("backup", "promote-weekly", "rotate", "check"):
+            with self.subTest(command=command):
+                self.refuse_without_mutation(command)
+
+    def test_foreign_receipt_is_rejected_before_rotation(self):
+        self.seed([DAILY])
+        (self.store / MANIFEST).write_text(DAILY + "\n" + FOREIGN + RECEIPT_SUFFIX + "\n")
+        self.refuse_without_mutation("rotate")
 
     def test_retention_and_dry_run(self):
         dailies = [PREFIX + f"-202609{day:02}T000000Z.dump" for day in range(1, 10)]
@@ -241,7 +267,8 @@ class ManifestAdmission(unittest.TestCase):
         result = self.run_backup("backup", branch="main")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.store / "custom/prefix/main-main/MANIFEST.txt").read_text(),
-                         "custom/prefix/main-main-20261001T123456Z.dump\n")
+                         "custom/prefix/main-main-20261001T123456Z.dump\n"
+                         "custom/prefix/main-main-20261001T123456Z.dump" + RECEIPT_SUFFIX + "\n")
 
     def test_check_reads_unterminated_last_key(self):
         self.seed([DAILY])

@@ -16,10 +16,12 @@ export type SitemapUrl = {
 
 // The event fields the sitemap needs. W8 fills these from the published-events
 // query (same scope as the legacy sitemap: status = published, ordered by
-// starts_at); the status filter below is the contract, not the query.
+// starts_at); the status filter below is the contract, not the query. The
+// union mirrors every events.status value so an archived "past" row is
+// rejected here too, not only by the query.
 export type SitemapEventCandidate = {
   key: string;
-  status: "published" | "draft" | "cancelled";
+  status: "published" | "draft" | "cancelled" | "past";
   updatedAt: string | null;
 };
 
@@ -28,8 +30,8 @@ export type SitemapEvent = {
   updatedAt: string | null;
 };
 
-// Only published events are crawlable. Drafts (403 for guests) and cancelled
-// (410 Gone) events must never appear in the index.
+// Only published events are crawlable. Drafts (403 for guests), cancelled
+// (410 Gone) and archived past-status events must never appear in the index.
 export function crawlableEvents(candidates: SitemapEventCandidate[]): SitemapEvent[] {
   return candidates
     .filter((e) => e.status === "published")
@@ -45,14 +47,15 @@ export const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
 export const canonicalUrl = (appUrl: string, path: string): string =>
   `${stripTrailingSlash(appUrl)}${path}`;
 
-// Static entries for the routes live in W4. /join, /events and friends join
-// the index in their own slices (see docs/url-freeze.md) — a sitemap must
-// never list a URL that 404s.
+// Static entries for the routes live today (parity matrix §1: home 1.0, join
+// 0.9, events.index 0.8 daily, leaves 0.7, published /e/{key} 0.6). A sitemap
+// must never list a URL that 404s, and /events/past stays out (TOG-7072).
 export function buildSitemapUrls(appUrl: string, events: SitemapEvent[]): SitemapUrl[] {
   const base = stripTrailingSlash(appUrl);
   const urls: SitemapUrl[] = [
     { loc: `${base}/`, changefreq: "weekly", priority: "1.0" },
     { loc: `${base}/join`, changefreq: "monthly", priority: "0.9" },
+    { loc: `${base}/events`, changefreq: "daily", priority: "0.8" },
     { loc: `${base}/about`, changefreq: "monthly", priority: "0.7" },
     { loc: `${base}/faq`, changefreq: "monthly", priority: "0.7" },
     { loc: `${base}/rules`, changefreq: "monthly", priority: "0.7" },
