@@ -49,12 +49,15 @@ describe("funnel leaves (DB-free floor)", () => {
     expect(res.headers.get("location")).toBe(FALLBACK_INVITE);
   });
 
-  it.each(["/about", "/faq", "/rules"])("%s is a 200 dependency-free leaf with no cookies", async (path) => {
-    const res = await app.request(path, {}, env);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/html");
-    expect(res.headers.getSetCookie()).toHaveLength(0);
-  });
+  it.each(["/about", "/faq", "/rules"])(
+    "%s is a 200 dependency-free leaf with no cookies",
+    async (path) => {
+      const res = await app.request(path, {}, env);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/html");
+      expect(res.headers.getSetCookie()).toHaveLength(0);
+    },
+  );
 
   it("/about carries the facts and a join link", async () => {
     const html = await (await app.request("/about", {}, env)).text();
@@ -176,10 +179,11 @@ describe("share meta parity (TOG-5624)", () => {
     expect(html).not.toContain("og:image");
   });
 
-  it("leaves without a canonical get no share tags, but keep feed autodiscovery", async () => {
+  it("the about leaf carries its self-canonical and keeps feed autodiscovery", async () => {
     const html = await (await app.request("/about", {}, env)).text();
-    expect(html).not.toContain("og:");
-    expect(html).not.toContain("twitter:");
+    expect(html).toContain('<link rel="canonical" href="https://next.example.test/about"');
+    expect(html).toContain('<meta property="og:url" content="https://next.example.test/about"');
+    expect(html).toContain('<meta name="twitter:card" content="summary"');
     expect(html).toContain('type="application/rss+xml"');
     expect(html).toContain('href="/events.rss"');
   });
@@ -191,13 +195,19 @@ describe("share meta parity (TOG-5624)", () => {
 });
 
 describe("URL freeze (W4 slice)", () => {
-  it.each(["/", "/join", "/about", "/faq", "/rules", "/privacy", "/sitemap_index.xml", "/robots.txt"])(
-    "%s answers",
-    async (path) => {
-      const res = await app.request(path, {}, env);
-      expect(res.status).toBe(200);
-    },
-  );
+  it.each([
+    "/",
+    "/join",
+    "/about",
+    "/faq",
+    "/rules",
+    "/privacy",
+    "/sitemap_index.xml",
+    "/robots.txt",
+  ])("%s answers", async (path) => {
+    const res = await app.request(path, {}, env);
+    expect(res.status).toBe(200);
+  });
 
   it("/discord redirects", async () => {
     expect((await app.request("/discord", {}, env)).status).toBe(302);

@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { API } from "typescript/unstable/sync";
 import { SyntaxKind } from "typescript/unstable/ast";
+import { readWranglerConfig } from "./wrangler-config.mjs";
+
+export { readWranglerConfig } from "./wrangler-config.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const start = "<!-- config-docs:start -->";
@@ -25,8 +28,9 @@ export function readEnvKeys(envFile, configFile) {
       }
       const keys = new Set();
       for (const name of ["Env", "JobsEnv"]) {
-        const alias = source.statements.find((node) =>
-          node.kind === SyntaxKind.TypeAliasDeclaration && node.name.text === name);
+        const alias = source.statements.find(
+          (node) => node.kind === SyntaxKind.TypeAliasDeclaration && node.name.text === name,
+        );
         if (!alias) throw new Error(`Missing ${name} type alias`);
         const type = project.checker.getTypeAtLocation(alias);
         const properties = type && project.checker.getPropertiesOfType(type);
@@ -42,16 +46,6 @@ export function readEnvKeys(envFile, configFile) {
   }
 }
 
-export function readWranglerConfig(text) {
-  // Keep quoted strings intact (including URLs and commas) while removing JSONC
-  // comments and trailing commas. JSON.parse still rejects malformed input.
-  const stringsOrComments = /"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
-  const stringsOrTrailingCommas = /"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g;
-  const json = text.replace(stringsOrComments, (match) => match.startsWith('"') ? match : " ")
-    .replace(stringsOrTrailingCommas, (match) => match === "," ? "" : match);
-  return JSON.parse(json);
-}
-
 export function readWranglerKeys(text) {
   const config = readWranglerConfig(text);
   const keys = new Set();
@@ -59,13 +53,37 @@ export function readWranglerKeys(text) {
   // Durable Objects/email/rate limits use `name`, unlike most bindings:
   // https://developers.cloudflare.com/workers/wrangler/configuration/#bindings
   const arrayBindings = [
-    "kv_namespaces", "r2_buckets", "d1_databases", "vectorize", "hyperdrive",
-    "services", "analytics_engine_datasets", "mtls_certificates",
-    "dispatch_namespaces", "pipelines", "secrets_store_secrets", "workflows",
-    "ai_search_namespaces", "ai_search", "agent_memory", "artifacts",
-    "unsafe_hello_world", "flagship", "worker_loaders", "vpc_services", "vpc_networks",
+    "kv_namespaces",
+    "r2_buckets",
+    "d1_databases",
+    "vectorize",
+    "hyperdrive",
+    "services",
+    "analytics_engine_datasets",
+    "mtls_certificates",
+    "dispatch_namespaces",
+    "pipelines",
+    "secrets_store_secrets",
+    "workflows",
+    "ai_search_namespaces",
+    "ai_search",
+    "agent_memory",
+    "artifacts",
+    "unsafe_hello_world",
+    "flagship",
+    "worker_loaders",
+    "vpc_services",
+    "vpc_networks",
   ];
-  const singleBindings = ["assets", "browser", "ai", "images", "media", "stream", "version_metadata"];
+  const singleBindings = [
+    "assets",
+    "browser",
+    "ai",
+    "images",
+    "media",
+    "stream",
+    "version_metadata",
+  ];
   function add(entries, field) {
     for (const entry of entries ?? []) {
       if (typeof entry?.[field] === "string") keys.add(entry[field]);
@@ -102,7 +120,11 @@ export function readDocKeys(text) {
   const keys = new Set();
   for (const line of block.split(/\r?\n/)) {
     if (!line.trim().startsWith("|")) continue;
-    const cells = line.trim().split("|").slice(1, -1).map((cell) => cell.trim());
+    const cells = line
+      .trim()
+      .split("|")
+      .slice(1, -1)
+      .map((cell) => cell.trim());
     if (cells[0] === "Name" || /^:?-+:?$/.test(cells[0])) continue;
     if (cells.length !== 5 || cells.some((cell) => !cell)) {
       throw new Error("Config rows need name, kind, environments, default and failure behaviour");
@@ -133,8 +155,11 @@ export function checkKeys(env, wrangler, docs) {
 
 export function checkConfigDocs() {
   const env = readEnvKeys(resolve(root, "src/env.ts"), resolve(root, "tsconfig.json"));
-  const wrangler = new Set(["wrangler.jsonc", "wrangler.local.jsonc"].flatMap((file) =>
-    [...readWranglerKeys(readFileSync(resolve(root, file), "utf8"))]));
+  const wrangler = new Set(
+    ["wrangler.jsonc", "wrangler.local.jsonc"].flatMap((file) => [
+      ...readWranglerKeys(readFileSync(resolve(root, file), "utf8")),
+    ]),
+  );
   const docs = readDocKeys(readFileSync(resolve(root, "docs/config.md"), "utf8"));
   const errors = checkKeys(env, wrangler, docs);
   if (errors.length) throw new Error(errors.join("\n"));

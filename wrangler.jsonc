@@ -6,7 +6,12 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
+  "tail_consumers": [{ "service": "two-web-next-alerts" }],
   "workers_dev": false,
+  // Preserve unrelated dashboard vars; source vars below override same-name vars.
+  // Remote secrets are retained by Wrangler (never copied into source).
+  "keep_vars": true,
   // Staging host. The Discord application must list ${APP_URL}/auth/discord/callback as a redirect URI.
   "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],
   // W13: Laravel queue + scheduler parity (TOG-9692). Cron expressions are pinned to
@@ -19,15 +24,20 @@
     ],
     // Terminal outcomes are acked by the consumer; max_retries is only a backstop above the largest `tries`.
     "consumers": [
-      { "queue": "two-sync-event", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 },
-      { "queue": "two-internal-action", "max_retries": 10, "max_batch_size": 10, "max_batch_timeout": 5 }
+      {
+        "queue": "two-sync-event",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      },
+      {
+        "queue": "two-internal-action",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      }
     ]
   },
-  // W8 write-back carrier. Still NOT bound: a producer binding to a queue that does not exist fails
-  // `wrangler deploy`, and the W8 SyncMessage shape differs from W13's QueueMessage above. After the
-  // operator runs `wrangler queues create two-web-next-event-sync`, append
-  //   { "binding": "EVENT_SYNC_QUEUE", "queue": "two-web-next-event-sync" }
-  // to producers. Until then src/events/sync.ts logs each due write-back (never silent, never throws).
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
@@ -42,7 +52,58 @@
     "FEATURED_IMAGE_HOSTS": "",
     "DISCORD_CLIENT_ID": "1539711683898118154",
     "DISCORD_GUILD_ID": "326474832151838730",
+    // Approved SySOp only. Preflight checks this exact public deployment value.
+    "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
     // WEB-HOMEPAGE campaign invite (never expires, unlimited); the fallback when auto-join fails.
     "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
+  },
+  "env": {
+    "production": {
+      "name": "two-web-next-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      // Cutover target only, NOT a DNS change or authorization to claim the apex.
+      "routes": [{ "pattern": "togetherweown.com", "custom_domain": true }],
+      "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
+      // Provision these separate queues at cutover; never reuse staging queues.
+      "queues": {
+        "producers": [
+          { "queue": "two-web-next-production-sync-event", "binding": "SYNC_EVENT_QUEUE" },
+          { "queue": "two-web-next-production-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
+        ],
+        "consumers": [
+          {
+            "queue": "two-web-next-production-sync-event",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "two-web-next-production-internal-action",
+            "max_retries": 10,
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
+        ]
+      },
+      // PLACEHOLDER: replace with the separately provisioned production Hyperdrive
+      // id in a reviewed cutover PR. The manual workflow refuses this sentinel.
+      "hyperdrive": [{ "binding": "DB", "id": "00000000000000000000000000000000" }],
+      // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
+      // env.production.vars must repeat every var the worker reads: Wrangler
+      // never inherits top-level vars into a named environment. The moderator
+      // list is the same approved SySOp role as staging (TOG-106); without it
+      // production boots with no moderators and admin authorization fails
+      // closed for everyone.
+      "vars": {
+        "APP_URL": "https://togetherweown.com",
+        "FEATURED_IMAGE_HOSTS": "",
+        "DISCORD_CLIENT_ID": "1539711683898118154",
+        "DISCORD_GUILD_ID": "326474832151838730",
+        // Approved SySOp only. Production preflight checks this exact value.
+        "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+        "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
+      }
+    }
   }
 }

@@ -11,6 +11,11 @@
 // The cookie carries a random token (`two_` + 32 bytes, base64url); the DB
 // stores only its SHA-256 hex. Nothing session-shaped lives in KV.
 
+/** Session lifetime: 120-minute sliding window (legacy parity, `docs/parity.md`).
+ * Login and every authenticated-page rotation re-stamp the DB expiry and the
+ * cookie Max-Age; the session-status probe cookie follows the same value. */
+export const SESSION_TTL_SECONDS = 60 * 120;
+
 export type DbSessionRow = {
   userId: string;
   username: string;
@@ -22,12 +27,19 @@ export type DbSessionRow = {
 export type SessionStore = {
   create: (session: DbSessionRow & { tokenHash: string; expiresAt: Date }) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
-  /** Rotation: delete the old row and insert the replacement atomically. */
+  /** Non-authenticating probe key, stable across rotation of a live session. */
+  statusHash: (tokenHash: string) => Promise<string | null>;
+  isActive: (statusHash: string) => Promise<boolean>;
+  /** Rotation: atomically replace an unrevoked, unexpired source; otherwise return false. */
   rotate: (
     oldTokenHash: string,
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<boolean>;
   revoke: (tokenHash: string) => Promise<void>;
+  /** Fresh login (TOG-12284): revoke every live session for this user except
+   * the freshly issued token, so a pre-login/pre-join token — and any older
+   * concurrent login — cannot survive sign-in. Hash-only, like revoke. */
+  revokeUserSessions: (userId: string, exceptTokenHash: string) => Promise<void>;
   /** Expiry GC (W13 model:prune): delete rows reads can no longer see. Returns rows removed. */
   sweepExpired: (now: Date) => Promise<number>;
 };
@@ -55,6 +67,10 @@ const MIGRATION = [
     expires_at timestamptz not null,
     revoked_at timestamptz
   )`,
+  // Additive rollout: existing login cookies acquire a probe on their next page.
+  `alter table web_sessions add column if not exists status_hash text`,
+  `update web_sessions set status_hash = token_hash where status_hash is null`,
+  `create index if not exists web_sessions_status_hash_idx on web_sessions (status_hash)`,
   `create index if not exists web_sessions_user_id_idx on web_sessions (user_id)`,
   `create index if not exists web_sessions_expires_at_idx on web_sessions (expires_at)`,
 ];
@@ -77,36 +93,66 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
   return {
     async create(s) {
       await sql`
-        insert into web_sessions (token_hash, user_id, username, avatar, member, moderator, expires_at)
-        values (${s.tokenHash}, ${s.userId}, ${s.username}, ${s.avatar}, ${s.member}, ${s.moderator}, ${s.expiresAt})
+        insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
+        values (${s.tokenHash}, ${s.tokenHash}, ${s.userId}, ${s.username}, ${s.avatar}, ${s.member}, ${s.moderator}, ${s.expiresAt})
         on conflict (token_hash) do update set
+          status_hash = excluded.status_hash,
           user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
           member = excluded.member, moderator = excluded.moderator,
           expires_at = excluded.expires_at, revoked_at = null`;
     },
     async get(tokenHash) {
-      const rows = await sql<Record<string, unknown>[]>`select user_id, username, avatar, member, moderator
+      const rows = await sql<
+        Record<string, unknown>[]
+      >`select user_id, username, avatar, member, moderator
         from web_sessions
         where token_hash = ${tokenHash} and revoked_at is null and expires_at > now()`;
       const row = rows[0];
       return row ? toRow(row) : null;
     },
+    async statusHash(tokenHash) {
+      const rows = await sql<
+        { status_hash: string }[]
+      >`select coalesce(status_hash, token_hash) as status_hash
+        from web_sessions where token_hash = ${tokenHash}
+          and revoked_at is null and expires_at > clock_timestamp()`;
+      return rows[0]?.status_hash ?? null;
+    },
+    async isActive(statusHash) {
+      const rows = await sql<{ active: boolean }[]>`select exists (
+        select 1 from web_sessions where coalesce(status_hash, token_hash) = ${statusHash}
+          and revoked_at is null and expires_at > clock_timestamp()
+      ) as active`;
+      return rows[0]?.active === true;
+    },
     async rotate(oldTokenHash, replacement) {
-      // No-op rotation deletes nothing and inserts nothing: rotating an unknown
-      // or already-rotated token must not mint an orphan row.
+      // Lock before checking eligibility, including no-op rotation. Materializing
+      // the locked row keeps the wall-clock check after any lock wait; now() is
+      // pinned to transaction start and could renew an expired session.
       if (oldTokenHash === replacement.tokenHash) {
-        const rows = await sql<Record<string, unknown>[]>`select count(*)::int as n
-          from web_sessions where token_hash = ${oldTokenHash}`;
+        const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
+            select token_hash, revoked_at, expires_at from web_sessions
+            where token_hash = ${oldTokenHash} for update
+          )
+          select count(*)::int as n from locked
+          where revoked_at is null and expires_at > clock_timestamp()`;
         return Number(rows[0]?.n ?? 0) > 0;
       }
-      const rows = await sql<Record<string, unknown>[]>`with deleted as (
-          delete from web_sessions where token_hash = ${oldTokenHash} returning 1
+      const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
+          select token_hash, revoked_at, expires_at from web_sessions
+          where token_hash = ${oldTokenHash} for update
+        ), deleted as (
+          delete from web_sessions using locked
+          where web_sessions.token_hash = locked.token_hash
+            and locked.revoked_at is null and locked.expires_at > clock_timestamp()
+          returning coalesce(web_sessions.status_hash, web_sessions.token_hash) as status_hash
         )
-        insert into web_sessions (token_hash, user_id, username, avatar, member, moderator, expires_at)
-        select ${replacement.tokenHash}, ${replacement.userId}, ${replacement.username},
+        insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
+        select ${replacement.tokenHash}, deleted.status_hash, ${replacement.userId}, ${replacement.username},
           ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt}
-        where exists (select 1 from deleted)
+        from deleted
         on conflict (token_hash) do update set
+          status_hash = excluded.status_hash,
           user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
           member = excluded.member, moderator = excluded.moderator,
           expires_at = excluded.expires_at, revoked_at = null
@@ -116,6 +162,10 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
     async revoke(tokenHash) {
       await sql`update web_sessions set revoked_at = now()
         where token_hash = ${tokenHash} and revoked_at is null`;
+    },
+    async revokeUserSessions(userId, exceptTokenHash) {
+      await sql`update web_sessions set revoked_at = now()
+        where user_id = ${userId} and token_hash != ${exceptTokenHash} and revoked_at is null`;
     },
     async sweepExpired(now) {
       // `<=`: reads require expires_at > now(), so a row expiring exactly at
@@ -129,7 +179,7 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
 
 /** Test/memory helper. Same contract, no I/O. */
 export function createMemorySessionStore(clock: () => number = Date.now): SessionStore {
-  const rows = new Map<string, DbSessionRow & { expiresAt: number }>();
+  const rows = new Map<string, DbSessionRow & { expiresAt: number; statusHash: string }>();
   const live = (hash: string) => {
     const r = rows.get(hash);
     if (!r || r.expiresAt <= clock()) {
@@ -140,20 +190,48 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
   };
   return {
     async create(s) {
-      rows.set(s.tokenHash, { ...s, expiresAt: s.expiresAt.getTime() });
+      rows.set(s.tokenHash, { ...s, expiresAt: s.expiresAt.getTime(), statusHash: s.tokenHash });
     },
     async get(hash) {
       const r = live(hash);
-      return r ? { userId: r.userId, username: r.username, avatar: r.avatar, member: r.member, moderator: r.moderator } : null;
+      return r
+        ? {
+            userId: r.userId,
+            username: r.username,
+            avatar: r.avatar,
+            member: r.member,
+            moderator: r.moderator,
+          }
+        : null;
+    },
+    async statusHash(hash) {
+      return live(hash)?.statusHash ?? null;
+    },
+    async isActive(statusHash) {
+      for (const hash of rows.keys()) {
+        if (live(hash)?.statusHash === statusHash) return true;
+      }
+      return false;
     },
     async rotate(oldHash, replacement) {
-      if (!live(oldHash)) return false;
+      const source = live(oldHash);
+      if (!source) return false;
+      if (oldHash === replacement.tokenHash) return true;
       rows.delete(oldHash);
-      rows.set(replacement.tokenHash, { ...replacement, expiresAt: replacement.expiresAt.getTime() });
+      rows.set(replacement.tokenHash, {
+        ...replacement,
+        expiresAt: replacement.expiresAt.getTime(),
+        statusHash: source.statusHash,
+      });
       return true;
     },
     async revoke(hash) {
       rows.delete(hash);
+    },
+    async revokeUserSessions(userId, exceptTokenHash) {
+      for (const [hash, r] of rows) {
+        if (hash !== exceptTokenHash && r.userId === userId) rows.delete(hash);
+      }
     },
     async sweepExpired(now) {
       const t = now.getTime();

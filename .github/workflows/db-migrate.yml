@@ -1,0 +1,74 @@
+name: db-migrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Approved Neon target (web migrations only)
+        type: choice
+        options: [staging, production]
+        default: staging
+        required: true
+  # Opt-in only: deploy.yml does NOT call this workflow by default.
+  # Environment secrets are loaded here, not passed/inherited from a caller.
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        default: staging
+        required: false
+
+permissions:
+  contents: read
+
+# Never cancel an in-flight schema change. Bot operations must be coordinated
+# separately; the script also serializes web applies at the database level.
+concurrency:
+  group: neon-web-migrate-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    # Required reviewers, prevent-self-review and main-only branch policy must
+    # be configured in Settings > Environments before enabling this workflow.
+    environment: ${{ inputs.target }}
+    steps:
+      - name: Ref and production enable gate (before dependency install or DB access)
+        env:
+          MIGRATION_TARGET: ${{ inputs.target }}
+          PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { printf '%s\n' 'Migrations require main.' >&2; exit 1; }
+          case "$MIGRATION_TARGET" in
+            staging) ;;
+            production) [[ "$PRODUCTION_DEPLOY_ENABLED" == true ]] || { printf '%s\n' 'Production migrations are disabled.' >&2; exit 1; } ;;
+            *) printf '%s\n' 'Unknown migration target.' >&2; exit 1 ;;
+          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Validate migration numbering
+        run: bash ci/check-migration-numbers.sh
+      - name: Dry-run listing (read-only journal diff, no DDL)
+        run: node ci/neon-migrate.mjs plan
+        env: &migration-env
+          MIGRATION_TARGET: ${{ inputs.target }}
+          PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          # Provision ONLY as secrets on the matching GitHub Environment.
+          # The unselected target is not exposed to the process. No DATABASE_URL fallback.
+          NEON_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.NEON_STAGING_DATABASE_URL || '' }}
+          PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || '' }}
+      - name: Record PITR timestamp, apply and verify under database lock
+        run: node ci/neon-migrate.mjs apply
+        env: *migration-env
+      - name: Post-check zero pending web migrations
+        run: node ci/neon-migrate.mjs verify
+        env: *migration-env

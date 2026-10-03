@@ -13,21 +13,47 @@ function avatarHash(id, avatar) {
     throw new Error("Invalid legacy avatar");
   }
   if (/^\/embed\/avatars\/[0-5]\.png$/.test(url.pathname)) return null;
-  const match = /^\/avatars\/(\d{1,20})\/([a-z0-9_]{1,64})\.(?:png|jpe?g|webp|gif)$/.exec(url.pathname);
+  const match = /^\/avatars\/(\d{1,20})\/([a-z0-9_]{1,64})\.(?:png|jpe?g|webp|gif)$/.exec(
+    url.pathname,
+  );
   if (!match || match[1] !== id) throw new Error("Invalid legacy avatar");
   return match[2]; // Image query parameters are not part of the stored hash.
 }
 
 export function createImportClient(url) {
   const parsed = new URL(url);
-  if (!["postgres:", "postgresql:"].includes(parsed.protocol) || !parsed.hostname || !parsed.username || parsed.pathname.length < 2) {
+  if (
+    !["postgres:", "postgresql:"].includes(parsed.protocol) ||
+    !parsed.hostname ||
+    !parsed.username ||
+    parsed.pathname.length < 2 ||
+    parsed.hash
+  ) {
     throw new Error("Invalid connection URL");
   }
+  // Unknown URL parameters become startup settings in Postgres.js, even
+  // overriding connection options. Allow only TLS mode and one literal schema;
+  // options, role, endpoint and session overrides must not cross this boundary.
+  for (const [key, value] of parsed.searchParams) {
+    if (
+      parsed.searchParams.getAll(key).length !== 1 ||
+      (key !== "sslmode" && key !== "search_path") ||
+      (key === "sslmode" &&
+        !["disable", "require", "verify-ca", "verify-full", "prefer", "allow"].includes(value)) ||
+      (key === "search_path" && (value.trim() !== value || !/^[a-z_][a-z0-9_]{0,62}$/.test(value)))
+    ) {
+      throw new Error("Invalid connection URL parameters");
+    }
+  }
   return postgres(url, {
-    max: 1, connect_timeout: 10, debug: false,
-    connection: { timezone: "UTC" }, onnotice: () => {},
+    max: 1,
+    connect_timeout: 10,
+    debug: false,
+    connection: { timezone: "UTC", client_encoding: "UTF8" },
+    onnotice: () => {},
     // URL/default port and empty password must never inherit PGPORT/PGPASSWORD.
-    port: Number(parsed.port || 5432), password: () => decodeURIComponent(parsed.password),
+    port: Number(parsed.port || 5432),
+    password: () => decodeURIComponent(parsed.password),
   });
 }
 
@@ -35,10 +61,14 @@ export function createImportClient(url) {
 // session, OAuth credential or moderator field is ever read from legacy.
 export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) {
   return legacy.begin("isolation level repeatable read read only", async (source) => {
+    // The driver always decodes UTF8; a LATIN1 session corrupts non-ASCII
+    // names/bio/games on the wire. Re-pin caller-supplied clients before reads.
+    await source`set local client_encoding = 'UTF8'`;
     // Timestamp text must be unambiguous even with caller/server DateStyle overrides.
     await source`set local datestyle = 'ISO, YMD'`;
     const users = await source`
-      select discord_id, username, avatar, (discord_joined_at is not null) as member,
+      select discord_id, coalesce(nullif(display_name, ''), username) as username,
+        avatar, (discord_joined_at is not null) as member,
         created_at::text as created_at, coalesce(updated_at, created_at)::text as updated_at
       from users order by id`;
     const profiles = await source`
@@ -47,7 +77,14 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
       from profiles p left join users u on u.id = p.user_id order by p.id`;
 
     for (const row of [...users, ...profiles]) {
-      if (typeof row.discord_id !== "string" || !/^\d{1,20}$/.test(row.discord_id) || !row.created_at || !row.updated_at) {
+      // Keep the Date serializer's finite-date boundary for Next's readers,
+      // but retain the original timestamp text for microsecond-exact binding.
+      if (
+        typeof row.discord_id !== "string" ||
+        !/^\d{1,20}$/.test(row.discord_id) ||
+        !Number.isFinite(Date.parse(row.created_at)) ||
+        !Number.isFinite(Date.parse(row.updated_at))
+      ) {
         throw new Error("Invalid legacy identity or timestamps");
       }
     }
@@ -59,7 +96,10 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
     }
 
     return next.begin(dryRun ? "read only" : "", async (target) => {
+      await target`set local client_encoding = 'UTF8'`;
       await target`set local datestyle = 'ISO, YMD'`;
+      // Bind timestamp parameters as text first: the driver's timestamp
+      // serializer goes through Date and would discard historical microseconds.
       const counts = {
         users: { read: users.length, changed: 0, unchanged: 0, written: 0 },
         profiles: { read: profiles.length, changed: 0, unchanged: 0, written: 0 },
@@ -67,21 +107,23 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
       for (const row of users) {
         let changed;
         if (dryRun) {
-          const identical = await target`
+          const unchanged = await target`
             select 1 from users where id = ${row.discord_id}
-              and (username, avatar, member, created_at, updated_at) is not distinct from
-                (${row.username}::text, ${row.avatar}::text, ${row.member}::boolean,
-                 ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')`;
-          changed = identical.length === 0;
+              and (updated_at > ${row.updated_at}::text::timestamp at time zone 'UTC'
+                or (username, avatar, member, created_at, updated_at) is not distinct from
+                  (${row.username}::text, ${row.avatar}::text, ${row.member}::boolean,
+                   ${row.created_at}::text::timestamp at time zone 'UTC', ${row.updated_at}::text::timestamp at time zone 'UTC'))`;
+          changed = unchanged.length === 0;
         } else {
           const written = await target`
             insert into users (id, username, avatar, member, created_at, updated_at)
             values (${row.discord_id}, ${row.username}, ${row.avatar}, ${row.member},
-              ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')
+              ${row.created_at}::text::timestamp at time zone 'UTC', ${row.updated_at}::text::timestamp at time zone 'UTC')
             on conflict (id) do update set username = excluded.username, avatar = excluded.avatar,
               member = excluded.member, created_at = excluded.created_at, updated_at = excluded.updated_at
-            where (users.username, users.avatar, users.member, users.created_at, users.updated_at)
-              is distinct from (excluded.username, excluded.avatar, excluded.member, excluded.created_at, excluded.updated_at)
+            where users.updated_at <= excluded.updated_at
+              and (users.username, users.avatar, users.member, users.created_at, users.updated_at)
+                is distinct from (excluded.username, excluded.avatar, excluded.member, excluded.created_at, excluded.updated_at)
             returning id`;
           changed = written.length !== 0;
         }
@@ -96,13 +138,13 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
             select 1 from profiles where user_id = ${row.discord_id}
               and (bio, games, timezone, created_at, updated_at) is not distinct from
                 (${row.bio}::text, ${games}::jsonb, ${row.timezone}::text,
-                 ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')`;
+                 ${row.created_at}::text::timestamp at time zone 'UTC', ${row.updated_at}::text::timestamp at time zone 'UTC')`;
           changed = identical.length === 0;
         } else {
           const written = await target`
             insert into profiles (user_id, bio, games, timezone, created_at, updated_at)
             values (${row.discord_id}, ${row.bio}, ${games}, ${row.timezone},
-              ${row.created_at}::timestamp at time zone 'UTC', ${row.updated_at}::timestamp at time zone 'UTC')
+              ${row.created_at}::text::timestamp at time zone 'UTC', ${row.updated_at}::text::timestamp at time zone 'UTC')
             on conflict (user_id) do update set bio = excluded.bio, games = excluded.games,
               timezone = excluded.timezone, created_at = excluded.created_at, updated_at = excluded.updated_at
             where (profiles.bio, profiles.games, profiles.timezone, profiles.created_at, profiles.updated_at)
@@ -120,11 +162,15 @@ export async function importUsersProfiles(legacy, next, { dryRun = true } = {}) 
 
 export async function main(args = process.argv.slice(2), env = process.env) {
   if (args.length === 1 && args[0] === "--help") {
-    console.log("Usage: node bin/import/users-profiles.mjs [--dry-run | --apply]\nLEGACY_DATABASE_URL and DATABASE_URL must be supplied via env only. Default: --dry-run.");
+    console.log(
+      "Usage: node bin/import/users-profiles.mjs [--dry-run | --apply]\nLEGACY_DATABASE_URL and DATABASE_URL must be supplied via env only. Default: --dry-run.",
+    );
     return 0;
   }
   if (args.length > 1 || (args.length === 1 && !["--dry-run", "--apply"].includes(args[0]))) {
-    console.error("users-profiles: refusing: expected --dry-run or --apply; connection URLs are env-only.");
+    console.error(
+      "users-profiles: refusing: expected --dry-run or --apply; connection URLs are env-only.",
+    );
     return 2;
   }
   if (!env.LEGACY_DATABASE_URL || !env.DATABASE_URL) {
@@ -148,7 +194,9 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   } catch {
     // Driver messages/details can include credentials, connection URLs and member
     // contents. Print none of them, even on malformed URLs or constraint failures.
-    console.error("users-profiles: import failed; check connections, migrations and source data privately before retrying.");
+    console.error(
+      "users-profiles: import failed; check connections, migrations and source data privately before retrying.",
+    );
     return 1;
   } finally {
     await Promise.all([legacy, next].map((sql) => sql?.end({ timeout: 2 }).catch(() => {})));

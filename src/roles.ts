@@ -10,6 +10,8 @@
 // flag (moderator = false) but never blocks sign-in: the privilege is denied by
 // default while the front door stays open.
 
+import { discordFetch } from "./discord-http";
+
 const API = "https://discord.com/api/v10";
 
 export type GuildMemberRoles = { roles: string[]; joinedAt: string | null };
@@ -19,7 +21,10 @@ export async function fetchMemberRoles(
   userId: string,
   botToken: string,
 ): Promise<GuildMemberRoles | null> {
-  const res = await fetch(`${API}/guilds/${guildId}/members/${userId}`, {
+  // Fail closed on an unconfigured bot token (TOG-12687): no bot call is
+  // emitted, so the caller degrades to a non-moderator flag.
+  if (!botToken || botToken.trim().length === 0) return null;
+  const res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
     headers: { authorization: `Bot ${botToken}` },
   });
   if (res.status === 404) return null;
@@ -35,7 +40,9 @@ export async function fetchMemberRoles(
     console.warn("moderator recompute lookup returned non-JSON");
     return null;
   }
-  const roles = Array.isArray(body.roles) ? body.roles.filter((r): r is string => typeof r === "string") : [];
+  const roles = Array.isArray(body.roles)
+    ? body.roles.filter((r): r is string => typeof r === "string")
+    : [];
   return { roles, joinedAt: typeof body.joined_at === "string" ? body.joined_at : null };
 }
 
@@ -66,6 +73,9 @@ export async function recomputeModerator(opts: {
   moderatorRoleIds: string[];
 }): Promise<boolean> {
   if (opts.moderatorRoleIds.length === 0) return false;
+  // Fail closed before any lookup (TOG-12687): a blank bot token means no
+  // bot-credentialed role fetch, so the flag stays non-moderator.
+  if (!opts.botToken || opts.botToken.trim().length === 0) return false;
   const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => null);
   if (!member) return false;
   return isModerator(member.roles, opts.moderatorRoleIds);

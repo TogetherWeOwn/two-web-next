@@ -13,6 +13,13 @@ It is an operator cutover tool, not a scheduled job or a Workers endpoint.
 - With no flags, the script is a **dry run**. `--apply` is the only write mode.
   `--dry-run` and `--apply` together are rejected. Counts contain no row data.
   Errors expose only a static message and, when available, a SQLSTATE.
+- Different URL strings are not proof of separate databases. When schemas match,
+  both modes require a random transaction-scoped advisory-lock probe on the exact
+  source/destination sessions before table locks, row access or sequence writes.
+  A same-database alias, denied/failed probe or incomplete result aborts without
+  row or connection output. Locks release when the transactions exit; no new
+  grants or privileged server-identity query is required. Independent databases
+  with the same name remain supported, as do separate schemas in one database.
 - Grants import **disabled** unless `--enable-grants` is explicitly supplied.
   Even with that flag, only demonstrably untouched grants can remain enabled:
   the source must expose `events.agent_grant_id` as a UUID, `max_events` must be
@@ -20,7 +27,7 @@ It is an operator cutover tool, not a scheduled job or a Workers endpoint.
   replay key for that grant. All history is checked, including replay keys too
   old to import. A missing ownership contract or any history leaves the grant
   disabled. This conservative rule avoids restoring spent quota: this tool does
-  not copy ownership into Next `agent_events`. Supply a complete frozen source,
+  not copy ownership into Next `events` (the temporary `agent_events` table is retired). Supply a complete frozen source,
   not a filtered export, when requesting enabled grants.
   The flag preserves legacy disabled/expiry state; it never re-enables a grant
   already disabled in legacy or an existing Next grant. Enabling grants requires
@@ -51,7 +58,9 @@ node bin/import/audit.mjs --apply --enable-grants # only after admission review
 
 The default schemas are `public`. `LEGACY_DATABASE_SCHEMA` and `DATABASE_SCHEMA`
 can select separate schemas for a synthetic fixture in one test database.
-Schema identifiers are validated and quoted, never interpolated as SQL text.
+Schema identifiers are quoted and restricted to lowercase ASCII identifiers of
+at most 63 bytes, with no whitespace. Longer names are refused rather than
+allowing PostgreSQL truncation to alias apparently different schemas.
 
 ## Mapping, counts and retention
 
@@ -104,7 +113,7 @@ read-only transactions and does not insert-then-rollback or touch sequences.
 ```sh
 # Explicit test-only URL: never use an inherited DATABASE_URL for this suite.
 AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \\
-  npm exec vitest run test/import-audit.test.ts test/import-audit-db.test.ts
+  npm exec vitest run test/import-audit*.test.*
 npm run check
 ```
 

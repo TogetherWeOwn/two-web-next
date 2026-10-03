@@ -31,7 +31,7 @@ const env: Env = {
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 describe("site.webmanifest", () => {
-  it("is valid JSON with the exact legacy fields", () => {
+  it("preserves the install contract with the current brand colors", () => {
     const manifest = JSON.parse(readFileSync(resolve(root, "public/site.webmanifest"), "utf8"));
     expect(manifest).toMatchObject({
       id: "/",
@@ -41,8 +41,8 @@ describe("site.webmanifest", () => {
       start_url: "/",
       scope: "/",
       display: "standalone",
-      background_color: "#f1eadb",
-      theme_color: "#0b0714",
+      background_color: "#151720",
+      theme_color: "#151720",
     });
     expect(manifest.icons).toEqual([
       { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
@@ -66,16 +66,20 @@ describe("install icons", () => {
 describe("shell head", () => {
   it("GET / carries theme-color meta + manifest/icon/apple-touch-icon links", async () => {
     const html = await (await app.request("/", {}, env)).text();
-    expect(html).toContain('<meta name="theme-color" content="#0b0714"');
+    expect(html).toContain('<meta name="theme-color" content="#151720"');
     expect(html).toContain('<link rel="manifest" href="/site.webmanifest"');
-    expect(html).toContain('<link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192"');
-    expect(html).toContain('<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180"');
+    expect(html).toContain(
+      '<link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192"',
+    );
+    expect(html).toContain(
+      '<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180"',
+    );
   });
 
   it("leaves carry the same head links", async () => {
     const html = await (await app.request("/about", {}, env)).text();
     expect(html).toContain('<link rel="manifest" href="/site.webmanifest"');
-    expect(html).toContain('<meta name="theme-color" content="#0b0714"');
+    expect(html).toContain('<meta name="theme-color" content="#151720"');
   });
 });
 
@@ -86,7 +90,9 @@ describe("branded error handlers on a scratch app", () => {
     const scratchApp = new Hono();
     scratchApp.notFound((c) => notFoundHandler(c));
     scratchApp.onError((err, c) => internalErrorHandler(err, c));
-    scratchApp.get("/throttled", (c) => rateLimitExceeded(c, Number(c.req.query("retry_after") ?? 60)));
+    scratchApp.get("/throttled", (c) =>
+      rateLimitExceeded(c, Number(c.req.query("retry_after") ?? 60)),
+    );
     scratchApp.get("/down", maintenanceHandler("https://discord.gg/invite"));
     scratchApp.get("/boom", () => {
       throw new Error("kaboom with secret internals");

@@ -99,6 +99,62 @@
       "when": 1790817994959,
       "tag": "1011_legacy-audit-evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790824783231,
+      "tag": "1012_content-funnel-import-keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790832986716,
+      "tag": "1013_hot-path-indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790856000000,
+      "tag": "1014_event-ics-sequence",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790856000001,
+      "tag": "1016_job-lock-ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790856000002,
+      "tag": "1017_queue_failed_job_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790902431105,
+      "tag": "1018_audit-immutability",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790954753239,
+      "tag": "1019_shared-agent-events",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790954753240,
+      "tag": "1020_event-sync-revisions",
+      "breakpoints": true
     }
   ]
 }

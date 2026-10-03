@@ -5,7 +5,11 @@ import { describe, expect, it } from "vitest";
 // own startup plumbing) without starting a Worker, touching a database, or
 // using credentials.
 
-async function readProbeConfig(): Promise<{ bindingKind: string; bindingValue: string; raw: string }> {
+async function readProbeConfig(): Promise<{
+  bindingKind: string;
+  bindingValue: string;
+  raw: string;
+}> {
   const fs = await import("node:fs");
   const raw = fs.readFileSync("spike/hyperdrive-semantics/wrangler.probe.jsonc", "utf8");
   const config = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, "")) as {
@@ -96,7 +100,10 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
     }
   }
 
-  async function makeFakes(scratch: string, runnerBody: string): Promise<{ fakeNode: string; fakeWrangler: string }> {
+  async function makeFakes(
+    scratch: string,
+    runnerBody: string,
+  ): Promise<{ fakeNode: string; fakeWrangler: string }> {
     const { fs, path } = await shellDeps();
     const fakeWrangler = path.join(scratch, "fake-wrangler.sh");
     fs.writeFileSync(fakeWrangler, '#!/bin/sh\necho "offline fake wrangler 0.0.0"\n');
@@ -107,76 +114,137 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
     return { fakeNode, fakeWrangler };
   }
 
-  function scratchDir(prefix: string): Promise<string> {
-    return shellDeps().then(({ fs, os, path }) => {
-      const base = process.env.PAPERCLIP_RUN_SCRATCH_DIR
-        ?? process.env.PAPERCLIP_SCRATCH_DIR
-        ?? os.tmpdir();
-      return fs.mkdtempSync(path.join(base, prefix));
-    });
+  async function withScratchDir(
+    prefix: string,
+    run: (scratch: string) => void | Promise<void>,
+  ): Promise<void> {
+    const { fs, os, path } = await shellDeps();
+    const base =
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? os.tmpdir();
+    const scratch = fs.mkdtempSync(path.join(base, prefix));
+    const errors: unknown[] = [];
+    try {
+      await run(scratch);
+    } catch (error) {
+      errors.push(error);
+    } finally {
+      try {
+        fs.rmSync(scratch, { recursive: true, force: true });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 1)
+      throw new AggregateError(errors, "Wrapper test and scratch cleanup failed");
+    if (errors.length) throw errors[0];
   }
 
-  it("reaps group children when the runner exits nonzero (offline)", async () => {
-    const { proc } = await shellDeps();
+  it("removes only its owned scratch directory after success", async () => {
     const { fs, path } = await shellDeps();
-    const scratch = await scratchDir("wrapper-exit-");
-    const childPidFile = path.join(scratch, "child.pid");
-    const { fakeNode, fakeWrangler } = await makeFakes(
-      scratch,
-      `#!/bin/sh\nsleep 60 &\necho "$!" > "${childPidFile}"\nexit 2\n`,
-    );
-    const started = Date.now();
-    const child = proc.spawn("bash", ["spike/hyperdrive-semantics/worker-checks.sh"], {
-      env: { ...process.env, NODE_BIN: fakeNode, WRANGLER_BIN: fakeWrangler },
-      stdio: "ignore",
+    let owned = "";
+    await withScratchDir("wrapper-sibling-", async (sibling) => {
+      await withScratchDir("wrapper-success-", (scratch) => {
+        owned = scratch;
+        fs.writeFileSync(path.join(scratch, "fixture"), "offline");
+      });
+      expect(fs.existsSync(owned)).toBe(false);
+      expect(fs.existsSync(sibling)).toBe(true);
     });
-    const exitCode: number = await new Promise((resolve, reject) => {
-      child.on("error", reject);
-      child.on("close", (code) => resolve(code ?? -1));
+  });
+
+  it.each(["assertion", "fixture", "spawn", "read"] as const)(
+    "removes scratch after a %s failure",
+    async (failure) => {
+      const { fs, path, proc } = await shellDeps();
+      let owned = "";
+      let original: unknown;
+      const reported = await withScratchDir("wrapper-failure-", async (scratch) => {
+        owned = scratch;
+        try {
+          if (failure === "assertion") expect("actual").toBe("expected");
+          if (failure === "fixture")
+            fs.writeFileSync(path.join(scratch, "missing", "fixture"), "offline");
+          if (failure === "read") fs.readFileSync(path.join(scratch, "missing.pid"), "utf8");
+          if (failure === "spawn") {
+            await new Promise<void>((resolve, reject) => {
+              const child = proc.spawn(path.join(scratch, "missing-executable"));
+              child.on("error", reject);
+              child.on("close", () => resolve());
+            });
+          }
+        } catch (error) {
+          original = error;
+          throw error;
+        }
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(original).toBeDefined();
+      expect(reported).toBe(original);
+      expect(fs.existsSync(owned)).toBe(false);
+    },
+  );
+
+  it("reaps group children when the runner exits nonzero (offline)", async () => {
+    const { proc, fs, path } = await shellDeps();
+    await withScratchDir("wrapper-exit-", async (scratch) => {
+      const childPidFile = path.join(scratch, "child.pid");
+      const { fakeNode, fakeWrangler } = await makeFakes(
+        scratch,
+        `#!/bin/sh\nsleep 60 &\necho "$!" > "${childPidFile}"\nexit 2\n`,
+      );
+      const started = Date.now();
+      const child = proc.spawn("bash", ["spike/hyperdrive-semantics/worker-checks.sh"], {
+        env: { ...process.env, NODE_BIN: fakeNode, WRANGLER_BIN: fakeWrangler },
+        stdio: "ignore",
+      });
+      const exitCode: number = await new Promise((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", (code) => resolve(code ?? -1));
+      });
+      expect(exitCode).toBe(2);
+      expect(Date.now() - started).toBeLessThan(60_000);
+      const childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
+      expect(Number.isInteger(childPid)).toBe(true);
+      expect(await waitReaped(childPid)).toBe(true);
     });
-    expect(exitCode).toBe(2);
-    expect(Date.now() - started).toBeLessThan(60_000);
-    const childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
-    expect(Number.isInteger(childPid)).toBe(true);
-    expect(await waitReaped(childPid)).toBe(true);
-    fs.rmSync(scratch, { recursive: true, force: true });
   }, 90_000);
 
   it("reaps the group on external interruption and exits 143 (offline)", async () => {
-    const { proc } = await shellDeps();
-    const { fs, path } = await shellDeps();
-    const scratch = await scratchDir("wrapper-int-");
-    const childPidFile = path.join(scratch, "child.pid");
-    const runnerPidFile = path.join(scratch, "runner.pid");
-    const { fakeNode, fakeWrangler } = await makeFakes(
-      scratch,
-      `#!/bin/sh\nsleep 60 &\necho "$!" > "${childPidFile}"\necho "$$" > "${runnerPidFile}"\nsleep 120\n`,
-    );
-    const child = proc.spawn("bash", ["spike/hyperdrive-semantics/worker-checks.sh"], {
-      env: { ...process.env, NODE_BIN: fakeNode, WRANGLER_BIN: fakeWrangler },
-      stdio: "ignore",
-    });
-    const exitCodePromise = new Promise<number>((resolve, reject) => {
-      child.on("error", reject);
-      child.on("close", (code) => resolve(code ?? -1));
-    });
-    let runnerPid = NaN;
-    for (let i = 0; i < 150 && !Number.isInteger(runnerPid); i++) {
-      await new Promise((r) => setTimeout(r, 100));
-      try {
-        runnerPid = parseInt(fs.readFileSync(runnerPidFile, "utf8").trim(), 10);
-      } catch {
-        runnerPid = NaN;
+    const { proc, fs, path } = await shellDeps();
+    await withScratchDir("wrapper-int-", async (scratch) => {
+      const childPidFile = path.join(scratch, "child.pid");
+      const runnerPidFile = path.join(scratch, "runner.pid");
+      const { fakeNode, fakeWrangler } = await makeFakes(
+        scratch,
+        `#!/bin/sh\nsleep 60 &\necho "$!" > "${childPidFile}"\necho "$$" > "${runnerPidFile}"\nsleep 120\n`,
+      );
+      const child = proc.spawn("bash", ["spike/hyperdrive-semantics/worker-checks.sh"], {
+        env: { ...process.env, NODE_BIN: fakeNode, WRANGLER_BIN: fakeWrangler },
+        stdio: "ignore",
+      });
+      const exitCodePromise = new Promise<number>((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", (code) => resolve(code ?? -1));
+      });
+      let runnerPid = NaN;
+      for (let i = 0; i < 150 && !Number.isInteger(runnerPid); i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        try {
+          runnerPid = parseInt(fs.readFileSync(runnerPidFile, "utf8").trim(), 10);
+        } catch {
+          runnerPid = NaN;
+        }
       }
-    }
-    expect(Number.isInteger(runnerPid)).toBe(true);
-    const childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
-    expect(Number.isInteger(childPid)).toBe(true);
-    child.kill("SIGTERM");
-    expect(await exitCodePromise).toBe(143);
-    expect(await waitReaped(runnerPid)).toBe(true);
-    expect(await waitReaped(childPid)).toBe(true);
-    fs.rmSync(scratch, { recursive: true, force: true });
+      expect(Number.isInteger(runnerPid)).toBe(true);
+      const childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
+      expect(Number.isInteger(childPid)).toBe(true);
+      child.kill("SIGTERM");
+      expect(await exitCodePromise).toBe(143);
+      expect(await waitReaped(runnerPid)).toBe(true);
+      expect(await waitReaped(childPid)).toBe(true);
+    });
   }, 90_000);
 });
 
@@ -201,8 +269,14 @@ describe("runner startup bound (TOG-9680 P2)", () => {
     const mod = await import("../spike/hyperdrive-semantics/runner");
     const result = await mod.runWithWorker({
       timeoutMs: 5000,
-      startWorker: async () => ({ stop: async () => { stopped.push("stopped"); } }),
-      runChecks: async () => { throw new Error("boom"); },
+      startWorker: async () => ({
+        stop: async () => {
+          stopped.push("stopped");
+        },
+      }),
+      runChecks: async () => {
+        throw new Error("boom");
+      },
     });
     expect(result.exitCode).toBe(1);
     expect(stopped).toEqual(["stopped"]);
@@ -214,7 +288,11 @@ describe("runner startup bound (TOG-9680 P2)", () => {
     const mod = await import("../spike/hyperdrive-semantics/runner");
     const result = await mod.runWithWorker({
       timeoutMs: 5000,
-      startWorker: async () => ({ stop: async () => { stopped.push("stopped"); } }),
+      startWorker: async () => ({
+        stop: async () => {
+          stopped.push("stopped");
+        },
+      }),
       runChecks: async () => {},
     });
     expect(result.exitCode).toBe(0);

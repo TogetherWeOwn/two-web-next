@@ -5,6 +5,11 @@ on:
     paths:
       - '.github/workflows/featured-offline-proof.yml'
       - 'ci/featured-proof/**'
+      - 'src/admin/pages.tsx'
+      - 'src/admin/routes.tsx'
+      - 'src/featured-status.tsx'
+      - 'src/pages.tsx'
+      - 'public/styles.css'
   workflow_dispatch:
 
 permissions:
@@ -12,12 +17,15 @@ permissions:
 
 concurrency:
   group: featured-offline-proof-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   capture:
+    if: github.event_name == 'workflow_dispatch'
     name: featured-offline-proof
-    runs-on: ubuntu-latest
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 8
     # Browser + system libraries are already present; only the matching JS
     # module is installed, inside this CI container. No app/DB service or secrets.
@@ -73,5 +81,49 @@ jobs:
         with:
           name: featured-offline-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/featured-output/
+          if-no-files-found: error
+          retention-days: 14
+
+  current-source:
+    if: github.event_name == 'pull_request'
+    name: featured-current-source-proof
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 8
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+      options: --init --ipc=host
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PROOF_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
+      PROOF_CHECKOUT_HEAD: ${{ github.event.pull_request.head.sha }}
+      PROOF_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Credential-free guard selftests (no browser)
+        run: node --test ci/featured-proof/run-capture.test.cjs
+      - name: Generate fictional SSR from the exact PR source
+        run: |
+          test "$(git -c "safe.directory=$GITHUB_WORKSPACE" -c "safe.directory=$PWD" rev-parse HEAD)" = "$PROOF_CHECKOUT_HEAD"
+          npm ci --ignore-scripts --include=dev --no-audit --no-fund
+          ./node_modules/.bin/esbuild ci/featured-proof/current-fixtures.ts --bundle --platform=node --format=cjs --outfile="$RUNNER_TEMP/featured-fixtures.cjs"
+          node "$RUNNER_TEMP/featured-fixtures.cjs" "$RUNNER_TEMP/featured-current-fixtures"
+      - name: Capture twelve current-source views with no app, database or network
+        run: |
+          npm install --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2
+          export NODE_PATH="$RUNNER_TEMP/featured-runtime/node_modules"
+          # Resolve only the pinned runtime module, not the app's newer Playwright.
+          cp ci/featured-proof/capture-current.cjs "$RUNNER_TEMP/featured-current-capture.cjs"
+          node "$RUNNER_TEMP/featured-current-capture.cjs" "$RUNNER_TEMP/featured-current-fixtures" "$RUNNER_TEMP/featured-current-output"
+      - name: Retain screenshots, manifest and report for independent QA
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: featured-current-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/featured-current-output/
           if-no-files-found: error
           retention-days: 14
