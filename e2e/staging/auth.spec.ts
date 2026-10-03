@@ -9,7 +9,9 @@ import { loginQaIdentities } from "./qa-login";
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
 // Fresh sessions per file: event pages rotate the bearer on read, so a stored
-// token is single-use across files.
+// token is single-use across files. Member + moderator: two logins — the
+// moderator journey reads this file's own moderator session, so it stays
+// order-independent.
 test.beforeAll(async () => {
   await loginQaIdentities();
 });

@@ -1,13 +1,13 @@
 import { test, expect } from "./fixtures";
 import { emptyStorageState, moderatorStorageState } from "./fixtures";
-import { loginQaIdentities } from "./qa-login";
+import { loginQaModerator } from "./qa-login";
 
 test.use({ storageState: moderatorStorageState });
 
 // Fresh moderator session per file: event pages rotate the bearer on read,
-// so a stored token is single-use across files.
+// so a stored token is single-use across files. Moderator only — one login.
 test.beforeAll(async () => {
-  await loginQaIdentities();
+  await loginQaModerator();
 });
 
 // Moderator staging journey. This spec NEVER publishes: the fixture is
