@@ -63,6 +63,7 @@ function fakeSql() {
   }[] = [];
   const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const head = strings[0] ?? "";
+    if (head.includes("pg_advisory_xact_lock")) return [];
     if (head.includes("count(*)")) {
       const [bucket] = values as [string];
       const cutoff = Date.now() - 60_000;
@@ -94,6 +95,11 @@ function fakeSql() {
     throw new Error(`fakeSql: unexpected statement: ${head.slice(0, 80)}`);
   }) as unknown as Sql;
   (sql as { unsafe: (q: string) => Promise<unknown> }).unsafe = async () => [];
+  // Transaction seam for atomic admission: the double is single-threaded, so
+  // run the callback against the same in-memory store.
+  (sql as unknown as { begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown> }).begin = (
+    run,
+  ) => run(sql);
   return { sql, throttle, attempts };
 }
 
