@@ -393,7 +393,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     it("empty and invalid query states still render usable navigation", async () => {
       const html = await (await request("?q=missing&sort=constructor&order=invalid&page=0")).text();
-      expect(html).toContain("No events yet.");
+      expect(html).toContain("No events match these filters.");
       expect(html).toContain("Page 1");
       expect(html).toContain('aria-sort="descending"');
       expect(html).toContain('name="sort" value="starts_at"');
