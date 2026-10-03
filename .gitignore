@@ -11,5 +11,6 @@ e2e/staging/.auth/
 playwright-report/
 test-results/
 artifacts/
+.lighthouseci/
 dist-tail/
 __pycache__/

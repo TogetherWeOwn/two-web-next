@@ -180,7 +180,7 @@ no public version/clock endpoint or redirect alias remains.
 | `bot:internal-action-smoke` (live-against-staging QA) | ✅ ported (PR #38): `src/probes/bot-smoke.ts` + `bin/internal-action-smoke.mjs`, fixture-pinned in `test/probes.test.ts` (signer + staging guard, production host refused); staging-only drill entry merged (PR #267; `test/internal-action-drill.test.ts`) | [TOG-10112](/TOG/issues/TOG-10112) (blocked; parent [TOG-9698](/TOG/issues/TOG-9698)) + [TOG-11706](/TOG/issues/TOG-11706) ✅ |
 | `queue:check-depth` (box probe) | dropped as a command (no box on Workers) — replaced by `GET /up` | **N3** ✅ ([TOG-9895](/TOG/issues/TOG-9895)) |
 | `error-alert:probe`, `queue:poison-probe` (drills) | ✅ re-expressed as Vitest tests (`test/drill-probes.test.ts`: error-alert 1-per-fingerprint/5min critical line against a fixture logger; poison-queue fixture isolated from ordinary queued work; fixture-only, no staging/prod) | [TOG-11732](/TOG/issues/TOG-11732) ✅ |
-| `ci:session-cookie` (perf-budget session minter) | dropped (no-op): no perf-budget gate in Next CI and no producer/minter exists; W15 pest→vitest port is done ([TOG-9697](/TOG/issues/TOG-9697) ✅, QA PASS on main `ea51a83e`) | W15 ✅ |
+| `ci:session-cookie` (perf-budget session minter) | unnecessary for the five guest-page budgets; authenticated perf surfaces remain uncovered | [TOG-10845](/TOG/issues/TOG-10845), [coverage](performance-budgets.md) |
 | `inspire` | stock scaffold | dropped (no-op) |
 
 ## 8. Mail, notifications, webhooks
@@ -264,6 +264,7 @@ go hunting for them.
 | Design-lab routes (non-prod visual experiments) | ✅ correctly absent | dropped (never production) |
 | DB sessions, 120-min sliding lifetime | ✅ DB-backed + rotation; 120-minute window re-stamped on login and every authenticated page view (`SESSION_TTL_SECONDS`, `src/sessions.ts`), status cookie follows it. No divergence: the earlier 30 d CPO divergence is withdrawn (privacy v2 keeps the v1 "no remember-me" promise, [TOG-12556](/TOG/issues/TOG-12556)) | W5 ✅ + [TOG-12928](/TOG/issues/TOG-12928) |
 | Session cookie `__Host-`, HttpOnly, Lax; OAuth state bound to signed cookie | ✅ | W5 ✅ |
+| Lighthouse public-page budgets + per-entry raw/gzip bundle budgets | local fixture worker, real pages/assets; legacy LCP/CLS/mobile profile unchanged, all islands and stylesheet budgeted | [TOG-10845](/TOG/issues/TOG-10845), [performance gates](performance-budgets.md) |
 
 ## 13. New cards created by this matrix (all in TWO Web Next, one PR each)
 
