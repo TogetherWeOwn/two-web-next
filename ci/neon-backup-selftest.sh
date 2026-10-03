@@ -165,6 +165,10 @@ ok "check fails on missing key"
 #    fine — agent-testdb trust auth — so only the unset case refuses).
 if DATABASE_URL= "$BIN" backup staging >/dev/null 2>&1; then fail "backup must refuse unset DATABASE_URL"; fi
 ok "backup refuses unset DATABASE_URL"
+# Backup keys carry whole-second timestamps: without this sleep a fast
+# passwordless backup can mint the same key as the backup above and correctly
+# refuse it as a duplicate, failing this acceptance assertion.
+sleep 1
 OUT_PWLESS="$(DATABASE_URL="postgres://tester@fake-host:5432/testdb" "$BIN" backup staging)"
 echo "$OUT_PWLESS" | grep -q '^backup: ' || fail "backup must accept a passwordless DATABASE_URL"
 ok "backup accepts passwordless DATABASE_URL"

@@ -206,7 +206,7 @@ do_backup() {
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   key="$(prefix)-${ts}.dump"
   dir="$(remote_tmp)"
-  trap 'rm -rf "$dir"' EXIT
+  trap '[ -n "${dir:-}" ] && rm -rf -- "$dir"' EXIT
   # Target validation and the local dump come first: an invalid target must
   # refuse before any storage call. Then admit the existing inventory and the
   # new archive + receipt keys before any remote mutation (archive upload,
@@ -235,7 +235,7 @@ newest_daily() {
 do_promote_weekly() {
   local dir ts src weekly
   dir="$(remote_tmp)"
-  trap 'rm -rf "$dir"' EXIT
+  trap '[ -n "${dir:-}" ] && rm -rf -- "$dir"' EXIT
   fetch_manifest "$dir/MANIFEST.txt"
   src="$(newest_daily "$dir/MANIFEST.txt")"
   [ -n "$src" ] || { echo "neon-backup: no daily to promote under branch '$BRANCH'" >&2; exit 1; }
@@ -273,7 +273,7 @@ delete_archive_pair() {
 do_rotate() {
   local dir dailies weeklies keep tmp_manifest
   dir="$(remote_tmp)"
-  trap 'rm -rf "$dir"' EXIT
+  trap '[ -n "${dir:-}" ] && rm -rf -- "$dir"' EXIT
   fetch_manifest "$dir/MANIFEST.txt"
   dailies="$(grep -E '\.dump$' "$dir/MANIFEST.txt" | grep -v '\-weekly\-' | sort || true)"
   weeklies="$(grep -E '\-weekly\-.*\.dump$' "$dir/MANIFEST.txt" | sort || true)"
@@ -314,7 +314,7 @@ do_rotate() {
 do_check() {
   local dir failed=0 unverified=0 key receipt
   dir="$(remote_tmp)"
-  trap 'rm -rf "$dir"' EXIT
+  trap '[ -n "${dir:-}" ] && rm -rf -- "$dir"' EXIT
   fetch_manifest "$dir/MANIFEST.txt"
   while IFS= read -r key || [ -n "$key" ]; do
     [ -n "$key" ] || continue

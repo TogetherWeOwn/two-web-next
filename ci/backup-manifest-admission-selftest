@@ -135,6 +135,9 @@ class ManifestAdmission(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertEqual(self.snapshot(), before)
         self.assertFalse(any(op in ("put", "delete") for op, _ in self.calls()), self.calls())
+        # Refusal exits unwind function locals before the EXIT trap runs: any
+        # `unbound variable` here means a trap references a dead local.
+        self.assertNotIn("unbound variable", result.stderr)
 
     def test_transport_and_auth_failures_never_initialize(self):
         self.seed([DAILY])
