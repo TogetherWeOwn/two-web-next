@@ -109,7 +109,12 @@ jobs:
       - name: Generate fictional SSR from the exact PR source
         run: |
           test "$(git -c "safe.directory=$GITHUB_WORKSPACE" -c "safe.directory=$PWD" rev-parse HEAD)" = "$PROOF_CHECKOUT_HEAD"
-          npm ci --ignore-scripts --include=dev --no-audit --no-fund
+          # The pinned image bundles npm <= 11.6, which resolves optional peers
+          # (@puppeteer/browsers -> proxy-agent >=8) that npm >= 11.8 leaves
+          # alone, so it reports a lockfile the required `check` job accepts as
+          # out of sync. --legacy-peer-deps skips that resolution; the install
+          # still comes from the lockfile, with scripts disabled.
+          npm ci --ignore-scripts --include=dev --no-audit --no-fund --legacy-peer-deps
           ./node_modules/.bin/esbuild ci/featured-proof/current-fixtures.ts --bundle --platform=node --format=cjs --outfile="$RUNNER_TEMP/featured-fixtures.cjs"
           node "$RUNNER_TEMP/featured-fixtures.cjs" "$RUNNER_TEMP/featured-current-fixtures"
       - name: Capture twelve current-source views with no app, database or network
