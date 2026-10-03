@@ -103,6 +103,13 @@ The list spec also runs as `mobile-375` (375×812 viewport) and
 RSVPs are withdrawn in-spec and every fixture the suite creates is cancelled
 in a `finally`, so a failed run leaves no draft behind. On failure the job
 uploads `test-results/` traces/screenshots and the HTML report for seven days.
+The repo is public, so artifacts are world-readable and log masking does not
+cover them. Playwright puts request headers (including `X-TWO-QA-Auth`) into a
+transport-level request error, so token-bearing requests go through
+`e2e/qa-request.mjs`, which rethrows a reason-only message, and a failure-only
+step (`ci/scrub-qa-token.sh`) deletes any artifact file that still contains
+the token, then fails the job. A token found in an artifact is exposed: report
+it to the COO the same hour.
 
 Blast-radius note: publishing the RSVP fixture and answering RSVPs enqueue
 sync-event carriers (`src/events/sync.ts` enqueues published/cancelled

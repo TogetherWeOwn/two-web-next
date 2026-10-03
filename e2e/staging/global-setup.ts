@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { QA_HEADER, STAGING_APP_URL } from "../../src/qa";
 import { requireStagingOrigin } from "../staging-guard.mjs";
 import { requireGithubRunner } from "../ci-only.mjs";
+import { sendTokenRequest } from "../qa-request.mjs";
 import { memberStorageState, moderatorStorageState } from "./fixtures";
 
 const stagingOrigin = requireStagingOrigin(STAGING_APP_URL);
@@ -18,11 +19,14 @@ async function login(identity: "qa-member" | "qa-moderator", path: string): Prom
   try {
     const context = await browser.newContext({ baseURL: stagingOrigin });
     // Same-origin gate needs the explicit staging Origin next to the header;
-    // a bad token or unknown identity answers 404, never a redirect.
-    const response = await context.request.post(`/auth/qa/${identity}`, {
-      headers: { [QA_HEADER]: token, Origin: stagingOrigin },
-      maxRedirects: 0,
-    });
+    // a bad token or unknown identity answers 404, never a redirect. The
+    // transport error text carries the request headers, so it never escapes.
+    const response = await sendTokenRequest(`staging QA login as ${identity}`, token, () =>
+      context.request.post(`/auth/qa/${identity}`, {
+        headers: { [QA_HEADER]: token, Origin: stagingOrigin },
+        maxRedirects: 0,
+      }),
+    );
     assert.equal(response.status(), 204, `staging QA login as ${identity}`);
     // Persist only a real Set-Cookie session: the jar must hold the Secure
     // HttpOnly __Host- cookie for the staging host before it is saved.

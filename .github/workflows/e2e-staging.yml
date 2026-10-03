@@ -47,6 +47,13 @@ jobs:
         run: npm run e2e:staging
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Scrub QA token from failure artifacts
+        # The repo is public and artifacts are downloadable without log
+        # masking. Delete any file holding the token and fail loud (TOG-13046).
+        if: failure()
+        run: bash ci/scrub-qa-token.sh test-results playwright-report
+        env:
+          QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
       - name: Failure traces and report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

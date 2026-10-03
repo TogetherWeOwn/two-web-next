@@ -1,3 +1,4 @@
+import { sendTokenRequest } from "../qa-request.mjs";
 import { test, expect, stagingOrigin, moderatorStorageState } from "./fixtures";
 
 // Storage-state identities land on their pages; negative QA cases answer 404.
@@ -26,10 +27,15 @@ test("staging QA rejects a bad token and an unknown identity with 404", async ({
       maxRedirects: 0,
     });
     expect(bad.status()).toBe(404);
-    const unknown = await context.request.post("/auth/qa/no-such-identity", {
-      headers: { "X-TWO-QA-Auth": process.env.QA_AUTH_TOKEN ?? "", Origin: origin },
-      maxRedirects: 0,
-    });
+    const token = process.env.QA_AUTH_TOKEN ?? "";
+    // The real token is in the header here; keep a transport error's request
+    // headers out of the report.
+    const unknown = await sendTokenRequest("staging QA unknown-identity probe", token, () =>
+      context.request.post("/auth/qa/no-such-identity", {
+        headers: { "X-TWO-QA-Auth": token, Origin: origin },
+        maxRedirects: 0,
+      }),
+    );
     expect(unknown.status()).toBe(404);
   } finally {
     await context.close();
