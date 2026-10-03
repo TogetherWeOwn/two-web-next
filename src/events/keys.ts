@@ -10,3 +10,12 @@ export function eventKeyAllowed(key: string, appUrl: string): boolean {
     appUrl === STAGING_APP_URL || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(appUrl);
   return ULID_KEY.test(key) || (demoApp && SEED_KEY.test(key));
 }
+
+// One canonical key form per event: ULIDs are stored uppercase, so a key in
+// any other letter case redirects to the uppercase URL before lookup.
+// Seed/demo keys are already lowercase and never ULID-shaped; anything else
+// keeps its current path (forged keys still refuse, unknown keys still 404).
+export function canonicalEventKey(key: string): string | null {
+  if (!ULID_KEY.test(key)) return null;
+  return key.toUpperCase();
+}
