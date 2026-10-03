@@ -451,13 +451,13 @@ export async function sitemapEvents(
   }));
 }
 
-/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. `statuses` differs for RSS vs ICS. */
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. */
 export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
   const rows = await db
     .select()
     .from(events)
     .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
-    .orderBy(asc(events.startsAt));
+    .orderBy(asc(events.startsAt), asc(events.id));
   // Feed builders stringify date parts without throwing, so without this the
   // export would serve corrupt `NaN` instants instead of failing loudly.
   return rows.filter(isRenderableEventWindow);

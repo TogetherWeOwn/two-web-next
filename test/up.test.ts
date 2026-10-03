@@ -1,8 +1,10 @@
 // route-inventory: GET /up
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Sql, TransactionSql } from "postgres";
 import app from "./app";
 import type { Env } from "../src/env";
+import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
+import { discardFailedJob, listFailedJobs } from "../src/jobs/redrive";
 import {
   configReadiness,
   databaseReadiness,
@@ -16,6 +18,7 @@ import {
   WEB_MIGRATIONS,
   withHealthReadTimeout,
 } from "../src/up";
+import { createLedgerFixture } from "./helpers/queue-ledger-fixture";
 import { healthSql } from "./helpers/up";
 
 const env: Env = {
@@ -549,6 +552,137 @@ describe("/up bounded reads", () => {
       await vi.advanceTimersByTimeAsync(0);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+// TOG-12860: links GET /up `queue.failed` to the redrive runbook
+// (docs/queue-redrive-runbook.md) against real SQL — the count /up reports is
+// the dead-letter depth `listFailedJobs` inspects newest-first, one confirmed
+// `discardFailedJob` drops it by exactly one, and an unreadable ledger stays
+// `unknown`/`null` on a 200, never a 500. Isolated schema through
+// createLedgerFixture; skipped when DATABASE_URL is unset.
+describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", () => {
+  let fixture: Awaited<ReturnType<typeof createLedgerFixture>>;
+  let sql: Awaited<ReturnType<typeof createLedgerFixture>>["sql"];
+  // The route reads `drizzle.__drizzle_migrations` schema-qualified, so point
+  // it at this fixture's seeded ledger table (same redirect as up-db.test.ts).
+  const redirectMigrations = (reader: Sql): Sql => {
+    const wrap = (target: Pick<Sql, "unsafe">): Sql =>
+      (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+        const query = strings.reduce((text, part, i) => text + (i ? `$${i}` : "") + part, "");
+        return target.unsafe(
+          query.replaceAll("drizzle.__drizzle_migrations", "__drizzle_migrations"),
+          values as Parameters<Sql["unsafe"]>[1],
+          { prepare: true },
+        );
+      }) as unknown as Sql;
+    return Object.assign(wrap(reader), {
+      begin: (options: string, fn: (sql: Sql) => Promise<unknown>) =>
+        reader.begin(options, (tx) => fn(wrap(tx))),
+    });
+  };
+  const live = (n: number, tag: string) =>
+    Promise.all(
+      Array.from({ length: n }, (_, i) =>
+        pgQueueLedger(sql).enqueued({
+          jobId: crypto.randomUUID(),
+          kind: "sync-event",
+          key: `sync-event:${tag}-${i}`,
+          availableAt: new Date(Date.now() - 1000),
+        }),
+      ),
+    );
+  const fail = async (kind: string, key: string | null, reason: string) => {
+    const jobId = crypto.randomUUID();
+    await pgQueueLedger(sql).enqueued({
+      jobId,
+      kind,
+      key,
+      availableAt: new Date(Date.now() - 1000),
+    });
+    await pgQueueLedger(sql).failed(jobId, kind, key, reason);
+    return jobId;
+  };
+  beforeAll(async () => {
+    fixture = await createLedgerFixture(process.env.DATABASE_URL!);
+    sql = fixture.sql;
+    await sql`create table __drizzle_migrations (id serial primary key, hash text not null, created_at bigint)`;
+    for (const entry of WEB_MIGRATIONS) {
+      await sql`insert into __drizzle_migrations (hash, created_at) values (${entry.tag}, ${entry.when})`;
+    }
+  });
+  beforeEach(async () => {
+    await fixture.reset();
+  });
+  afterAll(async () => {
+    await fixture.dispose();
+  });
+
+  it("queue.failed mirrors the dead letter newest-first, independent of live backlog", async () => {
+    await live(5, "base");
+    const first = await fail("sync-event", "sync-event:e1", "bot down");
+    const second = await fail("announcement", null, "bot refused");
+
+    // The /up count and the inspect listing read the same rows.
+    expect(await pgQueueDepth(sql)).toMatchObject({ pending: 5, total: 5, failed: 2 });
+    expect((await listFailedJobs(sql)).map((r) => r.jobId)).toEqual([second, first]);
+
+    const body = await upBody(() => pgQueueDepth(sql), healthSql());
+    expect(body.queue.failed).toBe(2);
+    expect(body.status).toBe("healthy");
+
+    const res = await app.request("/up", {}, withStore(redirectMigrations(sql)));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: "healthy", queue: { failed: 2 } });
+
+    // Backlog crosses the warn threshold: status degrades on pending, failed unmoved.
+    await live(25, "surge");
+    expect(await pgQueueDepth(sql)).toMatchObject({ pending: 30, total: 30, failed: 2 });
+    expect((await listFailedJobs(sql)).map((r) => r.jobId)).toEqual([second, first]);
+    const degraded = await upBody(() => pgQueueDepth(sql), healthSql());
+    expect(degraded.status).toBe("degraded");
+    expect(degraded.queue.failed).toBe(2);
+  });
+
+  it("a confirmed discard drops queue.failed by exactly one; unknown ids change nothing", async () => {
+    const keep = await fail("sync-event", "sync-event:k", "recovered elsewhere");
+    const drop = await fail("announcement", null, "poison payload");
+    expect((await pgQueueDepth(sql)).failed).toBe(2);
+
+    const [dropRow] = await sql`select id from queue_failed_jobs where job_id = ${drop}::uuid`;
+    expect(await discardFailedJob(sql, Number((dropRow as { id: unknown }).id))).toBe(true);
+    expect((await pgQueueDepth(sql)).failed).toBe(1);
+    expect((await listFailedJobs(sql)).map((r) => r.jobId)).toEqual([keep]);
+
+    const res = await app.request("/up", {}, withStore(redirectMigrations(sql)));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ queue: { failed: 1 } });
+
+    expect(await discardFailedJob(sql, 2_147_483_647)).toBe(false);
+    expect((await pgQueueDepth(sql)).failed).toBe(1);
+  });
+
+  it("an unreadable ledger reports unknown with failed null on a 200, never a 500", async () => {
+    await fail("sync-event", "sync-event:x", "transport error");
+    expect((await pgQueueDepth(sql)).failed).toBe(1);
+    await sql`drop table queue_failed_jobs`;
+    try {
+      const body = await upBody(() => pgQueueDepth(sql), healthSql());
+      expect(body.status).toBe("healthy");
+      expect(body.queue).toMatchObject({ status: "unknown", failed: null });
+
+      // Real SQL end to end: the DB gate stays ok, so the route stays 200.
+      const res = await app.request("/up", {}, withStore(redirectMigrations(sql)));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        queue: { status: "unknown", failed: null },
+      });
+    } finally {
+      await sql`create table queue_failed_jobs (like public.queue_failed_jobs including all)`;
     }
   });
 });

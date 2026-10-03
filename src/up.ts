@@ -155,6 +155,11 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(t));
 }
 
+// `failed` is the backlog-independent dead-letter count the redrive runbook
+// inspects newest-first (`docs/queue-redrive-runbook.md`): the same rows
+// `listFailedJobs` returns, so one confirmed `discardFailedJob` drops it by
+// exactly one. Pinned against real SQL in test/up.test.ts; an unreadable
+// ledger reports `unknown`/`null` here, never a 500 (queue-only stays 200).
 export type QueuePayload = {
   status: "healthy" | "degraded" | "unknown";
   pending: number | null;
