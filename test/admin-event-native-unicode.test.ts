@@ -65,7 +65,11 @@ const source = readFileSync(
   "utf8",
 );
 const { eventTextLimitError, bindAdminEventTextLimits } = runInNewContext(
-  source.replace(/^export /gm, "") + "\n({ eventTextLimitError, bindAdminEventTextLimits });",
+  // The served binder is the minified build output: esbuild keeps `export`
+  // inline (`;export function ...`), so strip those as well as line-leading
+  // exports before evaluating as a classic script.
+  source.replace(/(^|;)export (?=function |const |let |var |class )/gm, "$1") +
+    "\n({ eventTextLimitError, bindAdminEventTextLimits });",
   { queueMicrotask },
 ) as {
   eventTextLimitError: (value: string, field: string, max: number) => string;
