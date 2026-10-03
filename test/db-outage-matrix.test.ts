@@ -60,12 +60,10 @@ const MATRIX: Case[] = [
   // Main #111: a failed DB ping is a readiness failure, so /up answers 503
   // with the sanitized readiness body instead of a false healthy 200.
   { method: "GET", route: "/up", status: 503, format: "json" },
-  {
-    method: "GET",
-    route: "/auth/discord",
-    status: 302,
-    location: "https://discord.com/oauth2/authorize",
-  },
+  // One-use admission: the ordinary login start persists its journey, so with
+  // the app DB down it fails closed to the sign-in failure notice instead of
+  // sending the member through an OAuth round trip that could never be admitted.
+  { method: "GET", route: "/auth/discord", status: 302, location: "/?n=signin_failed" },
   { method: "GET", route: "/auth/discord/redirect", status: 302, location: "/auth/discord" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
   // Stale-tab liveness probe and expired-write recovery (main #239): neither
@@ -528,7 +526,7 @@ it("member event show fails closed to the outage envelope during an outage", asy
   }
 });
 
-it("valid login callback fails closed at session persistence, not OAuth validation", async () => {
+it("valid login callback fails closed at admission, before any Discord call", async () => {
   const state = "local-outage-oauth-state";
   const cookie = (
     await serializeSigned("__Host-two_oauth_state", state, env.SESSION_SECRET, {
@@ -536,27 +534,18 @@ it("valid login callback fails closed at session persistence, not OAuth validati
       secure: true,
     })
   ).split(";")[0]!;
-  vi.mocked(fetch)
-    .mockResolvedValueOnce(Response.json({ access_token: "local-fixture-token" }))
-    .mockResolvedValueOnce(
-      Response.json({
-        id: MEMBER.userId,
-        username: MEMBER.username,
-        global_name: null,
-        avatar: null,
-      }),
-    )
-    .mockResolvedValueOnce(new Response(null, { status: 201 }));
   const res = await testApp.request(
     `/auth/discord/callback?code=local-code&state=${state}`,
     { headers: { cookie } },
     outageEnv(),
   );
-  expect(fetch).toHaveBeenCalledTimes(3);
+  // The journey cannot be consumed with the app DB down, so the code is never
+  // exchanged and no session is minted: zero upstream calls.
+  expect(fetch).not.toHaveBeenCalled();
   await assertResponse(res, {
     method: "GET",
     route: "/auth/discord/callback",
-    status: 503,
-    format: "html",
+    status: 302,
+    location: "/?n=signin_failed",
   });
 });

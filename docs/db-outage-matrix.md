@@ -9,7 +9,7 @@ trusted origin; the inventory still inspects the real router and pins every
 middleware registration, including TrustHosts and same-origin guards. The
 retired `/health`, `/healthz` and `/db-ping` diagnostics are not registered;
 join-attempt detail and both admin/API RSVP pause/reopen routes are covered.
-The legacy login redirect remains database-free. Four static admin aliases
+The legacy `/auth/discord/redirect` alias remains database-free; the ordinary login start and callback persist a one-use journey, so they fail closed to `/?n=signin_failed` before any Discord call. Four static admin aliases
 redirect only after a valid moderator session; the featured edit alias must
 resolve its imported ID and returns a branded 503 when that lookup is down.
 All five admin aliases refuse with 503 when the production session store is

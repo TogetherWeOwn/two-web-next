@@ -62,6 +62,35 @@ Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
 private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
 per-event RSVP reads.
 
+### Auth admission follow-up (implemented; review pending)
+
+[TOG-10354](/TOG/issues/TOG-10354) adds shared Postgres single-use admission for
+ordinary auth and one-click join, plus atomic invalidation of the supplied active
+pre-login/pre-join token on fresh authentication. Request tests hold the first
+exchange in flight and replay ORIGINAL signed cookies; only one exchange, join,
+session and terminal attempt is admitted. Separate clients prove durable
+coordination, expiry and replacement rollback on the isolated test container.
+Journey expiry/consumption eligibility depends on the locked CTE output, not a
+base-relation qualifier that can run before locking. Auth/join natural-expiry
+regressions observe an actual wait on an unchanged tuple with collected table
+statistics; these failed on the pre-correction SQL in PostgreSQL 17.11. The
+holder-updated expiry case remains separate. This database-level proof does not
+establish attacker-reachable HTTP exploitation or lift independent review gates.
+Blank-bot join follows main's TOG-12680 contract: the OAuth exchange and user
+lookup run, zero bot-credentialed calls are emitted, and the callback renders
+recovery with no member session (also when the bot is disabled mid-journey). Store acquisition/consumption failure has separate
+request proofs of no upstream call, terminal attempt or session change; refused
+admission issuance cannot hand off to OAuth. Denial/exchange failure preserves prior authority;
+failed ordinary auto-join may only issue a non-member/non-moderator session,
+while failed one-click join issues none. Ten-minute server expiry and tombstone
+cleanup are documented in [W15 coverage](w15-auth-tests.md#admission-state-retention-and-failure-contract).
+Local Chromium fixture proof (`ci/auth-browser.mjs`) covers the real sign-in CTA,
+auth/join re-entry, supplied prior-cookie rejection, ORIGINAL-cookie replay and
+consent-denial recovery without external traffic. Exact-head independent
+review/security acceptance and green CI remain delivery gates.
+This narrows three W15 gaps; it does not claim full parity, cutover readiness,
+production testing, or change the recorded rotating TTL/POST-QA divergences.
+
 ## 2. Funnel routes (`routes/funnel.php`, empty stack, DB-free)
 
 | Legacy route | Next status | Card |

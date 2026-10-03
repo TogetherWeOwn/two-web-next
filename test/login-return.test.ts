@@ -699,6 +699,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
       sweepExpired: async () => {
         throw new Error("store down");
       },
+      replace: async () => {
+        throw new Error("store down");
+      },
+      journeys: store.journeys,
     };
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(failing));
     expect(res.status).toBe(410);
