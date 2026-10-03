@@ -1,6 +1,9 @@
 import { jsx } from "hono/jsx/jsx-runtime";
 import { describe, expect, it } from "vitest";
+import app from "./app";
 import { FeaturedFormPage } from "../src/admin/pages";
+import type { Env } from "../src/env";
+import { imageHosts, isFeaturedImageUrl } from "../src/image-policy";
 import type { FeaturedRow } from "../src/admin/store";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
@@ -206,5 +209,76 @@ describe("featured admin preview image box", () => {
     expect(html).toContain('data-testid="featured-preview"');
     if (imageUrl) expect(html).not.toContain(imageUrl);
     expectBoxed(html, "GET /admin/featured/:id/edit (no image)");
+  });
+});
+
+// TOG-12859: pin featured cover-image validation agreement with the deployed
+// CSP img-src (self + Discord CDN + exact allowlist, no `https:`/`data:`).
+// DB-free: the real app serves real headers on local fixtures, no network.
+const cspEnv: Env = {
+  APP_URL: "https://next.example.test",
+  DISCORD_CLIENT_ID: "client-id",
+  DISCORD_GUILD_ID: "326474832151838730",
+  DISCORD_INVITE_URL: "https://discord.gg/configured",
+  DISCORD_CLIENT_SECRET: "client-secret",
+  DISCORD_BOT_TOKEN: "bot-token",
+  SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
+  FEATURED_IMAGE_HOSTS: "images.unsplash.com",
+};
+
+function imgSrcOf(csp: string): string[] {
+  const directive = csp.split(";").find((part) => part.trim().startsWith("img-src "))!;
+  return directive.trim().split(/\s+/).slice(1);
+}
+
+describe("featured cover-image CSP agreement", () => {
+  it("serves self + Discord CDN + exact allowlist, never broad sources", async () => {
+    const res = await app.request("/about", {}, cspEnv);
+    expect(res.status).toBe(200);
+    const sources = imgSrcOf(res.headers.get("content-security-policy")!);
+    expect(sources).toEqual([
+      "'self'",
+      "https://cdn.discordapp.com",
+      "https://images.unsplash.com",
+    ]);
+    expect(sources).not.toContain("https:");
+    expect(sources.some((s) => s.startsWith("data:"))).toBe(false);
+  });
+
+  it("every accepted cover URL renders under the deployed img-src", async () => {
+    const res = await app.request("/about", {}, cspEnv);
+    const sources = imgSrcOf(res.headers.get("content-security-policy")!);
+    // The img-src hosts are exactly imageHosts(config): validation and the
+    // deployed policy share one allowlist, so no accepted URL is ever blocked.
+    const expected = imageHosts(cspEnv.FEATURED_IMAGE_HOSTS).map((host) => `https://${host}`);
+    expect(sources.filter((s) => s !== "'self'")).toEqual(expected);
+    for (const origin of expected) {
+      const url = `${origin}/photo.jpg`;
+      expect(isFeaturedImageUrl(url, cspEnv.FEATURED_IMAGE_HOSTS)).toBe(true);
+      expect(
+        url.startsWith(`${origin}/`),
+        `${url} accepted by validation but blocked by img-src`,
+      ).toBe(true);
+    }
+  });
+
+  it("no refused violation class would ever render under the deployed img-src", async () => {
+    const res = await app.request("/about", {}, cspEnv);
+    const sources = imgSrcOf(res.headers.get("content-security-policy")!);
+    for (const url of [
+      "http://cdn.discordapp.com/photo.jpg",
+      "data:image/png;base64,AAAA",
+      "https://user:password@cdn.discordapp.com/photo.jpg",
+      "https://@cdn.discordapp.com/photo.jpg",
+      "https://cdn.discordapp.com:8443/photo.jpg",
+      "https://*.evil.com/photo.jpg",
+      "https://unapproved.com/photo.jpg",
+    ]) {
+      expect(isFeaturedImageUrl(url, cspEnv.FEATURED_IMAGE_HOSTS)).toBe(false);
+      expect(
+        sources.some((s) => s !== "'self'" && url.startsWith(`${s}/`)),
+        `${url} refused by validation but renderable under img-src`,
+      ).toBe(false);
+    }
   });
 });

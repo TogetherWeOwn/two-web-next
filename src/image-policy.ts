@@ -38,10 +38,24 @@ export function imageHosts(configured?: string): string[] {
   return [...hosts];
 }
 
+/** True when an absolute URL carries userinfo: new URL() silently drops an
+ * empty username ("https://@host/…"), so the authority must be inspected
+ * before parsing. Relative paths may legitimately contain "@". */
+export function hasUrlUserinfo(raw: string): boolean {
+  const schemeEnd = raw.indexOf("://");
+  if (schemeEnd < 0) return false;
+  return raw
+    .slice(schemeEnd + 3)
+    .split("/", 1)[0]!
+    .includes("@");
+}
+
 export function isFeaturedImageUrl(raw: string, configured?: string): boolean {
   // URL() normalizes IP spellings, credentials and ports; reject ambiguous
-  // backslashes/control characters before parsing. No DNS or network fetch.
+  // backslashes/control characters — and any userinfo in the authority —
+  // before parsing. No DNS or network fetch.
   if (!/^https:\/\//i.test(raw) || /[\\\u0000- \u007f]/.test(raw)) return false;
+  if (hasUrlUserinfo(raw)) return false;
   try {
     const url = new URL(raw);
     return (
