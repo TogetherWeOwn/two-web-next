@@ -24,7 +24,7 @@ set -euo pipefail
 
 selftest() {
   local failures=0
-  check() {
+  check() { # <name> <expected> <tsv-body>... -- <glob>...
     local name=$1 expected=$2
     shift 2
     local lines=() globs=() in_globs=0
@@ -49,13 +49,21 @@ selftest() {
       failures=$((failures + 1))
     fi
   }
-  check "exact match is relevant" "relevant=true" "src/pages.tsx" -- "src/pages.tsx"
-  check "unrelated file is irrelevant" "relevant=false" "src/other.ts" -- "src/pages.tsx"
-  check "nested glob matches" "relevant=true" "ci/featured-proof/run-capture.cjs" -- "ci/featured-proof/**"
-  check "rename into scope is relevant" "relevant=true" "$(printf 'docs/new.md\tci/featured-proof/tool.cjs')" -- "ci/featured-proof/**"
-  check "rename out of scope stays relevant" "relevant=true" "$(printf 'docs/new.md\tsrc/pages.tsx')" -- "src/pages.tsx"
-  check "empty list fails closed" "relevant=true" -- "src/pages.tsx"
-  check "no globs means nothing relevant" "relevant=false" "src/pages.tsx" --
+  check "exact match is relevant" "relevant=true" \
+    "src/pages.tsx" -- "src/pages.tsx"
+  check "unrelated file is irrelevant" "relevant=false" \
+    "src/other.ts" -- "src/pages.tsx"
+  check "nested glob matches" "relevant=true" \
+    "ci/featured-proof/run-capture.cjs" -- "ci/featured-proof/**"
+  check "rename into scope is relevant" "relevant=true" \
+    "$(printf 'docs/new.md\tci/featured-proof/tool.cjs')" -- "ci/featured-proof/**"
+  check "rename out of scope stays relevant" "relevant=true" \
+    "$(printf 'docs/new.md\tsrc/pages.tsx')" -- "src/pages.tsx"
+  check "empty list fails closed" "relevant=true" \
+    -- "src/pages.tsx"
+  check "no globs means nothing relevant" "relevant=false" \
+    "src/pages.tsx" --
+  # Truncated file list proves nothing: count mismatch fails closed.
   local tsv
   tsv=$(mktemp)
   printf 'src/other.ts\n' > "$tsv"
@@ -68,6 +76,7 @@ selftest() {
     echo "FAIL: count mismatch (want relevant=true, got $got)"
     failures=$((failures + 1))
   fi
+  # Missing file list fails closed: relevant, exit 0, so the suite runs.
   tsv=$(mktemp)
   rm -f "$tsv"
   got=$(bash "$0" "$tsv" 1 -- "src/pages.tsx")
@@ -108,9 +117,12 @@ relevant() {
 [ -s "$files" ] || relevant "no changed-file list"
 [ "$#" -gt 0 ] || not_relevant
 listed=$(wc -l < "$files")
+# The files API stops at 3000 entries; a truncated list proves nothing.
 [ "$listed" -ge "$expected" ] || relevant "listed $listed of $expected changed files"
 
 while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
+  # A rename counts both names: moving code out of scope is still relevant
+  # to the scope it left, and moving code in is relevant to the scope joined.
   for path in "$name" ${previous:+"$previous"}; do
     for glob in "$@"; do
       case "$path" in
