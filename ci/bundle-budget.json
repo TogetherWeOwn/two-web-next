@@ -1,5 +1,5 @@
 {
-  "$comment": "Per-file budgets for unbundled public assets. Baseline 2026-09-30 (raw/gzip bytes): events-calendar 8108/2793, going-count 2776/1145, member-profile 5193/1977, past-events 3778/1434, styles 2087/882. Ceilings leave roughly 25-45% headroom, not room for a framework import. Islands added later start at measured size plus 25-33% headroom: copy-link (ceilings 3072/1280), avatar 610 raw (1024/512), admin-event-editor 979/482 (1280/640), admin-event-text-limits 1594/725 (2048/1024), auth-status 4152/1576 (5120/2048) and rsvp-button 28628/7371 (35840/9728, added on main by #98). Every JavaScript file under public/islands at any depth must have a budget. Raising a ceiling requires a separate deliberate PR explaining the growth; never relax a budget just to make CI green. Measured on the merged tree (main 7b42c09, 2026-10-02), five pre-existing assets exceed their unchanged ceilings: events-calendar.js 12060/3919, going-count.js 6663/2522, member-profile.js 15358/4936, past-events.js 5871/1972 (raw only) and public/styles.css 5678/1841. They keep their ceilings here and the checker reports them over budget until an explicit ceiling decision or a size reduction lands. Assets are main's files unchanged; this PR adds gates only and does not rewrite or minify served CSS or JavaScript.",
+  "$comment": "Per-file budgets for unbundled public assets. Baseline 2026-09-30 (raw/gzip bytes): events-calendar 8108/2793, going-count 2776/1145, member-profile 5193/1977, past-events 3778/1434, styles 2087/882. Ceilings leave roughly 25-45% headroom, not room for a framework import. Islands added later start at measured size plus 25-33% headroom: copy-link (ceilings 3072/1280), avatar 610 raw (1024/512), admin-event-editor 979/482 (1280/640), admin-event-text-limits 1594/725 (2048/1024), auth-status 4152/1576 (5120/2048) and rsvp-button 28628/7371 (35840/9728, added on main by #98). Every JavaScript file under public/islands at any depth must have a budget. Raising a ceiling requires an explicit decision explaining the growth; never relax a budget just to make CI green. CEO decision 2026-10-03 on TOG-10845 approved raising the five 2026-09-30 ceilings to measured size x1.25 (rounded up): events-calendar.js 12356/3975 -> 15872/5120, going-count.js 6800/2548 -> 8704/3328, member-profile.js 15547/4969 -> 19456/6400, past-events.js 6275/2024 -> 8192/2560, public/styles.css 5678/1841 -> 7168/2304 (measured on the merged tree, main 0bc7b0cb). Growth drivers are main's theme/port work since the baseline, not this PR; this PR adds gates only and does not rewrite or minify served CSS or JavaScript. A build-time minification follow-up will let these ceilings come back down later.",
   "budgets": {
     "public/islands/admin-event-editor.js": {
       "maxRawBytes": 1280,
@@ -22,28 +22,28 @@
       "maxGzipBytes": 1280
     },
     "public/islands/events-calendar.js": {
-      "maxRawBytes": 10240,
-      "maxGzipBytes": 3584
+      "maxRawBytes": 15872,
+      "maxGzipBytes": 5120
     },
     "public/islands/going-count.js": {
-      "maxRawBytes": 4096,
-      "maxGzipBytes": 1536
+      "maxRawBytes": 8704,
+      "maxGzipBytes": 3328
     },
     "public/islands/member-profile.js": {
-      "maxRawBytes": 7168,
-      "maxGzipBytes": 2560
+      "maxRawBytes": 19456,
+      "maxGzipBytes": 6400
     },
     "public/islands/past-events.js": {
-      "maxRawBytes": 5120,
-      "maxGzipBytes": 2048
+      "maxRawBytes": 8192,
+      "maxGzipBytes": 2560
     },
     "public/islands/rsvp-button.js": {
       "maxRawBytes": 35840,
       "maxGzipBytes": 9728
     },
     "public/styles.css": {
-      "maxRawBytes": 3072,
-      "maxGzipBytes": 1280
+      "maxRawBytes": 7168,
+      "maxGzipBytes": 2304
     }
   }
 }
