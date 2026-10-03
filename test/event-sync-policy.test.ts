@@ -1,27 +1,26 @@
 // Policy pin for Parity §6 SyncEventToDiscord (TOG-11768).
 //
 // The queue binding and worker wiring belong to W13/PR #7 + TOG-10815; this
-// file pins only the policy numbers every producer path shares — 10 s
+// file pins only the policy numbers the single tracked producer applies — 10 s
 // debounce, 6 tries over the 10/60/300/900/3600 ladder, per-eventKey
 // uniqueness and the terminal mirror-stamp contract — asserted against the
 // `src/jobs/*` constants with a fake clock. Change a number here only
 // together with a deliberate, reviewed parity decision.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isMirrored } from "../src/admin/validation";
-import type { Env } from "../src/env";
-import {
-  SYNC_BACKOFF_SECONDS,
-  SYNC_DEBOUNCE_SECONDS,
-  SYNC_TRIES,
-  SYNC_UNIQUE_FOR_SECONDS,
-  enqueueEventSync,
-  nextBackoffSeconds,
-} from "../src/events/sync";
+import { buildSyncMessage } from "../src/events/sync";
 import { SYNC_EVENT, backoffFor } from "../src/jobs/constants";
 import { trackingQueue } from "../src/jobs/ledger";
 import { dispatchSyncEvent, handleSyncEvent, uniqueKey } from "../src/jobs/sync-event";
 import { BotTerminalError, BotTransportError } from "../src/jobs/types";
-import type { BotClient, BotFailure, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
+import type {
+  BotClient,
+  BotFailure,
+  EventStore,
+  QueueLedger,
+  SyncAttempt,
+  UniqueLock,
+} from "../src/jobs/types";
 
 const payload = {
   eventKey: "e1",
@@ -73,12 +72,32 @@ function memLedger(): QueueLedger & { rows: Map<string, { state: string; availab
   };
 }
 
-function store(over: Partial<EventStore> = {}) {
+/** Request ledger double: `priorAttempts` request tries already spent before this carrier. */
+function store(over: Partial<EventStore> = {}, priorAttempts = 0) {
   const stamped: { eventKey: string; discordEventId: string; mirroredAt: Date }[] = [];
   const events: EventStore = {
-    find: async (eventKey) => ({ eventKey, payload: { ...payload, eventKey }, mirrored: true }),
-    recordMirrored: async (eventKey, discordEventId, mirroredAt) =>
-      void stamped.push({ eventKey, discordEventId, mirroredAt }),
+    prepareSync: async (eventKey, idempotencyKey, mirroredAt) => ({
+      eventKey,
+      idempotencyKey,
+      mirroredAt,
+      revision: 1,
+      state: "pending",
+      requestAttempts: priorAttempts,
+      nextAttemptAt: new Date(0),
+      action: "event.upsert",
+      payload: { ...payload, eventKey },
+    }),
+    claimSync: async (attempt) => ({ ...attempt, requestAttempts: attempt.requestAttempts + 1 }),
+    deferSync: async () => {},
+    completeSync: async (attempt, discordEventId) =>
+      void stamped.push({
+        eventKey: attempt.eventKey,
+        discordEventId,
+        mirroredAt: attempt.mirroredAt,
+      }),
+    failSync: async () => {},
+    needsSync: async () => false,
+    pendingSync: async () => null,
     closeFinished: async () => 0,
     materializeSeries: async () => 0,
     staleEventKeys: async () => [],
@@ -106,18 +125,10 @@ describe("policy constants (Parity §6 SyncEventToDiscord)", () => {
     });
   });
 
-  it("both producer paths agree on every number", () => {
-    expect(SYNC_DEBOUNCE_SECONDS).toBe(SYNC_EVENT.debounceSeconds);
-    expect(SYNC_UNIQUE_FOR_SECONDS).toBe(SYNC_EVENT.uniqueForSeconds);
-    expect(SYNC_TRIES).toBe(SYNC_EVENT.tries);
-    expect([...SYNC_BACKOFF_SECONDS]).toEqual([...SYNC_EVENT.backoffSeconds]);
-  });
-
-  it("the backoff ladder holds at the last value on both helpers", () => {
+  it("the backoff ladder holds at the last value", () => {
     for (let attempt = 1; attempt <= 9; attempt++) {
       const want = [10, 60, 300, 900, 3600][Math.min(attempt, 5) - 1]!;
       expect(backoffFor(SYNC_EVENT.backoffSeconds, attempt)).toBe(want);
-      expect(nextBackoffSeconds(attempt)).toBe(want);
     }
   });
 });
@@ -159,16 +170,20 @@ describe("debounce window (fake clock)", () => {
     expect(sent).toHaveLength(3);
   });
 
-  it("publish and cancel write-backs share the same 10 s debounce", async () => {
+  it("publish and cancel write-backs share the same 10 s debounce; drafts enqueue nothing", async () => {
     const sent: { m: unknown; o?: { delaySeconds?: number } }[] = [];
-    const env = {
-      EVENT_SYNC_QUEUE: {
-        send: async (m: unknown, o?: { delaySeconds?: number }) => void sent.push({ m, o }),
-      },
-    } as unknown as Env;
-    await enqueueEventSync(env, "e1", "published");
-    await enqueueEventSync(env, "e1", "cancelled");
+    const queue = {
+      send: async (m: unknown, o?: { delaySeconds?: number }) => void sent.push({ m, o }),
+    };
+    for (const status of ["published", "cancelled"] as const) {
+      const message = buildSyncMessage("e1", status)!;
+      // Fresh lock per status: the debounce, not uniqueness, is under test here.
+      expect(
+        await dispatchSyncEvent(queue, timeAwareLock(), message.eventKey, message.idempotencyKey),
+      ).toBe(true);
+    }
     expect(sent.map((s) => s.o)).toEqual([{ delaySeconds: 10 }, { delaySeconds: 10 }]);
+    expect(buildSyncMessage("e1", "draft")).toBeNull();
   });
 });
 
@@ -186,18 +201,23 @@ describe("retry count and backoff ladder", () => {
       [4, 900],
       [5, 3600],
     ] as const) {
-      const s = store();
+      const deferred: (Date | null)[] = [];
+      const s = store({ deferSync: async (_a, at) => void deferred.push(at) }, attempt - 1);
       const outcome = await handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, attempt, {
         bot,
         events: s.events,
       });
       expect(outcome).toEqual({ retryInSeconds: delay });
+      // The request ledger carries the same deadline the carrier waits for.
+      expect(deferred).toEqual([new Date(Date.now() + delay * 1000)]);
       expect(s.stamped).toHaveLength(0); // a wait stamps nothing
     }
-    const s = store();
+    const deferred: (Date | null)[] = [];
+    const s = store({ deferSync: async (_a, at) => void deferred.push(at) }, 5);
     await expect(
       handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 6, { bot, events: s.events }),
-    ).resolves.toEqual({ failed: "gave up after 6 attempts" });
+    ).resolves.toEqual({ failed: "carrier exhausted; unresolved identity retained" });
+    expect(deferred).toEqual([null]); // exhausted: no further deadline
     expect(s.stamped).toHaveLength(0);
   });
 
@@ -212,7 +232,10 @@ describe("retry count and backoff ladder", () => {
     answer = fail({ retryable: false, code: "action_not_allowed" });
     await expect(
       handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot, events: s.events }),
-    ).resolves.toMatchObject({ failed: expect.stringContaining("action_not_allowed") });
+    ).resolves.toMatchObject({
+      definitive: true,
+      failed: expect.stringContaining("action_not_allowed"),
+    });
 
     // Class-only (#233): a terminal throw fails with its class, never the
     // message (which can carry secrets) — so this pins "BotTerminalError".
@@ -226,7 +249,7 @@ describe("retry count and backoff ladder", () => {
         bot: terminal,
         events: s.events,
       }),
-    ).resolves.toEqual({ failed: "BotTerminalError" });
+    ).resolves.toEqual({ failed: "BotTerminalError", definitive: true });
     expect(s.stamped).toHaveLength(0);
   });
 });
@@ -257,29 +280,28 @@ describe("mirrored recheck and terminal stamp", () => {
     expect(isMirrored("past")).toBe(false);
   });
 
-  it("re-reads the row on every attempt: deleted or unmirrored rows drop without a bot call or stamp", async () => {
+  it("re-reads the row on every attempt: deleted, unmirrored or obsolete rows drop without a bot call or stamp", async () => {
     const upsertEvent = vi.fn(async () => ({ ok: true, requestId: null, discordEventId: "d1" }));
     const bot = { upsertEvent } as unknown as BotClient;
-    const find = vi.fn(async () => null);
-    const gone = store({ find: find as unknown as EventStore["find"] });
+    // The store answers null for a deleted row and for a draft/past row alike.
+    const prepareSync = vi.fn(async () => null);
+    const gone = store({ prepareSync });
     await expect(
       handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 3, { bot, events: gone.events }),
     ).resolves.toEqual({ done: true });
-    expect(find).toHaveBeenCalledWith("e1");
+    expect(prepareSync).toHaveBeenCalledWith("e1", "k", expect.any(Date));
     expect(upsertEvent).not.toHaveBeenCalled();
     expect(gone.stamped).toHaveLength(0);
 
-    const unmirrored = store({
-      find: async (eventKey) => ({ eventKey, payload: { ...payload, eventKey }, mirrored: false }),
+    // A snapshot retired by a newer revision on its first claim never calls out.
+    const obsolete = store({
+      claimSync: async (attempt: SyncAttempt) => ({ ...attempt, state: "obsolete" as const }),
     });
     await expect(
-      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, {
-        bot,
-        events: unmirrored.events,
-      }),
+      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 1, { bot, events: obsolete.events }),
     ).resolves.toEqual({ done: true });
     expect(upsertEvent).not.toHaveBeenCalled();
-    expect(unmirrored.stamped).toHaveLength(0);
+    expect(obsolete.stamped).toHaveLength(0);
   });
 
   it("success stamps the discord id and the fake-clock time, exactly once", async () => {

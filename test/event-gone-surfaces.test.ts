@@ -11,7 +11,8 @@
 import { serializeSigned } from "hono/utils/cookie";
 import { beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
-import { activityLog, events, rsvps } from "../src/db/admin-schema";
+import { events, rsvps } from "../src/db/admin-schema";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createDb } from "../src/db/index";
 import type { Env } from "../src/env";
 import {
@@ -97,7 +98,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
 
   beforeEach(async () => {
     await db.delete(rsvps);
-    await db.delete(activityLog);
+    await clearAuditRows(db, ["activity_log"]);
     await db.delete(events);
     await db.insert(events).values([
       {
@@ -146,8 +147,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
     }
     const html = await (await apex(`/e/${CANCELLED}`)).text();
     expect(html).toContain("<h1>Friday night games</h1>");
-    expect(html).toContain("This event was cancelled");
     expect(html).toContain('data-testid="event-cancelled">Cancelled');
+    const visible = html.replace(/<head>[\s\S]*?<\/head>|<script[\s\S]*?<\/script>|<[^>]+>/g, " ");
+    expect(visible.match(/cancel/gi)).toEqual(["Cancel"]);
+    expect(html).not.toContain('data-testid="rsvp-closed"');
     expect(html).toContain('href="/events">See upcoming events</a>');
     expect(html).toContain('name="robots" content="noindex, nofollow"');
     expect(jsonLdOf(html)).toMatchObject({

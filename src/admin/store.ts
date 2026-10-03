@@ -305,6 +305,8 @@ export async function updateEvent(
         timezone: input.timezone,
         location: input.location,
         capacity: input.capacity,
+        // A moderator edit must invalidate an agent's full-field stale write.
+        agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
         updatedAt: new Date(),
       })
       .where(eq(events.eventKey, eventKey))
@@ -365,6 +367,7 @@ async function shiftFutureChildren(
       .set({
         startsAt: new Date(child.startsAt.getTime() + startDelta),
         endsAt: new Date(child.endsAt.getTime() + endDelta),
+        agentVersion: child.agentGrantId === null ? child.agentVersion : child.agentVersion + 1,
         updatedAt: new Date(),
       })
       .where(eq(events.id, child.id))
@@ -403,6 +406,8 @@ export async function transitionEvent(
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   return db.transaction(async (tx) => {
+    // Share the ingress/RSVP row lock: judge the transition only after an
+    // earlier writer commits, so publication cannot resurrect cancellation.
     const [locked] = await tx
       .select()
       .from(events)
@@ -421,7 +426,11 @@ export async function transitionEvent(
     if (from === target) return { row: locked, writeBack: null };
     const [row] = await tx
       .update(events)
-      .set({ status: target, updatedAt: new Date() })
+      .set({
+        status: target,
+        agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+        updatedAt: new Date(),
+      })
       .where(eq(events.eventKey, eventKey))
       .returning();
     if (!row) throw new Error("event transition returned no row");

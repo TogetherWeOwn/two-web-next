@@ -74,7 +74,7 @@ async function fixture(callback) {
       CI: process.env.CI,
       GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
       NEON_STAGING_DATABASE_URL: url.href,
-      NEON_PRODUCTION_DATABASE_URL: url.href,
+      PRODUCTION_DATABASE_URL: url.href,
     };
     const run = (mode, overrides = {}) =>
       runMigration(
@@ -134,7 +134,11 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     }).status,
     1,
   );
-  assert.match(workflow, /runs-on: \[self-hosted, two-selfhosted\]/);
+  assert.ok(
+    workflow.includes(
+      `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`,
+    ),
+  );
   assert.match(workflow, /environment: \$\{\{ inputs.target \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /bash ci\/check-migration-numbers.sh/);
@@ -153,7 +157,7 @@ test("production is denied before connection for unset, false or non-exact flags
       ...mainEnv,
       MIGRATION_TARGET: "production",
       PRODUCTION_DEPLOY_ENABLED: "",
-      NEON_PRODUCTION_DATABASE_URL: "postgres://stub:DO_NOT_ECHO@invalid.test/db",
+      PRODUCTION_DATABASE_URL: "postgres://stub:DO_NOT_ECHO@invalid.test/db",
     },
     encoding: "utf8",
   });
@@ -177,7 +181,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
         PRODUCTION_DEPLOY_ENABLED: "true",
         NEON_STAGING_DATABASE_URL: "unused",
       }),
-    /Missing NEON_PRODUCTION/,
+    /Missing PRODUCTION_DATABASE_URL/,
   );
   for (const raw of [
     "secret-value",
@@ -198,14 +202,31 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging }).target,
     "staging",
   );
+  // Production is PlanetScale, not Neon: a Neon URL must be refused, and a
+  // direct PlanetScale URL (5432, pooled 6432 never) must be accepted.
+  const production = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
   assert.equal(
     migrationConfig({
       ...mainEnv,
       MIGRATION_TARGET: "production",
       PRODUCTION_DEPLOY_ENABLED: "true",
-      NEON_PRODUCTION_DATABASE_URL: staging,
+      PRODUCTION_DATABASE_URL: production,
     }).target,
     "production",
+  );
+  assert.throws(
+    () =>
+      migrationConfig({
+        ...mainEnv,
+        MIGRATION_TARGET: "production",
+        PRODUCTION_DEPLOY_ENABLED: "true",
+        PRODUCTION_DATABASE_URL: staging,
+      }),
+    /PlanetScale/,
+  );
+  assert.throws(
+    () => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: production }),
+    /Neon/,
   );
   assert.doesNotMatch(
     safeMigrationError(new Error("DO_NOT_ECHO postgres://credentials/ SQL")),
@@ -213,12 +234,17 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
   );
 });
 
-test("driver configuration strips optional channel binding and pins the port despite PGPORT", async () => {
+test("driver configuration strips channel binding and pins the port despite PGPORT", async () => {
   const priorPort = process.env.PGPORT;
   process.env.PGPORT = "5433";
   try {
     const staging = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
-    for (const binding of ["", "&channel_binding=prefer", "&channel_binding=disable"]) {
+    for (const binding of [
+      "",
+      "&channel_binding=require",
+      "&channel_binding=prefer",
+      "&channel_binding=disable",
+    ]) {
       const config = migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging + binding });
       assert.equal(config.url.searchParams.has("channel_binding"), false);
       const client = migrationClient(config); // Lazy constructor only: no Neon connection.
@@ -230,7 +256,9 @@ test("driver configuration strips optional channel binding and pins the port des
         await client.end();
       }
     }
-    for (const binding of ["require", "invalid", "prefer&channel_binding=require"]) {
+    // `require` (the Neon default) is accepted wherever it appears and stripped;
+    // only unknown values are still refused.
+    for (const binding of ["invalid", "prefer&channel_binding=bogus"]) {
       assert.throws(
         () =>
           migrationConfig({

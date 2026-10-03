@@ -69,3 +69,15 @@ export function joinAttemptsUrl(query: JoinAttemptsQuery, page: number): string 
   if (query.q) params.set("q", query.q);
   return `/admin/join-attempts?${params}`;
 }
+
+/** Zero-row copy: filtered empties name the filters, genuine empties invite creation. */
+export function featuredEmptyText(query: FeaturedListQuery): string {
+  return query.q || query.published
+    ? "No featured content matches these filters."
+    : "No featured content yet.";
+}
+
+/** Zero-row copy for the RSVP roster on the event edit page. */
+export function rosterEmptyText(query: RosterQuery): string {
+  return query.q ? "No RSVPs match this member search." : "No RSVPs yet.";
+}

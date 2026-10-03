@@ -78,7 +78,9 @@ export async function assertProfileInteractions(page, scenario) {
 }
 
 export async function assertHomeInteractions(page, scenario) {
-  if (scenario.route !== "/" || scenario.status !== 200) return [];
+  const home = scenario.route === "/" && scenario.status === 200;
+  const event = scenario.route === "/e/:key" && [200, 410].includes(scenario.status);
+  if (!home && !event) return [];
   const results = [];
   const skip = page.locator(".skip-link");
   const check = async (selector, state) => {
@@ -101,9 +103,14 @@ export async function assertHomeInteractions(page, scenario) {
       "First Tab must reveal and focus the skip link",
     );
     await check(".skip-link", "keyboard focus");
-    if (scenario.identity === "guest") {
+    if (scenario.identity === "guest" && scenario.status === 200) {
       await page.locator('[data-testid="signin"]').hover();
       await check('[data-testid="signin"]', "hover");
+    }
+    if (event && (scenario.status === 410 || scenario.identity === "guest")) {
+      const selector = scenario.status === 410 ? ".event-gone .btn" : ".event-pitch .btn";
+      await page.locator(selector).hover();
+      await check(selector, "hover");
     }
     await skip.hover();
     await check(".skip-link", "keyboard focus + hover");

@@ -1,0 +1,16 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "two-web-next-e2e",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": { "directory": "../public" },
+  "vars": {
+    "APP_URL": "https://next.togetherweown.com",
+    "DISCORD_CLIENT_ID": "e2e-client",
+    "DISCORD_GUILD_ID": "326474832151838730",
+    "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+    "DISCORD_INVITE_URL": "https://discord.gg/e2e-never-follow"
+  }
+}
