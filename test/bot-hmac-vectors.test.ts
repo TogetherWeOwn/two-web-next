@@ -24,8 +24,7 @@ import { BotTerminalError } from "../src/jobs/types";
 //
 // What this file deliberately does NOT cover: the bot's nonce cache, token
 // buckets and bind guard are bot runtime internals (two-bot, not Pest, not
-// two-web); the event.cancel action needs a client method that does not exist
-// yet. Rows already ported elsewhere are not repeated here: the signing
+// two-web). Rows already ported elsewhere are not repeated here: the signing
 // vectors themselves (test/bot-signer.test.ts), client happy paths
 // (test/bot-client.test.ts), producer key minting
 // (test/internal-action-producer-identity.test.ts), no-secret logging

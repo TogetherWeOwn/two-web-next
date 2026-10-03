@@ -1,15 +1,21 @@
-// Cancelled-row sync carriers never ask the bot to upsert (TOG-12448).
+// Cancelled-row sync carriers never ask the bot to upsert (TOG-12448,
+// TOG-12758).
 //
 // Event mutations share W13's tracked `sync-event` carrier; it holds identity
 // only, and the consumer sends whatever the persisted attempt snapshot says.
 // A cancelled row snapshots `event.cancel`, which must reach `cancelEvent` and
 // never `upsertEvent`. An upsert control proves the same path still upserts.
+// Legacy in-flight W8 carriers (`action`/`dedupeKey`, no `kind`) map to the
+// same job with the producer's idempotency key unchanged.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSyncMessage } from "../src/events/sync";
 import { consume } from "../src/jobs/consumer";
 import { isQueueMessage, toQueueMessage } from "../src/jobs/envelope";
+import { botClientFor } from "../src/jobs/worker";
+import { BotTransportError } from "../src/jobs/types";
 import type {
   BotClient,
+  BotFailure,
   EventStore,
   QueueLedger,
   SyncAttempt,
@@ -141,5 +147,139 @@ describe("cancelled-row sync carrier", () => {
     expect(deps.cancelEvent).not.toHaveBeenCalled();
     expect(deps.completeSync).toHaveBeenCalledTimes(1);
     expect(console.error).not.toHaveBeenCalled();
+  });
+
+  describe("legacy W8 cancel carrier", () => {
+    const w8cancel = (idempotencyKey: string) => ({
+      dedupeKey: "e-cancel",
+      eventKey: "e-cancel",
+      action: "event.cancel",
+      idempotencyKey,
+    });
+
+    it("maps to the sync-event job with the producer key, redelivery unchanged", () => {
+      const key = "22222222-2222-4222-8222-222222222222";
+      expect(toQueueMessage(structuredClone(w8cancel(key)))).toEqual({
+        kind: "sync-event",
+        eventKey: "e-cancel",
+        idempotencyKey: key,
+      });
+      // An inconsistent key or action stays unrecognized, like the upsert pin.
+      expect(toQueueMessage({ ...w8cancel(key), dedupeKey: "another-event" })).toBeNull();
+      expect(toQueueMessage({ ...w8cancel(key), action: "event.reopen" })).toBeNull();
+    });
+
+    it("sends exactly one event.cancel with the producer key through consume", async () => {
+      const key = "22222222-2222-4222-8222-222222222222";
+      for (const attempts of [1, 2]) {
+        const m = message(w8cancel(key), attempts);
+        const deps = dependencies("event.cancel");
+
+        await consume({ messages: [m] }, deps);
+
+        expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+        expect(m.retry).not.toHaveBeenCalled();
+        expect(deps.cancelEvent).toHaveBeenCalledExactlyOnceWith({ eventKey: "e-cancel" }, key);
+        expect(deps.upsertEvent).not.toHaveBeenCalled();
+        expect(deps.completeSync).toHaveBeenCalledTimes(1);
+      }
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it("sends one signed event.cancel with the producer key; redelivery reuses it", async () => {
+      const key = "33333333-3333-4333-8333-333333333333";
+      const w8 = {
+        dedupeKey: "e-cancel",
+        eventKey: "e-cancel",
+        action: "event.cancel",
+        idempotencyKey: key,
+      };
+      const mapped = toQueueMessage(structuredClone(w8));
+      expect(mapped).toEqual({ kind: "sync-event", eventKey: "e-cancel", idempotencyKey: key });
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      const seen: { body: unknown; idempotencyKey: string | null }[] = [];
+      const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
+        seen.push({
+          body: JSON.parse(init.body as string),
+          idempotencyKey: (init.headers as Record<string, string>)["Idempotency-Key"] ?? null,
+        });
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            request_id: "r1",
+            result: { outcome: "cancelled", event_id: "d1" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      });
+      const configured = {
+        BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
+        BOT_KEY_ID: "web-staging",
+        BOT_SHARED_SECRET: "fixture-secret",
+      };
+      for (const attempts of [1, 2]) {
+        const m = message(mapped, attempts);
+        const deps = dependencies("event.cancel");
+        deps.bot = botClientFor(configured, fetchFn as unknown as typeof fetch);
+
+        await consume({ messages: [m] }, deps);
+
+        expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+        expect(m.retry).not.toHaveBeenCalled();
+        expect(deps.completeSync).toHaveBeenCalledTimes(1);
+      }
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      for (const s of seen) {
+        expect(s.body).toEqual({ action: "event.cancel", event_key: "e-cancel" });
+        expect(s.idempotencyKey).toBe(key);
+      }
+      info.mockRestore();
+    });
+
+    it("releases on transport outage with the normal backoff, never a failure", async () => {
+      const key = "22222222-2222-4222-8222-222222222222";
+      const m = message(w8cancel(key));
+      const deps = dependencies("event.cancel");
+      deps.bot = {
+        ...deps.bot,
+        cancelEvent: vi.fn(async () => {
+          throw new BotTransportError("bot down");
+        }),
+      } as unknown as BotClient;
+
+      await consume({ messages: [m] }, deps);
+
+      expect(m.retry).toHaveBeenCalledExactlyOnceWith({ delaySeconds: 10 });
+      expect(m.ack).not.toHaveBeenCalled();
+      expect(deps.completeSync).not.toHaveBeenCalled();
+    });
+
+    it("acks a terminal/disabled-flag refusal without retry and never upserts", async () => {
+      const key = "22222222-2222-4222-8222-222222222222";
+      const refusal: BotFailure = {
+        ok: false,
+        code: "action_not_allowed",
+        status: 403,
+        requestId: null,
+        message: "flag off",
+        retryable: false,
+        retryAfterSeconds: null,
+      };
+      const m = message(w8cancel(key));
+      const deps = dependencies("event.cancel");
+      deps.bot = {
+        ...deps.bot,
+        cancelEvent: vi.fn(async () => refusal),
+      } as unknown as BotClient;
+
+      await consume({ messages: [m] }, deps);
+
+      expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+      expect(m.retry).not.toHaveBeenCalled();
+      expect(deps.upsertEvent).not.toHaveBeenCalled();
+      // `job failed` plus the one `queue.failing` alert line; no retry warn.
+      expect(console.error).toHaveBeenCalledTimes(2);
+      expect(console.warn).not.toHaveBeenCalled();
+    });
   });
 });

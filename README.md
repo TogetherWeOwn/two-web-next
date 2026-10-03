@@ -346,6 +346,9 @@ The live smoke runs manually via the `staging-smoke` workflow in a job container
 public; TOG-12326). It posts a real announcement to a throwaway channel and
 creates a real staging event. Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
+Pass `--announcement-only` (workflow input `announcement_only`) to run only
+`announcement.post` and its same-key replay check, for a receiver that does not
+implement `role.assign` or `event.upsert`; then only `--channel-key` is needed.
 Both probes are fixture-tested in `check` without real secrets.
 
 The CallInternalAction drill (`drill:internal-action`) ports the remaining
@@ -368,9 +371,10 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 ## Contributing
 
-Squash-merge only; PR titles follow Conventional Commits and the body carries
-`Refs: TOG-1234`. `check`, `gitleaks` and `pr-lint` are required. Review the exact
-green head before merge. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Squash-merge only; PR titles follow Conventional Commits and the body follows the
+[PR template](.github/pull_request_template.md). No internal card IDs in PR text.
+`check`, `gitleaks` and `pr-lint` are required. Review the exact green head before
+merge. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 

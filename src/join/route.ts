@@ -27,7 +27,7 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import { inviteDestination } from "../invite";
 import { recordJoinResult } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
-import type { SessionStore, Sql } from "../sessions";
+import { hashToken, type SessionStore, type Sql } from "../sessions";
 import {
   JOIN_THROTTLE_BUCKET,
   JOIN_THROTTLE_PER_MINUTE,
@@ -173,6 +173,10 @@ export function registerJoinRoutes(
     const source = sanitizeSource(c.req.query("source"));
     const next = safeNext(c.req.query("next"));
     const state = crypto.randomUUID();
+    const store = await hooks.storeFor(c);
+    await store.journeys.sweepExpired();
+    if (!(await store.journeys.issue(await hashToken(state), "join")))
+      return c.redirect("/join", 302);
     if (source) {
       await setSignedCookie(c, JOIN_SOURCE_COOKIE, source, c.env.SESSION_SECRET, {
         path: "/",
@@ -232,13 +236,18 @@ export function registerJoinRoutes(
     clearJourney();
     const code = c.req.query("code");
     const state = c.req.query("state");
+    const store =
+      state && expected && state === expected ? await hooks.storeFor(c).catch(() => null) : null;
+    const admitted =
+      store && (await store.journeys.consume(await hashToken(state!), "join").catch(() => false));
 
     // They pressed Cancel on the consent screen, or Discord answered the
     // approval with an error: nothing to exchange. Legacy renders the recovery
     // page (not a redirect) and never echoes Discord's error_description.
     if (c.req.query("error")) {
       const denied = c.req.query("error") === "access_denied";
-      await recordAttempt(sql, { outcome: "denied", source, requestId: null, discordId: null });
+      if (admitted)
+        await recordAttempt(sql, { outcome: "denied", source, requestId: null, discordId: null });
       return recover(
         denied ? "Join cancelled" : "Join didn't complete",
         denied
@@ -247,7 +256,7 @@ export function registerJoinRoutes(
       );
     }
 
-    if (!code || !state || !expected || state !== expected) {
+    if (!admitted || !store || !code) {
       // Lost/replayed state is legacy InvalidStateException: expired, retryable
       // now. The warning is the bounded correlation line (class only, never a
       // message) and doubles as the replay signal for this route.
@@ -256,7 +265,8 @@ export function registerJoinRoutes(
         source,
         outcome: "expired",
       });
-      await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
+      if (admitted)
+        await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
       return recover(
         "Join link expired",
         "That join link expired. Approvals last ten minutes — try again below.",
@@ -336,7 +346,6 @@ export function registerJoinRoutes(
       botToken: c.env.DISCORD_BOT_TOKEN,
       moderatorRoleIds: parseModeratorRoleIds(c.env.DISCORD_MODERATOR_ROLE_IDS),
     });
-    const store = await hooks.storeFor(c);
     await hooks.issueSession(c, store, {
       userId: user.id,
       username: user.global_name ?? user.username,

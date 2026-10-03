@@ -11,7 +11,7 @@ const fixtures = {
   "/up": [
     200,
     "application/json",
-    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown"}}',
+    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100}}',
   ],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
@@ -71,6 +71,11 @@ async function stub(t, change = () => {}) {
         "x-content-type-options": "nosniff",
         ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
         ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
+        // Cutover identity (TOG-12863): the live /up answers as two-web-next
+        // with no-store, so the stub advertises the same pair.
+        ...(request.url === "/up"
+          ? { "x-two-origin": "two-web-next", "cache-control": "no-store" }
+          : {}),
         ...(location ? { location } : {}),
         "set-cookie": "fixture=not-a-session; Path=/",
       },
@@ -369,11 +374,72 @@ for (const body of [
   });
 }
 
+test("accepts a critical backlog as degraded, never down", async (t) => {
+  // QUEUE_CRITICAL_AT (100) stays degraded: a backlog is RSVP lag, not an
+  // outage (src/up.ts). The gate asserts the 200 + origin + no-store triple.
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"degraded","db":"ok","pending_migrations":0,"queue":{"status":"degraded","pending":100,"warn_at":20,"critical_at":100}}';
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.ok(result.output.includes("PASS /up"), result.output);
+});
+
+test("rejects /up without the cutover origin marker", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") delete result.headers["x-two-origin"];
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes("FAIL /up: expected X-TWO-Origin two-web-next; actual missing"),
+    result.output,
+  );
+});
+
+test("rejects /up without no-store", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") result.headers["cache-control"] = "public, max-age=3600";
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(result.output.includes("FAIL /up: expected Cache-Control no-store"), result.output);
+});
+
+test("rejects /up 500 even with the origin marker present", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") {
+      result.status = 500;
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100}}';
+    }
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(result.output.includes("FAIL /up: expected HTTP 200; actual HTTP 500"), result.output);
+});
+
+test("rejects /up envelopes missing the queue thresholds", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown"}}';
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected JSON \/up db:ok, pending_migrations:0, status and queue\.status/,
+  );
+});
+
 test("allows degraded /up and guest admin 403", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (route === "/up")
       result.body =
-        '{"status":"degraded","db":"ok","pending_migrations":0,"queue":{"status":"degraded"}}';
+        '{"status":"degraded","db":"ok","pending_migrations":0,"queue":{"status":"degraded","warn_at":20,"critical_at":100}}';
     if (route === "/admin") {
       result.status = 403;
       delete result.headers.location;

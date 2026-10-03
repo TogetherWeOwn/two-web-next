@@ -1,0 +1,49 @@
+{
+  "$comment": "Per-file budgets for unbundled public assets. Baseline 2026-09-30 (raw/gzip bytes): events-calendar 8108/2793, going-count 2776/1145, member-profile 5193/1977, past-events 3778/1434, styles 2087/882. Ceilings leave roughly 25-45% headroom, not room for a framework import. Islands added later start at measured size plus 25-33% headroom: copy-link (ceilings 3072/1280), avatar 610 raw (1024/512), admin-event-editor 979/482 (1280/640), admin-event-text-limits 1594/725 (2048/1024), auth-status 4152/1576 (5120/2048) and rsvp-button 28628/7371 (35840/9728, added on main by #98). Every JavaScript file under public/islands at any depth must have a budget. Raising a ceiling requires an explicit decision explaining the growth; never relax a budget just to make CI green. CEO decision 2026-10-03 on TOG-10845 approved raising the five 2026-09-30 ceilings to measured size x1.25 (rounded up): events-calendar.js 12356/3975 -> 15872/5120, going-count.js 6800/2548 -> 8704/3328, member-profile.js 15547/4969 -> 19456/6400, past-events.js 6275/2024 -> 8192/2560, public/styles.css 5678/1841 -> 7168/2304 (measured on the merged tree, main 0bc7b0cb). Growth drivers are main's theme/port work since the baseline, not this PR; this PR adds gates only and does not rewrite or minify served CSS or JavaScript. CEO decision 2026-10-03 on TOG-12992 approved raising public/islands/admin-event-editor.js 1280/640 -> 3584/1536 (measured 2843/1189 x1.25, rounded up 512/256). Growth driver is main #344 (033059bf, admin session-expiry draft-hold in the editor islands), 1013/485 -> 2843/1189, not this PR; the raise covers that one island only and a further increase needs a new decision. A build-time minification follow-up will let these ceilings come back down later.",
+  "budgets": {
+    "public/islands/admin-event-editor.js": {
+      "maxRawBytes": 3584,
+      "maxGzipBytes": 1536
+    },
+    "public/islands/admin-event-text-limits.js": {
+      "maxRawBytes": 2048,
+      "maxGzipBytes": 1024
+    },
+    "public/islands/auth-status.js": {
+      "maxRawBytes": 5120,
+      "maxGzipBytes": 2048
+    },
+    "public/islands/avatar.js": {
+      "maxRawBytes": 1024,
+      "maxGzipBytes": 512
+    },
+    "public/islands/copy-link.js": {
+      "maxRawBytes": 3072,
+      "maxGzipBytes": 1280
+    },
+    "public/islands/events-calendar.js": {
+      "maxRawBytes": 15872,
+      "maxGzipBytes": 5120
+    },
+    "public/islands/going-count.js": {
+      "maxRawBytes": 8704,
+      "maxGzipBytes": 3328
+    },
+    "public/islands/member-profile.js": {
+      "maxRawBytes": 19456,
+      "maxGzipBytes": 6400
+    },
+    "public/islands/past-events.js": {
+      "maxRawBytes": 8192,
+      "maxGzipBytes": 2560
+    },
+    "public/islands/rsvp-button.js": {
+      "maxRawBytes": 35840,
+      "maxGzipBytes": 9728
+    },
+    "public/styles.css": {
+      "maxRawBytes": 7168,
+      "maxGzipBytes": 2304
+    }
+  }
+}

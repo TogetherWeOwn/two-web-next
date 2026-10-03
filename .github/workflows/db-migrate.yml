@@ -9,7 +9,10 @@ on:
         options: [staging, production]
         default: staging
         required: true
-  # Opt-in only: deploy.yml does NOT call this workflow by default.
+  # deploy.yml does not call this workflow: it applies the staging web
+  # migrations itself, in the exact-SHA deploy job, with the same
+  # ci/neon-migrate.mjs. This stays the hand-dispatch path (staging recovery)
+  # and the only production path.
   # Environment secrets are loaded here, not passed/inherited from a caller.
   workflow_call:
     inputs:

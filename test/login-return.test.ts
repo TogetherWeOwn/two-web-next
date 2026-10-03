@@ -294,13 +294,14 @@ describe("url.intended (auth-gate bounce)", () => {
     const { env } = isolated();
     // Same-origin POST reaches the guard (outer sameOrigin middleware fails
     // closed without an Origin); the bounce itself records intended only for
-    // GET/HEAD, so a POST redirects without the cookie.
+    // GET/HEAD, so a POST goes to write recovery without the cookie (TOG-12399).
     const bounce = await app.request(
       "/admin/",
       { method: "POST", headers: { origin: APP_URL } },
       env,
     );
-    expect(bounce.status).toBe(302);
+    expect(bounce.status).toBe(303);
+    expect(bounce.headers.get("location")).toBe("/auth/recover?next=%2Fadmin");
     expect(setCookies(bounce)).not.toContain(`${LOGIN_INTENDED_COOKIE}=`);
   });
 
@@ -698,6 +699,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event CTAs + profile banner (agent-t
       sweepExpired: async () => {
         throw new Error("store down");
       },
+      replace: async () => {
+        throw new Error("store down");
+      },
+      journeys: store.journeys,
     };
     const res = await app.request(`/e/${KEY}`, { headers: { cookie } }, envFor(failing));
     expect(res.status).toBe(410);

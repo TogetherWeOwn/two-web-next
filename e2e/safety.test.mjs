@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { requireGithubRunner, requireTestDatabase } from "./ci-only.mjs";
+import { requireStagingOrigin } from "./staging-guard.mjs";
 
 const runner = { GITHUB_ACTIONS: "true", RUNNER_OS: "Linux", RUNNER_ENVIRONMENT: "github-hosted" };
 
@@ -18,6 +20,42 @@ test("browser runner runs in GitHub Actions on Linux and refuses the controller"
   ]) {
     assert.throws(() => requireGithubRunner(env), /only in GitHub Actions on Linux/);
   }
+});
+
+test("staging guard permits only the exact staging origin", () => {
+  assert.equal(
+    requireStagingOrigin("https://next.togetherweown.com"),
+    "https://next.togetherweown.com",
+  );
+  assert.equal(
+    requireStagingOrigin("https://next.togetherweown.com/"),
+    "https://next.togetherweown.com",
+  );
+  for (const raw of [
+    undefined,
+    "",
+    "https://togetherweown.com",
+    "https://togetherweown.com/",
+    "http://next.togetherweown.com/",
+    "https://next.togetherweown.com:8443/",
+    "https://user:pass@next.togetherweown.com/",
+    "https://next.togetherweown.com/e/seed-calendar-01",
+    "https://next.togetherweown.com/?q=x",
+    "https://next.togetherweown.com/#main",
+    "https://evil-next.togetherweown.com/",
+    "https://next.togetherweown.com.example/",
+    "https://localhost:8787",
+    "https://two-web-next.example.workers.dev/",
+  ]) {
+    assert.throws(() => requireStagingOrigin(raw), /only against/);
+  }
+});
+
+test("default Playwright project ignores the staging specs", () => {
+  // Staging specs need the deployed Worker (QA seam + Hyperdrive/queues) and
+  // fail under wrangler dev + CI Postgres. Only e2e-staging.yml may run them.
+  const config = readFileSync(new URL("../playwright.config.ts", import.meta.url), "utf8");
+  assert.match(config, /testIgnore:\s*"[^"]*staging[^"]*"/);
 });
 
 test("database guard permits only the disposable CI target", () => {

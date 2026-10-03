@@ -7,11 +7,12 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
 CHECKER = Path(__file__).with_name("check-pr-conventions.py")
-TITLE = "fix(ci): require visible card references"
+TITLE = "fix(ci): stop requiring card references"
 BODY = "Explain the focused checker change and its offline regression tests."
 
 
@@ -20,9 +21,8 @@ class PrConventionsTests(unittest.TestCase):
         env = {
             "EVENT": "pull_request",
             "TITLE": TITLE,
-            "BODY": BODY + "\n\nRefs: TOG-1234",
+            "BODY": BODY,
             "AUTHOR": "contributor",
-            "REQUIRE_CARD_REF": "true",
         }
         env.update(inputs)
         env = {key: value for key, value in env.items() if value is not None}
@@ -41,94 +41,79 @@ class PrConventionsTests(unittest.TestCase):
             self.assertNotIn("PR conventions OK", result.stdout)
         return result.stdout
 
-    def test_visible_standalone_reference(self):
-        for ref in ("Refs: TOG-1234", "\tRefs: TOG-1234  ", "Refs:\tTOG-1234"):
-            with self.subTest(ref=ref):
-                self.run_checker(BODY=BODY + "\n\n" + ref + "\n")
-
-    def test_crlf_reference(self):
-        self.run_checker(BODY=BODY + "\r\n\r\nRefs: TOG-1234\r\n")
-
-    def test_hidden_references_fail(self):
-        for comment in (
-            "<!-- Refs: TOG-1234 -->",
-            "<!--\nRefs: TOG-1234\n-->",
-            "<!-- first -->\n<!--\nRefs: TOG-1234\nlast -->",
-        ):
-            with self.subTest(comment=comment):
-                output = self.run_checker(1, BODY=BODY + "\n" + comment)
-                self.assertIn("::error title=Card reference::", output)
-                self.assertNotIn("::error title=PR body::", output)
-
-    def test_inline_code_comment_delimiters_leave_reference_visible(self):
-        for ticks in ("`", "``"):
-            with self.subTest(ticks=ticks):
-                body = BODY + f"\n\n{ticks}<!--{ticks}\n\nRefs: TOG-1234\n\n{ticks}-->{ticks}"
-                self.run_checker(BODY=body)
-
-    def test_unterminated_comments_hide_references_through_eof(self):
+    def test_no_card_reference_is_required(self):
         for event in ("pull_request", "workflow_dispatch"):
             with self.subTest(event=event):
-                body = BODY + "\n\n<!--\nRefs: TOG-1234\n"
-                output = self.run_checker(1, EVENT=event, BODY=body)
-                self.assertIn("::error title=Card reference::", output)
-                self.assertNotIn("::error title=PR body::", output)
-                self.run_checker(EVENT=event, BODY=body, REQUIRE_CARD_REF="false")
-        self.run_checker(BODY=BODY + "\nRefs: TOG-1234\n<!-- unfinished")
+                output = self.run_checker(EVENT=event, BODY=BODY)
+                self.assertNotIn("::error", output)
+                self.assertNotIn("::warning", output)
 
-    def test_fenced_code_comment_delimiters_are_literal(self):
-        for fence in ("```", "~~~~"):
-            with self.subTest(fence=fence):
-                body = BODY + f"\n\n{fence}text\n<!-- ` ```\n{fence}\n\nRefs: TOG-1234\n\n{fence}\n-->\n{fence}"
-                self.run_checker(BODY=body)
-        self.run_checker(BODY=BODY + "\n\n```text\n<!--\nRefs: TOG-1234")
+    def test_card_reference_requirement_is_gone(self):
+        # The old switch must not bring the requirement back.
+        output = self.run_checker(BODY=BODY, REQUIRE_CARD_REF="true")
+        self.assertNotIn("Card reference", output)
 
-    def test_escaped_comment_delimiters_are_literal(self):
-        body = BODY + "\n\n" + r"\<!--" + "\n\nRefs: TOG-1234\n\n" + r"\-->"
-        self.run_checker(BODY=body)
+    def test_internal_id_in_title_warns(self):
+        output = self.run_checker(TITLE="fix(ci): handle TOG-1234 retries")
+        self.assertIn("::warning title=Internal ID::", output)
+        self.assertIn("the PR title", output)
+        self.assertNotIn("::error", output)
 
-    def test_real_comments_win_over_code_like_content(self):
-        for comment in (
-            "<!-- `\nRefs: TOG-1234\n` -->",
-            "<!--\n```\nRefs: TOG-1234\n```",
-            "` unmatched\n\n<!--\nRefs: TOG-1234",
-            "` unmatched\n<!--\nRefs: TOG-1234",
-            "\\\\\\\\<!--\nRefs: TOG-1234",
-        ):
-            with self.subTest(comment=comment):
-                output = self.run_checker(1, BODY=BODY + "\n\n" + comment)
-                self.assertIn("::error title=Card reference::", output)
-
-    def test_incidental_and_malformed_references_fail(self):
-        for ref in (
-            "Related to TOG-1234.",
-            "This fixes Refs: TOG-1234",
-            "Refs: TOG-1234 is relevant.",
-            "Refs: TOG-1234suffix",
-            "Refs: TOG-",
-            "Refs: TOG-abc",
-            "refs: TOG-1234",
-            "Refs: OTHER-1234",
-            "",
-        ):
+    def test_internal_id_in_body_warns(self):
+        for ref in ("Refs: TOG-1234", "Closes PAP-77.", "see (TOG-9)", "PAP-1\r\nTOG-2"):
             with self.subTest(ref=ref):
-                output = self.run_checker(1, BODY=BODY + "\n" + ref)
-                self.assertIn("::error title=Card reference::", output)
+                output = self.run_checker(BODY=BODY + "\n\n" + ref)
+                self.assertIn("::warning title=Internal ID::", output)
+                self.assertIn("the PR body", output)
+                self.assertNotIn("::error", output)
 
-    def test_hidden_reference_does_not_hide_visible_reference(self):
-        self.run_checker(BODY=BODY + "\n<!-- Refs: TOG-9999 -->\nRefs: TOG-1234")
+    def test_internal_id_in_html_comment_still_warns(self):
+        output = self.run_checker(BODY=BODY + "\n<!-- Refs: TOG-1234 -->")
+        self.assertIn("::warning title=Internal ID::", output)
 
-    def test_optional_reference_mode(self):
-        for body in (BODY, BODY + "\n<!-- Refs: TOG-1234 -->"):
-            with self.subTest(body=body):
-                self.run_checker(BODY=body, REQUIRE_CARD_REF="false")
-        output = self.run_checker(1, BODY="short", REQUIRE_CARD_REF="false")
-        self.assertIn("::error title=PR body::", output)
-        self.assertNotIn("::error title=Card reference::", output)
+    def test_warning_names_places_without_echoing_the_id(self):
+        output = self.run_checker(
+            TITLE="fix(ci): handle TOG-1234 retries", BODY=BODY + "\nPAP-5678"
+        )
+        self.assertIn("the PR title, the PR body", output)
+        self.assertNotIn("1234 retries", output)
+        self.assertNotIn("PAP-5678", output)
 
-    def test_reference_required_by_default(self):
-        output = self.run_checker(1, BODY=BODY, REQUIRE_CARD_REF=None)
-        self.assertIn("::error title=Card reference::", output)
+    def test_template_prefix_text_without_digits_does_not_warn(self):
+        body = BODY + "\n- [ ] No internal card ID (TOG-, PAP-) is in the title.\nTOGETHER-1 PAPER-2 STOG-3"
+        output = self.run_checker(BODY=body)
+        self.assertNotIn("::warning", output)
+
+    def test_internal_id_in_commit_subjects_warns(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            listing = Path(scratch) / "subjects.txt"
+            listing.write_text("feat(ci): clean subject\nfix(ci): handle TOG-42\n", encoding="utf-8")
+            output = self.run_checker(COMMIT_SUBJECTS_PATH=str(listing))
+            self.assertIn("::warning title=Internal ID::", output)
+            self.assertIn("commit subject 2", output)
+            self.assertNotIn("commit subject 1", output)
+            clean = Path(scratch) / "clean.txt"
+            clean.write_text("feat(ci): clean subject\n", encoding="utf-8")
+            self.assertNotIn("::warning", self.run_checker(COMMIT_SUBJECTS_PATH=str(clean)))
+
+    def test_missing_commit_subject_listing_is_ignored(self):
+        output = self.run_checker(COMMIT_SUBJECTS_PATH="/nonexistent/subjects.txt")
+        self.assertNotIn("::warning", output)
+
+    def test_error_level_fails_on_internal_ids(self):
+        for level in ("error", "bogus", ""):
+            with self.subTest(level=level):
+                output = self.run_checker(
+                    1, BODY=BODY + "\nRefs: TOG-1234", INTERNAL_ID_LEVEL=level
+                )
+                self.assertIn("::error title=Internal ID::", output)
+        self.run_checker(BODY=BODY + "\nRefs: TOG-1234", INTERNAL_ID_LEVEL="warning")
+        self.run_checker(BODY=BODY, INTERNAL_ID_LEVEL="error")
+
+    def test_internal_id_check_does_not_replace_convention_errors(self):
+        output = self.run_checker(1, TITLE="Update TOG-1 checker", BODY=BODY)
+        self.assertIn("not a Conventional Commits header", output)
+        self.assertIn("::warning title=Internal ID::", output)
 
     def test_valid_conventional_titles(self):
         for title in (
@@ -154,14 +139,10 @@ class PrConventionsTests(unittest.TestCase):
     def test_body_length_boundary_and_comment_stripping(self):
         for length, expected in ((39, 1), (40, 0)):
             with self.subTest(length=length):
-                # The visible reference contributes 13 non-whitespace characters.
-                body = "x" * (length - 13) + "\nRefs: TOG-1234"
-                output = self.run_checker(expected, BODY=body)
+                output = self.run_checker(expected, BODY="x" * length)
                 if expected:
                     self.assertIn("::error title=PR body::", output)
-        output = self.run_checker(
-            1, BODY="<!-- " + "x" * 80 + " -->\nRefs: TOG-1234"
-        )
+        output = self.run_checker(1, BODY="<!-- " + "x" * 80 + " -->")
         self.assertIn("::error title=PR body::", output)
 
     def test_dependency_bot_exemptions(self):
@@ -175,12 +156,10 @@ class PrConventionsTests(unittest.TestCase):
             with self.subTest(author=author):
                 self.run_checker(1, AUTHOR=author, BODY="")
 
-    def test_dispatch_uses_same_reference_gate(self):
+    def test_dispatch_uses_same_body_gate(self):
         self.run_checker(EVENT="workflow_dispatch")
-        output = self.run_checker(
-            1, EVENT="workflow_dispatch", BODY=BODY + "\n<!-- Refs: TOG-1234 -->"
-        )
-        self.assertIn("::error title=Card reference::", output)
+        output = self.run_checker(1, EVENT="workflow_dispatch", BODY="short")
+        self.assertIn("::error title=PR body::", output)
 
     def test_push_controls(self):
         self.run_checker(EVENT="push", COMMITS="[]", TITLE="invalid", BODY="")
@@ -193,6 +172,18 @@ class PrConventionsTests(unittest.TestCase):
                 self.run_checker(
                     EVENT="push", COMMITS=json.dumps([{"id": "a" * 40, "message": message}])
                 )
+        output = self.run_checker(
+            EVENT="push",
+            COMMITS=json.dumps([{"id": "a" * 40, "message": "fix(ci): handle TOG-42\n\nbody"}]),
+        )
+        self.assertIn("::warning title=Internal ID::", output)
+        self.assertIn("commit subject 1", output)
+        self.run_checker(
+            1,
+            EVENT="push",
+            INTERNAL_ID_LEVEL="error",
+            COMMITS=json.dumps([{"id": "a" * 40, "message": "fix(ci): handle PAP-42"}]),
+        )
         for message in ("Update checker", "fix(ci): trailing period.", "fix(ci): " + "x" * 92, ""):
             with self.subTest(message=message):
                 output = self.run_checker(

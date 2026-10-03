@@ -6,6 +6,10 @@ requireGithubRunner();
 export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
+  // Staging journey specs run only via playwright.staging.config.ts in the
+  // e2e-staging workflow (real Hyperdrive/queues + QA seam). They must never
+  // run under wrangler dev + CI Postgres, where that seam doesn't exist.
+  testIgnore: "**/staging/**",
   fullyParallel: false,
   workers: 1,
   retries: 0,

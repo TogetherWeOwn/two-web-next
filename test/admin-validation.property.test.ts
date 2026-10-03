@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   isKnownTimezone,
   parseEventForm,
+  parseFeaturedForm,
   utcToWall,
   ValidationError,
   wallToUtc,
@@ -28,6 +29,26 @@ const FORM = {
   ends_at: "2026-07-15 22:00",
   capacity: "8",
 };
+
+// Independent renderer for featured UTC windows: plain UTC getters, not Intl
+// and not the form parser. Featured windows carry PostgreSQL microseconds.
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+const pad3 = (n: number): string => String(n).padStart(3, "0");
+function featuredWindowText(micros: number): string {
+  const ms = Math.floor(micros / 1000);
+  const us = micros - ms * 1000;
+  const d = new Date(ms);
+  const date = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+  const time = `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
+  return `${date} ${time}.${pad3(d.getUTCMilliseconds())}${pad3(us)}`;
+}
+function featuredCanonicalText(micros: number): string {
+  return `${featuredWindowText(micros).replace(" ", "T")}Z`;
+}
+const utcMicros = fc.integer({
+  min: Date.UTC(2020, 0, 1) * 1000,
+  max: Date.UTC(2035, 11, 31, 23, 59, 59, 999) * 1000 + 999,
+});
 
 // Independent renderer: do not use utcToWall as the round-trip oracle.
 function wallAt(ms: number, timezone: string): string {
@@ -311,6 +332,37 @@ describe("seeded admin event validation properties", () => {
         expectFieldError(() => parseEventForm({ ...FORM, capacity }), "capacity");
       }),
       { ...OPTIONS, examples: [["2147483648"], ["9".repeat(400)], ["0"]] },
+    );
+  });
+
+  it("accepts a featured window iff its normalized UTC text is strictly after the start", () => {
+    fc.assert(
+      fc.property(utcMicros, fc.integer({ min: -2_000_000, max: 2_000_000 }), (start, delta) => {
+        const end = start + delta;
+        const starts_at = featuredWindowText(start);
+        const ends_at = featuredWindowText(end);
+        const parsed = () => parseFeaturedForm({ title: "Slot", starts_at, ends_at });
+        if (end > start) {
+          const window = parsed();
+          // Wall → UTC conversion agreement: canonical text matches the
+          // independent renderer, and the stored Date keeps the millisecond part.
+          expect(window.startsAtUtcText).toBe(featuredCanonicalText(start));
+          expect(window.endsAtUtcText).toBe(featuredCanonicalText(end));
+          expect(window.startsAtUtc?.getTime()).toBe(Math.floor(start / 1000));
+          expect(window.endsAtUtc?.getTime()).toBe(Math.floor(end / 1000));
+        } else {
+          // Equality and reversal both rejected: the comparison is strict.
+          expectFieldError(parsed, "ends_at");
+        }
+      }),
+      {
+        ...OPTIONS,
+        examples: [
+          [Date.UTC(2026, 9, 1, 12, 34, 56, 789) * 1000, 0],
+          [Date.UTC(2026, 9, 1, 12, 34, 56, 789) * 1000, 1],
+          [Date.UTC(2026, 9, 1, 12, 34, 56, 789) * 1000, -1],
+        ],
+      },
     );
   });
 

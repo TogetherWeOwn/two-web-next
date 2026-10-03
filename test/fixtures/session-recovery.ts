@@ -12,7 +12,10 @@ import type { Env } from "../../src/env";
 
 export const MEMBER = "100000000000000001";
 export const SECRET = "local-fixture-secret-at-least-32-bytes-long";
-export function recoveryFixture(origin = "https://next.example.test") {
+export function recoveryFixture(
+  origin = "https://next.example.test",
+  extra: Record<string, string> = {},
+) {
   const sessions = createMemorySessionStore();
   const profiles = createMemoryProfileStore([
     {
@@ -42,6 +45,7 @@ export function recoveryFixture(origin = "https://next.example.test") {
     DISCORD_BOT_TOKEN: "fixture-bot",
     DISCORD_GUILD_ID: "326474832151838730",
     DISCORD_INVITE_URL: "https://discord.gg/fixture",
+    ...extra,
   };
   const app = new Hono<{ Bindings: Env }>();
   for (const path of ["/profile", "/members/*"]) {
@@ -71,7 +75,7 @@ export function recoveryFixture(origin = "https://next.example.test") {
   app.route("/", production);
   const request = (path: string, init?: RequestInit) =>
     app.request(new URL(path, env.APP_URL), init, env);
-  async function login(expiresAt = new Date(Date.now() + 3600_000)) {
+  async function login(expiresAt = new Date(Date.now() + 3600_000), moderator = false) {
     const token = newSessionToken();
     const tokenHash = await hashToken(token);
     await sessions.create({
@@ -80,7 +84,7 @@ export function recoveryFixture(origin = "https://next.example.test") {
       username: "Fixture member",
       avatar: null,
       member: true,
-      moderator: false,
+      moderator,
       expiresAt,
     });
     return {

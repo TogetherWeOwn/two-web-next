@@ -129,10 +129,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   # name pinned equal to the id: `check` is a required check on main.
+  # Run the required gate even when performance jobs fail or are skipped;
+  # GitHub treats a skipped required check as successful.
   # A failing audit must also prevent the existing required check from passing.
   check:
     name: check
-    needs: [a11y, scope]
+    needs: [a11y, lighthouse, bundle-budget, scope]
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
@@ -163,6 +165,7 @@ jobs:
         env:
           A11Y_RESULT: ${{ needs.a11y.result }}
         run: test "$A11Y_RESULT" = success
+      # Always check out so the always-run performance gate below can report.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: needs.scope.outputs.docs_only != 'true'
         with:
@@ -184,6 +187,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # Only explicit success from both performance jobs may read green.
+      - name: Performance gate (lighthouse + bundle-budget must succeed)
+        if: always() && needs.scope.outputs.docs_only != 'true'
+        run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"
+      - name: Performance gate selftest
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node ci/require-performance.mjs --selftest
       - name: Dependency audit selftest (local fixtures)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run deps:audit:selftest
@@ -222,6 +232,18 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # SvelteKit spike (TOG-12247): the web/ workspace has its own lockfile and
+      # typecheck. web/node_modules is installed here so the Kit steps never run
+      # on a partial workspace.
+      - name: Install Kit workspace dependencies
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm ci --prefix web
+      - name: Kit typecheck (svelte-check, warnings fail)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run check --prefix web
+      - name: Kit archive parity (Hono vs SvelteKit section contract)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node ci/kit-preview-e2e.mjs
       - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/staging-deploy-gate-selftest.mjs
@@ -261,6 +283,10 @@ jobs:
             echo "::error::smoke CLI ran without options; expected exit 2"
             exit 1
           fi
+          if npm run smoke:internal-action -- --announcement-only 2>/dev/null; then
+            echo "::error::announcement-only smoke ran without --channel-key; expected exit 2"
+            exit 1
+          fi
 
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: needs.scope.outputs.docs_only != 'true'
@@ -277,3 +303,54 @@ jobs:
       - name: Production build (wrangler dry run, no deployment)
         if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
+
+  bundle-budget:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'bundle-budget') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # The checker uses only Node built-ins; no install/build/network needed.
+      - run: node ci/check-bundle-budget.mjs --selftest
+      - run: node ci/check-bundle-budget.mjs
+
+  lighthouse:
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'lighthouse') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    # A private namespace keeps Wrangler's fixed audit port off the shared host.
+    container:
+      image: node:24-bookworm
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+      # Ignore process bindings and .env; the fixture also discards runtime env.
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false"
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Install isolated Chromium and process tools
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends procps >/dev/null
+          npx playwright install --with-deps chromium
+          node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
+      - name: Lighthouse (local fixture worker, no database or Discord)
+        run: npm run lighthouse
+      - name: Performance evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lighthouse-${{ github.sha }}
+          path: .lighthouseci/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
