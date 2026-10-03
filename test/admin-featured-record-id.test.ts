@@ -14,6 +14,7 @@ import { createMemorySessionStore, type Sql } from "../src/sessions";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { EnvWithThrottle } from "../src/throttle";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 
 vi.mock("../src/admin/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/admin/store")>()),
@@ -226,7 +227,7 @@ for (const route of routes) {
         const res = await request(id, route, {
           bindings: {
             ...bindings,
-            THROTTLE_STORE: async () => sql as unknown as Sql,
+            THROTTLE_STORE: async () => withThrottleTx(sql as unknown as Sql),
           },
         });
         expect(res.status).toBe(429);
