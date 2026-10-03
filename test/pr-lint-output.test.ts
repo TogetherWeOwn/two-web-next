@@ -108,7 +108,6 @@ print(json.dumps({"event": "pull_request" if event == "workflow_dispatch" else e
       GITHUB_REPOSITORY: "TogetherWeOwn/fixture",
       GITHUB_EVENT_NAME: event,
       PR_NUMBER: "28",
-      REQUIRE_CARD_REF: "true",
       COMMITS: JSON.stringify(commits),
     };
     const resolve = step("Resolve PR title/body");
@@ -161,8 +160,7 @@ print(json.dumps({"event": "pull_request" if event == "workflow_dispatch" else e
 }
 
 const title = "fix(ci): preserve PR metadata";
-const validBody =
-  "Explain the transport change and its hermetic regression tests.\nRefs: TOG-11400";
+const validBody = "Explain the transport change and its hermetic regression tests.";
 const bodies = [
   `${validBody}\n\n\`\`\`text\nPR_EOF\n\`\`\`\nStill part of the body.`,
   `${validBody}\r\nPR_EOF\r\nUnicode: café 日本語 🧪\r\n`,
@@ -232,14 +230,35 @@ describe("unchanged convention policy and workflow gates", () => {
     expect(result.status).toBe(1);
   });
 
-  it("keeps the card-reference rule", () => {
+  it("does not require a card reference", () => {
     const result = transport(
       "pull_request",
       title,
       "Explain the transport change and all the hermetic tests that were run.",
     );
-    expect(result.status).toBe(1);
-    expect(result.output).toContain("::error title=Card reference::");
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).not.toContain("::error");
+    expect(result.output).not.toContain("::warning");
+  });
+
+  it("warns, without failing, on an internal card ID in the title or body", () => {
+    const body = transport("pull_request", title, `${validBody}\nRefs: TOG-1234`);
+    expect(body.status, body.output).toBe(0);
+    expect(body.output).toContain("::warning title=Internal ID::");
+    expect(body.output).toContain("the PR body");
+    const named = transport("pull_request", "fix(ci): handle PAP-77 retries", validBody);
+    expect(named.status, named.output).toBe(0);
+    expect(named.output).toContain("::warning title=Internal ID::");
+    expect(named.output).toContain("the PR title");
+  });
+
+  it("warns on an internal card ID in a commit subject on main", () => {
+    const result = transport("push", "", "", "", [
+      { id: "fixture", message: "fix(ci): handle TOG-42 retries" },
+    ]);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain("::warning title=Internal ID::");
+    expect(result.output).toContain("commit subject 1");
   });
 
   it("keeps the title length rule", () => {
@@ -255,6 +274,49 @@ describe("unchanged convention policy and workflow gates", () => {
     const bad = transport("push", "", "", "", [{ id: "fixture", message: "not conventional" }]);
     expect(bad.status).toBe(1);
     expect(bad.output).toContain("::error title=Commit on main::");
+  });
+
+  it("no longer carries the card-reference switch and defaults the internal-ID check to a warning", () => {
+    expect(workflow).not.toContain("REQUIRE_CARD_REF");
+    expect(workflow).toContain('\n  INTERNAL_ID_LEVEL: "warning"\n');
+    expect(workflow).not.toMatch(/Refs: TOG-/);
+  });
+
+  it.each([
+    ["writes the listed PR commit subjects to the job file", 0, "fix(ci): one\nfix(ci): two\n", ""],
+    ["survives a failed listing with a warning and an empty file", 1, "", "::warning::"],
+  ])("commit-subject step %s", (_name, ghExit, expectedFile, expectedOutput) => {
+    const scratch = mkdtempSync(
+      join(
+        process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+        "pr-lint-subjects-",
+      ),
+    );
+    try {
+      mkdirSync(join(scratch, "bin"));
+      writeFileSync(
+        join(scratch, "bin/gh"),
+        `#!/bin/bash\nif [ "${ghExit}" != 0 ]; then exit 1; fi\nprintf 'fix(ci): one\\nfix(ci): two\\n'\n`,
+        { mode: 0o755 },
+      );
+      const listing = step("List PR commit subjects");
+      expect(listing.text).toContain("if: github.event_name != 'push'");
+      const result = spawnSync("bash", ["-c", listing.run], {
+        env: {
+          PATH: `${join(scratch, "bin")}:/usr/local/bin:/usr/bin:/bin`,
+          RUNNER_TEMP: scratch,
+          REPO: "TogetherWeOwn/fixture",
+          PR_NUMBER: "28",
+        },
+        encoding: "utf8",
+        timeout: 5000,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(join(scratch, "pr-commit-subjects.txt"), "utf8")).toBe(expectedFile);
+      if (expectedOutput) expect(result.stdout).toContain(expectedOutput);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 
   it("retains the required check name, metadata sources, visibility-routed runners and read-only permissions", () => {

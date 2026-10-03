@@ -371,9 +371,10 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 ## Contributing
 
-Squash-merge only; PR titles follow Conventional Commits and the body carries
-`Refs: TOG-1234`. `check`, `gitleaks` and `pr-lint` are required. Review the exact
-green head before merge. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Squash-merge only; PR titles follow Conventional Commits and the body follows the
+[PR template](.github/pull_request_template.md). No internal card IDs in PR text.
+`check`, `gitleaks` and `pr-lint` are required. Review the exact green head before
+merge. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 
