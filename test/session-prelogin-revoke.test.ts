@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeSigned } from "hono/utils/cookie";
 import app from "./app";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import type { Env } from "../src/env";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import {
@@ -142,7 +143,7 @@ function fakeSql() {
     throw new Error(`fakeSql: unexpected statement: ${head.slice(0, 80)}`);
   }) as unknown as Sql;
   (sql as { unsafe: (q: string) => Promise<unknown> }).unsafe = async () => [];
-  return { sql, throttle, attempts };
+  return { sql: withThrottleTx(sql), throttle, attempts };
 }
 
 function isolatedJoin(deps: Partial<JoinRouteDeps> = {}) {

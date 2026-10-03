@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import { DiscordError, exchangeCode, failureMeta } from "../src/discord";
 import { createMemorySessionStore, type Sql } from "../src/sessions";
 import type { Env } from "../src/env";
@@ -164,7 +165,7 @@ function isolatedJourney() {
     ...env,
     SESSION_STORE: store,
     ROSTER_STORE: roster as unknown as Sql,
-    JOIN_DEPS: { store: async () => sql },
+    JOIN_DEPS: { store: async () => withThrottleTx(sql) },
   } as unknown as EnvWithJoin;
   return { env: e, create, rotate, roster, attempts };
 }
