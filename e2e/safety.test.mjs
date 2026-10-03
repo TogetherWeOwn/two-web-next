@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { requireGithubRunner, requireTestDatabase } from "./ci-only.mjs";
+import { requireStagingOrigin } from "./staging-guard.mjs";
 
 const runner = { GITHUB_ACTIONS: "true", RUNNER_OS: "Linux", RUNNER_ENVIRONMENT: "github-hosted" };
 
@@ -17,6 +18,35 @@ test("browser runner runs in GitHub Actions on Linux and refuses the controller"
     { ...runner, RUNNER_OS: "macOS" },
   ]) {
     assert.throws(() => requireGithubRunner(env), /only in GitHub Actions on Linux/);
+  }
+});
+
+test("staging guard permits only the exact staging origin", () => {
+  assert.equal(
+    requireStagingOrigin("https://next.togetherweown.com"),
+    "https://next.togetherweown.com",
+  );
+  assert.equal(
+    requireStagingOrigin("https://next.togetherweown.com/"),
+    "https://next.togetherweown.com",
+  );
+  for (const raw of [
+    undefined,
+    "",
+    "https://togetherweown.com",
+    "https://togetherweown.com/",
+    "http://next.togetherweown.com/",
+    "https://next.togetherweown.com:8443/",
+    "https://user:pass@next.togetherweown.com/",
+    "https://next.togetherweown.com/e/seed-calendar-01",
+    "https://next.togetherweown.com/?q=x",
+    "https://next.togetherweown.com/#main",
+    "https://evil-next.togetherweown.com/",
+    "https://next.togetherweown.com.example/",
+    "https://localhost:8787",
+    "https://two-web-next.example.workers.dev/",
+  ]) {
+    assert.throws(() => requireStagingOrigin(raw), /only against/);
   }
 });
 
