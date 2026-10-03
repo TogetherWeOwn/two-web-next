@@ -199,8 +199,10 @@ describe("OAuth throttle envelope (DB-free)", () => {
 
   it("renders the branded browser 429 page without a stack", async () => {
     // Ports ThrottleEnvelopeTest.php:100. The branded copy is Next's own
-    // ("Slow down a little" + error-join CTA, not the legacy discord-join id);
-    // the contract pinned is: 429 + Retry-After + noindex + no internals.
+    // ("Slow down a little" + error-invite CTA, not the legacy discord-join id);
+    // the contract pinned is: 429 + Retry-After + noindex + no internals. The
+    // CTA points at the Discord invite URL, never /auth/discord: the OAuth
+    // start needs the session store and is dead during a store outage.
     const { env } = isolatedThrottle();
     const path = "/auth/discord/callback?code=stale&state=wrong";
     for (let i = 0; i < 10; i++) await app.request(path, {}, env);
@@ -210,7 +212,9 @@ describe("OAuth throttle envelope (DB-free)", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     const html = await res.text();
     expect(html).toContain("Slow down a little");
-    expect(html).toContain('data-testid="error-join"');
+    expect(html).toContain('data-testid="error-invite"');
+    expect(html).toContain('href="https://discord.gg/invite"');
+    expect(html).not.toContain('href="/auth/discord"');
     expect(html).toContain('name="robots" content="noindex, nofollow"');
     expect(html).not.toContain("ThrottleRequestsException");
   });

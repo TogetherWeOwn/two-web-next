@@ -116,16 +116,22 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
 );
 
 // 500 (ports errors/500). Never echoes the failure: message and trace stay in
-// the logs, never in a member's browser.
-export const InternalErrorPage: FC = () => (
-  <ErrorShell code="500" title="Something broke on our side">
+// the logs, never in a member's browser. The CTA — and the header nav — point
+// at the Discord invite URL directly, never /auth/discord: during a store
+// outage the OAuth start is dead, same as 503.
+export const InternalErrorPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
+  <ErrorShell
+    code="500"
+    title="Something broke on our side"
+    headerCta={{ href: inviteUrl, label: "Open Discord" }}
+  >
     <p class="lead">
       It is not you. We have logged the failure and the team will take a look. Try again in a minute
       — the lobby is not going anywhere.
     </p>
     <p class="recovery-actions">
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">
-        Join with Discord
+      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
+        Use the Discord invite instead
       </a>{" "}
       <a href="/" data-testid="error-home">
         Back to the homepage
@@ -134,16 +140,21 @@ export const InternalErrorPage: FC = () => (
   </ErrorShell>
 );
 
-// 429 (ports errors/429 + App\Support\ThrottleEnvelope::render).
-export const RateLimitedPage: FC = () => (
-  <ErrorShell code="429" title="Slow down a little">
+// 429 (ports errors/429 + App\Support\ThrottleEnvelope::render). Same outage-safe
+// CTA as 500/503: the invite URL works when the session store is throttled or down.
+export const RateLimitedPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
+  <ErrorShell
+    code="429"
+    title="Slow down a little"
+    headerCta={{ href: inviteUrl, label: "Open Discord" }}
+  >
     <p class="lead">
       You have made a lot of requests in a short time. Wait a moment and try again — the lobby is
       not going anywhere.
     </p>
     <p class="recovery-actions">
-      <a class="btn" href={JOIN_HREF} data-testid="error-join">
-        Join with Discord
+      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
+        Use the Discord invite instead
       </a>{" "}
       <a href="/" data-testid="error-home">
         Back to the homepage
@@ -222,7 +233,7 @@ export function internalErrorHandler(err: unknown, c: Context): Response | Promi
   if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
   c.header("cache-control", "no-store, private");
   c.status(500);
-  return c.html(<InternalErrorPage />);
+  return c.html(<InternalErrorPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
 }
 
 // One 429 shape for every throttle (ports ThrottleEnvelope::render): JSON
@@ -244,7 +255,7 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   }
   c.header("cache-control", "no-store, private");
   c.status(429);
-  return c.html(<RateLimitedPage />);
+  return c.html(<RateLimitedPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
 }
 
 // Match the JSON-only event contracts before a handler can run (e.g. session
