@@ -126,8 +126,18 @@ the merged tree (main `0bc7b0cb`):
 | `public/islands/past-events.js` | 6275 / 2024 | 8192 / 2560 |
 | `public/styles.css` | 5678 / 1841 | 7168 / 2304 |
 
-A build-time minification follow-up will let these ceilings come back down
-later. Lighthouse thresholds are untouched.
+A separate CEO decision on TOG-12992 (2026-10-03) raised one more island,
+`public/islands/admin-event-editor.js`, to measured ×1.25 rounded up. Its growth
+comes from main #344 (`033059bf`, admin session-expiry draft-hold in the editor
+islands), which took it from 1013 / 485 to 2843 / 1189, not from this PR:
+
+| Asset | Raw / gzip bytes | Ceiling |
+|---|---:|---:|
+| `public/islands/admin-event-editor.js` | 2843 / 1189 | 3584 / 1536 |
+
+The raise covers that one island only; a further increase on it needs a new
+decision. A build-time minification follow-up will let these ceilings come back
+down later. Lighthouse thresholds are untouched.
 
 Never relax a Lighthouse threshold to turn a build green. Threshold changes
 require a separate owner-approved PR. Byte-ceiling increases must likewise be a
