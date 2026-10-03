@@ -1,4 +1,11 @@
 import { test, expect } from "./fixtures";
+import { loginQaIdentities } from "./qa-login";
+
+// Fresh member session per file: event pages rotate the bearer on read, so a
+// stored token is single-use across files.
+test.beforeAll(async () => {
+  await loginQaIdentities();
+});
 
 // CI keyboard flow verbatim, against the staging QA member: 1100 ms spam
 // floor, Tab order Bio to Games to Timezone to Save, Enter submits.

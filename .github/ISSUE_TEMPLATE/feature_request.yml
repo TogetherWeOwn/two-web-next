@@ -1,0 +1,59 @@
+name: Feature request
+description: Propose a new capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A feature request proposes something new: a page, an endpoint, a job, or a concept this site does not have today. To improve something that already exists, use the **Enhancement proposal** form instead.
+
+        Skim [CONTRIBUTING.md](https://github.com/TogetherWeOwn/two-web-next/blob/main/CONTRIBUTING.md) and the [parity matrix](https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/parity.md) before filing. Do not paste secrets or personal data.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area affected
+      description: Which part of the codebase would this primarily live in?
+      options:
+        - src/admin — moderator admin screens
+        - src/agent-events — agent event ingress
+        - src/bot — bot and Discord adapters
+        - src/db — schema and migrations
+        - src/events — event pages, feeds, RSVPs
+        - src/islands and public/ — browser scripts, styles, static assets
+        - src/jobs — queues and scheduled jobs
+        - src/join — sign-in and the join journey
+        - src/profiles — member profiles
+        - ci/ and .github/ — CI, workflows, release automation
+        - Cross-cutting (multiple of the above)
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What are you trying to do that is currently difficult or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the feature you would like. How should it work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about and why you ruled them out.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, examples from other tools, related issues, and so on.

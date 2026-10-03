@@ -47,8 +47,18 @@ jobs:
         run: npm run e2e:staging
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
-      - name: Failure traces and report
+      - name: Scrub QA token from failure artifacts
+        # The repo is public and artifacts are downloadable without log
+        # masking. Delete any file holding the token (also inside the report's
+        # embedded zip and every trace zip) and fail loud (TOG-13046). The
+        # upload below runs only when this sweep finished the whole tree.
+        id: scrub
         if: failure()
+        run: python3 ci/scrub-qa-token.py test-results playwright-report
+        env:
+          QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Failure traces and report
+        if: failure() && steps.scrub.outputs.swept == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-staging-failure-${{ github.run_id }}-${{ github.run_attempt }}

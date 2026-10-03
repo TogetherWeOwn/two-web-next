@@ -249,6 +249,26 @@ test("wrong token fails the login and skips every authenticated check", async (t
   assert.ok(!result.output.includes("wrong-token"), result.output);
 });
 
+test("a transport failure on the QA login never prints the token or request headers", async (t) => {
+  // TOG-13046: deploy.yml runs this probe on a public repo, so a dropped
+  // connection must surface as an error name only.
+  const server = createServer((request) => request.socket.destroy());
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(
+    () =>
+      new Promise((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const result = await run(`http://127.0.0.1:${server.address().port}`);
+  assert.equal(result.ok, false);
+  assert.match(result.output, /FAIL QA login: expected HTTP response within timeout; actual \w+/);
+  assert.ok(!result.output.includes(TOKEN), result.output);
+  assert.ok(!/x-two-qa-auth|call log/i.test(result.output), result.output);
+});
+
 for (const [id, label] of [
   ["guest-collection", "guest collection refusal"],
   ["guest-show", "guest show refusal"],

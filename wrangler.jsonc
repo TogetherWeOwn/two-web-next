@@ -44,13 +44,6 @@
   // project two-web-next, staging branch (pooled endpoint). Local dev sets
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB to agent-testdb.
   "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],
-  // TOG-11885 experiment (staging only): first-party page-view counts via
-  // Workers Analytics Engine (free tier: 100k writes + 10k reads/day). Named
-  // environments do NOT inherit top-level bindings, and `env.production`
-  // below declares its own bindings without this dataset, so production
-  // (`--env production`) never sees it. Creating the dataset is a deploy-time
-  // no-op if it already exists; removal is just deleting this block.
-  "analytics_engine_datasets": [{ "binding": "PAGE_VIEWS", "dataset": "two_web_next_page_views" }],
   // Not secrets (the client id is public: it is in every OAuth URL). Secrets (DISCORD_CLIENT_SECRET, DISCORD_BOT_TOKEN, SESSION_SECRET) are set with
   // `wrangler secret put` and never live in this file.
   "vars": {

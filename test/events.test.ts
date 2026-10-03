@@ -325,12 +325,15 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     description: string | null;
     starts_at: string;
     ends_at: string;
+    starts_at_local: string;
+    ends_at_local: string;
     timezone: string;
     location: string | null;
     capacity: number | null;
+    going_count: number;
     status: string;
     rsvp_open: boolean;
-    going_count: number;
+    synced_to_discord: boolean;
     waitlist_position: number | null;
   };
   type Collection = {
@@ -530,12 +533,15 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       "description",
       "starts_at",
       "ends_at",
+      "starts_at_local",
+      "ends_at_local",
       "timezone",
       "location",
       "capacity",
+      "going_count",
       "status",
       "rsvp_open",
-      "going_count",
+      "synced_to_discord",
       "waitlist_position",
     ]);
     expect(data).toEqual({
@@ -545,12 +551,15 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       description: "Bring a board.",
       starts_at: "2099-01-01T20:00:00.000Z",
       ends_at: "2099-01-01T22:00:00.000Z",
+      starts_at_local: "2099-01-01 20:00",
+      ends_at_local: "2099-01-01 22:00",
       timezone: "Europe/London",
       location: "Voice",
       capacity: 2,
+      going_count: 2,
       status: "published",
       rsvp_open: false,
-      going_count: 2,
+      synced_to_discord: false,
       waitlist_position: 2,
     });
     expect(res.headers.get("x-robots-tag")).toBeNull();

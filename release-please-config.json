@@ -4,7 +4,6 @@
     ".": {
       "release-type": "node",
       "include-component-in-tag": false,
-      "pull-request-footer": "Refs: TOG-9865",
       "changelog-sections": [
         {
           "type": "perf",

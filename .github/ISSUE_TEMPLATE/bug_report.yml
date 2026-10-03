@@ -1,0 +1,146 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Fill out the sections below so we can reproduce and triage quickly.
+
+        > **⚠️ Do not report security vulnerabilities here.** Use [private vulnerability reporting](https://github.com/TogetherWeOwn/two-web-next/security/advisories/new) instead. See [SECURITY.md](https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md).
+
+        > **⚠️ Privacy notice:** Several fields below accept logs, config, or request output that may contain **secrets or personally identifiable information (PII)** — session cookies, OAuth codes, tokens, Discord IDs, email addresses, usernames in file paths, or member data. Before pasting:
+        > 1. Review for sensitive data
+        > 2. Redact cookies, tokens, keys, IDs, and paths (e.g. replace `/Users/yourname/` with `/Users/REDACTED/`)
+        > 3. Never paste the contents of `.dev.vars` or any other secret file
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-submission checklist
+      description: Please confirm each of these before filing.
+      options:
+        - label: I have searched existing open and closed issues and this is not a duplicate.
+          required: true
+        - label: I can reproduce this on the latest release or on `main`.
+          required: true
+        - label: This is not a security vulnerability. I would report one privately.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. Name the page, route, endpoint, or command involved.
+      placeholder: When I do X, Y happens instead of Z.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps a maintainer can follow to reproduce the bug. Start from a clean checkout where possible.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The release tag or the commit SHA you are running.
+      placeholder: e.g. v0.2.0 or dd8cbef0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area affected
+      options:
+        - src/admin — moderator admin screens
+        - src/agent-events — agent event ingress
+        - src/bot — bot and Discord adapters
+        - src/db — schema and migrations
+        - src/events — event pages, feeds, RSVPs
+        - src/islands and public/ — browser scripts, styles, static assets
+        - src/jobs — queues and scheduled jobs
+        - src/join — sign-in and the join journey
+        - src/profiles — member profiles
+        - ci/ and .github/ — CI, workflows, release automation
+        - Other or unsure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Where did you see it?
+      options:
+        - Local dev (npm run dev)
+        - Test or staging environment
+        - Production site
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and operating system
+      description: Only for a page or island bug.
+      placeholder: e.g. Firefox 140 on Ubuntu 24.04
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`. Only for a local or CI bug.
+      placeholder: e.g. v24.1.0
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: |
+        Paste error messages, stack traces, or response bodies. Will be rendered as a code block.
+
+        **⚠️ PII warning:** Logs often contain cookies, tokens, IDs, and file paths with your username. Redact before pasting.
+      render: shell
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config (if applicable)
+      description: |
+        If the bug is config-related, paste the relevant snippet.
+
+        **⚠️ PII warning:** Config can contain secrets. **Paste variable names, never secret values.**
+      render: json
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, related issues, or anything else that might help.
+
+  - type: checkboxes
+    id: pii_confirmed
+    attributes:
+      label: Privacy checklist
+      description: Please confirm you have reviewed your submission for sensitive data.
+      options:
+        - label: I have reviewed all pasted output for secrets and PII (cookies, tokens, keys, IDs, usernames, file paths) and redacted where necessary.
+          required: true

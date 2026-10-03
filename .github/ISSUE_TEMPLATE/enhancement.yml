@@ -1,0 +1,98 @@
+name: Enhancement proposal
+description: Propose an improvement to existing behavior
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An enhancement improves something that already exists: better output, broader edge-case handling, clearer UX, or performance. It does not add new pages, endpoints, or concepts. If you are proposing something new, use the **Feature request** form instead.
+
+        Do not paste secrets or personal data.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-submission checklist
+      description: Please confirm each of these before filing.
+      options:
+        - label: I confirmed this improves existing behavior. It does not add a new page, endpoint, or concept.
+          required: true
+        - label: I searched existing open and closed issues and this has not already been proposed.
+          required: true
+
+  - type: input
+    id: what_is_improved
+    attributes:
+      label: What existing behavior does this improve?
+      description: Name the specific page, route, job, or behavior being enhanced.
+      placeholder: "e.g. the event feed ordering, the join error copy, the admin roster filter"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area affected
+      options:
+        - src/admin — moderator admin screens
+        - src/agent-events — agent event ingress
+        - src/bot — bot and Discord adapters
+        - src/db — schema and migrations
+        - src/events — event pages, feeds, RSVPs
+        - src/islands and public/ — browser scripts, styles, static assets
+        - src/jobs — queues and scheduled jobs
+        - src/join — sign-in and the join journey
+        - src/profiles — member profiles
+        - ci/ and .github/ — CI, workflows, release automation
+        - Cross-cutting (multiple of the above)
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current behavior
+      description: Describe exactly how it works today. Include example output or a screenshot if helpful.
+      placeholder: |
+        Currently, when I open ..., the page shows ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe exactly how it should work after the enhancement. Include example output.
+      placeholder: |
+        After this enhancement, the page would show ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason and benefit
+      description: |
+        Why is the current behavior a problem, and what is the concrete benefit of the proposed behavior?
+
+        Vague answers like "it would be better" or "more user-friendly" are not enough.
+    validations:
+      required: true
+
+  - type: textarea
+    id: breaking_changes
+    attributes:
+      label: Breaking changes
+      description: |
+        Does this change any behavior, response shape, URL, or output format that members, moderators, or the bot might rely on?
+        If yes, describe exactly what changes and how backward compatibility is maintained.
+        Write "None" only if you are certain.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      description: Screenshots, related issues, or anything else.
