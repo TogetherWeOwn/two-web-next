@@ -432,6 +432,15 @@ export function registerEventRoutes(
   // Missing keys use the branded 404 (suggestions + noindex), never bare plaintext.
   app.get("/events/:file{.+\\.ics}", async (c) => {
     const key = c.req.param("file").slice(0, -4);
+    // One canonical key form per event, mirroring /e/:key: a valid key in
+    // another letter case 301s to the canonical URL before any read.
+    // Seed/demo keys and unparsable keys keep their current path (forged
+    // keys still refuse, unknown keys still 404).
+    const canonical = canonicalEventKey(key);
+    if (canonical && canonical !== key) {
+      const search = new URL(c.req.url).search;
+      return c.redirect(`/events/${encodeURIComponent(canonical)}.ics${search}`, 301);
+    }
     if (!eventKeyAllowed(key, c.env.APP_URL)) {
       c.header("x-robots-tag", "noindex, nofollow");
       return notFoundHandler(c);
@@ -455,9 +464,18 @@ export function registerEventRoutes(
   });
 
   app.get("/events/:key", async (c) => {
+    const key = c.req.param("key");
+    // One canonical key form per event, mirroring /e/:key: a valid key in
+    // another letter case 301s to the canonical URL before any read.
+    // Seed/demo keys and unparsable keys keep their current path (forged
+    // keys still refuse, unknown keys still 404).
+    const canonical = canonicalEventKey(key);
+    if (canonical && canonical !== key) {
+      const search = new URL(c.req.url).search;
+      return c.redirect(`/events/${encodeURIComponent(canonical)}${search}`, 301);
+    }
     const session = await jsonSession(c);
     if (session instanceof Response) return session;
-    const key = c.req.param("key");
     if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
     const db = await dbFor(c);
     if (!db) return c.json({ error: "db_unavailable" }, 503);
