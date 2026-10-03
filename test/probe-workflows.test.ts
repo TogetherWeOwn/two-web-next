@@ -293,14 +293,13 @@ describe("staging smoke workflow safety", () => {
   });
 
   it("passes metacharacters as inert arguments through the actual workflow shell", () => {
-    const script = smoke
-      .split("        run: >-\n")[1]
-      ?.split("        env:\n")[0]
-      ?.trim()
-      .replace(/\n\s+/g, " ");
-    expect(script).toBeTruthy();
+    const block = smoke.split("        run: |\n")[1]?.split("        env:\n")[0];
+    expect(block).toBeTruthy();
+    // Dedent only; newlines must survive so the if/else keeps its shape.
+    const script = block!.replace(/^ {10}/gm, "").trim();
     expect(script).not.toContain("${{ inputs.");
     for (const [env, input] of [
+      ["SMOKE_ANNOUNCEMENT_ONLY", "announcement_only"],
       ["SMOKE_DISCORD_ID", "discord_id"],
       ["SMOKE_ROLE_KEY", "role_key"],
       ["SMOKE_CHANNEL_KEY", "channel_key"],
@@ -320,24 +319,43 @@ describe("staging smoke workflow safety", () => {
         'r"; printf HARMLESS_BREAKOUT; #',
         "`printf HARMLESS_BACKTICK` * ; $HOME",
       ];
-      const result = spawnSync("/bin/sh", ["-c", script!], {
-        encoding: "utf8",
-        timeout: 3000,
-        env: {
-          PATH: `${dir}:${process.env.PATH}`,
-          SMOKE_DISCORD_ID: values[0],
-          SMOKE_ROLE_KEY: values[1],
-          SMOKE_CHANNEL_KEY: values[2],
-        },
-      });
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(JSON.parse(result.stdout)).toEqual([
+      const run = (announcementOnly: string | undefined) =>
+        spawnSync("/bin/sh", ["-c", script], {
+          encoding: "utf8",
+          timeout: 3000,
+          env: {
+            PATH: `${dir}:${process.env.PATH}`,
+            ...(announcementOnly === undefined
+              ? {}
+              : { SMOKE_ANNOUNCEMENT_ONLY: announcementOnly }),
+            SMOKE_DISCORD_ID: values[0],
+            SMOKE_ROLE_KEY: values[1],
+            SMOKE_CHANNEL_KEY: values[2],
+          },
+        });
+      // Unset (older dispatches) and "false" both take the full-smoke branch.
+      for (const flag of [undefined, "false"]) {
+        const result = run(flag);
+        expect(result.status).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toEqual([
+          "run",
+          "smoke:internal-action",
+          "--",
+          `--discord-id=${values[0]}`,
+          `--role-key=${values[1]}`,
+          `--channel-key=${values[2]}`,
+        ]);
+      }
+      // announcement_only drops the user and role arguments entirely.
+      const only = run("true");
+      expect(only.status).toBe(0);
+      expect(only.stderr).toBe("");
+      expect(JSON.parse(only.stdout)).toEqual([
         "run",
         "smoke:internal-action",
         "--",
-        `--discord-id=${values[0]}`,
-        `--role-key=${values[1]}`,
+        "--announcement-only",
         `--channel-key=${values[2]}`,
       ]);
     } finally {
