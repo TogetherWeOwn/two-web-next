@@ -1,5 +1,11 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": { "allowJs": true },
-  "include": ["./**/*.ts", "./ci-only.mjs", "../playwright.config.ts"]
+  "include": [
+    "./**/*.ts",
+    "./ci-only.mjs",
+    "./staging-guard.mjs",
+    "../playwright.config.ts",
+    "../playwright.staging.config.ts"
+  ]
 }
