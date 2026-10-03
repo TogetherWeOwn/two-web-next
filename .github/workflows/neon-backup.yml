@@ -1,14 +1,17 @@
 name: neon-backup
 
-# Nightly pg_dump of the Neon staging branch (and prod after cutover) to R2
-# `two-web-next-backups`. See docs/db-migrations.md and bin/neon-backup.sh.
+# Nightly pg_dump of the Neon staging branch (and the PlanetScale
+# production branch after cutover) to R2 `two-web-next-backups`.
+# See docs/db-migrations.md and bin/neon-backup.sh.
 # CISO condition (TOG-9837): member-data dumps land ONLY in the
 # EU-jurisdiction-pinned `two-web-next-backups` bucket (every wrangler r2
 # object call passes --jurisdiction eu). The legacy `paperclip-backups`
 # bucket (jurisdiction default / ENAM) is out of scope for member-data dumps.
-# Secrets (operator-provisioned, never in logs): NEON_STAGING_DATABASE_URL,
-# CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID. While Neon is unprovisioned
-# the probe step skips the rest green so the schedule is quiet, not red.
+# Secrets (operator-provisioned, never in logs): NEON_STAGING_DATABASE_URL
+# (staging), PRODUCTION_DATABASE_URL (production, PlanetScale direct
+# endpoint), CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID. While a target is
+# unprovisioned the probe step skips the rest green so the schedule is
+# quiet, not red.
 
 on:
   schedule:
@@ -16,9 +19,15 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
-      branch:
-        description: "Neon branch to dump"
+      target:
+        description: "Database to dump (staging = Neon, production = PlanetScale)"
         default: "staging"
+        required: false
+        type: choice
+        options: [staging, production]
+      branch:
+        description: "Branch prefix override (default per target)"
+        default: ""
         required: false
         type: string
 
@@ -37,19 +46,28 @@ jobs:
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     env:
-      BRANCH: ${{ inputs.branch || 'staging' }}
+      TARGET: ${{ inputs.target || 'staging' }}
+      BRANCH: ${{ inputs.branch || (inputs.target == 'production' && 'production' || 'staging') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: probe
         name: Probe provisioning
+        env:
+          STAGING_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
         run: |
           set -euo pipefail
-          if [ -n "${{ secrets.NEON_STAGING_DATABASE_URL }}" ]; then
+          case "$TARGET" in
+            staging) ready="$STAGING_URL" ;;
+            production) ready="$PRODUCTION_URL" ;;
+            *) echo "Unknown backup target: $TARGET" >&2; exit 1 ;;
+          esac
+          if [ -n "$ready" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Neon staging not provisioned yet (TOG-9679); skipping."
+            echo "Backup target $TARGET not provisioned yet; skipping."
           fi
 
       - uses: actions/setup-node@v7
@@ -68,7 +86,9 @@ jobs:
       - name: Backup to R2
         if: steps.probe.outputs.ready == 'true'
         env:
-          DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          # Staging reads the Neon secret; production reads the PlanetScale
+          # direct-endpoint secret. The script only ever sees DATABASE_URL.
+          DATABASE_URL: ${{ env.TARGET == 'production' && secrets.PRODUCTION_DATABASE_URL || secrets.NEON_STAGING_DATABASE_URL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: ./bin/neon-backup.sh backup "$BRANCH"

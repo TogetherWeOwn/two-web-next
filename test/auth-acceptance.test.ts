@@ -18,7 +18,7 @@ const env: Env = {
   DISCORD_MODERATOR_ROLE_IDS: "",
   QA_AUTH_TOKEN: "test-only-qa-token",
 };
-const TTL = 30 * 24 * 60 * 60;
+const TTL = 120 * 60;
 const SESSION_COOKIE = "__Host-two_session";
 const cookies = (res: Response) =>
   res.headers
@@ -209,7 +209,7 @@ describe("W15 moderator role configuration", () => {
 });
 
 describe("W15 session lifetime, rotation and logout", () => {
-  it("uses a host-only, HttpOnly, Lax, Secure opaque cookie for the recorded 30-day TTL divergence", async () => {
+  it("uses a host-only, HttpOnly, Lax, Secure opaque cookie for the 120-minute sliding session", async () => {
     const { env: e } = isolated();
     const res = await qaLogin(e);
     const cookie = sessionCookie(res);
@@ -220,7 +220,7 @@ describe("W15 session lifetime, rotation and logout", () => {
     expect(cookie).not.toContain("QA Member");
   });
 
-  it("refreshes the full 30-day DB expiry on a read, invalidates the old token and expires at the exact boundary", async () => {
+  it("refreshes the full 120-minute DB expiry on a read, invalidates the old token and expires at the exact boundary", async () => {
     let now = Date.parse("2026-09-01T00:00:00Z");
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const { store, env: e } = isolated();
@@ -239,7 +239,7 @@ describe("W15 session lifetime, rotation and logout", () => {
     const testEnv = { ...e, SESSION_STORE: instrumented } as Env;
     const login = await qaLogin(testEnv);
     expect(writes[0]!.getTime()).toBe(now + TTL * 1000);
-    now += 29 * 24 * 60 * 60 * 1000;
+    now += TTL * 1000 - 60_000; // one minute before the window closes
     const view = await app.request("/", { headers: { cookie: cookies(login) } }, testEnv);
     expect(await view.text()).toContain("QA Member");
     expect(writes[1]!.getTime()).toBe(now + TTL * 1000);

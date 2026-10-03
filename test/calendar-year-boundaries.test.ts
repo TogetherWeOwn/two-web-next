@@ -38,6 +38,8 @@ function calendarFixture(startsAt: Date, zone?: string) {
   const past: typeof events.$inferSelect = {
     id: 1,
     icsSequence: 1n,
+    syncRevision: 1,
+    syncedRevision: 0,
     eventKey: "zone-fixture",
     title: "Past zone fixture",
     game: null,

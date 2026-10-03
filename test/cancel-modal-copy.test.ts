@@ -70,6 +70,8 @@ function listRow(status: EventListRow["status"], eventKey: string): EventListRow
     updatedAt: at,
     icsSequence: 0n,
     goingCount: 0,
+    syncRevision: 1,
+    syncedRevision: 0,
   };
 }
 
@@ -109,6 +111,8 @@ function publicEvent(over: Partial<PublicEvent> = {}): PublicEvent {
     createdAt: start,
     updatedAt: start,
     goingCount: 0,
+    syncRevision: 1,
+    syncedRevision: 0,
     ...over,
   };
 }
@@ -244,7 +248,7 @@ describe("cancelled banner copy and past-banner coexistence", () => {
   it("keeps the gone page on the cancelled copy with a way back to upcoming", () => {
     const html = goneHtml();
     expect(html).toContain('data-testid="event-cancelled">Cancelled');
-    expect(html).toContain("This event was cancelled");
+    expect(html).not.toContain(`data-testid="${RSVP_CLOSED_TESTID}"`);
     expect(html).toContain('href="/events">See upcoming events</a>');
   });
 });

@@ -52,6 +52,8 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, earlierEvents =
     agentVersion: 1,
     createdBy: null,
     icsSequence: 0n,
+    syncRevision: 1,
+    syncedRevision: 0,
     recurrenceFrequency: null,
     recurrenceCount: null,
     recurrenceEndsOn: null,

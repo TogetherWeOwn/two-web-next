@@ -9,7 +9,10 @@ on:
         options: [staging, production]
         default: staging
         required: true
-  # Opt-in only: deploy.yml does NOT call this workflow by default.
+  # deploy.yml does not call this workflow: it applies the staging web
+  # migrations itself, in the exact-SHA deploy job, with the same
+  # ci/neon-migrate.mjs. This stays the hand-dispatch path (staging recovery)
+  # and the only production path.
   # Environment secrets are loaded here, not passed/inherited from a caller.
   workflow_call:
     inputs:
@@ -65,7 +68,7 @@ jobs:
           # Provision ONLY as secrets on the matching GitHub Environment.
           # The unselected target is not exposed to the process. No DATABASE_URL fallback.
           NEON_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.NEON_STAGING_DATABASE_URL || '' }}
-          NEON_PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.NEON_PRODUCTION_DATABASE_URL || '' }}
+          PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || '' }}
       - name: Record PITR timestamp, apply and verify under database lock
         run: node ci/neon-migrate.mjs apply
         env: *migration-env

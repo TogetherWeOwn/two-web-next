@@ -54,3 +54,10 @@ export function eventListUrl(query: EventListQuery, changes: Partial<EventListQu
   if (next.page > 1) params.set("page", String(next.page));
   return `/admin/events?${params}`;
 }
+
+/** Zero-row copy for the events table: filtered empties say so, like featured. */
+export function eventEmptyText(query: EventListQuery): string {
+  return query.q || query.status || query.series || query.fill || query.rsvp_open
+    ? "No events match these filters."
+    : "No events yet.";
+}

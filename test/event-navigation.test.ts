@@ -35,6 +35,8 @@ const row = (id: number, over: Partial<EventRow> = {}): EventRow => ({
   capacity: null,
   status: "published",
   discordEventId: null,
+  syncRevision: 1,
+  syncedRevision: 0,
   discordSyncFailedAt: null,
   discordSyncFailureCode: null,
   agentGrantId: null,

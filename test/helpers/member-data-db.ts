@@ -29,6 +29,13 @@ export function testDatabaseUrl(raw: string, runner = process.env): URL {
     !/^\/[a-z][a-z0-9_]*$/.test(url.pathname)
   )
     return refuse();
+  // TOG-12549: refuse production/controller-looking database names even on the
+  // test host, and the per-worktree prefix without its numeric suffix. Green
+  // CI and agent-testdb runs use postgres/two_web_next/w15_* or suffixed
+  // two_web_next_tog12345, none of which match.
+  const dbName = url.pathname.slice(1).toLowerCase();
+  if (dbName === "prod" || dbName === "production" || dbName === "controller") return refuse();
+  if (dbName === "two_web_next_tog") return refuse();
   const agentTest =
     url.hostname === "agent-testdb" && url.username === "agent_test" && url.password === "";
   const ciService =
@@ -57,21 +64,26 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
     password: () => url.password,
     onnotice: () => {},
   };
-  const admin = postgres(url.href, options);
+  const admin = postgres(url.href, {
+    ...options,
+    connection: { statement_timeout: 2000, lock_timeout: 1000 },
+  });
   const client = postgres(url.href, { ...options, connection: { search_path: schemaName } });
   const db: Db = drizzle(client, { schema: { ...schema, ...adminSchema } });
   let created = false;
-  let disposed = false;
-  const dispose = async () => {
-    if (disposed) return;
-    disposed = true;
-    try {
-      await client.end();
-      if (created) await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`);
-    } finally {
-      await admin.end();
-    }
-  };
+  let disposal: Promise<void> | undefined;
+  const dispose = () =>
+    (disposal ??= (async () => {
+      try {
+        await client.end({ timeout: 1 });
+      } finally {
+        try {
+          if (created) await admin.unsafe(`DROP SCHEMA "${schemaName}" CASCADE`);
+        } finally {
+          await admin.end({ timeout: 1 });
+        }
+      }
+    })());
   try {
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
@@ -80,20 +92,20 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
     const migrations = readMigrationFiles({
       migrationsFolder: fileURLToPath(new URL("../../drizzle", import.meta.url).href),
     });
-    for (const migration of migrations)
-      await client.begin(async (tx) => {
-        // Match Drizzle's transactional execution, including migration table locks.
+    // One commit for the empty fixture, not one durable commit per statement.
+    await client.begin(async (tx) => {
+      for (const migration of migrations)
         for (const statement of migration.sql) {
           if (statement.trim())
             await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
         }
-      });
+    });
   } catch (error) {
     await dispose();
     throw error;
   }
   const reset = async () => {
-    if (disposed) throw new Error("W15 fixture is disposed");
+    if (disposal) throw new Error("W15 fixture is disposed");
     // Deliberately no arbitrary Db argument: only this scoped pool can clean.
     await clearAuditRows(db, ["member_data_access_logs", "activity_log"]);
     await db.delete(rsvps);

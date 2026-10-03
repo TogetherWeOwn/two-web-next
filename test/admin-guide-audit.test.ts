@@ -153,14 +153,20 @@ describe("admin guide audit: moderator guard on every claimed route (no DB)", ()
     },
   );
 
-  it.each(CANONICAL_POST)("guests at POST %s go to Discord sign-in", async (path) => {
+  // A guest write never re-submits: it recovers to the claimed GET screen
+  // holding the form or button (TOG-12399). An edit form shares its path
+  // with its update POST; the recovery reads it, it never re-posts.
+  it.each(CANONICAL_POST)("guests at POST %s go to write recovery", async (path) => {
     const route = path.replace(":key", "some-key").replace(":id", "1");
     const res = await request(route, envFor(createMemorySessionStore()), {
       method: "POST",
       headers: { origin: APP_URL },
     });
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/auth/discord");
+    expect(res.status).toBe(303);
+    const location = new URL(res.headers.get("location")!, APP_URL);
+    expect(location.pathname).toBe("/auth/recover");
+    const screens = CANONICAL_GET.map((p) => p.replace(":key", "some-key").replace(":id", "1"));
+    expect(screens).toContain(location.searchParams.get("next"));
   });
 
   it.each([...CANONICAL_GET, ...Object.keys(LEGACY_GET)])(

@@ -498,9 +498,14 @@ test("rollback workflow reuses the production gate with no wider permissions", (
     (workflow.match(/run: node ci\/production-deploy-gate\.mjs --version-id\n/g) ?? []).length,
     2,
   );
-  // Same private-repo runners as the production deploy workflow.
-  assert.equal((workflow.match(/runs-on: \[self-hosted, two-selfhosted\]/g) ?? []).length, 2);
-  assert.ok(!workflow.includes("ubuntu-latest"));
+  // Same visibility-aware runners as the production deploy workflow (TOG-12326).
+  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  assert.equal(workflow.split(runsOn).length - 1, 2);
+  assert.equal(
+    workflow.split("ubuntu-latest").length - 1,
+    2,
+    "ubuntu-latest only as the public-repo branch",
+  );
   // Production-only secrets, credential check before the mutation.
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
