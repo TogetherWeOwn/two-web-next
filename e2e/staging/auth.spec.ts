@@ -1,6 +1,12 @@
 import { sendTokenRequest } from "../qa-request.mjs";
 import { test, expect, stagingOrigin, moderatorStorageState } from "./fixtures";
 
+// The real token travels in a request header here. Traces record request
+// headers, and the failure artifacts are public, so this spec records no
+// trace/video/screenshot artifacts (the sweep in ci/scrub-qa-token.py is the
+// backstop).
+test.use({ trace: "off", screenshot: "off", video: "off" });
+
 // Storage-state identities land on their pages; negative QA cases answer 404.
 test("staging QA member session opens the member profile", async ({ page }) => {
   await page.goto("/profile");
@@ -19,11 +25,6 @@ test("staging QA moderator session opens the admin event list", async ({ browser
 });
 
 test.describe("negative QA cases", () => {
-  // The real token is in a request header here. A trace records the request
-  // headers, and the failure artifacts are public, so this test records none
-  // (the sweep in ci/scrub-qa-token.py is the backstop, TOG-13046).
-  test.use({ trace: "off" });
-
   test("staging QA rejects a bad token and an unknown identity with 404", async ({ browser }) => {
     const origin = stagingOrigin;
     const context = await browser.newContext({ baseURL: origin });
