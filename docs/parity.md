@@ -4,13 +4,13 @@ Source: legacy [two-web](https://github.com/TogetherWeOwn/two-web) @ `e1e939a`
 (read 2026-09-29: `routes/web.php`, `routes/api.php`, `routes/funnel.php`,
 `routes/console.php`, controllers, Livewire, Filament, jobs, commands,
 policies, middleware, services, config, views, content, public).
-Next side: this repo @ `e2f8969` (2026-10-01) + live card statuses of the same date.
+Next side: this repo @ `b46a479a` (2026-10-03) + live card statuses of the same date.
 
 Flip gate (owner): re-run before W16; the DNS flip needs **0 unmapped rows**.
 A row is mapped when it names a card or is **dropped, with a reason**.
 `✅ done` = merged to `main`. Everything else names the owning card.
 
-W-card statuses at refresh time (2026-10-01; W10/W15 updated 2026-10-02):
+W-card statuses at refresh time (2026-10-01; W10/W15 updated 2026-10-02; re-verified 2026-10-03, unchanged):
 W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 ✅, W6 ✅, W7 ✅, W8 ✅, W9 ✅, W10 ✅
 (slices 1–5, incl. slice 2 RsvpButton island PR #98;
 [TOG-9839](/TOG/issues/TOG-9839) done), W11 ✅, W12 ✅,
@@ -35,19 +35,19 @@ is not evidence that a configured-but-unreachable DB already meets them.
 | `GET /join`, `GET /join/discord`, `GET /join/callback` (one-click OAuth, `identify`+`guilds.join`, throttle 10,1, JoinAttempt write, guarded `next`, join-result confirmation + member reinvite) | ✅ one-shot `join_result` banner on `/`, `/join`, `/profile`, `/events`, `/e/{key}` with `data-testid="reinvite-link"` → `/discord` (merged PR #46); expired-grant vs outage classification (200 "Join approval expired" vs 503 "Discord is unreachable"; status governs, untrusted bodies never parsed) + bounded OAuth log redaction | W6 ✅ + [TOG-10356](/TOG/issues/TOG-10356) ✅ + [TOG-10355](/TOG/issues/TOG-10355) ✅ |
 | `GET /events` (EventsCalendar full-page) | ✅ SSR list + island UI (`test/islands-events-calendar.test.ts`) | W8 ✅ + W10 slice 3 ✅ |
 | `GET /events/past` (archive, 20/page) | ✅ SSR archive 20/page + island UI (`test/islands-past-events.test.ts`) | W8 ✅ + W10 slice 4 ✅ |
-| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links; prev/next + related merged (PR #58; `test/event-navigation.test.ts`); RsvpButton island shipped (PR #98; `test/islands-rsvp-binder.test.ts`) | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) ✅ + [TOG-10823](/TOG/issues/TOG-10823) ✅ + [TOG-10821](/TOG/issues/TOG-10821) ✅ |
-| `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ | W9 ✅ |
-| `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ | W9 ✅ |
-| `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ | W9 ✅ |
+| `GET /e/{event}` (public page; drafts 403 non-mod, cancelled 410+noindex, JSON-LD, GoingCount, attendee list, RsvpButton, prev/next, related) | ✅ page, 403/410, JSON-LD, going count, state banners, venue, guest join pitch, per-event share tags, past noindex and canonical copy-link island; member-only logged attendee names/profile links; prev/next + related merged (PR #58; `test/event-navigation.test.ts`); RsvpButton island shipped (PR #98; `test/islands-rsvp-binder.test.ts`); non-canonical letter-case keys 301 to the canonical form before lookup (`test/events-key-canonical.test.ts`) | W8 ✅ (partial) + [TOG-10822](/TOG/issues/TOG-10822) ✅ + [TOG-10823](/TOG/issues/TOG-10823) ✅ + [TOG-10821](/TOG/issues/TOG-10821) ✅ |
+| `GET /events/{event}.ics` (per-event download, ETag/304, sessionless, view-policy identical) | ✅ non-canonical letter-case keys 301 to the canonical form (`test/events-key-canonical-siblings.test.ts`); unknown-key 404s render the branded 404 with suggestions and noindex | W9 ✅ |
+| `GET /events.rss` (published upcoming, ETag/304, atom self-link) | ✅ equal-start rows ordered by id (`test/feed-equal-start-order.test.ts`) | W9 ✅ |
+| `GET /events.ics` (subscribable incl. CANCELLED, `webcal://`) | ✅ equal-start rows ordered by id (`test/feed-equal-start-order.test.ts`) | W9 ✅ |
 | `GET /auth/discord/redirect`, `GET /auth/discord/callback` (login, `identify`+`guilds.members.read`, 404-not-member, guarded `next`, `login_next`/`url.intended` precedence) | ✅ same-app flow (`identify`+`guilds.join`, auto-join, role recompute); legacy start alias merged (PR #105): 302 to `/auth/discord`, only validated `next` forwarded, other queries dropped (`test/legacy-redirects.test.ts`); return journey on signed `__Host-two_login_*` cookies, cleared on every terminal path (merged PR #46); classified failure banners (denied `signin_denied` / outage `signin_unavailable` / generic `signin_failed`) with bounded logs | W5 ✅ + [TOG-11156](/TOG/issues/TOG-11156) ✅ + [TOG-10356](/TOG/issues/TOG-10356) ✅ + [TOG-10355](/TOG/issues/TOG-10355) ✅ |
 | `GET /auth/qa/{identity}` (staging-only, header token) | ✅ as `POST /auth/qa/:identity` — **deliberate divergence**: GET login is CSRF-able; POST + byte-identical 404s | W5 ✅ |
 | `GET /auth/status` (bool-only liveness, stale tabs) | ✅ merged (PR #239): exact bool-only JSON, no-store/private, no identity or rotating cookies; stable non-authenticating probe survives rotation (`test/session-recovery.test.ts` + two-tab browser fixture); shared hook only, remaining surface integration is not waived | [TOG-10357](/TOG/issues/TOG-10357) ✅ |
-| `GET /auth/recover` (expired member writes) | ✅ merged (PR #239): durable explicit recovery, safe GET return, signed ten-minute pending/restored notice, one-shot post-login banner, no retained body or automatic retry. MemberProfile drafts preserved until reset; other write owners integrate under existing cards | [TOG-10357](/TOG/issues/TOG-10357) ✅ |
+| `GET /auth/recover` (expired member writes) | ✅ merged (PR #239): durable explicit recovery, safe GET return, signed ten-minute pending/restored notice, one-shot post-login banner, no retained body or automatic retry. MemberProfile drafts preserved until reset; admin event-editor expired-save recovery merged (`test/admin-session-recovery.test.ts`); other write owners integrate under existing cards | [TOG-10357](/TOG/issues/TOG-10357) ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; bounded cross-tab server recheck and fail-closed revocation response merged (PR #239); throttle ✅ (`test/throttle.test.ts`) | W5 ✅ + [TOG-10357](/TOG/issues/TOG-10357) ✅ + **N5** ✅ ([TOG-9897](/TOG/issues/TOG-9897)) |
 | `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth recording `url.intended`, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block reads bot-owned `web_v1` views, hides on no row/missing views/DB failure, covered by the same profile access-log subject | W7 ✅ |
 | `PATCH /members/{user}` (owner-only, throttle 30,1, bio/games/timezone validation) | ✅ + `POST _method=PATCH` for the plain form | W7 ✅ |
-| `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | `per_page` takes precedence over retained `limit` alias; default 20, complete signed integer sizes clamped 1–100, malformed/decimal/exponent sizes default 20; stable `starts_at ASC, id ASC`; existing `data/page/limit` plus `meta.current_page/per_page/total/last_page` (viewer-visible total, at least one last page); pages past the end clamp to the last page before any OFFSET is issued, so the response carries last-page rows with consistent `page`/`current_page`; retained exact `event_key` filter applies before paging to both rows and totals (malformed key 422, hidden/missing key empty); JSON/default/mixed-JSON guest 401, explicit `text/html` with valid positive quality redirects 302 with guarded `next` (no HTML substring or q=0 redirect); private ETag/304 | W8 ✅ + [TOG-11155](/TOG/issues/TOG-11155) |
-| `GET /events/:key` (legacy `/events/{event}` JSON show) | Session gate as collection; existing `eventJson()` fields and viewer waitlist position, no identities; draft member 403, moderator 200 + noindex; cancelled 410 with legacy reason/message/event_key/status; private ETag/304; registered after archive and per-event ICS | [TOG-11155](/TOG/issues/TOG-11155) |
+| `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | `per_page` takes precedence over retained `limit` alias; default 20, complete signed integer sizes clamped 1–100, malformed/decimal/exponent sizes default 20; stable `starts_at ASC, id ASC`; existing `data/page/limit` plus `meta.current_page/per_page/total/last_page` (viewer-visible total, at least one last page); pages past the end clamp to the last page before any OFFSET is issued, so the response carries last-page rows with consistent `page`/`current_page`; retained exact `event_key` filter applies before paging to both rows and totals (malformed key 422, hidden/missing key empty); JSON/default/mixed-JSON guest 401, explicit `text/html` with valid positive quality redirects 302 with guarded `next` (no HTML substring or q=0 redirect); private ETag/304; collection emits the 15 legacy-ordered keys with wall-time readings and Discord derivation (`test/event-json-access-matrix.test.ts`) | W8 ✅ + [TOG-11155](/TOG/issues/TOG-11155) |
+| `GET /events/:key` (legacy `/events/{event}` JSON show) | Session gate as collection; existing `eventJson()` fields and viewer waitlist position, no identities; draft member 403, moderator 200 + noindex; cancelled 410 with legacy reason/message/event_key/status; private ETag/304; non-canonical letter-case keys 301 to the canonical form (`test/events-key-canonical-siblings.test.ts`); registered after archive and per-event ICS | [TOG-11155](/TOG/issues/TOG-11155) |
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes + `event-write` throttle (`test/throttle.test.ts`) | W8 ✅ + W11 ✅ |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ routes + status machine (`test/admin-reads.test.ts` publish/cancel parity); tracked write-back via W13 `SYNC_EVENT_QUEUE` (PR #68); cancel rows send `event.cancel`, never upsert, and legacy in-flight `event.cancel` carriers map to the same tracked job with the producer key unchanged (`test/sync-cancel-carrier.test.ts`) | W8 ✅ + W11 ✅ + [TOG-10815](/TOG/issues/TOG-10815) |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | ✅ `POST /events/:key/rsvp-pause`, `POST /events/:key/rsvp-reopen`, `POST /admin/events/:key/rsvp-pause`, `POST /admin/events/:key/rsvp-reopen`: moderator-only, published/non-ended, row-locked idempotent toggles; each flip uses the Discord sync queue (`test/rsvp-toggle.test.ts`) | [TOG-10817](/TOG/issues/TOG-10817) ✅ |
@@ -62,7 +62,7 @@ Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
 private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
 per-event RSVP reads.
 
-### Auth admission follow-up (implemented; review pending)
+### Auth admission follow-up (merged PR #141 + PR #118; review acceptance pending)
 
 [TOG-10354](/TOG/issues/TOG-10354) adds shared Postgres single-use admission for
 ordinary auth and one-click join, plus atomic invalidation of the supplied active
@@ -86,7 +86,10 @@ while failed one-click join issues none. Ten-minute server expiry and tombstone
 cleanup are documented in [W15 coverage](w15-auth-tests.md#admission-state-retention-and-failure-contract).
 Local Chromium fixture proof (`ci/auth-browser.mjs`) covers the real sign-in CTA,
 auth/join re-entry, supplied prior-cookie rejection, ORIGINAL-cookie replay and
-consent-denial recovery without external traffic. Exact-head independent
+consent-denial recovery without external traffic. Human admission is
+serialized per bucket (`test/human-throttle-concurrency.test.ts`) and
+signed-in re-entry replacing the prior session exactly once is pinned
+(`test/join-idempotence.test.ts`). Exact-head independent
 review/security acceptance and green CI remain delivery gates.
 This narrows three W15 gaps; it does not claim full parity, cutover readiness,
 production testing, or change the recorded rotating TTL/POST-QA divergences.
@@ -97,7 +100,7 @@ production testing, or change the recorded rotating TTL/POST-QA divergences.
 |---|---|---|
 | `GET /discord` (302 `no-store`, configured-or-fallback invite) | ✅ incl. hardcoded fallback | W4 ✅ |
 | `GET /about`, `GET /faq` (static, zero-query) | ✅ | W4 ✅ |
-| `GET /privacy` (versioned `content/privacy-policy-v1.md` from disk, no session/cache/DB) | ✅ `src/privacy.ts` + `test/privacy.test.ts` | **N1** ✅ ([TOG-9893](/TOG/issues/TOG-9893)) |
+| `GET /privacy` (versioned policy from disk, no session/cache/DB; v1 file retained as history, live page serves `content/privacy-policy-v2.md` via `POLICY_FILE`) | ✅ `src/privacy.ts` + `test/privacy.test.ts` | **N1** ✅ ([TOG-9893](/TOG/issues/TOG-9893)) |
 | `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ✅ `src/up.ts` + `test/up.test.ts`; sole deploy/uptime endpoint, payload unchanged; queue read covers the ledger (`queue.status: "unknown"` when unconfigured) | **N3** ✅ ([TOG-9895](/TOG/issues/TOG-9895)) + [TOG-10852](/TOG/issues/TOG-10852) ✅ |
 | `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` + `test/csp-reports.test.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-uri` + Reporting API `Reporting-Endpoints`/`Report-To` point at it | [TOG-10107](/TOG/issues/TOG-10107) ✅ |
 
@@ -153,7 +156,7 @@ no public version/clock endpoint or redirect alias remains.
 | Panel gate: Discord-role → 403 (no login form), dark brand, CSP stack, `RecordMemberDataAccess` on panel | ✅ custom React rebuild, no Filament (`src/admin/guard.ts`; `test/admin.test.ts` guard pins: guest redirect, non-moderator 403, forged-origin 403, storeless 503) | W11 ✅ (M1) |
 | Events resource: table (search/sort/status/series/fill filters, publish/cancel/pause/reopen actions, no delete/bulk) + create-as-draft + edit (UTC↔wall DST carriers) + recurrence fields | ✅ table search/status/series/fill + allowlisted title/starts_at/status sort and 25-row pagination ([TOG-10825](/TOG/issues/TOG-10825) ✅); pause/reopen row + edit actions and `rsvp_open` ternary filter ([TOG-10817](/TOG/issues/TOG-10817) ✅); create-as-draft → edit → publish → cancel audited + wall-time field errors (`test/admin.test.ts`, `test/admin-event-form-errors.test.ts`) | W11 ✅ (M2/M3) |
 | `GET /admin/events/create`, `GET /admin/events/:key/edit` (Filament bookmarks) | ✅ merged (PR #105): 301 map to `/admin/events/new`, `/admin/events/:key`; same moderator guard, no resource reads, all queries dropped (`test/legacy-redirects.test.ts`) | [TOG-11156](/TOG/issues/TOG-11156) ✅ |
-| `GET /admin/featured-contents`, `GET /admin/featured-contents/create`, `GET /admin/featured-contents/:id/edit` (Filament bookmarks) | ✅ merged (PR #105): 301 map to `/admin/featured`, `/admin/featured/new`, `/admin/featured/{nativeId}`; edit resolves imported `legacy_id` after the guard (404 if missing/invalid, 503 if unavailable), never falls back to a same-number native row; all queries dropped (`test/legacy-redirects.test.ts`) | [TOG-11156](/TOG/issues/TOG-11156) ✅ |
+| `GET /admin/featured-contents`, `GET /admin/featured-contents/create`, `GET /admin/featured-contents/:id/edit` (Filament bookmarks) | ✅ merged (PR #105): 301 map to `/admin/featured`, `/admin/featured/new`, `/admin/featured/{nativeId}`; edit resolves imported `legacy_id` after the guard (404 if missing/invalid, 503 if unavailable), never falls back to a same-number native row; non-canonical native-ID spellings rejected (`test/admin-featured-record-id.test.ts`); all queries dropped (`test/legacy-redirects.test.ts`) | [TOG-11156](/TOG/issues/TOG-11156) ✅ |
 | RsvpsRelationManager (read-only roster, `canViewForRecord` 403) | ✅ read-only per-event roster on the admin edit page, subjects access-logged (`src/admin/routes.tsx`; `test/admin-reads.test.ts`) | W12 ✅ (M6) |
 | FeaturedContent resource (CRUD + publish window + live preview + safe delete) | ✅ create → publish toggle → reorder → delete, audited (`test/admin.test.ts`); publish-window status + live preview (PR #82; `test/featured-preview.test.ts`); homepage render path (`test/featured.test.ts`) | W11 ✅ (M4) |
 | JoinAttempt resource (read-only viewer: outcome/source/request/discord-id) | ✅ read-only viewer, newest-first + outcome filter + exact id search, subjects logged, no write verb (`test/admin-reads.test.ts`, `test/admin-join-attempt.test.ts`) | W12 ✅ (M8) |
@@ -170,14 +173,14 @@ no public version/clock endpoint or redirect alias remains.
 | `events:reconcile` every 10 min (close past, materialize series, re-dispatch stale; single-flight) | ✅ `reconcileEvents` in `src/jobs/cron.ts` (close finished, materialize series, re-dispatch stale) on the pg EventStore (`src/jobs/event-store-pg.ts`); single-flight via `runScheduled` (`test/jobs-scheduled.test.ts`, `test/prune.test.ts`) | W13 ✅ |
 | `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ `pruneModelTables` in `src/jobs/cron.ts` (90 d each, legacy constants; `test/prune.test.ts` memory + real Postgres) | W13 ✅ |
 | `web_sessions` expiry cleanup (no legacy equivalent — Laravel GC; rows accumulate without one) | ✅ expiry sweep in the same prune pass (`test/prune.test.ts`) | W13 ✅ |
-| Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | ✅ per-mutation `writeBack`/`childWriteBacks` in `src/admin/store.ts` (drafts/past/unmirrored skip); tracked write-back via W13 `SYNC_EVENT_QUEUE` with ledger, 10 s debounce + unique lock (PR #68; `test/rsvp-writeback-recovery.test.ts`, `test/rsvp-writeback-outage.test.ts`, PR #247). Bot HTTP adapter still pending (no live Discord proof) | [TOG-10815](/TOG/issues/TOG-10815) |
+| Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | ✅ per-mutation `writeBack`/`childWriteBacks` in `src/admin/store.ts` (drafts/past/unmirrored skip); tracked write-back via W13 `SYNC_EVENT_QUEUE` with ledger, 10 s debounce + unique lock (PR #68; `test/rsvp-writeback-recovery.test.ts`, `test/rsvp-writeback-outage.test.ts`, PR #247); title-only edit write-back pinned (`test/event-title-edit-writeback.test.ts`). Bot HTTP adapter still pending (no live Discord proof) | [TOG-10815](/TOG/issues/TOG-10815) |
 
 ## 7. Console commands
 
 | Legacy | Next status | Card |
 |---|---|---|
 | `discord:check-moderators` (deploy-time role-config probe) | ✅ ported (PR #38): `src/probes/check-moderators.ts` + `bin/check-moderators.mjs`, fixture-pinned in `test/probes.test.ts` (blank/dev PASS, require-configured FAIL, SySOp-only PASS, doomed-role FAIL); never touches the network. Live W16 rehearsal use stays on the pre-flip card | [TOG-10112](/TOG/issues/TOG-10112) (blocked; parent [TOG-9698](/TOG/issues/TOG-9698)) |
-| `bot:internal-action-smoke` (live-against-staging QA) | ✅ ported (PR #38): `src/probes/bot-smoke.ts` + `bin/internal-action-smoke.mjs`, fixture-pinned in `test/probes.test.ts` (signer + staging guard, production host refused); staging-only drill entry merged (PR #267; `test/internal-action-drill.test.ts`) | [TOG-10112](/TOG/issues/TOG-10112) (blocked; parent [TOG-9698](/TOG/issues/TOG-9698)) + [TOG-11706](/TOG/issues/TOG-11706) ✅ |
+| `bot:internal-action-smoke` (live-against-staging QA) | ✅ ported (PR #38): `src/probes/bot-smoke.ts` + `bin/internal-action-smoke.mjs`, fixture-pinned in `test/probes.test.ts` (signer + staging guard, production host refused, announcement-only mode); staging-only drill entry merged (PR #267; `test/internal-action-drill.test.ts`) | [TOG-10112](/TOG/issues/TOG-10112) (blocked; parent [TOG-9698](/TOG/issues/TOG-9698)) + [TOG-11706](/TOG/issues/TOG-11706) ✅ |
 | `queue:check-depth` (box probe) | dropped as a command (no box on Workers) — replaced by `GET /up` | **N3** ✅ ([TOG-9895](/TOG/issues/TOG-9895)) |
 | `error-alert:probe`, `queue:poison-probe` (drills) | ✅ re-expressed as Vitest tests (`test/drill-probes.test.ts`: error-alert 1-per-fingerprint/5min critical line against a fixture logger; poison-queue fixture isolated from ordinary queued work; fixture-only, no staging/prod) | [TOG-11732](/TOG/issues/TOG-11732) ✅ |
 | `ci:session-cookie` (perf-budget session minter) | unnecessary for the five guest-page budgets; authenticated perf surfaces remain uncovered | [TOG-10845](/TOG/issues/TOG-10845), [coverage](performance-budgets.md) |
@@ -236,10 +239,10 @@ go hunting for them.
 | EventIcs/EventRss/EventFeed/EventSubscribe/EventGoogleCalendar/EventJsonLd | ✅ | W8 ✅ (JSON-LD) + W9 ✅ (feeds) |
 | RsvpRateLimit / AgentEventRateLimit | ✅ / ✅ | W9 ✅ / W14 ✅ |
 | SafeRedirect (guarded `next`), SpamTrap (honeypot + 1000 ms floor) | ✅ `safeNext` on login/join/event-CTA returns, incl control-byte rejection / pending | W6 ✅ / W7 📋 + W9 📋 |
-| RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | pending | W11 🔶 (form) + W13 ⛔ (materialize) |
+| RecurrenceSchedule/RecurrenceInput, EventInput, Rules (IANA tz, wall-time, control chars) | partial: non-integer recurrence counts rejected (`test/recurrence-count-validation.test.ts`); rest pending | W11 🔶 (form) + W13 ⛔ (materialize) |
 | MemberStatsSource / Profiles support (rank, stats, milestones) | ✅ `src/profiles/stats.ts`: never-throw read of `web_v1.members` + `web_v1.member_milestones`; member-gated profile block, local fixture coverage | W7 ✅ |
-| Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell + upcoming-event teaser; live counts + rank reads implemented (pending merge) | W4 ✅ + W6 🔶 (widget) + [TOG-10818](/TOG/issues/TOG-10818) (counts/ranks) + [TOG-10820](/TOG/issues/TOG-10820) (upcoming) |
-| Counts (never-throw degraded empty state) | live/rank view reads + 60 s isolate cache implemented (pending merge); stale numerals hidden per card; [contract](web-v1-contract.md) | W4 ✅ + [TOG-10818](/TOG/issues/TOG-10818) |
+| Home support (Lobby Ledger, ranks, Discord widget iframe) | ✅ shell + upcoming-event teaser; live counts + rank reads merged (`test/home-counts.test.ts`, `test/counts.test.ts`) | W4 ✅ + W6 🔶 (widget) + [TOG-10818](/TOG/issues/TOG-10818) (counts/ranks) ✅ + [TOG-10820](/TOG/issues/TOG-10820) (upcoming) ✅ |
+| Counts (never-throw degraded empty state) | live/rank view reads + 60 s isolate cache merged; stale numerals hidden per card; [contract](web-v1-contract.md) | W4 ✅ + [TOG-10818](/TOG/issues/TOG-10818) ✅ |
 
 ### Waitlist service contract ([TOG-10816](/TOG/issues/TOG-10816))
 
@@ -257,9 +260,9 @@ go hunting for them.
 |---|---|---|
 | Share meta (canonical + OG/Twitter, no og:image) + RSS autodiscovery | ✅ layout-level + per-event tags: canonical, og:url/title/description, twitter:title/description/card, no og:image (`src/pages.tsx` Layout, `src/events/pages.tsx` EventDetailShell/EventPage; `test/event-page.test.ts` per-event tags, `test/page-description-metadata.test.ts`, `test/seo.test.ts`) | W4 ✅ + W8 ✅ |
 | `site.webmanifest` + icons (192/512/maskable/apple) + theme-color `#0b0714` | ❌ missing (`public/` has styles + islands only) | **N2** (new: manifest/icons) |
-| Branded 404/429/500/503 pages | ✅ branded shells; 404 now has a fail-open, 500 ms lookup (3 upcoming published events) and GET `/events?q=` search, without session reads/writes | **N2** + [TOG-10824](/TOG/issues/TOG-10824) |
+| Branded 404/429/500/503 pages | ✅ branded shells; 404 now has a fail-open, 500 ms lookup (3 upcoming published events) and GET `/events?q=` search, without session reads/writes; 500/429 recovery CTA points at the Discord invite (`test/errors-recovery-cta.test.ts`) | **N2** + [TOG-10824](/TOG/issues/TOG-10824) |
 | Draft/noindex + gone-410 + past-never-indexed rules | ✅ sitemap side (published-only `src/seo.ts`) + route side (draft/past meta + header noindex, cancelled 410 + noindex, published no signal; `src/events/routes.tsx`, `src/events/pages.tsx`; `test/event-page.test.ts`, `test/event-gone-surfaces.test.ts`) | W8 ✅ |
-| `content/privacy-policy-v1.md` (live source) | ❌ see N1 | **N1** |
+| `content/privacy-policy-v1.md` (superseded by v2, retained as history) | ❌ see N1 | **N1** |
 | `content/faq-preview*.md` (docs-only), `content/welcome/*` (unwired drafts) | copy inlined / never wired | dropped (docs-only / dead) |
 | Design-lab routes (non-prod visual experiments) | ✅ correctly absent | dropped (never production) |
 | DB sessions, 120-min sliding lifetime | ✅ DB-backed + rotation; 120-minute window re-stamped on login and every authenticated page view (`SESSION_TTL_SECONDS`, `src/sessions.ts`), status cookie follows it. No divergence: the earlier 30 d CPO divergence is withdrawn (privacy v2 keeps the v1 "no remember-me" promise, [TOG-12556](/TOG/issues/TOG-12556)) | W5 ✅ + [TOG-12928](/TOG/issues/TOG-12928) |
@@ -276,4 +279,7 @@ go hunting for them.
 - **N6** ([TOG-9898](/TOG/issues/TOG-9898)) — user-roster write on sign-in/join (`updateOrCreate` Discord id/username/avatar/member flag; never the moderator flag — recompute owns that). The `users` table exists from W3 but nothing writes it; W7/W11 reads need it. Acceptance: repeat login updates the row, no duplicates, moderator flag untouched by the write path.
 
 Unmapped rows remaining: **0**. Dropped rows carry reasons above; every other
-row names its card. Re-run this matrix before W16 (DNS flip).
+row names its card. Re-run 2026-10-03 at `b46a479a`: table scan finds no row
+without a card or drop reason, and no new legacy surface appeared (legacy
+still pinned at `e1e939a`); this refresh records only post-`e2f8969`
+landings, no product code changed. Re-run this matrix before the DNS flip.
