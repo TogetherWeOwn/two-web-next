@@ -204,12 +204,12 @@ go hunting for them.
 
 | Legacy | Next status | Card |
 |---|---|---|
-| EventPolicy (view/drafts/publish/cancel/toggleRsvp/Delete moderator-only) | pending | W8 📋 |
+| EventPolicy (view/drafts/publish/cancel/toggleRsvp/Delete moderator-only) | ✅ drafts 403 non-moderator, cancelled 410 + noindex, JSON/ICS same view rule, writes moderator-only (`src/events/routes.tsx`; `test/event-page.test.ts`, `test/event-gone-surfaces.test.ts`, `test/event-write-member-denied.test.ts`, `test/draft-ics-conditional-access.test.ts`) | W8 ✅ |
 | RsvpPolicy (owner-only write; Published + !ended + rsvpOpen create) | ✅ owner-only, Published + !ended + rsvpOpen | W9 ✅ |
-| FeaturedContentPolicy (all moderator; public via `currentlyVisible`) | pending | W11 🔶 |
-| JoinAttemptPolicy (read moderator; writes denied — controller writes direct) | pending | W6 🔶 (write) + W12 📋 (read) |
-| UserPolicy (`updateProfile` self-only) | pending | W7 📋 |
-| `access-admin` gate (`is_moderator`, recomputed from Discord role IDs each login) | ✅ recompute live; gate pending | W5 ✅ + W11 🔶 |
+| FeaturedContentPolicy (all moderator; public via `currentlyVisible`) | ✅ moderator-only writes (`src/featured-policy.ts`, `ALL /admin/*` guard), public reads exactly `currentlyVisible` (`src/featured.ts`; `test/featured-policy.test.ts`) | W11 ✅ |
+| JoinAttemptPolicy (read moderator; writes denied — controller writes direct) | ✅ moderator-only reads (`src/admin/guard.ts` + `src/admin/reads.ts`; `test/admin-join-attempt.test.ts`), zero admin write routes with the single controller insert (`src/join/service.ts` `recordAttempt`; `test/join-attempt-write-policy.test.ts`) | W6 ✅ + W12 ✅ |
+| UserPolicy (`updateProfile` self-only) | ✅ owner-only PATCH incl. moderator-refused, no existence oracle (`src/profiles/routes.tsx`; `test/profile-self-only.test.ts`) | W7 ✅ |
+| `access-admin` gate (`is_moderator`, recomputed from Discord role IDs each login) | ✅ recompute live + gate enforced: guest bounce, non-moderator 403, failure 503, private no-store (`src/admin/guard.ts`; `test/admin-guard-matrix.test.ts`) | W5 ✅ + W11 ✅ |
 
 ## 10. Middleware and edge behavior
 
@@ -255,10 +255,10 @@ go hunting for them.
 
 | Legacy | Next status | Card |
 |---|---|---|
-| Share meta (canonical + OG/Twitter, no og:image) + RSS autodiscovery | ✅ layout-level; per-event tags pending | W4 ✅ + W8 📋 |
+| Share meta (canonical + OG/Twitter, no og:image) + RSS autodiscovery | ✅ layout-level + per-event tags: canonical, og:url/title/description, twitter:title/description/card, no og:image (`src/pages.tsx` Layout, `src/events/pages.tsx` EventDetailShell/EventPage; `test/event-page.test.ts` per-event tags, `test/page-description-metadata.test.ts`, `test/seo.test.ts`) | W4 ✅ + W8 ✅ |
 | `site.webmanifest` + icons (192/512/maskable/apple) + theme-color `#0b0714` | ❌ missing (`public/` has styles + islands only) | **N2** (new: manifest/icons) |
 | Branded 404/429/500/503 pages | ✅ branded shells; 404 now has a fail-open, 500 ms lookup (3 upcoming published events) and GET `/events?q=` search, without session reads/writes | **N2** + [TOG-10824](/TOG/issues/TOG-10824) |
-| Draft/noindex + gone-410 + past-never-indexed rules | sitemap side ✅; route side pending | W8 📋 |
+| Draft/noindex + gone-410 + past-never-indexed rules | ✅ sitemap side (published-only `src/seo.ts`) + route side (draft/past meta + header noindex, cancelled 410 + noindex, published no signal; `src/events/routes.tsx`, `src/events/pages.tsx`; `test/event-page.test.ts`, `test/event-gone-surfaces.test.ts`) | W8 ✅ |
 | `content/privacy-policy-v1.md` (live source) | ❌ see N1 | **N1** |
 | `content/faq-preview*.md` (docs-only), `content/welcome/*` (unwired drafts) | copy inlined / never wired | dropped (docs-only / dead) |
 | Design-lab routes (non-prod visual experiments) | ✅ correctly absent | dropped (never production) |
