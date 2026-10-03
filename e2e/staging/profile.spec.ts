@@ -1,10 +1,10 @@
 import { test, expect } from "./fixtures";
-import { loginQaIdentities } from "./qa-login";
+import { loginQaMember } from "./qa-login";
 
 // Fresh member session per file: event pages rotate the bearer on read, so a
-// stored token is single-use across files.
+// stored token is single-use across files. Member only — one login.
 test.beforeAll(async () => {
-  await loginQaIdentities();
+  await loginQaMember();
 });
 
 // CI keyboard flow verbatim, against the staging QA member: 1100 ms spam
