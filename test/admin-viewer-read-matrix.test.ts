@@ -7,9 +7,14 @@
 // session row bit only (src/admin/guard.ts): nothing the client sends — a
 // re-signed cookie, a role cookie, a role header — can grant or keep it.
 //
-// Guests are denied by a 302 into site Discord OAuth, not a 403: the panel has
-// no login page (legacy parity, TOG-54). Every denial must release no member
-// data, write no access-log row and leave the read tables untouched.
+// Guests are denied by a redirect into sign-in, not a 403: the panel has no
+// login page (legacy parity, TOG-54). Reads bounce with a 302 to site Discord
+// OAuth; writes bounce with a 303 to the expiry-recovery page, never into a
+// re-submit. A bearer with no live session row (bad shape, revoked, expired)
+// is an expired guest, not a forbidden member: reads re-authenticate, writes
+// recover. A live row without the moderator bit is a 403. Every denial must
+// release no member data, write no access-log row and leave the read tables
+// untouched.
 
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,8 +40,9 @@ import {
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 type Actor = typeof MEMBER;
-type Expect = { status: 302 | 403 | 404 };
+type Expect = { status: 302 | 303 | 403 | 404 };
 const GUEST: Expect = { status: 302 };
+const GUEST_WRITE: Expect = { status: 303 };
 const FORBIDDEN: Expect = { status: 403 };
 const NO_ROUTE: Expect = { status: 404 };
 const WRITE_VERBS = ["POST", "PUT", "PATCH", "DELETE"] as const;
@@ -99,6 +105,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
     async function denied(res: Response, expected: Expect, label: string) {
       expect(res.status, label).toBe(expected.status);
       if (expected.status === 302) expect(res.headers.get("location"), label).toBe("/auth/discord");
+      if (expected.status === 303)
+        expect(res.headers.get("location"), label).toMatch(/^\/auth\/recover\?next=/);
       const body = await res.text();
       for (const token of LEAKS) expect(body, `${label} leaks ${token}`).not.toContain(token);
     }
@@ -184,7 +192,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     // the roster has none either. POST /admin/events/:key is the event edit form
     // (W11 M2), not a roster write, so the moderator row skips only that cell.
     it.each([
-      ["guest", null, GUEST, GUEST],
+      ["guest", null, GUEST_WRITE, GUEST_WRITE],
       ["signed-in member", MEMBER, FORBIDDEN, FORBIDDEN],
       ["signed-in non-member", OUTSIDER, FORBIDDEN, FORBIDDEN],
       ["moderator", MODERATOR, NO_ROUTE, null],
@@ -259,10 +267,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
         [
           "signed row hash instead of the token",
           { cookie: await signed(mod.row.tokenHash) },
-          FORBIDDEN,
+          GUEST,
         ],
-        ["revoked moderator session", { cookie: revoked.cookie }, FORBIDDEN],
-        ["expired moderator session", { cookie: expired.cookie }, FORBIDDEN],
+        ["revoked moderator session", { cookie: revoked.cookie }, GUEST],
+        ["expired moderator session", { cookie: expired.cookie }, GUEST],
         [
           "member session plus role cookies",
           {
