@@ -82,6 +82,7 @@ export const ALERT_ROUTES = new Set([
   "/join/callback",
   "/join/discord",
   "/logout",
+  "/members",
   "/members/:user",
   "/privacy",
   "/profile",

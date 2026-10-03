@@ -1,4 +1,5 @@
 // route-inventory: GET /profile
+// route-inventory: GET /members
 // route-inventory: GET /members/:user
 // route-inventory: PATCH /members/:user
 // route-inventory: POST /members/:user
@@ -233,6 +234,26 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
     expect(res.status).toBe(200);
     expect(html).toContain("Edit your profile");
     expect(html).toContain("alice");
+  });
+
+  it("bare /members is the frozen 404 for every role, with no log row", async () => {
+    const { app, sessions, store, log } = harness();
+    const find = vi.spyOn(store, "find");
+    const guest = await app.request("/members", {}, env);
+    expect(guest.status).toBe(404);
+    expect(guest.headers.get("location")).toBeNull();
+    expect(guest.headers.get("set-cookie")).toBeNull();
+    for (const row of [OUTSIDER, BOB, MOD]) {
+      const res = await app.request(
+        "/members",
+        { headers: { cookie: await cookieFor(sessions, row) } },
+        env,
+      );
+      expect(res.status, row.username).toBe(404);
+      expect(res.headers.get("location"), row.username).toBeNull();
+    }
+    expect(find).not.toHaveBeenCalled();
+    expect(log).toHaveLength(0);
   });
 
   it("unknown and malformed ids are 404 with no log row", async () => {
