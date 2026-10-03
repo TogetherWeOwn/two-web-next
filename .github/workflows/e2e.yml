@@ -5,6 +5,11 @@ name: e2e
 # larger runners or Blacksmith. The Postgres service is disposable per job;
 # the guard in e2e/ci-only.mjs permits only that target, never staging or
 # production. Browsers run here in CI only, never on the controller.
+# Docs-only PRs (ci/change-scope.sh verdict, mirrored from ci.yml) skip the
+# smoke below: prose that no gate, test or build reads proves nothing about
+# browser journeys. The pull_request trigger stays unfiltered so this workflow
+# always reports, and browser-smoke is not a required check, so a skip never
+# blocks a merge.
 
 on:
   pull_request:
@@ -14,14 +19,49 @@ on:
 
 permissions:
   contents: read
+  # The scope job lists the PR's changed files via the API.
+  pull-requests: read
 
 concurrency:
   group: e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose
+  # (`docs/**`, root `*.md`) that no gate, test or build reads fast-passes
+  # the browser smoke below instead of occupying a runner for 25 minutes.
+  # ci/change-scope.sh fails closed: island assets, stylesheets, fonts and
+  # every other path resolve to docs_only=false and run the full smoke.
+  scope:
+    name: scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+      - id: scope
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          bash ci/change-scope.sh "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" >> "$GITHUB_OUTPUT"
+
   browser-smoke:
     name: browser-smoke
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
