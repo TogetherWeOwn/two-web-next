@@ -74,8 +74,9 @@ Every cookie this site sets is its own: signed, `__Host-` prefixed, never
 readable by scripts, and sent only to this site over HTTPS.
 
 - `__Host-two_session` keeps you signed in. It holds a random token, not your
-  details. It lasts 30 days and is renewed, with a fresh token, each time you
-  load a page that uses your sign-in. Signing out ends it.
+  details. It lasts 120 minutes, and the clock restarts, with a fresh token,
+  each time you load a page that uses your sign-in; stay away for two hours
+  and you are signed out. Signing out ends it.
 - `__Host-two_session_status` lets other open tabs notice that you signed
   out. It can only check whether a session is still live and can never sign
   anyone in. It lasts as long as the session cookie.
@@ -90,9 +91,9 @@ readable by scripts, and sent only to this site over HTTPS.
   stores only a timestamp in your browser's local storage — nothing about
   who you are.
 
-There is no separate remember-me cookie, and no role is kept in a cookie:
-signing in again re-reads your Discord roles, so a changed role takes effect
-at your next sign-in.
+There is no remember-me cookie on purpose: signing in again re-reads your
+Discord roles, so a changed role takes effect at the next login instead of
+lingering in a cookie.
 
 There are no third-party analytics or advertising trackers on this site, and
 no third-party scripts. The one third-party embed is the live lobby widget on
