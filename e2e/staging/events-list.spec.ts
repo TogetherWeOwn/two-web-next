@@ -1,4 +1,11 @@
 import { test, expect } from "./fixtures";
+import { emptyStorageState } from "./fixtures";
+
+// Public journey: no session needed. Runs explicitly unauthenticated so the
+// rotating session reader on /events cannot consume (kill) the shared member
+// bearer that profile/auth specs reuse, and a bare newContext() here would
+// inherit the member storageState from the staging config.
+test.use({ storageState: emptyStorageState });
 
 // Runs in chromium, mobile-375 and reduced-motion: list, search miss + clear,
 // and the calendar month step. Frozen testids in src/islands/contracts.ts.

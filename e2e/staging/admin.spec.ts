@@ -1,7 +1,14 @@
 import { test, expect } from "./fixtures";
-import { moderatorStorageState } from "./fixtures";
+import { emptyStorageState, moderatorStorageState } from "./fixtures";
+import { loginQaIdentities } from "./qa-login";
 
 test.use({ storageState: moderatorStorageState });
+
+// Fresh moderator session per file: event pages rotate the bearer on read,
+// so a stored token is single-use across files.
+test.beforeAll(async () => {
+  await loginQaIdentities();
+});
 
 // Moderator staging journey. This spec NEVER publishes: the fixture is
 // cancelled from draft, so no sync-event carrier is enqueued (only
@@ -12,7 +19,10 @@ test("staging moderator creates a draft then cancels it without publishing", asy
   browser,
 }) => {
   let eventKey: string | undefined;
-  const guest = await browser.newContext();
+  // Explicitly empty: a bare newContext() inherits this file's moderator
+  // storageState from the staging config, which would both void the 403
+  // expectation and rotate (kill) the stored moderator bearer.
+  const guest = await browser.newContext({ storageState: emptyStorageState });
   try {
     await page.goto("/admin/events");
     await page.getByRole("link", { name: "New event", exact: true }).click();
