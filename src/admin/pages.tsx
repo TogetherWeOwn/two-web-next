@@ -10,11 +10,13 @@ import { currentlyVisible, FeaturedStatusBadge } from "../featured-status";
 import { FeaturedContentItem, SkipLink } from "../pages";
 import type { EventListRow, EventRow, FeaturedRow } from "./store";
 import { goingCountText } from "../islands/contracts";
-import { eventListUrl, type EventListQuery, type EventSort } from "./event-list";
+import { eventEmptyText, eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 import {
+  featuredEmptyText,
   featuredListUrl,
   joinAttemptsUrl,
+  rosterEmptyText,
   rosterUrl,
   type FeaturedListQuery,
   type JoinAttemptsQuery,
@@ -452,7 +454,7 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
             {rows.length === 0 ? (
               <tr>
                 <td colspan={5} data-testid="events-empty">
-                  No events yet.
+                  {eventEmptyText(query)}
                 </td>
               </tr>
             ) : (
@@ -819,7 +821,7 @@ export const EventFormPage: FC<{
                   {roster.length === 0 ? (
                     <tr>
                       <td colspan={3} data-testid="roster-empty">
-                        {rosterQuery.q ? "No RSVPs match this member search." : "No RSVPs yet."}
+                        {rosterEmptyText(rosterQuery)}
                       </td>
                     </tr>
                   ) : (
@@ -916,9 +918,7 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; n
             {rows.length === 0 ? (
               <tr>
                 <td colspan={5} data-testid="featured-empty">
-                  {query.q || query.published
-                    ? "No featured content matches these filters."
-                    : "No featured content yet."}
+                  {featuredEmptyText(query)}
                 </td>
               </tr>
             ) : (
