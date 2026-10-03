@@ -44,7 +44,9 @@ import {
   mergeCalendarRows,
   parseCalendarMonth,
   parseCalendarView,
+  wallDateIso,
   wallMonth,
+  wallTimeHm,
   calendarZone,
   currentCalendarMonth,
 } from "../islands/contracts";
@@ -78,6 +80,12 @@ type App = Hono<{ Bindings: Env }>;
 export type SessionReader = (c: Ctx) => Promise<Session | null>;
 
 export function eventJson(e: PublicEvent) {
+  // Legacy EventResource order (TOG-11666): event_key first, synced_to_discord
+  // last, never the autoincrement id. The wall readings sit beside the UTC
+  // instants so consumers render the host's wall time without re-resolving
+  // the zone; synced_to_discord derives from the mirror column so the raw
+  // discord_event_id never leaves the server.
+  const wall = (d: Date) => `${wallDateIso(d, e.timezone)} ${wallTimeHm(d, e.timezone)}`;
   return {
     event_key: e.eventKey,
     title: e.title,
@@ -85,12 +93,15 @@ export function eventJson(e: PublicEvent) {
     description: e.description,
     starts_at: e.startsAt.toISOString(),
     ends_at: e.endsAt.toISOString(),
+    starts_at_local: wall(e.startsAt),
+    ends_at_local: wall(e.endsAt),
     timezone: e.timezone,
     location: e.location,
     capacity: e.capacity,
+    going_count: e.goingCount,
     status: e.status,
     rsvp_open: e.rsvpOpen,
-    going_count: e.goingCount,
+    synced_to_discord: e.discordEventId !== null,
   };
 }
 
