@@ -75,6 +75,7 @@ const OTHER_READS = [
   "/auth/discord/redirect",
   "/auth/status",
   "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
+  "/members", // Retired bare path: frozen 404, answered before the member gate.
   "/events",
   "/events/past",
   "/events.json",
