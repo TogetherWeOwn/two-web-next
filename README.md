@@ -226,9 +226,13 @@ API access, unset/false flag or any other ref fails closed. Both gate jobs inher
 [read an Environment in this private repository](https://docs.github.com/en/rest/deployments/environments#get-an-environment--fine-grained-access-tokens).
 The deploy job uses that Environment, checks the gate again after approval, and
 deploys the dispatch SHA with `wrangler deploy --env production`. It does not
-create resources or run migrations/tests on production. Its `/up` smoke requires
-HTTP 200 with `db:ok` and `pending_migrations:0`, accepting degraded/unknown queue
-states like staging.
+create resources or run migrations/tests on production. Its post-deploy smoke runs
+the same GET-only public-route set as staging
+(`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
+requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
+degraded/unknown queue states like staging, and the remaining 15 routes assert
+status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
+(indexable HTML omits the staging noindex). No auth, no writes, no PII.
 The smoke runs only after a separately authorized production deployment; no
 production probe is performed by delivering or testing this template.
 

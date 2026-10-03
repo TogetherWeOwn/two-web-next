@@ -34,7 +34,10 @@ const routes = [
   },
 ];
 
-export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log, allowIndexable = false } = {}) {
+export async function smoke(
+  baseUrl,
+  { timeoutMs = 5_000, log = console.log, allowIndexable = false } = {},
+) {
   const base = new URL(baseUrl);
   if (
     !["http:", "https:"].includes(base.protocol) ||
