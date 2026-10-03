@@ -89,14 +89,35 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
         check(contentType === route.type, `Content-Type ${route.type}`, contentType ?? "missing");
       }
       const body = await response.text();
+      if (route.path === "/up") {
+        // Cutover identity gate (TOG-12863): the deploy target must answer as
+        // two-web-next with an uncacheable liveness envelope. A 500 (status
+        // gate above) or a missing origin marker fails the gate; liveness
+        // never becomes a DB gate beyond the db:ok shape below.
+        check(
+          headers.get("x-two-origin") === "two-web-next",
+          "X-TWO-Origin two-web-next",
+          headers.get("x-two-origin") ?? "missing",
+        );
+        const noStore = (headers.get("cache-control") ?? "")
+          .split(",")
+          .map((directive) => directive.trim().toLowerCase())
+          .includes("no-store");
+        check(noStore, "Cache-Control no-store", headers.get("cache-control") ?? "missing");
+      }
       if (route.json) {
         try {
           const data = JSON.parse(body);
+          // Healthy, degraded (warn 20 / critical 100, still degraded never
+          // down) and unknown-ledger envelopes all pass; thresholds pinned to
+          // src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT.
           const valid =
             data?.db === "ok" &&
             data?.pending_migrations === 0 &&
             ["healthy", "degraded"].includes(data?.status) &&
-            ["healthy", "degraded", "unknown"].includes(data?.queue?.status);
+            ["healthy", "degraded", "unknown"].includes(data?.queue?.status) &&
+            data?.queue?.warn_at === 20 &&
+            data?.queue?.critical_at === 100;
           check(
             valid,
             "JSON /up db:ok, pending_migrations:0, status and queue.status",
@@ -105,6 +126,20 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
         } catch {
           check(false, "valid JSON object", "invalid JSON");
         }
+      }
+      if (route.path === "/robots.txt") {
+        // Per-environment robots (W16b TOG-11942): the Sitemap line must name
+        // this environment's own origin, never the apex or another env's host.
+        const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
+        check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+      }
+      if (route.path === "/sitemap_index.xml") {
+        // Same-environment sitemap: every loc stays on the probed origin, and
+        // the index is never empty (static leaves render even with the DB down).
+        const locs = [...body.matchAll(/<loc>([^<]*)<\/loc>/g)].map((m) => m[1].trim());
+        check(locs.length > 0, "at least one sitemap <loc>", `${locs.length} <loc> entries`);
+        const foreign = locs.filter((loc) => !loc.startsWith(`${base.origin}/`)).length;
+        check(foreign === 0, "same-origin sitemap locs", `${foreign} foreign locs`);
       }
       if (route.body)
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");

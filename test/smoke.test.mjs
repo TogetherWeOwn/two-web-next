@@ -11,7 +11,7 @@ const fixtures = {
   "/up": [
     200,
     "application/json",
-    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown"}}',
+    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100}}',
   ],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
@@ -25,9 +25,14 @@ const fixtures = {
   "/sitemap_index.xml": [
     200,
     "application/xml",
-    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>',
+    (origin) =>
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${origin}/</loc></url></urlset>`,
   ],
-  "/robots.txt": [200, "text/plain", "User-agent: *\nDisallow:\n"],
+  "/robots.txt": [
+    200,
+    "text/plain",
+    (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`,
+  ],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
@@ -41,21 +46,36 @@ const fixtures = {
 async function stub(t, change = () => {}) {
   const requests = [];
   const server = createServer((request, response) => {
-    requests.push({ path: request.url, method: request.method, cookie: request.headers.cookie });
+    requests.push({
+      path: request.url,
+      method: request.method,
+      cookie: request.headers.cookie,
+      host: request.headers.host,
+    });
     const fixture = fixtures[request.url];
     if (!fixture) {
       response.writeHead(500).end("Unexpected request");
       return;
     }
     const [status, type, body, location] = fixture;
+    // Origin-aware SEO fixtures (W16b TOG-11942): the stub advertises its own
+    // origin the way the Worker advertises APP_URL, so the probe's
+    // same-origin robots/sitemap assertions exercise a true positive.
+    const origin = `http://${request.headers.host}`;
+    const resolved = typeof body === "function" ? body(origin) : body;
     const result = {
       status,
-      body,
+      body: resolved,
       headers: {
         "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
         ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
         ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
+        // Cutover identity (TOG-12863): the live /up answers as two-web-next
+        // with no-store, so the stub advertises the same pair.
+        ...(request.url === "/up"
+          ? { "x-two-origin": "two-web-next", "cache-control": "no-store" }
+          : {}),
         ...(location ? { location } : {}),
         "set-cookie": "fixture=not-a-session; Path=/",
       },
@@ -153,6 +173,45 @@ for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
     assert.ok(!result.output.includes("upstream fallback"));
   });
 }
+
+test("rejects a foreign robots Sitemap host without leaking the body", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt")
+      result.body =
+        "User-agent: *\nDisallow:\nSitemap: https://togetherweown.com/sitemap_index.xml\n";
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+  assert.doesNotMatch(result.output, /togetherweown\.com/);
+});
+
+test("rejects foreign sitemap locs and an empty sitemap", async (t) => {
+  for (const [body, expected] of [
+    [
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://togetherweown.com/</loc></url></urlset>',
+      "same-origin sitemap locs",
+    ],
+    [
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>',
+      "at least one sitemap <loc>",
+    ],
+  ]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/sitemap_index.xml") result.body = body;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(
+      result.output.includes(`FAIL /sitemap_index.xml: expected ${expected}`),
+      result.output,
+    );
+    assert.doesNotMatch(result.output, /togetherweown\.com/);
+  }
+});
 
 test("rules accepts rendered Rules but rejects rendered Home with the shared footer", async (t) => {
   // In-memory rendering uses local components only: https://esbuild.github.io/api/#write
@@ -315,11 +374,72 @@ for (const body of [
   });
 }
 
+test("accepts a critical backlog as degraded, never down", async (t) => {
+  // QUEUE_CRITICAL_AT (100) stays degraded: a backlog is RSVP lag, not an
+  // outage (src/up.ts). The gate asserts the 200 + origin + no-store triple.
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"degraded","db":"ok","pending_migrations":0,"queue":{"status":"degraded","pending":100,"warn_at":20,"critical_at":100}}';
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.ok(result.output.includes("PASS /up"), result.output);
+});
+
+test("rejects /up without the cutover origin marker", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") delete result.headers["x-two-origin"];
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes("FAIL /up: expected X-TWO-Origin two-web-next; actual missing"),
+    result.output,
+  );
+});
+
+test("rejects /up without no-store", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") result.headers["cache-control"] = "public, max-age=3600";
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(result.output.includes("FAIL /up: expected Cache-Control no-store"), result.output);
+});
+
+test("rejects /up 500 even with the origin marker present", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") {
+      result.status = 500;
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100}}';
+    }
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(result.output.includes("FAIL /up: expected HTTP 200; actual HTTP 500"), result.output);
+});
+
+test("rejects /up envelopes missing the queue thresholds", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown"}}';
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected JSON \/up db:ok, pending_migrations:0, status and queue\.status/,
+  );
+});
+
 test("allows degraded /up and guest admin 403", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (route === "/up")
       result.body =
-        '{"status":"degraded","db":"ok","pending_migrations":0,"queue":{"status":"degraded"}}';
+        '{"status":"degraded","db":"ok","pending_migrations":0,"queue":{"status":"degraded","warn_at":20,"critical_at":100}}';
     if (route === "/admin") {
       result.status = 403;
       delete result.headers.location;

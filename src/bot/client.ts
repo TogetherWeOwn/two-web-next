@@ -29,7 +29,13 @@ export type EventUpsertResult = BotSuccess<{
   replayed: boolean;
 }>;
 
-export type InternalActionResult = RoleAssignResult | AnnouncementResult | EventUpsertResult;
+export type EventCancelResult = BotSuccess<{ outcome: "cancelled"; discordEventId: string }>;
+
+export type InternalActionResult =
+  | RoleAssignResult
+  | AnnouncementResult
+  | EventUpsertResult
+  | EventCancelResult;
 export type InternalActionAnswer = InternalActionResult | BotFailure;
 
 /** A caller-supplied UUID for one logical operation (announcement/event only). */
@@ -335,6 +341,34 @@ export function createBotClient(opts: BotClientOptions) {
         outcome,
         discordEventId,
         replayed: answer.replayed,
+      };
+    },
+
+    // Opt-in on the bot (TWO_INTERNAL_ALLOW_EVENT_CANCEL): a bot without it
+    // answers a non-retryable `action_not_allowed`, which the queue treats as a
+    // definitive refusal. Only an event the bot already mapped can be cancelled.
+    async cancelEvent(
+      e: { eventKey: string },
+      idempotencyKey: string,
+    ): Promise<EventCancelResult | BotFailure> {
+      if (e.eventKey.trim() === "")
+        throw new BotTerminalError("An event.cancel needs an event_key.");
+      const answer = await send(
+        cfg(),
+        { action: "event.cancel", event_key: e.eventKey },
+        idempotencyKey,
+      );
+      if (!answer.ok) return answer.failure;
+      if (str(answer.result["outcome"]) !== "cancelled")
+        throw new BotTransportError("an event.cancel outcome this release does not know");
+      const discordEventId = str(answer.result["event_id"]);
+      if (discordEventId === null || discordEventId.trim() === "")
+        throw new BotTransportError("an event.cancel success with no event_id");
+      return {
+        ok: true,
+        requestId: answer.requestId || null,
+        outcome: "cancelled",
+        discordEventId,
       };
     },
   };

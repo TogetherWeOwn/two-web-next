@@ -14,9 +14,18 @@ permissions:
   # The scope job lists the PR's changed files via the API.
   pull-requests: read
 
+# Runs on main are never cancelled in progress: a cancel request marks the run
+# cancelled even when every job then succeeds, and the staging deploy trigger
+# rejects a cancelled conclusion. That left 54 of 60 main runs cancelled on
+# 2026-10-02 and staging never deployed. The group stays per ref, so main runs
+# are serialized (finish in push order; a newer pending run replaces an older
+# pending one before it starts), and an older SHA can never finish after, and
+# deploy over, a newer one. PR pushes still cancel superseded runs (TOG-11811
+# queue economy). test/ci-concurrency.test.ts and the staging gate selftest pin
+# this.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose
@@ -28,7 +37,7 @@ jobs:
   scope:
     name: scope
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
@@ -56,12 +65,14 @@ jobs:
     name: a11y
     needs: scope
     if: needs.scope.outputs.docs_only != 'true'
-    # Overflow switch (TOG ops, 2026-10-01): stays on self-hosted unless repo vars
-    # CI_OVERFLOW_RUNNER (JSON runs-on, e.g. ["ubuntu-latest"]), CI_OVERFLOW_JOBS
-    # (JSON job ids) and CI_OVERFLOW_EVENTS (JSON event names) all select this job.
-    # Flip back without a PR by deleting CI_OVERFLOW_RUNNER. Private repo: hosted
-    # minutes come from the included allowance; an rbx1 guard reverts at 45k.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    # Overflow switch (TOG ops, 2026-10-01): repo vars CI_OVERFLOW_RUNNER (JSON
+    # runs-on, e.g. ["ubuntu-latest"]), CI_OVERFLOW_JOBS (JSON job ids) and
+    # CI_OVERFLOW_EVENTS (JSON event names) together route this job without a PR.
+    # Unselected, it follows repo visibility: the org's two-selfhosted runner group
+    # refuses public repos (TOG-12326), so GitHub-hosted Linux while public and the
+    # self-hosted fleet while private. Private repo: hosted minutes come from the
+    # included allowance; an rbx1 guard reverts at 45k.
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     timeout-minutes: 25
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -106,6 +117,8 @@ jobs:
       - name: Profile native and island Unicode regressions (memory fixtures)
         run: A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts
       - name: WCAG 2.2 AA (local fixtures, no external services)
+        env:
+          DEBUG: pw:browser
         run: npm run a11y
       - name: Accessibility evidence
         if: always()
@@ -123,7 +136,7 @@ jobs:
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
     # runners, so 20m cancelled green runs (TOG-12177). Keep the job bounded; the
     # seeded property suite retains its hard 10s limit.
@@ -205,7 +218,7 @@ jobs:
         run: bash ci/biome-selftest.sh
       - name: Check (lint + typecheck + coverage gate)
         if: needs.scope.outputs.docs_only != 'true'
-        run: npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs
+        run: npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
@@ -215,6 +228,9 @@ jobs:
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run test:cutover
+      - name: Shadow-compare selftest (loopback only)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: npm run test:shadow
       - name: Coverage job summary
         if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
@@ -249,6 +265,9 @@ jobs:
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: needs.scope.outputs.docs_only != 'true'
         run: node --test ci/production-deploy-gate.test.mjs
+      - name: Production secrets preflight selftest (stubbed wrangler, no secrets or network)
+        if: needs.scope.outputs.docs_only != 'true'
+        run: node --test ci/check-production-secrets.test.mjs
       - name: Build (wrangler dry run)
         if: needs.scope.outputs.docs_only != 'true'
         run: npx wrangler deploy --dry-run --outdir dist

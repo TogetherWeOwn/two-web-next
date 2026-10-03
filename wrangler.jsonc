@@ -38,11 +38,6 @@
       }
     ]
   },
-  // W8 write-back carrier. Still NOT bound: a producer binding to a queue that does not exist fails
-  // `wrangler deploy`, and the W8 SyncMessage shape differs from W13's QueueMessage above. After the
-  // operator runs `wrangler queues create two-web-next-event-sync`, append
-  //   { "binding": "EVENT_SYNC_QUEUE", "queue": "two-web-next-event-sync" }
-  // to producers. Until then src/events/sync.ts logs each due write-back (never silent, never throws).
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
@@ -98,11 +93,18 @@
       // id in a reviewed cutover PR. The manual workflow refuses this sentinel.
       "hyperdrive": [{ "binding": "DB", "id": "00000000000000000000000000000000" }],
       // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
+      // env.production.vars must repeat every var the worker reads: Wrangler
+      // never inherits top-level vars into a named environment. The moderator
+      // list is the same approved SySOp role as staging (TOG-106); without it
+      // production boots with no moderators and admin authorization fails
+      // closed for everyone.
       "vars": {
         "APP_URL": "https://togetherweown.com",
         "FEATURED_IMAGE_HOSTS": "",
         "DISCORD_CLIENT_ID": "1539711683898118154",
         "DISCORD_GUILD_ID": "326474832151838730",
+        // Approved SySOp only. Production preflight checks this exact value.
+        "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
         "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
       }
     }
