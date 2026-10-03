@@ -1,0 +1,100 @@
+name: staging-importer-dryrun
+
+# Staging-only importer dry run (counts only, no writes).
+# Manual dispatch only; runs inside GitHub where the staging secrets already
+# live, so no agent principal ever holds them. The four import slices run in
+# dry-run mode (the default — this workflow never passes --apply), then the
+# verifier reconciles table names and counts. Output is counts only: the
+# verifier runs with --detail-limit 0 so no row keys are printed, and the
+# importers print per-table predicted counts, never row data.
+# No migrations, no writes, no rotation, staging only. Direct disclosure of
+# either database URL remains refused; secrets are env-only and never logged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cutoff:
+        description: "Verify cutoff as ISO-UTC (YYYY-MM-DDTHH:MM:SSZ); empty means anchor-minus-90d (90 days before now, UTC)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-importer-dryrun
+  cancel-in-progress: false
+
+jobs:
+  dryrun:
+    name: dryrun
+    # Public repo: standard GitHub-hosted runners only — never paid larger
+    # runners or Blacksmith.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --include=dev
+
+      - name: Importer dry run (counts only, no writes)
+        env:
+          # Staging Environment secrets; never echoed, never written to a file.
+          # GitHub masks secret values in logs automatically.
+          # DATABASE_URL is the staging Neon destination.
+          DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          # Staging-safe legacy snapshot source. The operator must provision
+          # this on the staging environment before dispatch; it must be a
+          # snapshot taken for staging, never the production legacy database
+          # and never the agent test database. Dispatch fails without it.
+          LEGACY_DATABASE_URL: ${{ secrets.LEGACY_STAGING_SNAPSHOT_DATABASE_URL }}
+          INPUT_CUTOFF: ${{ inputs.cutoff }}
+        run: |
+          set -uo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::NEON_STAGING_DATABASE_URL is not configured on the staging environment"
+            exit 1
+          fi
+          if [ -z "${LEGACY_DATABASE_URL:-}" ]; then
+            echo "::error::LEGACY_STAGING_SNAPSHOT_DATABASE_URL is not configured on the staging environment; refusing to substitute production or test databases"
+            exit 1
+          fi
+          if [ "$LEGACY_DATABASE_URL" = "$DATABASE_URL" ]; then
+            echo "::error::refusing: source and destination point at the same database"
+            exit 1
+          fi
+          if [ -n "${INPUT_CUTOFF:-}" ]; then
+            CUTOFF="$INPUT_CUTOFF"
+          else
+            CUTOFF="$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          fi
+          echo "cutoff=$CUTOFF"
+          failures=0
+          run_slice() {
+            label="$1"
+            shift
+            echo "--- $label ---"
+            "$@"
+            code=$?
+            echo "exit=$code ($label)"
+            if [ "$code" -ne 0 ]; then
+              failures=$((failures + 1))
+            fi
+          }
+          run_slice users-profiles node bin/import/users-profiles.mjs
+          run_slice events-rsvps node bin/import/events-rsvps.mjs
+          run_slice content-funnel node bin/import/content-funnel.mjs
+          run_slice audit node bin/import/audit.mjs
+          run_slice verify node bin/import/verify.mjs --cutoff "$CUTOFF" --detail-limit 0 --json verify-report.json --markdown verify-report.md
+          if [ "$failures" -ne 0 ]; then
+            echo "::error::$failures slice(s) reported a diff or an error; see per-slice exit codes above"
+            exit 1
+          fi
+          echo "all slices matched predicted counts"
