@@ -28,8 +28,9 @@ ported file is covered. Destinations are relative to this repository.
    a normal session; GET is absent (Hono 404, not Laravel 405); all failed POSTs
    are identical 404s with no session. No redirect/query parameter carries the
    configured QA token.
-2. **30-day rotating TTL**, versus the legacy 120-minute sliding session:
-   `docs/parity.md:170`, legacy `config/session.php:35`. Assert creation expiry,
+2. **120-minute sliding TTL**, same as the legacy session (the earlier 30-day
+   divergence was withdrawn in [TOG-12928](/TOG/issues/TOG-12928)):
+   `docs/parity.md:232`, legacy `config/session.php:35`. Assert creation expiry,
    cookie Max-Age, expiry refresh on authenticated read, exact expiry boundary,
    deletion of the old token and logout revocation. Legacy cookie tests do not
    contain a time-advance TTL assertion; this is additional coverage of the

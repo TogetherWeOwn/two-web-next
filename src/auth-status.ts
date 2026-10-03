@@ -1,6 +1,6 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, generateSignedCookie, getSignedCookie } from "hono/cookie";
-import { hashToken, type SessionStore } from "./sessions";
+import { hashToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
 
 export const AUTH_STATUS_COOKIE = "__Host-two_session_status";
 const SESSION_COOKIE = "__Host-two_session";
@@ -9,7 +9,7 @@ const OPTIONS = {
   secure: true,
   httpOnly: true,
   sameSite: "Lax" as const,
-  maxAge: 60 * 60 * 24 * 30,
+  maxAge: SESSION_TTL_SECONDS,
 };
 type Ctx = Context<any>;
 
