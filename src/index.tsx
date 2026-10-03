@@ -14,6 +14,7 @@ import {
   hashToken,
   migrate,
   newSessionToken,
+  SESSION_TTL_SECONDS,
   type SessionStore,
   type Sql,
 } from "./sessions";
@@ -76,7 +77,6 @@ export { rulesLastUpdated } from "./rules-last-updated";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
