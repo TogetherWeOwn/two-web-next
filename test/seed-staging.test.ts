@@ -173,6 +173,37 @@ describe("staging seed: fail-closed offline CLI", () => {
     ).toThrow("production database host");
   });
 
+  it("refuses production targets before any connection, so --apply writes nothing", () => {
+    // Unroutable TEST-NET-1 host: any connection attempt would fail with a
+    // driver/timeout error. A production refusal instead proves main()
+    // validates the environment before importing postgres or connecting, which
+    // is what makes zero writes possible. Covers both modes per target.
+    const unreachableDb = "postgres://agent_test@192.0.2.1:5432/two_web_next";
+    const prodTargets: [string, Record<string, string>, string][] = [
+      ["production apex", { APP_URL: "https://togetherweown.com" }, "production APP_URL"],
+      [
+        "production host",
+        { DATABASE_URL: "postgres://agent_test@db.production.test/two_web_next" },
+        "production database host",
+      ],
+      [
+        "production name",
+        { DATABASE_URL: "postgres://agent_test@agent-testdb/production" },
+        "production database name",
+      ],
+    ];
+    for (const [_label, target, message] of prodTargets) {
+      for (const args of [[], ["--apply"]]) {
+        const result = run(args, { ...localEnv, DATABASE_URL: unreachableDb, ...target });
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(message);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).not.toContain("192.0.2.1");
+        expect(result.stderr).not.toMatch(/ECONN|ENOTFOUND|timed out/i);
+      }
+    }
+  });
+
   it("defaults to a connection-free dry-run, accepts explicit preview, and rejects ambiguous/URL arguments", async () => {
     expect(parseMode([])).toBe("dry-run");
     expect(parseMode(["--dry-run"])).toBe("dry-run");
@@ -373,6 +404,26 @@ describe.skipIf(!url)("staging seed against isolated test Postgres", () => {
       applySeed(fixture.client, buildSeed(day)),
     ]);
     expect(await counts()).toEqual({ users: 3, events: 50, rsvps: 12, featured: 3 });
+  });
+
+  it("reseeds idempotently: third run inserts nothing, all row IDs stay stable", async () => {
+    await applySeed(fixture.client, buildSeed(day));
+    await applySeed(fixture.client, buildSeed(day));
+    const users = await fixture.client`SELECT id, username FROM users ORDER BY id`;
+    const featured = await fixture.client`SELECT id, title FROM featured_contents ORDER BY id`;
+    const maxIds =
+      await fixture.client`SELECT (SELECT max(id) FROM users) AS users, (SELECT max(id) FROM events) AS events,
+      (SELECT max(id) FROM rsvps) AS rsvps, (SELECT max(id) FROM featured_contents) AS featured`;
+    await applySeed(fixture.client, buildSeed(day));
+    expect(await counts()).toEqual({ users: 3, events: 50, rsvps: 12, featured: 3 });
+    expect(await fixture.client`SELECT id, username FROM users ORDER BY id`).toEqual(users);
+    expect(await fixture.client`SELECT id, title FROM featured_contents ORDER BY id`).toEqual(
+      featured,
+    );
+    expect(
+      await fixture.client`SELECT (SELECT max(id) FROM users) AS users, (SELECT max(id) FROM events) AS events,
+      (SELECT max(id) FROM rsvps) AS rsvps, (SELECT max(id) FROM featured_contents) AS featured`,
+    ).toEqual(maxIds);
   });
 
   it.each(["event", "user", "featured", "duplicate featured"])(

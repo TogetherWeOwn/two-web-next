@@ -1,0 +1,59 @@
+name: e2e-staging
+
+# Post-deploy critical journeys against the staging Worker
+# (docs/critical-journeys.md, "Staging post-deploy journeys"). Runs after a
+# successful staging deploy and on manual dispatch. Public repo: standard
+# GitHub-hosted ubuntu-latest runners only — never paid larger runners or
+# Blacksmith. QA_AUTH_TOKEN comes from the staging Environment secret and is
+# never printed; GitHub masks secrets in logs automatically. Browsers run here
+# in CI only, never on the controller.
+
+on:
+  workflow_run:
+    workflows: [deploy]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-staging
+  cancel-in-progress: false
+
+jobs:
+  staging-journeys:
+    name: staging-journeys
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: staging
+      url: https://next.togetherweown.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Staging critical journeys
+        run: npm run e2e:staging
+        env:
+          QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Failure traces and report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-staging-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

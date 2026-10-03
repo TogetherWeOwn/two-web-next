@@ -1,6 +1,15 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { ALERT_ROUTES, DeliveryMute, MUTE_MS, createTailWorker, parseAlert } from "../tail/worker";
+import {
+  ALERT_ROUTES,
+  APP_SCRIPT_NAMES,
+  DeliveryMute,
+  MUTE_MS,
+  createTailWorker,
+  parseAlert,
+} from "../tail/worker";
+// @ts-expect-error JSONC comment/trailing-comma stripper has no declaration file.
+import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { ALERT_WINDOW_MS, AlertRateLimit, alertRequestError } from "../src/alerts";
 
 const timestamp = Date.parse("2026-10-01T00:00:00Z");
@@ -342,6 +351,177 @@ describe("Tail delivery", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("pages production script traces exactly like staging ones", async () => {
+    const { worker, send } = fixture();
+    await worker.tail([trace([requestAlert], timestamp, "two-web-next-production")], env);
+    expect(send).toHaveBeenCalledTimes(1);
+    const calls = send.mock.calls as unknown as [string, RequestInit][];
+    expect(calls[0]![0]).toBe(`${secret}?wait=true`);
+    expect(JSON.parse(JSON.parse(calls[0]![1].body as string).content)).toMatchObject({
+      event: "error.alert",
+      route: "/join",
+    });
+  });
+
+  it("accepts only the staging and production app scripts, never a prefix of them", async () => {
+    expect([...APP_SCRIPT_NAMES].sort()).toEqual(["two-web-next", "two-web-next-production"]);
+    const { worker, send } = fixture();
+    await worker.tail(
+      [
+        trace([requestAlert], timestamp, "two-web-next-production-evil"),
+        trace([requestAlert], timestamp, "two-web-nextx"),
+        trace([requestAlert], timestamp, "other"),
+      ],
+      env,
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+describe("Tail scheduled uptime prober", () => {
+  const uptime = "https://next.togetherweown.com/up";
+  const upEnv = { OPS_ALERT_WEBHOOK_URL: secret, UPTIME_URL: uptime };
+  type Probe = { status?: number; origin?: string | null; throw?: unknown };
+
+  function uptimeFixture(probes: Probe[]) {
+    let now = timestamp;
+    const sleeps: number[] = [];
+    const queue = [...probes];
+    const send = vi.fn(async (...args: [string, RequestInit?]) => {
+      const [, init] = args;
+      if (init?.method === "POST") return new Response(null, { status: 200 });
+      const next = queue.shift() ?? { status: 500 };
+      if (next.throw) throw next.throw;
+      const headers = next.origin == null ? undefined : { "x-two-origin": next.origin };
+      return new Response(null, { status: next.status ?? 200, headers });
+    });
+    const sink = vi.fn();
+    const worker = createTailWorker({
+      fetch: send as unknown as typeof fetch,
+      sink,
+      mute: new DeliveryMute(() => now),
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+      },
+    });
+    const event = { cron: "*/5 * * * *", scheduledTime: timestamp, noRetry() {} };
+    return {
+      worker,
+      send,
+      sink,
+      sleeps,
+      event,
+      advance: (ms: number) => {
+        now += ms;
+      },
+    };
+  }
+
+  const probeGets = (send: ReturnType<typeof vi.fn>) =>
+    (send.mock.calls as unknown as [string, RequestInit][]).filter(
+      ([, init]) => init?.method !== "POST",
+    );
+  const pagePosts = (send: ReturnType<typeof vi.fn>) =>
+    (send.mock.calls as unknown as [string, RequestInit][]).filter(
+      ([, init]) => init?.method === "POST",
+    );
+
+  it("one failure then a success sends no page, with the retry at least 10 s later", async () => {
+    const { worker, send, sink, sleeps, event } = uptimeFixture([
+      { status: 500 },
+      { status: 200, origin: "two-web-next" },
+    ]);
+    await worker.scheduled(event, upEnv);
+    expect(probeGets(send)).toHaveLength(2);
+    expect(pagePosts(send)).toHaveLength(0);
+    expect(sleeps).toEqual([10_000]);
+    expect(sink).not.toHaveBeenCalled();
+  });
+
+  it("two failures send one allowlisted page", async () => {
+    const { worker, send, sink, event } = uptimeFixture([{ status: 500 }, { status: 503 }]);
+    await worker.scheduled(event, upEnv);
+    const pages = pagePosts(send);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]![0]).toBe(`${secret}?wait=true`);
+    const payload = JSON.parse(pages[0]![1].body as string);
+    expect(payload.allowed_mentions).toEqual({ parse: [] });
+    expect(JSON.parse(payload.content)).toEqual({
+      event: "uptime.down",
+      status: 503,
+      timestamp: expect.any(String),
+    });
+    expect(sink).toHaveBeenCalledOnce();
+    expect(JSON.parse(sink.mock.calls[0]![0])).toMatchObject({
+      event: "uptime.down",
+      delivery: "ops.alert.delivered",
+    });
+  });
+
+  it("a muted second run does not page", async () => {
+    const { worker, send, event } = uptimeFixture([
+      { status: 500 },
+      { status: 500 },
+      { status: 500 },
+      { status: 500 },
+    ]);
+    await worker.scheduled(event, upEnv);
+    await worker.scheduled(event, upEnv);
+    expect(pagePosts(send)).toHaveLength(1);
+  });
+
+  it.each([
+    { OPS_ALERT_WEBHOOK_URL: undefined, UPTIME_URL: uptime },
+    { OPS_ALERT_WEBHOOK_URL: secret },
+    {},
+  ])("missing webhook or target is a silent no-op %#: no probing, no logging", async (env) => {
+    const { worker, send, sink, event } = uptimeFixture([{ status: 200, origin: "two-web-next" }]);
+    await worker.scheduled(event, env);
+    expect(send).not.toHaveBeenCalled();
+    expect(sink).not.toHaveBeenCalled();
+  });
+
+  it("a timeout counts as a failure", async () => {
+    const timeout = new DOMException("The operation timed out.", "TimeoutError");
+    const { worker, send, event } = uptimeFixture([{ throw: timeout }, { throw: timeout }]);
+    await worker.scheduled(event, upEnv);
+    const pages = pagePosts(send);
+    expect(pages).toHaveLength(1);
+    expect(JSON.parse(JSON.parse(pages[0]![1].body as string).content)).toEqual({
+      event: "uptime.down",
+      status: 0,
+      timestamp: expect.any(String),
+    });
+  });
+
+  it.each([
+    { status: 200, origin: null, label: "missing x-two-origin" },
+    { status: 200, origin: "evil.test", label: "wrong x-two-origin" },
+    { status: 503, origin: "two-web-next", label: "non-200 status" },
+  ])(
+    "a 200 without the origin header or $label pages after two failures",
+    async ({ status, origin }) => {
+      const { worker, send, event } = uptimeFixture([
+        { status, origin },
+        { status, origin },
+      ]);
+      await worker.scheduled(event, upEnv);
+      const pages = pagePosts(send);
+      expect(pages).toHaveLength(1);
+      expect(JSON.parse(JSON.parse(pages[0]![1].body as string).content).status).toBe(status);
+    },
+  );
+
+  it("a healthy first probe makes no second attempt", async () => {
+    const { worker, send, sleeps, event } = uptimeFixture([
+      { status: 200, origin: "two-web-next" },
+    ]);
+    await worker.scheduled(event, upEnv);
+    expect(probeGets(send)).toHaveLength(1);
+    expect(sleeps).toHaveLength(0);
+  });
+});
+
+describe("Tail delivery memory accounting", () => {
   it("caps memory, evicts old sent entries and expires the window", () => {
     let now = 0;
     const mute = new DeliveryMute(() => now);
@@ -358,5 +538,30 @@ describe("Tail delivery", () => {
     mute.finish("overflow", false);
     now += MUTE_MS;
     expect(mute.begin("f500")).toBe(true);
+  });
+});
+
+describe("Production Tail pager wiring", () => {
+  it("env.production consumes the production alerts Worker, not the staging one", () => {
+    const app = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const production = (app.env as Record<string, Record<string, unknown> | undefined>).production;
+    expect(production?.tail_consumers).toEqual([{ service: "two-web-next-alerts-production" }]);
+    // The top-level staging consumer is untouched by the production wiring.
+    expect(app.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
+  });
+
+  it("the production alerts Worker exists under its own name with no staging leakage", () => {
+    const tail = readWranglerConfig(readFileSync("tail/wrangler.jsonc", "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(tail.name).toBe("two-web-next-alerts");
+    const production = (tail.env as Record<string, Record<string, unknown> | undefined>).production;
+    expect(production?.name).toBe("two-web-next-alerts-production");
+    expect(production?.tail_consumers).toBeUndefined();
+    expect(production?.workers_dev).toBe(false);
   });
 });

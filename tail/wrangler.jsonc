@@ -5,7 +5,23 @@
   "compatibility_date": "2026-09-29",
   "workers_dev": false,
   "preview_urls": false,
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  // Uptime prober (TOG-12394): the Tail pager only sees requests that reach the
+  // app Worker, so cron probes /up and pages on two consecutive failures.
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    "UPTIME_URL": "https://next.togetherweown.com/up"
+  },
   // OPS_ALERT_WEBHOOK_URL is an optional secret on THIS Worker, not the app.
   // No public routes, database bindings, queue bindings or tail consumers.
+  "env": {
+    "production": {
+      "name": "two-web-next-alerts-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      "observability": { "enabled": true }
+      // OPS_ALERT_WEBHOOK_URL for production is installed separately with
+      // `wrangler secret put OPS_ALERT_WEBHOOK_URL --config tail/wrangler.jsonc --env production`.
+    }
+  }
 }

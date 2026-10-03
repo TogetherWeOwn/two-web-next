@@ -23,12 +23,17 @@ import type {
   RoleAssignResult,
 } from "../bot/client";
 
-export type SmokeArgs = {
-  discordId: string;
-  roleKey: string;
-  channelKey: string;
-  eventKey: string;
-};
+export type SmokeArgs =
+  | {
+      announcementOnly?: false;
+      discordId: string;
+      roleKey: string;
+      channelKey: string;
+      eventKey: string;
+    }
+  // Receivers that expose announcement.post only (the two-bot-next staging
+  // receiver, TOG-12973): skip role.assign and event.upsert, which they refuse.
+  | { announcementOnly: true; channelKey: string };
 
 export type SmokeCheck = { label: string; ok: boolean; detail: string };
 
@@ -99,7 +104,8 @@ function describe(a: Answer | null): string {
 
 /**
  * Drive role.assign, announcement.post (+ same-key retry), event.upsert
- * against the staging bot. BotTerminalError propagates (misconfigured: exit
+ * against the staging bot (announcement.post and its retry only when
+ * `args.announcementOnly`). BotTerminalError propagates (misconfigured: exit
  * 2); anything else a call throws becomes a failed check (exit 1). Never logs
  * request bodies — the announcement text in particular stays out of logs.
  */
@@ -127,10 +133,13 @@ export async function runBotSmoke(
   };
 
   // role.assign — natural idempotency, no key.
-  const role = await attempt("role.assign", () =>
-    client.assignRole({ userId: args.discordId, roleKey: args.roleKey }),
-  );
-  if (role !== null) check("role.assign is ok", ok(role), describe(role));
+  if (!args.announcementOnly) {
+    const { discordId, roleKey } = args;
+    const role = await attempt("role.assign", () =>
+      client.assignRole({ userId: discordId, roleKey }),
+    );
+    if (role !== null) check("role.assign is ok", ok(role), describe(role));
+  }
 
   // announcement.post — needs key. The same key retried must replay, not post twice.
   const key = crypto.randomUUID();
@@ -161,11 +170,14 @@ export async function runBotSmoke(
     );
   }
 
+  if (args.announcementOnly) return { checks, failures, ok: failures.length === 0 };
+
   // event.upsert — fresh event key per run by default, so a run creates rather than updates.
+  const { eventKey } = args;
   const event = await attempt("event.upsert", () =>
     client.upsertEvent(
       {
-        eventKey: args.eventKey,
+        eventKey,
         name: "TOG-10112 smoke event",
         startsAt: new Date(now().getTime() + 86_400_000).toISOString(),
         endsAt: new Date(now().getTime() + 90_000_000).toISOString(),

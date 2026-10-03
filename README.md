@@ -346,6 +346,9 @@ The live smoke runs manually via the `staging-smoke` workflow in a job container
 public; TOG-12326). It posts a real announcement to a throwaway channel and
 creates a real staging event. Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
+Pass `--announcement-only` (workflow input `announcement_only`) to run only
+`announcement.post` and its same-key replay check, for a receiver that does not
+implement `role.assign` or `event.upsert`; then only `--channel-key` is needed.
 Both probes are fixture-tested in `check` without real secrets.
 
 The CallInternalAction drill (`drill:internal-action`) ports the remaining

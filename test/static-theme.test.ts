@@ -81,7 +81,7 @@ it("keeps versioned privacy HTML and the rules date unchanged inside the content
   expect(privacy).toContain(
     `<div data-testid="privacy-policy">${renderPolicyMarkdown(POLICY_MARKDOWN)}</div>`,
   );
-  expect(privacy).toContain('data-testid="privacy-version">Version 1');
+  expect(privacy).toContain('data-testid="privacy-version">Version 2');
   const rules = await (await app.request("/rules", {}, env)).text();
   expect(rules).toContain('<time datetime="2026-09-01">1 September 2026</time>');
   expect(rules.match(/<li class="card">/g)).toHaveLength(5);
