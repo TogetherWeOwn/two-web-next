@@ -83,15 +83,27 @@ export async function checkJoinThrottle(
   max: number,
 ): Promise<ThrottleVerdict> {
   if (!sql) return { limited: false };
-  const rows = await sql<{ n: number; wait: number }[]>`
-    SELECT count(*)::int AS n,
-      coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - now()))), 1)::int AS wait
-    FROM web_throttle_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
-  const r = rows[0];
-  if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
-  await sql`INSERT INTO web_throttle_hits (bucket) VALUES (${bucket})`;
-  await sql`DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`;
-  return { limited: false };
+  // The native postgres.js store supports transactions; the session SQL seam
+  // deliberately exposes only the statements needed by session stores.
+  const store = sql as Sql & {
+    begin: (run: (tx: Sql) => Promise<ThrottleVerdict>) => Promise<ThrottleVerdict>;
+  };
+  const verdict = await store.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
+    // now() is transaction-start time, which can precede a long lock wait.
+    const rows = await tx<{ n: number; wait: number }[]>`
+      SELECT count(*)::int AS n,
+        coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - clock_timestamp()))), 1)::int AS wait
+      FROM web_throttle_hits WHERE bucket = ${bucket} AND at > clock_timestamp() - interval '60 seconds'`;
+    const r = rows[0];
+    if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
+    await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
+    return { limited: false };
+  });
+  // Global expiry cleanup must not prolong the per-bucket admission lock.
+  if (!verdict.limited)
+    await sql`DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`;
+  return verdict;
 }
 
 // Runtime DDL for the join tables, mirroring sessions.ts MIGRATION: the same

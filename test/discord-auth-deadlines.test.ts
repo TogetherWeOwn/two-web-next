@@ -3,6 +3,7 @@ import { addGuildMember, DiscordError, exchangeCode, fetchUser } from "../src/di
 import { discordFetch, DISCORD_HTTP_BUDGET_MS, DiscordHttpTimeoutError } from "../src/discord-http";
 import { fetchMemberRoles, recomputeModerator } from "../src/roles";
 import app from "./app";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, type Sql } from "../src/sessions";
 
@@ -37,7 +38,7 @@ function isolatedJourney() {
     SESSION_SECRET: "fixture signing key ".repeat(3),
     DISCORD_MODERATOR_ROLE_IDS: "1".repeat(18),
     SESSION_STORE: store,
-    JOIN_DEPS: { store: async () => sql },
+    JOIN_DEPS: { store: async () => withThrottleTx(sql) },
   };
   return { store, env: env as Env };
 }

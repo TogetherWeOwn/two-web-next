@@ -17,6 +17,7 @@
 // hot modules beyond the memory session store test seam.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, type Sql } from "../src/sessions";
 
@@ -64,7 +65,7 @@ function fakeSql() {
     throw new Error(`fakeSql: unexpected statement: ${head.slice(0, 80)}`);
   }) as unknown as Sql;
   (sql as { unsafe: (q: string) => Promise<unknown> }).unsafe = async () => [];
-  return { sql, attempts };
+  return { sql: withThrottleTx(sql), attempts };
 }
 
 function isolated() {

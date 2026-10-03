@@ -3,6 +3,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import rawApp from "../src/index";
 import app from "./app";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 import type { Env } from "../src/env";
 import {
   BODY_LIMIT_BYTES,
@@ -78,7 +79,7 @@ async function sessionEnv(sql: Sql) {
     QA_AUTH_TOKEN: "test-only-qa-token",
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     SESSION_STORE: store,
-    THROTTLE_STORE: async () => sql,
+    THROTTLE_STORE: async () => withThrottleTx(sql),
   } as unknown as EnvWithThrottle;
   const cookie = (
     await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {

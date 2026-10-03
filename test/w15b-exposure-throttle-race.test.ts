@@ -66,6 +66,7 @@ import {
   type Sql,
 } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { withThrottleTx } from "./helpers/throttle-tx-double";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -109,7 +110,7 @@ function fakeThrottleSql() {
     if (head.includes("INSERT INTO join_attempts")) return [];
     throw new Error(`fakeThrottleSql: unexpected statement: ${head.slice(0, 80)}`);
   }) as unknown as Sql;
-  return sql;
+  return withThrottleTx(sql);
 }
 
 // Fresh memory sessions + both throttle seams per test, so budgets never leak

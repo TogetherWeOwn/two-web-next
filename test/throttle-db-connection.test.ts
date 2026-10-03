@@ -14,13 +14,18 @@ const hits = new Map<string, number>();
 const sql = Object.assign(
   async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join("?");
+    if (query.includes("pg_advisory_xact_lock")) return [];
     const bucket = String(values[0]);
     if (query.includes("SELECT count(*)")) return [{ n: hits.get(bucket) ?? 0, wait: 30 }];
     if (query.includes("INSERT INTO web_throttle_hits"))
       hits.set(bucket, (hits.get(bucket) ?? 0) + 1);
     return [];
   },
-  { unsafe: vi.fn(async () => []) },
+  {
+    unsafe: vi.fn(async () => []),
+    // Transaction seam for atomic admission: single-threaded double, run inline.
+    begin: (run: (tx: unknown) => Promise<unknown>) => run(sql),
+  },
 );
 const ctx = (env: EnvWithThrottle) => ({ env }) as Context<{ Bindings: Env }>;
 const bindingEnv = {
