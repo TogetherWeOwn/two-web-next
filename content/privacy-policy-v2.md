@@ -113,7 +113,14 @@ served it — never your IP address or who you are.
 ## Deletion
 
 Ask anytime to be removed — DM a moderator or open a private support ticket —
-and we delete your rows.
+and we delete your rows: your member record, profile, RSVPs, sign-in sessions
+and join attempts. Signing in again later starts a fresh record.
+
+Two records are the exception, because they are kept tamper-proof as evidence
+and are not edited on request. The access log (who looked at whose records,
+described above) is not rewritten for one person; it deletes itself after 90
+days. The moderator edit history keeps the name of the moderator who made each
+change.
 
 ## Changes to this policy
 
