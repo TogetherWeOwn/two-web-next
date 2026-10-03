@@ -3,7 +3,8 @@ import { memberStorageState, moderatorStorageState } from "./fixtures";
 import { loginQaIdentities } from "./qa-login";
 
 // Fresh sessions per file: event pages rotate the bearer on read, so a stored
-// token is single-use across files.
+// token is single-use across files. Member + moderator: two logins — the
+// journey needs both identities.
 test.beforeAll(async () => {
   await loginQaIdentities();
 });
