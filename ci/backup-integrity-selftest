@@ -46,6 +46,8 @@ if op == "put":
     dest.write_bytes(pathlib.Path(args[args.index("--file") + 1]).read_bytes())
 elif op == "get":
     if not dest.is_file():
+        # Wrangler's explicit null-object diagnostic (first-use initialization).
+        print("\x1b[31m✘ [ERROR]\x1b[0m The specified key does not exist.", file=sys.stderr)
         sys.exit(1)
     data = dest.read_bytes()
     suffix = os.environ.get("STUB_CORRUPT_SUFFIX", ".dump")

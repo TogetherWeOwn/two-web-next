@@ -62,6 +62,7 @@ import { databaseUrl } from "../db/connection";
 import { isDatabaseUnavailable } from "../db/errors";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listJoinAttempts, listRoster } from "./reads";
+import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
@@ -506,10 +507,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       action: "view",
       route: "admin.featured.edit",
     });
+    const id = parseRecordId(c.req.param("id"));
+    if (id === null) return errorPage(c, 404, "Featured content not found");
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
-    const id = Number(c.req.param("id"));
-    if (!Number.isInteger(id)) return errorPage(c, 404, "Featured content not found");
     const row = await getFeatured(db, id);
     if (!row) return errorPage(c, 404, "Featured content not found");
     return bufferedMemberHtml(
@@ -530,10 +531,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     requestBodyLimit("featured"),
     async (c) => {
+      const id = parseRecordId(c.req.param("id"));
+      if (id === null) return errorPage(c, 404, "Featured content not found");
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const id = Number(c.req.param("id"));
-      if (!Number.isInteger(id)) return errorPage(c, 404, "Featured content not found");
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
       const values = formData(await c.req.parseBody());
@@ -576,10 +577,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     requestBodyLimit("action"),
     async (c) => {
+      const id = parseRecordId(c.req.param("id"));
+      if (id === null) return errorPage(c, 404, "Featured content not found");
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const id = Number(c.req.param("id"));
-      if (!Number.isInteger(id)) return errorPage(c, 404, "Featured content not found");
       try {
         await deleteFeatured(db, c.get("adminActor"), id);
         return c.redirect("/admin/featured", 303);

@@ -12,7 +12,8 @@ export const recoveryUrl = (next: string) =>
   `/auth/recover?next=${encodeURIComponent(safeNext(next) ?? "/profile")}`;
 
 function writeReturn(c: Ctx): string {
-  const fallback = c.req.path.startsWith("/members/") ? "/profile" : "/events";
+  const fallback =
+    adminWriteReturn(c.req.path) ?? (c.req.path.startsWith("/members/") ? "/profile" : "/events");
   try {
     const ref = new URL(c.req.header("referer") ?? "");
     if (ref.origin === new URL(c.env.APP_URL).origin)
@@ -21,6 +22,31 @@ function writeReturn(c: Ctx): string {
     /* No trusted page history: use a GET destination, never the write URL. */
   }
   return fallback;
+}
+
+/**
+ * Admin POSTs bounce to the GET form page, never the write URL. Action-only
+ * endpoints (publish/cancel/RSVP pause/delete) have no GET form, so they fall back to
+ * the page holding their buttons; anything unrecognized falls back to the
+ * dashboard. Every candidate re-passes safeNext at the use site.
+ */
+function adminWriteReturn(path: string): string | null {
+  if (path !== "/admin" && !path.startsWith("/admin/")) return null;
+  const rest = path.slice("/admin".length);
+  const candidates: Record<string, string> = {
+    "/events": "/admin/events/new",
+    "/featured": "/admin/featured/new",
+  };
+  if (candidates[rest]) return candidates[rest];
+  let match = rest.match(/^\/events\/([^/]+)\/(publish|cancel|rsvp-pause|rsvp-reopen)$/);
+  if (match) return safeNext(`/admin/events/${match[1]}`) ?? "/admin/events";
+  match = rest.match(/^\/events\/([^/]+)$/);
+  if (match) return safeNext(`/admin/events/${match[1]}`) ?? "/admin/events";
+  match = rest.match(/^\/featured\/([^/]+)\/delete$/);
+  if (match) return "/admin/featured";
+  match = rest.match(/^\/featured\/([^/]+)$/);
+  if (match) return safeNext(`/admin/featured/${match[1]}`) ?? "/admin/featured";
+  return "/admin";
 }
 
 export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Response> {

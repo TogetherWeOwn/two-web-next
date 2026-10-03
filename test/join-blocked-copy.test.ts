@@ -218,10 +218,14 @@ describe("join-blocked copy (legacy JoinBlockedWidgetTest)", () => {
   it("denied consent keeps its distinct copy and never echoes the provider description", async () => {
     const { fake, env: e } = isolated();
     const calls = mockDiscord();
-    const res = await app.request(
-      "/join/callback?error=access_denied&error_description=blocked-probe-never-echo",
-      {},
+    // One-use admission: a denial is only recorded for an admitted journey
+    // (valid state matching the signed cookie), so start one first.
+    const { state, cookie } = await startJoin(e);
+    const res = await finishJoinCb(
       e,
+      state!,
+      cookie,
+      "error=access_denied&error_description=blocked-probe-never-echo",
     );
     expect(res.status).toBe(200);
     const html = await res.text();

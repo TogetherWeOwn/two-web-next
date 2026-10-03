@@ -7,11 +7,12 @@
 //
 // Enforcement lives in the existing layers (no product change here beyond the
 // reviewable statement in src/featured-policy.ts, which this file also pins):
-// - writes: `ALL /admin/*` moderator middleware + adminGuard (guest 302
-//   bounce to OAuth, signed-in non-moderator 403) + the outer same-origin 403;
+// - writes: `ALL /admin/*` moderator middleware + adminGuard (guest write 303
+//   to /auth/recover with a safe GET `next`, guest read 302 to OAuth,
+//   signed-in non-moderator 403) + the outer same-origin 403;
 // - public reads: listVisibleFeatured (isPublished + [startsAt, endsAt)).
 // Refusal is asserted through the mounted app (child-root adminApp alone
-// would answer a guest POST with the recovery 303, not the real 302).
+// sees no /admin prefix, so a guest POST would recover to /events instead).
 
 import { readFileSync, readdirSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
@@ -174,8 +175,8 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
     headers: { cookie, origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(fields),
   });
-  // Refusals go through the mounted app: only there does a guest POST take
-  // the real OAuth 302 (child-root adminApp alone answers the recovery 303).
+  // Refusals go through the mounted app: only there does a guest POST recover
+  // to its admin GET page (child-root adminApp alone falls back to /events).
   const mounted = (path: string, init?: RequestInit, cookie?: string) =>
     app.request(
       path,
@@ -199,7 +200,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
   });
   afterAll(() => fixture?.dispose());
 
-  it("guest writes bounce to OAuth and member writes 403, never 2xx, rows byte-identical", async () => {
+  it("guest writes bounce to write recovery and member writes 403, never 2xx, rows byte-identical", async () => {
     await fixture.db.insert(featuredContents).values({ title: "Seed slot", position: 0 });
     const draft = { title: "Guest slot", body: "Hello", position: "1" };
     const publishWindow = {
@@ -212,18 +213,19 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
     const beforeRows = await rows();
     expect(beforeRows).toHaveLength(1);
 
-    for (const [path, fields] of [
-      ["/admin/featured", draft],
-      ["/admin/featured/1", publishWindow],
-      ["/admin/featured/1/delete", {}],
+    // Each write recovers to the GET page holding its form, never the POST URL.
+    for (const [path, fields, next] of [
+      ["/admin/featured", draft, "/admin/featured/new"],
+      ["/admin/featured/1", publishWindow, "/admin/featured/1"],
+      ["/admin/featured/1/delete", {}, "/admin/featured"],
     ] as const) {
       const guest = await mounted(path, {
         method: "POST",
         headers: { origin: env.APP_URL, "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams(fields),
       });
-      expect(guest.status, `guest POST ${path}`).toBe(302);
-      expect(guest.headers.get("location")).toBe("/auth/discord");
+      expect(guest.status, `guest POST ${path}`).toBe(303);
+      expect(guest.headers.get("location")).toBe(`/auth/recover?next=${encodeURIComponent(next)}`);
 
       const member = await mounted(
         path,
