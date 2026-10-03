@@ -354,10 +354,9 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json exposure (agent-testdb)"
     // Legacy allowlist (EventJsonAccessTest.php:71): event_key, title, game,
     // description, starts_at, ends_at, starts_at_local, ends_at_local,
     // timezone, location, capacity, going_count, status, rsvp_open,
-    // synced_to_discord. Next deliberately differs: no localized instants or
-    // sync flag; waitlist_position rides along for the member viewer. The
-    // invariant pinned is exactness — no autoincrement id, no creator id, no
-    // raw Discord id may ever leave the server.
+    // synced_to_discord. Next preserves these fields; waitlist_position rides
+    // along for the member viewer. The invariant pinned is exactness — no
+    // autoincrement id, no creator id, no raw Discord id may ever leave the server.
     await seedStatuses();
     for (const who of [MEMBER, MOD]) {
       const res = await app.request(
@@ -372,13 +371,16 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json exposure (agent-testdb)"
           "capacity",
           "description",
           "ends_at",
+          "ends_at_local",
           "event_key",
           "game",
           "going_count",
           "location",
           "rsvp_open",
           "starts_at",
+          "starts_at_local",
           "status",
+          "synced_to_discord",
           "timezone",
           "title",
           "waitlist_position",
