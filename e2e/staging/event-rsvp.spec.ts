@@ -3,8 +3,9 @@ import { expect, memberStorageState, moderatorStorageState, stagingOrigin, test 
 import { loginQaIdentities } from "./qa-login";
 
 // Fresh sessions per file: event pages rotate the bearer on read, so a stored
-// token is single-use across files. Member + moderator: two logins — the
-// journeys need both identities.
+// token is single-use across files — and across tests sharing one file, so
+// the waitlist journey below re-signs inside the test. Member + moderator:
+// two logins — the journeys need both identities.
 test.beforeAll(async () => {
   await loginQaIdentities();
 });
@@ -103,6 +104,12 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
 test("staging member joins then leaves the waitlist on a capacity-1 fixture", async ({
   browser,
 }) => {
+  // The going/withdraw journey above already spent this file's stored bearers:
+  // every authenticated event-page view rotates the session token server-side,
+  // so the on-disk bearer is dead by now and the member page would render as a
+  // guest with no waitlist controls. Re-sign both identities first (the earlier
+  // contexts are closed); two extra hits stay under the 10/min QA-login budget.
+  await loginQaIdentities();
   const moderator = await browser.newContext({ storageState: moderatorStorageState });
   const member = await browser.newContext({ storageState: memberStorageState });
   let eventKey: string | undefined;
