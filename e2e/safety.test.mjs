@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { requireGithubRunner, requireTestDatabase } from "./ci-only.mjs";
 import { requireStagingOrigin } from "./staging-guard.mjs";
@@ -48,6 +49,13 @@ test("staging guard permits only the exact staging origin", () => {
   ]) {
     assert.throws(() => requireStagingOrigin(raw), /only against/);
   }
+});
+
+test("default Playwright project ignores the staging specs", () => {
+  // Staging specs need the deployed Worker (QA seam + Hyperdrive/queues) and
+  // fail under wrangler dev + CI Postgres. Only e2e-staging.yml may run them.
+  const config = readFileSync(new URL("../playwright.config.ts", import.meta.url), "utf8");
+  assert.match(config, /testIgnore:\s*"[^"]*staging[^"]*"/);
 });
 
 test("database guard permits only the disposable CI target", () => {
