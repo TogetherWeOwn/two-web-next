@@ -11,6 +11,14 @@
 // The cookie carries a random token (`two_` + 32 bytes, base64url); the DB
 // stores only its SHA-256 hex. Nothing session-shaped lives in KV.
 
+/**
+ * Sliding session lifetime: 120 minutes. Login and every authenticated-page
+ * rotation re-stamp the DB expiry and the cookie Max-Age with this value; the
+ * non-authenticating status cookie (auth-status.ts) uses it too so the probe
+ * never outlives the session it reports on (privacy v2 Option B, TOG-12928).
+ */
+export const SESSION_TTL_SECONDS = 60 * 120;
+
 export type DbSessionRow = {
   userId: string;
   username: string;

@@ -28,12 +28,14 @@ ported file is covered. Destinations are relative to this repository.
    a normal session; GET is absent (Hono 404, not Laravel 405); all failed POSTs
    are identical 404s with no session. No redirect/query parameter carries the
    configured QA token.
-2. **30-day rotating TTL**, versus the legacy 120-minute sliding session:
-   `docs/parity.md:170`, legacy `config/session.php:35`. Assert creation expiry,
-   cookie Max-Age, expiry refresh on authenticated read, exact expiry boundary,
-   deletion of the old token and logout revocation. Legacy cookie tests do not
-   contain a time-advance TTL assertion; this is additional coverage of the
-   recorded Next contract, not a fabricated legacy test.
+2. **120-minute sliding rotating TTL**, matching the legacy 120-minute session
+   (`config/session.php:35`); the earlier 30-day divergence is closed
+   ([TOG-12928](/TOG/issues/TOG-12928)). `SESSION_TTL_SECONDS` lives in
+   `src/sessions.ts`; the status cookie imports it. Assert creation expiry,
+   cookie Max-Age (session and status cookies), expiry refresh on authenticated
+   read, exact expiry boundary, deletion of the old token and logout revocation.
+   Legacy cookie tests do not contain a time-advance TTL assertion; this is
+   additional coverage of the Next contract, not a fabricated legacy test.
 3. **Same-app Discord auto-join**, versus legacy membership-gated login:
    `docs/parity.md:32`, `src/roles.ts:5-11`, `src/join/service.ts:8-23`.
    Assert `identify guilds.join`, direct Discord PUT and bot-token role recompute.
@@ -104,7 +106,7 @@ ported file is covered. Destinations are relative to this repository.
   rotated and the old cookie is rejected.
 - **Given** two reads of one token, **when** rotation competes, **then** exactly
   one replacement is committed (memory and test-container Postgres proof).
-- **Given** the refreshed thirty-day boundary, **when** the cookie is reused,
+- **Given** the refreshed 120-minute boundary, **when** the cookie is reused,
   **then** the request is a guest and no replacement cookie is minted.
 - **Given** an active session, **when** same-origin POST logout completes,
   **then** replay cannot authenticate. GET does not revoke; foreign-origin POST
