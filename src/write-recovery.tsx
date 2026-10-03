@@ -23,10 +23,12 @@ function writeReturn(c: Ctx): string {
   return fallback;
 }
 
-export async function expiredWriteBounce(c: Ctx): Promise<Response> {
+export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Response> {
   const next = writeReturn(c);
   // JSON callers keep 401, with an explicit recovery link, never an OAuth redirect.
+  // JSON-only routes pass jsonOnly: a header-less fetch must not follow a 303 to a 200 page.
   if (
+    jsonOnly ||
     (c.req.header("accept") ?? "").includes("application/json") ||
     (c.req.header("content-type") ?? "").includes("application/json")
   ) {
