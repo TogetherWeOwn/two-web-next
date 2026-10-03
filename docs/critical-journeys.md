@@ -75,3 +75,38 @@ synchronization.
 Scope excludes visual regression, real Discord writes and any tests against
 production or staging databases. Source parity context: `docs/parity.md` and
 legacy `ci/critical-journeys.json`/`tests/Browser/*` (legacy is frozen).
+
+## Staging post-deploy journeys
+
+`.github/workflows/e2e-staging.yml` runs the deployed Worker end to end after
+every successful staging deploy (and on manual dispatch) with the
+`playwright.staging.config.ts` project against the staging origin. The runner
+is the same `ubuntu-latest` Chromium setup as CI; the difference is the
+target: real Hyperdrive and queues instead of `wrangler dev --local` and the
+disposable Postgres service. The token travels as the `staging` Environment
+secret `QA_AUTH_TOKEN` (secret name only here — never a value), masked in logs,
+sent only as the `X-TWO-QA-Auth` header next to an explicit staging `Origin`,
+and never printed or placed in a URL.
+
+Coverage reuses the CI journey logic with staging-safe setup:
+
+| Journey | Spec | Evidence required |
+| --- | --- | --- |
+| QA sign-in, member and moderator | `e2e/staging/auth.spec.ts` | Saved storage states open `/profile` (`QA Member`) and `/admin/events` (`Events`); bad token and unknown identity answer 404 |
+| Events list, search miss, calendar month step | `e2e/staging/events-list.spec.ts` | `events-content` plus list or never-empty; unique miss string shows the miss block and clears; month label steps forward and back |
+| Fixture event, RSVP going, withdraw, cancel | `e2e/staging/event-rsvp.spec.ts` | Moderator draft → publish; member PUT 201, `You're in`, reload persists; DELETE 204, going returns; fixture cancelled in `finally` |
+| QA member keyboard profile edit | `e2e/staging/profile.spec.ts` | Same 1000 ms floor and Tab flow as CI; PATCH 200; `Profile saved.` focused; unique bio and games survive reload |
+| Moderator draft create and cancel | `e2e/staging/admin.spec.ts` | `Create draft` → `Status: draft`; guest draft 403; `Cancel event` → `Status: cancelled`; guest cancelled 410. Never publishes |
+
+The list spec also runs as `mobile-375` (375×812 viewport) and
+`reduced-motion` (`reducedMotion: reduce`) projects. Cleanup is structural:
+RSVPs are withdrawn in-spec and every fixture the suite creates is cancelled
+in a `finally`, so a failed run leaves no draft behind. On failure the job
+uploads `test-results/` traces/screenshots and the HTML report for seven days.
+
+Blast-radius note: publishing the RSVP fixture and answering RSVPs enqueue
+sync-event carriers (`src/events/sync.ts` enqueues published/cancelled
+statuses; RSVP writes enqueue per `src/events/rsvp.ts`), but the staging
+Worker has no queue consumer pointed at the live guild — carriers expire or
+fail closed without a Discord write. The admin journey never publishes, so it
+enqueues nothing at all.
