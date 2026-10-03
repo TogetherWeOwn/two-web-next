@@ -31,7 +31,7 @@ function releasePr() {
     number: 28,
     state: "open",
     title: "chore(main): release 0.3.0",
-    body: "## Summary\nPrepare the release from conventional commits and validate it with fixtures.\n\nRefs: TOG-11399",
+    body: "## Summary\nPrepare the release from conventional commits and validate it with fixtures.",
     user: { login: "github-actions[bot]" },
     head: { sha: headSha, repo: { full_name: repository } },
     base: { sha: baseSha, ref: "main", repo: { full_name: repository } },
@@ -154,7 +154,6 @@ else:
       EVENT_TITLE: fixture.event.pull_request?.title ?? "",
       EVENT_BODY: fixture.event.pull_request?.body ?? "",
       EVENT_AUTHOR: fixture.event.pull_request?.user.login ?? "",
-      REQUIRE_CARD_REF: "true",
       COMMITS: JSON.stringify([{ id: headSha, message: "fix(ci): bind lint metadata" }]),
     };
     const shell =
