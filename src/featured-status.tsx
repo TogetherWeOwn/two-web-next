@@ -20,7 +20,14 @@ export function currentlyVisible(row: FeaturedWindow, now: Date = new Date()): b
   return featuredStatus(row, now) === "live";
 }
 
-export const FeaturedStatusBadge: FC<{ row: FeaturedWindow; now?: Date }> = ({ row, now = new Date() }) => {
+export const FeaturedStatusBadge: FC<{ row: FeaturedWindow; now?: Date }> = ({
+  row,
+  now = new Date(),
+}) => {
   const status = featuredStatus(row, now);
-  return <span class={`featured-status featured-status-${status}`} data-status={status}>{status}</span>;
+  return (
+    <span class={`featured-status featured-status-${status}`} data-status={status}>
+      {status}
+    </span>
+  );
 };

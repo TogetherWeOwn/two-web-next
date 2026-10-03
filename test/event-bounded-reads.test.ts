@@ -44,7 +44,13 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
   beforeAll(async () => {
     const url = testDatabaseUrl(process.env.DATABASE_URL!);
     schemaName = `w15_${randomUUID().replaceAll("-", "")}`;
-    const base = { max: 1, port: 5432, connect_timeout: 5, password: () => url.password, onnotice: () => {} };
+    const base = {
+      max: 1,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+      onnotice: () => {},
+    };
     admin = postgres(url.href, base);
     client = postgres(url.href, {
       ...base,
@@ -54,12 +60,15 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     db = drizzle(client, { schema: { ...schema, ...adminSchema } });
     await admin.unsafe(`CREATE SCHEMA "${schemaName}"`);
     created = true;
-    const migrations = readMigrationFiles({ migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url).href) });
+    const migrations = readMigrationFiles({
+      migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url).href),
+    });
     for (const migration of migrations) {
       // Drizzle applies each migration in one transaction; some (LOCK TABLE) require it.
       await client.begin(async (tx) => {
         for (const statement of migration.sql) {
-          if (statement.trim()) await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+          if (statement.trim())
+            await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
         }
       });
     }
@@ -108,7 +117,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
 
   async function seedFeatured(n: number, tag: string): Promise<void> {
     for (let i = 0; i < n; i++) {
-      await db.insert(featuredContents).values({ title: `Slot ${tag}-${i}`, isPublished: true, position: i });
+      await db
+        .insert(featuredContents)
+        .values({ title: `Slot ${tag}-${i}`, isPublished: true, position: i });
     }
   }
 
@@ -144,22 +155,22 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     expect(roundTrips.length).toBe(firstPass);
   });
 
-  it("JSON collection: two round trips at both sizes, going-only counts", async () => {
+  it("JSON collection: three round trips at both sizes, going-only counts", async () => {
     // Standalone-safe: top up to 10 collection-visible rows whatever ran before.
     const existing = await db.select().from(events);
     if (existing.length < 10) await seedEvents(10 - existing.length, "C");
     roundTrips = [];
-    const rows = await listJson(db, { limit: 10, offset: 0, includeDrafts: false });
+    const { rows } = await listJson(db, { limit: 10, offset: 0, includeDrafts: false });
     expect(rows).toHaveLength(10);
-    // One rows SELECT + one batched going aggregate: no per-row queries.
-    expect(roundTrips.length).toBe(2);
+    // One total COUNT + one rows SELECT + one batched going aggregate: no per-row queries.
+    expect(roundTrips.length).toBe(3);
     for (const row of rows) expect(row.goingCount).toBe(3);
     // Growing the collection keeps the count identical: growth is bounded.
     await seedEvents(10, "C2");
     roundTrips = [];
-    const grown = await listJson(db, { limit: 100, offset: 0, includeDrafts: false });
+    const { rows: grown } = await listJson(db, { limit: 100, offset: 0, includeDrafts: false });
     expect(grown.length).toBeGreaterThan(10);
-    expect(roundTrips.length).toBe(2);
+    expect(roundTrips.length).toBe(3);
     for (const row of grown) expect(row.goingCount).toBe(3);
   });
 

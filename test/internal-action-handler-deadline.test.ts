@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { consume } from "../src/jobs/consumer";
-import { INTERNAL_ACTION_DEADLINE_MS, withInternalActionDeadline } from "../src/jobs/internal-action-deadline";
+import {
+  INTERNAL_ACTION_DEADLINE_MS,
+  withInternalActionDeadline,
+} from "../src/jobs/internal-action-deadline";
 import { handleCallInternalAction } from "../src/jobs/call-internal-action";
 import { BotTransportError, BotTerminalError } from "../src/jobs/types";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
@@ -8,14 +11,26 @@ import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs
 // TOG-11628: the queued internal-action handler must bound a never-settling
 // BotClient promise. Ledger/lock cleanup is already bounded; the bot call was
 // awaited bare, so one hung call stalled the whole serial batch behind it.
-const ann = { kind: "announcement", idempotencyKey: "k", action: { channelKey: "c", body: "b" } } as const;
-const role = { kind: "role-assign", idempotencyKey: null, action: { userId: "u", roleKey: "r" } } as const;
+const ann = {
+  kind: "announcement",
+  idempotencyKey: "k",
+  action: { channelKey: "c", body: "b" },
+} as const;
+const role = {
+  kind: "role-assign",
+  idempotencyKey: null,
+  action: { userId: "u", roleKey: "r" },
+} as const;
 
 function msg(body: unknown, attempts = 1) {
   const r = { body, attempts, acked: false, retried: undefined as number | undefined | "now" };
   return Object.assign(r, {
-    ack() { r.acked = true; },
-    retry(o?: { delaySeconds?: number }) { r.retried = o?.delaySeconds ?? "now"; },
+    ack() {
+      r.acked = true;
+    },
+    retry(o?: { delaySeconds?: number }) {
+      r.retried = o?.delaySeconds ?? "now";
+    },
   });
 }
 const memLock = (): UniqueLock => ({ acquire: async () => "lease", release: async () => {} });
@@ -31,8 +46,13 @@ function memLedger() {
   return { ledger, rows };
 }
 const store = (): EventStore => ({
-  find: async () => null,
-  recordMirrored: async () => {},
+  prepareSync: async () => null,
+  completeSync: async () => {},
+  claimSync: async () => null,
+  deferSync: async () => {},
+  failSync: async () => {},
+  needsSync: async () => false,
+  pendingSync: async () => null,
   closeFinished: async () => 0,
   materializeSeries: async () => 0,
   staleEventKeys: async () => [],
@@ -56,7 +76,10 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     } as unknown as BotClient;
     const first = msg({ ...ann }, 1);
     const second = msg({ ...role }, 1);
-    const p = consume({ messages: [first, second] }, { bot, events: store(), lock: memLock(), ledger: memLedger().ledger });
+    const p = consume(
+      { messages: [first, second] },
+      { bot, events: store(), lock: memLock(), ledger: memLedger().ledger },
+    );
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
     await p;
     // Bounded wait (first backoff is 5 s), same carrier key, no terminal ack …
@@ -72,7 +95,10 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     vi.useFakeTimers();
     const bot = { assignRole: () => new Promise(() => {}) } as unknown as BotClient;
     const m = msg({ ...role }, 1);
-    const p = consume({ messages: [m] }, { bot, events: store(), lock: memLock(), ledger: memLedger().ledger });
+    const p = consume(
+      { messages: [m] },
+      { bot, events: store(), lock: memLock(), ledger: memLedger().ledger },
+    );
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
     await p;
     expect(m.retried).toBe(5);
@@ -98,7 +124,9 @@ describe("internal-action handler deadline (TOG-11628)", () => {
   it("late success after the deadline cannot reclassify the disposed outcome", async () => {
     vi.useFakeTimers();
     let resolve!: (v: unknown) => void;
-    const gate = new Promise((res) => { resolve = res; });
+    const gate = new Promise((res) => {
+      resolve = res;
+    });
     const bot = { postAnnouncement: () => gate } as unknown as BotClient;
     const p = handleCallInternalAction({ ...ann }, 1, bot);
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
@@ -115,7 +143,9 @@ describe("internal-action handler deadline (TOG-11628)", () => {
   it("a late rejection after the deadline is swallowed, not thrown", async () => {
     vi.useFakeTimers();
     let reject!: (e: unknown) => void;
-    const gate = new Promise((_res, rej) => { reject = rej; });
+    const gate = new Promise((_res, rej) => {
+      reject = rej;
+    });
     // No local catch: the handler's Promise.race must stay attached so a
     // late rejection after the deadline is handled, not unhandled.
     const bot = { postAnnouncement: () => gate } as unknown as BotClient;
@@ -134,7 +164,9 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     const bot = {
       postAnnouncement: (_a: unknown, key: string) => {
         seen.push(key);
-        return first ? ((first = false), new Promise(() => {})) : Promise.resolve({ ok: true, requestId: null, messageId: "m1", replayed: true });
+        return first
+          ? ((first = false), new Promise(() => {}))
+          : Promise.resolve({ ok: true, requestId: null, messageId: "m1", replayed: true });
       },
     } as unknown as BotClient;
     const attempt = handleCallInternalAction({ ...ann }, 1, bot);
@@ -146,26 +178,65 @@ describe("internal-action handler deadline (TOG-11628)", () => {
   });
 
   it("fast paths are unchanged: success, refusal, retry-after, transport and terminal throws", async () => {
-    const ok = { postAnnouncement: async () => ({ ok: true, requestId: null, messageId: "m1", replayed: false }) } as unknown as BotClient;
+    const ok = {
+      postAnnouncement: async () => ({
+        ok: true,
+        requestId: null,
+        messageId: "m1",
+        replayed: false,
+      }),
+    } as unknown as BotClient;
     await expect(handleCallInternalAction({ ...ann }, 1, ok)).resolves.toEqual({ done: true });
 
     const refused = {
-      postAnnouncement: async () => ({ ok: false, code: "action_not_allowed", status: 403, requestId: null, message: "no", retryable: false, retryAfterSeconds: null }),
+      postAnnouncement: async () => ({
+        ok: false,
+        code: "action_not_allowed",
+        status: 403,
+        requestId: null,
+        message: "no",
+        retryable: false,
+        retryAfterSeconds: null,
+      }),
     } as unknown as BotClient;
-    await expect(handleCallInternalAction({ ...ann }, 1, refused)).resolves.toMatchObject({ failed: expect.stringContaining("announcement.post") });
+    await expect(handleCallInternalAction({ ...ann }, 1, refused)).resolves.toMatchObject({
+      failed: expect.stringContaining("announcement.post"),
+    });
 
     const throttled = {
-      postAnnouncement: async () => ({ ok: false, code: "rate_limited", status: 429, requestId: null, message: "slow", retryable: true, retryAfterSeconds: 42 }),
+      postAnnouncement: async () => ({
+        ok: false,
+        code: "rate_limited",
+        status: 429,
+        requestId: null,
+        message: "slow",
+        retryable: true,
+        retryAfterSeconds: 42,
+      }),
     } as unknown as BotClient;
-    await expect(handleCallInternalAction({ ...ann }, 1, throttled)).resolves.toEqual({ retryInSeconds: 42 });
+    await expect(handleCallInternalAction({ ...ann }, 1, throttled)).resolves.toEqual({
+      retryInSeconds: 42,
+    });
 
-    const down = { postAnnouncement: async () => { throw new BotTransportError("down"); } } as unknown as BotClient;
-    await expect(handleCallInternalAction({ ...ann }, 1, down)).resolves.toEqual({ retryInSeconds: 5 });
+    const down = {
+      postAnnouncement: async () => {
+        throw new BotTransportError("down");
+      },
+    } as unknown as BotClient;
+    await expect(handleCallInternalAction({ ...ann }, 1, down)).resolves.toEqual({
+      retryInSeconds: 5,
+    });
 
-    const broken = { postAnnouncement: async () => { throw new BotTerminalError("bad secret"); } } as unknown as BotClient;
+    const broken = {
+      postAnnouncement: async () => {
+        throw new BotTerminalError("bad secret");
+      },
+    } as unknown as BotClient;
     // Class-only (TOG-11627): the terminal message can carry tokens or personal
     // data, so the handler emits only the exception class.
-    await expect(handleCallInternalAction({ ...ann }, 1, broken)).resolves.toEqual({ failed: "BotTerminalError" });
+    await expect(handleCallInternalAction({ ...ann }, 1, broken)).resolves.toEqual({
+      failed: "BotTerminalError",
+    });
 
     vi.useFakeTimers();
     await expect(handleCallInternalAction({ ...ann }, 1, ok)).resolves.toEqual({ done: true });

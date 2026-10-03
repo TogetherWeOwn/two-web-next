@@ -29,24 +29,68 @@ export type BotSuccess<T> = { ok: true; requestId: string | null } & T;
 export class BotTransportError extends Error {}
 /** Missing secret / payload the bot would call malformed: terminal. */
 export class BotTerminalError extends Error {}
+/** Known retry result could not be committed; the durable claim remains closed. */
+export class SyncRetryPersistenceError extends Error {
+  readonly nextAttemptAt: Date | null;
+  constructor(nextAttemptAt: Date | null, cause: unknown) {
+    super("sync retry result could not be persisted; request remains fenced", { cause });
+    this.nextAttemptAt = nextAttemptAt;
+  }
+}
 
 export interface BotClient {
-  upsertEvent(p: EventUpsert, idempotencyKey: string): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
-  postAnnouncement(a: Announcement, idempotencyKey: string): Promise<BotSuccess<{ messageId: string; replayed: boolean }> | BotFailure>;
+  upsertEvent(
+    p: EventUpsert,
+    idempotencyKey: string,
+  ): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
+  cancelEvent(
+    p: { eventKey: string },
+    idempotencyKey: string,
+  ): Promise<BotSuccess<{ discordEventId: string }> | BotFailure>;
+  postAnnouncement(
+    a: Announcement,
+    idempotencyKey: string,
+  ): Promise<BotSuccess<{ messageId: string; replayed: boolean }> | BotFailure>;
   assignRole(r: RoleAssignment): Promise<BotSuccess<{ outcome: string }> | BotFailure>;
 }
 
-export type MirroredEvent = { eventKey: string; payload: EventUpsert; mirrored: boolean };
+export type SyncAttempt = {
+  idempotencyKey: string;
+  eventKey: string;
+  revision: number;
+  mirroredAt: Date;
+  /** `failed` is definitive refusal; `obsolete` was retired before any request. */
+  state: "pending" | "succeeded" | "failed" | "obsolete";
+  requestAttempts: number;
+  /** Null while a claim's result is unsettled, or after retirement/exhaustion. */
+  nextAttemptAt: Date | null;
+} & (
+  | { action: "event.upsert"; payload: EventUpsert }
+  | { action: "event.cancel"; payload: { eventKey: string } }
+);
 
 export interface EventStore {
-  find(eventKey: string): Promise<MirroredEvent | null>;
-  /** Persist discord_event_id and stamp only RSVPs updated at or before `mirroredAt`. */
-  recordMirrored(eventKey: string, discordEventId: string, mirroredAt: Date): Promise<void>;
+  /** Snapshot at first attempt, not dispatch. Retries return the persisted request. */
+  prepareSync(
+    eventKey: string,
+    idempotencyKey: string,
+    mirroredAt: Date,
+  ): Promise<SyncAttempt | { waiting: true } | null>;
+  /** Atomically settle the attempt and acknowledge only its revision/RSVP cutoff. */
+  completeSync(attempt: SyncAttempt, discordEventId: string): Promise<void>;
+  /** Fence a due request until its result commits, or retire an obsolete snapshot. */
+  claimSync(attempt: SyncAttempt, now: Date): Promise<SyncAttempt | null>;
+  deferSync(attempt: SyncAttempt, nextAttemptAt: Date | null): Promise<void>;
+  /** Settle only a definitive refusal. */
+  failSync(idempotencyKey: string): Promise<void>;
+  needsSync(eventKey: string): Promise<boolean>;
+  /** Recovery preserves request identity, eligibility and attempts across carriers. */
+  pendingSync(eventKey: string): Promise<SyncAttempt | null>;
   /** Published events past ends_at -> past. Returns rows changed. */
   closeFinished(now: Date): Promise<number>;
   /** Top up every live series (draft/published parent). Returns rows created; idempotent. */
   materializeSeries(): Promise<number>;
-  /** Published, and discord_event_id null or any RSVP unsynced. */
+  /** Initiating-eligible dirty revisions and attempted pending recovery candidates. */
   staleEventKeys(): Promise<string[]>;
 }
 
@@ -87,11 +131,23 @@ export interface UniqueLock {
   release(key: string, leaseToken: string): Promise<void>;
 }
 
-export type QueueMessage =
+/** Originating web request, not the bot response ID or a deduplication key. */
+type QueueCorrelation = { requestId?: string };
+
+export type QueueMessage = QueueCorrelation &
   // Optional only for pre-fencing messages: those finish without releasing a lock (TTL recovers it).
-  | { kind: "sync-event"; eventKey: string; idempotencyKey: string; leaseToken?: string; jobId?: string }
-  | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
-  | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string };
+  (
+    | {
+        kind: "sync-event";
+        eventKey: string;
+        idempotencyKey: string;
+        leaseToken?: string;
+        jobId?: string;
+      }
+    | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
+    | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
+    | { kind: "alert-probe"; probeId?: string; jobId?: never }
+  );
 
 /**
  * N3 (TOG-9895): the countable side of the queue. Cloudflare Queues carries the
@@ -103,7 +159,12 @@ export type QueueMessage =
  */
 export interface QueueLedger {
   /** A message was accepted by the queue. `availableAt` includes the debounce delay. */
-  enqueued(job: { jobId: string; kind: string; key: string | null; availableAt: Date }): Promise<void>;
+  enqueued(job: {
+    jobId: string;
+    kind: string;
+    key: string | null;
+    availableAt: Date;
+  }): Promise<void>;
   /** A consumer picked the message up. */
   reserved(jobId: string): Promise<void>;
   /** The message went back to the queue (retry outcome or redelivery). */

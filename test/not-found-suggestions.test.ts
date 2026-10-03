@@ -59,8 +59,15 @@ const baseEnv: EnvWithAdminDb = {
 
 type Fixture = typeof event & { id: number; status: string; endsAt: Date };
 function fixture(id: number, status = "published", end = "2026-10-01T20:00:00Z"): Fixture {
-  return { ...event, id, key: `game-${id}`, title: `Game ${id}`, status,
-    startsAt: new Date(`2026-10-01T${String(10 + id).padStart(2, "0")}:00:00Z`), endsAt: new Date(end) };
+  return {
+    ...event,
+    id,
+    key: `game-${id}`,
+    title: `Game ${id}`,
+    status,
+    startsAt: new Date(`2026-10-01T${String(10 + id).padStart(2, "0")}:00:00Z`),
+    endsAt: new Date(end),
+  };
 }
 
 function fixtureDb(rows: Fixture[]) {
@@ -69,35 +76,52 @@ function fixtureDb(rows: Fixture[]) {
     queries.push({ sql, params });
     if (!sql.includes('from "events"')) return { rows: [] };
     const boundary = new Date(String(params[1]));
-    const visible = rows.filter((r) => r.status === params[0] && r.endsAt >= boundary)
+    const visible = rows
+      .filter((r) => r.status === params[0] && r.endsAt >= boundary)
       .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime() || a.id - b.id)
       .slice(0, Number(params[2]));
     return { rows: visible.map((r) => [r.key, r.title, r.startsAt.toISOString(), r.location]) };
   });
-  Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db) });
+  Object.assign(db, {
+    transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db),
+  });
   return { db: db as unknown as Db, queries };
 }
 
 function sessionTrap() {
-  const accessed = vi.fn(() => { throw new Error("404 must not touch sessions"); });
+  const accessed = vi.fn(() => {
+    throw new Error("404 must not touch sessions");
+  });
   return { store: new Proxy({}, { get: accessed }), accessed };
 }
 
 describe("404 optional event lookup", () => {
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("renders only the first three published, not-ended events with SQL timeouts and no sessions", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
     const { db, queries } = fixtureDb([
-      fixture(5), fixture(4), fixture(3), fixture(2), fixture(1),
-      fixture(0, "draft"), fixture(0, "cancelled"), fixture(0, "past"),
+      fixture(5),
+      fixture(4),
+      fixture(3),
+      fixture(2),
+      fixture(1),
+      fixture(0, "draft"),
+      fixture(0, "cancelled"),
+      fixture(0, "past"),
       fixture(0, "published", "2026-09-30T20:00:00Z"),
     ]);
     const acquire = vi.spyOn(adminDb, "dbFor");
     const sessions = sessionTrap();
-    const res = await app.request("/lost/link", { headers: { cookie: "__Host-two_session=existing-token" } },
-      { ...baseEnv, ADMIN_DB: db, SESSION_STORE: sessions.store } as EnvWithAdminDb);
+    const res = await app.request(
+      "/lost/link",
+      { headers: { cookie: "__Host-two_session=existing-token" } },
+      { ...baseEnv, ADMIN_DB: db, SESSION_STORE: sessions.store } as EnvWithAdminDb,
+    );
     const html = await res.text();
     expect(res.status).toBe(404);
     expect(res.headers.get("cache-control")).toBe("no-store, private");
@@ -115,47 +139,76 @@ describe("404 optional event lookup", () => {
     expect(queries[0]!.sql).toContain("set_config('lock_timeout', $1, true)");
     expect(queries[0]!.sql).toContain("set_config('statement_timeout', $2, true)");
     expect(queries[0]!.params).toEqual(["400ms", "400ms"]);
-    expect(queries[1]!.sql).toContain('"events" where ("events"."status" = $1 and "events"."ends_at" >= $2 and isfinite("events"."starts_at"))');
-    expect(queries[1]!.sql).toContain('order by "events"."starts_at" asc, "events"."id" asc limit $3');
+    expect(queries[1]!.sql).toContain(
+      '"events" where ("events"."status" = $1 and "events"."ends_at" >= $2 and isfinite("events"."starts_at"))',
+    );
+    expect(queries[1]!.sql).toContain(
+      'order by "events"."starts_at" asc, "events"."id" asc limit $3',
+    );
     expect(queries[1]!.params).toEqual(["published", "2026-10-01T12:00:00.000Z", 3]);
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([
-    ["infinity", false], ["-infinity", false],
-    ["infinity", true], ["-infinity", true],
-  ] as const)("discards %s start dates and preserves 404 recovery (finite sibling: %s)", async (start, includeValid) => {
-    const db = drizzle(async (sql) => ({ rows: sql.includes('from "events"') ? [
-      ["nonfinite", "Nonfinite event", start, null],
-      ...(includeValid ? [[event.key, event.title, event.startsAt.toISOString(), event.location]] : []),
-    ] : [] }));
-    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db) });
-    const sessions = sessionTrap();
-    const res = await app.request("/lost", { headers: { cookie: "__Host-two_session=existing-token" } },
-      { ...baseEnv, ADMIN_DB: db as unknown as Db, SESSION_STORE: sessions.store } as EnvWithAdminDb);
-    const html = await res.text();
-    expect(res.status).toBe(404);
-    expect(res.headers.get("cache-control")).toBe("no-store, private");
-    expect(res.headers.get("set-cookie")).toBeNull();
-    expect(html).toContain('content="noindex, nofollow"');
-    expect(html).toContain('action="/events" method="get" role="search"');
-    expect(html).not.toContain("Nonfinite event");
-    if (includeValid) {
-      expect(html).toContain('href="/e/game-night"');
-      expect(html).toContain('datetime="2026-10-01T18:00:00.000Z"');
-      expect(html).not.toContain('data-testid="error-events-empty"');
-    } else {
-      expect(html).not.toContain('data-testid="error-event-suggestion"');
-      expect(html).toContain('data-testid="error-events-empty"');
-    }
-    expect(sessions.accessed).not.toHaveBeenCalled();
-  });
+    ["infinity", false],
+    ["-infinity", false],
+    ["infinity", true],
+    ["-infinity", true],
+  ] as const)(
+    "discards %s start dates and preserves 404 recovery (finite sibling: %s)",
+    async (start, includeValid) => {
+      const db = drizzle(async (sql) => ({
+        rows: sql.includes('from "events"')
+          ? [
+              ["nonfinite", "Nonfinite event", start, null],
+              ...(includeValid
+                ? [[event.key, event.title, event.startsAt.toISOString(), event.location]]
+                : []),
+            ]
+          : [],
+      }));
+      Object.assign(db, {
+        transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db),
+      });
+      const sessions = sessionTrap();
+      const res = await app.request(
+        "/lost",
+        { headers: { cookie: "__Host-two_session=existing-token" } },
+        {
+          ...baseEnv,
+          ADMIN_DB: db as unknown as Db,
+          SESSION_STORE: sessions.store,
+        } as EnvWithAdminDb,
+      );
+      const html = await res.text();
+      expect(res.status).toBe(404);
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
+      expect(res.headers.get("set-cookie")).toBeNull();
+      expect(html).toContain('content="noindex, nofollow"');
+      expect(html).toContain('action="/events" method="get" role="search"');
+      expect(html).not.toContain("Nonfinite event");
+      if (includeValid) {
+        expect(html).toContain('href="/e/game-night"');
+        expect(html).toContain('datetime="2026-10-01T18:00:00.000Z"');
+        expect(html).not.toContain('data-testid="error-events-empty"');
+      } else {
+        expect(html).not.toContain('data-testid="error-event-suggestion"');
+        expect(html).toContain('data-testid="error-events-empty"');
+      }
+      expect(sessions.accessed).not.toHaveBeenCalled();
+    },
+  );
 
   it("DB failure keeps a session-free 404 and the search form without leaking the error", async () => {
-    const db = { transaction: vi.fn().mockRejectedValue(new Error("private database failure")) } as unknown as Db;
+    const db = {
+      transaction: vi.fn().mockRejectedValue(new Error("private database failure")),
+    } as unknown as Db;
     const sessions = sessionTrap();
-    const res = await app.request("/lost", {},
-      { ...baseEnv, ADMIN_DB: db, SESSION_STORE: sessions.store } as EnvWithAdminDb);
+    const res = await app.request("/lost", {}, {
+      ...baseEnv,
+      ADMIN_DB: db,
+      SESSION_STORE: sessions.store,
+    } as EnvWithAdminDb);
     const html = await res.text();
     expect(res.status).toBe(404);
     expect(res.headers.get("set-cookie")).toBeNull();
@@ -174,19 +227,24 @@ describe("404 optional event lookup", () => {
     expect(await res.text()).not.toContain('data-testid="error-event-suggestion"');
   });
 
-  it.each(["acquisition", "query"])("bounds stalled DB %s at 500 ms, with late rejection handled", async (stage) => {
-    vi.useFakeTimers();
-    let reject!: (error: Error) => void;
-    const stalled = new Promise<Db>((_, fail) => { reject = fail; });
-    if (stage === "acquisition") vi.spyOn(adminDb, "dbFor").mockReturnValue(stalled);
-    const db = { transaction: () => stalled } as unknown as Db;
-    const response = app.request("/lost", {}, { ...baseEnv, ADMIN_DB: db });
-    await vi.advanceTimersByTimeAsync(SUGGESTIONS_DEADLINE_MS);
-    const res = await response;
-    expect(res.status).toBe(404);
-    expect(await res.text()).not.toContain('data-testid="error-event-suggestion"');
-    expect(vi.getTimerCount()).toBe(0);
-    reject(new Error("late database failure"));
-    await vi.advanceTimersByTimeAsync(0);
-  });
+  it.each(["acquisition", "query"])(
+    "bounds stalled DB %s at 500 ms, with late rejection handled",
+    async (stage) => {
+      vi.useFakeTimers();
+      let reject!: (error: Error) => void;
+      const stalled = new Promise<Db>((_, fail) => {
+        reject = fail;
+      });
+      if (stage === "acquisition") vi.spyOn(adminDb, "dbFor").mockReturnValue(stalled);
+      const db = { transaction: () => stalled } as unknown as Db;
+      const response = app.request("/lost", {}, { ...baseEnv, ADMIN_DB: db });
+      await vi.advanceTimersByTimeAsync(SUGGESTIONS_DEADLINE_MS);
+      const res = await response;
+      expect(res.status).toBe(404);
+      expect(await res.text()).not.toContain('data-testid="error-event-suggestion"');
+      expect(vi.getTimerCount()).toBe(0);
+      reject(new Error("late database failure"));
+      await vi.advanceTimersByTimeAsync(0);
+    },
+  );
 });

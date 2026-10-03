@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import postgres from "postgres";
-import { parseDatabaseUrl, runDbPing, PROBE_TIMEOUT_MS, CLEANUP_TIMEOUT_MS } from "../bin/db-ping-core.mjs";
+import {
+  parseDatabaseUrl,
+  runDbPing,
+  PROBE_TIMEOUT_MS,
+  CLEANUP_TIMEOUT_MS,
+} from "../bin/db-ping-core.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,11 +16,15 @@ const syntheticUrl = "postgres://fixture:synthetic-password@agent-testdb/probe";
 const sentinel = "synthetic-driver-detail-row";
 
 function cli(scenario, extraEnv = {}, args = []) {
-  const directory = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "db-ping-test-"));
+  const directory = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "db-ping-test-"),
+  );
   try {
     const receipt = join(directory, "closed");
     const driver = join(directory, "driver.mjs");
-    writeFileSync(driver, `
+    writeFileSync(
+      driver,
+      `
       import { appendFileSync } from 'node:fs';
       appendFileSync(process.env.RECEIPT, 'imported\\n');
       export default function postgres() {
@@ -40,22 +49,32 @@ function cli(scenario, extraEnv = {}, args = []) {
           }
         };
       }
-    `);
+    `,
+    );
     const driverUrl = pathToFileURL(driver).href;
     const hooks = join(directory, "hooks.mjs");
-    writeFileSync(hooks, `export async function resolve(specifier, context, next) {
+    writeFileSync(
+      hooks,
+      `export async function resolve(specifier, context, next) {
       if (specifier === 'postgres') return { url: ${JSON.stringify(driverUrl)}, shortCircuit: true };
       return next(specifier, context);
-    }`);
+    }`,
+    );
     const register = join(directory, "register.mjs");
-    writeFileSync(register, `import { register } from 'node:module'; register(${JSON.stringify(pathToFileURL(hooks).href)});`);
+    writeFileSync(
+      register,
+      `import { register } from 'node:module'; register(${JSON.stringify(pathToFileURL(hooks).href)});`,
+    );
     const result = spawnSync(process.execPath, ["--import", register, "bin/db-ping.mjs", ...args], {
       // Never inherit a database credential or target from the test runner.
       env: { DATABASE_URL: syntheticUrl, SCENARIO: scenario, RECEIPT: receipt, ...extraEnv },
-      encoding: "utf8", timeout: 8500,
+      encoding: "utf8",
+      timeout: 8500,
     });
     let receiptText = "";
-    try { receiptText = readFileSync(receipt, "utf8"); } catch {}
+    try {
+      receiptText = readFileSync(receipt, "utf8");
+    } catch {}
     return { ...result, closed: receiptText.includes("closed"), receipt: receiptText };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -72,8 +91,11 @@ it("redacts injected URL/password/row failures and closes before CLI exit", () =
   expect(result.closed).toBe(true);
 });
 
-for (const [scenario, code] of [["construct", "DB_PING_FAILED"],
-  ["cleanup-fail", "DB_PING_CLEANUP_FAILED"], ["cleanup-hang", "DB_PING_CLEANUP_TIMEOUT"]]) {
+for (const [scenario, code] of [
+  ["construct", "DB_PING_FAILED"],
+  ["cleanup-fail", "DB_PING_CLEANUP_FAILED"],
+  ["cleanup-hang", "DB_PING_CLEANUP_TIMEOUT"],
+]) {
   it(`bounds and redacts ${scenario} at the CLI boundary`, () => {
     const started = performance.now();
     const output = cli(scenario);
@@ -107,9 +129,16 @@ it("refuses argv credentials and missing config before even importing the driver
 });
 
 it("discards all ambient libpq settings in the standalone process", () => {
-  const output = cli("success", { PGHOST: "wrong-host", PGPORT: "1234", PGDATABASE: "wrong-db",
-    PGUSER: "wrong-user", PGPASSWORD: "wrong-password", PGAPPNAME: sentinel,
-    PGSSLMODE: "disable", PGTARGETSESSIONATTRS: "not-a-valid-value" });
+  const output = cli("success", {
+    PGHOST: "wrong-host",
+    PGPORT: "1234",
+    PGDATABASE: "wrong-db",
+    PGUSER: "wrong-user",
+    PGPASSWORD: "wrong-password",
+    PGAPPNAME: sentinel,
+    PGSSLMODE: "disable",
+    PGTARGETSESSIONATTRS: "not-a-valid-value",
+  });
   expect(output.status).toBe(0);
   expect(output.closed).toBe(true);
 });
@@ -130,31 +159,57 @@ it("emits only stable success metadata, not driver rows", () => {
   expect(result.closed).toBe(true);
 });
 
-const invalidUrls = [undefined, "", "not-a-url", "https://fixture:password@agent-testdb/probe",
-  "postgres:///probe", "postgres://fixture@/probe", "postgres://agent-testdb/probe",
-  "postgres://fixture@agent-testdb", "postgres://fixture@agent-testdb/",
-  "postgres://fixture@agent-testdb:0/probe", "postgres://fixture@agent-testdb:65536/probe",
-  "postgres://fixture@agent-testdb:abc/probe", "postgres://fixture@agent-testdb/probe#secret",
-  "postgres://fixture@agent-testdb/probe?host=other", "postgres://fixture@agent-testdb/probe?password=other",
-  "postgres://fixture@agent-testdb/probe?port=2345", "postgres://fixture@agent-testdb/probe?sslmode=prefer",
+const invalidUrls = [
+  undefined,
+  "",
+  "not-a-url",
+  "https://fixture:password@agent-testdb/probe",
+  "postgres:///probe",
+  "postgres://fixture@/probe",
+  "postgres://agent-testdb/probe",
+  "postgres://fixture@agent-testdb",
+  "postgres://fixture@agent-testdb/",
+  "postgres://fixture@agent-testdb:0/probe",
+  "postgres://fixture@agent-testdb:65536/probe",
+  "postgres://fixture@agent-testdb:abc/probe",
+  "postgres://fixture@agent-testdb/probe#secret",
+  "postgres://fixture@agent-testdb/probe?host=other",
+  "postgres://fixture@agent-testdb/probe?password=other",
+  "postgres://fixture@agent-testdb/probe?port=2345",
+  "postgres://fixture@agent-testdb/probe?sslmode=prefer",
   "postgres://fixture@agent-testdb/probe?sslmode=require&sslmode=disable",
   "postgres://fixture@agent-testdb/probe?sslrootcert=/secret",
   "postgres://fixture@agent-testdb/probe?options=-csearch_path=secret",
-  "postgres://fixture@agent-testdb/probe?search_path=secret", " postgres://fixture@agent-testdb/probe",
-  "postgres://fixture@agent-testdb/probe\n", "postgres://fixture@host,other/probe",
-  "postgres://fixture@%2ftmp/probe", "postgres://fixture@agent-testdb/%2fother",
-  "postgres://fixture@agent-testdb/%00", "postgres://fixture:%00@agent-testdb/probe",
-  "postgres://fixture:%xx@agent-testdb/probe"];
+  "postgres://fixture@agent-testdb/probe?search_path=secret",
+  " postgres://fixture@agent-testdb/probe",
+  "postgres://fixture@agent-testdb/probe\n",
+  "postgres://fixture@host,other/probe",
+  "postgres://fixture@%2ftmp/probe",
+  "postgres://fixture@agent-testdb/%2fother",
+  "postgres://fixture@agent-testdb/%00",
+  "postgres://fixture:%00@agent-testdb/probe",
+  "postgres://fixture:%xx@agent-testdb/probe",
+];
 
-it.each(invalidUrls)("refuses invalid configuration before constructing a client (%s)", async databaseUrl => {
-  let constructed = false;
-  const output = await runDbPing({ databaseUrl, createClient: () => { constructed = true; } });
-  expect(output).toEqual({ ok: false, code: "DB_PING_CONFIG", exitCode: 2 });
-  expect(constructed).toBe(false);
-});
+it.each(invalidUrls)(
+  "refuses invalid configuration before constructing a client (%s)",
+  async (databaseUrl) => {
+    let constructed = false;
+    const output = await runDbPing({
+      databaseUrl,
+      createClient: () => {
+        constructed = true;
+      },
+    });
+    expect(output).toEqual({ ok: false, code: "DB_PING_CONFIG", exitCode: 2 });
+    expect(constructed).toBe(false);
+  },
+);
 
 it("pins decoded fields, IPv6, TLS and defaults without consulting libpq", async () => {
-  const options = parseDatabaseUrl("postgresql://user%40name:p%40ss@[::1]:6543/probe?sslmode=verify-full");
+  const options = parseDatabaseUrl(
+    "postgresql://user%40name:p%40ss@[::1]:6543/probe?sslmode=verify-full",
+  );
   expect(options.host).toEqual(["::1"]);
   expect(options.port).toEqual([6543]);
   expect(options.username).toBe("user@name");
@@ -162,11 +217,19 @@ it("pins decoded fields, IPv6, TLS and defaults without consulting libpq", async
   expect(options.database).toBe("probe");
   expect(options.ssl).toBe("verify-full");
   expect(parseDatabaseUrl(`${syntheticUrl}?sslmode=require`).ssl).toBe("require");
-  expect(parseDatabaseUrl(`${syntheticUrl}?sslmode=require&sslrootcert=system`).ssl).toBe("verify-full");
+  expect(parseDatabaseUrl(`${syntheticUrl}?sslmode=require&sslrootcert=system`).ssl).toBe(
+    "verify-full",
+  );
 
-  const keys = { PGHOST: "wrong-host", PGPORT: "1234", PGDATABASE: "wrong-db",
-    PGUSER: "wrong-user", PGUSERNAME: "wrong-username", PGPASSWORD: "wrong-password" };
-  const previous = Object.fromEntries(Object.keys(keys).map(key => [key, process.env[key]]));
+  const keys = {
+    PGHOST: "wrong-host",
+    PGPORT: "1234",
+    PGDATABASE: "wrong-db",
+    PGUSER: "wrong-user",
+    PGUSERNAME: "wrong-username",
+    PGPASSWORD: "wrong-password",
+  };
+  const previous = Object.fromEntries(Object.keys(keys).map((key) => [key, process.env[key]]));
   let sql;
   try {
     Object.assign(process.env, keys);
@@ -179,7 +242,8 @@ it("pins decoded fields, IPv6, TLS and defaults without consulting libpq", async
     expect(sql.options.pass()).toBe("");
   } finally {
     for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
     await sql?.end({ timeout: 0 });
   }
@@ -190,21 +254,28 @@ for (const phase of ["connect", "query"]) {
     let connected = false;
     let closed = false;
     const started = performance.now();
-    const output = await runDbPing({ databaseUrl: syntheticUrl, timeoutMs: 30, cleanupTimeoutMs: 20,
-      createClient: options => {
+    const output = await runDbPing({
+      databaseUrl: syntheticUrl,
+      timeoutMs: 30,
+      cleanupTimeoutMs: 20,
+      createClient: (options) => {
         expect(options.connect_timeout).toBe(0.03);
         // PgBouncer rejects unknown startup parameters; the deadline is client-side.
         expect(options.connection).toEqual({ application_name: "db-ping" });
         return {
-          unsafe: async statement => {
+          unsafe: async (statement) => {
             expect(statement).toBe("SELECT 1 AS ok");
             if (phase === "connect") await new Promise(() => {});
             connected = true;
             await new Promise(() => {});
           },
-          end: async options => { expect(options).toEqual({ timeout: 0 }); closed = true; },
+          end: async (options) => {
+            expect(options).toEqual({ timeout: 0 });
+            closed = true;
+          },
         };
-      } });
+      },
+    });
     expect(output.code).toBe("DB_PING_TIMEOUT");
     expect(output.exitCode).toBe(1);
     expect(connected).toBe(phase === "query");
@@ -215,15 +286,35 @@ for (const phase of ["connect", "query"]) {
 
 it("bounds cleanup after success and absorbs late query rejection after timeout", async () => {
   let cleanup = false;
-  const output = await runDbPing({ databaseUrl: syntheticUrl, timeoutMs: 30, cleanupTimeoutMs: 20,
-    createClient: () => ({ unsafe: async () => [], end: () => { cleanup = true; return new Promise(() => {}); } }) });
+  const output = await runDbPing({
+    databaseUrl: syntheticUrl,
+    timeoutMs: 30,
+    cleanupTimeoutMs: 20,
+    createClient: () => ({
+      unsafe: async () => [],
+      end: () => {
+        cleanup = true;
+        return new Promise(() => {});
+      },
+    }),
+  });
   expect(cleanup).toBe(true);
   expect(output.code).toBe("DB_PING_CLEANUP_TIMEOUT");
   expect(output.exitCode).toBe(1);
   let reject;
-  const late = await runDbPing({ databaseUrl: syntheticUrl, timeoutMs: 30, cleanupTimeoutMs: 20,
-    createClient: () => ({ unsafe: () => new Promise((_, r) => { reject = r; }), end: async () => {} }) });
+  const late = await runDbPing({
+    databaseUrl: syntheticUrl,
+    timeoutMs: 30,
+    cleanupTimeoutMs: 20,
+    createClient: () => ({
+      unsafe: () =>
+        new Promise((_, r) => {
+          reject = r;
+        }),
+      end: async () => {},
+    }),
+  });
   expect(late.code).toBe("DB_PING_TIMEOUT");
   reject(new Error(sentinel));
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
 });

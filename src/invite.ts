@@ -12,7 +12,8 @@ export const FALLBACK_INVITE = "https://discord.gg/4GwEDNRTtx";
 
 function discordInvite(url: string): string | null {
   // Require a real HTTPS authority, not missing or extra slashes repaired by URL parsing.
-  if (!/^https:\/\/[^/?#@\s]+(?:[/?#]|$)/i.test(url) || /[\u0000-\u001f\u007f\\]/.test(url)) return null;
+  if (!/^https:\/\/[^/?#@\s]+(?:[/?#]|$)/i.test(url) || /[\u0000-\u001f\u007f\\]/.test(url))
+    return null;
   let parts: URL;
   try {
     parts = new URL(url);
@@ -20,8 +21,13 @@ function discordInvite(url: string): string | null {
     return null;
   }
   if (parts.protocol !== "https:" || parts.username || parts.password || parts.port) return null;
-  if (!((parts.hostname === "discord.gg" && /^\/[\w-]+$/.test(parts.pathname)) ||
-    (parts.hostname === "discord.com" && /^\/invite\/[\w-]+$/.test(parts.pathname)))) return null;
+  if (
+    !(
+      (parts.hostname === "discord.gg" && /^\/[\w-]+$/.test(parts.pathname)) ||
+      (parts.hostname === "discord.com" && /^\/invite\/[\w-]+$/.test(parts.pathname))
+    )
+  )
+    return null;
   // Serialize Unicode before Hono redirects, preserving existing query and fragment escapes.
   return parts.href;
 }

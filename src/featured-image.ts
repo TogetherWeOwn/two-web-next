@@ -1,4 +1,4 @@
-import { isFeaturedImageUrl } from "./image-policy";
+import { hasUrlUserinfo, isFeaturedImageUrl } from "./image-policy";
 
 // Suppress blocked images on older/imported rows using the CSP host allowlist.
 // Preserve legacy same-site images as paths; new admin input is HTTPS-only.
@@ -9,12 +9,18 @@ import { isFeaturedImageUrl } from "./image-policy";
 // featuredImageSrc closes that gap: same-site absolute URLs render as
 // path-only src, so 'self' matches wherever the page is served.
 export function featuredImageAllowed(raw: string, appUrl: string, imageHosts?: string): boolean {
+  // Same userinfo leak as validation: new URL() drops an empty username, so
+  // inspect the authority text before parsing (relative paths are unaffected).
+  if (hasUrlUserinfo(raw)) return false;
   try {
     const image = new URL(raw, appUrl);
     const site = new URL(appUrl);
-    return !image.username && !image.password
-      && (image.protocol === "http:" || image.protocol === "https:")
-      && (image.origin === site.origin || isFeaturedImageUrl(raw, imageHosts));
+    return (
+      !image.username &&
+      !image.password &&
+      (image.protocol === "http:" || image.protocol === "https:") &&
+      (image.origin === site.origin || isFeaturedImageUrl(raw, imageHosts))
+    );
   } catch {
     return false;
   }

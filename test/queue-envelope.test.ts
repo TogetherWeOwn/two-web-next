@@ -1,21 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { consume } from "../src/jobs/consumer";
 import { uniqueKey, type Outcome } from "../src/jobs/sync-event";
+import { SyncRetryPersistenceError } from "../src/jobs/types";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
 const handlers = vi.hoisted(() => ({ sync: vi.fn(), internal: vi.fn() }));
 vi.mock("../src/jobs/sync-event", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../src/jobs/sync-event")>(),
+  ...(await importOriginal<typeof import("../src/jobs/sync-event")>()),
   handleSyncEvent: handlers.sync,
 }));
-vi.mock("../src/jobs/call-internal-action", () => ({ handleCallInternalAction: handlers.internal }));
+vi.mock("../src/jobs/call-internal-action", () => ({
+  handleCallInternalAction: handlers.internal,
+}));
 
 const leaseToken = "11111111-1111-4111-8111-111111111111";
 const sync = { kind: "sync-event", eventKey: "event-1", idempotencyKey: "sync-key", leaseToken };
 const announcement = {
-  kind: "announcement", idempotencyKey: "announcement-key", action: { channelKey: "general", body: "hello" },
+  kind: "announcement",
+  idempotencyKey: "announcement-key",
+  action: { channelKey: "general", body: "hello" },
 };
-const role = { kind: "role-assign", idempotencyKey: null, action: { userId: "user-1", roleKey: "member" } };
+const role = {
+  kind: "role-assign",
+  idempotencyKey: null,
+  action: { userId: "user-1", roleKey: "member" },
+};
 
 function message(body: unknown, attempts = 1) {
   return { body, attempts, ack: vi.fn(), retry: vi.fn() };
@@ -29,7 +38,10 @@ function dependencies() {
     dequeued: vi.fn(async () => {}),
     failed: vi.fn(async () => {}),
   };
-  const lock: UniqueLock = { acquire: vi.fn(async () => leaseToken), release: vi.fn(async () => {}) };
+  const lock: UniqueLock = {
+    acquire: vi.fn(async () => leaseToken),
+    release: vi.fn(async () => {}),
+  };
   // These tests isolate the envelope boundary; no bot or event implementation
   // should be reached before validation. The real handlers remain covered in jobs.test.ts.
   return { bot: {} as BotClient, events: {} as EventStore, ledger, lock };
@@ -45,18 +57,35 @@ const malformed: [string, unknown][] = [
   ["missing kind", {}],
   ["unknown kind", { kind: "private-unsupported-kind", action: role.action }],
   ["prototype kind", { kind: "toString", action: role.action }],
+  ["probe with ledger identifier", { kind: "alert-probe", jobId: "private-job-id" }],
+  ["probe with non-string ID", { kind: "alert-probe", probeId: 42 }],
+  ["probe with null ID", { kind: "alert-probe", probeId: null }],
+  ["probe with empty ID", { kind: "alert-probe", probeId: "" }],
+  ["probe with arbitrary ID", { kind: "alert-probe", probeId: "private-probe-content" }],
+  [
+    "probe with non-v4 ID",
+    { kind: "alert-probe", probeId: "11111111-1111-7111-8111-111111111111" },
+  ],
   ["missing sync event key", { kind: "sync-event", idempotencyKey: "k" }],
   ["non-string sync event key", { ...sync, eventKey: 42 }],
   ["missing sync idempotency key", { kind: "sync-event", eventKey: "e" }],
   ["null sync idempotency key", { ...sync, idempotencyKey: null }],
   ...[
-    ["null", null], ["number", 42], ["boolean", false], ["object", {}], ["array", []],
-    ["blank", ""], ["non-UUID", "private-invalid-lease-token"],
-    ["truncated UUID", leaseToken.slice(1)], ["unhyphenated UUID", leaseToken.replaceAll("-", "")],
+    ["null", null],
+    ["number", 42],
+    ["boolean", false],
+    ["object", {}],
+    ["array", []],
+    ["blank", ""],
+    ["non-UUID", "private-invalid-lease-token"],
+    ["truncated UUID", leaseToken.slice(1)],
+    ["unhyphenated UUID", leaseToken.replaceAll("-", "")],
     ["non-hex UUID", leaseToken.replace("4", "g")],
-    ["whitespace UUID", ` ${leaseToken}`], ["newline UUID", `${leaseToken}\n`],
+    ["whitespace UUID", ` ${leaseToken}`],
+    ["newline UUID", `${leaseToken}\n`],
   ].map(([label, token]): [string, unknown] => [
-    `${label} lease token`, { ...sync, leaseToken: token, jobId: "private-job-id" },
+    `${label} lease token`,
+    { ...sync, leaseToken: token, jobId: "private-job-id" },
   ]),
   ["missing announcement action", { kind: "announcement", idempotencyKey: "k" }],
   ["null announcement action", { ...announcement, action: null }],
@@ -88,7 +117,8 @@ describe("queue envelope batch isolation", () => {
 
   describe.each(["ack", "retry"] as const)("healthy sibling receives %s", (disposition) => {
     it.each(malformed)("rejects %s before handlers and continues", async (_label, body) => {
-      if (disposition === "retry") handlers.sync.mockResolvedValue({ retryInSeconds: 10 } satisfies Outcome);
+      if (disposition === "retry")
+        handlers.sync.mockResolvedValue({ retryInSeconds: 10 } satisfies Outcome);
       const invalid = message(body);
       const healthy = message(sync);
       const deps = dependencies();
@@ -117,21 +147,108 @@ describe("queue envelope batch isolation", () => {
     });
   });
 
-  it.each([sync, announcement, role])("preserves ledger transitions for a valid carrier", async (body) => {
-    const tracked = { ...body, jobId: "job-1", extraMetadata: { unknown: true } };
-    const m = message(tracked);
-    const deps = dependencies();
-    await consume({ messages: [m] }, deps);
-    expect(m.ack).toHaveBeenCalledExactlyOnceWith();
-    expect(deps.ledger.reserved).toHaveBeenCalledExactlyOnceWith("job-1");
-    expect(deps.ledger.dequeued).toHaveBeenCalledExactlyOnceWith("job-1");
+  it("preserves a known retry deadline between malformed and completed siblings", async () => {
+    const now = new Date("2030-01-01T00:00:00Z");
+    handlers.sync.mockRejectedValueOnce(
+      new SyncRetryPersistenceError(
+        new Date(now.getTime() + 37_000),
+        new Error("result write failed"),
+      ),
+    );
+    const invalid = message({ ...sync, eventKey: null, jobId: "untrusted-job" });
+    const waiting = message({ ...sync, jobId: "waiting-job" });
+    const completed = message({ ...sync, eventKey: "event-2", jobId: "completed-job" });
+    const needsSync = vi.fn(async () => true);
+    const dispatchPending = vi.fn(async () => {});
+    const deps = { ...dependencies(), now: () => now, needsSync, dispatchPending };
+
+    await consume({ messages: [invalid, waiting, completed] }, deps);
+
+    expect(invalid.ack).toHaveBeenCalledExactlyOnceWith();
+    expect(invalid.retry).not.toHaveBeenCalled();
+    expect(waiting.retry).toHaveBeenCalledExactlyOnceWith({ delaySeconds: 37 });
+    expect(waiting.ack).not.toHaveBeenCalled();
+    expect(completed.ack).toHaveBeenCalledExactlyOnceWith();
+    expect(completed.retry).not.toHaveBeenCalled();
+    expect(handlers.sync).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(deps.ledger.reserved).mock.calls).toEqual([
+      ["waiting-job"],
+      ["completed-job"],
+    ]);
+    expect(deps.ledger.released).toHaveBeenCalledExactlyOnceWith("waiting-job", expect.any(Date));
+    expect(deps.ledger.dequeued).toHaveBeenCalledExactlyOnceWith("completed-job");
     expect(deps.ledger.failed).not.toHaveBeenCalled();
-    expect(console.warn).not.toHaveBeenCalled();
+    expect(deps.lock.release).toHaveBeenCalledExactlyOnceWith(uniqueKey("event-2"), leaseToken);
+    expect(needsSync).toHaveBeenCalledExactlyOnceWith("event-2");
+    expect(dispatchPending).toHaveBeenCalledExactlyOnceWith("event-2", expect.any(AbortSignal));
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith("queue malformed message discarded");
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      "sync retry result persistence failed",
+      "sync retry result could not be persisted; request remains fenced",
+    );
   });
 
+  describe.each([false, true])("synthetic probe QA enabled: %s", (probeEnabled) => {
+    it.each([
+      { kind: "alert-probe" },
+      { kind: "alert-probe", probeId: "11111111-1111-4111-8111-111111111111" },
+    ])(
+      "admits only the synthetic carrier without ledger, lock or bot operations %#",
+      async (body) => {
+        const m = message(body);
+        const deps = dependencies();
+        await consume({ messages: [m] }, { ...deps, probeEnabled });
+        expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+        expect(m.retry).not.toHaveBeenCalled();
+        expect(handlers.sync).not.toHaveBeenCalled();
+        expect(handlers.internal).not.toHaveBeenCalled();
+        for (const operation of Object.values(deps.ledger))
+          expect(operation).not.toHaveBeenCalled();
+        for (const operation of Object.values(deps.lock)) expect(operation).not.toHaveBeenCalled();
+        expect(console.warn).not.toHaveBeenCalled();
+        if (probeEnabled) {
+          const critical = vi
+            .mocked(console.error)
+            .mock.calls.filter(([line]) => String(line).startsWith('{"level":"critical"'));
+          expect(critical).toHaveLength(1);
+          expect(JSON.parse(String(critical[0]![0]))).toMatchObject({
+            event: "queue.failing",
+            job: "AlertProbe",
+            attempts: 1,
+          });
+          expect(JSON.parse(String(critical[0]![0])).probeId).toBe(body.probeId);
+        } else {
+          expect(console.error).not.toHaveBeenCalled();
+        }
+      },
+    );
+  });
+
+  it.each([sync, announcement, role])(
+    "preserves ledger transitions for a valid carrier",
+    async (body) => {
+      const tracked = { ...body, jobId: "job-1", extraMetadata: { unknown: true } };
+      const m = message(tracked);
+      const deps = dependencies();
+      await consume({ messages: [m] }, deps);
+      expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+      expect(deps.ledger.reserved).toHaveBeenCalledExactlyOnceWith("job-1");
+      expect(deps.ledger.dequeued).toHaveBeenCalledExactlyOnceWith("job-1");
+      expect(deps.ledger.failed).not.toHaveBeenCalled();
+      expect(console.warn).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([undefined, "ABCDEF12-3456-7890-ABCD-EF1234567890"])(
-    "accepts a legacy absent token or a canonical UUID without constraining opaque keys", async (token) => {
-      const body = { kind: "sync-event", eventKey: "", idempotencyKey: "opaque", jobId: "legacy-job", leaseToken: token };
+    "accepts a legacy absent token or a canonical UUID without constraining opaque keys",
+    async (token) => {
+      const body = {
+        kind: "sync-event",
+        eventKey: "",
+        idempotencyKey: "opaque",
+        jobId: "legacy-job",
+        leaseToken: token,
+      };
       const m = message(body);
       const deps = dependencies();
       await consume({ messages: [m] }, deps);
@@ -150,7 +267,11 @@ describe("queue envelope batch isolation", () => {
     const messages = [
       message({ kind: "sync-event", eventKey: "", idempotencyKey: "", jobId: undefined }),
       message({ kind: "announcement", idempotencyKey: "", action: { channelKey: "", body: "" } }),
-      message({ kind: "role-assign", idempotencyKey: null, action: { userId: "opaque", roleKey: "" } }),
+      message({
+        kind: "role-assign",
+        idempotencyKey: null,
+        action: { userId: "opaque", roleKey: "" },
+      }),
     ];
     await consume({ messages }, dependencies());
     for (const m of messages) expect(m.ack).toHaveBeenCalledExactlyOnceWith();
@@ -159,16 +280,18 @@ describe("queue envelope batch isolation", () => {
     expect(console.warn).not.toHaveBeenCalled();
   });
 
-  it.each([["sync", sync], ["announcement", announcement], ["role", role]])(
-    "preserves old %s messages without jobId", async (_label, body) => {
-      const m = message(body);
-      const deps = dependencies();
-      await consume({ messages: [m] }, deps);
-      expect(m.ack).toHaveBeenCalledExactlyOnceWith();
-      expect(m.retry).not.toHaveBeenCalled();
-      expect(handlers.sync.mock.calls.length + handlers.internal.mock.calls.length).toBe(1);
-      for (const operation of Object.values(deps.ledger)) expect(operation).not.toHaveBeenCalled();
-      expect(console.warn).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    ["sync", sync],
+    ["announcement", announcement],
+    ["role", role],
+  ])("preserves old %s messages without jobId", async (_label, body) => {
+    const m = message(body);
+    const deps = dependencies();
+    await consume({ messages: [m] }, deps);
+    expect(m.ack).toHaveBeenCalledExactlyOnceWith();
+    expect(m.retry).not.toHaveBeenCalled();
+    expect(handlers.sync.mock.calls.length + handlers.internal.mock.calls.length).toBe(1);
+    for (const operation of Object.values(deps.ledger)) expect(operation).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
+  });
 });

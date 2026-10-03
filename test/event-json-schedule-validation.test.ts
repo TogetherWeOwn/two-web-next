@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
+import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -38,7 +38,7 @@ const baseEnv: Env = {
 describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   const store = createMemorySessionStore();
-  const sent: SyncMessage[] = [];
+  const sent: QueueMessage[] = [];
   let env: Env;
 
   beforeAll(async () => {
@@ -47,37 +47,65 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
       ...baseEnv,
       ADMIN_DB: fixture.db,
       SESSION_STORE: store,
-      EVENT_SYNC_QUEUE: { send: async (message: SyncMessage) => void sent.push(message) },
+      SYNC_EVENT_QUEUE: {
+        send: async (message: unknown) => {
+          sent.push(message as QueueMessage);
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+        },
+      },
     } as unknown as Env;
   });
-  afterAll(async () => { await fixture?.dispose(); });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   beforeEach(async () => {
     await fixture.reset();
     sent.length = 0;
     await fixture.db.insert(events).values({
-      eventKey: EVENT_KEY, title: "Game night",
-      startsAt: new Date(STARTS_ISO), endsAt: new Date(ENDS_ISO),
-      timezone: "Europe/London", status: "draft",
+      eventKey: EVENT_KEY,
+      title: "Game night",
+      startsAt: new Date(STARTS_ISO),
+      endsAt: new Date(ENDS_ISO),
+      timezone: "Europe/London",
+      status: "draft",
     });
   });
 
   async function cookieFor(moderator = true) {
     const token = newSessionToken();
     await store.create({
-      tokenHash: await hashToken(token), userId: "json-schedule-mod", username: "Moderator",
-      avatar: null, member: true, moderator, expiresAt: new Date(Date.now() + 3600_000),
+      tokenHash: await hashToken(token),
+      userId: "json-schedule-mod",
+      username: "Moderator",
+      avatar: null,
+      member: true,
+      moderator,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    return (await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-      path: "/", secure: true, httpOnly: true, sameSite: "Lax",
-    })).split(";")[0]!;
+    return (
+      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
   }
 
-  const jsonHeaders = async () => ({ cookie: await cookieFor(), origin: APP_URL, "content-type": "application/json" });
-  const post = (body: unknown) => jsonHeaders().then((headers) =>
-    app.request("/events", { method: "POST", headers, body: JSON.stringify(body) }, env));
-  const patch = (key: string, body: unknown) => jsonHeaders().then((headers) =>
-    app.request(`/events/${key}`, { method: "PATCH", headers, body: JSON.stringify(body) }, env));
+  const jsonHeaders = async () => ({
+    cookie: await cookieFor(),
+    origin: APP_URL,
+    "content-type": "application/json",
+  });
+  const post = (body: unknown) =>
+    jsonHeaders().then((headers) =>
+      app.request("/events", { method: "POST", headers, body: JSON.stringify(body) }, env),
+    );
+  const patch = (key: string, body: unknown) =>
+    jsonHeaders().then((headers) =>
+      app.request(`/events/${key}`, { method: "PATCH", headers, body: JSON.stringify(body) }, env),
+    );
   const snapshot = async () => ({
     events: await fixture.db.select().from(events),
     audit: await fixture.db.select().from(activityLog),
@@ -92,9 +120,16 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
 
   it("POST without ends_at is a 422 field error with no row", async () => {
     const before = await snapshot();
-    const res = await post({ title: "JSON schedule proof", starts_at: SCHEDULE.starts_at, timezone: SCHEDULE.timezone });
+    const res = await post({
+      title: "JSON schedule proof",
+      starts_at: SCHEDULE.starts_at,
+      timezone: SCHEDULE.timezone,
+    });
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: { ends_at: "When does it end?" } });
+    expect(await res.json()).toEqual({
+      error: "invalid",
+      fields: { ends_at: "When does it end?" },
+    });
     await expectUnchanged(before);
   });
 
@@ -103,17 +138,31 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
     ["equal to the start", "2026-11-04 20:00"],
   ])("POST with the end %s is a 422 field error with no row", async (_, ends_at) => {
     const before = await snapshot();
-    const res = await post({ title: "JSON schedule proof", starts_at: SCHEDULE.starts_at, ends_at, timezone: SCHEDULE.timezone });
+    const res = await post({
+      title: "JSON schedule proof",
+      starts_at: SCHEDULE.starts_at,
+      ends_at,
+      timezone: SCHEDULE.timezone,
+    });
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: { ends_at: "The end is after the start." } });
+    expect(await res.json()).toEqual({
+      error: "invalid",
+      fields: { ends_at: "The end is after the start." },
+    });
     await expectUnchanged(before);
   });
 
   it("PATCH with the end not after the start is a 422 field error with no write", async () => {
     const before = await snapshot();
-    const res = await patch(EVENT_KEY, { starts_at: SCHEDULE.starts_at, ends_at: "2026-11-04 19:00" });
+    const res = await patch(EVENT_KEY, {
+      starts_at: SCHEDULE.starts_at,
+      ends_at: "2026-11-04 19:00",
+    });
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: { ends_at: "The end is after the start." } });
+    expect(await res.json()).toEqual({
+      error: "invalid",
+      fields: { ends_at: "The end is after the start." },
+    });
     await expectUnchanged(before);
   });
 
@@ -121,7 +170,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
     const before = await snapshot();
     const res = await patch(EVENT_KEY, { ends_at: "2026-11-04 19:00" });
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: { ends_at: "The end is after the start." } });
+    expect(await res.json()).toEqual({
+      error: "invalid",
+      fields: { ends_at: "The end is after the start." },
+    });
     await expectUnchanged(before);
     expect((await stored())?.endsAt.toISOString()).toBe(ENDS_ISO);
   });
@@ -133,7 +185,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
       await fixture.client.unsafe(
         `INSERT INTO events (event_key, title, starts_at, ends_at) VALUES ('01JNULLENDS00000000000000', 'Null end', '2026-11-04T20:00:00Z', NULL)`,
       );
-    } catch (err) { caught = err; }
+    } catch (err) {
+      caught = err;
+    }
     expect(caught).toMatchObject({ code: "23502" });
     expect(String((caught as { message?: unknown })?.message ?? caught)).toContain("ends_at");
     expect(await fixture.db.select().from(events)).toEqual(before);
@@ -142,7 +196,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON schedule validation (agen
   it("PATCH omitting both wall times keeps the stored schedule", async () => {
     const res = await patch(EVENT_KEY, { title: "Renamed" });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ data: { title: "Renamed", starts_at: STARTS_ISO, ends_at: ENDS_ISO } });
+    expect(await res.json()).toMatchObject({
+      data: { title: "Renamed", starts_at: STARTS_ISO, ends_at: ENDS_ISO },
+    });
     const row = await stored();
     expect(row?.startsAt.toISOString()).toBe(STARTS_ISO);
     expect(row?.endsAt.toISOString()).toBe(ENDS_ISO);

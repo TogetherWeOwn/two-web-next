@@ -7,9 +7,9 @@ Transitions are proved against real SQL in `test/queue-redrive.test.ts`.
 
 ## Rules
 
-- The worker gate in `runbook.md` applies: `src/jobs/worker.ts` uses `notWired`
-  adapters, so do not redrive real messages until the Director accepts a reviewed
-  adapter fix. Redrive rehearsal evidence is the test file, not live replay.
+- The worker gate in `runbook.md` applies: do not redrive real messages until
+  the worker's `BOT_*` bindings are confirmed present (missing config fails jobs
+  terminally). Redrive rehearsal evidence is the test file, not live replay.
 - A failed row is diagnostic identity only (`id`, `job_id`, `kind`, `key`,
   `reason`, `failed_at`) — no payload, no original bot idempotency key. Never
   reconstruct an announcement/role action from a key or fabricate a key.
