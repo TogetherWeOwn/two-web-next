@@ -112,7 +112,11 @@ describe("admin guard matrix (override seams, no DB)", () => {
       env,
     );
     expect(res.status).toBe(503);
-    expect(await res.text()).toContain("Admin temporarily unavailable");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.get("vary")).toContain("Accept");
+    const body = await res.text();
+    expect(body).toContain("We will be right back");
+    expect(body).toContain('<a class="brand" href="/"');
   });
 
   it("moderator passes with private, no-store", async () => {

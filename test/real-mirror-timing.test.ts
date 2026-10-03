@@ -6,15 +6,15 @@
 import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import type { SyncMessage } from "../src/events/sync";
 import { consume } from "../src/jobs/consumer";
-import { pgEventStore } from "../src/jobs/event-store-pg";
+import { pgEventStore } from "../src/jobs/events";
+import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { BotTransportError } from "../src/jobs/types";
-import type { BotClient, QueueLedger, UniqueLock } from "../src/jobs/types";
+import type { BotClient, QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
   createMemberDataFixture,
@@ -22,9 +22,13 @@ import {
   type MemberDataFixture,
 } from "./helpers/member-data-db";
 
+vi.mock("postgres", async () => {
+  const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
+  return { ...actual, default: vi.fn(actual.default) };
+});
+
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
-const LEASE = "11111111-1111-4111-8111-111111111111";
 
 describe.skipIf(!process.env.DATABASE_URL)(
   "real mirror stamps and sync timing (agent-testdb)",
@@ -36,7 +40,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     // (see test/helpers/jobs-db.ts), so the adapter gets its own raw pool on the same schema.
     let jobsSql: postgres.Sql;
     const store = createMemorySessionStore();
-    const sent: SyncMessage[] = [];
+    const sent: QueueMessage[] = [];
     const env = {
       APP_URL,
       SESSION_SECRET,
@@ -49,7 +53,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
       get ADMIN_DB() {
         return db;
       },
-      EVENT_SYNC_QUEUE: { send: async (m: SyncMessage) => void sent.push(m) },
+      DB: { connectionString: "" },
+      SYNC_EVENT_QUEUE: {
+        send: async (m: unknown) => {
+          sent.push(m as QueueMessage);
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+        },
+      },
     } as unknown as Env;
 
     beforeAll(async () => {
@@ -57,14 +67,23 @@ describe.skipIf(!process.env.DATABASE_URL)(
       db = fixture.db;
       client = fixture.client;
       const url = testDatabaseUrl(process.env.DATABASE_URL!);
-      jobsSql = postgres(url.href, {
+      const realPostgres = (await vi.importActual<{ default: typeof postgres }>("postgres"))
+        .default;
+      const options = {
         max: 2,
         port: 5432,
         connect_timeout: 5,
         password: () => url.password,
         connection: { search_path: fixture.schemaName },
         onnotice: () => {},
-      });
+      };
+      (env as unknown as { DB: { connectionString: string } }).DB.connectionString = url.href;
+      // Producer pools go to the same disposable schema as the fixture.
+      vi.mocked(postgres).mockImplementation(((raw: string, opts: postgres.Options<{}>) => {
+        testDatabaseUrl(raw);
+        return realPostgres(raw, { ...opts, ...options });
+      }) as typeof postgres);
+      jobsSql = realPostgres(url.href, options);
     });
     beforeEach(async () => {
       await fixture.reset();
@@ -72,6 +91,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       sent.length = 0;
     });
     afterAll(async () => {
+      vi.mocked(postgres).mockReset();
       await jobsSql?.end({ timeout: 1 });
       await fixture?.dispose();
     });
@@ -125,14 +145,6 @@ describe.skipIf(!process.env.DATABASE_URL)(
       return ev!;
     }
 
-    const lock = (): UniqueLock => ({ acquire: async () => LEASE, release: async () => {} });
-    const ledger = (): QueueLedger => ({
-      enqueued: async () => {},
-      reserved: async () => {},
-      released: async () => {},
-      dequeued: async () => {},
-      failed: async () => {},
-    });
     type Tracked = {
       body: unknown;
       attempts: number;
@@ -141,9 +153,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       ack(): void;
       retry(o?: { delaySeconds?: number }): void;
     };
-    const message = (eventKey: string, attempts: number): Tracked => {
+    const message = (produced: QueueMessage, attempts: number): Tracked => {
       const m: Tracked = {
-        body: { kind: "sync-event", eventKey, idempotencyKey: "same-key", leaseToken: LEASE },
+        body: produced,
         attempts,
         acked: false,
         retried: null,
@@ -156,10 +168,16 @@ describe.skipIf(!process.env.DATABASE_URL)(
       };
       return m;
     };
-    const run = (m: Tracked, bot: BotClient) =>
+    const run = (m: Tracked, bot: BotClient, offsetSeconds = 60) =>
       consume(
         { messages: [m] },
-        { bot, events: pgEventStore(jobsSql), lock: lock(), ledger: ledger() },
+        {
+          bot,
+          events: pgEventStore(jobsSql),
+          lock: pgUniqueLock(jobsSql),
+          ledger: pgQueueLedger(jobsSql),
+          now: () => new Date(Date.now() + offsetSeconds * 1000),
+        },
       );
     const rsvpRow = async (eventId: number) =>
       (await db.select().from(rsvps).where(eq(rsvps.eventId, eventId)))[0]!;
@@ -175,7 +193,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       });
       // Write-back is enqueued once, with the key that every retry must reuse.
       expect(sent).toHaveLength(1);
-      expect(sent[0]).toMatchObject({ eventKey: ev.eventKey, action: "event.upsert" });
+      expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: ev.eventKey });
       const before = await rsvpRow(ev.id);
 
       // Attempt 1: bot down. Transport error is a wait (release), never a failure.
@@ -186,7 +204,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           throw new BotTransportError("bot unreachable");
         },
       } as unknown as BotClient;
-      const first = message(ev.eventKey, 1);
+      const first = message(sent[0]!, 1);
       await run(first, down);
       expect(first.acked).toBe(false);
       expect(first.retried).toBe(10);
@@ -208,10 +226,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
           return { ok: true, requestId: null, discordEventId: "discord-evt-1" };
         },
       } as unknown as BotClient;
-      const second = message(ev.eventKey, 2);
-      await run(second, up);
+      const second = message(sent[0]!, 2);
+      await run(second, up, 600);
       expect(second.acked).toBe(true);
-      expect(calls).toEqual(["same-key", "same-key"]);
+      const produced = sent[0] as Extract<QueueMessage, { kind: "sync-event" }>;
+      expect(calls).toEqual([produced.idempotencyKey, produced.idempotencyKey]);
 
       // Recovery: event carries the Discord id; the same RSVP row is stamped and the member view is synced.
       const after = await rsvpRow(ev.id);
@@ -231,7 +250,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const up: BotClient = {
         upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "discord-evt-2" }),
       } as unknown as BotClient;
-      await run(message(ev.eventKey, 1), up);
+      await run(message(sent.at(-1)!, 1), up);
       expect((await rsvpRow(ev.id)).syncedToDiscordAt).not.toBeNull();
 
       // Re-answer: any change makes the mirror stale again (null stamp on the same row).
@@ -241,7 +260,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
       });
       expect(await pgEventStore(jobsSql).staleEventKeys()).toEqual([ev.eventKey]);
-      await run(message(ev.eventKey, 1), up);
+      await run(message(sent.at(-1)!, 1), up);
       expect((await rsvpRow(ev.id)).syncedToDiscordAt).not.toBeNull();
       expect(await pgEventStore(jobsSql).staleEventKeys()).toEqual([]);
     });

@@ -138,6 +138,11 @@ const event: PublicEvent = {
   createdAt: new Date(),
   updatedAt: new Date(),
   icsSequence: 0n,
+  syncRevision: 1,
+  syncedRevision: 0,
+  agentGrantId: null,
+  proofMarker: null,
+  agentVersion: 1,
 };
 function browser(
   state: "open" | "going" | "going-full" | "waitlisted" | "closed" | "full" = "open",

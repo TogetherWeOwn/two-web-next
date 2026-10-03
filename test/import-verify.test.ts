@@ -3,10 +3,12 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { lookup } from "node:dns/promises";
 import { fileURLToPath, URL } from "node:url";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  assertDistinctDatabases,
   compareKeys,
   quoteIdentifier,
   renderMarkdown,
@@ -126,6 +128,56 @@ it("CLI rejects required/invalid channel binding before connecting, without leak
   }
 });
 
+it("static guard refuses normalized equivalent endpoints and defers distinct ones", () => {
+  const base = "postgres://agent_test@agent-testdb:5432/two_web_next";
+  for (const [legacy, next] of [
+    [base, base],
+    [base, "postgresql://agent_test@AGENT-TESTDB:5432/two_web_next"],
+    [
+      "postgres://agent_test@agent-testdb/two_web_next",
+      "postgres://agent_test@agent-testdb:5432/two_web_next",
+    ],
+    ["postgres://agent_test@agent-testdb:5432/%74wo_web_next", base],
+    // Roles and query parameters never distinguish one database from another.
+    [base, "postgres://other_role@agent-testdb:5432/two_web_next"],
+    [base, `${base}?application_name=verify`],
+  ] as const) {
+    expect(() => assertDistinctDatabases(legacy, next)).toThrow("same_database");
+  }
+  for (const [legacy, next] of [
+    [base, "postgres://agent_test@agent-testdb:5432/other_db"],
+    [base, "postgres://agent_test@other.invalid:5432/two_web_next"],
+    [base, "postgres://agent_test@agent-testdb:5433/two_web_next"],
+  ] as const) {
+    expect(() => assertDistinctDatabases(legacy, next)).not.toThrow();
+  }
+  expect(() => assertDistinctDatabases("not a url", base)).toThrow(
+    "invalid_connection_environment",
+  );
+});
+
+it("CLI refuses same-database URLs with exit 2 before opening any connection", () => {
+  // Unreachable hosts prove no connection is attempted: a connect-first
+  // implementation would fail with operation_failed after DNS/connect errors.
+  const legacy = "postgres://agent_test@unreachable.invalid:5432/two_web_next";
+  for (const next of [
+    legacy,
+    "postgresql://agent_test@UNREACHABLE.INVALID/two_web_next",
+    "postgres://agent_test@unreachable.invalid:5432/%74wo_web_next",
+  ] as const) {
+    const run = spawnSync(process.execPath, [script, "--cutoff", cutoff], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: { LEGACY_DATABASE_URL: legacy, DATABASE_URL: next },
+    });
+    expect(run.status).toBe(2);
+    expect(run.stderr.trim()).toBe("Verification failed: same_database");
+    expect(run.stdout).toBe("");
+    expect(run.stderr).not.toContain("agent_test");
+    expect(run.stderr).not.toContain("unreachable.invalid");
+  }
+});
+
 it("markdown escapes keys as data and never includes member payloads", () => {
   const report: VerificationReport = {
     version: 1,
@@ -226,6 +278,15 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     await admin.unsafe(`INSERT INTO "${destination.schemaName}".samples
       SELECT id, part, lower(label), properties::jsonb, instant AT TIME ZONE 'UTC' FROM "${sourceSchema}".samples`);
   });
+  // The two sides compare fixtures in separate schemas of one test database,
+  // so they must stay distinct URL strings resolving to the same live server:
+  // an IP literal for the legacy side (resolved at runtime, never hardcoded).
+  let legacyConnectionUrl = databaseUrl!;
+  beforeAll(async () => {
+    const url = new URL(databaseUrl!);
+    url.hostname = await lookup(url.hostname, { family: 4 }).then(({ address }) => address);
+    legacyConnectionUrl = url.href;
+  });
   const runCli = async (tableMap = map, args: string[] = [], connectionUrl = databaseUrl!) => {
     const path = join(scratch, "map.json");
     await writeFile(path, JSON.stringify(tableMap));
@@ -233,12 +294,25 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       encoding: "utf8",
       timeout: 30000,
       env: {
-        LEGACY_DATABASE_URL: connectionUrl,
+        LEGACY_DATABASE_URL: legacyConnectionUrl,
         DATABASE_URL: connectionUrl,
         PGPASSWORD: "must-not-inherit",
       },
     });
   };
+  it("same URL twice against the live database exits 2 before connecting", async () => {
+    // Identical strings hit the normalized-identity fast path. Pre-connect
+    // ordering is pinned by the unreachable-host test above: only the guard
+    // before connect() can produce same_database there (a connect-first
+    // ordering would fail with operation_failed), so this live refusal issues
+    // zero queries by the same code path.
+    const run = await runCli(map, [], legacyConnectionUrl);
+    expect(run.status, run.stderr).toBe(2);
+    expect(run.stderr.trim()).toBe("Verification failed: same_database");
+    expect(run.stdout).toBe("");
+    // Distinct strings to the same live server stay on the normal path.
+    expect((await runCli()).status).toBe(0);
+  });
   it("identical rows exit 0 across batches and emit JSON plus markdown without fields", async () => {
     const jsonPath = join(scratch, "report.json");
     const mdPath = join(scratch, "report.md");

@@ -510,10 +510,10 @@ suite("audit import into the migrated Next schema (disposable test DB only)", ()
       expect(rows[0]!.disabled_at).not.toBeNull(); // Already consumed in legacy.
       expect(rows[1]!.disabled_at).not.toBeNull(); // Disabled in legacy.
       expect(rows[2]!.disabled_at).toBeNull(); // Proven unused.
-      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      expect(await fixture.client`SELECT event_key FROM events`).toEqual([]);
       const denied = await create(spentToken, "fresh-spent-key");
       expect(denied).toMatchObject({ status: 403, body: { reason: "grant_disabled" } });
-      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      expect(await fixture.client`SELECT event_key FROM events`).toEqual([]);
       expect(
         await fixture.client`SELECT key FROM agent_event_idempotency_keys WHERE key = 'fresh-spent-key'`,
       ).toEqual([]);
@@ -564,7 +564,7 @@ suite("audit import into the migrated Next schema (disposable test DB only)", ()
           status: 403,
           body: { reason: "grant_disabled" },
         });
-        expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+        expect(await fixture.client`SELECT event_key FROM events`).toEqual([]);
         expect(
           await fixture.client`SELECT key FROM agent_event_idempotency_keys WHERE key IN ('fresh-history-key', 'synthetic-spent-old-key')`,
         ).toEqual([]);
@@ -585,7 +585,7 @@ suite("audit import into the migrated Next schema (disposable test DB only)", ()
         status: 403,
         body: { reason: "grant_disabled" },
       });
-      expect(await fixture.client`SELECT event_key FROM agent_events`).toEqual([]);
+      expect(await fixture.client`SELECT event_key FROM events`).toEqual([]);
     } finally {
       await legacy.unsafe(
         `ALTER TABLE "${sourceSchema}".events RENAME COLUMN unknown_ownership TO agent_grant_id`,

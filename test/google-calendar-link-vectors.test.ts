@@ -19,6 +19,9 @@ const row = (overrides: Partial<EventRow> = {}): EventRow => ({
   discordEventId: null,
   discordSyncFailedAt: null,
   discordSyncFailureCode: null,
+  agentGrantId: null,
+  proofMarker: null,
+  agentVersion: 1,
   createdBy: null,
   rsvpOpen: true,
   recurrenceFrequency: null,
@@ -29,6 +32,8 @@ const row = (overrides: Partial<EventRow> = {}): EventRow => ({
   createdAt: new Date("2026-07-01T12:00:00Z"),
   updatedAt: new Date("2026-07-01T12:00:00Z"),
   icsSequence: 0n,
+  syncRevision: 1,
+  syncedRevision: 0,
   ...overrides,
 });
 

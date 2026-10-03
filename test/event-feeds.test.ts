@@ -3,11 +3,11 @@
 // route-inventory: GET /events/:file{.+\.ics}
 // W9 calendar feeds: byte-level fixtures pinned to two-web's EventIcs/EventRss/EventGoogleCalendar
 // output, plus route tests (agent-testdb; skipped without DATABASE_URL).
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
-import { createDb } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import {
   IcsSequenceRangeError,
@@ -189,10 +189,21 @@ describe("feed builders (byte fixtures)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: MemberDataFixture["db"];
+  beforeAll(async () => {
+    // Replay every canonical migration into a guarded, owned schema (never public).
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
   const env = {
     APP_URL,
-    ADMIN_DB: db,
+    get ADMIN_DB() {
+      return db;
+    },
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
   } as unknown as Env;
   const req = (path: string, init: RequestInit = {}) => app.request(path, init, env);

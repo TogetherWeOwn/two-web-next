@@ -10,9 +10,10 @@
 // the write path the read tests cannot: the admin surface exposes zero write
 // routes for join_attempts, and every funnel row flows through the single
 // controller insert (recordAttempt in src/join/service.ts, called only from
-// src/join/route.ts). The only deleter is the W13 retention prune
-// (age-only, src/jobs/postgres.ts). Test-only: the policy holds, so no
-// product change ships here.
+// src/join/route.ts). The deleters are the W13 retention prune (age-only,
+// src/jobs/postgres.ts) and the TOG-12548 member-erasure operator command
+// (subject-scoped `where discord_id`, src/member-erasure.ts). Test-only: the
+// policy holds, so no product change ships here.
 import { readFileSync, readdirSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -88,9 +89,11 @@ describe("join-attempt write policy: single controller insert (DB-free source al
     expect(read("src/join/service.ts").match(/INSERT INTO join_attempts/g)).toHaveLength(1);
   });
 
-  it("exactly one age-only deleter, in the retention prune store", () => {
+  it("exactly two deleters: the age-only retention prune and the subject-scoped member erasure", () => {
     const deleters = filesMatching(/delete from join_attempts/);
-    expect(deleters).toEqual(["src/jobs/postgres.ts"]);
+    expect(deleters).toEqual(["src/jobs/postgres.ts", "src/member-erasure.ts"]);
+    // The erasure delete is subject-scoped (one member's rows), never age-based.
+    expect(read("src/member-erasure.ts")).toMatch(/delete from join_attempts where discord_id = /);
   });
 
   it("no UPDATE of join_attempts anywhere in src/", () => {
