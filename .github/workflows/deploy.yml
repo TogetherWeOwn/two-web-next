@@ -79,6 +79,32 @@ jobs:
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators
+      # Staging web schema (TOG-12965). The Worker's /up gate and event queries
+      # need the migrations of the SHA being deployed, so apply them after every
+      # check has passed and before the first Cloudflare mutation: a failed plan,
+      # apply or verify fails the job here and nothing reaches Cloudflare. Same
+      # ci/neon-migrate.mjs as db-migrate.yml (journal-prefix check, advisory
+      # lock, PITR timestamp, zero-pending post-check). Staging only: production
+      # is never migrated from this workflow.
+      - name: Plan staging web migrations (read-only journal diff)
+        run: node ci/neon-migrate.mjs plan
+        env: &staging-migration-env
+          MIGRATION_TARGET: staging
+          # `staging` Environment secret of this job; no DATABASE_URL fallback.
+          NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          # workflow_run's GITHUB_SHA is main's tip; the receipt must name the CI-verified checkout.
+          GITHUB_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - name: Re-verify exact-SHA full CI before staging migration
+        # DDL is a remote mutation too; the checks above may outlive the accepted CI attempt.
+        run: node ci/staging-deploy-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Apply staging web migrations (advisory lock, PITR timestamp)
+        run: node ci/neon-migrate.mjs apply
+        env: *staging-migration-env
+      - name: Verify zero pending staging web migrations
+        run: node ci/neon-migrate.mjs verify
+        env: *staging-migration-env
       - name: Ensure queues exist
         # Idempotent: "already exists" is fine; a real permission error surfaces at deploy.
         run: |
