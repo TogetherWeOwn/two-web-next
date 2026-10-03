@@ -1,0 +1,45 @@
+// two-web-next-kit-preview: the SvelteKit 3 spike front (TOG-12247). A preview
+// Worker on workers.dev only: no route, no custom domain, no tail consumer, no
+// queue consumer and no cron. Never the staging or production Worker.
+// test/jobs-worker-config.test.ts pins those properties.
+// Tear down with `npx wrangler delete --config web/wrangler.jsonc`.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "two-web-next-kit-preview",
+  // adapter-cloudflare 8 writes the Worker and its assets here.
+  "main": ".svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "workers_dev": true,
+  "preview_urls": false,
+  // Every request reaches the Worker first, so public/ files (copied in by
+  // scripts/copy-public.mjs) pass the Hono host guard and headers. Kit's own
+  // /_app/* output is still served by the adapter before hooks run.
+  "assets": {
+    "directory": ".svelte-kit/cloudflare",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // Producers only, onto the jobs preview Worker's own queues (wrangler.jobs.jsonc
+  // env.preview), so a web write here is consumed by two-web-jobs-preview.
+  "queues": {
+    "producers": [
+      { "queue": "two-web-jobs-preview-sync-event", "binding": "SYNC_EVENT_QUEUE" },
+      { "queue": "two-web-jobs-preview-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
+    ]
+  },
+  // The staging Hyperdrive: the preview reads the same data as next.togetherweown.com,
+  // which is what the markup-parity E2E (ci/kit-preview-e2e.mjs) compares against.
+  "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],
+  // No secrets are set on this Worker: sign-in and other secret-backed Hono
+  // routes fail closed here, and /events/past needs none.
+  "vars": {
+    "APP_URL": "https://two-web-next-kit-preview.5150.workers.dev",
+    "FEATURED_IMAGE_HOSTS": "",
+    "DISCORD_CLIENT_ID": "1539711683898118154",
+    "DISCORD_GUILD_ID": "326474832151838730",
+    "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+    "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
+  }
+}

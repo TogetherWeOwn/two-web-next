@@ -90,7 +90,8 @@ import { feedUrl, googleCalendarUrl, rssUrl, webcalUrl } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 
-const fmt = (d: Date, tz: string): string => {
+// Exported for the SvelteKit spike page (web/, TOG-12247): one formatter, one markup contract.
+export const fmt = (d: Date, tz: string): string => {
   try {
     return new Intl.DateTimeFormat("en-GB", {
       dateStyle: "full",
