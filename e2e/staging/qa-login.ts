@@ -11,7 +11,7 @@ import {
   QA_LOGIN_MAX_ATTEMPTS,
   sleep,
 } from "../qa-login-retry.mjs";
-import { memberStorageState, moderatorStorageState } from "./fixtures";
+import { emptyStorageState, memberStorageState, moderatorStorageState } from "./fixtures";
 
 const stagingOrigin = requireStagingOrigin(STAGING_APP_URL);
 
@@ -29,7 +29,16 @@ async function login(identity: "qa-member" | "qa-moderator", path: string): Prom
   for (let attempt = 1; attempt <= QA_LOGIN_MAX_ATTEMPTS; attempt++) {
     const browser = await chromium.launch();
     try {
-      const context = await browser.newContext({ baseURL: stagingOrigin });
+      // Explicitly empty storage state: a bare newContext() inherits the
+      // config-level storageState file, which does not exist on a fresh
+      // checkout (nothing writes it before the first login) — Playwright
+      // then throws ENOENT before the login POST ever runs. The login needs
+      // no cookies: it authenticates with the QA header and reads the
+      // Set-Cookie session from the response jar.
+      const context = await browser.newContext({
+        baseURL: stagingOrigin,
+        storageState: emptyStorageState,
+      });
       // Same-origin gate needs the explicit staging Origin next to the header;
       // a bad token or unknown identity answers 404, never a redirect. The
       // transport error text carries the request headers, so it never escapes.
