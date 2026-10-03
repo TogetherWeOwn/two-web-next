@@ -23,7 +23,7 @@ import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { inviteDestination } from "../invite";
 import { matchQuery, recordSearch } from "./search-log";
-import { databaseUnavailable, NotFoundPage, rateLimitExceeded } from "../errors";
+import { databaseUnavailable, NotFoundPage, notFoundHandler, rateLimitExceeded } from "../errors";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { safeNext } from "../join/service";
@@ -423,13 +423,20 @@ export function registerEventRoutes(
   });
 
   // Same view policy as /e/:key: drafts are moderator-only; cancelled/past download fine.
+  // Missing keys use the branded 404 (suggestions + noindex), never bare plaintext.
   app.get("/events/:file{.+\\.ics}", async (c) => {
     const key = c.req.param("file").slice(0, -4);
-    if (!eventKeyAllowed(key, c.env.APP_URL)) return c.notFound();
+    if (!eventKeyAllowed(key, c.env.APP_URL)) {
+      c.header("x-robots-tag", "noindex, nofollow");
+      return notFoundHandler(c);
+    }
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const e = await getEventRow(db, key);
-    if (!e) return c.notFound();
+    if (!e) {
+      c.header("x-robots-tag", "noindex, nofollow");
+      return notFoundHandler(c);
+    }
     if (e.status === "draft") {
       const session = await readSession(c);
       if (!session?.moderator) return c.text("Forbidden", 403);
