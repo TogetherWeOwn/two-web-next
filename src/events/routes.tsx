@@ -54,7 +54,7 @@ import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswe
 import { waitlistPosition, waitlistPositions } from "./waitlist";
 import { EventGonePage, EventPage, EventsCalendarPage, PastEventsPage } from "./pages";
 import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
-import { eventKeyAllowed } from "./keys";
+import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import {
   JSON_DEFAULT_LIMIT,
   JSON_MAX_LIMIT,
@@ -490,6 +490,15 @@ export function registerEventRoutes(
         };
         const render = async () => {
           const key = c.req.param("key") ?? "";
+          // One canonical key form per event: ULIDs are stored uppercase, so
+          // a valid key in another letter case 301s to the canonical URL
+          // before any read. Seed/demo keys and unparsable keys keep their
+          // current path (forged keys refuse, unknown keys 404).
+          const canonical = canonicalEventKey(key);
+          if (canonical && canonical !== key) {
+            c.header("location", `/e/${encodeURIComponent(canonical)}${new URL(c.req.url).search}`);
+            return bufferedMemberText(c, "", 301);
+          }
           if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
           const db = await dbFor(c);
           if (!db) return bufferedMemberText(c, "Events temporarily unavailable", 503);
