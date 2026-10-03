@@ -11,6 +11,11 @@
 // The cookie carries a random token (`two_` + 32 bytes, base64url); the DB
 // stores only its SHA-256 hex. Nothing session-shaped lives in KV.
 
+/** Session lifetime: 120-minute sliding window (legacy parity, `docs/parity.md`).
+ * Login and every authenticated-page rotation re-stamp the DB expiry and the
+ * cookie Max-Age; the session-status probe cookie follows the same value. */
+export const SESSION_TTL_SECONDS = 60 * 120;
+
 export type DbSessionRow = {
   userId: string;
   username: string;

@@ -14,8 +14,9 @@ import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 // against fakes (test/jobs.test.ts, test/jobs-reconcile-counting.test.ts) and
 // the adapter in isolation (test/event-store-pg.test.ts); these suites drive
 // the real entry points — handleScheduled and handleQueue — against real
-// Postgres on a disposable agent-testdb/CI schema. The bot client stays a loud
-// stub on purpose: a mirrored event retries with the sync backoff, never acks.
+// Postgres on a disposable agent-testdb/CI schema. The bot client is the live
+// signed client (#366): with no BOT_* configured a mirrored event ends as a
+// terminal, alerting failure — settled failed, acked, never retried.
 vi.mock("postgres", async () => {
   const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
   return { ...actual, default: vi.fn(actual.default) };
@@ -142,7 +143,7 @@ describe.skipIf(!process.env.DATABASE_URL)("worker pg EventStore wiring (test Po
     expect(await sql`select key from job_unique_locks`).toHaveLength(1);
   });
 
-  it("queue consumer drops unknown keys via the real store and retries mirrored events (stubbed bot)", async () => {
+  it("queue consumer drops unknown keys via the real store and terminally settles mirrored events (unconfigured bot)", async () => {
     const liveKey = await seedEvent({
       tag: "queued",
       startsAt: new Date("2026-10-01T10:00:00Z"),
@@ -154,12 +155,13 @@ describe.skipIf(!process.env.DATABASE_URL)("worker pg EventStore wiring (test Po
     await handleQueue({ messages: [dropped] } as unknown as MessageBatch, queueEnv());
     expect(dropped.acked).toBe(true);
     expect(dropped.retried).toBeUndefined();
-    // Mirrored row: the real find serves it, the still-stubbed bot throws an
-    // unexpected error, so the message retries immediately — never acked.
+    // Mirrored row: the real find serves it, but the live bot client has no
+    // BOT_* configured, so it throws BotTerminalError — a terminal failure
+    // that is settled failed, logged, alerted and acked, never retried.
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const mirrored = carrier(liveKey);
     await handleQueue({ messages: [mirrored] } as unknown as MessageBatch, queueEnv());
-    expect(mirrored.acked).toBe(false);
+    expect(mirrored.acked).toBe(true);
     expect(mirrored.retried).toBeUndefined();
     expect(error).toHaveBeenCalled();
   });
