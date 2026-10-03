@@ -2,6 +2,8 @@
 import EventCard from "#lib/EventCard.svelte";
 import Shell from "#lib/Shell.svelte";
 import {
+  EVENTS_EMPTY_COPY,
+  EVENTS_SUBSCRIBE_TESTID,
   PAST_EVENTS_COPY,
   PAST_EVENTS_EMPTY_TESTID,
   PAST_EVENTS_ISLAND,
@@ -11,6 +13,7 @@ import {
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../../../../../src/islands/contracts";
+import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
 import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
@@ -36,6 +39,10 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
       <h1 id="past-events-heading" tabindex="-1">Past events</h1>
       <p>Game nights we’ve shared. Find the next one in the upcoming schedule.</p>
     </div>
+    <p>
+      <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>{" "}
+      <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
+    </p>
     <div data-archive-state>
       {#if rows.length === 0}
         {#if totalPages === 0}

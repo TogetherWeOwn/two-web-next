@@ -95,6 +95,9 @@ export function securityHeadersFor(
     .join(" ");
   const csp = [
     ["default-src", "'self'"],
+    ["base-uri", "'self'"],
+    ["connect-src", "'self'"],
+    ["object-src", "'none'"],
     ["img-src", "'self'", images],
     ["frame-src", framed ? "https://discord.com/widget" : "'none'"],
     ["style-src", "'self'"],
