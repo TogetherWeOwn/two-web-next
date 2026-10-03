@@ -19,7 +19,14 @@
       "name": "two-web-next-alerts-production",
       "workers_dev": false,
       "preview_urls": false,
-      "observability": { "enabled": true }
+      "observability": { "enabled": true },
+      // Wrangler never inherits top-level vars into a named environment:
+      // without this block the production prober runs with no UPTIME_URL
+      // and probes nothing. The apex target mirrors the app's production
+      // APP_URL in wrangler.jsonc.
+      "vars": {
+        "UPTIME_URL": "https://togetherweown.com/up"
+      }
       // OPS_ALERT_WEBHOOK_URL for production is installed separately with
       // `wrangler secret put OPS_ALERT_WEBHOOK_URL --config tail/wrangler.jsonc --env production`.
     }
