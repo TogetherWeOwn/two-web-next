@@ -36,6 +36,27 @@ may have no originating HTTP request ID. Do not interpret a missing ID as a
 successful job. The W8 event-sync carrier and W13 queue-ledger carrier both
 propagate it; it is not a deduplication key and does not change job execution.
 
+## CSP violation sink
+
+`POST /csp-reports` is the session-free violation sink. Query its two log
+keys in Workers Logs with a message/text **contains** filter:
+
+- `csp.report.violation` — a sampled valid report. The record carries exactly
+  five fixed fields: `blocked_uri`, `violated_directive`, `document_uri`,
+  `source_file` and `line_number`. URI credentials are redacted and
+  non-scalar values collapse to null, so never expect nested report bodies.
+- `csp.report.dropped_oversize` — a report over the 8 KB cap. The record
+  carries only `{ bytes }`; the body is discarded, never logged or stored.
+
+Sampling: `CSP_REPORT_SAMPLE_RATE` (default `1.0`) controls what fraction of
+valid reports is logged. Values clamp to 0–1; a missing or unparseable value
+falls back to `1.0` (logging stays on). The knob changes logging only — the
+sink still answers 204.
+
+Every sink path returns 204 with `no-store` and has no session, cookie or DB
+dependency, so a missing `request_id` on these records is normal. Endpoint
+contract: `docs/same-origin.md` (exemption table).
+
 ## Privacy and boundaries
 
 Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
