@@ -2,6 +2,11 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { jsx } from "hono/jsx";
 import { describe, expect, it, vi } from "vitest";
+import {
+  PROFILE_EMPTY_COPY,
+  PROFILE_NEW_MEMBER_CTA_TESTID,
+  PROFILE_NEW_MEMBER_TESTID,
+} from "../src/islands/contracts";
 import { ProfilePage } from "../src/profiles/pages";
 
 const binder = readFileSync("public/islands/member-profile.js", "utf8");
@@ -121,6 +126,9 @@ function fixture(search = "") {
   const games = node(page, "div", "profile-games");
   node(games, "ul").appendChild(document.createTextNode("Chess"));
   const timezone = node(page, "p", "profile-timezone", "Timezone: UTC");
+  const newMember = node(page, "section", "profile-new-member");
+  newMember.hidden = true;
+  const cta = node(newMember, "a", "profile-new-member-cta", "Add profile details");
   const root = node(page, "section", "profile-edit");
   root.setAttribute("data-island", "member-profile");
   root.setAttribute("data-member-id", "100000000000000001");
@@ -184,6 +192,8 @@ function fixture(search = "") {
     bio,
     games,
     timezone,
+    newMember,
+    cta,
     form,
     edit,
     editControl,
@@ -219,7 +229,8 @@ describe("shipped member-profile edit lifecycle", () => {
     await flush();
     expect(f.bio.textContent).toBe("Second bio");
     expect(f.games.querySelectorAll("li").map((li) => li.textContent)).toEqual(["Go", "Chess"]);
-    expect(f.timezone.hidden).toBe(true);
+    expect(f.timezone.hidden).toBe(false);
+    expect(f.timezone.textContent).toBe("Timezone: Add yours so people know when you are around.");
     f.edit.dispatch("click");
     f.enter({ bio: "Discard me", games_text: "Other", timezone: "Asia/Tokyo" });
     f.cancel();
@@ -396,13 +407,67 @@ describe("shipped member-profile edit lifecycle", () => {
     f.form.dispatch("submit");
     f.requests[1]!.resolve(success());
     await flush();
-    expect(f.bio.textContent).toBe("No bio yet.");
-    expect(f.games.textContent).toBe("No games listed yet.");
+    expect(f.bio.textContent).toBe("New here. More soon.");
+    expect(f.games.textContent).toBe("Add the games you keep coming back to.");
     expect(f.games.querySelector("ul")).toBeNull();
-    expect(f.timezone.hidden).toBe(true);
+    expect(f.timezone.hidden).toBe(false);
+    expect(f.timezone.textContent).toBe("Timezone: Add yours so people know when you are around.");
     f.edit.dispatch("click");
     expect(f.form.elements.bio!.value).toBe("");
     expect(f.form.elements.games_text!.value).toBe("");
+  });
+
+  it("tells the owner what is missing, and shows the new-member panel only while nothing is filled in", async () => {
+    const f = fixture();
+    expect(f.newMember.hidden).toBe(true);
+    f.enter({ bio: "", games_text: "Go", timezone: "" });
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.bio.textContent).toBe("You have not added a bio yet.");
+    expect(f.timezone.textContent).toBe("Timezone: Add yours so people know when you are around.");
+    expect(f.newMember.hidden).toBe(true);
+    f.edit.dispatch("click");
+    f.enter({ bio: "", games_text: "", timezone: "" });
+    f.form.dispatch("submit");
+    f.requests[1]!.resolve(success());
+    await flush();
+    expect(f.bio.textContent).toBe("New here. More soon.");
+    expect(f.newMember.hidden).toBe(false);
+    f.edit.dispatch("click");
+    f.enter({ bio: "Hello", games_text: "", timezone: "" });
+    f.form.dispatch("submit");
+    f.requests[2]!.resolve(success());
+    await flush();
+    expect(f.bio.textContent).toBe("Hello");
+    expect(f.newMember.hidden).toBe(true);
+  });
+
+  it("mirrors the owner empty-state copy and testids from the shared contract", () => {
+    for (const copy of [
+      PROFILE_EMPTY_COPY.bioOwner,
+      PROFILE_EMPTY_COPY.bioNew,
+      PROFILE_EMPTY_COPY.gamesOwner,
+      PROFILE_EMPTY_COPY.timezoneOwner,
+      PROFILE_NEW_MEMBER_TESTID,
+      PROFILE_NEW_MEMBER_CTA_TESTID,
+    ])
+      expect(binder).toContain(copy);
+  });
+
+  it("reopens the collapsed editor from the new-member call to action", async () => {
+    const f = fixture();
+    f.enter({ bio: "", games_text: "", timezone: "" });
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.hidden).toBe(true);
+    expect(f.newMember.hidden).toBe(false);
+    const click = f.cta.dispatch("click");
+    expect(click.preventDefault).toHaveBeenCalledOnce();
+    expect(f.form.hidden).toBe(false);
+    expect(f.editControl.hidden).toBe(true);
+    expect(f.document.activeElement).toBe(f.heading);
   });
 
   it.each([401, 419, 302, 0])(
@@ -564,5 +629,6 @@ describe("shipped member-profile edit lifecycle", () => {
       appUrl: "https://next.example.test",
     }).toString();
     expect(viewer).not.toContain('data-testid="profile-edit-again"');
+    expect(viewer).not.toContain('data-testid="profile-new-member"');
   });
 });

@@ -9,16 +9,21 @@ import {
   PROFILE_CANCEL_TESTID,
   PROFILE_COPY,
   PROFILE_EDIT_TESTID,
+  PROFILE_EMPTY_COPY,
   PROFILE_ERROR_TESTID,
   PROFILE_FORM_TESTID,
   PROFILE_HONEY_FIELD,
   PROFILE_JOINED_TESTID,
   PROFILE_NAME_TESTID,
+  PROFILE_NEW_MEMBER_COPY,
+  PROFILE_NEW_MEMBER_CTA_TESTID,
+  PROFILE_NEW_MEMBER_TESTID,
   PROFILE_OPENED_AT_FIELD,
   PROFILE_RANK_TESTID,
   PROFILE_SAVE_TESTID,
   PROFILE_VIEW_TESTID,
   profileAvatarSrcset,
+  profileIsNewMember,
   profileJoinedMonth,
 } from "../islands/contracts";
 import type { MemberView } from "./store";
@@ -108,6 +113,7 @@ export const ProfilePage: FC<{
 }> = ({ member, isOwner, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
+  const isNewMember = profileIsNewMember(member);
   const form = values ?? {
     bio: member.bio ?? "",
     games_text: member.games.join("\n"),
@@ -171,8 +177,11 @@ export const ProfilePage: FC<{
                 {!stats?.joinedAt && joined ? (
                   <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p>
                 ) : null}
-                <p data-testid="profile-timezone" hidden={!member.timezone}>
-                  {member.timezone ? `Timezone: ${member.timezone}` : ""}
+                <p data-testid="profile-timezone">
+                  {`Timezone: ${
+                    member.timezone ||
+                    (isOwner ? PROFILE_EMPTY_COPY.timezoneOwner : PROFILE_EMPTY_COPY.timezoneOther)
+                  }`}
                 </p>
               </div>
             </div>
@@ -181,7 +190,12 @@ export const ProfilePage: FC<{
             <section aria-labelledby="profile-about-heading">
               <h2 id="profile-about-heading">About</h2>
               <p class="profile-bio" data-testid="profile-bio">
-                {member.bio || "No bio yet."}
+                {member.bio ||
+                  (isNewMember
+                    ? PROFILE_EMPTY_COPY.bioNew
+                    : isOwner
+                      ? PROFILE_EMPTY_COPY.bioOwner
+                      : PROFILE_EMPTY_COPY.bioOther(member.username))}
               </p>
             </section>
             <section aria-labelledby="profile-games-heading">
@@ -194,13 +208,27 @@ export const ProfilePage: FC<{
                     ))}
                   </ul>
                 ) : (
-                  <p>No games listed yet.</p>
+                  <p>{isOwner ? PROFILE_EMPTY_COPY.gamesOwner : PROFILE_EMPTY_COPY.gamesOther}</p>
                 )}
               </div>
             </section>
           </div>
         </section>
         <script src="/islands/avatar.js" defer></script>
+        {isOwner ? (
+          <section
+            class="profile-panel profile-new-member"
+            aria-labelledby="new-member-heading"
+            data-testid={PROFILE_NEW_MEMBER_TESTID}
+            hidden={!isNewMember}
+          >
+            <h2 id="new-member-heading">{PROFILE_NEW_MEMBER_COPY.heading}</h2>
+            <p>{PROFILE_NEW_MEMBER_COPY.body}</p>
+            <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
+              {PROFILE_NEW_MEMBER_COPY.cta}
+            </a>
+          </section>
+        ) : null}
         {stats ? <MemberStatsBlock stats={stats} /> : null}
         {isOwner ? (
           <section
