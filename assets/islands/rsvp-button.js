@@ -495,6 +495,15 @@
     join.addEventListener("click", function (ev) {
       onAction(join.getAttribute("data-action"), join, ev);
     });
+    if (full && !root.querySelector('[data-testid="' + TESTID.full + '"]')) {
+      var message = document.createElement("p");
+      message.setAttribute("role", "status");
+      message.setAttribute("data-testid", TESTID.full);
+      var capRaw = root.getAttribute("data-capacity");
+      var capNum = capRaw === null || capRaw === "" ? NaN : Number(capRaw);
+      message.textContent = COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
+      controls.appendChild(message);
+    }
     focusTestid([TESTID.going, TESTID.waitlistJoin]);
   }
 
