@@ -197,6 +197,30 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   }
 });
 
+test("the required CI job fails first when scope did not succeed, before any guard reads its outputs", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  assert(check, "Required check job must exist");
+  const steps = check.split("\n    steps:\n")[1] ?? "";
+  // First step, unconditional: no `if:` between its name and its env.
+  const guard = steps.match(
+    /^      - name: Require successful scope\n        env:\n          SCOPE_RESULT: \$\{\{ needs\.scope\.result \}\}\n        run: ([^\n]+)\n/,
+  );
+  assert(guard, "Scope guard must be the first, unconditional step of check");
+  // `scope` is not a required check; empty outputs would otherwise read as
+  // unselected areas and let `check` pass on a skipped audit.
+  for (const [result, expected] of [
+    ["success", 0],
+    ["failure", 1],
+    ["cancelled", 1],
+    ["skipped", 1],
+    ["", 1],
+  ]) {
+    const execution = spawnSync("bash", ["-c", guard[1]], { env: { SCOPE_RESULT: result } });
+    assert.equal(execution.status, expected, `Scope result ${result || "missing"}`);
+  }
+});
+
 test("the required CI job has a bounded coverage allowance without relaxing its gates", async () => {
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];

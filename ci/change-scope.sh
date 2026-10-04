@@ -88,10 +88,14 @@ if [ -s "$files" ]; then
           wrangler*.jsonc|tail/*|web/*)
             worker=true
             ;;
-          # Database: migrations, the journal lock and the drizzle config.
-          # Observed by `check` (migrate, history checks) and `a11y` (the
-          # fixtures run the real migrations), not by the perf jobs.
-          drizzle/*|migrations.lock|drizzle.config.ts)
+          # Database: migrations, the journal lock, the drizzle config and the
+          # migration tooling under ci/ (history and numbering checks, the
+          # Neon migrate script and its selftest). Observed by `check` (migrate,
+          # history checks, numbering) and `a11y` (the fixtures run the real
+          # migrations), not by the perf jobs. Listed before the `ci/*` app
+          # arm below, which would otherwise claim these paths.
+          drizzle/*|migrations.lock|drizzle.config.ts|\
+          ci/check-migration-*|ci/neon-migrate*)
             db=true
             ;;
           # App: everything the served worker, its assets, the test suites
