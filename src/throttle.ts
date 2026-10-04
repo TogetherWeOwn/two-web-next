@@ -66,10 +66,12 @@ function normalizeClientIp(ip: string): string {
 }
 
 /**
- * Keep header precedence unchanged; normalize only the selected address.
+ * The per-client key every human-route bucket is built from. On Cloudflare
+ * `cf-connecting-ip` is always set and cannot be forged by the client; the
+ * `x-forwarded-for` hop and "anon" only matter off-edge (local runs, tests).
  * See docs/throttling.md for prefix sharing and rollout behaviour.
  */
-const clientKey = (c: Context) =>
+export const clientKey = (c: Context) =>
   normalizeClientIp(
     c.req.header("cf-connecting-ip") ??
       c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
