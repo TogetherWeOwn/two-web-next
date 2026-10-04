@@ -170,6 +170,46 @@ describe("e2e scope gate", () => {
   });
 });
 
+describe("e2e-staging scope gate", () => {
+  const staging = readFileSync(".github/workflows/e2e-staging.yml", "utf8");
+  const scopeJob = staging.split("\n  scope:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+  const journeys = staging.split("\n  staging-journeys:\n")[1] ?? "";
+
+  it("mirrors the e2e.yml docs-only gate without PR context", () => {
+    // No PR files API here: workflow_run + workflow_dispatch carry no pull
+    // request, so the scope job diffs the deployed head SHA against its
+    // parent and feeds ci/change-scope.sh the same TSV shape.
+    expect(scopeJob).toContain("bash ci/change-scope.sh");
+    expect(scopeJob).toContain("docs_only:");
+    expect(scopeJob).not.toContain("pulls/$PR_NUMBER/files");
+    expect(scopeJob).toContain("workflow_run.head_sha");
+    expect(scopeJob).toContain("git diff --name-status");
+    expect(journeys).toMatch(/\n    needs: scope\n/);
+    expect(journeys).toMatch(/needs\.scope\.outputs\.docs_only != 'true'/);
+  });
+
+  it("keeps the deploy trigger intact and dispatches always running", () => {
+    expect(staging).toMatch(/(^|\n)  workflow_run:\n/);
+    expect(staging).toMatch(/(^|\n)  workflow_dispatch:\n/);
+    expect(scopeJob).toContain("github.event_name == 'workflow_dispatch'");
+    expect(scopeJob).toContain("github.event.workflow_run.head_branch == 'main'");
+    expect(journeys).toContain("github.event_name == 'workflow_dispatch'");
+  });
+
+  it("stays on standard hosted runners and gates no required check", () => {
+    expect(scopeJob).toMatch(/\n    runs-on: ubuntu-latest\n/);
+    expect(journeys).toMatch(/\n    runs-on: ubuntu-latest\n/);
+    // staging-journeys is post-deploy evidence, not a merge gate: CONTRIBUTING
+    // names exactly check, gitleaks and pr-lint, so a docs-only skip never
+    // blocks a merge.
+    const section =
+      readFileSync("CONTRIBUTING.md", "utf8")
+        .split("### Branch protection and required checks")[1]
+        ?.split(/\n#{2,3} /)[0] ?? "";
+    expect(section).not.toContain("staging-journeys");
+  });
+});
+
 describe("changed-path fixture matrix", () => {
   it("fast-passes docs-only PRs", () => {
     expect(
