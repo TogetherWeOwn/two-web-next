@@ -192,8 +192,25 @@ describe.skipIf(!process.env.DATABASE_URL)(
       ]);
     });
 
-    it.each([null, "unmapped-discord-id"])(
-      "refuses an unattributable retained attempt for %s",
+    it.each(["denied", "error"])(
+      "renders a pre-identity %s attempt with no invented member subject",
+      async (outcome) => {
+        const row = await attempt({ outcome, discordId: null, requestId: "pre-identity-trace" });
+        const res = await read(row.id);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("cache-control")).toBe("private, no-store");
+        const html = await res.text();
+        expect(html).toContain(outcome);
+        expect(html).toContain(row.requestId!);
+        expect(html).toContain("Discord ID");
+        expect(html).not.toContain("null");
+        expect(await logs()).toEqual([]);
+        expect(await fixture.db.select().from(joinAttempts)).toEqual([row]);
+      },
+    );
+
+    it.each(["", "123", "unmapped-discord-id"])(
+      "refuses a malformed non-null retained owner for %s",
       async (discordId) => {
         vi.spyOn(console, "error").mockImplementation(() => {});
         const row = await attempt({

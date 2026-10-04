@@ -561,7 +561,52 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await fixture.db.select().from(joinAttempts)).toHaveLength(JOIN_ATTEMPT_PAGE_SIZE + 5);
     });
 
-    it.each([null, "invalid-owner", "123"])(
+    it.each(["newest", "lookahead", "all"])(
+      "renders %s null-owner attempts without poisoning pagination or the valid audit subjects",
+      async (position) => {
+        const createdAt = new Date();
+        const rows = await fixture.db
+          .insert(joinAttempts)
+          .values(
+            Array.from({ length: JOIN_ATTEMPT_PAGE_SIZE + 1 }, (_, i) => ({
+              outcome: i === JOIN_ATTEMPT_PAGE_SIZE || position === "all" ? "denied" : "added",
+              requestId: `pre-identity-${i}`,
+              createdAt,
+              discordId:
+                position === "all" || i === (position === "newest" ? JOIN_ATTEMPT_PAGE_SIZE : 0)
+                  ? null
+                  : String(100000000000006000n + BigInt(i)),
+            })),
+          )
+          .returning();
+        const ordered = [...rows].reverse();
+        const first = await request("/join-attempts");
+        expect(attemptIds(first)).toEqual(
+          ordered.slice(0, JOIN_ATTEMPT_PAGE_SIZE).map((r) => r.id),
+        );
+        expect(link(first, "next")).toContain("page=2");
+        const access = await logs();
+        const subjects = rows
+          .flatMap((row) => (row.discordId === null ? [] : [row.discordId]))
+          .sort();
+        if (position === "all") expect(access).toEqual([]);
+        else {
+          expect(access).toMatchObject([
+            { subjectUserIds: subjects, subjectCount: subjects.length },
+          ]);
+          expect(access).toHaveLength(1);
+        }
+        const second = await request("/join-attempts?page=2");
+        expect(attemptIds(second)).toEqual([ordered[JOIN_ATTEMPT_PAGE_SIZE]!.id]);
+        expect(link(second, "next")).toBeUndefined();
+        const filtered = await request("/join-attempts?outcome=added");
+        expect(attemptIds(filtered)).toEqual(
+          ordered.filter((row) => row.outcome === "added").map((row) => row.id),
+        );
+      },
+    );
+
+    it.each(["", "invalid-owner", "123"])(
       "refuses the whole page when its unrendered lookahead owner is %s",
       async (owner) => {
         const createdAt = new Date();
