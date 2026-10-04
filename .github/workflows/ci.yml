@@ -347,6 +347,9 @@ jobs:
       - name: Production secrets preflight selftest (stubbed wrangler, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/check-production-secrets.test.mjs
+      - name: Watch Lighthouse runner selftest (stub fetch and lhci, no network or browser)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run lighthouse:origin:selftest
       - name: Build (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --outdir dist
