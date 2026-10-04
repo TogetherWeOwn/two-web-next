@@ -174,6 +174,14 @@ async function stub(
 ) {
   const requests = [];
   const state = { live: new Set(), rays: 0 };
+  const timers = new Set();
+  const later = (fn, ms) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      fn();
+    }, ms);
+    timers.add(timer);
+  };
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => {
@@ -204,11 +212,24 @@ async function stub(
       change(id, result, {
         originHeader: request.headers.origin,
         qaHeader: request.headers["x-two-qa-auth"],
+        cookieHeader: request.headers.cookie,
         body,
       });
-      response.writeHead(result.status, result.headers);
-      if (result.body === null) response.flushHeaders();
-      else response.end(result.body);
+      const sendBody = () => {
+        if (response.destroyed) return;
+        if (result.body === null) response.flushHeaders();
+        else response.end(result.body);
+      };
+      const send = () => {
+        if (response.destroyed) return;
+        response.writeHead(result.status, result.headers);
+        if (result.bodyDelayMs) {
+          response.flushHeaders();
+          later(sendBody, result.bodyDelayMs);
+        } else sendBody();
+      };
+      if (result.delayMs) later(send, result.delayMs);
+      else send();
     });
   });
   server.listen(0, "127.0.0.1");
@@ -216,6 +237,7 @@ async function stub(
   t.after(
     () =>
       new Promise((resolve, reject) => {
+        for (const timer of timers) clearTimeout(timer);
         server.closeAllConnections();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
@@ -527,7 +549,7 @@ test("bounds stalled responses", async (t) => {
 const FLAG_EXPECTED =
   "__Host- prefix, Path=/, Secure, HttpOnly, SameSite=Lax, positive Max-Age, no Domain";
 
-for (const [problem, mutate] of [
+const FLAG_MUTATIONS = [
   ["Secure", (cookie) => cookie.replace("; Secure", "")],
   ["HttpOnly", (cookie) => cookie.replace("; HttpOnly", "")],
   ["SameSite=Lax", (cookie) => cookie.replace("SameSite=Lax", "SameSite=Strict")],
@@ -535,7 +557,9 @@ for (const [problem, mutate] of [
   ["positive Max-Age", (cookie) => cookie.replace("; Max-Age=7200", "")],
   ["Path=/", (cookie) => cookie.replace("Path=/;", "Path=/app;")],
   ["no Domain", (cookie) => `${cookie}; Domain=togetherweown.com`],
-]) {
+];
+
+for (const [problem, mutate] of FLAG_MUTATIONS) {
   for (const [label, index] of [
     ["session cookie flags", 0],
     ["status cookie flags", 1],
@@ -584,7 +608,7 @@ test("fails rotation when the page view leaves the old cookie authenticating", a
   assert.equal(result.ok, false);
   assert.ok(
     result.output.includes(
-      "FAIL session rotation replay: expected old cookie unauthenticated and replacement authenticated on /auth/status; actual no replacement session cookie; old cookie still authenticates",
+      "FAIL session rotation replay: expected old cookie unauthenticated and replacement authenticated on /auth/status; actual no replacement session cookie; no replacement status cookie; old cookie still authenticates",
     ),
     result.output,
   );
@@ -868,6 +892,200 @@ test("Cloudflare normalization is exact and fails closed on lookalikes", () => {
   ]) {
     assert.equal(stripCloudflareSnippet(page), page);
   }
+});
+
+for (const [problem, mutate] of FLAG_MUTATIONS) {
+  test(`rotation validates reissued status cookie: ${problem}`, async (t) => {
+    const { url } = await stub(t, (id, response) => {
+      if (id === "home") response.headers["set-cookie"][1] = mutate(statusSetCookie);
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, result.output);
+    assert.match(result.output, /FAIL session rotation replay/);
+    assert.ok(
+      result.output.includes(`replacement status cookie violated ${problem}`),
+      result.output,
+    );
+    assert.ok(!result.output.includes("never-log-this"), result.output);
+  });
+}
+
+for (const [cookies, problem] of [
+  [[sessionSetCookie(ROTATED)], "no replacement status cookie"],
+  [
+    [sessionSetCookie(ROTATED), statusSetCookie.replace("__Host-", "")],
+    "no replacement status cookie",
+  ],
+  [
+    [sessionSetCookie(ROTATED), statusSetCookie.replace(STATUS_VALUE, "")],
+    "empty replacement status cookie",
+  ],
+  [[sessionSetCookie(ROTATED), statusSetCookie, statusSetCookie], "duplicate Set-Cookie"],
+]) {
+  test(`rotation validates reissued status cookie: ${problem}`, async (t) => {
+    const { url } = await stub(t, (id, response) => {
+      if (id === "home") response.headers["set-cookie"] = cookies;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, result.output);
+    assert.match(result.output, /FAIL session rotation replay/);
+    assert.ok(result.output.includes(problem), result.output);
+    assert.ok(!result.output.includes("never-log-this"), result.output);
+  });
+}
+
+for (const occurrence of [1, 2, 3]) {
+  for (const kind of ["session", "status"]) {
+    test(`readonly status probe rejects ${kind} issuance on reply ${occurrence} and cleans up`, async (t) => {
+      const next = "unexpected-session-never-log-this";
+      let count = 0;
+      const fixture = await stub(t, (id, response, { cookieHeader }) => {
+        if (id === "status" && ++count === occurrence) {
+          if (kind === "session") {
+            fixture.state.live.delete(cookieHeader?.slice("__Host-two_session=".length));
+            fixture.state.live.add(next);
+          }
+          response.headers["set-cookie"] = [
+            kind === "session" ? sessionSetCookie(next) : statusSetCookie,
+          ];
+        }
+      });
+      const result = await run(fixture.url);
+      assert.equal(result.ok, false, result.output);
+      assert.match(
+        result.output,
+        /status probe (issued auth cookies|mutated authentication state)/,
+      );
+      assert.ok(!result.output.includes("PASS logout revokes session"), result.output);
+      assert.equal(fixture.state.live.size, 0);
+      for (const request of fixture.requests.filter((request) => request.path === "/auth/status")) {
+        assert.ok(!request.cookie.includes("__Host-two_session_status"));
+      }
+      assert.ok(!result.output.includes("never-log-this"), result.output);
+    });
+  }
+}
+
+for (const revoke of [false, true]) {
+  test(`status observer rotation cannot mask logout with revoke=${revoke}`, async (t) => {
+    let rotations = 0;
+    const fixture = await stub(
+      t,
+      (id, response, { cookieHeader }) => {
+        if (id === "status" && JSON.parse(response.body).authenticated) {
+          const next = `unexpected-${++rotations}-never-log-this`;
+          fixture.state.live.delete(cookieHeader.slice("__Host-two_session=".length));
+          fixture.state.live.add(next);
+          response.headers["set-cookie"] = [sessionSetCookie(next)];
+        }
+      },
+      { revoke },
+    );
+    const result = await run(fixture.url);
+    assert.equal(result.ok, false, result.output);
+    assert.match(result.output, /FAIL session rotation replay/);
+    assert.match(result.output, /FAIL logout revokes session/);
+    assert.ok(!result.output.includes("PASS logout revokes session"), result.output);
+    assert.equal(fixture.state.live.size === 0, revoke);
+    assert.ok(
+      fixture.requests
+        .filter((request) => request.path === "/logout")
+        .some((request) => request.cookie === "__Host-two_session=unexpected-1-never-log-this"),
+    );
+    assert.ok(!result.output.includes("never-log-this"), result.output);
+  });
+}
+
+for (const occurrence of [1, 2, 3]) {
+  test(`status observer body timeout on reply ${occurrence} still cleans up issued bearers`, async (t) => {
+    const next = "timeout-session-never-log-this";
+    let count = 0;
+    const fixture = await stub(t, (id, response) => {
+      if (id === "status" && ++count === occurrence) {
+        fixture.state.live.add(next);
+        response.headers["set-cookie"] = [sessionSetCookie(next)];
+        response.body = null;
+      }
+    });
+    const result = await run(fixture.url, { timeoutMs: 500 });
+    assert.equal(result.ok, false, result.output);
+    assert.equal(fixture.state.live.size, 0);
+    assert.ok(
+      fixture.requests
+        .filter((request) => request.path === "/logout")
+        .some((request) => request.cookie === `__Host-two_session=${next}`),
+    );
+    assert.ok(!result.output.includes("PASS logout revokes session"), result.output);
+    assert.ok(!result.output.includes("never-log-this"), result.output);
+  });
+}
+
+test("status observer duplicate issuance retains every observed bearer for cleanup", async (t) => {
+  const issued = ["duplicate-one-never-log-this", "duplicate-two-never-log-this"];
+  let count = 0;
+  const fixture = await stub(t, (id, response) => {
+    if (id === "status" && ++count === 2) {
+      for (const value of issued) fixture.state.live.add(value);
+      response.headers["set-cookie"] = issued.map(sessionSetCookie);
+    }
+  });
+  const result = await run(fixture.url);
+  assert.equal(result.ok, false, result.output);
+  assert.equal(fixture.state.live.size, 0);
+  assert.ok(!result.output.includes("never-log-this"), result.output);
+});
+
+test("status observer cleanup is bounded when many unexpected bearers are issued", async (t) => {
+  let count = 0;
+  const fixture = await stub(t, (id, response) => {
+    if (id === "status" && ++count === 2) {
+      const issued = Array.from({ length: 10 }, (_, i) => `overflow-${i}-never-log-this`);
+      for (const value of issued) fixture.state.live.add(value);
+      response.headers["set-cookie"] = issued.map(sessionSetCookie);
+    }
+  });
+  const result = await run(fixture.url);
+  assert.equal(result.ok, false, result.output);
+  assert.match(result.output, /cleanup limit exceeded/);
+  assert.ok(fixture.requests.filter((request) => request.path === "/logout").length <= 9);
+  assert.ok(!result.output.includes("never-log-this"), result.output);
+});
+
+for (const bodyDelayMs of [0, 50]) {
+  test(`404 deadlines cover each fetch and body independently (body delay ${bodyDelayMs})`, async (t) => {
+    const fixture = await stub(t, (id, response) => {
+      if (id === "qa-404" || id === "missing-404") {
+        response.delayMs = 300;
+        response.bodyDelayMs = bodyDelayMs;
+      }
+    });
+    for (const path of ["/auth/qa/qa-member", "/auth/json-smoke-missing-route"]) {
+      const response = await fetch(new URL(path, fixture.url), {
+        method: "POST",
+        headers: { origin: fixture.url },
+        signal: AbortSignal.timeout(500),
+      });
+      assert.equal(response.status, 404);
+      await response.text();
+    }
+    const result = await run(fixture.url, { timeoutMs: 500 });
+    assert.equal(result.ok, true, result.output);
+    assert.match(result.output, /PASS QA bad-token 404 matches missing route/);
+    assert.ok(!result.output.includes("never-log-this"), result.output);
+  });
+}
+
+test("404 deadlines still reject a genuinely slow response body", async (t) => {
+  const { url } = await stub(t, (id, response) => {
+    if (id === "qa-404") response.bodyDelayMs = 750;
+  });
+  const result = await run(url, { timeoutMs: 500 });
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL QA bad-token 404 matches missing route.*(TimeoutError|AbortError)/,
+  );
+  assert.ok(!result.output.includes("never-log-this"), result.output);
 });
 
 test("cookie and snippet helpers handle real header and edge shapes", () => {
