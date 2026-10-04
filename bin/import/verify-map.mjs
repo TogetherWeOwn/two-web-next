@@ -53,13 +53,11 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
       [
         field("username", "COALESCE(NULLIF(l.display_name, ''), l.username)"),
         field("avatar"),
+        // Import policy (docs/import-users-profiles.md): non-null historical
+        // join evidence imports as member, null as false.
+        field("member", "(l.discord_joined_at IS NOT NULL)", "n.member"),
         ...times(),
       ],
-      {
-        mappingGaps: [
-          "member: legacy has no member flag; importer must define the guild-membership evidence transform.",
-        ],
-      },
     ),
     table(
       "profiles",
@@ -102,6 +100,17 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
           "n.recurrence_ends_on::timestamp",
         ),
         field("created_by", userId("created_by", "u")),
+        timestamp("discord_sync_failed_at"),
+        field("discord_sync_failure_code"),
+        // The importer refuses a batch containing agent attribution (grant ID,
+        // proof marker or nonzero version), and Next's human events carry none.
+        // Compare the legacy predicate to a literal so an attributed event is
+        // a named-key mismatch, never silently excluded or a MATCH.
+        field(
+          "agent_attribution",
+          "(l.agent_grant_id IS NOT NULL OR l.proof_marker IS NOT NULL OR l.agent_version IS DISTINCT FROM 0)::text",
+          "'false'",
+        ),
         field(
           "parent_event_key",
           "COALESCE(p.event_key, CASE WHEN l.parent_event_id IS NOT NULL THEN 'unresolved-legacy-event:' || l.parent_event_id::text END)",
@@ -116,10 +125,6 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
         next: {
           from: `${next}."events" n LEFT JOIN ${next}."events" p ON p.id = n.parent_event_id`,
         },
-        mappingGaps: [
-          "discord_sync_failed_at, discord_sync_failure_code: no destination columns yet.",
-          "agent_grant_id, proof_marker, agent_version: importer must define events to agent_events split; no silent exclusion of proof events.",
-        ],
       },
     ),
     table(

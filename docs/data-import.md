@@ -20,9 +20,9 @@ import cards is included:
 
 | Import slice | Legacy → Next table | Comparison key | Compared fields / transforms |
 | --- | --- | --- | --- |
-| [TOG-10831](/TOG/issues/TOG-10831), users/profiles | `users` → `users` | `discord_id` → `id` | `COALESCE(NULLIF(display_name, ''), username)` → username (matches `users-profiles.mjs`), avatar, created/updated timestamps; member mapping remains a gap |
+| [TOG-10831](/TOG/issues/TOG-10831), users/profiles | `users` → `users` | `discord_id` → `id` | `COALESCE(NULLIF(display_name, ''), username)` → username (matches `users-profiles.mjs`), avatar, `member` (`discord_joined_at IS NOT NULL`, the policy in `import-users-profiles.md`), created/updated timestamps |
 | users/profiles | `profiles` → `profiles` | legacy user lookup → Discord `user_id` | bio, games JSONB, timezone, created/updated timestamps; profile surrogate ID deliberately not compared |
-| [TOG-10832](/TOG/issues/TOG-10832), events/RSVPs | `events` → `events` | `event_key` | title, game, description, UTC start/end instants, timezone, location, capacity, status, Discord mirror ID, creator Discord ID, rsvp_open, recurrence frequency/count/end/index, parent event_key, created/updated timestamps |
+| [TOG-10832](/TOG/issues/TOG-10832), events/RSVPs | `events` → `events` | `event_key` | title, game, description, UTC start/end instants, timezone, location, capacity, status, Discord mirror ID, creator Discord ID, rsvp_open, recurrence frequency/count/end/index, parent event_key, Discord sync failure instant (UTC) and code, `agent_attribution` (legacy grant ID, proof marker or nonzero version projected to `true`/`false` and compared to `false`), created/updated timestamps |
 | events/RSVPs | `rsvps` → `rsvps` | event_key + user Discord ID | status, synced-to-Discord and created/updated timestamps; numeric event/user IDs resolved through joins |
 | [TOG-10833](/TOG/issues/TOG-10833), content/funnel | `featured_contents` → `featured_contents` | preserved `id` | title, body, URL, image URL/alt, published flag, position, UTC show window, creator Discord ID, created/updated timestamps |
 | content/funnel | `join_attempts` → `join_attempts` | preserved `id` | outcome, source, request_id, discord_id, created_at; fixed retention cutoff |
@@ -65,13 +65,19 @@ The current schemas cannot establish full data parity by themselves. The baselin
 reports `mappingGaps` and exits **1 even if all compared rows match**, including
 for an empty database, until importers finalize these policies:
 
-- `users.member`: there is no legacy member boolean. A non-null
-  `discord_joined_at` is not equivalent: successful join/login paths can leave it
-  NULL. Do not silently invent membership evidence.
-- Event sync failure timestamp/code have no Next destination columns. Legacy
-  proof-event grant ID/marker/version live in `events`, while Next's `agent_events`
-  is separate and uses local wall-time strings. An importer must define the split,
-  preserve the sync fields, and add the resulting verification projection.
+- `users.member` and the event sync failure fields are resolved: the baseline
+  compares `(discord_joined_at IS NOT NULL)` with `users.member`, and the UTC
+  failure instant and code with the columns added by `1009_event-sync-failure`.
+  `discord_joined_at` is historical join evidence, not current membership (see
+  `import-users-profiles.md`). Agent attribution is fail-closed rather than
+  migrated: `import-events-rsvps.md` refuses the whole batch when a legacy event
+  has a grant ID, proof marker or nonzero version, so the verifier projects that
+  predicate as `agent_attribution` against `false`. An attributed event is
+  therefore a named-key mismatch (or a missing key when the refused batch wrote
+  nothing), never excluded and never a MATCH. Splitting machine-owned events
+  into Next's `agent_events` remains a separately authorized migration.
+  `test/import-verify-importers.test.ts` runs the real importers into the
+  verifier and asserts zero diffs and gaps for these tables.
 - Activity morph identities and Spatie `{attributes,old}` properties versus Next's
   `{field:{before,after}}` shape need an explicit preservation/conversion policy.
   `causer_type`, `event`, `batch_uuid` are absent from Next. NULL log names use

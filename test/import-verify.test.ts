@@ -79,7 +79,10 @@ it("covers all twelve import tables, requires a fixed cutoff and exposes unresol
   expect(() => defaultTableMap({ cutoff: "2026-07-02';SELECT 1--" })).toThrow(
     "fixed_cutoff_required",
   );
-  expect(map.find((t) => t.name === "users")!.mappingGaps!.join()).toContain("member");
+  // The users and events gaps are closed by importer-backed projections
+  // (test/import-verify-importers.test.ts); sibling slices still own the rest.
+  for (const name of ["users", "events"])
+    expect(map.find((t) => t.name === name)!.mappingGaps ?? []).toEqual([]);
   expect(
     map.find((t) => t.name === "agent_event_grants")!.columns.find((f) => f.name === "disabled")!
       .legacy,
@@ -539,7 +542,7 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     expect(renderMarkdown(report)).toContain("Incomplete mapping");
   });
   it.each([null, "", "PRIVATE-DISPLAY-NAME", " "])(
-    "baseline username follows the importer for display_name=%s without certifying membership",
+    "baseline username follows the importer for display_name=%s and carries no mapping gap",
     async (displayName) => {
       const username = "PRIVATE-RAW-USERNAME";
       const expected = displayName === null || displayName === "" ? username : displayName;
@@ -569,8 +572,8 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
         extraCount: 0,
         mismatchCount: 0,
       });
-      expect(matched.tables[0]!.mappingGaps.join()).toContain("member");
-      expect(matched.ok).toBe(false); // Name parity must not resolve the membership-policy gap.
+      expect(matched.tables[0]!.mappingGaps).toEqual([]);
+      expect(matched.ok).toBe(true);
       const wrong = expected === username ? "PRIVATE-WRONG-USERNAME" : username;
       await admin.unsafe(`UPDATE "${destination.schemaName}".users SET username=$1 WHERE id='42'`, [
         wrong,
@@ -592,7 +595,7 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     const n = `"${destination.schemaName}"`;
     await admin.unsafe(`
       INSERT INTO ${l}.users VALUES(1,'42','synthetic',NULL,NULL,false,'2026-09-01 01:02:03.123456','2026-09-01 01:02:03.123456');
-      INSERT INTO ${n}.users VALUES('42','synthetic',NULL,true,'2026-09-01 01:02:03.123456+00','2026-09-01 01:02:03.123456+00');
+      INSERT INTO ${n}.users VALUES('42','synthetic',NULL,false,'2026-09-01 01:02:03.123456+00','2026-09-01 01:02:03.123456+00');
       INSERT INTO ${l}.profiles VALUES(11,1,'private-bio','["game-b","game-a"]','UTC','2026-09-01 01:02:03','2026-09-01 01:02:03');
       INSERT INTO ${n}.profiles VALUES('42','private-bio','["game-b","game-a"]','UTC','2026-09-01 01:02:03+00','2026-09-01 01:02:03+00');
       INSERT INTO ${l}.events(id,event_key,title,starts_at,ends_at,created_by,parent_event_id,recurrence_ends_on,created_at,updated_at)
