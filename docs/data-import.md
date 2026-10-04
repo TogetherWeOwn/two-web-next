@@ -27,11 +27,11 @@ import cards is included:
 | [TOG-10833](/TOG/issues/TOG-10833), content/funnel | `featured_contents` → `featured_contents` | preserved `id` | title, body, URL, image URL/alt, published flag, position, UTC show window, creator Discord ID, created/updated timestamps |
 | content/funnel | `join_attempts` → `join_attempts` | preserved `id` | outcome, source, request_id, discord_id, created_at; fixed retention cutoff |
 | content/funnel | `event_search_logs` → `event_search_logs` | preserved `id` | normalized_query, result_count, occurred_at; fixed retention cutoff |
-| [TOG-10834](/TOG/issues/TOG-10834), audit/grants | `member_data_access_logs` → `member_data_access_logs` | preserved `id` | viewer Discord ID, resolved viewer/subject user IDs, resource, action, subject_count, route, occurred_at; subject array order preserved |
-| audit/grants | `activity_log` → `activity_log` | preserved `id` | log_name (NULL → default), description, subject_type/id, causer_id, properties JSONB, created/updated timestamps; unresolved attribution/dirty-map policy flagged |
-| audit/grants | `agent_event_grants` → `agent_event_grants` | UUID `id` | agent/company/guild IDs, verifier hash, expires_at, created_at; expects disabled_at NOT NULL, not a copied enablement state |
-| audit/grants | `agent_event_audits` → `agent_event_audits` | preserved `id` | grant_id, operation, event_key, idempotency_key, payload_digest, request_id, result, reason_code, created_at |
-| audit/grants | `agent_event_idempotency_keys` → same | preserved `id` | grant_id, key, payload_digest, status, body JSONB, event_key, created_at; fixed retention cutoff |
+| [TOG-10834](/TOG/issues/TOG-10834), audit/grants | `member_data_access_logs` → `member_data_access_logs` | preserved `id` | viewer Discord ID, viewer user ID and subject user ID array (both kept as the legacy internal IDs the importer copies, array order preserved), resource, action, subject_count, route, occurred_at |
+| audit/grants | `activity_log` → `activity_log` | preserved `id` | log_name (NULL stays NULL), description, subject_type, subject_id, causer_type, causer_id, event, batch_uuid, properties JSONB (verbatim), created/updated timestamps (NULL `updated_at` stays NULL) |
+| audit/grants | `agent_event_grants` → `agent_event_grants` | UUID `id` | agent/company/guild IDs, verifier hash (internal only), max_events, expires_at, created_at, updated_at; expects disabled_at NOT NULL, not a copied enablement state |
+| audit/grants | `agent_event_audits` → `agent_event_audits` | preserved `id` | grant_id, operation, event_key, idempotency_key, payload_digest, request_id, result, reason_code, discord_event_id, created_at, updated_at |
+| audit/grants | `agent_event_idempotency_keys` → same | preserved `id` | grant_id, key, payload_digest, status, body JSONB (internal only), event_key, created_at, updated_at; importer's retention window (see below) |
 
 Legacy naive timestamps are interpreted as UTC (`AT TIME ZONE 'UTC'`), matching
 legacy's application timezone. Already timezone-aware event instants are not
@@ -72,14 +72,32 @@ for an empty database, until importers finalize these policies:
   proof-event grant ID/marker/version live in `events`, while Next's `agent_events`
   is separate and uses local wall-time strings. An importer must define the split,
   preserve the sync fields, and add the resulting verification projection.
-- Activity morph identities and Spatie `{attributes,old}` properties versus Next's
-  `{field:{before,after}}` shape need an explicit preservation/conversion policy.
-  `causer_type`, `event`, `batch_uuid` are absent from Next. NULL log names use
-  `default` in the provisional projection, not an approved loss-of-evidence policy.
-- Grants omit `max_events`/`updated_at`; agent audits omit `discord_event_id`/
-  `updated_at`; idempotency rows omit `updated_at`. Preservation/disposition must
-  be recorded by the audit importer. Join-attempt `updated_at` is outside the
-  four-column terminal-funnel projection and absent from Next.
+- Audit evidence has no unresolved mapping. `audit.mjs` copies every column added
+  by `1011_legacy-audit-evidence.sql` (`docs/audit-import.md`), the baseline
+  compares each one, and `test/import-verify-audit.test.ts` runs the real importer
+  into the verifier and asserts zero diffs and empty gaps for these five tables.
+  The importer's dispositions are explicit, not silent drops:
+  - Morph and user references keep their legacy internal IDs. `subject_id`,
+    `causer_id`, `viewer_user_id` and `subject_user_ids` are not remapped to
+    Discord IDs or joined to Next users, so the baseline compares them as legacy
+    IDs (text, and JSON for the array). `viewer_discord_id` is the stable identity.
+  - `properties` is copied verbatim as JSONB. The Spatie `{attributes,old}` shape
+    is not converted to Next's `{field:{before,after}}`; readers handle both for
+    imported rows.
+  - NULL `log_name` and `updated_at` stay NULL; no `default` or `now()` is
+    fabricated. `max_events` is retained as evidence only, since Next ingress still
+    enforces its own one-event quota.
+  - Grants import disabled. The baseline expects `disabled_at IS NOT NULL` on every
+    Next grant and does not compare the stamped instant, which is the importer's run
+    time for grants that were not already disabled. A grant admitted with
+    `--enable-grants` appears as a `disabled` mismatch for that UUID only; the
+    verifier cannot know the flag, so reconcile it against the admission review.
+  - Replay keys older than the cutoff, or with a NULL or non-finite `created_at`,
+    are counted `expired` and not imported. The baseline applies the same selection
+    to the legacy side, so those keys are outside the verified set: reconcile them
+    from the importer's `expired` count.
+- Join-attempt `updated_at` is outside the four-column terminal-funnel projection
+  and absent from Next.
 - Legacy nullable created/updated timestamps are **not** silently replaced with
   now(). If an importer needs a fallback, make it deterministic in its finalized
   map and document it. Numeric retained IDs must fit Next's serial range.
@@ -97,6 +115,9 @@ cutoff-exact and unknown-age rows survive. A NULL timestamp is not evidence of
 expiry: missing unknown-age records must be reported, not silently discarded.
 Importers must preserve them or define a reviewed, deterministic disposition in
 the finalized map (including how Next's NOT NULL columns are populated).
+Agent idempotency keys are the exception to the unknown-age rule: they follow the
+audit importer's window, so the legacy side selects `created_at >= cutoff` and
+finite, and a NULL or non-finite `created_at` is expired rather than missing.
 Reported counts are the **selected rows after filters**, not whole-table totals.
 No historical query text is renormalized.
 

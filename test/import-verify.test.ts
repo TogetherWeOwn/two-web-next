@@ -457,7 +457,7 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       expect(run.status, run.stderr).toBe(0);
     },
   );
-  it.each(["join_attempts", "event_search_logs", "agent_event_idempotency_keys"])(
+  it.each(["join_attempts", "event_search_logs"])(
     "%s retention retains unknown-age rows on both sides",
     async (name) => {
       const baseline = defaultTableMap({
@@ -587,7 +587,7 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       }
     },
   );
-  it("baseline natural keys remap users, event parents, RSVPs and audit subjects without losing instants", async () => {
+  it("baseline natural keys remap users, event parents and RSVPs, and keep audit references as legacy IDs, without losing instants", async () => {
     const l = `"${sourceSchema}"`;
     const n = `"${destination.schemaName}"`;
     await admin.unsafe(`
@@ -605,7 +605,7 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       INSERT INTO ${n}.rsvps(id,event_id,user_id,status,synced_to_discord_at,created_at,updated_at)
         VALUES(120,200,'42','waitlisted','2026-09-01 01:02:03.123456+00','2026-09-01+00','2026-09-01+00');
       INSERT INTO ${l}.member_data_access_logs VALUES(1,'42',1,'Users','read','[1]',1,'admin.users','2026-09-01');
-      INSERT INTO ${n}.member_data_access_logs VALUES(1,'42','42','Users','read','["42"]',1,'admin.users','2026-09-01+00');
+      INSERT INTO ${n}.member_data_access_logs VALUES(1,'42','1','Users','read','[1]',1,'admin.users','2026-09-01+00');
       INSERT INTO ${l}.join_attempts VALUES(1,'joined',NULL,NULL,'42','2026-07-02','2026-07-02'),(2,'joined',NULL,NULL,'42','2026-07-01','2026-07-01');
       INSERT INTO ${n}.join_attempts(id,outcome,discord_id,created_at) VALUES(1,'joined','42','2026-07-02+00'),(2,'denied','42','2026-07-01+00');
       INSERT INTO ${l}.event_search_logs VALUES(1,'private query',2,'2026-07-02'),(2,'ignored old',0,'2026-07-01');
