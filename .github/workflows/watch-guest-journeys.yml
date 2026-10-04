@@ -1,0 +1,68 @@
+name: watch-guest-journeys
+
+# GET-only guest journeys for the 48h post-flip watch (docs/runbook.md "48h
+# post-flip watch", docs/watch-run-record.md section 6, e2e/watch/). Manual
+# dispatch only: the run names its target origin as an input, and the
+# production apex run belongs to the watch, never to a push or a schedule.
+# Public repo: standard GitHub-hosted ubuntu-latest runners only. No secrets and
+# no Environment: the journeys are unauthenticated reads (no sign-in, RSVP,
+# join or write of any kind; a non-GET request is aborted and fails the run).
+# Browsers run here in CI only, never on the controller.
+
+on:
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: Origin to read. The apex run is the watch's call (block B2).
+        type: choice
+        required: true
+        default: https://next.togetherweown.com
+        options:
+          - https://next.togetherweown.com
+          - https://togetherweown.com
+          - https://www.togetherweown.com
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watch-guest-journeys-${{ inputs.origin }}
+  cancel-in-progress: false
+
+jobs:
+  guest-journeys:
+    name: guest-journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: GET-only guest journeys
+        run: npm run e2e:watch
+        env:
+          WATCH_ORIGIN: ${{ inputs.origin }}
+      - name: Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: watch-guest-journeys-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14

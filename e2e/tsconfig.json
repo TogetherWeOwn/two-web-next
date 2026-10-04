@@ -5,7 +5,9 @@
     "./**/*.ts",
     "./ci-only.mjs",
     "./staging-guard.mjs",
+    "./watch-guard.mjs",
     "../playwright.config.ts",
-    "../playwright.staging.config.ts"
+    "../playwright.staging.config.ts",
+    "../playwright.watch.config.ts"
   ]
 }

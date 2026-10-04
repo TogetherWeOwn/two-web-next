@@ -111,6 +111,10 @@ marker, `pending >= 100`, or `unknown` across two consecutive polls.
 - Playwright GET-only guest journeys: homepage, static leaves, events
   list, one published event, robots/sitemap. No sign-in, no RSVP, no
   join, no writes of any kind.
+  Run via the dispatch-only
+  [watch-guest-journeys](../.github/workflows/watch-guest-journeys.yml)
+  workflow (`e2e/watch/`, origin input `https://togetherweown.com`) and
+  record the run URL in the table below.
 
 | Check | Time (UTC) | Result | Within budget |
 | --- | --- | --- | --- |
