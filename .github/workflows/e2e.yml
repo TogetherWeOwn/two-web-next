@@ -5,11 +5,12 @@ name: e2e
 # larger runners or Blacksmith. The Postgres service is disposable per job;
 # the guard in e2e/ci-only.mjs permits only that target, never staging or
 # production. Browsers run here in CI only, never on the controller.
-# Docs-only PRs (ci/change-scope.sh verdict, mirrored from ci.yml) skip the
-# smoke below: prose that no gate, test or build reads proves nothing about
-# browser journeys. The pull_request trigger stays unfiltered so this workflow
-# always reports, and browser-smoke is not a required check, so a skip never
-# blocks a merge.
+# Docs-only and test-only PRs (ci/change-scope.sh skip_e2e verdict, mirrored
+# from ci.yml) skip the smoke below: prose that no gate, test or build reads,
+# and unit tests the journeys never execute, prove nothing about browser
+# journeys. The pull_request trigger stays unfiltered so this workflow always
+# reports, and browser-smoke is not a required check, so a skip never blocks a
+# merge.
 
 on:
   pull_request:
@@ -28,16 +29,18 @@ concurrency:
 
 jobs:
   # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose
-  # (`docs/**`, root `*.md`) that no gate, test or build reads fast-passes
-  # the browser smoke below instead of occupying a runner for 25 minutes.
+  # (`docs/**`, root `*.md`) that no gate, test or build reads, or only the
+  # `test/` unit tree the journeys never execute, fast-passes the browser
+  # smoke below instead of occupying a runner for 25 minutes.
   # ci/change-scope.sh fails closed: island assets, stylesheets, fonts and
-  # every other path resolve to docs_only=false and run the full smoke.
+  # every other path resolve to skip_e2e=false and run the full smoke.
   scope:
     name: scope
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      skip_e2e: ${{ steps.scope.outputs.skip_e2e }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request'
@@ -61,7 +64,7 @@ jobs:
   browser-smoke:
     name: browser-smoke
     needs: scope
-    if: needs.scope.outputs.docs_only != 'true'
+    if: needs.scope.outputs.skip_e2e != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:

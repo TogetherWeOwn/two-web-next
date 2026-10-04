@@ -5,7 +5,9 @@ import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // ci/change-scope.sh decides whether the required `check` may fast-pass a PR
-// (TOG-11811). Every doubt must resolve to docs_only=false.
+// (TOG-11811) and whether the browser/staging smoke may skip it. Every doubt
+// must resolve to docs_only=false and skip_e2e=false. The script prints one
+// `docs_only=<bool>` line and one `skip_e2e=<bool>` line.
 const script = resolve("ci/change-scope.sh");
 let repo: string;
 
@@ -24,7 +26,16 @@ function scope(rows: string[][], expected = rows.length, cwd = repo) {
     env,
     encoding: "utf8",
   });
-  return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr };
+  const lines = result.stdout.trim().split("\n");
+  const verdict = (key: string) =>
+    lines.find((line) => line.startsWith(`${key}=`))?.slice(key.length + 1);
+  return {
+    status: result.status,
+    stdout: result.stdout.trim(),
+    stderr: result.stderr,
+    docsOnly: verdict("docs_only"),
+    skipE2e: verdict("skip_e2e"),
+  };
 }
 
 beforeEach(() => {
@@ -39,6 +50,8 @@ beforeEach(() => {
     "ci/check-config-docs.mjs": 'readFileSync("docs/config.md")\n',
     "content/policy.md": "policy\n",
     "src/app.ts": "export {};\n",
+    "test/app.test.ts": 'import { it } from "vitest";\n',
+    "test/helpers/fixture.ts": "export {};\n",
   };
   for (const [path, body] of Object.entries(files)) {
     mkdirSync(dirname(join(repo, path)), { recursive: true });
@@ -52,48 +65,51 @@ afterEach(() => rmSync(dirname(repo), { recursive: true, force: true }));
 
 describe("change-scope gate", () => {
   it("fast-passes prose that nothing reads", () => {
-    expect(
-      scope([
-        ["docs/guide.md", ""],
-        ["README.md", ""],
-        ["docs/new.md", ""],
-      ]).stdout,
-    ).toBe("docs_only=true");
+    const result = scope([
+      ["docs/guide.md", ""],
+      ["README.md", ""],
+      ["docs/new.md", ""],
+    ]);
+    expect(result.docsOnly).toBe("true");
+    expect(result.skipE2e).toBe("true");
   });
 
   it("runs the suite for any code path", () => {
-    expect(
-      scope([
-        ["docs/guide.md", ""],
-        ["src/app.ts", ""],
-      ]).stdout,
-    ).toBe("docs_only=false");
+    const result = scope([
+      ["docs/guide.md", ""],
+      ["src/app.ts", ""],
+    ]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("false");
   });
 
   it("counts the old name of a rename", () => {
-    expect(scope([["docs/app.md", "src/app.ts"]]).stdout).toBe("docs_only=false");
+    expect(scope([["docs/app.md", "src/app.ts"]]).docsOnly).toBe("false");
   });
 
   it("treats a doc a gate reads as a gate input", () => {
     const result = scope([["docs/config.md", ""]]);
-    expect(result.stdout).toBe("docs_only=false");
+    expect(result.docsOnly).toBe("false");
     expect(result.stderr).toContain("ci/check-config-docs.mjs");
   });
 
   it("keeps Markdown outside docs/ in the suite", () => {
-    expect(scope([["content/policy.md", ""]]).stdout).toBe("docs_only=false");
+    expect(scope([["content/policy.md", ""]]).docsOnly).toBe("false");
   });
 
   it("fails closed on a truncated, empty or malformed list", () => {
-    expect(scope([["docs/guide.md", ""]], 3001).stdout).toBe("docs_only=false");
-    expect(scope([]).stdout).toBe("docs_only=false");
-    expect(scope([["", ""]]).stdout).toBe("docs_only=false");
+    expect(scope([["docs/guide.md", ""]], 3001).docsOnly).toBe("false");
+    expect(scope([]).docsOnly).toBe("false");
+    expect(scope([["", ""]]).docsOnly).toBe("false");
+    expect(scope([["test/app.test.ts", ""]], 3001).skipE2e).toBe("false");
+    expect(scope([]).skipE2e).toBe("false");
+    expect(scope([["", ""]]).skipE2e).toBe("false");
   });
 
   it("holds its verdict on large PRs (no SIGPIPE flip)", () => {
     const docs = Array.from({ length: 3000 }, (_, i) => [`docs/page-${i}.md`, ""]);
-    expect(scope(docs).stdout).toBe("docs_only=true");
-    expect(scope([...docs.slice(1), ["src/app.ts", ""]]).stdout).toBe("docs_only=false");
+    expect(scope(docs).docsOnly).toBe("true");
+    expect(scope([...docs.slice(1), ["src/app.ts", ""]]).docsOnly).toBe("false");
   });
 
   it("errors instead of passing when the tree cannot be searched", () => {
@@ -101,6 +117,73 @@ describe("change-scope gate", () => {
     const result = scope([["docs/guide.md", ""]], 1, outside);
     expect(result.status).not.toBe(0);
     expect(result.stdout).toBe("");
+  });
+});
+
+describe("skip_e2e verdict", () => {
+  it("skips the smoke for test-only changes the journeys never execute", () => {
+    const result = scope([
+      ["test/app.test.ts", ""],
+      ["test/helpers/fixture.ts", ""],
+    ]);
+    // Unit tests still run the required check: docs_only stays false.
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("true");
+  });
+
+  it("skips the smoke for mixed docs and test changes", () => {
+    const result = scope([
+      ["docs/guide.md", ""],
+      ["test/app.test.ts", ""],
+      ["README.md", ""],
+    ]);
+    expect(result.skipE2e).toBe("true");
+  });
+
+  it("skips the smoke for a doc a gate reads: an input to check, not to journeys", () => {
+    const result = scope([["docs/config.md", ""]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("true");
+  });
+
+  it("runs the smoke when a test change meets any web-affecting path", () => {
+    for (const path of [
+      "src/app.ts",
+      "assets/islands/rsvp-button.js",
+      "public/styles.css",
+      "content/policy.md",
+      "e2e/admin.spec.ts",
+      "wrangler.jsonc",
+      "bin/smoke.mjs",
+      "ci/check-config-docs.mjs",
+      "drizzle/0001_init.sql",
+      "package.json",
+      "vitest.config.ts",
+    ]) {
+      expect(
+        scope([
+          ["test/app.test.ts", ""],
+          [path, ""],
+        ]).skipE2e,
+        path,
+      ).toBe("false");
+    }
+  });
+
+  it("counts both names of a rename for the smoke verdict", () => {
+    // A journey moved into test/ is still observed through its old name.
+    expect(scope([["test/journey.ts", "e2e/journey.ts"]]).skipE2e).toBe("false");
+    // Code moved out of test/ starts being observed through its new name.
+    expect(scope([["src/journey.ts", "test/journey.ts"]]).skipE2e).toBe("false");
+    // Prose renamed inside docs/ or into the unit tree skips.
+    expect(scope([["docs/renamed.md", "docs/guide.md"]]).skipE2e).toBe("true");
+    expect(scope([["test/renamed.test.ts", "test/app.test.ts"]]).skipE2e).toBe("true");
+  });
+
+  it("fails the smoke verdict closed on a truncated list", () => {
+    const docs = Array.from({ length: 3000 }, (_, i) => [`docs/page-${i}.md`, ""]);
+    expect(scope(docs).skipE2e).toBe("true");
+    expect(scope(docs, 3001).skipE2e).toBe("false");
   });
 });
 
@@ -146,9 +229,10 @@ describe("e2e scope gate", () => {
   it("mirrors the ci.yml docs-only gate instead of running unscoped", () => {
     expect(scopeJob).toContain("bash ci/change-scope.sh");
     expect(scopeJob).toContain("docs_only:");
+    expect(scopeJob).toContain("skip_e2e:");
     expect(scopeJob).toContain("repos/$REPO/pulls/$PR_NUMBER/files");
     expect(smoke).toMatch(/\n    needs: scope\n/);
-    expect(smoke).toMatch(/\n    if: needs\.scope\.outputs\.docs_only != 'true'\n/);
+    expect(smoke).toMatch(/\n    if: needs\.scope\.outputs\.skip_e2e != 'true'\n/);
   });
 
   it("keeps the pull_request trigger unfiltered so the workflow always reports", () => {
@@ -161,7 +245,8 @@ describe("e2e scope gate", () => {
   it("stays on standard hosted runners and skips only the smoke, never a required check", () => {
     expect(smoke).toMatch(/\n    runs-on: ubuntu-latest\n/);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
-    // check, gitleaks and pr-lint, so a docs-only skip never blocks a merge.
+    // check, gitleaks and pr-lint, so a docs-only or test-only skip never
+    // blocks a merge.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]
@@ -181,11 +266,12 @@ describe("e2e-staging scope gate", () => {
     // parent and feeds ci/change-scope.sh the same TSV shape.
     expect(scopeJob).toContain("bash ci/change-scope.sh");
     expect(scopeJob).toContain("docs_only:");
+    expect(scopeJob).toContain("skip_e2e:");
     expect(scopeJob).not.toContain("pulls/$PR_NUMBER/files");
     expect(scopeJob).toContain("workflow_run.head_sha");
     expect(scopeJob).toContain("git diff --name-status");
     expect(journeys).toMatch(/\n    needs: scope\n/);
-    expect(journeys).toMatch(/needs\.scope\.outputs\.docs_only != 'true'/);
+    expect(journeys).toMatch(/needs\.scope\.outputs\.skip_e2e != 'true'/);
   });
 
   it("keeps the deploy trigger intact and dispatches always running", () => {
@@ -200,8 +286,8 @@ describe("e2e-staging scope gate", () => {
     expect(scopeJob).toMatch(/\n    runs-on: ubuntu-latest\n/);
     expect(journeys).toMatch(/\n    runs-on: ubuntu-latest\n/);
     // staging-journeys is post-deploy evidence, not a merge gate: CONTRIBUTING
-    // names exactly check, gitleaks and pr-lint, so a docs-only skip never
-    // blocks a merge.
+    // names exactly check, gitleaks and pr-lint, so a docs-only or test-only
+    // skip never blocks a merge.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]
@@ -210,23 +296,56 @@ describe("e2e-staging scope gate", () => {
   });
 });
 
+describe("deploy post-deploy smoke scope", () => {
+  const deploy = readFileSync(".github/workflows/deploy.yml", "utf8");
+  const scopeStep =
+    deploy.match(
+      /      - name: Scope post-deploy smoke to web-affecting changes\n(?:        .*\n|          .*\n)+/,
+    )?.[0] ?? "";
+  const publicSmoke = deploy.split("      - name: Smoke test staging public routes\n")[1] ?? "";
+  const jsonSmoke = deploy.split("      - name: Smoke test staging event JSON contract\n")[1] ?? "";
+
+  it("scopes both smoke steps to web-affecting deploys without PR context", () => {
+    // The job checks out the deployed SHA, so the scope step diffs HEAD
+    // against its parent in the e2e-staging TSV shape; a deploy with no
+    // parent fails closed and runs the smoke instead of failing the deploy.
+    expect(deploy).toContain("fetch-depth: 2");
+    expect(scopeStep).toContain('git rev-parse --verify --quiet "HEAD~1"');
+    expect(scopeStep).toContain("bash ci/change-scope.sh");
+    expect(scopeStep).toContain("git diff --name-status");
+    expect(scopeStep).toContain("id: smoke-scope");
+    expect(publicSmoke).toMatch(/^        if: steps\.smoke-scope\.outputs\.skip_e2e != 'true'$/m);
+    expect(jsonSmoke).toMatch(/^        if: steps\.smoke-scope\.outputs\.skip_e2e != 'true'$/m);
+  });
+
+  it("keeps the deploy itself and its gates unscoped", () => {
+    // The scope step sits after the Cloudflare mutations, and nothing gates
+    // the deploy steps or the staging-deploy-gate re-verifications on it.
+    const scopeIndex = deploy.indexOf("Scope post-deploy smoke");
+    const deployIndex = deploy.indexOf("Deploy to Cloudflare Workers");
+    expect(scopeIndex).toBeGreaterThan(deployIndex);
+    expect(deploy).not.toMatch(/needs\.smoke-scope/);
+    expect(deploy.match(/node ci\/staging-deploy-gate\.mjs/g)?.length).toBeGreaterThan(1);
+  });
+});
+
 describe("changed-path fixture matrix", () => {
   it("fast-passes docs-only PRs", () => {
-    expect(
-      scope([
-        ["docs/guide.md", ""],
-        ["README.md", ""],
-      ]).stdout,
-    ).toBe("docs_only=true");
+    const result = scope([
+      ["docs/guide.md", ""],
+      ["README.md", ""],
+    ]);
+    expect(result.docsOnly).toBe("true");
+    expect(result.skipE2e).toBe("true");
   });
 
   it("runs the full suite for code PRs", () => {
-    expect(
-      scope([
-        ["docs/guide.md", ""],
-        ["src/app.ts", ""],
-      ]).stdout,
-    ).toBe("docs_only=false");
+    const result = scope([
+      ["docs/guide.md", ""],
+      ["src/app.ts", ""],
+    ]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("false");
   });
 
   // Island sources, built outputs, stylesheets, fonts, icons and the manifest
@@ -248,13 +367,15 @@ describe("changed-path fixture matrix", () => {
   it.each(assetOnly.map((path) => [path] as [string]))(
     "runs the full suite for island-asset path %s",
     (path) => {
-      expect(scope([[path, ""]]).stdout).toBe("docs_only=false");
+      const result = scope([[path, ""]]);
+      expect(result.docsOnly).toBe("false");
+      expect(result.skipE2e).toBe("false");
     },
   );
 
   it("counts an asset source renamed into docs/ as code", () => {
-    expect(scope([["docs/rsvp-button.md", "assets/islands/rsvp-button.js"]]).stdout).toBe(
-      "docs_only=false",
-    );
+    const result = scope([["docs/rsvp-button.md", "assets/islands/rsvp-button.js"]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("false");
   });
 });
