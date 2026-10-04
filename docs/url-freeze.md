@@ -18,7 +18,7 @@ Any intentional change needs a 301 map entry, not a silent move.
 | `/sitemap_index.xml` | `routes/web.php` sitemap closure | ✅ static entries; published `/e/{key}` rows land with W8 |
 | `/robots.txt` | `routes/web.php` robots closure (per-env host, TOG-7071) | ✅ |
 | `/join` | `JoinController` landing page (one-click button + invite fallback + widget) | ✅ W6: database-free leaf, in sitemap (monthly, 0.9) |
-| `/join/discord` | `JoinController` OAuth start (`identify` + `guilds.join`, `throttle:10,1`) | ✅ W6: Postgres throttle, signed `join_source` / `join_next` cookies |
+| `/join/discord` | `JoinController` OAuth start (`identify` + `guilds.join`, `throttle:10,1`) | ✅ W6: per-client Postgres throttle, signed `join_source` / `join_next` cookies |
 | `/join/callback` | `JoinController` OAuth callback (synchronous bot add, then sign-in) | ✅ W6: synchronous `PUT /guilds/{guild}/members/{user}`, one `join_attempts` row per terminal path |
 
 Crawl-set contract (TOG-7072): published events only. Drafts 403 for guests,

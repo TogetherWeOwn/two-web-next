@@ -28,6 +28,7 @@ import { inviteDestination } from "../invite";
 import { recordJoinResult } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
+import { clientKey } from "../throttle";
 import {
   JOIN_THROTTLE_BUCKET,
   JOIN_THROTTLE_PER_MINUTE,
@@ -91,11 +92,15 @@ function currentMinute(now: () => number): number {
   return Math.floor(now() / 60000);
 }
 
+// The budget is per client: `join:<client>:<minute>`, the same client key every
+// other human-route throttle uses. /join/discord and /join/callback draw on one
+// bucket per client (legacy `throttle:10,1` keyed guests by IP), but no client
+// can spend another's budget.
 async function throttled(c: Ctx): Promise<Response | null> {
   const deps = (c.env as EnvWithJoin).JOIN_DEPS;
   const verdict = await checkJoinThrottle(
     await joinStore(c),
-    `${JOIN_THROTTLE_BUCKET}:${currentMinute(deps?.now ?? Date.now)}`,
+    `${JOIN_THROTTLE_BUCKET}:${clientKey(c)}:${currentMinute(deps?.now ?? Date.now)}`,
     JOIN_THROTTLE_PER_MINUTE,
   );
   if (!verdict.limited) return null;
