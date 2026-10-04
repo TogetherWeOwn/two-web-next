@@ -516,6 +516,16 @@ describe("RsvpButton shipped binder", () => {
     expect(b.requests[1]!.init.body).toBe('{"status":"waitlisted"}');
     expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #3 in line");
     expect(b.get("waitlist-claim")).toBeNull();
+    // WaitlistTest.php: the place is announced politely (status, never alert),
+    // takes focus after joining, and the join broadcasts the waitlisted state.
+    const position = b.get("waitlist-position")!;
+    expect(position.getAttribute("role")).toBe("status");
+    expect(position.getAttribute("tabindex")).toBe("-1");
+    expect(position.focused).toBe(true);
+    expect(b.broadcasts.at(-1)!.detail).toEqual({
+      eventKey: "raid/one",
+      viewerState: "waitlisted",
+    });
   });
 
   it("honors the current FIFO server's waitlisted answer to a going request", async () => {
@@ -526,6 +536,19 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-confirmed")).toBeNull();
     expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #2 in line");
     expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "waitlisted" });
+  });
+
+  it("announces the settled Going answer when a waitlist join returns the former holder's seat", async () => {
+    // WaitlistTest.php: the only waiter is a former holder, so the locked server
+    // settles the join to Going; the view confirms it and broadcasts `going`.
+    const b = browser("full");
+    b.get("waitlist-join")!.click();
+    expect(b.requests[0]!.init.body).toBe('{"status":"waitlisted"}');
+    b.finish(0, 200, { data: { status: "going", synced_to_discord_at: null } });
+    await b.settle();
+    expect(b.get("rsvp-confirmed")).not.toBeNull();
+    expect(b.get("waitlist-position")).toBeNull();
+    expect(b.broadcasts.at(-1)!.detail).toEqual({ eventKey: "raid/one", viewerState: "going" });
   });
 
   it.each([

@@ -258,7 +258,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     const created = await write("POST", "/events", MOD, payload);
     expect(created.status).toBe(201);
     const key = ((await created.json()) as { data: { event_key: string; status: string } }).data;
-    expect(key.event_key).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(key.event_key).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
     expect(key.status).toBe("draft");
     expect(sent).toHaveLength(0); // drafts never sync
 
@@ -268,8 +268,12 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
 
     const patched = await write("PATCH", `/events/${key.event_key}`, MOD, { title: "Renamed" });
     expect(patched.status).toBe(200);
-    const pj = ((await patched.json()) as { data: { title: string; starts_at: string } }).data;
+    const pj = (
+      (await patched.json()) as { data: { title: string; game: string; starts_at: string } }
+    ).data;
     expect(pj.title).toBe("Renamed");
+    // EventScheduleTest.php: the game the create asked for survives to the stored row.
+    expect(pj.game).toBe("Chess");
     expect(pj.starts_at).toBe("2099-11-04T20:00:00.000Z");
     expect(sent).toHaveLength(0);
 
@@ -472,6 +476,9 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(unchanged.status).toBe(304);
     expect(await unchanged.text()).toBe("");
     expect(unchanged.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    // EventJsonAccessTest.php: a member is refused the draft outright, with or
+    // without the moderator's validator.
+    expect((await req(path, await as(MEMBER))).status).toBe(403);
     expect((await req(path, await as(MEMBER, { "if-none-match": etag }))).status).toBe(403);
     expect(
       (await req(path, { headers: { accept: "application/json", "if-none-match": etag } })).status,
