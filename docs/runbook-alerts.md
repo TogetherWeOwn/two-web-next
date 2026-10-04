@@ -32,9 +32,9 @@ The app writes ONE single-line JSON object on `console.error`, with
 
 ## Delivery and redaction
 
-`tail/worker.ts` accepts only critical `error.alert` and `queue.failing` JSON
-arguments from error-level logs of `two-web-next`. Other events, malformed
-arguments, other Workers and recursive Tail logs are ignored.
+For source alerts, `tail/worker.ts` accepts only critical `error.alert` and
+`queue.failing` JSON arguments from error-level logs of `two-web-next`. Other
+events, malformed arguments, other Workers and recursive Tail logs are ignored.
 
 | Outbound field | Policy |
 | --- | --- |
@@ -71,6 +71,24 @@ redacted summary. A failed delivery does not start the mute; a later source line
 can retry, but the current event is not durably retried. Source request muting
 can delay that next attempt. Review Tail logs when delivery is suspected lost.
 The webhook URL and webhook response bodies are never logged.
+
+### Scheduled `/up` prober: `uptime.down`
+
+The Tail Worker's scheduled handler generates a third event, `uptime.down`,
+from its own `/up` prober when `UPTIME_URL` and a valid webhook are configured.
+Each cron run probes once and retries a failure after ten seconds, with a
+ten-second timeout per attempt. It pages only if **both attempts in that run
+fail**; a healthy first or second attempt stays silent. Healthy means HTTP 200
+with `x-two-origin: two-web-next`, not merely a reachable endpoint.
+
+The summary contains only `event`, `status` (the second attempt's HTTP status,
+or `0` for a transport error/timeout) and `timestamp`. It uses the same
+five-minute, per-isolate delivery mute, keyed by `uptime.down:<status>`.
+The Tail Worker records `ops.alert.delivered` or `ops.alert.delivery_failed`
+for each unmuted delivery attempt, so the delivery-receipt query below also
+catches these pages. **There is no matching app source-log line by design**:
+the event originates in the Tail Worker, not an `error.alert` or `queue.failing`
+source emission. A receipt without a source alert is therefore expected.
 
 ## Configure/deploy (staging first)
 
