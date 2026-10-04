@@ -104,6 +104,10 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
 test("staging member joins then leaves the waitlist on a capacity-1 fixture", async ({
   browser,
 }) => {
+  // Slow staging needs more than the 30s default: the re-sign below launches
+  // two browsers, then the journey drives a full fixture lifecycle. Triples
+  // the timeout to 90s.
+  test.slow();
   // The going/withdraw journey above already spent this file's stored bearers:
   // every authenticated event-page view rotates the session token server-side,
   // so the on-disk bearer is dead by now and the member page would render as a
