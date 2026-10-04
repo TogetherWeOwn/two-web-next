@@ -59,7 +59,7 @@ it("uses UTF-8 byte ordering matching Postgres C collation, and collision-free c
   expect(compareKeys(["9007199254740993"], ["9007199254740993"])).toBe(0);
 });
 
-it("covers all twelve import tables, requires a fixed cutoff and exposes unresolved mappings", () => {
+it("covers all twelve import tables, requires a fixed cutoff and declares no unresolved mappings", () => {
   const map = defaultTableMap({ cutoff });
   expect(map.map((t) => t.name)).toEqual([
     "users",
@@ -79,10 +79,12 @@ it("covers all twelve import tables, requires a fixed cutoff and exposes unresol
   expect(() => defaultTableMap({ cutoff: "2026-07-02';SELECT 1--" })).toThrow(
     "fixed_cutoff_required",
   );
-  // The users and events gaps are closed by importer-backed projections
-  // (test/import-verify-importers.test.ts); sibling slices still own the rest.
-  for (const name of ["users", "events"])
-    expect(map.find((t) => t.name === name)!.mappingGaps ?? []).toEqual([]);
+  // Every gap is closed by an importer-backed projection: users/events in
+  // test/import-verify-importers.test.ts, content/funnel in
+  // test/import-verify-content-funnel.test.ts, audit in
+  // test/import-verify-audit.test.ts, and the full chain in
+  // test/import-verify-chain.test.ts.
+  for (const table of map) expect(table.mappingGaps ?? [], table.name).toEqual([]);
   expect(
     map.find((t) => t.name === "agent_event_grants")!.columns.find((f) => f.name === "disabled")!
       .legacy,
