@@ -269,12 +269,14 @@ const MATRIX: Case[] = [
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
 // endpoint. Pin known middleware multiplicity instead of filtering wildcards.
-// Global `*` carries five: the pre-throttle guard, trust-hosts, same-origin,
-// the stale-tab auth-status script and the expired-write banner (main #239
-// added the last two). Profile paths carry three registrations each: the
-// session gate, the join-result consumer, and the mandatory access log.
+// Global `*` carries six: the pre-throttle guard, trust-hosts, same-origin,
+// the stale-tab auth-status script, the expired-write banner (main #239
+// added those two) and the flag-gated freeze banner. Profile paths carry
+// three registrations each: the session gate, the join-result consumer, and
+// the mandatory access log.
 // Profiles: session gate + keyed read boundary per path (main #145).
 const MIDDLEWARE = [
+  "ALL /*",
   "ALL /*",
   "ALL /*",
   "ALL /*",
