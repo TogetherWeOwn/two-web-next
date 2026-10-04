@@ -100,7 +100,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -207,7 +207,7 @@ jobs:
       - name: Dependency audit (lockfile, including dev dependencies)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run deps:audit
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
         if: needs.scope.outputs.docs_only != 'true'
       - name: Seeded admin properties (10s budget, local fixtures)
         if: needs.scope.outputs.docs_only != 'true'
@@ -244,7 +244,7 @@ jobs:
       # on a partial workspace.
       - name: Install Kit workspace dependencies
         if: needs.scope.outputs.docs_only != 'true'
-        run: npm ci --prefix web
+        run: npm ci --prefix web --no-audit --no-fund
       - name: Kit typecheck (svelte-check, warnings fail)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run check --prefix web
@@ -322,7 +322,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci --include=dev
+      - run: npm ci --include=dev --no-audit --no-fund
       # The served public/ files are the deterministic esbuild output of
       # assets/; fail when a source changed without its rebuilt output.
       - run: node ci/minify-assets.mjs --selftest
@@ -350,7 +350,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci --include=dev
+      - run: npm ci --include=dev --no-audit --no-fund
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
