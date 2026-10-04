@@ -72,8 +72,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     const snapshot = async (eventKey: string, id: number) => ({
       event: await fixture.client`SELECT * FROM events WHERE event_key = ${eventKey}`,
       answers: await fixture.client`SELECT * FROM rsvps WHERE event_id = ${id} ORDER BY id`,
-      stored:
-        await fixture.client`SELECT * FROM agent_event_idempotency_keys WHERE event_key = ${eventKey} ORDER BY id`,
+      stored: await fixture.client`SELECT * FROM agent_event_idempotency_keys ORDER BY id`,
     });
 
     beforeAll(async () => {
@@ -96,6 +95,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     it("refuses a grant-driven shrink below Going: 422, rows unchanged, no write-back", async () => {
       const eventKey = await create(8);
+      expect((await call("publish", { event_key: eventKey })).status).toBe(200);
+      expect(
+        await fixture.client`SELECT status, rsvp_open, capacity, agent_version FROM events WHERE event_key = ${eventKey}`,
+      ).toEqual([{ status: "published", rsvp_open: true, capacity: 8, agent_version: 1 }]);
+      expect(dispatched).toEqual([{ eventKey, status: "published" }]);
+      dispatched.length = 0;
       const id = await eventId(eventKey);
       await occupy(id, 5, "seat");
       await fixture.db.insert(rsvps).values([
