@@ -27,6 +27,23 @@ Never borrow another person's session or use the QA authentication seam to get
 admin access. If access or member-data audit logging fails, stop and escalate;
 do not bypass it with direct database queries or another endpoint.
 
+## Auth-wall probe (staging only)
+
+`bin/admin-authwall-probe.mjs` verifies all nine admin POST routes answer each
+leg correctly: guests bounce to session recovery (303), signed-in
+non-moderators get 403, and moderators read the dashboard (200). It logs in
+both QA identities, sends empty bodies (expectations resolve before any
+handler touches the database, so it writes nothing), and prints only statuses
+— never tokens, cookies, or bodies. Run it with `QA_AUTH_TOKEN` from an
+approved secret binding:
+
+```sh
+QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/admin-authwall-probe.mjs
+```
+
+It spends two QA-login hits and stays inside the admin-write throttle budget.
+Live runs belong to the authorized cutover procedure, not CI.
+
 ## Screens and route reference
 
 Use the navigation **Events**, **Featured**, **Join attempts**, or **Site**.
