@@ -13,8 +13,8 @@
 /** Pause before each Retry click, in order. Length = retries after the first try. */
 export const SEARCH_RETRY_BACKOFF_MS = Object.freeze([2_000, 4_000, 8_000, 12_000]);
 
-/** Worst-case wait for one attempt to settle on the miss or the error block. */
-export const SEARCH_ATTEMPT_SETTLE_MS = 5_000;
+/** Worst-case wait for one attempt to settle on the miss or the error block (staging answers in 1-5 s on a slow episode). */
+export const SEARCH_ATTEMPT_SETTLE_MS = 10_000;
 
 /** Total attempts: the first search plus one per scheduled retry. */
 export function searchMaxAttempts() {
