@@ -15,7 +15,7 @@ test("staging QA member edits and persists their profile using the keyboard", as
   // The real spam trap silently ignores submits within 1000 ms of SSR render.
   await page.waitForTimeout(1100);
   const bio = `Staging run ${Date.now()}: community game nights.`;
-  await page.getByLabel("Bio", { exact: true }).focus();
+  await page.getByLabel("Bio").focus();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type(bio);
   await page.keyboard.press("Tab");
