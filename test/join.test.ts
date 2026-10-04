@@ -454,6 +454,44 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(await limited.json()).toMatchObject({ reason: "rate_limited" });
     expect(fake.throttle).toHaveLength(10);
   });
+
+  it("keys the budget per client: one client cannot spend another's", async () => {
+    const { fake, env: e } = isolated({ now: () => 1_791_000_000_000 });
+    const as = (ip: string) => ({ headers: { "cf-connecting-ip": ip } });
+    for (let i = 0; i < 10; i++) {
+      expect((await app.request("/join/discord", as("203.0.113.7"), e)).status).toBe(302);
+    }
+    // The attacker is refused on both routes of the funnel...
+    expect((await app.request("/join/discord", as("203.0.113.7"), e)).status).toBe(429);
+    expect((await app.request("/join/callback", as("203.0.113.7"), e)).status).toBe(429);
+    // ...and a client the Worker has never seen is not.
+    const victim = await app.request("/join/discord", as("198.51.100.99"), e);
+    expect(victim.status).toBe(302);
+    expect(victim.headers.get("location")).toContain("discord.com");
+    expect(
+      (await app.request("/join/callback?error=access_denied", as("198.51.100.99"), e)).status,
+    ).not.toBe(429);
+    // The bucket names the client and the minute, never a site-wide key.
+    const minute = Math.floor(1_791_000_000_000 / 60000);
+    expect(new Set(fake.throttle.map((r) => r.bucket))).toEqual(
+      new Set([`join:203.0.113.7:${minute}`, `join:198.51.100.99:${minute}`]),
+    );
+  });
+
+  it("falls back to the first x-forwarded-for hop, then one anonymous bucket, like every other throttle", async () => {
+    const { fake, env: e } = isolated({ now: () => 1_791_000_000_000 });
+    await app.request(
+      "/join/discord",
+      { headers: { "x-forwarded-for": "192.0.2.5, 10.0.0.1" } },
+      e,
+    );
+    await app.request("/join/discord", {}, e);
+    const minute = Math.floor(1_791_000_000_000 / 60000);
+    expect(fake.throttle.map((r) => r.bucket)).toEqual([
+      `join:192.0.2.5:${minute}`,
+      `join:anon:${minute}`,
+    ]);
+  });
 });
 
 describe("GET /join/callback (synchronous bot add + sign-in)", () => {
@@ -540,13 +578,19 @@ describe("GET /join/callback (synchronous bot add + sign-in)", () => {
     expect(fake.attempts[0]).toMatchObject({ outcome: "error" });
   });
 
-  it("throttles the callback on the same shared budget", async () => {
+  it("throttles the callback on the same per-client budget", async () => {
     const { env: e } = isolated({ now: () => 1_791_000_000_000 });
+    const as = (ip: string) => ({ headers: { "cf-connecting-ip": ip } });
     for (let i = 0; i < 10; i++) {
-      await app.request("/join/callback?error=access_denied", {}, e);
+      await app.request("/join/callback?error=access_denied", as("203.0.113.7"), e);
     }
-    const limited = await app.request("/join/callback?error=access_denied", {}, e);
+    const limited = await app.request("/join/callback?error=access_denied", as("203.0.113.7"), e);
     expect(limited.status).toBe(429);
+    // The same client is out of budget on the start route too (one bucket)...
+    expect((await app.request("/join/discord", as("203.0.113.7"), e)).status).toBe(429);
+    // ...while a member returning from Discord on another address is untouched.
+    const other = await app.request("/join/callback?error=access_denied", as("198.51.100.99"), e);
+    expect(other.status).not.toBe(429);
   });
 });
 
