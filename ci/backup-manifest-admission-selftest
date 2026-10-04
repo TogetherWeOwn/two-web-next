@@ -215,6 +215,16 @@ class ManifestAdmission(unittest.TestCase):
         self.seed([NEW])
         self.refuse_without_mutation("backup")
 
+    def test_duplicate_refusal_reports_admission_without_unbound_variable(self):
+        # TOG-13095: a same-second key collision fails admission; the EXIT
+        # trap must not then trip `set -u` on the out-of-scope temp dir and
+        # mask the refusal with `dir: unbound variable`.
+        self.seed([NEW])
+        result = self.run_backup("backup")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("manifest admission failed", result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+
     def test_generated_weekly_duplicate_rejected_before_upload(self):
         self.seed([DAILY, WEEKLY])
         self.refuse_without_mutation("promote-weekly")
