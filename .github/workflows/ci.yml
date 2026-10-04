@@ -171,6 +171,9 @@ jobs:
   # Run the required gate even when performance jobs fail or are skipped;
   # GitHub treats a skipped required check as successful.
   # A failing audit must also prevent the existing required check from passing.
+  # `scope` is not a required check, so a red scope must fail `check` itself
+  # (first step): without its outputs every area reads as unselected, and the
+  # audit guard would accept a skipped a11y and leave `check` green.
   check:
     name: check
     needs: [a11y, lighthouse, bundle-budget, scope]
@@ -196,6 +199,10 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
+      - name: Require successful scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: test "$SCOPE_RESULT" = success
       - name: Docs-only fast pass (no code changed)
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
@@ -447,6 +454,14 @@ jobs:
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
           [ "$SCOPE_RESULT" = success ] || fail "scope did not succeed; failing closed."
+          # Empty or unexpected outputs would read as unselected areas and let a
+          # skipped job pass, so every verdict must be exactly true or false.
+          for pair in "FULL=$FULL" "APP=$APP" "WORKER=$WORKER" "DB=$DB" "DRAFT=$DRAFT"; do
+            case "${pair#*=}" in
+              true|false) ;;
+              *) fail "scope output ${pair%%=*} is '${pair#*=}', expected true or false; failing closed." ;;
+            esac
+          done
           [ "$CHECK_RESULT" = success ] || fail "check did not succeed."
           selected_app_db() { [ "$FULL" = true ] || [ "$APP" = true ] || [ "$DB" = true ]; }
           selected_app() { [ "$FULL" = true ] || [ "$APP" = true ]; }
