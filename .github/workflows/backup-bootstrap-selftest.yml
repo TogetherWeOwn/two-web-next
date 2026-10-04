@@ -35,6 +35,8 @@ jobs:
       relevant: ${{ steps.scope.outputs.relevant }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Path-scope selftest (fixtures, no network)
         run: bash ci/path-scope.sh --selftest
       - id: scope
@@ -68,6 +70,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Offline PGDG bootstrap regressions (no secrets or host provisioning)
         run: python3 ci/backup-bootstrap-selftest
 

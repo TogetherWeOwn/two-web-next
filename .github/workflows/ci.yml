@@ -50,7 +50,7 @@ jobs:
   scope:
     name: scope
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'scope') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
@@ -62,6 +62,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
       - id: scope
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -100,11 +102,12 @@ jobs:
     # Overflow switch (TOG ops, 2026-10-01): repo vars CI_OVERFLOW_RUNNER (JSON
     # runs-on, e.g. ["ubuntu-latest"]), CI_OVERFLOW_JOBS (JSON job ids) and
     # CI_OVERFLOW_EVENTS (JSON event names) together route this job without a PR.
-    # Unselected, it follows repo visibility: the org's two-selfhosted runner group
-    # refuses public repos (TOG-12326), so GitHub-hosted Linux while public and the
-    # self-hosted fleet while private. Private repo: hosted minutes come from the
-    # included allowance; an rbx1 guard reverts at 45k.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    # The public guard comes first, so a public repo never leaves GitHub-hosted
+    # Linux, whatever the overflow vars name (the org's two-selfhosted runner group
+    # also refuses public repos, TOG-12326). Private repo: the overflow switch if
+    # selected, else the self-hosted fleet. Hosted minutes come from the included
+    # allowance; an rbx1 guard reverts at 45k.
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'a11y') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 25
     # Self-hosted runners share one Docker host, so a published 5432 (and
     # wrangler's dev ports) collide across concurrent jobs. A job container has
@@ -122,13 +125,15 @@ jobs:
       DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Job-private localhost:5432 forward to the Postgres service
         run: |
           apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -180,7 +185,7 @@ jobs:
     # A skipped required check is mergeable; explicitly fail when the audit is not green.
     if: always()
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
     # runners, so 20m cancelled green runs (TOG-12177). Keep the job bounded; the
     # seeded property suite retains its hard 10s limit.
@@ -219,6 +224,7 @@ jobs:
           # Migration history needs the base commit; fresh (hosted/overflow)
           # workspaces lack it, unlike reused self-hosted ones.
           fetch-depth: 0
+          persist-credentials: false
       - name: Job-private localhost:5432 forward to the Postgres service
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
@@ -229,7 +235,7 @@ jobs:
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
           node-version: 24
@@ -321,8 +327,25 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
+        shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
-        run: bash ci/check-migration-numbers.sh
+        env:
+          MIGRATION_GIT_TOKEN: ${{ github.token }}
+        # The baseline checker can fetch. Authenticate only this command, never
+        # persist the read token beside dependency/lifecycle scripts.
+        # actions/checkout writes `origin` without a `.git` suffix and Git matches
+        # `http.<url>.*` on path boundaries, so scope the header to both forms.
+        # https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGCOUNT
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "${MIGRATION_GIT_TOKEN:?}" | base64 -w0)"
+          echo "::add-mask::$auth"
+          GIT_CONFIG_COUNT=2 \
+          GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.extraheader" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+          GIT_CONFIG_KEY_1="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
+          GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
+            bash ci/check-migration-numbers.sh
       - name: Pre-flip probe selftests (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |
@@ -364,11 +387,13 @@ jobs:
     needs: scope
     # Budgets only observe the served assets (app). Drafts skip.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'bundle-budget') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'bundle-budget') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -385,7 +410,7 @@ jobs:
     needs: scope
     # Fixture worker serves the app over fixed routes (app only). Drafts skip.
     if: needs.scope.outputs.draft != 'true' && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'lighthouse') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'lighthouse') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:
       image: node:24-bookworm
@@ -397,7 +422,9 @@ jobs:
       CLOUDFLARE_INCLUDE_PROCESS_ENV: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -418,7 +445,7 @@ jobs:
         run: npm run lighthouse
       - name: Performance evidence (including failures)
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lighthouse-${{ github.sha }}
           path: .lighthouseci/
@@ -438,7 +465,7 @@ jobs:
     needs: [a11y, lighthouse, bundle-budget, check, scope]
     if: always()
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
-    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'ci-ok') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'ci-ok') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 5
     steps:
       - name: Aggregate change-gated conclusions

@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page } from "@playwright/test";
+import { cleanupFeaturedFixture, homeHasHeadline } from "./featured-checks";
 import { emptyStorageState, expect, moderatorStorageState, stagingOrigin, test } from "./fixtures";
 import { loginQaModerator } from "./qa-login";
 
@@ -22,44 +22,18 @@ function utcWall(offsetMs: number): string {
   return new Date(Date.now() + offsetMs).toISOString().slice(0, 16).replace("T", " ");
 }
 
-// Cleanup deletes through the context's request API, never by opening a page:
-// a cleanup-time `newPage` flaked with `Protocol error Target.createTarget` in
-// the RSVP spec, orphaning the fixture it was meant to remove. The delete form
-// endpoint needs only the session cookie plus the explicit staging Origin the
-// same-origin guard requires (the request API sends neither Origin nor Fetch
-// Metadata on its own). 303 = deleted, 404 = already gone.
-async function deleteFixtureViaApi(request: APIRequestContext, id: string): Promise<number> {
-  const response = await request.post(`/admin/featured/${id}/delete`, {
-    headers: { Origin: stagingOrigin },
-    maxRedirects: 0,
-  });
-  return response.status();
-}
-
-// Headlines the public homepage renders in its "From the community team"
-// section, in page order. An absent section is an empty list. The homepage
-// bounds its featured read to 500 ms and degrades to no section, so callers
-// poll rather than trust a single load.
-async function homeHeadlines(guest: Page): Promise<string[]> {
-  const response = await guest.goto("/", { waitUntil: "domcontentloaded" });
-  expect(response?.status()).toBe(200);
-  return guest
-    .getByTestId("featured-content")
-    .getByTestId("featured-item")
-    .getByRole("heading", { level: 3 })
-    .allTextContents();
-}
-
+// The homepage bounds its featured read to 500 ms and degrades to no section,
+// so poll rather than trust a single load. Transport/non-200 failures retry too.
 const HOME_POLL = { timeout: 20_000, intervals: [1_000, 2_000, 3_000] };
 
 // Moderator owns the journey: a published slot is created, shown to a guest on
 // the homepage, renamed, then deleted through the UI. The fixture is deleted
-// in `finally` by id, so a red run never leaves a live card on the staging
-// homepage. Featured content touches no queue and no Discord write-back.
+// in `finally` by id; an unsuccessful cleanup annotates the original red run.
+// Featured content touches no queue and no Discord write-back.
 test("staging moderator creates, edits and deletes a featured slot shown on the homepage", async ({
   page,
   browser,
-}) => {
+}, testInfo) => {
   test.setTimeout(120_000);
   const stamp = Date.now();
   const title = `Staging E2E Featured ${stamp}`;
@@ -67,7 +41,6 @@ test("staging moderator creates, edits and deletes a featured slot shown on the 
   const body = "Created by the post-deploy staging suite; deleted before the run ends.";
   let id: string | undefined;
   let deleted = false;
-  let cleanupStatus: number | undefined;
   // Explicitly empty: a bare newContext() inherits this file's moderator
   // storageState from the staging config, which would show moderator
   // sessions instead of the public page and rotate (kill) the stored bearer.
@@ -99,7 +72,7 @@ test("staging moderator creates, edits and deletes a featured slot shown on the 
     );
 
     // 2. A guest sees the slot in the homepage featured section.
-    await expect.poll(() => homeHeadlines(guest), HOME_POLL).toContain(title);
+    await expect.poll(() => homeHasHeadline(guest, title, true), HOME_POLL).toBe(true);
     await expect(guest.getByRole("heading", { name: "From the community team" })).toBeVisible();
     const shown = guest
       .getByTestId("featured-content")
@@ -113,7 +86,7 @@ test("staging moderator creates, edits and deletes a featured slot shown on the 
     await page.getByTestId("save-featured").click();
     await expect(page.getByRole("heading", { name: `Edit ${renamed}`, exact: true })).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/admin/featured/${id}$`));
-    await expect.poll(() => homeHeadlines(guest), HOME_POLL).toContain(renamed);
+    await expect.poll(() => homeHasHeadline(guest, renamed, true), HOME_POLL).toBe(true);
     // Same load that showed the new headline, so this absence is not a read
     // that degraded to an empty section.
     await expect(guest.getByRole("heading", { level: 3, name: title, exact: true })).toHaveCount(0);
@@ -125,18 +98,16 @@ test("staging moderator creates, edits and deletes a featured slot shown on the 
     await expect(page).toHaveURL(/\/admin\/featured$/);
     deleted = true;
     await expect(page.getByRole("link", { name: renamed, exact: true })).toHaveCount(0);
-    await expect.poll(() => homeHeadlines(guest), HOME_POLL).not.toContain(renamed);
+    await expect.poll(() => homeHasHeadline(guest, renamed, false), HOME_POLL).toBe(true);
     const gone = await page.goto(`/admin/featured/${id}`);
     expect(gone?.status()).toBe(404);
   } finally {
-    if (id !== undefined && !deleted) {
-      // A transport error's call log carries the session cookie and this repo
-      // is public, so the failure is reduced to a status the check below names.
-      cleanupStatus = await deleteFixtureViaApi(page.request, id).catch(() => -1);
+    try {
+      if (id !== undefined && !deleted) {
+        await cleanupFeaturedFixture(page.request, id, stagingOrigin, testInfo);
+      }
+    } finally {
+      await guestContext.close();
     }
-    await guestContext.close();
   }
-  // Only reached when the journey itself passed; a failed assertion already
-  // threw past this line, and the finally above still removed the fixture.
-  if (cleanupStatus !== undefined) expect([303, 404]).toContain(cleanupStatus);
 });
