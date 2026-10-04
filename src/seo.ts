@@ -16,10 +16,12 @@ export type SitemapUrl = {
 
 // The event fields the sitemap needs. W8 fills these from the published-events
 // query (same scope as the legacy sitemap: status = published, ordered by
-// starts_at); the status filter below is the contract, not the query.
+// starts_at); the status filter below is the contract, not the query. The
+// union mirrors every events.status value so an archived "past" row is
+// rejected here too, not only by the query.
 export type SitemapEventCandidate = {
   key: string;
-  status: "published" | "draft" | "cancelled";
+  status: "published" | "draft" | "cancelled" | "past";
   updatedAt: string | null;
 };
 
@@ -28,8 +30,8 @@ export type SitemapEvent = {
   updatedAt: string | null;
 };
 
-// Only published events are crawlable. Drafts (403 for guests) and cancelled
-// (410 Gone) events must never appear in the index.
+// Only published events are crawlable. Drafts (403 for guests), cancelled
+// (410 Gone) and archived past-status events must never appear in the index.
 export function crawlableEvents(candidates: SitemapEventCandidate[]): SitemapEvent[] {
   return candidates
     .filter((e) => e.status === "published")

@@ -1,14 +1,68 @@
 # Contributing
 
-## Commits and PRs
+## Pull request contract
 
-- Squash-merge only. Each PR is one logical change.
+The same contract applies to humans and AI agents. [AGENTS.md](AGENTS.md) is the short
+version.
+
+- Work on a branch and open a PR. Never push to `main`. Name branches
+  `type/short-slug`, for example `fix/sudo-window`. Head branches are deleted when
+  the PR merges.
+- Squash-merge only. Each PR is one logical change. The squash commit takes the PR
+  title and body, so write both for the history on `main`.
 - PR title = Conventional Commits header: `type(scope): summary`, at most 100
   characters, no trailing period. Types: `feat`, `fix`, `perf`, `refactor`,
-  `test`, `docs`, `build`, `ci`, `chore`, `revert`, `style`, `security`.
-- Card ID goes in the body as `Refs: TOG-1234`, never in the title.
-- PR body explains what changed, why, and how it was tested (see the PR template).
-- `check`, `gitleaks` and `pr-lint` are required checks on `main`.
+  `test`, `docs`, `build`, `ci`, `chore`, `revert`, `style`, `security`. The scope
+  names the area of the code, such as `auth`, `events` or `sync`. Release automation
+  reads these headers.
+- Fill in every section of the [PR template](.github/pull_request_template.md):
+  Thinking Path, Linked Issues or Issue Description, What Changed, Verification,
+  Risks, Model Used, and the Checklist. Use short, active sentences.
+- Link a public GitHub issue with `Closes #123`, or describe the problem in the PR.
+  No card reference is required. `docs`, `chore`, `build`, `ci`, `style`, `test` and
+  `revert` PRs need no linked issue.
+- Search first. Look for an open or recent PR that touches the same area, and link
+  what you find. `feat`, `fix`, `perf`, `refactor` and `security` PRs tick the
+  duplicate-search box in the checklist.
+- Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
+  followed by digits), private URLs, tokens or secrets in any title, body, commit,
+  comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
+  or a commit subject.
+- Be honest about the model and the tests. Name the model that wrote or assisted the
+  change, give the exact commands you ran and their results, and say what you did
+  not run. Never claim a green run you did not see.
+- Address every review finding, or reply with why it does not apply.
+- Credit the contributors whose work you build on.
+- Done means merged. Do not leave an orphan PR open: merge it, or close it with a
+  comment naming what replaced it.
+- Open issues with the forms in `.github/ISSUE_TEMPLATE/`. Report security
+  vulnerabilities privately, as described in [SECURITY.md](SECURITY.md), never in an
+  issue.
+
+### Branch protection and required checks
+
+The repository rulesets enforce the following on `main`:
+
+- `protect-main`: changes arrive through a pull request, the branch cannot be
+  deleted or force-pushed, only squash merges are allowed, and `check` and
+  `gitleaks` must pass.
+- `pr-conventions`: `pr-lint` must pass.
+
+GitHub does not enforce an approval count here. Team policy does: an independent
+reviewer, who did not write the change, reviews the exact head SHA that merges, CI
+is green on that SHA, and a new push needs a new review.
+
+`pr-lint` lives in `.github/workflows/pr-gates.yml` and runs through
+`ci/pr-lint-output.py check`: first `ci/check-pr-conventions.py` (it fails on a
+title that is not a Conventional Commits header, a title over 100 characters or
+ending in a period, and an empty body; its internal-ID check is a warning
+today, and `INTERNAL_ID_LEVEL` in the workflow turns it into an error), then
+`.github/scripts/pr_standards.py` for pull requests when the workflow sets
+`PR_STANDARDS_MODE`. The upstream body, branch and reference rules start as
+warnings (`PR_STANDARDS_MODE: "warn"`); the flip to `"error"` is a separate
+one-line change once the repo's open PRs are clear. The script is unit-tested
+beside it: `python3 -m unittest discover -s .github/scripts -p
+'test_pr_standards.py'`.
 
 ## Dependency security and static analysis
 
@@ -64,9 +118,12 @@ workflow or change repository scanning settings as part of the dependency gate.
 
 Releases are automated with [release-please](https://github.com/googleapis/release-please)
 (`release-please-config.json` + `.release-please-manifest.json`, release-type
-`node`). Merge a conventional commit to `main` and release-please opens or
-updates a release PR; merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z`
-and publishes a GitHub Release. Never tag or release by hand.
+`node`). The `release` workflow regenerates the release PR on a weekly schedule
+or a manual dispatch, not on every merge to `main` (a push only publishes).
+Merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
+Release. Cut one with the short freeze procedure in
+[`docs/releases.md`](docs/releases.md#cutting-a-release). Never tag or release
+by hand.
 
 `CHANGELOG.md` uses the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
@@ -80,11 +137,51 @@ cutover. `feat!` / `BREAKING CHANGE` bumps major (minor while `0.x`).
 ## Local development
 
 ```sh
-npm ci
+npm ci --include=dev
 cp .dev.vars.example .dev.vars   # fill in locally; never commit
 npm run dev
-npm run check                    # typecheck + tests
+npm run format                   # formatting only; never rewrites lint violations
+npm run lint                     # read-only Biome lint + format gate
+npm run check                    # lint + format + typecheck + config drift + tests
 ```
 
-Never commit secrets, `.dev.vars` or `node_modules/`. See
-[README.md](README.md) for the full configuration reference.
+Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
+[`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both
+lint and formatting. `npm run format` only formats; it does not apply lint fixes
+or reorder imports. `npm run check` runs this gate; CI runs it before typecheck
+and coverage, alongside the configuration drift check, and proves rejection
+of debugger statements, unused variables, floating promises and bad formatting
+with `bash ci/biome-selftest.sh`.
+
+The rule set is deliberately opt-in (`preset: none`): basic correctness checks,
+unused variables and floating promises, not opinionated style or accessibility
+rewrites. Generated Drizzle metadata, the npm lockfile and build/dependency
+outputs are excluded. The existing island sources under `assets/islands/`
+retain narrow compatibility exceptions: `events-calendar.js` permits the
+unused catch variable `e`, and it, `member-profile.js` and `past-events.js`
+disable `noFloatingPromises` for their existing fire-and-forget handlers.
+The minified build output under `public/islands/` skips both lint and format:
+it is reviewed as bytes, with `npm run build:assets:check` failing on drift.
+The staging spike
+`staging-checks.ts` disables only `noUnsafeFinally` for its existing fail-closed
+cleanup-verification throw in `finally`; its control flow remains unchanged.
+All other files keep the selected rules. Tightening these exceptions is separate
+behavioral work.
+The four standalone importer tests (`import-audit.test.ts`,
+`import-events-rsvps.test.ts`, `import-events-target-separation.test.ts` and
+`import-backfill-portable.test.ts`) use a 140-column formatter override to keep their
+existing `@ts-expect-error` imports on one line; wrapping would detach the directive
+from TypeScript's module diagnostic. `assets/styles.css`, `public/styles.css`,
+`public/theme.css`,
+`public/profile-theme.css`, `public/schedule-theme.css`, `public/event-theme.css` and
+`ci/a11y.mjs` are not formatted because existing regression tests assert exact stylesheet bytes,
+source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,
+hash-verified proof inputs byte-for-byte. Their content, hashes and regression
+assertions remain unchanged. These formatter exemptions disable neither lint nor
+typecheck.
+Configuration options follow the [Biome configuration reference](https://biomejs.dev/reference/configuration/).
+
+Never commit secrets, `.dev.vars` or `node_modules/`. Run tests only against the
+disposable test database or local fixtures described in [README.md](README.md),
+never against a production or staging database. See the README for the full
+configuration reference.

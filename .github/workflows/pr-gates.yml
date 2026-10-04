@@ -1,0 +1,148 @@
+name: pr-gates
+
+# Lightweight PR gates: PR-title lint + full-history secret scan in ONE
+# workflow with sequential jobs, so a PR push occupies one runner slot at a
+# time instead of two parallel `pr-lint` + `secret-scan` runs.
+#
+# Required-check names are the JOB names, not the workflow name, and are pinned
+# equal to the ids: `pr-lint` (ruleset pr-conventions) and `gitleaks` (ruleset
+# protect-main). Keep both names byte-identical or merges block.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  # Dispatched by the release workflow on release-please branches:
+  # PRs opened with GITHUB_TOKEN trigger no workflows, so the required
+  # `pr-lint` check would never run on the release PR without this path.
+  # The release workflow passes the release PR number; the pr-lint job fetches
+  # the title/body via the API and validates them with the same
+  # ci/check-pr-conventions.py script as the pull_request path.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Release PR number to validate"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# A PR (or the dispatched release PR) cancels its superseded run. Each push to
+# main keeps its own group: pr-lint checks that push's commits, so a newer push
+# must not cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  # This repository is public, so internal card IDs (TOG-1234, PAP-1234) must stay out of PR
+  # text. "warning" reports them without failing; flip to "error" once open PRs are clean.
+  INTERNAL_ID_LEVEL: "warning"
+  # Upstream body/branch/reference rules (`.github/scripts/pr_standards.py`) start as
+  # warnings; flip to "error" once the repo's open PRs are clear (target 2026-10-10).
+  PR_STANDARDS_MODE: "warn"
+
+jobs:
+  # Convention for every change that lands on main:
+  #   * PR title = Conventional Commits header: `type(scope): summary`, <= 100 chars, no trailing period.
+  #     Types: feat fix perf refactor test docs build ci chore revert style security.
+  #     Release automation reads these headers.
+  #   * PR body follows .github/pull_request_template.md: what changed, why, and how it was tested.
+  #   * No card reference is required. Internal card IDs (TOG-1234, PAP-1234) in the title, body or a
+  #     commit subject draw a warning, because this repository is public.
+  #   * Repos are squash-merge only and the squash commit title is the PR title, so the history on
+  #     main is one conventional commit per PR. The push job below flags any commit that bypasses it
+  #     (for example a merge call that passes its own commit_title).
+  #
+  # name pinned equal to the id: `pr-lint` is a required check.
+  pr-lint:
+    name: pr-lint
+    # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-lint') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    env:
+      # Metadata lint needs the immutable PR head, not a regenerated merge ref
+      # whose base can differ from the event snapshot. Push/dispatch keep their SHA.
+      PR_LINT_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_LINT_CHECKOUT_SHA }}
+
+      - name: Unit-test the lint
+        run: python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+
+      - name: Resolve PR title/body
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: python3 ci/pr-lint-output.py resolve
+
+      # Advisory input for the internal-ID warning. A failed listing must not fail the gate.
+      # The subjects go to a job-owned file, never to a step output or the environment.
+      - name: List PR commit subjects
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          if ! gh api "repos/$REPO/pulls/$PR_NUMBER/commits" --paginate \
+            --jq '.[].commit.message | split("\n")[0]' > "$RUNNER_TEMP/pr-commit-subjects.txt"; then
+            echo "::warning::Could not list the PR commits; skipped the commit-subject check."
+            : > "$RUNNER_TEMP/pr-commit-subjects.txt"
+          fi
+
+      - name: Check title, body and commits
+        env:
+          PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
+          COMMITS: ${{ toJSON(github.event.commits) }}
+          COMMIT_SUBJECTS_PATH: ${{ runner.temp }}/pr-commit-subjects.txt
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+        run: python3 ci/pr-lint-output.py check
+
+  # Full-history gitleaks scan; `gitleaks` is a required check on main. Uses
+  # the gitleaks binary (the gitleaks-action wrapper needs a paid licence for
+  # organizations). --redact so findings never print the value. A secret that
+  # reaches a branch is already leaked: report it, do not just delete the line.
+  #
+  # Sequential after pr-lint: one runner slot at a time. Runs even
+  # when pr-lint fails, so a non-conventional push to main is still scanned.
+  # name pinned equal to the id: `gitleaks` is a required check.
+  gitleaks:
+    name: gitleaks
+    needs: pr-lint
+    if: ${{ !cancelled() }}
+    # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
+    runs-on: ${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'gitleaks') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a secret added and then removed in an earlier commit
+          # on the same branch is still a leak, and a shallow clone hides it.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          set -euo pipefail
+          # $RUNNER_TEMP is job-private; 16 runners share one /tmp.
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          chmod 0755 "$RUNNER_TEMP/gitleaks"
+          "$RUNNER_TEMP/gitleaks" version
+
+      - name: Scan the full history
+        run: |
+          set -euo pipefail
+          # --log-opts=HEAD: scan only history reachable from HEAD, not every fetched branch.
+          "$RUNNER_TEMP/gitleaks" git . --redact --verbose --exit-code 1 --log-opts=HEAD

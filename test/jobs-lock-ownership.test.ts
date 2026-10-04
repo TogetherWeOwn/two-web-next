@@ -6,22 +6,99 @@ import { consume } from "../src/jobs/consumer";
 import { trackingQueue } from "../src/jobs/ledger";
 import { pgUniqueLock } from "../src/jobs/postgres";
 import { dispatchSyncEvent, uniqueKey } from "../src/jobs/sync-event";
-import { BotTransportError, type BotClient, type EventStore, type QueueLedger, type QueueMessage, type UniqueLock } from "../src/jobs/types";
+import {
+  BotTransportError,
+  type BotClient,
+  type EventStore,
+  type QueueLedger,
+  type QueueMessage,
+  type SyncAttempt,
+  type UniqueLock,
+} from "../src/jobs/types";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 const eventKey = "lease-regression";
 const key = uniqueKey(eventKey);
 const success = { ok: true, requestId: null, discordEventId: "discord-event" } as const;
-const events: EventStore = {
-  find: async () => ({ eventKey, mirrored: true,
-    payload: { eventKey, name: "fixture", startsAt: "2026-10-01T12:00:00Z", endsAt: null, location: "", description: null } }),
-  recordMirrored: async () => {}, closeFinished: async () => 0,
-  materializeSeries: async () => 0, staleEventKeys: async () => [],
-};
+function memoryEvents(): EventStore {
+  const attempts = new Map<string, SyncAttempt>();
+  return {
+    prepareSync: async (eventKey, idempotencyKey, mirroredAt) => {
+      const existing = attempts.get(idempotencyKey);
+      if (existing) return existing;
+      if ([...attempts.values()].some((a) => a.eventKey === eventKey && a.state === "pending"))
+        return { waiting: true };
+      const attempt: SyncAttempt = {
+        eventKey,
+        idempotencyKey,
+        mirroredAt,
+        revision: 1,
+        state: "pending",
+        requestAttempts: 0,
+        nextAttemptAt: mirroredAt,
+        action: "event.upsert",
+        payload: {
+          eventKey,
+          name: "fixture",
+          startsAt: "2026-10-01T12:00:00Z",
+          endsAt: null,
+          location: "",
+          description: null,
+        },
+      };
+      attempts.set(idempotencyKey, attempt);
+      return attempt;
+    },
+    claimSync: async (attempt, now) => {
+      const stored = attempts.get(attempt.idempotencyKey)!;
+      if (stored.state !== "pending" || !stored.nextAttemptAt || stored.nextAttemptAt > now)
+        return null;
+      const claimed = {
+        ...stored,
+        requestAttempts: stored.requestAttempts + 1,
+        nextAttemptAt: null,
+      };
+      attempts.set(attempt.idempotencyKey, claimed);
+      return claimed;
+    },
+    deferSync: async (attempt, nextAttemptAt) => {
+      attempts.set(attempt.idempotencyKey, {
+        ...attempts.get(attempt.idempotencyKey)!,
+        nextAttemptAt,
+      });
+    },
+    completeSync: async (attempt) => {
+      attempts.set(attempt.idempotencyKey, {
+        ...attempts.get(attempt.idempotencyKey)!,
+        state: "succeeded",
+        nextAttemptAt: null,
+      });
+    },
+    failSync: async (idempotencyKey) => {
+      attempts.set(idempotencyKey, {
+        ...attempts.get(idempotencyKey)!,
+        state: "failed",
+        nextAttemptAt: null,
+      });
+    },
+    needsSync: async () => false,
+    pendingSync: async (eventKey) =>
+      [...attempts.values()].find((a) => a.eventKey === eventKey && a.state === "pending") ?? null,
+    closeFinished: async () => 0,
+    materializeSeries: async () => 0,
+    staleEventKeys: async () => [],
+  };
+}
+let events = memoryEvents();
 function ledger(): QueueLedger {
-  return { enqueued: vi.fn(async () => {}), reserved: vi.fn(async () => {}), released: vi.fn(async () => {}),
-    dequeued: vi.fn(async () => {}), failed: vi.fn(async () => {}) };
+  return {
+    enqueued: vi.fn(async () => {}),
+    reserved: vi.fn(async () => {}),
+    released: vi.fn(async () => {}),
+    dequeued: vi.fn(async () => {}),
+    failed: vi.fn(async () => {}),
+  };
 }
 function carrier(body: SyncMessage, attempts = 1) {
   return { body, attempts, ack: vi.fn(), retry: vi.fn() };
@@ -36,57 +113,108 @@ function memoryLock() {
       rows.set(k, { token, expiresAt: Date.now() + ttl * 1000 });
       return token;
     }),
-    release: vi.fn(async (k, token) => { if (rows.get(k)?.token === token) rows.delete(k); }),
+    release: vi.fn(async (k, token) => {
+      if (rows.get(k)?.token === token) rows.delete(k);
+    }),
   };
   return { lock, rows };
 }
 function producer(lock: UniqueLock, transport = vi.fn(async (_body: unknown) => {})) {
   const sent: SyncMessage[] = [];
   const depth = ledger();
-  const queue = trackingQueue({ send: async (body: unknown) => {
-    await transport(body);
-    sent.push(body as SyncMessage);
-  } }, depth);
+  const queue = trackingQueue(
+    {
+      send: async (body: unknown) => {
+        await transport(body);
+        sent.push(body as SyncMessage);
+      },
+    },
+    depth,
+  );
   return { sent, depth, dispatch: () => dispatchSyncEvent(queue, lock, eventKey) };
 }
 
 describe("queue carrier lease ownership", () => {
   beforeEach(() => {
+    events = memoryEvents();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
-
-  it.each(["success", "refusal", "exhausted throw"] as const)("late A %s cannot release B; B completion admits C", async (terminal) => {
-    const { lock, rows } = memoryLock();
-    const p = producer(lock);
-    expect(await p.dispatch()).toBe(true);
-    const a = p.sent[0]!;
-    vi.advanceTimersByTime(SYNC_EVENT.uniqueForSeconds * 1000 + 1);
-    expect(await p.dispatch()).toBe(true);
-    const b = p.sent[1]!;
-    expect(b.leaseToken).not.toBe(a.leaseToken);
-    const bot = { upsertEvent: async () => {
-      if (terminal === "exhausted throw") throw new TypeError("fixture throw");
-      if (terminal === "refusal") return { ok: false, code: "refused", status: 403, requestId: null,
-        message: "fixture refusal", retryable: false, retryAfterSeconds: null } as const;
-      return success;
-    } } as unknown as BotClient;
-    const old = carrier(a, terminal === "exhausted throw" ? SYNC_EVENT.tries : 1);
-    await consume({ messages: [old] }, { bot, events, lock, ledger: p.depth });
-    expect(old.ack).toHaveBeenCalledOnce();
-    expect(lock.release).toHaveBeenCalledWith(key, a.leaseToken);
-    expect(rows.get(key)?.token).toBe(b.leaseToken);
-    expect(await p.dispatch()).toBe(false);
-    const current = carrier(b);
-    await consume({ messages: [current] }, { bot: { upsertEvent: async () => success } as unknown as BotClient,
-      events, lock, ledger: p.depth });
-    expect(current.ack).toHaveBeenCalledOnce();
-    expect(rows.has(key)).toBe(false);
-    expect(await p.dispatch()).toBe(true);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
+
+  it.each(["success", "refusal", "exhausted throw"] as const)(
+    "late A %s cannot release B; B completion admits C",
+    async (terminal) => {
+      const { lock, rows } = memoryLock();
+      const p = producer(lock);
+      expect(await p.dispatch()).toBe(true);
+      const a = p.sent[0]!;
+      vi.advanceTimersByTime(SYNC_EVENT.uniqueForSeconds * 1000 + 1);
+      expect(await p.dispatch()).toBe(true);
+      const b = p.sent[1]!;
+      expect(b.leaseToken).not.toBe(a.leaseToken);
+      const bot = {
+        upsertEvent: async () => {
+          if (terminal === "exhausted throw") throw new TypeError("fixture throw");
+          if (terminal === "refusal")
+            return {
+              ok: false,
+              code: "refused",
+              status: 403,
+              requestId: null,
+              message: "fixture refusal",
+              retryable: false,
+              retryAfterSeconds: null,
+            } as const;
+          return success;
+        },
+      } as unknown as BotClient;
+      const old = carrier(a, terminal === "exhausted throw" ? SYNC_EVENT.tries : 1);
+      await consume({ messages: [old] }, { bot, events, lock, ledger: p.depth });
+      expect(old.ack).toHaveBeenCalledOnce();
+      expect(lock.release).toHaveBeenCalledWith(key, a.leaseToken);
+      expect(rows.get(key)?.token).toBe(b.leaseToken);
+      expect(await p.dispatch()).toBe(false);
+      if (terminal === "exhausted throw") {
+        // Carrier exhaustion cannot let B overtake A's unresolved request.
+        const blocked = carrier(b);
+        const send = vi.fn(async (_payload: unknown, _idempotencyKey: string) => success);
+        await consume(
+          { messages: [blocked] },
+          { bot: { upsertEvent: send } as unknown as BotClient, events, lock, ledger: p.depth },
+        );
+        expect(blocked.retry).toHaveBeenCalledWith({ delaySeconds: 10 });
+        expect(blocked.ack).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+        expect(rows.get(key)?.token).toBe(b.leaseToken);
+        vi.advanceTimersByTime(3600_000);
+        await consume(
+          { messages: [carrier(a)] },
+          { bot: { upsertEvent: send } as unknown as BotClient, events, lock, ledger: p.depth },
+        );
+        expect(send.mock.calls[0]![1]).toBe(a.idempotencyKey);
+        expect(rows.get(key)?.token).toBe(b.leaseToken);
+      }
+      const current = carrier(b);
+      await consume(
+        { messages: [current] },
+        {
+          bot: { upsertEvent: async () => success } as unknown as BotClient,
+          events,
+          lock,
+          ledger: p.depth,
+        },
+      );
+      expect(current.ack).toHaveBeenCalledOnce();
+      expect(rows.has(key)).toBe(false);
+      expect(await p.dispatch()).toBe(true);
+    },
+  );
 
   it("transport retry keeps the same ownership, job and idempotency identities past expiry", async () => {
     const { lock, rows } = memoryLock();
@@ -97,7 +225,10 @@ describe("queue carrier lease ownership", () => {
     expect(a.jobId).toEqual(expect.any(String));
     expect(a.leaseToken).toEqual(expect.any(String));
     expect(a.leaseToken).not.toBe(a.idempotencyKey);
-    const send = vi.fn().mockRejectedValueOnce(new BotTransportError("fixture unavailable")).mockResolvedValue(success);
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new BotTransportError("fixture unavailable"))
+      .mockResolvedValue(success);
     const bot = { upsertEvent: send } as unknown as BotClient;
     const retry = carrier(a, 5);
     await consume({ messages: [retry] }, { bot, events, lock, ledger: p.depth });
@@ -126,8 +257,19 @@ describe("queue carrier lease ownership", () => {
     await p.dispatch();
     const a = p.sent[0]!;
     const m = carrier(a);
-    await consume({ messages: [m] }, { bot: { upsertEvent: async () => { throw new TypeError("fixture throw"); } } as unknown as BotClient,
-      events, lock, ledger: p.depth });
+    await consume(
+      { messages: [m] },
+      {
+        bot: {
+          upsertEvent: async () => {
+            throw new TypeError("fixture throw");
+          },
+        } as unknown as BotClient,
+        events,
+        lock,
+        ledger: p.depth,
+      },
+    );
     expect(m.retry).toHaveBeenCalledWith();
     expect(m.ack).not.toHaveBeenCalled();
     expect(rows.get(key)?.token).toBe(a.leaseToken);
@@ -147,7 +289,9 @@ describe("queue carrier lease ownership", () => {
 
   it("failed-send compensation frees its own lease for the next dispatch", async () => {
     const { lock, rows } = memoryLock();
-    const send = vi.fn(async (_body: unknown) => { throw new Error("fixture send failure"); });
+    const send = vi.fn(async (_body: unknown) => {
+      throw new Error("fixture send failure");
+    });
     const p = producer(lock, send);
     await expect(p.dispatch()).rejects.toThrow("fixture send failure");
     const a = send.mock.calls[0]![0] as SyncMessage;
@@ -174,17 +318,30 @@ describe("queue carrier lease ownership", () => {
   it("cleanup failure does not replace the original send error", async () => {
     const { lock } = memoryLock();
     vi.mocked(lock.release).mockRejectedValue(new Error("fixture cleanup failure"));
-    await expect(producer(lock, vi.fn(async () => { throw new Error("fixture send failure"); })).dispatch())
-      .rejects.toThrow("fixture send failure");
+    await expect(
+      producer(
+        lock,
+        vi.fn(async () => {
+          throw new Error("fixture send failure");
+        }),
+      ).dispatch(),
+    ).rejects.toThrow("fixture send failure");
   });
 
   it("a hung failed-send cleanup rejects with the original error at the deadline", async () => {
     const { lock, rows } = memoryLock();
     vi.mocked(lock.release).mockImplementation(() => new Promise<void>(() => {}));
     const sendError = new Error("fixture send failure");
-    const send = vi.fn(async (_body: unknown) => { throw sendError; });
+    const send = vi.fn(async (_body: unknown) => {
+      throw sendError;
+    });
     let settled = false;
-    const result = producer(lock, send).dispatch().catch((error: unknown) => { settled = true; return error; });
+    const result = producer(lock, send)
+      .dispatch()
+      .catch((error: unknown) => {
+        settled = true;
+        return error;
+      });
 
     await vi.advanceTimersByTimeAsync(1999);
     expect(settled).toBe(false);
@@ -201,7 +358,9 @@ describe("queue carrier lease ownership", () => {
     const { lock, rows } = memoryLock();
     const release = vi.mocked(lock.release).getMockImplementation()!;
     let unblock!: () => void;
-    const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
     const finished = vi.fn();
     vi.mocked(lock.release).mockImplementation(async (k, token) => {
       await blocked;
@@ -209,7 +368,14 @@ describe("queue carrier lease ownership", () => {
       finished();
     });
     const sendError = new Error("fixture send failure");
-    const result = producer(lock, vi.fn(async () => { throw sendError; })).dispatch().catch((error: unknown) => error);
+    const result = producer(
+      lock,
+      vi.fn(async () => {
+        throw sendError;
+      }),
+    )
+      .dispatch()
+      .catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(2000);
     expect(await result).toBe(sendError);
     await vi.advanceTimersByTimeAsync(SYNC_EVENT.uniqueForSeconds * 1000);
@@ -226,8 +392,15 @@ describe("queue carrier lease ownership", () => {
     const { lock, rows } = memoryLock();
     const token = await lock.acquire(key, 300);
     const legacy = carrier({ kind: "sync-event", eventKey, idempotencyKey: token!, jobId: token! });
-    await consume({ messages: [legacy] }, { bot: { upsertEvent: async () => success } as unknown as BotClient,
-      events, lock, ledger: ledger() });
+    await consume(
+      { messages: [legacy] },
+      {
+        bot: { upsertEvent: async () => success } as unknown as BotClient,
+        events,
+        lock,
+        ledger: ledger(),
+      },
+    );
     expect(legacy.ack).toHaveBeenCalledOnce();
     expect(lock.release).not.toHaveBeenCalled();
     expect(rows.get(key)?.token).toBe(token);
@@ -241,8 +414,12 @@ describe("queue carrier lease ownership", () => {
 // contention operate in its disposable schema (or transaction-local temp table).
 describe.skipIf(!process.env.DATABASE_URL)("Postgres atomic lease ownership", () => {
   let fixture: JobsFixture | undefined;
-  beforeAll(async () => { fixture = await createJobsFixture(process.env.DATABASE_URL!, { max: 8 }); });
-  afterAll(async () => { await fixture?.dispose(); });
+  beforeAll(async () => {
+    fixture = await createJobsFixture(process.env.DATABASE_URL!, { max: 8 });
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
 
   it("one concurrent winner owns the row; unknown/rejected contenders cannot release it", async () => {
     const sql = fixture!.client;
@@ -272,9 +449,12 @@ describe.skipIf(!process.env.DATABASE_URL)("Postgres atomic lease ownership", ()
     expect(winners).toHaveLength(1);
     const b = winners[0]!;
     expect(b).not.toBe(a);
-    const [before] = await sql`select owner_token, expires_at from job_unique_locks where key = ${k}`;
+    const [before] =
+      await sql`select owner_token, expires_at from job_unique_locks where key = ${k}`;
     await lock.release(k, a!);
-    expect(await sql`select owner_token, expires_at from job_unique_locks where key = ${k}`).toEqual([before]);
+    expect(
+      await sql`select owner_token, expires_at from job_unique_locks where key = ${k}`,
+    ).toEqual([before]);
     expect(await lock.acquire(k, 300)).toBeNull();
     await lock.release(k, b);
     const c = await lock.acquire(k, 300);
@@ -288,14 +468,18 @@ describe.skipIf(!process.env.DATABASE_URL)("Postgres atomic lease ownership", ()
   });
 
   it("additive migration preserves existing leases and expiry upgrades null ownership", async () => {
-    const migration = readFileSync(fileURLToPath(new URL("../drizzle/1016_job-lock-ownership.sql", import.meta.url).href), "utf8");
+    const migration = readFileSync(
+      fileURLToPath(new URL("../drizzle/1016_job-lock-ownership.sql", import.meta.url).href),
+      "utf8",
+    );
     await fixture!.client.begin(async (tx) => {
       await tx`create temporary table job_unique_locks (key text primary key, expires_at timestamptz not null) on commit drop`;
       const expires = new Date(Date.now() + 300_000);
       await tx`insert into job_unique_locks (key, expires_at) values ('legacy', ${expires})`;
       await tx.unsafe(migration);
-      expect(await tx`select key, expires_at, owner_token from job_unique_locks`)
-        .toEqual([{ key: "legacy", expires_at: expires, owner_token: null }]);
+      expect(await tx`select key, expires_at, owner_token from job_unique_locks`).toEqual([
+        { key: "legacy", expires_at: expires, owner_token: null },
+      ]);
       const lock = pgUniqueLock(tx);
       expect(await lock.acquire("legacy", 300)).toBeNull();
       await lock.release("legacy", crypto.randomUUID());

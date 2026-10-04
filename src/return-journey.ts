@@ -66,13 +66,21 @@ export async function rememberLoginNext(c: Ctx, raw: string | undefined): Promis
  * only — a bounced write goes back to the page, never into a re-submit.
  */
 export async function bounceToLogin(c: Ctx): Promise<Response> {
-  if (!["GET", "HEAD"].includes(c.req.method) && !c.req.path.startsWith("/admin")) return expiredWriteBounce(c);
+  // A bounced write goes back to the page, never into a re-submit — admin
+  // writes included (writeReturn maps them onto their GET form page).
+  if (!["GET", "HEAD"].includes(c.req.method)) return expiredWriteBounce(c);
   if (c.req.method === "GET" || c.req.method === "HEAD") {
     const url = new URL(c.req.url);
-    await setSignedCookie(c, LOGIN_INTENDED_COOKIE, url.pathname + url.search, c.env.SESSION_SECRET, {
-      ...cookieOpts,
-      maxAge: JOURNEY_TTL_SECONDS,
-    });
+    await setSignedCookie(
+      c,
+      LOGIN_INTENDED_COOKIE,
+      url.pathname + url.search,
+      c.env.SESSION_SECRET,
+      {
+        ...cookieOpts,
+        maxAge: JOURNEY_TTL_SECONDS,
+      },
+    );
   }
   return c.redirect("/auth/discord", 302);
 }

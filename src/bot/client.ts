@@ -11,14 +11,15 @@
 // Nothing here logs the secret, the signature, or a request body: the
 // announcement body in particular is never logged (legacy §4 rule).
 
-import {
-  encodeCanonicalJson,
-  INTERNAL_ACTIONS_PATH,
-  newNonce,
-  signInternalAction,
-} from "./signer";
+import { encodeCanonicalJson, INTERNAL_ACTIONS_PATH, newNonce, signInternalAction } from "./signer";
 import { BotTerminalError, BotTransportError } from "../jobs/types";
-import type { Announcement, BotFailure, BotSuccess, EventUpsert, RoleAssignment } from "../jobs/types";
+import type {
+  Announcement,
+  BotFailure,
+  BotSuccess,
+  EventUpsert,
+  RoleAssignment,
+} from "../jobs/types";
 
 export type RoleAssignResult = BotSuccess<{ outcome: "assigned" | "already_held" }>;
 export type AnnouncementResult = BotSuccess<{ messageId: string; replayed: boolean }>;
@@ -28,7 +29,13 @@ export type EventUpsertResult = BotSuccess<{
   replayed: boolean;
 }>;
 
-export type InternalActionResult = RoleAssignResult | AnnouncementResult | EventUpsertResult;
+export type EventCancelResult = BotSuccess<{ outcome: "cancelled"; discordEventId: string }>;
+
+export type InternalActionResult =
+  | RoleAssignResult
+  | AnnouncementResult
+  | EventUpsertResult
+  | EventCancelResult;
 export type InternalActionAnswer = InternalActionResult | BotFailure;
 
 /** A caller-supplied UUID for one logical operation (announcement/event only). */
@@ -58,33 +65,47 @@ const charLen = (s: string): number => [...s].length;
 /** `role.assign`: discord_id is a snowflake (digits, ≤20); role_key is a key, never an ID. */
 export function validateRoleAssign(a: RoleAssignment): void {
   if (!/^\d{1,20}$/.test(a.userId))
-    throw new BotTerminalError("A role.assign needs a Discord snowflake for discord_id: decimal digits, at most 20 of them.");
+    throw new BotTerminalError(
+      "A role.assign needs a Discord snowflake for discord_id: decimal digits, at most 20 of them.",
+    );
   if (a.roleKey.trim() === "")
-    throw new BotTerminalError("A role.assign needs a role_key. It is a key from the bot role map, not a Discord role id.");
+    throw new BotTerminalError(
+      "A role.assign needs a role_key. It is a key from the bot role map, not a Discord role id.",
+    );
 }
 
 /** `announcement.post`: needs an idempotency key on every call (a repeat without one posts twice). */
 export function validateAnnouncement(a: Announcement): void {
   if (a.channelKey.trim() === "")
-    throw new BotTerminalError("An announcement.post needs a channel_key. It is a key from the bot channel map, not a Discord channel id.");
-  if (a.body.trim() === "")
-    throw new BotTerminalError("An announcement.post needs a body.");
+    throw new BotTerminalError(
+      "An announcement.post needs a channel_key. It is a key from the bot channel map, not a Discord channel id.",
+    );
+  if (a.body.trim() === "") throw new BotTerminalError("An announcement.post needs a body.");
   if (charLen(a.body) > 2000)
-    throw new BotTerminalError(`An announcement body is at most 2000 characters; this one is ${charLen(a.body)}.`);
+    throw new BotTerminalError(
+      `An announcement body is at most 2000 characters; this one is ${charLen(a.body)}.`,
+    );
 }
 
 /** `event.upsert`: external events only (location, exactly one of channel_key/location — this client only sends location). */
 export function validateEventUpsert(e: EventUpsert): void {
   if (e.eventKey.trim() === "")
-    throw new BotTerminalError("An event.upsert needs an event_key: it is how the bot finds the event to update.");
-  if (e.name.trim() === "")
-    throw new BotTerminalError("An event.upsert needs a name.");
+    throw new BotTerminalError(
+      "An event.upsert needs an event_key: it is how the bot finds the event to update.",
+    );
+  if (e.name.trim() === "") throw new BotTerminalError("An event.upsert needs a name.");
   if (charLen(e.name) > 100)
-    throw new BotTerminalError(`An event name is at most 100 characters; this one is ${charLen(e.name)}.`);
+    throw new BotTerminalError(
+      `An event name is at most 100 characters; this one is ${charLen(e.name)}.`,
+    );
   if (e.description !== null && charLen(e.description) > 1000)
-    throw new BotTerminalError(`An event description is at most 1000 characters; this one is ${charLen(e.description)}.`);
+    throw new BotTerminalError(
+      `An event description is at most 1000 characters; this one is ${charLen(e.description)}.`,
+    );
   if (e.location.trim() === "")
-    throw new BotTerminalError("An event.upsert needs a location. The bot takes exactly one of channel_key or location, and this client only ever sends location.");
+    throw new BotTerminalError(
+      "An event.upsert needs a location. The bot takes exactly one of channel_key or location, and this client only ever sends location.",
+    );
   const startsAt = Date.parse(e.startsAt);
   const endsAt = e.endsAt === null ? NaN : Date.parse(e.endsAt);
   if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || endsAt <= startsAt)
@@ -138,8 +159,7 @@ function parseEnvelope(status: number, replayed: boolean, json: unknown): Parsed
       status,
       requestId: requestId || null,
       message: typeof error.message === "string" ? error.message : "",
-      retryable:
-        typeof error.retryable === "boolean" ? error.retryable : retryableFallback(code),
+      retryable: typeof error.retryable === "boolean" ? error.retryable : retryableFallback(code),
       retryAfterSeconds: null, // set by the caller on a 429
     },
   };
@@ -168,7 +188,9 @@ async function send(
   idempotencyKey: string | null,
 ): Promise<ParsedEnvelope> {
   if (idempotencyKey !== null && !UUID.test(idempotencyKey))
-    throw new BotTerminalError("An Idempotency-Key must be a UUID; the bot answers a malformed one with a non-retryable `malformed`.");
+    throw new BotTerminalError(
+      "An Idempotency-Key must be a UUID; the bot answers a malformed one with a non-retryable `malformed`.",
+    );
   const body = encodeCanonicalJson(payload);
   const timestamp = Math.floor(Date.now() / 1000);
   const nonce = newNonce();
@@ -204,7 +226,8 @@ async function send(
   const parsed = parseEnvelope(res.status, res.headers.get("Idempotent-Replay") === "true", json);
   if (!parsed.ok && parsed.failure.code === "rate_limited" && res.status === 429) {
     const retryAfter = res.headers.get("Retry-After");
-    parsed.failure.retryAfterSeconds = retryAfter !== null && /^\d+$/.test(retryAfter) ? Number(retryAfter) : null;
+    parsed.failure.retryAfterSeconds =
+      retryAfter !== null && /^\d+$/.test(retryAfter) ? Number(retryAfter) : null;
   }
   const durationMs = Date.now() - startedAt;
   const actionName = payload["action"] ?? "(unknown)";
@@ -251,7 +274,11 @@ export function createBotClient(opts: BotClientOptions) {
 
     async assignRole(a: RoleAssignment): Promise<RoleAssignResult | BotFailure> {
       validateRoleAssign(a);
-      const answer = await send(cfg(), { action: "role.assign", discord_id: a.userId, role_key: a.roleKey }, null);
+      const answer = await send(
+        cfg(),
+        { action: "role.assign", discord_id: a.userId, role_key: a.roleKey },
+        null,
+      );
       if (!answer.ok) return answer.failure;
       const outcome = str(answer.result["outcome"]);
       if (outcome !== "assigned" && outcome !== "already_held")
@@ -259,7 +286,10 @@ export function createBotClient(opts: BotClientOptions) {
       return { ok: true, requestId: answer.requestId || null, outcome };
     },
 
-    async postAnnouncement(a: Announcement, idempotencyKey: string): Promise<AnnouncementResult | BotFailure> {
+    async postAnnouncement(
+      a: Announcement,
+      idempotencyKey: string,
+    ): Promise<AnnouncementResult | BotFailure> {
       validateAnnouncement(a);
       const answer = await send(
         cfg(),
@@ -268,11 +298,20 @@ export function createBotClient(opts: BotClientOptions) {
       );
       if (!answer.ok) return answer.failure;
       const messageId = str(answer.result["message_id"]);
-      if (messageId === null || messageId.trim() === "") throw new BotTransportError("an announcement.post success with no message_id");
-      return { ok: true, requestId: answer.requestId || null, messageId, replayed: answer.replayed };
+      if (messageId === null || messageId.trim() === "")
+        throw new BotTransportError("an announcement.post success with no message_id");
+      return {
+        ok: true,
+        requestId: answer.requestId || null,
+        messageId,
+        replayed: answer.replayed,
+      };
     },
 
-    async upsertEvent(e: EventUpsert, idempotencyKey: string): Promise<EventUpsertResult | BotFailure> {
+    async upsertEvent(
+      e: EventUpsert,
+      idempotencyKey: string,
+    ): Promise<EventUpsertResult | BotFailure> {
       validateEventUpsert(e);
       // validateEventUpsert throws unless endsAt is set; this narrows it for the compiler.
       const endsAt = e.endsAt;
@@ -294,8 +333,43 @@ export function createBotClient(opts: BotClientOptions) {
       if (outcome !== "created" && outcome !== "updated")
         throw new BotTransportError("an event.upsert outcome this release does not know");
       const discordEventId = str(answer.result["event_id"]);
-      if (discordEventId === null || discordEventId.trim() === "") throw new BotTransportError("an event.upsert success with no event_id");
-      return { ok: true, requestId: answer.requestId || null, outcome, discordEventId, replayed: answer.replayed };
+      if (discordEventId === null || discordEventId.trim() === "")
+        throw new BotTransportError("an event.upsert success with no event_id");
+      return {
+        ok: true,
+        requestId: answer.requestId || null,
+        outcome,
+        discordEventId,
+        replayed: answer.replayed,
+      };
+    },
+
+    // Opt-in on the bot (TWO_INTERNAL_ALLOW_EVENT_CANCEL): a bot without it
+    // answers a non-retryable `action_not_allowed`, which the queue treats as a
+    // definitive refusal. Only an event the bot already mapped can be cancelled.
+    async cancelEvent(
+      e: { eventKey: string },
+      idempotencyKey: string,
+    ): Promise<EventCancelResult | BotFailure> {
+      if (e.eventKey.trim() === "")
+        throw new BotTerminalError("An event.cancel needs an event_key.");
+      const answer = await send(
+        cfg(),
+        { action: "event.cancel", event_key: e.eventKey },
+        idempotencyKey,
+      );
+      if (!answer.ok) return answer.failure;
+      if (str(answer.result["outcome"]) !== "cancelled")
+        throw new BotTransportError("an event.cancel outcome this release does not know");
+      const discordEventId = str(answer.result["event_id"]);
+      if (discordEventId === null || discordEventId.trim() === "")
+        throw new BotTransportError("an event.cancel success with no event_id");
+      return {
+        ok: true,
+        requestId: answer.requestId || null,
+        outcome: "cancelled",
+        discordEventId,
+      };
     },
   };
 }

@@ -1,23 +1,35 @@
 name: deploy
 
-# Staging deploy on merge to main. Production (togetherweown.com) is only
+# Staging deploy after successful full CI on main. Production (togetherweown.com) is only
 # switched at cutover (plan TOG-9671, W16): there is deliberately no prod job here.
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: deploy-staging
-  cancel-in-progress: false
+  actions: read
 
 jobs:
   deploy-staging:
     name: deploy-staging
-    runs-on: [self-hosted, two-selfhosted]
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    # Rejected completion events must not replace a successful pending deploy.
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    # The org's two-selfhosted runner group refuses public repositories, so a
+    # fixed self-hosted label strands this job while the repo is public
+    # (TOG-12326). Public: GitHub-hosted, free for public repos. Private:
+    # back on the self-hosted fleet with no workflow change.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     # Production-style gate: GitHub Environment protection rules (required
     # reviewers, etc.) apply to staging deploys the same way they would to prod.
@@ -39,6 +51,16 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # workflow_run's github.sha is main's tip, not the successful CI SHA.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # Two commits of history: the smoke-scope step below diffs the
+          # deployed HEAD against its parent.
+          fetch-depth: 2
+      - name: Require successful exact-SHA full CI
+        run: node ci/staging-deploy-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Job-private localhost:5432 forward to the Postgres service
         run: |
           apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
@@ -57,23 +79,102 @@ jobs:
       - run: npm run check
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # Deploy build step: regenerate the served public/ assets from assets/
+      # with esbuild --minify and refuse drift. Deterministic: a no-op when
+      # CI's drift check passed, so the deployed bytes are the reviewed bytes.
+      - name: Build minified public assets (esbuild, drift fails closed)
+        run: npm run build:assets:check
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators
+      # Staging web schema (TOG-12965). The Worker's /up gate and event queries
+      # need the migrations of the SHA being deployed, so apply them after every
+      # check has passed and before the first Cloudflare mutation: a failed plan,
+      # apply or verify fails the job here and nothing reaches Cloudflare. Same
+      # ci/neon-migrate.mjs as db-migrate.yml (journal-prefix check, advisory
+      # lock, PITR timestamp, zero-pending post-check). Staging only: production
+      # is never migrated from this workflow.
+      - name: Plan staging web migrations (read-only journal diff)
+        run: node ci/neon-migrate.mjs plan
+        env: &staging-migration-env
+          MIGRATION_TARGET: staging
+          # `staging` Environment secret of this job; no DATABASE_URL fallback.
+          NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          # workflow_run's GITHUB_SHA is main's tip; the receipt must name the CI-verified checkout.
+          GITHUB_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - name: Re-verify exact-SHA full CI before staging migration
+        # DDL is a remote mutation too; the checks above may outlive the accepted CI attempt.
+        run: node ci/staging-deploy-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Apply staging web migrations (advisory lock, PITR timestamp)
+        run: node ci/neon-migrate.mjs apply
+        env: *staging-migration-env
+      - name: Verify zero pending staging web migrations
+        run: node ci/neon-migrate.mjs verify
+        env: *staging-migration-env
       - name: Ensure queues exist
         # Idempotent: "already exists" is fine; a real permission error surfaces at deploy.
         run: |
-          for q in two-sync-event two-internal-action; do npx wrangler queues create "$q" || true; done
+          for q in two-sync-event two-internal-action; do
+            # Preparation or an earlier mutation may outlive the accepted CI attempt.
+            node ci/staging-deploy-gate.mjs || exit 1
+            npx wrangler queues create "$q" || true
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Re-verify exact-SHA full CI before Tail Worker deploy
+        # The Tail Worker is a Cloudflare mutation too; queue creation may outlive the accepted CI attempt.
+        run: node ci/staging-deploy-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Deploy alert Tail Worker before attaching the app
+        # The app's tail_consumers binding needs the consumer to exist first.
+        run: npx wrangler deploy --config tail/wrangler.jsonc
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Re-verify exact-SHA full CI before Worker deploy
+        # Queue creation or the Tail deploy may outlive the accepted CI attempt; this step runs directly before the deploy.
+        run: node ci/staging-deploy-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy to Cloudflare Workers
         run: npx wrangler deploy --config wrangler.jsonc
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
+      # head commit only touches docs prose or the `test/` unit tree the
+      # checkers never execute skips the smoke steps below — the full suite,
+      # including those tests, already ran in this job via `npm run check`.
+      # ci/change-scope.sh fails closed: every other path runs the smoke.
+      - name: Scope post-deploy smoke to web-affecting changes
+        id: smoke-scope
+        # The deploy-staging job runs in a container where the default run
+        # shell is sh (dash), which rejects `set -o pipefail`. Run this step
+        # under bash.
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A deploy with no parent (practically impossible on main) fails
+          # closed: run the smoke rather than failing the deploy on scope.
+          if ! git rev-parse --verify --quiet "HEAD~1" >/dev/null; then
+            echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Same shape as the pull-request files API that ci/change-scope.sh
+          # reads in e2e.yml: one `filename<TAB>previous_filename` line per
+          # changed file. Rename rows print old-then-new, so they are swapped.
+          git diff --name-status -M "HEAD~1" HEAD \
+            | awk -F'\t' '{ if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t" }' > "$RUNNER_TEMP/deployed-files.tsv"
+          EXPECTED=$(wc -l < "$RUNNER_TEMP/deployed-files.tsv")
+          bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging public routes
-        # /up is always 200: degraded/unknown queue health must not fail a deploy.
+        if: steps.smoke-scope.outputs.skip_e2e != 'true'
+        # bin/smoke.mjs requires /up db:ok + pending_migrations:0; queue-only degraded/unknown must not fail a deploy.
         run: |
           for i in 1 2 3 4 5 6; do
             if node bin/smoke.mjs https://next.togetherweown.com; then
@@ -87,3 +188,30 @@ jobs:
           done
           echo "::error::staging public-route smoke failed after deploy"
           exit 1
+      - name: Smoke test staging event JSON contract
+        if: steps.smoke-scope.outputs.skip_e2e != 'true'
+        # Authenticated JSON show/paging probe through the staging QA seam
+        # (TOG-11769). Needs the staging-environment QA_AUTH_TOKEN secret: it
+        # is never a repository secret/value in this file, only a name. When
+        # the secret is absent the step reports its skip and passes, so the
+        # missing token never fails a deploy; the skipped contract is then
+        # visible in the job log instead of silently asserted.
+        run: |
+          if [ -z "${QA_AUTH_TOKEN:-}" ]; then
+            echo "json-smoke skipped: staging QA_AUTH_TOKEN is not configured"
+            exit 0
+          fi
+          for i in 1 2 3 4 5 6; do
+            if node bin/json-smoke.mjs https://next.togetherweown.com; then
+              echo "staging json-smoke ok (attempt $i)"
+              exit 0
+            fi
+            if [ "$i" -lt 6 ]; then
+              echo "attempt $i failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+          echo "::error::staging event-JSON smoke failed after deploy"
+          exit 1
+        env:
+          QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}

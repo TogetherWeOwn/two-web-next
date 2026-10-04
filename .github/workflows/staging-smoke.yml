@@ -14,13 +14,18 @@ name: staging-smoke
 on:
   workflow_dispatch:
     inputs:
+      announcement_only:
+        description: "Run announcement.post only (receiver without role.assign/event.upsert); discord_id and role_key are then ignored"
+        required: false
+        default: false
+        type: boolean
       discord_id:
-        description: "QA user snowflake to assign the role to"
-        required: true
+        description: "QA user snowflake to assign the role to (not needed when announcement_only)"
+        required: false
         type: string
       role_key:
-        description: "A key from the bot role allowlist, not a role ID"
-        required: true
+        description: "A key from the bot role allowlist, not a role ID (not needed when announcement_only)"
+        required: false
         type: string
       channel_key:
         description: "A THROWAWAY channel key — a real announcement gets posted"
@@ -37,28 +42,35 @@ concurrency:
 jobs:
   internal-action-smoke:
     name: internal-action-smoke
-    runs-on: [self-hosted, two-selfhosted]
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     container:
       image: node:24-bookworm
     timeout-minutes: 10
     environment:
       name: staging
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-      - run: npm ci --include=dev
+      - run: npm ci --include=dev --no-audit --no-fund
       - name: Moderator role-config probe (pre-smoke gate)
         run: npm run check:worker-moderators
       - name: Internal-action smoke against the staging bot
-        run: >-
-          npm run smoke:internal-action --
-          --discord-id="$SMOKE_DISCORD_ID"
-          --role-key="$SMOKE_ROLE_KEY"
-          --channel-key="$SMOKE_CHANNEL_KEY"
+        run: |
+          if [ "$SMOKE_ANNOUNCEMENT_ONLY" = "true" ]; then
+            npm run smoke:internal-action -- --announcement-only --channel-key="$SMOKE_CHANNEL_KEY"
+          else
+            npm run smoke:internal-action -- \
+              --discord-id="$SMOKE_DISCORD_ID" \
+              --role-key="$SMOKE_ROLE_KEY" \
+              --channel-key="$SMOKE_CHANNEL_KEY"
+          fi
         env:
+          SMOKE_ANNOUNCEMENT_ONLY: ${{ inputs.announcement_only }}
           SMOKE_DISCORD_ID: ${{ inputs.discord_id }}
           SMOKE_ROLE_KEY: ${{ inputs.role_key }}
           SMOKE_CHANNEL_KEY: ${{ inputs.channel_key }}

@@ -1,0 +1,128 @@
+name: e2e-staging
+
+# Post-deploy critical journeys against the staging Worker
+# (docs/critical-journeys.md, "Staging post-deploy journeys"). Runs after a
+# successful staging deploy and on manual dispatch. Public repo: standard
+# GitHub-hosted ubuntu-latest runners only — never paid larger runners or
+# Blacksmith. QA_AUTH_TOKEN comes from the staging Environment secret and is
+# never printed; GitHub masks secrets in logs automatically. Browsers run here
+# in CI only, never on the controller.
+# Docs-only and test-only deploys (ci/change-scope.sh skip_e2e verdict,
+# mirrored from e2e.yml) skip the journeys below: prose that no gate, test or
+# build reads, and unit tests the journeys never execute, prove nothing about
+# the deployed Worker. There is no PR context here (workflow_run +
+# workflow_dispatch triggers), so the scope job diffs the deployed head SHA
+# against its parent instead of listing PR files. e2e-staging gates no merge
+# (required checks are check, gitleaks and pr-lint), so a skip never blocks
+# anything.
+
+on:
+  workflow_run:
+    workflows: [deploy]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-staging
+  cancel-in-progress: false
+
+jobs:
+  # Cheap change-scope gate (mirrors e2e.yml): a deploy whose head commit only
+  # touches prose (`docs/**`, root `*.md`) that no gate, test or build reads,
+  # or only the `test/` unit tree the journeys never execute, fast-passes the
+  # journeys below instead of occupying a runner for 25 minutes. Manual
+  # dispatches always run the journeys. ci/change-scope.sh fails closed:
+  # every other path resolves to skip_e2e=false.
+  scope:
+    name: scope
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      skip_e2e: ${{ steps.scope.outputs.skip_e2e }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # workflow_run's github.sha is the default branch tip, not the
+          # deployed SHA. Full history lets the diff below reach the parent.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - id: scope
+        run: |
+          set -euo pipefail
+          HEAD_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
+          # A manual dispatch always runs the journeys; a deploy with no
+          # parent (practically impossible on main) fails closed.
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Same shape as the pull-request files API that ci/change-scope.sh
+          # reads in e2e.yml: one `filename<TAB>previous_filename` line per
+          # changed file. Rename rows print old-then-new, so they are swapped.
+          git diff --name-status -M "$HEAD_SHA~1" "$HEAD_SHA" \
+            | awk -F'\t' '{ if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t" }' > "$RUNNER_TEMP/deployed-files.tsv"
+          EXPECTED=$(wc -l < "$RUNNER_TEMP/deployed-files.tsv")
+          bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
+
+  staging-journeys:
+    name: staging-journeys
+    needs: scope
+    if: >-
+      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: staging
+      url: https://next.togetherweown.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Staging critical journeys
+        run: npm run e2e:staging
+        env:
+          QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Scrub QA token from failure artifacts
+        # The repo is public and artifacts are downloadable without log
+        # masking. Delete any file holding the token (also inside the report's
+        # embedded zip and every trace zip) and fail loud (TOG-13046). The
+        # upload below runs only when this sweep finished the whole tree.
+        id: scrub
+        if: failure()
+        run: python3 ci/scrub-qa-token.py test-results playwright-report
+        env:
+          QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Failure traces and report
+        if: failure() && steps.scrub.outputs.swept == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-staging-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

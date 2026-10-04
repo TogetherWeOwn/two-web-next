@@ -86,7 +86,11 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     const res = await post(
       JSON.stringify([
         {
-          body: { blockedURL: "inline", effectiveDirective: "script-src-elem", url: "http://localhost/" },
+          body: {
+            blockedURL: "inline",
+            effectiveDirective: "script-src-elem",
+            url: "http://localhost/",
+          },
         },
       ]),
       env,
@@ -122,19 +126,24 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     const res = await post("x".repeat(MAX_CSP_REPORT_BYTES + 1));
     expect(res.status).toBe(204);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith("csp.report.dropped_oversize", { bytes: MAX_CSP_REPORT_BYTES + 1 });
+    expect(warn).toHaveBeenCalledWith("csp.report.dropped_oversize", {
+      bytes: MAX_CSP_REPORT_BYTES + 1,
+    });
   });
 
   it("cancels on the first over-cap chunk despite a lying content-length", async () => {
     let pulls = 0;
     const cancel = vi.fn();
-    const stream = new ReadableStream({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(new TextEncoder().encode("y".repeat(1024)));
+    const stream = new ReadableStream(
+      {
+        pull(controller) {
+          pulls += 1;
+          controller.enqueue(new TextEncoder().encode("y".repeat(1024)));
+        },
+        cancel,
       },
-      cancel,
-    }, { highWaterMark: 0 });
+      { highWaterMark: 0 },
+    );
     const req = new Request("https://next.example.test/csp-reports", {
       method: "POST",
       body: stream,
@@ -151,15 +160,20 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
   it("discards a single large overflow chunk and never pulls the next chunk", async () => {
     let pulls = 0;
     const cancel = vi.fn();
-    const stream = new ReadableStream({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(new Uint8Array(64 * 1024));
+    const stream = new ReadableStream(
+      {
+        pull(controller) {
+          pulls += 1;
+          controller.enqueue(new Uint8Array(64 * 1024));
+        },
+        cancel,
       },
-      cancel,
-    }, { highWaterMark: 0 });
+      { highWaterMark: 0 },
+    );
     const req = new Request("https://next.example.test/csp-reports", {
-      method: "POST", body: stream, duplex: "half",
+      method: "POST",
+      body: stream,
+      duplex: "half",
     } as RequestInit);
     expect(await readCappedBody(req)).toEqual({ text: "", truncated: true, bytes: 64 * 1024 });
     expect(pulls).toBe(1);
@@ -170,11 +184,15 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     const pull = vi.fn();
     const stream = new ReadableStream({ pull }, { highWaterMark: 0 });
     const req = new Request("https://next.example.test/csp-reports", {
-      method: "POST", body: stream, duplex: "half",
+      method: "POST",
+      body: stream,
+      duplex: "half",
       headers: { "content-length": String(MAX_CSP_REPORT_BYTES + 1) },
     } as RequestInit);
     expect(await readCappedBody(req)).toEqual({
-      text: "", truncated: true, bytes: MAX_CSP_REPORT_BYTES + 1,
+      text: "",
+      truncated: true,
+      bytes: MAX_CSP_REPORT_BYTES + 1,
     });
     expect(pull).not.toHaveBeenCalled();
     await req.body?.cancel();
@@ -183,7 +201,11 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
   it("accepts a body exactly at the cap", async () => {
     const body = "x".repeat(MAX_CSP_REPORT_BYTES);
     const req = new Request("https://next.example.test/csp-reports", { method: "POST", body });
-    expect(await readCappedBody(req)).toEqual({ text: body, truncated: false, bytes: MAX_CSP_REPORT_BYTES });
+    expect(await readCappedBody(req)).toEqual({
+      text: body,
+      truncated: false,
+      bytes: MAX_CSP_REPORT_BYTES,
+    });
   });
 
   it("touches no session, cookie, or database — 204 with the app DB down", async () => {
@@ -252,9 +274,9 @@ describe("extractCspReport", () => {
       "source-file": "http://localhost/",
       "line-number": 1,
     });
-    expect(
-      extractCspReport(JSON.stringify([{ body: { blockedURL: "inline" } }])),
-    ).toEqual({ blockedURL: "inline" });
+    expect(extractCspReport(JSON.stringify([{ body: { blockedURL: "inline" } }]))).toEqual({
+      blockedURL: "inline",
+    });
     expect(extractCspReport(JSON.stringify([{ blockedURL: "inline" }]))).toEqual({
       blockedURL: "inline",
     });
@@ -281,7 +303,7 @@ describe("cspReportLogFields", () => {
       blocked_uri: null,
       violated_directive: null,
       document_uri: null,
-      source_file: "x",
+      source_file: null,
       line_number: null,
     });
   });

@@ -8,14 +8,26 @@ name: release
 # Required-checks fix: PRs opened with GITHUB_TOKEN trigger no workflows, so
 # the required `check` / `gitleaks` / `pr-lint` would never run on the release
 # PR and it could never merge. The dispatch job below calls `gh workflow run`
-# (workflow_dispatch IS allowed from GITHUB_TOKEN) for ci / secret-scan on the
-# release branch, plus the pr-lint dispatch path that validates the open PR
-# via the API. The check runs land on the PR head SHA, which is what required
-# checks match on. No App key or PAT in Actions secrets.
+# (workflow_dispatch IS allowed from GITHUB_TOKEN) for ci / pr-gates on the
+# release branch. The pr-gates dispatch path validates the open PR via the API
+# (pr_number input). The check runs land on the PR head SHA, which is what
+# required checks match on. No App key or PAT in Actions secrets.
+#
+# TOG-13034 (port of two-bot-next #365): only `schedule` and `workflow_dispatch`
+# (re)generate the release PR. A `push` to main runs release-please with
+# skip-github-pull-request, so it still publishes the tag/release when the
+# release PR merges but never rewrites the PR head or dispatches ci / pr-gates
+# on it (a rewrite on every merge meant the PR never held a head long enough to
+# get exact-head green). See docs/releases.md for the freeze -> dispatch ->
+# merge -> unfreeze procedure.
 
 on:
   push:
     branches: [main]
+  schedule:
+    # Off the hour to avoid the busiest scheduled-run window (UTC); weekly,
+    # because the normal cut is an operator dispatch (docs/releases.md).
+    - cron: '23 4 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -30,7 +42,9 @@ concurrency:
 jobs:
   release-please:
     name: release-please
-    runs-on: [self-hosted, two-selfhosted]
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
       prs_created: ${{ steps.release.outputs.prs_created }}
@@ -41,12 +55,19 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          # Publication stays enabled on every event (skip-github-release is
+          # never set). Only a push skips PR generation, so it cannot rewrite
+          # the release PR head or leave a new head with no checks.
+          skip-github-pull-request: ${{ github.event_name == 'push' }}
 
   dispatch-checks:
     name: dispatch-checks
     needs: release-please
-    if: needs.release-please.outputs.prs_created == 'true'
-    runs-on: [self-hosted, two-selfhosted]
+    # Never on a push: it did not regenerate the PR, so there is no new head.
+    if: github.event_name != 'push' && needs.release-please.outputs.prs_created == 'true'
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - env:
@@ -63,5 +84,4 @@ jobs:
           ")
           echo "Release PR #$PR_NUMBER on branch $HEAD_BRANCH; dispatching required checks."
           gh workflow run ci.yml --ref "$HEAD_BRANCH"
-          gh workflow run secret-scan.yml --ref "$HEAD_BRANCH"
-          gh workflow run pr-lint.yml --ref "$HEAD_BRANCH" -f pr_number="$PR_NUMBER"
+          gh workflow run pr-gates.yml --ref "$HEAD_BRANCH" -f pr_number="$PR_NUMBER"

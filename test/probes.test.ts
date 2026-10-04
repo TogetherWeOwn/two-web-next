@@ -12,7 +12,14 @@ import type { BotFailure } from "../src/jobs/types";
 
 const SYSOP = SYSOP_MODERATOR_ROLE_ID;
 const fail = (o: Partial<BotFailure>): BotFailure => ({
-  ok: false, code: "x", status: 503, requestId: null, message: "m", retryable: true, retryAfterSeconds: null, ...o,
+  ok: false,
+  code: "x",
+  status: 503,
+  requestId: null,
+  message: "m",
+  retryable: true,
+  retryAfterSeconds: null,
+  ...o,
 });
 
 describe("discord:check-moderators (role-config probe)", () => {
@@ -57,12 +64,15 @@ describe("discord:check-moderators (role-config probe)", () => {
     expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("FAIL");
   });
 
-  it.each([`${SYSOP},100000000000000001`, `${SYSOP},${SYSOP}`])("refuses a list other than exactly SySOp: %s", (raw) => {
-    const p = checkModerators(raw, { requireConfigured: true });
-    expect(p.ok).toBe(false);
-    expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("FAIL");
-    expect(p.unknowns).toBe(0);
-  });
+  it.each([`${SYSOP},100000000000000001`, `${SYSOP},${SYSOP}`])(
+    "refuses a list other than exactly SySOp: %s",
+    (raw) => {
+      const p = checkModerators(raw, { requireConfigured: true });
+      expect(p.ok).toBe(false);
+      expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("FAIL");
+      expect(p.unknowns).toBe(0);
+    },
+  );
 
   it("trims whitespace and drops empties", () => {
     const p = checkModerators(`  ${SYSOP} , ,`, { requireConfigured: true });
@@ -78,11 +88,15 @@ describe("discord:check-moderators (role-config probe)", () => {
 
 describe("check-moderators CLI", () => {
   const run = (args: string[], env: Record<string, string>) =>
-    execFileSync(process.execPath, ["--import", "./bin/ts-hook.mjs", "bin/check-moderators.mjs", ...args], {
-      encoding: "utf8",
-      env: { ...process.env, ...env },
-      timeout: 30_000,
-    });
+    execFileSync(
+      process.execPath,
+      ["--import", "./bin/ts-hook.mjs", "bin/check-moderators.mjs", ...args],
+      {
+        encoding: "utf8",
+        env: { ...process.env, ...env },
+        timeout: 30_000,
+      },
+    );
   const exitOf = (args: string[], env: Record<string, string>): number => {
     try {
       run(args, env);
@@ -126,29 +140,54 @@ describe("smoke staging guard", () => {
   });
 
   it("admits a staging host that is not production", () => {
-    expect(stagingEndpoint("https://bot-staging.internal.example", "https://bot.internal.example")).toBe(
-      "https://bot-staging.internal.example",
-    );
+    expect(
+      stagingEndpoint("https://bot-staging.internal.example", "https://bot.internal.example"),
+    ).toBe("https://bot-staging.internal.example");
   });
 
-  it.each([undefined, "", " ", "not a url", "ftp://bot.internal.example"])("refuses missing or invalid production exclusion: %s", (production) => {
-    expect(() => stagingEndpoint("https://bot-staging.internal.example", production)).toThrow(BotTerminalError);
-  });
+  it.each([undefined, "", " ", "not a url", "ftp://bot.internal.example"])(
+    "refuses missing or invalid production exclusion: %s",
+    (production) => {
+      expect(() => stagingEndpoint("https://bot-staging.internal.example", production)).toThrow(
+        BotTerminalError,
+      );
+    },
+  );
 
-  it.each(["http://bot.internal.example:8787", "https://BOT.internal.example:444/", "https://bot.internal.example./"])("refuses alternate spelling/port of the production hostname: %s", (target) => {
+  it.each([
+    "http://bot.internal.example:8787",
+    "https://BOT.internal.example:444/",
+    "https://bot.internal.example./",
+  ])("refuses alternate spelling/port of the production hostname: %s", (target) => {
     expect(() => stagingEndpoint(target, "https://bot.internal.example")).toThrow(/production/);
   });
 
-  it.each(["ftp://staging.example", "https://user:password@staging.example", "https://staging.example?token=secret", "https://staging.example#secret"])("refuses unsafe target: %s", (target) => {
+  it.each([
+    "ftp://staging.example",
+    "https://user:password@staging.example",
+    "https://staging.example?token=secret",
+    "https://staging.example#secret",
+  ])("refuses unsafe target: %s", (target) => {
     expect(() => stagingEndpoint(target, "https://bot.internal.example")).toThrow(BotTerminalError);
   });
 });
 
 describe("bot:internal-action-smoke orchestration (fixture client)", () => {
-  const args = { discordId: "900000000000009999", roleKey: "rocketleague", channelKey: "qa-throwaway", eventKey: "tog-test-1" };
+  const args = {
+    discordId: "900000000000009999",
+    roleKey: "rocketleague",
+    channelKey: "qa-throwaway",
+    eventKey: "tog-test-1",
+  };
   const fixedNow = () => new Date("2026-09-30T00:00:00.000Z");
   const roleOk: RoleAssignResult = { ok: true, requestId: "r1", outcome: "assigned" };
-  const eventOk: EventUpsertResult = { ok: true, requestId: "r3", outcome: "created", discordEventId: "d1", replayed: false };
+  const eventOk: EventUpsertResult = {
+    ok: true,
+    requestId: "r3",
+    outcome: "created",
+    discordEventId: "d1",
+    replayed: false,
+  };
 
   function stubClient(ann: (key: string, body: string) => AnnouncementResult | BotFailure) {
     const seen: string[] = [];
@@ -164,7 +203,12 @@ describe("bot:internal-action-smoke orchestration (fixture client)", () => {
   }
 
   it("passes when the retry replays the same message id", async () => {
-    const client = stubClient(() => ({ ok: true, requestId: "r2", messageId: "m1", replayed: true }));
+    const client = stubClient(() => ({
+      ok: true,
+      requestId: "r2",
+      messageId: "m1",
+      replayed: true,
+    }));
     const r = await runBotSmoke(client, args, fixedNow);
     expect(r.ok).toBe(true);
     expect(r.checks.map((c) => c.label)).toEqual([
@@ -178,6 +222,42 @@ describe("bot:internal-action-smoke orchestration (fixture client)", () => {
     // Same idempotency key on both announcement attempts (fresh nonce is the client's job).
     expect(client.seen).toHaveLength(2);
     expect(client.seen[0]).toBe(client.seen[1]);
+  });
+
+  it("announcement-only mode never calls role.assign or event.upsert", async () => {
+    const calls: string[] = [];
+    const client = {
+      assignRole: async (): Promise<RoleAssignResult> => {
+        calls.push("role.assign");
+        throw new Error("must not be called");
+      },
+      postAnnouncement: async () => {
+        calls.push("announcement.post");
+        return {
+          ok: true,
+          requestId: "r2",
+          messageId: "m1",
+          replayed: calls.length > 1,
+        } as AnnouncementResult;
+      },
+      upsertEvent: async (): Promise<EventUpsertResult> => {
+        calls.push("event.upsert");
+        throw new Error("must not be called");
+      },
+    };
+    const r = await runBotSmoke(
+      client,
+      { announcementOnly: true, channelKey: "qa-throwaway" },
+      fixedNow,
+    );
+    expect(r.ok).toBe(true);
+    expect(calls).toEqual(["announcement.post", "announcement.post"]);
+    expect(r.checks.map((c) => c.label)).toEqual([
+      "announcement.post is ok",
+      "retry is ok",
+      "retry is flagged Idempotent-Replay",
+      "retry returns the original message_id",
+    ]);
   });
 
   it("reuses byte-identical announcement payload with an advancing clock", async () => {
@@ -196,7 +276,12 @@ describe("bot:internal-action-smoke orchestration (fixture client)", () => {
 
   it("fails when the retry posts a second message instead of replaying", async () => {
     let n = 0;
-    const client = stubClient(() => ({ ok: true, requestId: "r2", messageId: `m${++n}`, replayed: false }));
+    const client = stubClient(() => ({
+      ok: true,
+      requestId: "r2",
+      messageId: `m${++n}`,
+      replayed: false,
+    }));
     const r = await runBotSmoke(client, args, fixedNow);
     expect(r.ok).toBe(false);
     expect(r.failures.some((f) => f.includes("Idempotent-Replay"))).toBe(true);
@@ -206,7 +291,8 @@ describe("bot:internal-action-smoke orchestration (fixture client)", () => {
   it("fails loudly on a bot refusal and keeps the other checks", async () => {
     const client = {
       assignRole: async () => fail({ code: "action_not_allowed", status: 403, retryable: false }),
-      postAnnouncement: async () => ({ ok: true, requestId: "r2", messageId: "m1", replayed: true }) as AnnouncementResult,
+      postAnnouncement: async () =>
+        ({ ok: true, requestId: "r2", messageId: "m1", replayed: true }) as AnnouncementResult,
       upsertEvent: async () => eventOk,
     };
     const r = await runBotSmoke(client, args, fixedNow);
@@ -217,17 +303,26 @@ describe("bot:internal-action-smoke orchestration (fixture client)", () => {
 
   it("a misconfigured client propagates (exit 2), it is not a failed check", async () => {
     const client = {
-      assignRole: async () => { throw new BotTerminalError("Bot is not configured: BOT_SHARED_SECRET is missing."); },
-      postAnnouncement: async (): Promise<AnnouncementResult> => { throw new Error("unreachable"); },
-      upsertEvent: async (): Promise<EventUpsertResult> => { throw new Error("unreachable"); },
+      assignRole: async () => {
+        throw new BotTerminalError("Bot is not configured: BOT_SHARED_SECRET is missing.");
+      },
+      postAnnouncement: async (): Promise<AnnouncementResult> => {
+        throw new Error("unreachable");
+      },
+      upsertEvent: async (): Promise<EventUpsertResult> => {
+        throw new Error("unreachable");
+      },
     };
     await expect(runBotSmoke(client, args, fixedNow)).rejects.toThrow(BotTerminalError);
   });
 
   it("a thrown transport error becomes a failed check, not a crash", async () => {
     const client = {
-      assignRole: async (): Promise<RoleAssignResult> => { throw new Error("connection reset"); },
-      postAnnouncement: async () => ({ ok: true, requestId: "r2", messageId: "m1", replayed: true }) as AnnouncementResult,
+      assignRole: async (): Promise<RoleAssignResult> => {
+        throw new Error("connection reset");
+      },
+      postAnnouncement: async () =>
+        ({ ok: true, requestId: "r2", messageId: "m1", replayed: true }) as AnnouncementResult,
       upsertEvent: async () => eventOk,
     };
     const r = await runBotSmoke(client, args, fixedNow);
@@ -257,6 +352,26 @@ describe("internal-action-smoke CLI", () => {
     expect(r.out).toMatch(/--discord-id/);
   });
 
+  it("--announcement-only needs only --channel-key (exit 2 without it)", () => {
+    const r = run(["--announcement-only"], {
+      BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
+    });
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/--channel-key/);
+    expect(r.out).not.toMatch(/--discord-id|--role-key/);
+  });
+
+  it("--announcement-only still refuses the production host", () => {
+    const r = run(["--announcement-only", "--channel-key=qa-throwaway"], {
+      BOT_ENDPOINT_URL: "https://bot.internal.example",
+      BOT_PRODUCTION_URL: "https://bot.internal.example",
+      BOT_SHARED_SECRET: "x",
+      BOT_KEY_ID: "web-staging",
+    });
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/production/);
+  });
+
   it("exit 2 when the target is the production host", () => {
     const r = run(
       ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"],
@@ -271,20 +386,35 @@ describe("internal-action-smoke CLI", () => {
     expect(r.out).toMatch(/production/);
   });
 
-  it.each(["", "not a url", "ftp://bot.internal.example"])("exit 2 on invalid production exclusion before network: %s", (production) => {
-    const r = run(
-      ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"],
-      { BOT_ENDPOINT_URL: "https://bot-staging.internal.example", BOT_PRODUCTION_URL: production, BOT_SHARED_SECRET: "fixture-only", BOT_KEY_ID: "web-staging" },
-    );
-    expect(r.code).toBe(2);
-    expect(r.out).toMatch(/BOT_PRODUCTION_URL/);
-    expect(r.out).not.toContain("fixture-only");
-  });
+  it.each(["", "not a url", "ftp://bot.internal.example"])(
+    "exit 2 on invalid production exclusion before network: %s",
+    (production) => {
+      const r = run(
+        [
+          "--discord-id=900000000000009999",
+          "--role-key=rocketleague",
+          "--channel-key=qa-throwaway",
+        ],
+        {
+          BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
+          BOT_PRODUCTION_URL: production,
+          BOT_SHARED_SECRET: "fixture-only",
+          BOT_KEY_ID: "web-staging",
+        },
+      );
+      expect(r.code).toBe(2);
+      expect(r.out).toMatch(/BOT_PRODUCTION_URL/);
+      expect(r.out).not.toContain("fixture-only");
+    },
+  );
 
   it("refuses credential-bearing URLs without echoing their credentials", () => {
     const r = run(
       ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"],
-      { BOT_ENDPOINT_URL: "https://user:fixture-password@staging.example", BOT_PRODUCTION_URL: "https://bot.internal.example" },
+      {
+        BOT_ENDPOINT_URL: "https://user:fixture-password@staging.example",
+        BOT_PRODUCTION_URL: "https://bot.internal.example",
+      },
     );
     expect(r.code).toBe(2);
     expect(r.out).not.toContain("fixture-password");
@@ -293,7 +423,10 @@ describe("internal-action-smoke CLI", () => {
   it("exit 2 when the bot is not configured", () => {
     const r = run(
       ["--discord-id=900000000000009999", "--role-key=rocketleague", "--channel-key=qa-throwaway"],
-      { BOT_ENDPOINT_URL: "https://bot-staging.internal.example", BOT_PRODUCTION_URL: "https://bot.internal.example" },
+      {
+        BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
+        BOT_PRODUCTION_URL: "https://bot.internal.example",
+      },
     );
     expect(r.code).toBe(2);
   });

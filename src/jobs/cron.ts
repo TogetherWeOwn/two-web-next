@@ -5,6 +5,7 @@ import {
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
   PRUNE_CRON,
   RECONCILE_CRON,
+  SYNC_EVENT,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
 import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
@@ -19,6 +20,8 @@ import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
  */
 export type SingleFlight = (name: string, fn: (db: TxClient) => Promise<void>) => Promise<boolean>;
 
+type ReconcilePreparation = { closed: number; materialized: number; stale: string[] };
+
 /**
  * Ports events:reconcile: close finished, materialise series, re-dispatch stale. Close first so the
  * sync pass cannot resurrect an ended event; materialise before the sync pass so a new occurrence is
@@ -29,13 +32,33 @@ export async function reconcileEvents(deps: {
   queue: { send(b: unknown, o?: { delaySeconds?: number }): Promise<unknown> };
   lock: UniqueLock;
   now?: () => Date;
+  writeTransaction?: (
+    work: (events: EventStore) => Promise<ReconcilePreparation>,
+  ) => Promise<ReconcilePreparation>;
 }): Promise<{ closed: number; materialized: number; resynced: number }> {
-  const closed = await deps.events.closeFinished((deps.now ?? (() => new Date()))());
-  const materialized = await deps.events.materializeSeries();
-  const stale = await deps.events.staleEventKeys();
+  const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
+    closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
+    materialized: await events.materializeSeries(),
+    stale: await events.staleEventKeys(),
+  });
+  // Commit materialization and release parent row locks before external I/O.
+  // The enclosing flight still excludes another scheduler throughout dispatch.
+  const { closed, materialized, stale } = await (deps.writeTransaction
+    ? deps.writeTransaction(prepare)
+    : prepare(deps.events));
   let resynced = 0;
   for (const key of stale) {
-    await dispatchSyncEvent(deps.queue, deps.lock, key);
+    // A carrier can be stranded, delayed or exhausted. Only recover a due
+    // request with budget left, always under its original immutable key.
+    const pending = await deps.events.pendingSync(key);
+    if (
+      pending &&
+      (pending.requestAttempts >= SYNC_EVENT.tries ||
+        !pending.nextAttemptAt ||
+        pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
+    )
+      continue;
+    await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
     resynced++; // Laravel counts stale rows, not accepted dispatches
   }
   if (closed > 0 || materialized > 0 || resynced > 0) {
@@ -61,7 +84,10 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * the cutoff goes, cutoff-exact rows survive. Idempotent: a re-run matches
  * nothing and reports zeros.
  */
-export async function pruneModelTables(stores: PruneStores, now: Date = new Date()): Promise<PruneCounts> {
+export async function pruneModelTables(
+  stores: PruneStores,
+  now: Date = new Date(),
+): Promise<PruneCounts> {
   const [accessLog, joinAttempts, idempotencyKeys, searchLog, sessions] = await Promise.all([
     stores.accessLog.pruneOlderThan(cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS)),
     stores.joinAttempts.pruneOlderThan(cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS)),
@@ -78,9 +104,13 @@ export async function pruneModelTables(stores: PruneStores, now: Date = new Date
 export async function runScheduled(
   cron: string,
   flight: SingleFlight,
-  jobs: { reconcile: (db: TxClient) => Promise<unknown>; prune: (db: TxClient) => Promise<unknown> },
+  jobs: {
+    reconcile: (db: TxClient) => Promise<unknown>;
+    prune: (db: TxClient) => Promise<unknown>;
+  },
 ): Promise<boolean> {
-  if (cron === RECONCILE_CRON) return flight("events:reconcile", async (db) => void (await jobs.reconcile(db)));
+  if (cron === RECONCILE_CRON)
+    return flight("events:reconcile", async (db) => void (await jobs.reconcile(db)));
   if (cron === PRUNE_CRON) return flight("model:prune", async (db) => void (await jobs.prune(db)));
   throw new Error(`unknown cron trigger: ${cron}`);
 }

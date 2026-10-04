@@ -92,11 +92,9 @@ export function pastEventsRequest(page: number): { method: "GET"; url: string } 
 }
 
 /** Singular RSVP resource: one answer per member per event (PUT + DELETE). */
-export const rsvpUrl = (eventKey: string): string =>
-  `/events/${encodeURIComponent(eventKey)}/rsvp`;
+export const rsvpUrl = (eventKey: string): string => `/events/${encodeURIComponent(eventKey)}/rsvp`;
 
-export const eventPageUrl = (eventKey: string): string =>
-  `/e/${encodeURIComponent(eventKey)}`;
+export const eventPageUrl = (eventKey: string): string => `/e/${encodeURIComponent(eventKey)}`;
 
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
@@ -291,7 +289,11 @@ export function isValidZone(zone: string | null | undefined): boolean {
   }
 }
 
-function partsIn(instant: Date, zone: string, opts: Intl.DateTimeFormatOptions): Map<string, string> {
+function partsIn(
+  instant: Date,
+  zone: string,
+  opts: Intl.DateTimeFormatOptions,
+): Map<string, string> {
   const z = isValidZone(zone) ? zone : "UTC";
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: z, ...opts }).formatToParts(instant);
   return new Map(parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
@@ -299,11 +301,18 @@ function partsIn(instant: Date, zone: string, opts: Intl.DateTimeFormatOptions):
 
 /** Canonical ISO wall date, including expanded years (invalid zones read as UTC). */
 export function wallDateIso(instant: Date, zone: string): string {
-  const p = partsIn(instant, zone, { era: "short", year: "numeric", month: "2-digit", day: "2-digit" });
+  const p = partsIn(instant, zone, {
+    era: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
   // Intl's Gregorian year is era-relative: 1 BC is astronomical year zero.
   const year = Number(p.get("year"));
   const isoYear = p.get("era") === "BC" ? 1 - year : year;
-  return calendarDate(isoYear, Number(p.get("month")) - 1, Number(p.get("day"))).toISOString().split("T")[0]!;
+  return calendarDate(isoYear, Number(p.get("month")) - 1, Number(p.get("day")))
+    .toISOString()
+    .split("T")[0]!;
 }
 
 /** "HH:mm" 24-hour wall time in `zone` (invalid zones read as UTC). */
@@ -355,7 +364,11 @@ export interface CalendarDay<E = unknown> {
 }
 
 /** Whole-weeks Monday-first grid for `month`; `byDay` buckets rows by their host-zone date. */
-export function monthGrid<E>(month: string, todayIso: string, byDay: Map<string, E[]>): CalendarDay<E>[][] {
+export function monthGrid<E>(
+  month: string,
+  todayIso: string,
+  byDay: Map<string, E[]>,
+): CalendarDay<E>[][] {
   const m = MONTH_RE.exec(month);
   const y = Number(m![1]);
   const mo = Number(m![2]);
@@ -480,7 +493,11 @@ export function calendarEmptyState(s: {
 }
 
 /** One GET per member action — the SSR page URL, not a data endpoint. */
-export function calendarRequest(s: CalendarState): { method: "GET"; url: string; accept: "text/html" } {
+export function calendarRequest(s: CalendarState): {
+  method: "GET";
+  url: string;
+  accept: "text/html";
+} {
   return { method: "GET", url: calendarUrl(s), accept: "text/html" };
 }
 
@@ -565,7 +582,11 @@ export interface GoingRefreshRequest {
 
 /** One request per answered event, filtered before collection pagination. */
 export function goingRefreshRequest(eventKey: string): GoingRefreshRequest {
-  return { method: "GET", url: `${EVENTS_JSON_URL}?event_key=${encodeURIComponent(eventKey)}`, eventKey };
+  return {
+    method: "GET",
+    url: `${EVENTS_JSON_URL}?event_key=${encodeURIComponent(eventKey)}`,
+    eventKey,
+  };
 }
 
 export interface EventJsonRow {
@@ -593,10 +614,9 @@ export function shouldRefreshGoing(detailKey: string, islandKey: string): boolea
  * surface: two-web PR #431 (TOG-7297 all-clear) with the clock-ended hole
  * tracked as TOG-7419.
  *
- * Slice state: no binder and no SSR exist yet (TOG-9839, gated on W9 routes
- * TOG-9688). This section is the build-from contract; the drift tests
- * (test/islands-rsvp-button.test.ts) pin it and skip the binder/SSR/server
- * rows with the blocker named.
+ * Slice 2 adds the SSR form and shipped binder. Drift tests execute both.
+ * Writes serialize until the response body settles; an abort cannot undo a
+ * transaction, so repeated activations during saving fire no replacement.
  *
  * NOTE on re-spec §2: it lists PUT statuses as "going / waitlisted / none".
  * Legacy accepts the full RsvpStatus enum and "none" is the withdraw
@@ -623,6 +643,8 @@ export const RSVP_SYNC_FAILED_TESTID = "rsvp-sync-failed";
 export const RSVP_SYNCED_TESTID = "rsvp-synced";
 export const RSVP_RATE_LIMITED_TESTID = "rsvp-rate-limited";
 export const RSVP_FAILED_TESTID = "rsvp-failed";
+export const RSVP_UNKNOWN_TESTID = "rsvp-unknown";
+export const RSVP_REFRESH_TESTID = "rsvp-refresh";
 export const RSVP_SESSION_EXPIRED_TESTID = "rsvp-session-expired";
 
 /** Full legacy RsvpStatus enum: the PUT body accepts every value. */
@@ -713,6 +735,8 @@ export const RSVP_COPY = {
   synced: "Synced to Discord.",
   failedTitle: "That RSVP didn't save.",
   failedAction: "Try once more.",
+  unknown: "We couldn't confirm your RSVP. Check the event before trying again.",
+  refresh: "Refresh the event",
   paused: "RSVPs are paused for this event — check back soon.",
   sessionExpired: "Your session expired.",
   guestCta: "Log in with Discord",
@@ -784,22 +808,23 @@ export function rsvpFocusTargets(
  * Discord sends the member back to the page. Null for a bare link.
  */
 export function loginUrl(returnTo: string | null): string {
-  return returnTo ? `/auth/discord?next=${encodeURIComponent(returnTo)}` : "/auth/discord";
+  return returnTo ? `/join/discord?next=${encodeURIComponent(returnTo)}` : "/join/discord";
 }
 
 /** Shared write budget, both verbs, per member (legacy RsvpRateLimit). */
 export const RSVP_RATE_LIMIT = { maxAttempts: 12, decaySeconds: 60 } as const;
 
 /**
- * Abuse decoy (TOG-8715): field no real form renders visibly, one-second
- * floor. A filled decoy on PUT answers the byte-identical first-write
- * success shape (201, null mirror stamp) without touching limiter/auth/DB,
- * and on DELETE the same empty 204 — nothing attacker-shaped logged. The
- * click island itself carries no trap: a bare click with no inputs and a
- * human-speed tap must never trip it.
+ * Abuse decoy: field no real form renders visibly; no minimum-fill
+ * floor — the click island sends no form-open timestamp, so
+ * there is nothing to time. A filled decoy on PUT answers the
+ * byte-identical first-write success shape (201, null mirror stamp) without
+ * touching limiter/auth/DB, and on DELETE the same empty 204 — nothing
+ * attacker-shaped logged. The click island itself carries no trap: a bare
+ * click with no inputs and a human-speed tap must never trip it. The 1000 ms
+ * timing floor belongs to the profile form only (PROFILE_MIN_FILL_MS).
  */
 export const RSVP_HONEY_FIELD = "website";
-export const RSVP_MIN_FILL_MS = 1000;
 
 /**
  * Trap verdict: true when the honeypot value is filled. A present non-string
@@ -918,14 +943,20 @@ export function profileClientErrors(input: {
   timezone: string;
 }): Record<string, string> {
   const errors: Record<string, string> = {};
-  if (CONTROL_CHARS.test(input.bio) || CONTROL_CHARS.test(input.games_text) || CONTROL_CHARS.test(input.timezone)) {
+  if (
+    CONTROL_CHARS.test(input.bio) ||
+    CONTROL_CHARS.test(input.games_text) ||
+    CONTROL_CHARS.test(input.timezone)
+  ) {
     errors.control = "Remove control characters.";
   }
-  if ([...input.bio].length > PROFILE_LIMITS.bio) errors.bio = "Keep your bio to 1000 characters or fewer.";
+  if ([...input.bio].length > PROFILE_LIMITS.bio)
+    errors.bio = "Keep your bio to 1000 characters or fewer.";
   const games: string[] = [];
   for (const line of input.games_text.split(/\r\n|\r|\n/)) {
     const t = line.trim();
-    if ([...t].length > PROFILE_LIMITS.gameChars) errors.games ??= "Keep each game name to 80 characters or fewer.";
+    if ([...t].length > PROFILE_LIMITS.gameChars)
+      errors.games ??= "Keep each game name to 80 characters or fewer.";
     if (t !== "" && !games.includes(t)) games.push(t);
   }
   if (games.length > PROFILE_LIMITS.gamesMax) errors.games ??= "Add no more than 20 games.";
@@ -939,7 +970,22 @@ export function profileClientErrors(input: {
   return errors;
 }
 
-export type ProfileOutcome = "saved" | "invalid" | "failed" | "session-expired" | "uncertain" | "cancelled";
+/**
+ * Admin event/featured editor session-expiry notice (TOG-12399): the island
+ * vetoes the probe reload so the unsaved draft stays reachable, releases the
+ * dirty guard for the recovery trip, and shows this durable notice with the
+ * recovery link from the event detail.
+ */
+export const ADMIN_SESSION_EXPIRED_TESTID = "admin-session-expired";
+export const ADMIN_SESSION_EXPIRED_COPY = "Your session expired. Your changes are still here.";
+
+export type ProfileOutcome =
+  | "saved"
+  | "invalid"
+  | "failed"
+  | "session-expired"
+  | "uncertain"
+  | "cancelled";
 
 /** Focus after each outcome: heading, alert, or saved confirmation (TOG-6957). */
 export function profileFocusTarget(outcome: ProfileOutcome): string | null {
@@ -974,10 +1020,16 @@ export function profileTrapTripped(input: Record<string, unknown>, nowMs: number
 }
 
 /** Discord CDN avatar with srcset, or null so SSR renders the initial fallback. */
-export function profileAvatarSrcset(id: string, avatar: string | null): { src: string; srcset: string } | null {
+export function profileAvatarSrcset(
+  id: string,
+  avatar: string | null,
+): { src: string; srcset: string } | null {
   if (!avatar || !/^[a-z0-9_]{1,64}$/i.test(avatar)) return null;
   const base = `https://cdn.discordapp.com/avatars/${id}/${avatar}.png`;
-  return { src: `${base}?size=128`, srcset: `${base}?size=64 1x, ${base}?size=128 2x, ${base}?size=256 3x` };
+  return {
+    src: `${base}?size=128`,
+    srcset: `${base}?size=64 1x, ${base}?size=128 2x, ${base}?size=256 3x`,
+  };
 }
 
 export function profileJoinedMonth(joinedAt: Date | null): string | null {

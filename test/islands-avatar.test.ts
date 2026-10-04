@@ -6,13 +6,22 @@ import { describe, expect, it, vi } from "vitest";
 const binder = readFileSync(new NodeURL("../public/islands/avatar.js", import.meta.url), "utf8");
 const css = readFileSync(new NodeURL("../public/styles.css", import.meta.url), "utf8");
 
-function avatar(opts: { complete?: boolean; naturalWidth?: number; missingImage?: boolean; missingInitial?: boolean } = {}) {
+function avatar(
+  opts: {
+    complete?: boolean;
+    naturalWidth?: number;
+    missingImage?: boolean;
+    missingInitial?: boolean;
+  } = {},
+) {
   const listeners = new Map<string, () => void>();
   const image = {
     hidden: false,
     complete: opts.complete ?? false,
     naturalWidth: opts.naturalWidth ?? 0,
-    addEventListener: vi.fn((event: string, listener: () => void) => listeners.set(event, listener)),
+    addEventListener: vi.fn((event: string, listener: () => void) =>
+      listeners.set(event, listener),
+    ),
   };
   const initial = { hidden: true };
   const root = {
@@ -37,15 +46,16 @@ function mount(avatars: ReturnType<typeof avatar>[]) {
 }
 
 describe("Avatar island DOM fixture", () => {
-  it.each([{ complete: false, naturalWidth: 0 }, { complete: true, naturalWidth: 64 }])(
-    "keeps a pending or successfully loaded image visible (%j)", (opts) => {
-      const a = avatar(opts);
-      mount([a]);
-      expect(a.image.addEventListener).toHaveBeenCalledWith("error", expect.any(Function));
-      expect(a.image.hidden).toBe(false);
-      expect(a.initial.hidden).toBe(true);
-    },
-  );
+  it.each([
+    { complete: false, naturalWidth: 0 },
+    { complete: true, naturalWidth: 64 },
+  ])("keeps a pending or successfully loaded image visible (%j)", (opts) => {
+    const a = avatar(opts);
+    mount([a]);
+    expect(a.image.addEventListener).toHaveBeenCalledWith("error", expect.any(Function));
+    expect(a.image.hidden).toBe(false);
+    expect(a.initial.hidden).toBe(true);
+  });
 
   it("reveals the initial and hides the broken image on a later error, idempotently", () => {
     const a = avatar();
@@ -87,8 +97,13 @@ describe("Avatar island DOM fixture", () => {
 
 describe("Avatar stylesheet drift", () => {
   it("reserves 64×64 for both states and does not override hidden with display:flex/block", () => {
-    expect(css).toMatch(/\.avatar \{[^}]*width: 64px;[^}]*height: 64px;[^}]*flex-shrink: 0;/);
-    expect(css).toContain(".avatar img, .avatar-initial { width: 100%; height: 100%; }");
-    expect(css).toContain(".avatar [hidden] { display: none; }");
+    // Whitespace-tolerant: the served stylesheet is the minified build output.
+    expect(css).toMatch(
+      /\.avatar\s*\{[^}]*width:\s*64px;[^}]*height:\s*64px;[^}]*flex-shrink:\s*0/,
+    );
+    expect(css).toMatch(
+      /\.avatar img,\s*\.avatar-initial\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%/,
+    );
+    expect(css).toMatch(/\.avatar \[hidden\]\s*\{\s*display:\s*none/);
   });
 });

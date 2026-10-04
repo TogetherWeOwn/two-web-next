@@ -83,7 +83,8 @@ try {
   let ready = false;
   while (Date.now() < deadline && server.exitCode === null && server.signalCode === null) {
     lifecycle.assertRunning();
-    try { ready = (await readiness.get(`${origin}/up`, { timeout: 1000 })).ok(); } catch {}
+    // Startup only: /up now requires the real DB/ledger, absent in this fixture worker.
+    try { ready = (await readiness.get(`${origin}/robots.txt`, { timeout: 1000 })).ok(); } catch {}
     if (ready) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }

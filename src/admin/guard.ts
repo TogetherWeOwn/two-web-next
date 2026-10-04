@@ -28,8 +28,10 @@ import { getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
+import { databaseUnavailable, notFoundHandler } from "../errors";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
+import { prepareAuthStatus } from "../auth-status";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -41,7 +43,6 @@ import {
 import { dbFor } from "./db";
 import { recordAccess } from "./store";
 import { memberReadBoundary } from "../member-reads";
-import { notFoundHandler } from "../errors";
 
 export type Actor = { id: string; username: string };
 
@@ -118,35 +119,62 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     const dbOverride = isStore(overrides) ? undefined : overrides?.db;
 
     let actor: Actor | null = null;
+    // A bearer with no live row (expired/revoked/rotated) is an expired
+    // guest, not a forbidden member: writes recover, reads re-authenticate.
+    let expiredGuest = false;
+    // Moderator pages run the tab-sync probe, so an expiry mid-edit raises
+    // two:session-expired and the form island can keep the draft reachable.
+    let attachStatus: (() => void) | null = null;
     try {
       const resolved = sessionOverride ?? (await sessionStoreFor(c));
       if (!resolved) throw new Error("admin needs a session store; refusing to decide without one");
-      const row = await resolved.get(await hashToken(token));
+      const tokenHash = await hashToken(token);
+      const row = await resolved.get(tokenHash);
       // Signed in, not a moderator: 403, not a login loop (TOG-54).
       if (row?.moderator) actor = { id: row.userId, username: row.username };
+      else if (!row) expiredGuest = true;
+      if (actor && c.req.method === "GET") {
+        attachStatus = await prepareAuthStatus(c, resolved, tokenHash);
+      }
     } catch (err) {
-      console.error("admin guard could not resolve the session; refusing.", { error: String(err) });
-      return c.text("Admin temporarily unavailable", 503);
+      console.error("admin guard could not resolve the session; refusing.", {
+        exception: err instanceof Error ? err.name : "unknown",
+      });
+      return databaseUnavailable(c);
     }
-    if (!actor) return c.text("Forbidden", 403);
+    if (!actor) {
+      if (expiredGuest) return bounceToLogin(c);
+      return c.text("Forbidden", 403);
+    }
     c.set("adminActor", actor);
 
     if (c.req.method === "GET" || c.req.method === "HEAD") {
       // Every admin read is observed, including a query added to an existing
       // non-sensitive screen. Route metadata never supplies the subject keys.
-      await memberReadBoundary(c, () => {
-        const declared = c.get("access");
-        return declared ? { ...declared, viewer: actor!.id } : undefined;
-      }, async (entry) => {
-        const db = dbOverride ?? await dbFor(c);
-        if (!db) throw new Error("Admin audit database unavailable");
-        return recordAccess(db, entry);
-      }, async () => {
-        if (c.req.matchedRoutes.length > 1) await next();
-        // Only this guard matched. Render here: Hono's single-middleware path
-        // otherwise reassigns/clones a finalized not-found buffer after next().
-        else await notFoundHandler(c);
-      });
+      await memberReadBoundary(
+        c,
+        () => {
+          const declared = c.get("access");
+          return declared ? { ...declared, viewer: actor!.id } : undefined;
+        },
+        async (entry) => {
+          const db = dbOverride ?? (await dbFor(c));
+          if (!db) throw new Error("Admin audit database unavailable");
+          return recordAccess(db, entry);
+        },
+        async () => {
+          if (c.req.matchedRoutes.length > 1) await next();
+          // Only this guard matched. Render here: Hono's single-middleware path
+          // otherwise reassigns/clones a finalized not-found buffer after next().
+          else await notFoundHandler(c);
+        },
+        databaseUnavailable,
+      );
+      // Only rendered documents get the probe: redirects and refusals stay
+      // cookie-free. Signed above, so attaching here never delays the page.
+      if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
+        attachStatus?.();
+      }
     } else {
       await next();
     }

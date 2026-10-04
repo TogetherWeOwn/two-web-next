@@ -11,8 +11,13 @@ const deferred = () => Promise.withResolvers();
 
 // Runs in the a11y job after Chromium installation, not the browser-free check job.
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  test(`real Chromium ${signal} leaves the runner alive through cleanup and evidence`, { skip: process.env.A11Y_BROWSER_TESTS !== "true", timeout: 20000 }, async (t) => {
-    const path = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "a11y-browser-signal-"));
+  test(`real Chromium ${signal} leaves the runner alive through cleanup and evidence`, {
+    skip: process.env.A11Y_BROWSER_TESTS !== "true",
+    timeout: 20000,
+  }, async (t) => {
+    const path = await mkdtemp(
+      join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "a11y-browser-signal-"),
+    );
     t.after(() => rm(path, { recursive: true, force: true }));
     const script = `
       import { once } from "node:events";
@@ -34,13 +39,26 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
       await lifecycle.stop();
       await writeFile(${JSON.stringify(join(path, "evidence"))}, "cleanup and evidence complete");
     `;
-    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     t.after(() => stopChildProcess(child));
     let stderr = "";
-    child.stderr.on("data", (data) => { stderr += data; });
+    child.stderr.on("data", (data) => {
+      stderr += data;
+    });
     const exited = once(child, "exit");
-    const ready = new Promise((resolve) => child.stdout.on("data", (data) => { if (data.toString().includes("READY")) resolve(); }));
-    await Promise.race([ready, exited.then(() => { throw new Error(`Browser exited before readiness: ${stderr}`); })]);
+    const ready = new Promise((resolve) =>
+      child.stdout.on("data", (data) => {
+        if (data.toString().includes("READY")) resolve();
+      }),
+    );
+    await Promise.race([
+      ready,
+      exited.then(() => {
+        throw new Error(`Browser exited before readiness: ${stderr}`);
+      }),
+    ]);
     child.kill(signal);
     const [code, exitSignal] = await exited;
     assert.equal(exitSignal, null, stderr);
@@ -69,12 +87,20 @@ test("signal and finally callers share cleanup completion, not an early return",
   const lifecycle = createAuditLifecycle();
   const disposal = deferred();
   let calls = 0;
-  await lifecycle.acquire(() => ({}), async () => { calls++; await disposal.promise; });
+  await lifecycle.acquire(
+    () => ({}),
+    async () => {
+      calls++;
+      await disposal.promise;
+    },
+  );
   const signalStop = lifecycle.stop();
   const finallyStop = lifecycle.stop();
   assert.equal(signalStop, finallyStop);
   let completed = false;
-  void finallyStop.then(() => { completed = true; });
+  void finallyStop.then(() => {
+    completed = true;
+  });
   await new Promise(setImmediate);
   assert.equal(completed, false);
   assert.equal(calls, 1);
@@ -90,16 +116,27 @@ for (const resourceName of ["fixture", "browser", "readiness"]) {
     const acquisition = deferred();
     const disposal = deferred();
     const events = [];
-    const resource = lifecycle.acquire(() => acquisition.promise, async () => {
-      events.push(`${resourceName} disposed`);
-      await disposal.promise;
-    });
+    const resource = lifecycle.acquire(
+      () => acquisition.promise,
+      async () => {
+        events.push(`${resourceName} disposed`);
+        await disposal.promise;
+      },
+    );
     const rejected = assert.rejects(resource, /audit cancelled/);
     await new Promise(setImmediate); // The factory has started, but not resolved.
     const stopped = lifecycle.stop();
     let finished = false;
-    void stopped.then(() => { finished = true; });
-    assert.throws(() => lifecycle.acquire(() => { throw new Error("must not acquire"); }), /audit cancelled/);
+    void stopped.then(() => {
+      finished = true;
+    });
+    assert.throws(
+      () =>
+        lifecycle.acquire(() => {
+          throw new Error("must not acquire");
+        }),
+      /audit cancelled/,
+    );
     acquisition.resolve({});
     await rejected;
     await new Promise(setImmediate);
@@ -115,10 +152,13 @@ test("cleanup attempts every owned resource even if an earlier disposal fails", 
   const lifecycle = createAuditLifecycle();
   const events = [];
   for (const name of ["scratch", "fixture", "server", "browser"]) {
-    await lifecycle.acquire(() => name, async () => {
-      events.push(name);
-      if (name === "browser") throw new Error("close failed");
-    });
+    await lifecycle.acquire(
+      () => name,
+      async () => {
+        events.push(name);
+        if (name === "browser") throw new Error("close failed");
+      },
+    );
   }
   const stopped = lifecycle.stop();
   await assert.rejects(stopped, /close failed/);
@@ -128,9 +168,15 @@ test("cleanup attempts every owned resource even if an earlier disposal fails", 
 
 test("in-flight startup writes finish before removing owned scratch", async () => {
   const lifecycle = createAuditLifecycle();
-  const path = await lifecycle.acquire(() => mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "a11y-cancel-test-")), (dir) => rm(dir, { recursive: true, force: true }));
+  const path = await lifecycle.acquire(
+    () => mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "a11y-cancel-test-")),
+    (dir) => rm(dir, { recursive: true, force: true }),
+  );
   const gate = deferred();
-  const operation = lifecycle.run(async () => { await gate.promise; await writeFile(join(path, "bundle"), "fixture"); });
+  const operation = lifecycle.run(async () => {
+    await gate.promise;
+    await writeFile(join(path, "bundle"), "fixture");
+  });
   const rejected = assert.rejects(operation, /audit cancelled/);
   await new Promise(setImmediate);
   const stopped = lifecycle.stop();
@@ -143,7 +189,9 @@ test("in-flight startup writes finish before removing owned scratch", async () =
 test("cancellation before the factory starts creates no resource", async () => {
   const lifecycle = createAuditLifecycle();
   let acquired = false;
-  const resource = lifecycle.acquire(() => { acquired = true; });
+  const resource = lifecycle.acquire(() => {
+    acquired = true;
+  });
   const rejected = assert.rejects(resource, /audit cancelled/);
   await lifecycle.stop();
   await rejected;

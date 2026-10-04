@@ -34,9 +34,16 @@ Receipt keys are additional manifest lines, not additional daily/weekly backups.
 Current archive names, branch prefixes, EU jurisdiction, upload flags and
 newest-7-daily/newest-4-weekly defaults are unchanged. Failed verification does
 not publish the new pair; an uploaded object may remain outside the manifest.
-No automatic orphan cleanup or store backfill is introduced. Existing manifest
-fetch/create and concurrent-writer semantics are unchanged; this is not a
-transactional manifest redesign.
+No automatic orphan cleanup or store backfill is introduced. Concurrent-writer
+semantics are unchanged; this is not a transactional manifest redesign.
+
+The manifest is admitted before any remote mutation (`bin/backup/manifest-helper`).
+Only Wrangler's explicit missing-key diagnostic lets `backup` initialize a first
+manifest; every other read failure (auth, transport, unclassified) refuses with
+a nonzero exit and leaves the inventory and archives untouched. Each line must
+be a valid daily or weekly archive key (or its `.digest.json` receipt) for the
+selected branch prefix; malformed, duplicate or foreign-branch lines refuse the
+whole inventory before an upload, promotion PUT or rotation DELETE.
 
 ## Check outcomes and legacy compatibility
 

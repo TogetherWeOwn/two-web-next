@@ -6,6 +6,11 @@
 //     node --import ./bin/ts-hook.mjs bin/internal-action-smoke.mjs \
 //       --discord-id=<snowflake> --role-key=<key> --channel-key=<throwaway> [--event-key=<key>]
 //
+// --announcement-only: for a receiver that supports announcement.post alone.
+// Runs announcement.post + the same-key retry and skips role.assign and
+// event.upsert, so only --channel-key is required:
+//   ... bin/internal-action-smoke.mjs --announcement-only --channel-key=<throwaway>
+//
 // Safety: posts a REAL announcement to a throwaway channel and creates a REAL
 // staging event — --channel-key must name a throwaway channel. The script
 // requires valid BOT_PRODUCTION_URL and BOT_ENDPOINT_URL, refuses the entire
@@ -27,11 +32,13 @@ const roleKey = opt("role-key");
 const channelKey = opt("channel-key");
 const eventKey = opt("event-key") || `tog10112-${crypto.randomUUID().slice(0, 12)}`;
 
-const missing = ["discord-id", "role-key", "channel-key"].filter(
-  (n) => opt(n) === "",
-);
+const announcementOnly = process.argv.slice(2).includes("--announcement-only");
+const required = announcementOnly ? ["channel-key"] : ["discord-id", "role-key", "channel-key"];
+const missing = required.filter((n) => opt(n) === "");
 if (missing.length > 0) {
-  console.error(`internal-action-smoke: missing required option(s): ${missing.map((n) => `--${n}`).join(" ")}`);
+  console.error(
+    `internal-action-smoke: missing required option(s): ${missing.map((n) => `--${n}`).join(" ")}`,
+  );
   process.exit(2);
 }
 
@@ -45,6 +52,8 @@ try {
 
 console.log("internal actions smoke (TOG-10112)");
 console.log(`  target  ${new URL(url).origin}`);
+if (announcementOnly)
+  console.log("  scope   announcement-only (role.assign and event.upsert skipped)");
 console.log("");
 
 const bot = createBotClient({
@@ -61,7 +70,12 @@ try {
 
 let report;
 try {
-  report = await runBotSmoke(bot, { discordId, roleKey, channelKey, eventKey });
+  report = await runBotSmoke(
+    bot,
+    announcementOnly
+      ? { announcementOnly: true, channelKey }
+      : { discordId, roleKey, channelKey, eventKey },
+  );
 } catch (e) {
   // Misconfiguration (including the production refusal) is exit 2, not a failed check.
   console.error(`internal-action-smoke: ${e instanceof Error ? e.message : String(e)}`);

@@ -1,0 +1,27 @@
+{
+  "name": "two-web-next-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  },
+  "scripts": {
+    "build": "vite build && node scripts/copy-public.mjs",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "preview:deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-cloudflare": "8.0.0",
+    "@sveltejs/kit": "3.0.0",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "svelte": "5.57.1",
+    "svelte-check": "4.7.6",
+    "typescript": "6.0.3",
+    "vite": "8.3.2",
+    "wrangler": "4.145.0"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24"
+  }
+}

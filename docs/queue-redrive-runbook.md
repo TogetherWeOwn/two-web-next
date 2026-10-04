@@ -1,15 +1,15 @@
 # Queue dead-letter redrive runbook: two-web-next
 
-Inspect-list-redrive loop over `queue_failed_jobs` for [TOG-11707](/TOG/issues/TOG-11707).
+Inspect-list-redrive loop over `queue_failed_jobs` for dead-letter recovery.
 Companion to the [operations runbook](runbook.md#queue-containment-drain-and-failed-job-replay):
 that section owns containment/drain gates; this page owns the dead-letter loop.
 Transitions are proved against real SQL in `test/queue-redrive.test.ts`.
 
 ## Rules
 
-- The worker gate in `runbook.md` applies: `src/jobs/worker.ts` uses `notWired`
-  adapters, so do not redrive real messages until the Director accepts a reviewed
-  adapter fix. Redrive rehearsal evidence is the test file, not live replay.
+- The worker gate in `runbook.md` applies: do not redrive real messages until
+  the worker's `BOT_*` bindings are confirmed present (missing config fails jobs
+  terminally). Redrive rehearsal evidence is the test file, not live replay.
 - A failed row is diagnostic identity only (`id`, `job_id`, `kind`, `key`,
   `reason`, `failed_at`) — no payload, no original bot idempotency key. Never
   reconstruct an announcement/role action from a key or fabricate a key.

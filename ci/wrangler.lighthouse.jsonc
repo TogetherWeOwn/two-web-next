@@ -1,0 +1,10 @@
+// Standalone local fixture; intentionally no remote/database/service bindings.
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "two-web-next-lighthouse-fixture",
+  "main": "./lighthouse-worker.ts",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": "../public" },
+  "dev": { "ip": "127.0.0.1", "port": 8787 }
+}

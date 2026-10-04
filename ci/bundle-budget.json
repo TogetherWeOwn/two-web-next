@@ -1,0 +1,49 @@
+{
+  "$comment": "Per-file budgets for minified public assets. Minified baseline 2026-10-03 (raw/gzip bytes, esbuild 0.28.1 --minify from assets/): admin-event-editor 1429/737, admin-event-text-limits 998/539, auth-status 2081/1009, avatar 287/213, copy-link 1323/714, events-calendar 5133/1991, going-count 2289/1092, member-profile 6138/2414, past-events 3350/1397, rsvp-button 13662/4001, styles 4749/1611. Ceilings are measured size x1.25 rounded up (raw to 512B, gzip to 256B), replacing the unminified stopgap ceilings. Earlier history: baseline 2026-09-30 (raw/gzip bytes): events-calendar 8108/2793, going-count 2776/1145, member-profile 5193/1977, past-events 3778/1434, styles 2087/882. Islands added later started at measured size plus 25-33% headroom: copy-link (ceilings 3072/1280), avatar 610 raw (1024/512), admin-event-editor 979/482 (1280/640), admin-event-text-limits 1594/725 (2048/1024), auth-status 4152/1576 (5120/2048) and rsvp-button 28628/7371 (35840/9728, added on main by #98). Every JavaScript file under public/islands at any depth must have a budget. Raising a ceiling requires an explicit decision explaining the growth; never relax a budget just to make CI green. assets/ holds the reviewed sources; public/ holds the deterministic build output (node ci/minify-assets.mjs --check fails on drift). Served behavior is unchanged: the binder suite executes the minified bytes.",
+  "budgets": {
+    "public/islands/admin-event-editor.js": {
+      "maxRawBytes": 2048,
+      "maxGzipBytes": 1024
+    },
+    "public/islands/admin-event-text-limits.js": {
+      "maxRawBytes": 1536,
+      "maxGzipBytes": 768
+    },
+    "public/islands/auth-status.js": {
+      "maxRawBytes": 3072,
+      "maxGzipBytes": 1280
+    },
+    "public/islands/avatar.js": {
+      "maxRawBytes": 512,
+      "maxGzipBytes": 512
+    },
+    "public/islands/copy-link.js": {
+      "maxRawBytes": 2048,
+      "maxGzipBytes": 1024
+    },
+    "public/islands/events-calendar.js": {
+      "maxRawBytes": 6656,
+      "maxGzipBytes": 2560
+    },
+    "public/islands/going-count.js": {
+      "maxRawBytes": 3072,
+      "maxGzipBytes": 1536
+    },
+    "public/islands/member-profile.js": {
+      "maxRawBytes": 7680,
+      "maxGzipBytes": 3072
+    },
+    "public/islands/past-events.js": {
+      "maxRawBytes": 4608,
+      "maxGzipBytes": 1792
+    },
+    "public/islands/rsvp-button.js": {
+      "maxRawBytes": 17408,
+      "maxGzipBytes": 5120
+    },
+    "public/styles.css": {
+      "maxRawBytes": 6144,
+      "maxGzipBytes": 2048
+    }
+  }
+}

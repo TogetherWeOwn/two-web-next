@@ -27,6 +27,23 @@ Never borrow another person's session or use the QA authentication seam to get
 admin access. If access or member-data audit logging fails, stop and escalate;
 do not bypass it with direct database queries or another endpoint.
 
+## Auth-wall probe (staging only)
+
+`bin/admin-authwall-probe.mjs` verifies all nine admin POST routes answer each
+leg correctly: guests bounce to session recovery (303), signed-in
+non-moderators get 403, and moderators read the dashboard (200). It logs in
+both QA identities, sends empty bodies (expectations resolve before any
+handler touches the database, so it writes nothing), and prints only statuses
+— never tokens, cookies, or bodies. Run it with `QA_AUTH_TOKEN` from an
+approved secret binding:
+
+```sh
+QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/admin-authwall-probe.mjs
+```
+
+It spends two QA-login hits and stays inside the admin-write throttle budget.
+Live runs belong to the authorized cutover procedure, not CI.
+
 ## Screens and route reference
 
 Use the navigation **Events**, **Featured**, **Join attempts**, or **Site**.
@@ -118,7 +135,8 @@ editor's separate browser warning for unsaved changes is not action approval.
 
 A fresh time in the daylight-saving **gap** is rejected; choose a real time and
 ask engineering if the intended instant is unclear. A fresh repeated-hour time
-uses the first occurrence; there is no occurrence chooser. Unchanged edit times
+uses the second occurrence (after the clocks go back, e.g. 01:30 GMT on
+25 October 2026), as the old site did; there is no occurrence chooser. Unchanged edit times
 preserve the stored instant. Do not move them just to make the form save.
 
 The form's navigation **Cancel** link only leaves the editor. It is different
@@ -281,7 +299,7 @@ sections when their data is available:
 
 A missing section is not proof of zero incidents: failing/slow optional funnel
 or missed-search reads can omit their section while the dashboard remains
-available. Both reads run concurrently with a 500 ms budget each; that optional
+available. Both reads start together with a 1.5 s budget; that optional
 widget behavior does not relax authorization or access-log enforcement.
 Missing database configuration is different: normal signed-in session resolution
 and admin access are unavailable, not just the widgets. A signed-session request
@@ -289,6 +307,35 @@ can return 503; guests still go to sign-in. Stop and escalate rather than assumi
 an otherwise usable panel with empty counts.
 There is no activity-log/member-access-log viewer, user editor, role/ban manager
 or join-attempt mutation screen here.
+
+## Member deletion requests
+
+Members can ask anytime to be removed, by DM to a moderator or through a
+private support ticket; the published privacy policy promises deletion of
+their rows on such a request. There is no self-serve delete button and no
+delete control in this panel, so a moderator who receives a request records
+it and hands it to the site maintainers/operator. Never ask for or paste
+passwords, tokens, or other credentials while handling the request.
+
+1. Confirm the request comes from the member themselves, by DM or private
+   ticket. Keep the member's Discord user ID inside that private thread.
+2. Hand the Discord user ID to the site maintainers/operator through the
+   approved private support process. Do not run database commands, edit rows,
+   or try another endpoint yourself.
+3. Tell the member what happens: the operator deletes their member record,
+   profile, RSVPs, sign-in sessions (this signs them out everywhere), and
+   join attempts in one transaction, following the
+   [member-erasure operator runbook](member-erasure.md). Signing in again
+   later starts a fresh record.
+4. Name the two exceptions, which stay tamper-proof as evidence: past
+   member-data access-log entries (never rewritten for one person; they
+   delete themselves after 90 days) and the moderator edit history (it keeps
+   the name of the moderator who made each change). Discord-side data (roles,
+   messages, tickets) is out of scope here and is handled through Discord's
+   own moderation tools.
+
+Do not promise a completion time; the operator runs the command and confirms
+the per-table counts.
 
 ## Moderator boundaries and incidents
 

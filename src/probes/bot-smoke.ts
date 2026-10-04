@@ -16,14 +16,24 @@
 
 import { BotTerminalError } from "../jobs/types";
 import type { BotFailure } from "../jobs/types";
-import type { AnnouncementResult, BotActionClient, EventUpsertResult, RoleAssignResult } from "../bot/client";
+import type {
+  AnnouncementResult,
+  BotActionClient,
+  EventUpsertResult,
+  RoleAssignResult,
+} from "../bot/client";
 
-export type SmokeArgs = {
-  discordId: string;
-  roleKey: string;
-  channelKey: string;
-  eventKey: string;
-};
+export type SmokeArgs =
+  | {
+      announcementOnly?: false;
+      discordId: string;
+      roleKey: string;
+      channelKey: string;
+      eventKey: string;
+    }
+  // Receivers that expose announcement.post only (the two-bot-next staging
+  // receiver, TOG-12973): skip role.assign and event.upsert, which they refuse.
+  | { announcementOnly: true; channelKey: string };
 
 export type SmokeCheck = { label: string; ok: boolean; detail: string };
 
@@ -36,7 +46,9 @@ export type SmokeReport = { checks: SmokeCheck[]; failures: string[]; ok: boolea
  */
 export function stagingEndpoint(rawUrl: string | undefined, productionUrl?: string): string {
   if (!rawUrl || rawUrl.trim() === "") {
-    throw new BotTerminalError("Bot is not configured: BOT_ENDPOINT_URL is missing (staging bot URL).");
+    throw new BotTerminalError(
+      "Bot is not configured: BOT_ENDPOINT_URL is missing (staging bot URL).",
+    );
   }
   const parse = (raw: string | undefined, name: string): URL => {
     let url: URL;
@@ -45,8 +57,17 @@ export function stagingEndpoint(rawUrl: string | undefined, productionUrl?: stri
     } catch {
       throw new BotTerminalError(`${name} must be a valid HTTP(S) URL.`);
     }
-    if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
-      throw new BotTerminalError(`${name} must be an HTTP(S) URL without credentials, query or fragment.`);
+    if (
+      !["https:", "http:"].includes(url.protocol) ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
+      throw new BotTerminalError(
+        `${name} must be an HTTP(S) URL without credentials, query or fragment.`,
+      );
     }
     return url;
   };
@@ -74,7 +95,8 @@ function describe(a: Answer | null): string {
   if (!ok(a)) {
     return `refused ${a.status} ${a.code} retryable=${a.retryable ? "true" : "false"} request_id=${a.requestId ?? "(none)"}`;
   }
-  if ("messageId" in a) return `message_id=${a.messageId} replayed=${a.replayed ? "true" : "false"} request_id=${a.requestId ?? "(none)"}`;
+  if ("messageId" in a)
+    return `message_id=${a.messageId} replayed=${a.replayed ? "true" : "false"} request_id=${a.requestId ?? "(none)"}`;
   if ("discordEventId" in a && "outcome" in a)
     return `outcome=${a.outcome} event_id=${a.discordEventId} request_id=${a.requestId ?? "(none)"}`;
   return `outcome=${(a as RoleAssignResult).outcome} request_id=${a.requestId ?? "(none)"}`;
@@ -82,7 +104,8 @@ function describe(a: Answer | null): string {
 
 /**
  * Drive role.assign, announcement.post (+ same-key retry), event.upsert
- * against the staging bot. BotTerminalError propagates (misconfigured: exit
+ * against the staging bot (announcement.post and its retry only when
+ * `args.announcementOnly`). BotTerminalError propagates (misconfigured: exit
  * 2); anything else a call throws becomes a failed check (exit 1). Never logs
  * request bodies — the announcement text in particular stays out of logs.
  */
@@ -102,21 +125,31 @@ export async function runBotSmoke(
       return await call();
     } catch (e) {
       if (e instanceof BotTerminalError) throw e;
-      failures.push(`${label} threw ${e instanceof Error ? e.constructor.name : typeof e}: ${e instanceof Error ? e.message : String(e)}`);
+      failures.push(
+        `${label} threw ${e instanceof Error ? e.constructor.name : typeof e}: ${e instanceof Error ? e.message : String(e)}`,
+      );
       return null;
     }
   };
 
   // role.assign — natural idempotency, no key.
-  const role = await attempt("role.assign", () =>
-    client.assignRole({ userId: args.discordId, roleKey: args.roleKey }),
-  );
-  if (role !== null) check("role.assign is ok", ok(role), describe(role));
+  if (!args.announcementOnly) {
+    const { discordId, roleKey } = args;
+    const role = await attempt("role.assign", () =>
+      client.assignRole({ userId: discordId, roleKey }),
+    );
+    if (role !== null) check("role.assign is ok", ok(role), describe(role));
+  }
 
   // announcement.post — needs key. The same key retried must replay, not post twice.
   const key = crypto.randomUUID();
-  const announcement = { channelKey: args.channelKey, body: `TOG-10112 smoke run. Ignore. ${now().toISOString()}` };
-  const first = await attempt("announcement.post", () => client.postAnnouncement(announcement, key));
+  const announcement = {
+    channelKey: args.channelKey,
+    body: `TOG-10112 smoke run. Ignore. ${now().toISOString()}`,
+  };
+  const first = await attempt("announcement.post", () =>
+    client.postAnnouncement(announcement, key),
+  );
   if (first !== null) check("announcement.post is ok", ok(first), describe(first));
   const replay = await attempt("announcement.post retried with the same idempotency key", () =>
     client.postAnnouncement(announcement, key),
@@ -137,11 +170,14 @@ export async function runBotSmoke(
     );
   }
 
+  if (args.announcementOnly) return { checks, failures, ok: failures.length === 0 };
+
   // event.upsert — fresh event key per run by default, so a run creates rather than updates.
+  const { eventKey } = args;
   const event = await attempt("event.upsert", () =>
     client.upsertEvent(
       {
-        eventKey: args.eventKey,
+        eventKey,
         name: "TOG-10112 smoke event",
         startsAt: new Date(now().getTime() + 86_400_000).toISOString(),
         endsAt: new Date(now().getTime() + 90_000_000).toISOString(),

@@ -32,7 +32,7 @@ route-level 403/410 for `/e/{key}` land with W8; `crawlableEvents` in
 |---|---|
 | `/events`, `/events/past` | W8 |
 | `/e/{key}` | W8 |
-| `/events.json` | W8 |
+| `/events.json`, `/events/{key}` (JSON) | W8 + [TOG-11155](/TOG/issues/TOG-11155) |
 | `.ics` / `.rss` feeds | W9 |
 | `/profile`, `/members/{user}` | W7 |
 | `/admin/*` | W11–W12 |
@@ -42,6 +42,16 @@ Note: legacy `/join*` is the one-click OAuth journey; this repo's equivalent
 `/auth/discord*` shipped in W3 with the same `identify` + `guilds.join`
 scopes. The `/join` paths landed with W6 alongside it (same scopes, same
 synchronous bot add); both stay until the strangler cutover retires one.
+
+## RSVP progressive enhancement (W10)
+
+`POST /e/:key/rsvp` is the additive HTML form adapter for member join,
+waitlist and withdrawal controls. It shares the frozen JSON resource's session,
+caller-only write, decoy, lock and 12/minute bucket; successful submissions return
+303 to `/e/{key}`. Failures retain their status and an HTML recovery link.
+`PUT /events/:key/rsvp` and `DELETE /events/:key/rsvp` are unchanged;
+POST to that JSON resource still returns 405. The global same-origin guard
+applies to the HTML adapter as to all cookie-authenticated mutations.
 
 ## Redirect map
 
@@ -138,8 +148,9 @@ to an error page, on the Next candidate in both phases.
   session, no cookie, no cache, no database read in their path. Zero-query
   tests pin this (ports `DiscordFunnelTest` / `AboutPageTest` /
   `FaqPageTest`).
-- One URL, one media type: `/events` (HTML) vs `/events.json`, `/e/{key}`
-  (HTML) vs `/events/{key}.ics`. Never content-negotiate.
+- One URL, one success media type: `/events` and `/e/{key}` (HTML),
+  `/events.json` and `/events/{key}` (JSON), `/events/{key}.ics` (calendar).
+  JSON reads redirect browser guests to sign-in, but never render HTML success bodies.
 - `robots.txt` is a route, never a static file in `public/` (TOG-7071).
 - Staging advertises its own host in sitemap/robots via `APP_URL`.
 
@@ -188,7 +199,8 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /e/:key` | public-draft-moderator | events: legacy `/e/{event}` |
 | `GET /events` | public | events: calendar |
 | `GET /events.ics` | public | event-feeds: subscription |
-| `GET /events.json` | session | events: authenticated JSON |
+| `GET /events.json` | session | events: paginated JSON; JSON guest 401 / browser guest guarded OAuth 302 |
+| `GET /events/:key` | session | events: JSON show; draft moderator-only, cancelled 410, private ETag/304 |
 | `GET /events.rss` | public | event-feeds: RSS |
 | `GET /events/:file{.+\.ics}` | public-draft-moderator | event-feeds: legacy `/events/{event}.ics` |
 | `GET /events/past` | public | events: archive |
@@ -196,6 +208,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /join` | public | join: landing page |
 | `GET /join/callback` | oauth-state | join: one-click callback |
 | `GET /join/discord` | public | join: OAuth start |
+| `GET /members` | public | profiles: retired bare path, frozen 404 for every role |
 | `GET /members/:user` | member | profiles: legacy `/members/{user}` |
 | `GET /privacy` | public | privacy: versioned policy |
 | `GET /profile` | member | profiles: current member |
@@ -205,6 +218,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /up` | public | up: always-200 queue health |
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
+| `POST /__probe/alert` | staging-token | alerts: QA-only request + poison-job drill; expected 500, no production seam |
 | `POST /admin/events` | moderator | admin: draft create |
 | `POST /admin/events/:key` | moderator | admin: update |
 | `POST /admin/events/:key/cancel` | moderator | admin: cancel |
