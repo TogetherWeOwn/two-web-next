@@ -397,7 +397,10 @@ The telemetry query returns only the newest 100 events. Keep each window to
    Map each version to its commit by the deploy job's `Deploy to Cloudflare
    Workers` step: the deployment's `created_on` is within about 2 seconds of
    that step's `completed_at` (Actions jobs API), or read the `Current Version
-   ID:` line in the job log. Deploys are not tagged yet.
+   ID:` line in the job log. For a `workflow_run` deploy, the Actions run's
+   `head_sha` is main's tip at trigger time, not necessarily the checked-out
+   source: read `GITHUB_SHA` in the deploy step's log for that same version ID.
+   Deploys are not tagged yet.
 3. Baseline: `node bin/smoke.mjs https://next.togetherweown.com | tee "$RUN_DIR/smoke-base.log"`.
    Record any existing failures. The rehearsal compares against this
    baseline; it does not require it to be green.
@@ -530,15 +533,18 @@ Rehearsal record:
 | 2026-10-03 18:25 | DNS flip back (records deleted, custom domain re-attached) | 2.1 s | +3.2 s (first probe with the marker) | +14.7 s (10 consecutive with it) | n/a (smoke result in the notes below) |
 | 2026-10-03 20:36 | rollback `59a88ba7` (331122e5) to `da612f07` (bfbaf4d5) | 3.7 s | +4.5 s (last 301 at +1.6 s, first 404 at +4.5 s) | +4.5 s, no alternation | 0 of 137 (both directions) |
 | 2026-10-03 20:37 | roll forward `da612f07` to `59a88ba7` | 3.8 s | +9.6 s (last 404 at +8.2 s, first 301 at +9.6 s) | +9.6 s, no alternation | see above |
-| 2026-10-04 08:51 | rollback `2e803af9` (72c4f435) to `44878468` (4c65217e) | 4.7 s | +5.6 s | +5.6 s | 0 of 100 |
+| 2026-10-04 08:51 | rollback `2e803af9` (487ef4a4) to `44878468` (4c65217e) | 4.7 s | +5.6 s | +5.6 s | 0 of 100 |
 | 2026-10-04 08:52 | roll forward `44878468` to `2e803af9` | 3.8 s | +5.5 s | +5.5 s | see above |
 
 Notes from the 2026-10-04 run (probe cadence about 1.3 s; both directions in
 one probe loop, 100 probes, none non-200; the whole Worker half took 136 s):
 
+- N+1's source is `487ef4a4`: [deploy run 455](https://github.com/TogetherWeOwn/two-web-next/actions/runs/37189725072)
+  logs that `GITHUB_SHA` and version `2e803af9` in the deploy step. The run's
+  API `head_sha` (`72c4f435`) is not the deployed source.
 - N was the newest deployment whose Worker code differs from N+1: it predates
   the dependency bump (#409) and the numeric `tabindex` change (#469). The
-  other 6 of the 8 commits between them change workflow, test or backup files
+  other 5 of the 7 commits between them change workflow, test or backup files
   only. `/up` returns 200 on both and no public path has a status that
   differs, so only telemetry (`$workers.scriptVersion.id`) shows which version
   served. It shows one switch in each direction and no alternation: first N

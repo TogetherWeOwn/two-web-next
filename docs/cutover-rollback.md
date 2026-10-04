@@ -77,20 +77,21 @@ steps against `togetherweown.com`, `www`, or
 
 ## Production cutover step ↔ reverse map
 
-Every production cutover step and its backout. "Tested" means rehearsed
-on staging or proved by a green workflow receipt; the per-step result table below
-records pass/fail per step. A Worker rollback never undoes schema, data,
-Discord side effects, queue messages or external-resource changes.
+Every production cutover step and its backout. The evidence column states
+what actually ran; the per-step result table below distinguishes pass, partial
+and not run. This record does not establish fully rehearsed cutover readiness.
+A Worker rollback never undoes schema, data, Discord side effects, queue
+messages or external-resource changes.
 
-| # | Forward step | Reverse (backout) | How the reverse is tested |
+| # | Forward step | Reverse (backout) | Rehearsal evidence (actually recorded) |
 |---|---|---|---|
-| 0 | Pre-cutover snapshot (checklist below) | Snapshot is read-only; no reverse. A missing item aborts the cutover | Staging drill records all four snapshot items |
-| 1 | Production schema migration (`db-migrate.yml`, target production) | Reviewed forward repair first. PITR restore only with CEO approval: migrations `1017` and `1019` are unmeasurable (see [cutover-migration-ledger.md](cutover-migration-ledger.md)) — only backup/PITR restores them | Staging drill: staging apply receipt + forward-repair path; PITR eligibility verified, never executed against staging data |
-| 2 | Production Worker deploy (`deploy-production.yml`) | One-click `rollback-production` workflow to the recorded version ID, then `/up` smoke (200, `db:ok`, zero pending) | Staging drill: `wrangler rollback` N+1 → N → N+1 with smoke before/during/after |
-| 3 | DNS flip apex/www to Next | Flip back to the legacy target: delete the flip records, re-attach the custom domain (`PUT /accounts/.../workers/domains`); `wrangler triggers deploy` fallback re-applies the domain from `wrangler.jsonc` | Staging drill: DNS flip to legacy and back on `next.togetherweown.com`, 2026-10-03 18:25 (Rehearsal record) |
-| 4 | Member-data import run | Re-run the corrected import: importers are idempotent upserts that preserve destination row IDs and write nothing when identical. Never delete rows or hand-edit the ledger | Importer dry-run workflow plus staging import receipts |
-| 5 | Queue traffic on the new Worker | Pause delivery per the runbook containment block. Never purge, delete/recreate queues, or remove consumers | Containment block in [runbook.md](runbook.md#queue-containment-drain-and-failed-job-replay) |
-| 6 | 48h post-flip watch ([cutover-freeze.md](cutover-freeze.md) in force) | On Sev-1: contain, then the production rollback pointer (step 2 reverse). The 48h clock restarts after the re-flip | Watch spec in [runbook.md](runbook.md#48h-post-flip-watch) plus run records |
+| 0 | Pre-cutover snapshot (checklist below) | Snapshot is read-only; no reverse. A missing item aborts the cutover | Partial staging analogue: CI gate, `/up` readiness and Worker pointers recorded; no migration plan/PITR evidence. Six-item breakdown in the result table |
+| 1 | Production schema migration (`db-migrate.yml`, target production) | Reviewed forward repair first. PITR restore requires owner-reserved approval consolidated by the CEO: migrations `1017` and `1019` are unmeasurable (see [cutover-migration-ledger.md](cutover-migration-ledger.md)) — only backup/PITR restores them | Not run: no staging forward repair or PITR restore; schema/config compatibility checked only (see result table) |
+| 2 | Production Worker deploy (`deploy-production.yml`) | One-click `rollback-production` workflow to the recorded version ID, then `/up` smoke (200, `db:ok`, zero pending) | Pass on staging, 2026-10-04: `wrangler rollback` N+1 → N → N+1 with smoke before/during/after; production workflow not executed |
+| 3 | DNS flip apex/www to Next | Flip back to the legacy target: delete the flip records, re-attach the custom domain (`PUT /accounts/.../workers/domains`); `wrangler triggers deploy` fallback re-applies the domain from `wrangler.jsonc` | Pass on staging, 2026-10-03 18:25: DNS flip to legacy and back on `next.togetherweown.com`; legacy answered 522 (Rehearsal record) |
+| 4 | Member-data import run | Re-run the corrected import: importers are idempotent upserts that preserve destination row IDs and write nothing when identical. Never delete rows or hand-edit the ledger | Not run: dry run failed closed; no staging import receipts. Idempotency has fixture coverage only (see result table) |
+| 5 | Queue traffic on the new Worker | Pause delivery per the runbook containment block. Never purge, delete/recreate queues, or remove consumers | Not run: read-only queue info, not pause/resume, was recorded (see result table) |
+| 6 | 48h post-flip watch ([cutover-freeze.md](cutover-freeze.md) in force) | On Sev-1: contain, then the production rollback pointer (step 2 reverse). The 48h clock restarts after the re-flip | Not run: no post-flip watch or watch-triggered rollback was rehearsed (see result table) |
 
 ## Pre-cutover snapshot (record all six before any forward step)
 
@@ -113,7 +114,7 @@ the incident card) on any of these:
 - Member-visible breakage (sign-in, profiles, RSVPs, event pages).
 - During a staging drill: a merge deploy landing in the window (the
   deployment list differs by more than the two rehearsal deployments), a
-  `ci`/`deploy` run starting on `main`, or the baseline smoke changing
+  `deploy` run starting on `main`, or the baseline smoke changing
   mid-drill. Restore the pre-drill version and re-run in a quiet window.
 
 ## Who calls rollback
@@ -125,7 +126,7 @@ the incident card) on any of these:
 - Technical disputes or missing implementation escalate to the **Director
   of Engineering**; security/access or suspected leaked member data go
   through the Director to CISO.
-- Owner-reserved approvals stay with the **CEO**: credential
+- The **CEO** consolidates owner-reserved approvals for credential
   rotation/deletion, new spend, and irreversible data recovery (PITR
   restore). Silence is never approval.
 
@@ -155,7 +156,7 @@ the incident card) on any of these:
 | 2026-10-03 18:25 | DNS flip `next.*` to legacy and back (staging only) | flip 1.6 s, marker gone +1.2 s, 10 consecutive probes without it at +11.2 s; flip back 2.1 s, marker back +3.2 s, stable +14.7 s; smoke 16/16 before and after; zone clean; legacy edge answered 522 and intermittent 503 |
 | 2026-10-03 20:36–20:37 | Worker rollback `59a88ba7` to `da612f07` and back | 3.7 s / 3.8 s commands, one switch each way (+4.5 s / +9.6 s), 0 non-200 of 137 probes, smoke 16/16 on `59a88ba7`, `da612f07` and `59a88ba7` again; staging restored at 100% |
 | 2026-10-03 ~22:30 | Rehearsal scoping for this card: staging `/up` 200 `db:ok` 0 pending, staging idle (no `ci`/`deploy` in flight on `main`), Worker at merge-deploy version | Worker half already receipted twice same-day; the DNS half had already run at 18:25 (row above), which this scoping did not know |
-| 2026-10-04 08:51–08:53 | Worker rollback `2e803af9` (72c4f435) to `44878468` (4c65217e) and back | 4.7 s / 3.8 s commands, first request on target +5.6 s / +5.5 s, one switch each way, 0 non-200 of 100 probes, smoke 17/17 on `2e803af9`, `44878468` (49 of 49 telemetry events N) and `2e803af9` again; no deploy landed in the window; staging restored at 100% |
+| 2026-10-04 08:51–08:53 | Worker rollback `2e803af9` (487ef4a4) to `44878468` (4c65217e) and back | 4.7 s / 3.8 s commands, first request on target +5.6 s / +5.5 s, one switch each way, 0 non-200 of 100 probes, smoke 17/17 on `2e803af9`, `44878468` (49 of 49 telemetry events N) and `2e803af9` again; no deploy landed in the window; staging restored at 100% |
 
 ### Per-step result, 2026-10-04 drill (staging revision `2e803af9`)
 
@@ -165,8 +166,8 @@ is stated and nothing is claimed.
 
 | # | Cutover step | Result | Evidence or reason |
 |---|---|---|---|
-| 0 | Pre-cutover snapshot | pass (items 1–3 on the staging analogue); items 4–6 not run | Deploy gate follows a green `ci` for the SHA; `dep-before.json` saved with active version `2e803af9` and chosen N `44878468`; `/up` `db:ok`, `pending_migrations` 0. DNS inputs were read in the 2026-10-03 18:25 run; roster and freeze are production-only |
-| 1 | Production schema migration | not run | No harmful migration exists on staging to repair. Compatibility only: no `drizzle`, `migrations.lock`, `ci/neon-migrate.mjs` or `wrangler.jsonc` difference between N and N+1; `/up` `db:ok`, 0 pending on both. PITR is not drilled (CEO approval, irreversible) |
+| 0 | Pre-cutover snapshot | partial (staging analogue): items 1–2 partial, item 3 pass; items 4–6 not run | Item 1: deploy gate follows green exact-SHA `ci`, but no same-SHA review receipt was saved. Item 2: `/up` `db:ok`, `pending_migrations` 0 only; no migration plan receipt, pre-apply PITR timestamp or eligibility verification recorded. Item 3: `dep-before.json` saved with active version `2e803af9` and chosen N `44878468`. DNS inputs were read in the separate 2026-10-03 18:25 run, not an apex/www snapshot; roster and freeze are production-only |
+| 1 | Production schema migration | not run | No harmful migration exists on staging to repair. Compatibility only: no `drizzle`, `migrations.lock`, `ci/neon-migrate.mjs` or `wrangler.jsonc` difference between N and N+1; `/up` `db:ok`, 0 pending on both. PITR is not drilled (irreversible; owner-reserved approval consolidated by the CEO) |
 | 2 | Production Worker deploy | pass | `wrangler rollback` N+1 → N → N+1 on `two-web-next`, 100% each time, deployments `a58f67e3` and `77c4c9b9` the only additions, final state `2e803af9`@100; smoke 17/17 before, on N, and after. The production path is the `rollback-production` workflow, which this drill does not run |
 | 3 | DNS flip | pass (2026-10-03 18:25, not repeated 2026-10-04) | Flip to legacy and back, marker returned at +3.2 s, stable at +14.7 s, zone clean. Caveat: the staging legacy origin answered 522, so the production legacy origin must be proven first ([runbook](runbook.md#before-the-production-flip)) |
 | 4 | Member-data import | not run | The dry run fails closed until a staging-safe snapshot is provisioned (follow-up below). Idempotent re-run is covered by `test/import-*.test.ts` only |
@@ -184,7 +185,9 @@ is stated and nothing is claimed.
   during the DNS rehearsal. Confirm that the production legacy origin
   answers the apex before the flip (runbook, "Before the production
   flip").
-- Staging `e2e-staging` (Staging critical journeys) failed after the
-  08:15 and 08:29 UTC deploys; it must pass before the production deploy.
+- As observed on 2026-10-04, staging `e2e-staging` (Staging critical
+  journeys) failed after the 08:15 and 08:29 UTC deploys; it must pass
+  before the production deploy. A successful workflow with skipped
+  journey jobs is not a passing journey receipt.
 - Keep this record current: append each rehearsal row with timings,
   version IDs, smoke results, and discrepancies.
