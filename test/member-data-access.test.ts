@@ -127,6 +127,49 @@ describe("access-log flush lifecycle", () => {
     expect(await res.text()).not.toContain(PERSONAL_STRINGS[1]);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
   });
+
+  it.each(["false", "0", "no"])(
+    "a throwing sink degrades to a served read with ENFORCE=%s",
+    async (flag) => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const failingWrite = vi.fn(async (_entry: Parameters<AccessSink>[0]) => {
+        throw new Error("sink unavailable");
+      });
+      const res = await router(async () => failingWrite).request(
+        "/read",
+        {},
+        { ...env, MEMBER_ACCESS_LOG_ENFORCE: flag },
+      );
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe(PERSONAL_STRINGS[1]);
+      expect(failingWrite).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalled();
+      expect(String(spy.mock.calls[0]?.[0])).toContain("could not be recorded");
+    },
+  );
+
+  it("a throwing sink acquisition degrades to a served read with ENFORCE=false", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await router(async () => {
+      throw new Error("sink unavailable");
+    }).request("/read", {}, { ...env, MEMBER_ACCESS_LOG_ENFORCE: "false" });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(PERSONAL_STRINGS[1]);
+    expect(spy).toHaveBeenCalled();
+    expect(String(spy.mock.calls[0]?.[0])).toContain("could not be recorded");
+  });
+
+  it("a throwing sink fails closed when ENFORCE is unset", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failingWrite = vi.fn(async (_entry: Parameters<AccessSink>[0]) => {
+      throw new Error("sink unavailable");
+    });
+    const res = await router(async () => failingWrite).request("/read", {}, env);
+    expect(res.status).toBe(503);
+    expect(await res.text()).not.toContain(PERSONAL_STRINGS[1]);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(spy).toHaveBeenCalled();
+  });
 });
 
 describe.skipIf(!process.env.DATABASE_URL)(
