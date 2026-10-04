@@ -63,7 +63,8 @@ const fixtureApp = () => {
     c.header("cache-control", PUBLIC_CACHE);
     return c.html(DOCUMENT_BODY, 404);
   });
-  fixture.get("/json", (c) => c.json({ ok: true }));
+  // Plain-text body that still looks like a document, so only the content-type gate can skip it.
+  fixture.get("/plain", (c) => c.text(DOCUMENT_BODY));
   fixture.get("/auth/login", (c) => {
     c.header("cache-control", PUBLIC_CACHE);
     return c.html(DOCUMENT_BODY);
@@ -133,8 +134,8 @@ describe("freeze + expired-write co-render", () => {
       ],
       [
         "non-HTML",
-        await fixture.request("/json", { headers: { cookie } }, freezeEnv),
-        '{"ok":true}',
+        await fixture.request("/plain", { headers: { cookie } }, freezeEnv),
+        DOCUMENT_BODY,
       ],
       [
         "auth page",
