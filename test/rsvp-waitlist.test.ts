@@ -548,6 +548,8 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     "%s events leave the line frozen on withdraw and capacity edits",
     async (state) => {
       const ev = await fullWithLine();
+      const waiters = (await rows(ev.id)).filter((r) => r.status === "waitlisted");
+      expect(waiters.map((r) => r.userId)).toEqual(["waiter-1", "waiter-2"]);
       await db
         .update(events)
         .set(
@@ -563,9 +565,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       expect((await put(ev.eventKey, "newcomer", "waitlisted")).status).toBe(403);
       expect((await withdraw(ev.eventKey, "holder")).status).toBe(204);
       expect((await patch(ev.eventKey, 3)).status).toBe(200);
-      expect(
-        (await rows(ev.id)).every((r) => r.status === "waitlisted" && r.syncedToDiscordAt !== null),
-      ).toBe(true);
+      expect(await rows(ev.id)).toEqual(waiters);
     },
   );
 

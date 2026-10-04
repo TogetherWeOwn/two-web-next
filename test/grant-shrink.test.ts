@@ -70,11 +70,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
         })),
       );
     const snapshot = async (eventKey: string, id: number) => ({
-      event:
-        await fixture.client`SELECT event_key, capacity, agent_version, status FROM events WHERE event_key = ${eventKey}`,
-      answers: await fixture.client`SELECT count(*)::int AS n FROM rsvps WHERE event_id = ${id}`,
+      event: await fixture.client`SELECT * FROM events WHERE event_key = ${eventKey}`,
+      answers: await fixture.client`SELECT * FROM rsvps WHERE event_id = ${id} ORDER BY id`,
       stored:
-        await fixture.client`SELECT count(*)::int AS n FROM agent_event_idempotency_keys WHERE event_key = ${eventKey}`,
+        await fixture.client`SELECT * FROM agent_event_idempotency_keys WHERE event_key = ${eventKey} ORDER BY id`,
     });
 
     beforeAll(async () => {
@@ -99,11 +98,25 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const eventKey = await create(8);
       const id = await eventId(eventKey);
       await occupy(id, 5, "seat");
+      await fixture.db.insert(rsvps).values([
+        { eventId: id, userId: "waiter", status: "waitlisted" },
+        { eventId: id, userId: "maybe", status: "maybe" },
+      ]);
+      await fixture.client`UPDATE rsvps SET synced_to_discord_at = '2099-09-30T12:00:00Z' WHERE event_id = ${id}`;
       const before = await snapshot(eventKey, id);
       const shrunk = await call("update", {
         event_key: eventKey,
         version: 1,
-        fields: { ...FIELDS, capacity: 2 },
+        fields: {
+          title: "Refused rename",
+          game: "Refused game",
+          description: "Refused description",
+          starts_at: "2099-10-02 18:00",
+          ends_at: "2099-10-02 23:00",
+          timezone: "Europe/London",
+          location: "Refused venue",
+          capacity: 2,
+        },
       });
       expect(shrunk.status).toBe(422);
       expect(shrunk.body).toMatchObject({
@@ -122,7 +135,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const eventKey = await create(8);
       await occupy(await eventId(eventKey), 5, "seat");
       for (const [version, capacity] of [
-        [1, 8],
+        [1, 5],
         [2, 10],
         [3, null],
       ] as const) {
@@ -133,6 +146,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
         });
         expect(updated.status).toBe(200);
         expect(updated.body).toMatchObject({ event_key: eventKey, agent_version: version + 1 });
+        expect(
+          await fixture.client`SELECT capacity, agent_version FROM events WHERE event_key = ${eventKey}`,
+        ).toEqual([{ capacity, agent_version: version + 1 }]);
       }
       expect(
         await fixture.client`SELECT capacity, agent_version FROM events WHERE event_key = ${eventKey}`,
@@ -159,7 +175,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       ).toEqual([{ title: "Winner", agent_version: 2 }]);
     });
 
-    it("recounts behind the lock: an edit queued behind a new Going seat cannot strand it", async () => {
+    it("rejects a shrink after a concurrent Going seat commits", async () => {
       const eventKey = await create(8);
       const id = await eventId(eventKey);
       await occupy(id, 5, "seat");
@@ -183,7 +199,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         version: 1,
         fields: { ...FIELDS, capacity: 5 },
       });
-      // Let the edit queue on the held row lock, then commit the sixth seat first.
+      // Start the edit before committing the sixth seat; this pins the outcome, not an observed lock wait.
       await new Promise((resolve) => setTimeout(resolve, 150));
       release();
       await holder;

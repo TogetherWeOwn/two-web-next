@@ -258,7 +258,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     const created = await write("POST", "/events", MOD, payload);
     expect(created.status).toBe(201);
     const key = ((await created.json()) as { data: { event_key: string; status: string } }).data;
-    expect(key.event_key).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(key.event_key).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
     expect(key.status).toBe("draft");
     expect(sent).toHaveLength(0); // drafts never sync
 
