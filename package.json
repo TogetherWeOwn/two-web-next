@@ -1,5 +1,6 @@
 {
   "name": "two-web-next",
+  "description": "CI full-run probe for dependency manifests",
   "version": "0.2.0",
   "private": true,
   "type": "module",
