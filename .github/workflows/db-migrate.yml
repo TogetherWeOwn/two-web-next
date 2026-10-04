@@ -61,6 +61,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Validate migration numbering
+        shell: bash
         env:
           MIGRATION_GIT_TOKEN: ${{ github.token }}
         # The baseline checker can fetch. Authenticate only this command, never

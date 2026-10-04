@@ -327,6 +327,7 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/neon-backup-selftest.sh
       - name: Migration numbering check
+        shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
         env:
           MIGRATION_GIT_TOKEN: ${{ github.token }}

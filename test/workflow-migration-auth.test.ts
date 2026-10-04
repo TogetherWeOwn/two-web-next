@@ -31,6 +31,8 @@ function migrationStep(file: string, name: string) {
   return {
     text,
     step,
+    // Container jobs default to sh, not Bash. Exercise the workflow's choice.
+    shell: step.match(/^        shell: (\S+)\s*$/m)?.[1] ?? "sh",
     script: script
       .split("\n")
       .filter((line) => line.startsWith("          "))
@@ -203,6 +205,10 @@ async function fixture(event: string) {
 
 describe("migration workflow fetch authentication", () => {
   for (const { file, name, events } of steps) {
+    it(`${file} explicitly selects Bash for the pipefail wrapper`, () => {
+      expect(migrationStep(file, name).shell).toBe("bash");
+    });
+
     it(`${file} exposes the token only to the baseline-check step`, () => {
       const { text, step } = migrationStep(file, name);
       expect(step).toContain("        env:\n          MIGRATION_GIT_TOKEN: ${{ github.token }}\n");
@@ -226,7 +232,8 @@ describe("migration workflow fetch authentication", () => {
         expect(negative).toContain("cannot read Git baseline (fetch)");
         expect(refused).toBeGreaterThan(rejectedBefore);
         const authenticatedBefore = authenticated;
-        const result = await exec("bash", ["-e", "-c", migrationStep(file, name).script], {
+        const migration = migrationStep(file, name);
+        const result = await exec(migration.shell, ["-e", "-c", migration.script], {
           cwd: checkout,
           env: { ...env, MIGRATION_GIT_TOKEN: token },
         });
@@ -249,11 +256,11 @@ describe("migration workflow fetch authentication", () => {
     await git(checkout, "remote", "set-url", "origin", `${origin}/fixtures/other.git`);
     const authenticatedBefore = authenticated;
     const rejectedBefore = refused;
-    const result = await exec(
-      "bash",
-      ["-e", "-c", migrationStep("db-migrate.yml", "Validate migration numbering").script],
-      { cwd: checkout, env: { ...env, MIGRATION_GIT_TOKEN: token } },
-    ).then(
+    const migration = migrationStep("db-migrate.yml", "Validate migration numbering");
+    const result = await exec(migration.shell, ["-e", "-c", migration.script], {
+      cwd: checkout,
+      env: { ...env, MIGRATION_GIT_TOKEN: token },
+    }).then(
       () => "unexpected success",
       (error: { stderr: string }) => error.stderr,
     );
