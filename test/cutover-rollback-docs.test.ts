@@ -100,6 +100,42 @@ describe("cutover rollback documentation safety", () => {
     expect(checklist).toContain("No confirmed hold means no drill");
   });
 
+  it("retains the deploy/migration hold across DNS mutations until final restoration checks", () => {
+    const rehearsal = runbook
+      .split("**Worker rollback (N+1 to N and back)**")[1]!
+      .split("Rehearsal record:")[0]!;
+    const step = (number: number) =>
+      rehearsal.split(new RegExp(`^${number}\\. `, "m"))[1]!.split(/^\d+\. /m)[0]!;
+    const acquire = step(1);
+    const workerFinal = step(7);
+    const dnsSnapshot = step(8);
+    const flip = step(10);
+    const restore = step(12);
+    const verify = step(14);
+    const release = step(15);
+    expect(acquire).toContain("confirmed exclusive staging deploy/migration hold");
+    expect(acquire).toContain("DNS steps 8–14");
+    expect(workerFinal).toContain("do not release the hold");
+    expect(dnsSnapshot).toContain("Re-confirm the same hold before the DNS snapshot");
+    for (const mutation of [flip, restore]) {
+      expect(mutation).toContain("Re-confirm the hold");
+      expect(mutation).toContain("collision response");
+    }
+    expect(verify).toContain("N+1 at 100%");
+    expect(verify).toContain("serving version");
+    expect(verify).toContain("unchanged live schema/bindings");
+    expect(release).toContain("Only after step 14");
+    const releaseInstructions = [
+      ...rehearsal.matchAll(/owners release the hold|hold-release acknowledgements/g),
+    ];
+    expect(releaseInstructions).toHaveLength(1);
+    expect(releaseInstructions[0]!.index).toBeGreaterThan(rehearsal.indexOf("14. Read back"));
+    expect(release).toContain(releaseInstructions[0]![0]);
+    const checklist = rollback.split("## Ordered revert steps")[1]!.split("## Staging DNS")[0]!;
+    expect(checklist).toMatch(/DNS half must retain[\s\S]*through DNS\/custom-domain restoration/);
+    expect(checklist).toContain("hold-release acknowledgements only after those checks");
+  });
+
   it("stops on a collision and inspects live compatibility before selecting recovery", () => {
     const collision = rollback
       .split("### Staging collision response")[1]!

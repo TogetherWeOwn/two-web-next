@@ -404,9 +404,12 @@ The telemetry query returns only the newest 100 events. Keep each window to
    alone does not exclude already queued work. If the hold cannot be confirmed,
    stop; a quiet Actions page or historical workflow runtime is not exclusion.
    The observed nine-minute deploy lead time is not a lock or a minimum runtime.
-   Keep the hold through final state verification; re-confirm it immediately
-   before each rollback/roll-forward mutation. If it lapses or another deploy,
-   migration or schema change appears, stop further drill mutations and follow
+   Keep the hold through DNS steps 8–14 and final state verification, not just
+   the Worker half: a staging deploy can reclaim the same custom domain during
+   the DNS flip. With the authorized DNS operator, re-confirm it immediately
+   before each rollback/roll-forward mutation and each DNS mutation. If it lapses
+   or another deploy, migration or schema change appears, stop further drill
+   mutations and follow
    the [collision response](cutover-rollback.md#staging-collision-response), not an automatic
    restoration to the captured version. Record the live version, bindings and
    applied schema/journal identity from authorized release/migration evidence
@@ -496,12 +499,19 @@ The telemetry query returns only the newest 100 events. Keep each window to
    overlapping entries invalidate the drill and invoke the collision response.
    Missing expected IDs or insufficient overlapping history makes the check
    inconclusive, not pass: stop and ask the release owner for retained history.
-   Confirm N+1 at 100% and unchanged schema/bindings before the authorized
-   owners release the hold; record release acknowledgements in the receipt.
+   Confirm N+1 at 100% and unchanged schema/bindings, but do not release the hold:
+   it must cover the DNS half and final verification in steps 8–14.
 
 **DNS flip to the legacy target and back**
 
-8. Record the starting state and the legacy target:
+8. Re-confirm the same hold before the DNS snapshot, including the authorized
+   DNS operator's acknowledgement that the remaining window covers flip,
+   restoration and final checks. No confirmed hold means no DNS drill. For a
+   DNS-only drill after a separately completed Worker half, acquire a fresh hold
+   with the step 1 owners/mechanisms before this snapshot. Capture the current
+   serving version as N+1 and its allocation/live schema/bindings as that drill's
+   restoration baseline; do not reuse an earlier drill's pointer or baseline.
+   Record the starting state and the legacy target:
 
    ```bash
    (
@@ -518,8 +528,10 @@ The telemetry query returns only the newest 100 events. Keep each window to
    proxied with `ttl` 1 (auto).
 9. Run `probe | tee "$RUN_DIR/probe-dns.log"` in the second terminal. The
    signal is the `two-web-next` marker on `/up`, which only Next sends.
-10. Flip to legacy. Between the two calls the host has no record, so keep
-    them in one block:
+10. Re-confirm the hold and unchanged Worker allocation/schema/bindings before
+    the DNS mutation; if exclusion or compatibility has changed, stop and use
+    the collision response. Flip to legacy. Between the calls the host has no
+    record, so keep them in one block:
 
     ```bash
     (
@@ -544,7 +556,11 @@ The telemetry query returns only the newest 100 events. Keep each window to
     intermittent 503s in the window. Loss of the `two-web-next` marker, not
     the legacy status, is the flip signal. For production, see "Before the
     production flip" below.
-12. Flip back. Delete the rehearsal records, then re-attach the custom domain:
+12. Re-confirm the hold and unchanged Worker allocation/schema/bindings before
+    restoration, including before the fallback below. If exclusion or live
+    compatibility has changed, stop and use the collision response rather than
+    blindly reclaiming the domain. Otherwise flip back: delete the rehearsal
+    records, then re-attach the custom domain:
 
     ```bash
     (
@@ -567,9 +583,21 @@ The telemetry query returns only the newest 100 events. Keep each window to
 13. Record the time from B0 to the first probe with the marker, and to the
     start of 10 consecutive probes with it. Repeat the step 3 smoke; it must
     match the baseline.
-14. Read back as in step 8. Expect exactly one custom domain and only the
-    Worker's read-only record. The custom-domain ID can change.
-15. Post the timings, version IDs, smoke results and discrepancies on the W16
+14. Read back as in step 8. Expect exactly one custom domain attached to
+    `two-web-next` and only the Worker's read-only record, matching the saved
+    DNS/custom-domain baseline except that the custom-domain ID can change.
+    Confirm N+1 at 100%, prove the serving version with the `/up` revision marker
+    or telemetry as in steps 2/6, and verify unchanged live schema/bindings against
+    the baseline using authorized release/migration evidence. Unexpected drift
+    or inconclusive evidence invokes the collision response; do not declare pass
+    or release exclusion based only on the returned Next marker or smoke.
+15. Only after step 14 confirms DNS/custom-domain restoration, the serving
+    version, allocation and unchanged live schema/bindings may the authorized
+    owners release the hold. Record their release acknowledgements and time in
+    the receipt. If verification cannot complete within the held window, stop
+    drill mutations and coordinate a safe disposition/hold extension with those
+    owners; expiry is not a successful release or automatic recovery authority.
+16. Post the timings, version IDs, smoke results and discrepancies on the W16
     card, and keep `$RUN_DIR` until the card is closed.
 
 Rehearsal record:

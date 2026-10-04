@@ -55,8 +55,14 @@ steps against `togetherweown.com`, `www`, or
    to roll off the ten-entry history window; eviction alone is not a collision.
    Missing expected IDs or insufficient overlap is inconclusive, not pass
    ([runbook step 7](runbook.md#staging-rehearsal-worker-rollback-and-dns-flip-back)).
-   Confirm the pre-rehearsal version at 100% and unchanged schema/bindings, then
-   obtain the authorized owners' hold-release acknowledgements.
+   Confirm the pre-rehearsal version at 100% and unchanged schema/bindings.
+   A drill that includes the DNS half must retain the same acknowledged hold
+   through DNS/custom-domain restoration, serving-version and live schema/binding
+   verification ([runbook steps 8–14](runbook.md#staging-rehearsal-worker-rollback-and-dns-flip-back));
+   obtain the authorized owners' hold-release acknowledgements only after those checks.
+   If the Worker half is rehearsed separately, release only after its final checks;
+   a later DNS-only drill must acquire its own confirmed exclusive deploy/migration
+   hold before its snapshot or mutations and keep it through the same final checks.
 
 ## Staging DNS restoration and import recovery limits
 
