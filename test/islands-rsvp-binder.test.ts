@@ -409,6 +409,10 @@ describe("RsvpButton shipped binder", () => {
 
   it("tells a claimant who lost the freed seat, keeping their place without a claim control", async () => {
     const b = browser("waitlisted");
+    const staleFull = new Node();
+    staleFull.setAttribute("data-testid", "event-full");
+    staleFull.textContent = "This one's full. Cap is 4.";
+    b.root.querySelector("[data-rsvp-form]")!.appendChild(staleFull);
     b.get("waitlist-claim")!.click();
     b.finish(0, 200, {
       data: { status: "waitlisted", waitlist_position: 1, synced_to_discord_at: null },
@@ -421,6 +425,13 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("waitlist-leave")).not.toBeNull();
     expect(b.get("waitlist-claim")).toBeNull();
     expect(b.get("rsvp-confirmed")).toBeNull();
+    expect(b.get("event-full")).toBeNull();
+    expect(b.root.textContent).not.toContain("This one's full.");
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 });
+    expect(b.get("event-full")).toBeNull();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.get("waitlist-seat-taken")).toBe(note);
     // Nothing changed for the member, so no "Saved." line and no alert beside the note.
     expect(b.get("rsvp-syncing")).toBeNull();
     expect(b.get("rsvp-failed")).toBeNull();
@@ -430,6 +441,24 @@ describe("RsvpButton shipped binder", () => {
     b.finish(1, 204);
     await b.settle();
     expect(b.get("waitlist-seat-taken")).toBeNull();
+  });
+
+  it("keeps the settled position and Leave control without refusal copy on a claim conflict", async () => {
+    const b = browser("waitlisted");
+    const position = b.get("waitlist-position")!;
+    b.get("waitlist-claim")!.click();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(b.get("waitlist-position")).toBe(position);
+    expect(position.textContent).toBe("You're on the waitlist");
+    expect(position.focused).toBe(true);
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.get("event-full")).toBeNull();
+    expect(b.get("rsvp-confirmed")).toBeNull();
+    expect(b.broadcasts).toHaveLength(0);
+    expect(b.requests).toHaveLength(1);
   });
 
   it("mounts an empty polite claim-loss region before updating it in a later task", async () => {
@@ -803,14 +832,41 @@ describe("RsvpButton shipped binder", () => {
     },
   );
 
-  it("keeps full copy and does not offer a seat claim after joining a full waitlist", async () => {
-    const b = browser("full");
+  it("replaces the full-event invitation with a settled waitlist position, not refusal copy", async () => {
+    const b = browser("full", undefined, true);
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
     b.get("waitlist-join")!.click();
     b.finish(0, 201, { data: { status: "waitlisted", waitlist_position: 1 } });
     await b.settle();
-    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(b.get("waitlist-position")?.focused).toBe(true);
+    expect(b.get("event-full")).toBeNull();
+    expect(b.root.textContent).not.toContain("This one's full.");
     expect(b.get("waitlist-claim")).toBeNull();
-    expect(b.get("waitlist-leave")).not.toBeNull();
+    expect(b.get("waitlist-join")).toBeNull();
+    expect(b.get("rsvp-confirmed")).toBeNull();
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.get("waitlist-seat-taken")).toBeNull();
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 4, capacity: 4 }]);
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(b.get("event-full")).toBeNull();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.page.querySelector("[data-count]")?.textContent).toBe("4 of 4 going");
+    b.get("waitlist-leave")!.click();
+    expect(b.requests[2]!.init.method).toBe("DELETE");
+    b.finish(2, 204);
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("waitlist-join")?.disabled).toBe(false);
+    b.finish(3, 200, [{ event_key: "raid/one", going_count: 4, capacity: 4 }]);
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("waitlist-position")).toBeNull();
+    expect(b.get("waitlist-join")?.disabled).toBe(false);
+    expect(b.get("rsvp-going")).toBeNull();
+    expect(b.requests).toHaveLength(4);
   });
 
   it("a paused holder can leave without reopening joins or claims", async () => {
@@ -1016,6 +1072,8 @@ describe("RsvpButton shipped binder", () => {
     b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 });
     expect(b.get("waitlist-claim")).toBeNull();
     expect(b.get("waitlist-leave")).not.toBeNull();
+    expect(b.get("event-full")).toBeNull();
+    expect(b.get("rsvp-confirmed")).toBeNull();
     expect(b.requests).toHaveLength(2);
   });
 

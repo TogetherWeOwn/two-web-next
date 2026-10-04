@@ -8,8 +8,10 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   // Staging journey specs run only via playwright.staging.config.ts in the
   // e2e-staging workflow (real Hyperdrive/queues + QA seam). They must never
-  // run under wrangler dev + CI Postgres, where that seam doesn't exist.
-  testIgnore: "**/staging/**",
+  // run under wrangler dev + CI Postgres, where that seam doesn't exist. The
+  // watch specs target the deployed staging or apex origin through
+  // playwright.watch.config.ts and likewise never run here.
+  testIgnore: "**/{staging,watch}/**",
   fullyParallel: false,
   workers: 1,
   retries: 0,
