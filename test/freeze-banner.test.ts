@@ -84,6 +84,90 @@ describe("cutover freeze banner flag", () => {
     expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
   });
 
+  it("flag on renders one status region first inside <main>", async () => {
+    const res = await app.request("/about", {}, onEnv);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    // Exactly one polite live region on the static leaf: the banner itself.
+    expect(html.match(/role="status"/g) ?? []).toHaveLength(1);
+    expect(html.match(new RegExp(`data-testid="${FREEZE_BANNER_TESTID}"`, "g")) ?? []).toHaveLength(
+      1,
+    );
+    // Prepended as the first child of <main>: in-flow, no overlay shift.
+    expect(html).toMatch(
+      new RegExp(
+        `<main\\b[^>]*><p class="notice" role="status" data-testid="${FREEZE_BANNER_TESTID}">`,
+      ),
+    );
+  });
+
+  it("flag on changes nothing except the banner insertion", async () => {
+    const [offRes, onRes] = await Promise.all([
+      app.request("/about", {}, baseEnv),
+      app.request("/about", {}, onEnv),
+    ]);
+    expect(offRes.status).toBe(200);
+    expect(onRes.status).toBe(200);
+    const offHtml = await offRes.text();
+    const onHtml = await onRes.text();
+    const banner = freezeBannerHtml(onEnv)!;
+    // Byte-identical besides the single insertion: no wrapper, no head edits.
+    expect(onHtml.replace(banner, "")).toBe(offHtml);
+    expect(onRes.headers.get("cache-control")).toBe(offRes.headers.get("cache-control"));
+  });
+
+  it("banner has no layout-affecting attributes beyond the notice class", () => {
+    const banner = freezeBannerHtml(onEnv)!;
+    const open = banner.match(/^<p\b[^>]*>/)![0];
+    expect(open).toBe(`<p class="notice" role="status" data-testid="${FREEZE_BANNER_TESTID}">`);
+    expect(open).not.toContain("style=");
+    expect(open).not.toMatch(/\b(width|height|hidden|tabindex)\b/);
+  });
+
+  it("banner adds no scripts or styles to the page", async () => {
+    const [offRes, onRes] = await Promise.all([
+      app.request("/about", {}, baseEnv),
+      app.request("/about", {}, onEnv),
+    ]);
+    const offHtml = await offRes.text();
+    const onHtml = await onRes.text();
+    const bannerEl = onHtml.match(
+      new RegExp(`<p\\b[^>]*data-testid="${FREEZE_BANNER_TESTID}"[^>]*>.*?</p>`, "s"),
+    )![0];
+    expect(bannerEl).not.toContain("<script");
+    expect(bannerEl).not.toContain("<style");
+    expect(bannerEl).not.toContain("style=");
+    const count = (html: string, re: RegExp) => html.match(re)?.length ?? 0;
+    expect(count(onHtml, /<script\b/g)).toBe(count(offHtml, /<script\b/g));
+    expect(count(onHtml, /<style\b/g)).toBe(count(offHtml, /<style\b/g));
+    expect(count(onHtml, /style=/g)).toBe(count(offHtml, /style=/g));
+  });
+
+  it("banner link is the relative /privacy path only", async () => {
+    const res = await app.request("/about", {}, onEnv);
+    const bannerEl = (await res.text()).match(
+      new RegExp(`<p\\b[^>]*data-testid="${FREEZE_BANNER_TESTID}"[^>]*>.*?</p>`, "s"),
+    )![0];
+    expect(bannerEl.match(/<a\b/g) ?? []).toHaveLength(1);
+    expect(bannerEl).toContain('href="/privacy"');
+    expect(bannerEl).not.toMatch(/https?:\/\//);
+  });
+
+  it("render-level date injection stays inert", async () => {
+    const probe: Env = {
+      ...baseEnv,
+      FREEZE_BANNER_ENABLED: "1",
+      FREEZE_BANNER_DATES: '"><script>alert(1)</script>',
+    };
+    const res = await app.request("/about", {}, probe);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(`data-testid="${FREEZE_BANNER_TESTID}"`);
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(res.headers.get("cache-control")).toBe("public, max-age=3600");
+  });
+
   it("flag on skips non-document responses untouched", async () => {
     // /auth/discord is a 302 redirect: no HTML document, no banner, same status.
     const res = await app.request("/auth/discord", {}, onEnv);
