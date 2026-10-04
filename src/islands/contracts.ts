@@ -638,6 +638,7 @@ export const WAITLIST_JOIN_TESTID = "waitlist-join";
 export const WAITLIST_POSITION_TESTID = "waitlist-position";
 export const WAITLIST_CLAIM_TESTID = "waitlist-claim";
 export const WAITLIST_LEAVE_TESTID = "waitlist-leave";
+export const WAITLIST_SEAT_TAKEN_TESTID = "waitlist-seat-taken";
 export const RSVP_SYNCING_TESTID = "rsvp-syncing";
 export const RSVP_SYNC_FAILED_TESTID = "rsvp-sync-failed";
 export const RSVP_SYNCED_TESTID = "rsvp-synced";
@@ -730,6 +731,7 @@ export const RSVP_COPY = {
   waitlistFallback: "You're on the waitlist",
   waitlistClaim: "A seat opened up — I'm in",
   waitlistLeave: "Leave the waitlist",
+  waitlistSeatTaken: "Someone just took that seat.",
   syncing: "Saved. Syncing to Discord.",
   syncFailed: "Saved. Discord sync didn't go through — your spot is still held.",
   synced: "Synced to Discord.",

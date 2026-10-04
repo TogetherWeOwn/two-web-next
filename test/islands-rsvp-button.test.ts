@@ -40,6 +40,7 @@ import {
   WAITLIST_JOIN_TESTID,
   WAITLIST_LEAVE_TESTID,
   WAITLIST_POSITION_TESTID,
+  WAITLIST_SEAT_TAKEN_TESTID,
   loginUrl,
   rsvpBroadcast,
   rsvpClosedCopy,
@@ -108,6 +109,7 @@ describe("rsvp-button states rendered: copy + testids", () => {
       RSVP_RATE_LIMITED_TESTID,
       RSVP_FAILED_TESTID,
       RSVP_SESSION_EXPIRED_TESTID,
+      WAITLIST_SEAT_TAKEN_TESTID,
     ]).toEqual([
       "rsvp-going",
       "rsvp-withdraw",
@@ -126,6 +128,7 @@ describe("rsvp-button states rendered: copy + testids", () => {
       "rsvp-rate-limited",
       "rsvp-failed",
       "rsvp-session-expired",
+      "waitlist-seat-taken",
     ]);
   });
 
@@ -146,6 +149,7 @@ describe("rsvp-button states rendered: copy + testids", () => {
     expect(RSVP_COPY.paused).toBe("RSVPs are paused for this event — check back soon.");
     expect(RSVP_COPY.sessionExpired).toBe("Your session expired.");
     expect(RSVP_COPY.guestCta).toBe("Log in with Discord");
+    expect(RSVP_COPY.waitlistSeatTaken).toBe("Someone just took that seat.");
   });
 
   it("names the closed reason in words: cancelled, draft, or been-and-gone", () => {

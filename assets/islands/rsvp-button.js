@@ -40,6 +40,7 @@
     waitlistFallback: "You're on the waitlist",
     waitlistClaim: "A seat opened up — I'm in",
     waitlistLeave: "Leave the waitlist",
+    waitlistSeatTaken: "Someone just took that seat.",
     syncing: "Saved. Syncing to Discord.",
     syncFailed: "Saved. Discord sync didn't go through — your spot is still held.",
     synced: "Synced to Discord.",
@@ -67,6 +68,7 @@
     waitlistPosition: "waitlist-position",
     waitlistClaim: "waitlist-claim",
     waitlistLeave: "waitlist-leave",
+    waitlistSeatTaken: "waitlist-seat-taken",
     syncing: "rsvp-syncing",
     syncFailed: "rsvp-sync-failed",
     synced: "rsvp-synced",
@@ -141,6 +143,7 @@
       TESTID.failed,
       TESTID.sessionExpired,
       TESTID.closed,
+      TESTID.waitlistSeatTaken,
       TESTID.syncing,
       TESTID.synced,
       TESTID.syncFailed,
@@ -543,6 +546,10 @@
     clearOutcome();
     var controller = {};
     inflight = controller;
+    // A waitlisted member clicking the claim control: if the locked server
+    // keeps them waitlisted, a rival took the freed seat first.
+    var claimingFromWaitlist =
+      action === "going" && !!root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
     var isWithdraw = action === "withdraw";
     var method = isWithdraw ? "DELETE" : "PUT";
     setBusy(true, button, isWithdraw ? COPY.removing : COPY.saving);
@@ -586,6 +593,21 @@
                     paintConfirmed();
                   }
                   broadcast(viewerState(d.status));
+                  if (claimingFromWaitlist && d.status === "waitlisted") {
+                    // Lost the race: the place in line is unchanged, so say so
+                    // politely (role=status, no focus move) instead of "Saved."
+                    var note = notice(TESTID.waitlistSeatTaken, "status", "", false, false);
+                    note.setAttribute("aria-live", "polite");
+                    // Expose the empty region before a later task changes its content.
+                    setTimeout(function () {
+                      if (
+                        root.querySelector('[data-testid="' + TESTID.waitlistSeatTaken + '"]') ===
+                        note
+                      )
+                        note.textContent = COPY.waitlistSeatTaken;
+                    }, 0);
+                    return;
+                  }
                   syncNote(d.synced_to_discord_at || null, !!d.sync_failed);
                 },
                 function () {
