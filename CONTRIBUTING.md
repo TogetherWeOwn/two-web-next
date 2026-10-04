@@ -77,6 +77,21 @@ one-line change once the repo's open PRs are clear. The script is unit-tested
 beside it: `python3 -m unittest discover -s .github/scripts -p
 'test_pr_standards.py'`.
 
+### Secret-scan allowlists
+
+The required `gitleaks` job (also in `pr-gates.yml`) scans the full history
+reachable from the PR head. On a pull request it applies the base branch's
+`.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
+comments, so a PR cannot allowlist its own leak. If a change legitimately needs a
+new allowlist entry, merge that entry first as a small, separately reviewed PR;
+the next scan honours it. A new fixture that trips a rule therefore waits for that
+entry, or uses a value an existing entry already covers. Push-to-main scans use
+the repository's own files. Run `GITLEAKS_BIN=<path>
+.github/scripts/test-gitleaks-scan.sh` to repeat the offline self-test the job
+runs. The scanner archive is pinned by SHA-256 in `pr-gates.yml`; bump
+`GITLEAKS_SHA256` from the release's `gitleaks_<version>_checksums.txt` together
+with `GITLEAKS_VERSION`.
+
 ## Dependency security and static analysis
 
 The required `check` job runs `npm run deps:audit:selftest` (local fixtures,

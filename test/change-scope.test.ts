@@ -203,6 +203,25 @@ describe("change-scope gate", () => {
     expect(result.stderr).toContain("ci/check-config-docs.mjs");
   });
 
+  it("runs everything for a change to the secret-scan gate or its scripts", () => {
+    // Workflow and script edits are never prose: a change to the required
+    // gitleaks gate must not fast-pass `check` or skip the smoke.
+    for (const path of [
+      ".github/workflows/pr-gates.yml",
+      ".github/scripts/gitleaks-scan.sh",
+      ".github/scripts/test-gitleaks-scan.sh",
+      ".gitleaks.toml",
+      ".gitleaksignore",
+    ]) {
+      const result = scope([
+        ["docs/guide.md", ""],
+        [path, ""],
+      ]);
+      expect(result.docsOnly, path).toBe("false");
+      expect(result.skipE2e, path).toBe("false");
+    }
+  });
+
   it("keeps Markdown outside docs/ in the suite", () => {
     expect(scope([["content/policy.md", ""]]).docsOnly).toBe("false");
   });
