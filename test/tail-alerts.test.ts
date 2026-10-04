@@ -173,6 +173,52 @@ describe("Tail delivery", () => {
     ]);
   });
 
+  it("outbound summaries carry only the allowlisted fields for one request and one queue alert", async () => {
+    const { worker, send } = fixture();
+    await worker.tail([trace([requestAlert, queueAlert])], env);
+    expect(send).toHaveBeenCalledTimes(2);
+    const summaries = (send.mock.calls as unknown as [string, RequestInit][]).map(([, init]) =>
+      JSON.parse(JSON.parse(init.body as string).content),
+    );
+    const [request, queue] = summaries;
+    expect(Object.keys(request).sort()).toEqual(["event", "fingerprint", "route", "timestamp"]);
+    expect(request).toMatchObject({ event: "error.alert", route: "/join" });
+    expect(request.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.keys(queue).sort()).toEqual([
+      "attempts",
+      "event",
+      "fingerprint",
+      "job",
+      "timestamp",
+    ]);
+    expect(queue).toMatchObject({
+      event: "queue.failing",
+      fingerprint: "queue.failing@CallInternalAction",
+      job: "CallInternalAction",
+      attempts: 6,
+    });
+    for (const summary of summaries) {
+      for (const banned of [
+        "exception",
+        "message",
+        "method",
+        "stack",
+        "request_id",
+        "probeId",
+        "connection",
+        "queue",
+        "body",
+        "token",
+        "headers",
+        "url",
+        "trace",
+      ]) {
+        expect(summary).not.toHaveProperty(banned);
+      }
+      expect(JSON.stringify(summary)).not.toMatch(/never-send|private-message|private-queue/);
+    }
+  });
+
   it("mutes each fingerprint for exactly five minutes of source log time, ignoring JSON timestamp fields", async () => {
     const { worker, send, advance } = fixture();
     await worker.tail([trace([requestAlert, requestAlert, queueAlert, queueAlert])], env);
