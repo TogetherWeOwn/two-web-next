@@ -815,15 +815,16 @@ export function loginUrl(returnTo: string | null): string {
 export const RSVP_RATE_LIMIT = { maxAttempts: 12, decaySeconds: 60 } as const;
 
 /**
- * Abuse decoy (TOG-8715): field no real form renders visibly, one-second
- * floor. A filled decoy on PUT answers the byte-identical first-write
- * success shape (201, null mirror stamp) without touching limiter/auth/DB,
- * and on DELETE the same empty 204 — nothing attacker-shaped logged. The
- * click island itself carries no trap: a bare click with no inputs and a
- * human-speed tap must never trip it.
+ * Abuse decoy: field no real form renders visibly; no minimum-fill
+ * floor — the click island sends no form-open timestamp, so
+ * there is nothing to time. A filled decoy on PUT answers the
+ * byte-identical first-write success shape (201, null mirror stamp) without
+ * touching limiter/auth/DB, and on DELETE the same empty 204 — nothing
+ * attacker-shaped logged. The click island itself carries no trap: a bare
+ * click with no inputs and a human-speed tap must never trip it. The 1000 ms
+ * timing floor belongs to the profile form only (PROFILE_MIN_FILL_MS).
  */
 export const RSVP_HONEY_FIELD = "website";
-export const RSVP_MIN_FILL_MS = 1000;
 
 /**
  * Trap verdict: true when the honeypot value is filled. A present non-string
