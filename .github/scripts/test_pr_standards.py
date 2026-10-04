@@ -173,6 +173,35 @@ class CardAndInternalRefs(unittest.TestCase):
             f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", HEAD_REF=ref))
             self.assertEqual([], f, ref)
 
+    def test_public_branch_unicode_alphanumeric_prefixes_are_not_boundaries(self):
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        for mode in ("warn", "error"):
+            for adjacent in ("é", "界", "²", "Ⅷ"):
+                for ticket in ("ACME-123", "acme-123", "AcMe-123"):
+                    ref = f"fix/{adjacent}{ticket}"
+                    with self.subTest(mode=mode, ref=ref):
+                        f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", PR_STANDARDS_MODE=mode,
+                                            HEAD_REF=ref, INTERNAL_ID_PREFIXES="ACME"))
+                        self.assertEqual([], f)
+
+    def test_public_branch_unicode_alphanumeric_suffixes_are_not_boundaries(self):
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        for mode in ("warn", "error"):
+            for adjacent in ("é", "界", "²", "Ⅷ"):
+                for ticket in ("ACME-123", "acme-123", "AcMe-123"):
+                    ref = f"fix/{ticket}{adjacent}"
+                    with self.subTest(mode=mode, ref=ref):
+                        f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", PR_STANDARDS_MODE=mode,
+                                            HEAD_REF=ref, INTERNAL_ID_PREFIXES="ACME"))
+                        self.assertEqual([], f)
+
+    def test_public_branch_underscores_separate_ids_from_unicode_text(self):
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        for mode, level in (("warn", "warning"), ("error", "error")):
+            f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", PR_STANDARDS_MODE=mode,
+                                HEAD_REF="fix/é_acme-123_界", INTERNAL_ID_PREFIXES="ACME"))
+            self.assertEqual([(level, "Internal reference")], levels(f), mode)
+
     def test_public_branch_ids_follow_mode_and_configured_prefixes(self):
         clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
         for mode, level in (("warn", "warning"), ("error", "error")):

@@ -134,7 +134,8 @@ def internal_hits(text, prefixes, slug=False):
     text = strip_comments(text)
     hits = []
     if slug:
-        m = re.search(rf"(?<![A-Za-z0-9])(?:{prefixes})-\d+(?![A-Za-z0-9])", text, re.I)
+        # [^\W_] keeps Unicode alphanumeric boundaries while allowing underscore separators.
+        m = re.search(rf"(?<![^\W_])(?:{prefixes})-\d+(?![^\W_])", text, re.I)
     else:
         m = re.search(rf"\b(?:{prefixes})-\d+\b", text)
     if m:
