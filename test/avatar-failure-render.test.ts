@@ -277,9 +277,14 @@ describe("avatar load-failure fallback render", () => {
   it("size is reserved so the fallback cannot shift the name/rank row", () => {
     // Profile avatar box: fixed size + no shrink; both states fill it; hidden
     // never displays. Img carries width/height attributes (asserted above).
-    expect(styles).toMatch(/\.avatar \{[^}]*width: 64px;[^}]*height: 64px;[^}]*flex-shrink: 0;/);
-    expect(styles).toContain(".avatar img, .avatar-initial { width: 100%; height: 100%; }");
-    expect(styles).toContain(".avatar [hidden] { display: none; }");
+    // Whitespace-tolerant: the served stylesheet is the minified build output.
+    expect(styles).toMatch(
+      /\.avatar\s*\{[^}]*width:\s*64px;[^}]*height:\s*64px;[^}]*flex-shrink:\s*0/,
+    );
+    expect(styles).toMatch(
+      /\.avatar img,\s*\.avatar-initial\s*\{[^}]*width:\s*100%;[^}]*height:\s*100%/,
+    );
+    expect(styles).toMatch(/\.avatar \[hidden\]\s*\{\s*display:\s*none/);
     const eventCss = readFileSync(
       new NodeURL("../public/event-theme.css", import.meta.url),
       "utf8",

@@ -38,6 +38,7 @@ npm run format                   # formatting only
 npm run lint                     # read-only Biome gate
 npm run typecheck                # tsc for src and ci
 npm test                         # Vitest
+npm run build:assets             # regenerate minified public/ from assets/ after editing a source
 npm run check                    # lint + types + config drift + tests + smoke
 npx wrangler deploy --dry-run --outdir dist   # bundle check, no deploy
 ```

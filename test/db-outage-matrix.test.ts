@@ -70,6 +70,9 @@ const MATRIX: Case[] = [
   // reads the DB without a session cookie, so both stay 200 during an outage.
   { method: "GET", route: "/auth/status", status: 200, format: "json" },
   { method: "GET", route: "/auth/recover", status: 200, format: "html" },
+  // Bare /members is the retired frozen 404: answered before the member gate,
+  // so no session/DB read and the same branded page with or without a binding.
+  { method: "GET", route: "/members", status: 404, format: "html" },
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },
@@ -266,12 +269,14 @@ const MATRIX: Case[] = [
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
 // endpoint. Pin known middleware multiplicity instead of filtering wildcards.
-// Global `*` carries five: the pre-throttle guard, trust-hosts, same-origin,
-// the stale-tab auth-status script and the expired-write banner (main #239
-// added the last two). Profile paths carry three registrations each: the
-// session gate, the join-result consumer, and the mandatory access log.
+// Global `*` carries six: the pre-throttle guard, trust-hosts, same-origin,
+// the stale-tab auth-status script, the expired-write banner (main #239
+// added those two) and the flag-gated freeze banner. Profile paths carry
+// three registrations each: the session gate, the join-result consumer, and
+// the mandatory access log.
 // Profiles: session gate + keyed read boundary per path (main #145).
 const MIDDLEWARE = [
+  "ALL /*",
   "ALL /*",
   "ALL /*",
   "ALL /*",

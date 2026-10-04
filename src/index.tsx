@@ -72,6 +72,7 @@ import {
   recoveryLanding,
   expiredWriteBanner,
 } from "./write-recovery";
+import { freezeBanner } from "./freeze-banner";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
@@ -172,6 +173,7 @@ app.use("*", trustHosts());
 app.use("*", sameOrigin);
 app.use("*", authStatusScript);
 app.use("*", expiredWriteBanner);
+app.use("*", freezeBanner);
 app.get("/auth/status", (c) => authStatus(c, () => storeFor(c)));
 app.get("/auth/recover", recoveryLanding);
 

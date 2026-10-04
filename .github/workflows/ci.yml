@@ -100,7 +100,14 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
       - run: npx playwright install --with-deps chromium
       - name: Chromium cancellation regressions
         run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
@@ -108,7 +115,7 @@ jobs:
         run: timeout 120s npm run test:auth-browser
       - name: Session recovery evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: session-recovery-evidence
           path: artifacts/session-recovery/
@@ -122,7 +129,7 @@ jobs:
         run: npm run a11y
       - name: Accessibility evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: a11y-evidence
           path: artifacts/a11y/
@@ -187,6 +194,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          # The Kit install below reads web/package-lock.json, a separate
+          # graph from the root lockfile. Hash it into the cache key too so
+          # the shared npm store covers the Kit steps.
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
       # Only explicit success from both performance jobs may read green.
       - name: Performance gate (lighthouse + bundle-budget must succeed)
         if: always() && needs.scope.outputs.docs_only != 'true'
@@ -200,7 +213,7 @@ jobs:
       - name: Dependency audit (lockfile, including dev dependencies)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run deps:audit
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
         if: needs.scope.outputs.docs_only != 'true'
       - name: Seeded admin properties (10s budget, local fixtures)
         if: needs.scope.outputs.docs_only != 'true'
@@ -237,7 +250,7 @@ jobs:
       # on a partial workspace.
       - name: Install Kit workspace dependencies
         if: needs.scope.outputs.docs_only != 'true'
-        run: npm ci --prefix web
+        run: npm ci --prefix web --no-audit --no-fund
       - name: Kit typecheck (svelte-check, warnings fail)
         if: needs.scope.outputs.docs_only != 'true'
         run: npm run check --prefix web
@@ -258,7 +271,7 @@ jobs:
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
       - name: Upload coverage report
         if: always() && needs.scope.outputs.docs_only != 'true' && hashFiles('coverage/coverage-summary.json') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-${{ github.sha }}
           path: coverage/
@@ -314,7 +327,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      # The checker uses only Node built-ins; no install/build/network needed.
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      # The served public/ files are the deterministic esbuild output of
+      # assets/; fail when a source changed without its rebuilt output.
+      - run: node ci/minify-assets.mjs --selftest
+      - run: node ci/minify-assets.mjs --check
+      # The checker uses only Node built-ins; no network needed.
       - run: node ci/check-bundle-budget.mjs --selftest
       - run: node ci/check-bundle-budget.mjs
 
@@ -337,7 +356,14 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci --include=dev
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
       - name: Install isolated Chromium and process tools
         run: |
           apt-get update -qq && apt-get install -y -qq --no-install-recommends procps >/dev/null
@@ -347,7 +373,7 @@ jobs:
         run: npm run lighthouse
       - name: Performance evidence (including failures)
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: lighthouse-${{ github.sha }}
           path: .lighthouseci/

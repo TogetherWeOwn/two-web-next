@@ -54,6 +54,9 @@ jobs:
         with:
           # workflow_run's github.sha is main's tip, not the successful CI SHA.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # Two commits of history: the smoke-scope step below diffs the
+          # deployed HEAD against its parent.
+          fetch-depth: 2
       - name: Require successful exact-SHA full CI
         run: node ci/staging-deploy-gate.mjs
         env:
@@ -76,6 +79,11 @@ jobs:
       - run: npm run check
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # Deploy build step: regenerate the served public/ assets from assets/
+      # with esbuild --minify and refuse drift. Deterministic: a no-op when
+      # CI's drift check passed, so the deployed bytes are the reviewed bytes.
+      - name: Build minified public assets (esbuild, drift fails closed)
+        run: npm run build:assets:check
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators
@@ -138,7 +146,34 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
+      # head commit only touches docs prose or the `test/` unit tree the
+      # checkers never execute skips the smoke steps below — the full suite,
+      # including those tests, already ran in this job via `npm run check`.
+      # ci/change-scope.sh fails closed: every other path runs the smoke.
+      - name: Scope post-deploy smoke to web-affecting changes
+        id: smoke-scope
+        # The deploy-staging job runs in a container where the default run
+        # shell is sh (dash), which rejects `set -o pipefail`. Run this step
+        # under bash.
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A deploy with no parent (practically impossible on main) fails
+          # closed: run the smoke rather than failing the deploy on scope.
+          if ! git rev-parse --verify --quiet "HEAD~1" >/dev/null; then
+            echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Same shape as the pull-request files API that ci/change-scope.sh
+          # reads in e2e.yml: one `filename<TAB>previous_filename` line per
+          # changed file. Rename rows print old-then-new, so they are swapped.
+          git diff --name-status -M "HEAD~1" HEAD \
+            | awk -F'\t' '{ if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t" }' > "$RUNNER_TEMP/deployed-files.tsv"
+          EXPECTED=$(wc -l < "$RUNNER_TEMP/deployed-files.tsv")
+          bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging public routes
+        if: steps.smoke-scope.outputs.skip_e2e != 'true'
         # bin/smoke.mjs requires /up db:ok + pending_migrations:0; queue-only degraded/unknown must not fail a deploy.
         run: |
           for i in 1 2 3 4 5 6; do
@@ -154,6 +189,7 @@ jobs:
           echo "::error::staging public-route smoke failed after deploy"
           exit 1
       - name: Smoke test staging event JSON contract
+        if: steps.smoke-scope.outputs.skip_e2e != 'true'
         # Authenticated JSON show/paging probe through the staging QA seam
         # (TOG-11769). Needs the staging-environment QA_AUTH_TOKEN secret: it
         # is never a repository secret/value in this file, only a name. When

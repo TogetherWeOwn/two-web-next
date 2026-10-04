@@ -76,7 +76,7 @@ async function login(identity: "qa-member" | "qa-moderator", path: string): Prom
 /**
  * Sign both QA identities in and persist their storage states. Every login
  * spends the shared `qa-login` throttle budget (10/min per runner IP —
- * global-setup plus four authed per-file hooks must stay under it), and the
+ * global-setup plus six authed per-file hooks must stay under it), and the
  * sign-in sweep revokes each identity's older sessions, so every spec file
  * takes exactly the sessions it needs and no more:
  * - files needing one identity call loginQaMember() / loginQaModerator()
@@ -95,7 +95,7 @@ export async function loginQaIdentities(): Promise<void> {
 
 /**
  * Sign in only the member identity (one throttle hit). For spec files that
- * never touch the moderator session — profile, auth's member journey.
+ * never touch the moderator session — profile, logout, join, auth's member journey.
  */
 export async function loginQaMember(): Promise<void> {
   await login("qa-member", memberStorageState);

@@ -82,6 +82,9 @@ export const coverage = {
       },
     ],
   },
+  "/members": {
+    cases: [{ path: "/members", status: 404 }],
+  },
   "/members/:user": {
     cases: [
       { path: `/members/${otherMember}`, identity: "member" },

@@ -11,7 +11,7 @@ bot rewrite, framework ADR pending).
 | Piece | Value |
 |---|---|
 | Staging provider / plan | Neon, Launch (`$0.106`/CU-hr + `$0.35`/GB-mo, no minimum, scale-to-zero) |
-| Production provider / plan | PlanetScale Postgres HA, PS-10 arm, Frankfurt (`aws-eu-central-1`), PG17 — per [TOG-12178](/TOG/issues/TOG-12178#document-decision) rev 2 |
+| Production provider / plan | PlanetScale Postgres HA, PS-10 arm, AWS `us-east-1` (N. Virginia), PG17 — per CEO region decision 2026-10-03 on [TOG-12212](/TOG/issues/TOG-12212) (supersedes [TOG-12178](/TOG/issues/TOG-12178#document-decision) rev 2 Frankfurt) |
 | Branches | Neon `staging` (all pre-cutover work) + PlanetScale `two-production` (prod, at cutover) |
 | Web path | Workers → Hyperdrive (`DB` binding) → staging Neon pooled URL / production PlanetScale `6432` (PgBouncer) URL |
 | Bot path | Container → direct `postgres` driver (no Hyperdrive) → staging Neon pooled URL / production PlanetScale `5432` direct URL |

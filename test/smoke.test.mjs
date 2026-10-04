@@ -20,6 +20,11 @@ const fixtures = {
   "/privacy": [200, "text/html", "<h1>Privacy policy</h1>"],
   "/events": [200, "text/html", '<h1 id="events-heading">Events</h1>'],
   "/events/past": [200, "text/html", '<h1 id="past-events-heading">Past events</h1>'],
+  "/join": [
+    200,
+    "text/html",
+    '<h1 id="join-heading">Join Together We Own</h1><p>One click with Discord</p>',
+  ],
   "/events.rss": [200, "application/rss+xml", '<rss version="2.0"><channel></channel></rss>'],
   "/events.ics": [200, "text/calendar", "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n"],
   "/sitemap_index.xml": [
@@ -122,7 +127,7 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const { url, requests } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /16 routes, 0 failed assertions/);
+  assert.match(result.output, /17 routes, 0 failed assertions/);
   assert.deepEqual(
     requests.map((r) => r.path),
     Object.keys(fixtures),
@@ -139,7 +144,7 @@ for (const path of Object.keys(fixtures)) {
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
     assert.match(result.output, /actual HTTP 503/);
-    assert.equal(requests.length, 16);
+    assert.equal(requests.length, 17);
   });
 }
 
@@ -257,6 +262,56 @@ test("rules accepts rendered Rules but rejects rendered Home with the shared foo
   }
 });
 
+test("join accepts rendered Join but rejects rendered Home with the shared footer", async (t) => {
+  // In-memory rendering uses local components only: https://esbuild.github.io/api/#write
+  const bundle = await build({
+    entryPoints: ["src/pages.tsx"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { Home, Join } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  const home = Home({
+    session: null,
+    notice: null,
+    inviteUrl: "https://discord.gg/fixture",
+    appUrl: "https://example.test",
+    counts: { memberCount: null, onlineCount: null, ranks: [] },
+    upcomingEvents: [],
+    eventsUnavailable: false,
+    featured: [],
+  }).toString();
+  const join = Join({
+    inviteUrl: "https://discord.gg/fixture",
+    widgetUrl: null,
+    next: null,
+    appUrl: "https://example.test",
+    joinResult: null,
+  }).toString();
+  assert.match(join, /One click with Discord/);
+  assert.doesNotMatch(home, /One click with Discord/);
+  for (const [body, expected] of [
+    [home, false],
+    [join, true],
+  ]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/join") result.body = body;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, expected, result.output);
+    if (!expected) {
+      assert.match(
+        result.output,
+        /FAIL \/join: expected body matching .*One click with Discord.*; actual body did not match/,
+      );
+      assert.ok(!result.output.includes("PASS /join"), result.output);
+    }
+  }
+});
+
 test("past events accepts rendered Archive but rejects rendered Upcoming with archive navigation", async (t) => {
   const bundle = await build({
     entryPoints: ["src/events/pages.tsx"],
@@ -299,7 +354,7 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 16);
+    assert.equal(requests.length, 17);
     if (!expected) {
       assert.match(
         result.output,
@@ -503,7 +558,7 @@ for (const [robotsTag, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 16);
+    assert.equal(requests.length, 17);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
         assert.ok(
@@ -588,7 +643,7 @@ for (const [location, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 16);
+    assert.equal(requests.length, 17);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
       assert.match(
@@ -634,7 +689,7 @@ test("connection failures include route and expected versus actual", async (t) =
     result.output,
     /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
   );
-  assert.match(result.output, /16 routes, 16 failed assertions/);
+  assert.match(result.output, /17 routes, 17 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
@@ -649,4 +704,54 @@ test("invalid input is rejected before making requests", async () => {
   }
   assert.equal((await cli([])).code, 2);
   assert.equal((await cli(["not-a-url"])).code, 2);
+  assert.equal((await cli(["http://127.0.0.1", "--bogus-flag"])).code, 2);
+});
+
+test("allowIndexable passes apex HTML without the staging noindex", async (t) => {
+  // Apex serving apex omits X-Robots-Tag on indexable leaves (src/headers.ts
+  // robotsTagFor); the archive and branded 404 stay meta-noindex, which this
+  // header probe skips.
+  const { url, requests } = await stub(t, (route, result) => {
+    if (route === "/events/past" || route === "/__smoke_unknown_route__") return;
+    delete result.headers["x-robots-tag"];
+  });
+  const result = await run(url, { allowIndexable: true });
+  assert.equal(result.ok, true, result.output);
+  assert.equal(requests.length, 17);
+  assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
+});
+
+test("allowIndexable rejects a staging noindex leaked onto apex HTML", async (t) => {
+  const { url } = await stub(t);
+  const result = await run(url, { allowIndexable: true });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes(
+      "FAIL /: expected no universal X-Robots-Tag noindex on indexable apex HTML",
+    ),
+    result.output,
+  );
+  assert.ok(!result.output.split("\n").includes("PASS /"), result.output);
+});
+
+test("default mode still requires the staging noindex", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/about") delete result.headers["x-robots-tag"];
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes("FAIL /about: expected staging X-Robots-Tag noindex"),
+    result.output,
+  );
+});
+
+test("CLI --allow-indexable reaches the apex posture", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/events/past" || route === "/__smoke_unknown_route__") return;
+    delete result.headers["x-robots-tag"];
+  });
+  const result = await cli([url, "--allow-indexable"]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /17 routes, 0 failed assertions/);
 });

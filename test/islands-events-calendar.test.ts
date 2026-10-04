@@ -717,11 +717,32 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).toContain(`data-testid="${EVENT_DRAFT_TESTID}"`);
   });
 
-  it("keeps cancelled rows listed with the badge", async () => {
-    const cancelled = eventRow({ title: "Rained off", status: "cancelled" });
+  it("keeps cancelled rows listed with the badge but no dead detail link", async () => {
+    const cancelled = eventRow({
+      eventKey: "rained-off",
+      title: "Rained off",
+      status: "cancelled",
+    });
     const html = await (await calendar([cancelled], [], okSource()).request("/events")).text();
     expect(html).toContain("Rained off");
     expect(html).toContain(`data-testid="${EVENT_CANCELLED_TESTID}"`);
+    // The detail page answers 410, so the card title stays plain text.
+    expect(html).not.toContain('href="/e/rained-off"');
+  });
+
+  it("keeps cancelled rows in the gap list as plain text", async () => {
+    const pastRow = eventRow({
+      eventKey: "gap-cancelled",
+      title: "Rained off long ago",
+      status: "cancelled",
+      startsAt: new Date(Date.UTC(2020, 0, 1)),
+      endsAt: new Date(Date.UTC(2020, 0, 1, 2)),
+    });
+    const html = await (await calendar([], [pastRow], okSource()).request("/events")).text();
+    expect(html).toContain(`data-testid="${EVENTS_EMPTY_GAP_TESTID}"`);
+    expect(html).toContain("Rained off long ago");
+    // The detail page answers 410, so the gap entry stays plain text.
+    expect(html).not.toContain('href="/e/gap-cancelled"');
   });
 
   it("reveals past matches inside a search without the drawer flag", async () => {

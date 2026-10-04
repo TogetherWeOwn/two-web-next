@@ -1,6 +1,6 @@
 # Queue dead-letter redrive runbook: two-web-next
 
-Inspect-list-redrive loop over `queue_failed_jobs` for [TOG-11707](/TOG/issues/TOG-11707).
+Inspect-list-redrive loop over `queue_failed_jobs` for dead-letter recovery.
 Companion to the [operations runbook](runbook.md#queue-containment-drain-and-failed-job-replay):
 that section owns containment/drain gates; this page owns the dead-letter loop.
 Transitions are proved against real SQL in `test/queue-redrive.test.ts`.

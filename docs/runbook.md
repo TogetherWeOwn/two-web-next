@@ -142,7 +142,7 @@ approved account and binding isolation before any remote mutation.
 and not a test. It is the hand-dispatch path for staging recovery and the only
 path for production; the staging `deploy.yml` applies staging migrations on its
 own (see *Staging deploy integration* below). This workflow's addition
-([TOG-11161](/TOG/issues/TOG-11161)) does not authorize its execution. No live
+does not authorize its execution. No live
 migration or Neon branch creation is performed by its selftest.
 
 **Before enabling or dispatching:**
@@ -226,7 +226,7 @@ queues and external side effects separately. Do not run an unreviewed down
 migration or assume restoring the Worker restores the database.
 
 **Staging deploy integration:** `deploy.yml` applies the staging web migrations
-itself ([TOG-12965](/TOG/issues/TOG-12965)): `plan`, the exact-SHA CI re-check,
+itself: `plan`, the exact-SHA CI re-check,
 `apply` and `verify` run in the `deploy-staging` job (Environment `staging`, which
 holds `NEON_STAGING_DATABASE_URL`) after `npm run check` and before the first
 Cloudflare mutation, so new code never meets the old staging schema and a failed
@@ -330,6 +330,8 @@ directory; `cfapi` reads its token from `CF_TOKEN` and fails on API errors):
 
 ```bash
 export RUN_DIR="$(mktemp -d)" CF_ACC="<account id>" CF_ZONE="<togetherweown.com zone id>"
+# CF_ACC: the 32-hex id in the table printed by `npx --no-install wrangler whoami`.
+# CF_ZONE: only the DNS half below needs it.
 cfapi() { # usage: cfapi METHOD PATH [JSON]
   node -e 'const [m,p,b]=process.argv.slice(1);
     fetch("https://api.cloudflare.com/client/v4"+p,{method:m,body:b,headers:{
@@ -337,13 +339,16 @@ cfapi() { # usage: cfapi METHOD PATH [JSON]
     .then(r=>r.json()).then(d=>{if(!d.success){console.error(JSON.stringify(d.errors));process.exit(1)}
       console.log(JSON.stringify(d.result))})' "$@"
 }
-probe() { # one line per second: epoch-ms, HTTP status, X-TWO-Origin (blank if absent)
+probe() { # about one line per 1.3 s: epoch-ms, /up status, X-TWO-Origin (blank if absent), DISC_PATH status
+  # DISC_PATH: a public path whose status differs between N and N+1 (step 2); /up if none does.
   local i=0
   while :; do
     i=$((i + 1))
-    printf '%s %s\n' "$(date +%s%3N)" "$(curl -s -o /dev/null -D - --max-time 5 \
+    printf '%s %s %s\n' "$(date +%s%3N)" "$(curl -s -o /dev/null -D - --max-time 5 \
       "https://next.togetherweown.com/up?rehearsal=$i" | tr -d '\r' |
-      awk 'NR==1{s=$2} tolower($1)=="x-two-origin:"{o=$2} END{print s, o}')"
+      awk 'NR==1{s=$2} tolower($1)=="x-two-origin:"{o=$2} END{print s, o}')" \
+      "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+      "https://next.togetherweown.com${DISC_PATH:-/up}?rehearsal=$i")"
     sleep 1
   done
 }
@@ -364,14 +369,28 @@ The telemetry query returns only the newest 100 events. Keep each window to
 
 **Worker rollback (N+1 to N and back)**
 
-1. Confirm that no deploy is running or queued:
-   `gh run list --workflow deploy.yml --limit 3`. A deploy during the
-   rehearsal overwrites the rollback.
-2. Record the versions from
-   `npx --no-install wrangler deployments list --name two-web-next --json`.
-   N+1 is the active version and N is the previous deployment's version. Map
-   each version to its commit with the `Current Version ID:` line in its deploy
-   job log; deploys are not tagged yet.
+1. Confirm that the staging Worker is idle. A deploy during the rehearsal
+   overwrites the rollback, and one starts whenever a `ci` run on `main`
+   succeeds: the `deploy` workflow follows it and reaches the Worker upload
+   about 9 minutes after it starts, because `npm run check` runs first. Start
+   only when no `ci` push run on `main` and no `deploy` run is queued, pending
+   or in progress (Actions page or REST API; `gh` from an agent workspace
+   cannot read this repository, and unauthenticated REST calls share a 60 per
+   hour limit). The whole Worker half takes about 3 minutes.
+2. Save `npx --no-install wrangler deployments list --name two-web-next --json`
+   as `$RUN_DIR/dep-before.json`. It returns only the 10 newest deployments, so
+   N must be among them. N+1 is the active version. The previous deployment is
+   the default N, but adjacent versions are often code-identical: any merge
+   redeploys, including workflow-only and e2e-only changes. Then only
+   telemetry can tell N from N+1. Prefer the newest N whose source differs on
+   a public route (`git diff --stat "$N_SHA" "$N1_SHA" -- src public`) and
+   that has no migration or binding drift
+   (`git diff --exit-code "$N_SHA" "$N1_SHA" -- drizzle migrations.lock ci/neon-migrate.mjs wrangler.jsonc`).
+   Set `DISC_PATH` to a public path whose status differs between N and N+1.
+   Map each version to its commit by the deploy job's `Deploy to Cloudflare
+   Workers` step: the deployment's `created_on` is within about 2 seconds of
+   that step's `completed_at` (Actions jobs API), or read the `Current Version
+   ID:` line in the job log. Deploys are not tagged yet.
 3. Baseline: `node bin/smoke.mjs https://next.togetherweown.com | tee "$RUN_DIR/smoke-base.log"`.
    Record any existing failures. The rehearsal compares against this
    baseline; it does not require it to be green.
@@ -391,11 +410,14 @@ The telemetry query returns only the newest 100 events. Keep each window to
    )
    ```
 
-6. Prove that N serves. After 60 seconds, run
+6. Prove that N serves. After 50 to 60 seconds, run
    `served_versions $((T0 - 4000)) $((T0 + 36000))`, then a second window
    that starts 36 seconds after T0. Record three intervals from T0: the first
    request served by N, the point after which no N+1 request appears
-   (settled), and the number of non-200 probes. Then run N's own smoke; the
+   (settled), and the number of non-200 probes. The probe's `DISC_PATH`
+   column shows the same switch from plain HTTP. A window that returns exactly
+   100 events hit the cap and can lose its oldest requests; check that the
+   switch is still inside it. Then run N's own smoke; the
    HEAD smoke can expect an `/up` shape that N does not have yet:
 
    ```bash
@@ -411,7 +433,10 @@ The telemetry query returns only the newest 100 events. Keep each window to
 7. Roll forward with `wrangler rollback "$N1_VERSION"` (the same block as
    step 5), prove N+1 the same way, then repeat the step 3 smoke. The result
    must match the baseline. Confirm that `wrangler deployments list` shows
-   both rehearsal deployments with their messages.
+   both rehearsal deployments with their messages (the `-m` text is stored in
+   the deployment's `annotations["workers/message"]`; the version itself shows
+   `Message: -`) and no other deployment in between: compare with
+   `$RUN_DIR/dep-before.json`.
 
 **DNS flip to the legacy target and back**
 
@@ -487,7 +512,39 @@ Rehearsal record:
 |---|---|---|---|---|---|
 | 2026-10-02 00:53 | rollback `62871bf4` (8cb9cff) to `60663623` (0515ef4) | 5.2 s | +8.9 s | +12.3 s | 0 of 150 |
 | 2026-10-02 00:55 | roll forward `60663623` to `62871bf4` | 5.5 s | +6.6 s | +10.7 s | 0 of 90 |
+| 2026-10-03 16:35 | rollback `81da0f67` (c07ad6b) to `cd470835` (4b12bef, five deployments back) | 4.4 s | +5.1 s | +5.1 s | 0 of 48 |
+| 2026-10-03 16:36 | roll forward `cd470835` to `81da0f67` | 4.0 s | +6.0 s | +8.6 s | 0 of 42 |
 | pending | DNS flip to legacy and back | needs a DNS-edit principal | | | |
+
+Notes from the 2026-10-03 run (probe cadence about 1.3 s; both directions in one
+probe loop, 95 probes in all, none non-200):
+
+- N was five deployments back because the adjacent one (`4bac3ea9`, 39b2965)
+  differed from N+1 only in e2e and workflow files, which is the same Worker
+  code. `cd470835` predates the lowercase-ULID `/e/:key` redirect, so the
+  probe path `/e/01abcdefghjkmnpqrstvwxyz12` returned 404 on N and 301 on
+  N+1. That showed the serving version from plain HTTP, not only from
+  telemetry. No migration, binding or `wrangler.jsonc` difference separated N
+  and N+1.
+- Rollback switched once, with no alternation between versions. The
+  probe saw its last 301 at +3.6 s and its first 404 at +4.9 s. The roll
+  forward alternated for 2.6 s (+6.0 s to +8.6 s) before only N+1 served;
+  the probe saw its last 404 at +4.3 s and its first 301 at +5.7 s. Both 40
+  second telemetry windows returned exactly 100 events, the cap, with the
+  switch still inside them.
+- The baseline smoke on N+1 passed 16 of 16 routes (the 2026-10-02 `/events*`
+  500s are gone), N's own smoke passed 16 of 16 on N, and the HEAD smoke passed 16 of
+  16 after the roll forward. Every telemetry event in the N smoke window
+  showed N.
+- Both rollbacks ran non-interactively with `-y` ("Using fallback value in
+  non-interactive context: yes") and created deployments `d252c38a` and
+  `2698ae3d`. `dep-before.json` and the final list differ only by those two,
+  so no merge deploy landed in the window. The Worker ended on `81da0f67`
+  at 100%, the pre-rehearsal version. The whole Worker half took 134 s
+  (baseline smoke to final smoke) with 50 s settle waits.
+- `deployments list` and `versions list` both return only 10 entries.
+- The DNS half was not run. It needs a principal with Zone DNS edit and
+  Workers custom-domain edit, which the `Operator:` step tracks.
 
 Notes from the 2026-10-02 run:
 
@@ -502,6 +559,62 @@ Notes from the 2026-10-02 run:
 - For proxied records, resolvers only ever receive Cloudflare anycast
   addresses (`ttl` 1, auto). The DNS flip therefore depends on how fast
   Cloudflare applies edge configuration, not on resolver TTL expiry.
+
+## 48h post-flip watch
+
+The cutover is not done at the DNS flip: the new site stays under a 48h
+watch with the freeze in [cutover-freeze.md](cutover-freeze.md) in force
+until the watch exits. Everything in this section is read-only or GET-only:
+no production writes, migrations, credential changes or queue purges. Any
+Sev-1 goes to containment below and the production rollback pointer, never
+to a live fix or a credential swap.
+
+**What to check:**
+
+- Pager: `error.alert` / `queue.failing` delivery for the whole 48h, per
+  [runbook-alerts.md](runbook-alerts.md) (redacted Tail receipts; source
+  traces stay the diagnostic fallback).
+- `GET /up` on the apex: HTTP 200 with `db:ok`, `pending_migrations:0` and
+  the existing queue envelope, the same readiness bar as the production
+  deploy smoke in
+  [.github/workflows/deploy-production.yml](../.github/workflows/deploy-production.yml).
+- `node ci/cutover-check.mjs --phase after --target togetherweown.com --json`
+  (the [after gate](cutover-check.md#phase-contract-and-prerequisites)):
+  unauthenticated, GET-only, no database client. OAuth start/callback
+  routes can record throttles, so run it only inside this watch, never as
+  a casual probe.
+- Lighthouse against the production origin once within 24h, held to the
+  repo thresholds in [ci/lighthouserc.cjs](../ci/lighthouserc.cjs) (LCP,
+  CLS, server response time); thresholds are never relaxed to turn a
+  build green.
+- Playwright GET-only guest journeys (homepage, static leaves, events
+  list, one published event, robots/sitemap): no sign-in, no RSVP, no
+  join, no writes of any kind.
+
+```bash
+(
+  set -euo pipefail
+  curl -sS --max-time 10 https://togetherweown.com/up
+  node ci/cutover-check.mjs --phase after --target togetherweown.com --json
+)
+```
+
+**Cadence:** pager continuously; `/up` every 15 minutes for the first 4h,
+then hourly; the full after-gate at flip+1h, +24h and +48h; Lighthouse and
+the GET-only journeys once within the first 24h.
+
+**Exit criteria:** 48h elapse with no Sev-1 — no pager storm, `/up` 200
+with `db:ok` and zero pending migrations throughout, after-gates green,
+Lighthouse and guest journeys within budget. The DevOps & Reliability
+Engineer records the exit on the cutover card and lifts the freeze there.
+
+**On a Sev-1** (pager storm, `/up` non-200 or `db:error`/pending nonzero,
+a red after-gate, or member-visible breakage): contain per the queue and
+outage sections above, then roll back with the one-click
+[rollback-production](../.github/workflows/rollback-production.yml)
+workflow to the version ID recorded before the release. A Worker rollback
+does not undo schema, data or Discord side effects. The 48h clock restarts
+after the re-flip.
 
 ## Read `/up` without mistaking liveness for readiness
 

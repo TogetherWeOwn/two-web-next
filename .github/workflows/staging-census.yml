@@ -3,12 +3,30 @@ name: staging-census
 # Read-only staging web_sessions census (counts only).
 # Operator tool for the staging session-sweep probe: runs inside GitHub where
 # the staging Neon secret already lives, so no agent principal ever holds it.
-# Single job, workflow_dispatch only, staging environment, one read-only
+# Manual dispatch only, staging environment, one read-only
 # transaction. Prints COUNTS ONLY — never token_hash or session values.
 # No migrations, no writes, no rotation, staging only.
+#
+# The trigger stays dispatch-only on purpose: this workflow reads a staging
+# secret, and no pull-request-triggered workflow in this repo touches staging
+# secrets (a fork PR would have no secret and fail). Relevance is decided per
+# dispatch by the `scope` job instead (ci/path-scope.sh fails closed): the
+# dispatched revision is diffed against its parent, and the census runs only
+# when that range touches the session-subsystem paths below. A forced dispatch
+# (`force: true`) always runs. The census job is gated on the verdict with a
+# job-level `if:`, mirroring featured-offline-proof.yml and
+# backup-bootstrap-selftest.yml. This workflow gates no merge (required checks
+# are check, gitleaks and pr-lint), so there is no aggregator job and a skip
+# never blocks anything.
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Run the census even when the dispatched revision touches no census paths"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -18,8 +36,64 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Change-scope gate: only dispatches whose revision touches the
+  # census inputs run the query below. A forced dispatch and any doubt
+  # always count as relevant (fail closed).
+  scope:
+    name: scope
+    # The org's two-selfhosted runner group refuses public repos:
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.scope.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The verdict diffs the dispatched revision against its parent.
+          fetch-depth: 2
+      - name: Path-scope selftest (fixtures, no network)
+        run: bash ci/path-scope.sh --selftest
+      - id: scope
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          # A forced dispatch is always an explicit operator question about
+          # the staging database as it is right now. A dispatch with no
+          # parent fails closed (runs the census).
+          if [ "${FORCE:-}" = "true" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git rev-parse --verify --quiet HEAD~1 >/dev/null; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Same shape as the pull-request files API that ci/path-scope.sh
+          # reads in featured-offline-proof.yml: one
+          # `filename<TAB>previous_filename` line per changed file. Rename
+          # rows print old-then-new, so they are swapped.
+          git diff --name-status -M HEAD~1 HEAD \
+            | awk -F'\t' '{ if ($1 ~ /^R/) print $3 "\t" $2; else print $2 "\t" }' > "$RUNNER_TEMP/dispatched-files.tsv"
+          EXPECTED=$(wc -l < "$RUNNER_TEMP/dispatched-files.tsv")
+          bash ci/path-scope.sh "$RUNNER_TEMP/dispatched-files.tsv" "$EXPECTED" -- \
+            ".github/workflows/staging-census.yml" \
+            "src/sessions.ts" \
+            "src/member-erasure.ts" \
+            "src/jobs/cron.ts" \
+            "src/jobs/worker.ts" \
+            "src/jobs/types.ts" \
+            "bin/erase-member.mjs" \
+            "test/sessions.test.ts" \
+            "test/session-rotation-revocation-race.test.ts" \
+            "test/member-erasure.test.ts" \
+            "test/prune.test.ts" >> "$GITHUB_OUTPUT"
+
   census:
     name: census
+    needs: scope
+    if: needs.scope.outputs.relevant == 'true'
     # The org's two-selfhosted runner group refuses public repos:
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}

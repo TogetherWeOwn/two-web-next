@@ -45,15 +45,18 @@
   "overrides": [
     {
       "includes": [
+        "assets/styles.css",
         "public/styles.css",
         "public/theme.css",
         "public/profile-theme.css",
         "public/schedule-theme.css",
         "public/event-theme.css",
         "ci/a11y.mjs",
-        "ci/featured-proof/**"
+        "ci/featured-proof/**",
+        "public/islands/**"
       ],
-      "formatter": { "enabled": false }
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false }
     },
     {
       "includes": [
@@ -81,7 +84,7 @@
       }
     },
     {
-      "includes": ["public/islands/events-calendar.js"],
+      "includes": ["assets/islands/events-calendar.js"],
       "linter": {
         "rules": {
           "correctness": {
@@ -95,7 +98,7 @@
       }
     },
     {
-      "includes": ["public/islands/member-profile.js"],
+      "includes": ["assets/islands/member-profile.js"],
       "linter": {
         "rules": {
           "nursery": { "noFloatingPromises": "off" }
@@ -103,7 +106,7 @@
       }
     },
     {
-      "includes": ["public/islands/past-events.js"],
+      "includes": ["assets/islands/past-events.js"],
       "linter": {
         "rules": {
           "nursery": { "noFloatingPromises": "off" }

@@ -75,6 +75,7 @@ const OTHER_READS = [
   "/auth/discord/redirect",
   "/auth/status",
   "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
+  "/members", // Retired bare path: frozen 404, answered before the member gate.
   "/events",
   "/events/past",
   "/events.json",
@@ -97,13 +98,15 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
       ...ADMIN_READS.map((path) => `GET /admin${path === "/" ? "" : path}`),
       // ALL includes middleware as well as handlers. Pin their multiplicity;
       // filtering wildcards or deduplicating would hide added ALL endpoints.
-      // The five global ALL /* registrations are the composed security/robots
+      // The six global ALL /* registrations are the composed security/robots
       // headers, strict per-environment trustHosts guard, same-origin guard,
-      // auth-status controller injection and expired-write banner consumption.
+      // auth-status controller injection, expired-write banner consumption and
+      // the flag-gated freeze banner.
       // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
-      // Five global ALL /*: headers, trustHosts, same-origin, auth-status injection and expired-write banner.
+      // Six global ALL /*: headers, trustHosts, same-origin, auth-status injection, expired-write banner and freeze banner.
       // The event read boundary encloses its existing GET handler directly;
       // profile flash consumption stays inside the existing boundary middleware.
+      "ALL /*",
       "ALL /*",
       "ALL /*",
       "ALL /*",

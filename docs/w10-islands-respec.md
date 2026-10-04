@@ -86,9 +86,9 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
 - Honeypot `website` field: a filled decoy answers the byte-identical success shape
   without touching limiter/auth/DB; nothing attacker-shaped logged. Per the executable
   contract (`rsvpTrapTripped`), a bare RSVP click has no form-open timestamp or
-  minimum-fill gate; absent/empty inputs never trip. `RSVP_MIN_FILL_MS = 1000` is
-  a legacy constant, not a W9 enforcement claim. Non-string and filled duplicate
-  decoys fail closed.
+  minimum-fill gate; absent/empty inputs never trip. There is no RSVP timing
+  floor — the 1000 ms floor belongs to the profile form only
+  (`PROFILE_MIN_FILL_MS`). Non-string and filled duplicate decoys fail closed.
 - Drift tests pin: requests fired per click (method/URL/body), all states rendered,
   broadcast payload, CM throttle copy verbatim, honeypot success-shape equality.
 - Needs from W9: frozen `PUT/DELETE` status codes, throttle agreement (12/min shared

@@ -70,7 +70,7 @@ function loadViaPinnedWrangler(cwd: string, env: NodeJS.ProcessEnv, envFiles?: s
   );
   expect(
     JSON.parse(readFileSync(path.join(root, "node_modules/wrangler/package.json"), "utf8")).version,
-  ).toBe("4.143.1");
+  ).toBe("4.145.0");
   const require = createRequire(import.meta.url);
   const context = vm.createContext({
     process: { env: { ...env }, cwd: () => cwd, platform: "linux" },
