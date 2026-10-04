@@ -105,7 +105,10 @@ export async function writeRsvp(
         target: [rsvps.eventId, rsvps.userId],
         set: { status: settledStatus, syncedToDiscordAt: null, updatedAt: now },
       });
-    await promoteWaitlist(tx, ev, clock);
+    // Non-seat answers and Going re-answers leave the existing line untouched.
+    // New seat requests still settle FIFO, including explicit stale-view joins.
+    const releasesSeat = existing?.status === "going" && status !== "going";
+    if (releasesSeat || settledStatus === "waitlisted") await promoteWaitlist(tx, ev, clock);
     // Return the committed allocation, including callers that promoted themselves.
     const [row] = await tx
       .select()
