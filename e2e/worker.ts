@@ -15,6 +15,16 @@ globalThis.fetch = async (input, init) => {
   outbound.push(call);
   if (url.origin === "https://discord.com") {
     if (request.method === "POST" && url.pathname === "/api/v10/oauth2/token") {
+      // Blocked-join arm for the offline recovery spec: one fixed,
+      // non-secret code mints a marker token. Every other code keeps the
+      // success token, so the existing journeys are unaffected.
+      let code = "";
+      try {
+        code = new URLSearchParams(await request.clone().text()).get("code") ?? "";
+      } catch {
+        code = "";
+      }
+      if (code === "e2e-blocked-code") return Response.json({ access_token: "e2e-blocked-token" });
       return Response.json({ access_token: "e2e-member-token" });
     }
     if (request.method === "GET" && url.pathname === "/api/v10/users/@me") {
@@ -28,7 +38,20 @@ globalThis.fetch = async (input, init) => {
       });
     }
     if (url.pathname === "/api/v10/guilds/326474832151838730/members/900000000000001398") {
-      if (request.method === "PUT") return new Response(null, { status: 204 });
+      if (request.method === "PUT") {
+        // The blocked-join marker token is refused like a real bot refusal
+        // (banned user / missing permission): the callback must degrade to
+        // the blocked recovery page instead of signing in.
+        let blocked = false;
+        try {
+          const body = (await request.clone().json()) as { access_token?: unknown };
+          blocked = body.access_token === "e2e-blocked-token";
+        } catch {
+          blocked = false;
+        }
+        if (blocked) return new Response(null, { status: 403 });
+        return new Response(null, { status: 204 });
+      }
       if (request.method === "GET") return Response.json({ roles: [] });
     }
   }

@@ -14,6 +14,7 @@ non-Actions execution.
 | QA sign-in → keyboard profile edit | `e2e/profile.spec.ts` | Genuine QA session cookie; tab order and Enter submit; PATCH 200; saved status focused; values survive reload |
 | Events list → event page → RSVP going → withdraw | `e2e/events.spec.ts` | Real going/withdraw controls; PUT 201 and DELETE 204; both states persist after reload |
 | Moderator → create draft → publish | `e2e/admin.spec.ts` | Real form/redirect; draft hidden from guest (403); publish status; guest view 200 and public calendar navigation |
+| Blocked join → recovery copy + fallback invite | `e2e/join-blocked.spec.ts` | Bot-refused guild add renders the blocked copy with retry and invite CTA, 200, no session; distinct from denied/outage/expired copy |
 
 RSVP selectors are the frozen `rsvp-going`, `rsvp-confirmed`, `rsvp-withdraw`
 contracts in `src/islands/contracts.ts`. The suite deliberately does **not**
