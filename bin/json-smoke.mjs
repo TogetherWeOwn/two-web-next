@@ -547,22 +547,47 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       headers: { ...(session ? { cookie: `${SESSION_COOKIE}=${session}` } : {}), ...headers },
     });
 
-  // true/false only for a 200 JSON verdict; an outage or odd reply is `null`,
-  // never read as "logged out".
+  let current = cookie;
+  let statusMutated = false;
+  const cleanupSessions = new Set();
+  // A status probe must observe without changing authentication. Track unexpected
+  // bearers before reading its body, but never trust a mutating probe's verdict.
   const authenticates = async (session) => {
     const response = await call("/auth/status", {
       session,
       headers: { accept: "application/json" },
     });
+    const issued = setCookiesOf(response)
+      .map(parseSetCookie)
+      .filter((cookie) => cookie && [SESSION_COOKIE, STATUS_COOKIE].includes(cookie.name));
+    const mutated = issued.length > 0;
+    if (mutated) {
+      statusMutated = true;
+      const bearers = issued.filter((cookie) => cookie.name === SESSION_COOKIE && cookie.value);
+      if (bearers.length) {
+        if (current) cleanupSessions.add(current);
+        for (const bearer of bearers) cleanupSessions.add(bearer.value);
+        current = bearers.at(-1).value;
+      }
+    }
     const body = parseBody(await response.text());
     const verdict =
-      response.status === 200 && isJson(response) && typeof body?.authenticated === "boolean"
+      !mutated &&
+      response.status === 200 &&
+      isJson(response) &&
+      typeof body?.authenticated === "boolean"
         ? body.authenticated
         : null;
-    return { verdict, status: response.status };
+    return { verdict, status: response.status, mutated };
   };
-  const describeReplay = ({ verdict, status }, wanted) =>
-    verdict === null ? `status probe HTTP ${status}` : wanted ? "rejected" : "still authenticates";
+  const describeReplay = ({ verdict, status, mutated }, wanted) =>
+    mutated
+      ? "status probe issued auth cookies"
+      : verdict === null
+        ? `status probe HTTP ${status}`
+        : wanted
+          ? "rejected"
+          : "still authenticates";
 
   const flagsExpected =
     "__Host- prefix, Path=/, Secure, HttpOnly, SameSite=Lax, positive Max-Age, no Domain";
@@ -593,7 +618,6 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
 
     // One authenticated page view rotates the token: the old value is revoked
     // in the same statement that mints its replacement.
-    let current = cookie;
     try {
       const page = await call("/", { session: cookie, headers: { accept: "text/html" } });
       const replacement = cookieNamed(page, SESSION_COOKIE);
@@ -608,6 +632,13 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       else {
         const flags = sessionCookieProblems(replacement);
         if (flags.length) problems.push(`replacement cookie violated ${flags.join(", ")}`);
+      }
+      const replacementStatus = cookieNamed(page, STATUS_COOKIE);
+      if (!replacementStatus) problems.push("no replacement status cookie");
+      else {
+        if (!replacementStatus.value) problems.push("empty replacement status cookie");
+        const flags = sessionCookieProblems(replacementStatus);
+        if (flags.length) problems.push(`replacement status cookie violated ${flags.join(", ")}`);
       }
       const old = await authenticates(cookie);
       if (old.verdict !== false) problems.push(`old cookie ${describeReplay(old, false)}`);
@@ -629,15 +660,17 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
 
     // Logout needs the correct Origin (same-origin gate) and must revoke the
     // row server-side, not only clear the browser cookie.
+    const preLogout = current;
     let logout = null;
     let logoutError = null;
     try {
       logout = await call("/logout", {
         method: "POST",
-        session: current,
+        session: preLogout,
         headers: { origin: base.origin },
       });
       await logout.text();
+      if (logout.status === 303) cleanupSessions.delete(preLogout);
     } catch (error) {
       logoutError = errorName(error);
     }
@@ -648,12 +681,13 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       const problems = [];
       if (logout.status !== 303) problems.push(`logout HTTP ${logout.status}`);
       try {
-        const replay = await authenticates(current);
+        const replay = await authenticates(preLogout);
         if (replay.verdict !== false)
           problems.push(`pre-logout cookie ${describeReplay(replay, false)}`);
       } catch (error) {
         problems.push(`status probe ${errorName(error)}`);
       }
+      if (statusMutated) problems.push("status probe mutated authentication state");
       if (problems.length)
         fail(
           "logout revokes session",
@@ -682,6 +716,34 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
         );
       else pass("logout clears cookies");
     }
+
+    // Best-effort teardown after a broken observer. Never probe these bearers
+    // again: doing so could mint more sessions. Bound extra logout attempts.
+    const pending = [...cleanupSessions];
+    if (pending.length > 8)
+      fail(
+        "unexpected status session cleanup",
+        "at most 8 pending bearers",
+        "cleanup limit exceeded",
+      );
+    for (const session of pending.slice(-8)) {
+      try {
+        const cleanup = await call("/logout", {
+          method: "POST",
+          session,
+          headers: { origin: base.origin },
+        });
+        await cleanup.text();
+        if (cleanup.status !== 303)
+          fail(
+            "unexpected status session cleanup",
+            "HTTP 303 within timeout",
+            `HTTP ${cleanup.status}`,
+          );
+      } catch (error) {
+        fail("unexpected status session cleanup", "HTTP 303 within timeout", errorName(error));
+      }
+    }
   }
 
   // Needs no session: a wrong token must be indistinguishable from a route
@@ -692,10 +754,10 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       ...attempt,
       headers: { ...attempt.headers, [QA_HEADER]: BAD_TOKEN },
     });
+    // Consume each body within its own request deadline, not after another fetch.
+    const badBody = stripCloudflareSnippet(await bad.text());
     const missing = await call(MISSING_ROUTE, attempt);
-    const [badBody, missingBody] = (await Promise.all([bad.text(), missing.text()])).map((text) =>
-      stripCloudflareSnippet(text),
-    );
+    const missingBody = stripCloudflareSnippet(await missing.text());
     const contentType = (response) => (response.headers.get("content-type") ?? "").trim();
     const sameContentType = contentType(bad) === contentType(missing);
     if (
