@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AccessEntry } from "../src/access-log";
 import { recordAccess } from "../src/admin/store";
 import { memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
-import { users } from "../src/db/schema";
+import { joinAttempts as attempts, profiles, users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { bufferedMemberText, keyedMemberRead, memberReadBoundary } from "../src/member-reads";
 import { memberReadDb, observeMemberReads } from "../src/db/member-reads";
@@ -127,11 +127,11 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
     },
   );
 
-  it.each([null, "not-a-member-key", "123"])(
-    "invalid/partial key %s refuses contents before audit",
+  it.each(["", "not-a-member-key", "123"])(
+    "invalid non-null key %s refuses contents before audit",
     async (key) => {
-      // Nullable join-attempt owners reproduce incomplete legacy projections
-      // without weakening the users table's primary key constraint.
+      // Only actual SQL NULL is ownerless; malformed non-null IDs must not
+      // silently drop a subject from a mixed result.
       const connection = db();
       const { joinAttempts } = await import("../src/db/schema");
       await fixture.db.insert(joinAttempts).values([
@@ -143,6 +143,40 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
         return bufferedMemberText(c, PERSONAL_STRINGS[1]!);
       });
       await deny(await app.request("/existing", {}, env));
+    },
+  );
+
+  it.each(["direct", "derived"])(
+    "a %s union cannot launder another table's rows through the nullable join owner",
+    async (shape) => {
+      // The profile row has a valid owner but a SQL-NULL bio. Relabelled as
+      // join_attempts.discord_id, that NULL must not drop the profile subject.
+      const marker = "synthetic-private-timezone-marker";
+      await fixture.db.update(profiles).set({ bio: null, timezone: marker });
+      await fixture.db
+        .insert(attempts)
+        .values({ discordId: null, requestId: "pre-identity", outcome: "denied" });
+      const connection = db();
+      const app = router(async (c) => {
+        const combined = connection
+          .select({ owner: attempts.discordId, trace: attempts.requestId })
+          .from(attempts)
+          .where(eq(attempts.outcome, "denied"))
+          .unionAll(
+            connection.select({ owner: profiles.bio, trace: profiles.timezone }).from(profiles),
+          );
+        const mixed = combined.as("mixed");
+        const query =
+          shape === "derived"
+            ? connection.select({ owner: mixed.owner, trace: mixed.trace }).from(mixed)
+            : combined;
+        const rows = await keyedMemberRead(() => query);
+        return bufferedMemberText(c, JSON.stringify(rows));
+      });
+      const res = await app.request("/existing", {}, env);
+      expect(res.status).toBe(503);
+      expect(await res.text()).not.toContain(marker);
+      expect(await logs()).toHaveLength(0);
     },
   );
 

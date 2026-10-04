@@ -267,12 +267,17 @@ link to open `/admin/join-attempts/:id`: it shows **Outcome**, **Source**,
 **Attempted at (UTC)** and **Trace** (**Request ID**, **Discord ID**) as recorded.
 Missing request IDs appear as a dash. Detail links only resolve attempts within
 the same 90-day window. **Back to join attempts** returns to the unfiltered first
-page. There is no edit, delete or retry control. List and detail reads attribute
-the returned rows' recorded Discord IDs directly, excluding the viewer; they do
-not require a current users row or membership flag. Missing, invalid or partial
-member keys refuse the contents instead of silently dropping subjects. Empty
-lists and self-only reads create no access row. Audit-write failures always
-refuse protected contents, even with the legacy enforcement setting disabled.
+page. There is no edit, delete or retry control. Cancelled consent, expired state
+and failures before identity exchange can record a null Discord ID; those attempts
+remain visible with an empty Discord cell (a dash in detail), without inventing a
+member subject. Request/source fields are still diagnostics, not proof of anonymity.
+List and detail reads attribute every retrieved non-null Discord ID directly,
+including the list's unrendered pagination lookahead and excluding the viewer; they
+do not require a current users row or membership flag. Missing owner projections
+and malformed non-null IDs still refuse the whole response rather than silently
+dropping subjects. Empty, null-ID-only and self-only reads create no access row.
+Audit-write failures for actual member subjects always refuse protected contents,
+even with the legacy enforcement setting disabled.
 Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the

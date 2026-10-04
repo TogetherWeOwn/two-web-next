@@ -149,8 +149,45 @@ describe.skipIf(!process.env.DATABASE_URL)(
       },
     );
 
-    it.each([null, "invalid-owner", "123"])(
-      "join list/detail refuse partial owner %s instead of dropping its subject",
+    it("mounted join list/detail retain pre-identity rows while auditing the actual members only", async () => {
+      const [attempt] = await fixture.db
+        .insert(joinAttempts)
+        .values({ discordId: null, requestId: "pre-identity-trace", outcome: "denied" })
+        .returning();
+      for (const path of ["/join-attempts", `/join-attempts/${attempt!.id}`]) {
+        const response = await request(path);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(await response.text()).toContain("pre-identity-trace");
+      }
+      expect(await logs()).toMatchObject([
+        { subjectUserIds: [SUBJECT.userId], subjectCount: 1, route: "admin.join-attempts.index" },
+      ]);
+      expect(await logs()).toHaveLength(1);
+    });
+
+    it("mixed null/member rows still refuse contents when the real audit insert fails", async () => {
+      await fixture.db
+        .insert(joinAttempts)
+        .values({ discordId: null, requestId: "pre-identity-trace", outcome: "denied" });
+      await fixture.db.execute(
+        sql`ALTER TABLE member_data_access_logs RENAME TO unavailable_access_logs`,
+      );
+      try {
+        const response = await request("/join-attempts");
+        const body = await response.clone().text();
+        await denial(response, false);
+        expect(body).not.toContain("pre-identity-trace");
+      } finally {
+        await fixture.db.execute(
+          sql`ALTER TABLE unavailable_access_logs RENAME TO member_data_access_logs`,
+        );
+      }
+      expect(await logs()).toEqual([]);
+    });
+
+    it.each(["", "invalid-owner", "123"])(
+      "join list/detail refuse malformed non-null owner %s instead of dropping its subject",
       async (discordId) => {
         const [attempt] = await fixture.db
           .insert(joinAttempts)
