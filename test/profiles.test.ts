@@ -221,7 +221,32 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
         env,
       )
     ).text();
-    expect(asMod).toBe(asMember);
+    // The only difference is the header shortcut; the member data is identical.
+    const adminLink =
+      '<a class="btn profile-secondary" href="/admin" data-testid="profile-admin-link">Moderator admin</a>';
+    expect(asMember).not.toContain("/admin");
+    expect(asMod).toContain(adminLink);
+    expect(asMod.replace(adminLink, "")).toBe(asMember);
+  });
+
+  it("every signed-in member gets a sign-out form on both profile routes; only moderators get the admin link", async () => {
+    const { app, sessions } = harness();
+    for (const [row, admin] of [
+      [ALICE, false],
+      [BOB, false],
+      [MOD, true],
+    ] as const) {
+      const headers = { cookie: await cookieFor(sessions, row) };
+      for (const path of ["/profile", `/members/${ALICE.userId}`]) {
+        const html = await (await app.request(path, { headers }, env)).text();
+        expect(html, `${row.username} ${path}`).toContain(
+          '<form method="post" action="/logout" data-testid="profile-signout">',
+        );
+        expect(html.includes('data-testid="profile-admin-link"'), `${row.username} ${path}`).toBe(
+          admin,
+        );
+      }
+    }
   });
 
   it("owner sees the edit form on their own profile; /profile is the viewer's own", async () => {

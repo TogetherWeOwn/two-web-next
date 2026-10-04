@@ -22,12 +22,12 @@ import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/valid
 import { dispatchWriteBack } from "../admin/writeback";
 import type { Env, Session } from "../env";
 import { inviteDestination } from "../invite";
-import { matchQuery, recordSearch } from "./search-log";
+import { MAX_QUERY_LENGTH, matchQuery, recordSearch } from "./search-log";
 import { databaseUnavailable, NotFoundPage, notFoundHandler, rateLimitExceeded } from "../errors";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { safeNext } from "../join/service";
-import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
+import { WRITE_THROTTLE_PER_MINUTE, throttle, throttleGuard } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
 import { discordEventsSource } from "./discord-transients";
 import {
@@ -78,6 +78,15 @@ import {
 type Ctx = Context<{ Bindings: Env }>;
 type App = Hono<{ Bindings: Env }>;
 export type SessionReader = (c: Ctx) => Promise<Session | null>;
+
+export const PUBLIC_EVENT_READS_PER_MINUTE = 60;
+
+/** One client budget across public pages and feeds, before event or session reads. */
+async function publicReadGuard(c: Ctx): Promise<Response | null> {
+  const limited = await throttleGuard(c, "events-read", PUBLIC_EVENT_READS_PER_MINUTE);
+  if (limited) limited.headers.set("cache-control", "no-store, private");
+  return limited;
+}
 
 export function eventJson(e: PublicEvent) {
   // Legacy EventResource order (TOG-11666): event_key first, synced_to_discord
@@ -175,6 +184,13 @@ export function registerEventRoutes(
   const unavailable = (c: Ctx) => c.text("Events temporarily unavailable", 503);
 
   app.get("/events", async (c) => {
+    const q = c.req.query("q") ?? "";
+    if ([...q].length > MAX_QUERY_LENGTH) {
+      c.header("cache-control", "no-store, private");
+      return c.text(`Search query must be ${MAX_QUERY_LENGTH} characters or fewer.`, 422);
+    }
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const session = await (c.req.header("x-two-island") === "events-calendar"
@@ -185,7 +201,6 @@ export function registerEventRoutes(
     // Resolve the URL state. A search forces the list view (a month grid that
     // may not contain the matches reads as "no results"); an unknown view
     // keeps the current one, which for a fresh URL means the default list.
-    const q = c.req.query("q") ?? "";
     const match = matchQuery(q);
     const searching = match !== null;
     const view = searching ? "list" : (parseCalendarView(c.req.query("view")) ?? "list");
@@ -304,6 +319,8 @@ export function registerEventRoutes(
   });
 
   app.get("/events/past", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
@@ -407,6 +424,8 @@ export function registerEventRoutes(
   });
 
   app.get("/events.rss", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published"]);
@@ -418,6 +437,8 @@ export function registerEventRoutes(
   });
 
   app.get("/events.ics", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return unavailable(c);
     const rows = await listFeed(db, ["published", "cancelled"]);
@@ -431,6 +452,8 @@ export function registerEventRoutes(
   // Same view policy as /e/:key: drafts are moderator-only; cancelled/past download fine.
   // Missing keys use the branded 404 (suggestions + noindex), never bare plaintext.
   app.get("/events/:file{.+\\.ics}", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     const key = c.req.param("file").slice(0, -4);
     // One canonical key form per event, mirroring /e/:key: a valid key in
     // another letter case 301s to the canonical URL before any read.
@@ -498,6 +521,8 @@ export function registerEventRoutes(
   });
 
   app.get("/e/:key", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
     let viewer: string | null = null;
     // Observe the entire existing handler, not only the attendee helper. An
     // anonymous viewer can release classified public records, never member keys.

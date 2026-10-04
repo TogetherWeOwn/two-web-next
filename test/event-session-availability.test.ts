@@ -11,7 +11,11 @@ import {
 } from "../src/events/reads";
 import { env, EVENT_KEY, SUBJECT } from "./helpers/member-data";
 
-const { connect, ddl } = vi.hoisted(() => ({ connect: vi.fn(), ddl: vi.fn() }));
+const { connect, ddl, throttleStore } = vi.hoisted(() => ({
+  connect: vi.fn(),
+  ddl: vi.fn(),
+  throttleStore: vi.fn(async () => null),
+}));
 vi.mock("postgres", () => ({ default: connect }));
 vi.mock("../src/events/reads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/events/reads")>()),
@@ -66,7 +70,13 @@ const request = (cookie?: string) =>
     {
       headers: cookie ? { cookie } : {},
     },
-    { ...env, ADMIN_DB: {}, DB: { connectionString: "postgres://unused.invalid/session-fixture" } },
+    {
+      ...env,
+      ADMIN_DB: {},
+      DB: { connectionString: "postgres://unused.invalid/session-fixture" },
+      // Count session connections separately from public event admission.
+      THROTTLE_STORE: throttleStore,
+    },
   );
 
 beforeEach(() => {
@@ -111,6 +121,7 @@ describe("guest event pages with unavailable session storage", () => {
       expect(listGoingAttendees).not.toHaveBeenCalled();
       expect(connect).not.toHaveBeenCalled();
       expect(ddl).not.toHaveBeenCalled();
+      expect(throttleStore).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -121,6 +132,7 @@ describe("guest event pages with unavailable session storage", () => {
     expect(await res.text()).not.toContain(SUBJECT.username);
     expect(connect).toHaveBeenCalledTimes(1);
     expect(ddl).toHaveBeenCalledTimes(1);
+    expect(throttleStore).toHaveBeenCalledTimes(1);
     expect(listGoingAttendees).not.toHaveBeenCalled();
   });
 });

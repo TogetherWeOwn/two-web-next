@@ -1,4 +1,4 @@
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
 import { expect, memberStorageState, moderatorStorageState, stagingOrigin, test } from "./fixtures";
 import { loginQaIdentities } from "./qa-login";
 
@@ -22,6 +22,39 @@ async function cancelFixtureViaApi(request: APIRequestContext, eventKey: string)
     maxRedirects: 0,
   });
   return response.status();
+}
+
+// `finally` cleanup that never throws, so the contexts below always close.
+// A test timeout closes both contexts before this runs, and every request then
+// fails with `Failed to find browser context`; throwing there used to skip the
+// close and orphan the fixture. A cancel that misses is recorded here and
+// retried by the global teardown sweep (global-teardown.ts), which fails the
+// run only if a fixture is still live after it. `withdraw` frees both seats
+// first: the DELETEs are quiet 204s with or without a row.
+async function cleanUpFixture(
+  moderator: BrowserContext,
+  member: BrowserContext,
+  eventKey: string | undefined,
+  withdraw: boolean,
+): Promise<void> {
+  const note = (description: string) =>
+    test.info().annotations.push({ type: "fixture-cleanup", description });
+  if (eventKey) {
+    if (withdraw) {
+      for (const context of [member, moderator]) {
+        await context.request
+          .delete(`/events/${eventKey}/rsvp`, { headers: { Origin: stagingOrigin } })
+          .catch(() => note("rsvp withdraw failed; the cancel below still frees the seat"));
+      }
+    }
+    try {
+      const status = await cancelFixtureViaApi(moderator.request, eventKey);
+      if (status !== 303) note(`cancel answered ${status}; global teardown sweeps the fixture`);
+    } catch {
+      note("cancel request failed; global teardown sweeps the fixture");
+    }
+  }
+  await Promise.allSettled([member.close(), moderator.close()]);
 }
 
 // Moderator drives the admin form. Split from publishing so the caller holds the
@@ -55,16 +88,16 @@ async function publishDraft(admin: Page): Promise<void> {
   ).toBeVisible();
 }
 
-// Fixture orphaned by that flake; the waitlist journey cancels it best-effort
-// if it is still live. ULID-shaped, not a credential (see .gitleaks.toml).
-const ORPHAN_EVENT_KEY = "01M41G95P1M3EWP30VWZPFYSG9";
-
 // Moderator owns the journey: a draft is created, published for the RSVP, and
 // cancelled in `finally` so the fixture never lingers. Publishing and RSVP
 // writes enqueue sync-event carriers (src/events/sync.ts), but with no
 // SYNC_EVENT_QUEUE consumer pointed at the live guild there is no Discord
 // write-back; the cancelled fixture doubles as the 410 case.
 test("staging member RSVPs going on a fixture, then withdraws", async ({ browser }) => {
+  // Admin form, publish, RSVP, two reloads and a withdraw: run 37192224803 hit
+  // the 30s default on a slow episode, which closed the contexts mid-journey
+  // and orphaned the fixture. Triples the timeout to 90s.
+  test.slow();
   const moderator = await browser.newContext({ storageState: moderatorStorageState });
   const member = await browser.newContext({ storageState: memberStorageState });
   let eventKey: string | undefined;
@@ -100,11 +133,7 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
     await expect(page.getByTestId("rsvp-going")).toBeVisible();
     await expect(page.getByTestId("rsvp-confirmed")).toHaveCount(0);
   } finally {
-    if (eventKey) {
-      expect(await cancelFixtureViaApi(moderator.request, eventKey)).toBe(303);
-    }
-    await member.close();
-    await moderator.close();
+    await cleanUpFixture(moderator, member, eventKey, false);
   }
 });
 
@@ -185,22 +214,9 @@ test("staging member joins then leaves the waitlist on a capacity-1 fixture", as
     await expect(page.getByTestId("waitlist-join")).toBeVisible();
     await expect(page.getByTestId("waitlist-position")).toHaveCount(0);
   } finally {
-    // API-only cleanup: the DELETEs are quiet 204s with or without a row and
-    // cancel is idempotent, so cleanup holds on every path out of the journey.
-    // The orphan below is best-effort — a previous flaked cleanup left it live
-    // and this test does not own it, so its outcome is never asserted.
-    if (eventKey) {
-      await member.request.delete(`/events/${eventKey}/rsvp`, {
-        headers: { Origin: stagingOrigin },
-      });
-      await moderator.request.delete(`/events/${eventKey}/rsvp`, {
-        headers: { Origin: stagingOrigin },
-      });
-      expect(await cancelFixtureViaApi(moderator.request, eventKey)).toBe(303);
-      await cancelFixtureViaApi(moderator.request, ORPHAN_EVENT_KEY);
-    }
-    await member.close();
-    await moderator.close();
+    // API-only cleanup: cancel is idempotent, so cleanup holds on every path
+    // out of the journey (see cleanUpFixture).
+    await cleanUpFixture(moderator, member, eventKey, true);
   }
 });
 
@@ -279,19 +295,8 @@ test("staging waitlisted member is promoted when the seat holder withdraws", asy
     await expect(page.getByTestId("rsvp-confirmed")).toContainText("You're in");
     await expect(page.getByTestId("waitlist-position")).toHaveCount(0);
   } finally {
-    // API-only cleanup, as in the join + leave journey: quiet 204s with or
-    // without a row, idempotent cancel. The member now holds the seat, so its
-    // DELETE is the one that frees it.
-    if (eventKey) {
-      await member.request.delete(`/events/${eventKey}/rsvp`, {
-        headers: { Origin: stagingOrigin },
-      });
-      await moderator.request.delete(`/events/${eventKey}/rsvp`, {
-        headers: { Origin: stagingOrigin },
-      });
-      expect(await cancelFixtureViaApi(moderator.request, eventKey)).toBe(303);
-    }
-    await member.close();
-    await moderator.close();
+    // API-only cleanup, as in the join + leave journey. The member now holds the
+    // seat, so its DELETE is the one that frees it.
+    await cleanUpFixture(moderator, member, eventKey, true);
   }
 });

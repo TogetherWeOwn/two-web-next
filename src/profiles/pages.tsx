@@ -108,12 +108,14 @@ export const PROFILE_SHARE_DESCRIPTION = "A member of Together We Own.";
 export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
+  /** Viewer's session moderator bit: only decides whether the /admin shortcut renders. */
+  isModerator?: boolean;
   appUrl: string;
   joinResult?: JoinResult | null;
   stats?: MemberStats | null;
   errors?: Record<string, string>;
   values?: { bio: string; games_text: string; timezone: string };
-}> = ({ member, isOwner, appUrl, joinResult, stats, errors, values }) => {
+}> = ({ member, isOwner, isModerator, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const isNewMember = profileIsNewMember(member);
@@ -134,11 +136,24 @@ export const ProfilePage: FC<{
         <a class="brand" href="/">
           TWO
         </a>
-        <nav aria-label="Primary">
-          <a class="btn" href="/profile">
-            Your profile
-          </a>
-        </nav>
+        <div class="profile-header-actions">
+          <nav aria-label="Primary">
+            <a class="btn" href="/profile">
+              Your profile
+            </a>
+            {/* Convenience link only: /admin still 403s anyone without the moderator bit. */}
+            {isModerator ? (
+              <a class="btn profile-secondary" href="/admin" data-testid="profile-admin-link">
+                Moderator admin
+              </a>
+            ) : null}
+          </nav>
+          <form method="post" action="/logout" data-testid="profile-signout">
+            <button type="submit" class="link">
+              Sign out
+            </button>
+          </form>
+        </div>
       </header>
       <main id="main" tabindex={-1}>
         {joinResult ? <JoinResultBanner result={joinResult} /> : null}

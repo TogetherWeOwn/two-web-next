@@ -43,3 +43,17 @@ test("staging QA member edits and persists their profile using the keyboard", as
   await expect(view.getByText("Timezone: Europe/London", { exact: true })).toBeVisible();
   await expect(view.getByRole("listitem")).toHaveText(["Deep Rock Galactic", "Minecraft"]);
 });
+
+// Read-only: the profile shell carries Sign out for every
+// member and no moderator shortcut for a non-moderator. Never clicks Sign out
+// here, which would revoke the stored session the other specs rely on.
+test("staging QA member sees Sign out and no moderator shortcut on their profile", async ({
+  page,
+}) => {
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId("profile-signout").getByRole("button", { name: "Sign out" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("profile-admin-link")).toHaveCount(0);
+});

@@ -4,19 +4,21 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:https";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 
-const directory = await mkdtemp(resolve(".auth-browser-"));
+const directory = await mkdtemp(join(tmpdir(), "auth-browser-"));
 const originalFetch = globalThis.fetch;
 let browser;
 let server;
 let release;
 try {
+  await symlink(resolve("node_modules"), join(directory, "node_modules"), "dir");
   const output = join(directory, "fixture.mjs");
   await build({
     entryPoints: ["test/fixtures/session-recovery.ts"],
@@ -233,8 +235,93 @@ try {
   await navigation;
   console.log("PASS two-tab delayed rotation-cookie probe: no false logout, no old-token grace");
 
-  // Logout notification is emitted only once the real server revocation completes.
-  await a.locator('form[action="/logout"] button').click();
+  // Refused logout keeps the editor and its in-memory draft; retry is explicit.
+  await a.goto(url("/profile?edit=1"));
+  await a.waitForFunction(() => !!window.TwoAuth);
+  await a.evaluate(() => {
+    window.logoutNotifications = 0;
+    const original = BroadcastChannel.prototype.postMessage;
+    BroadcastChannel.prototype.postMessage = function (message) {
+      if (message === "recheck") window.logoutNotifications++;
+      return original.call(this, message);
+    };
+  });
+  const logoutForm = a.getByTestId("profile-signout");
+  const logoutButton = logoutForm.getByRole("button", { name: "Sign out", exact: true });
+  let refusedLogoutPosts = 0;
+  for (const width of [360, 1280]) {
+    await a.setViewportSize({ width, height: 900 });
+    for (const failure of [429, 503, "network"]) {
+      let releaseLogout;
+      let intercepted;
+      const requested = new Promise((resolve) => {
+        intercepted = resolve;
+      });
+      await a.route("**/logout", async (route) => {
+        assert.equal(route.request().method(), "POST");
+        refusedLogoutPosts++;
+        await new Promise((resolve) => {
+          releaseLogout = resolve;
+          intercepted();
+        });
+        if (failure === "network") return route.abort();
+        return route.fulfill({ status: failure, body: "Local refused logout" });
+      });
+      try {
+        const draft = `Unsaved logout draft ${width}/${failure}`;
+        await a.getByRole("textbox", { name: /^Bio\b/ }).fill(draft);
+        await a.getByRole("textbox", { name: /^Games\b/ }).fill("Go\nChess");
+        await a.getByLabel("Timezone", { exact: true }).fill("UTC");
+        const before = refusedLogoutPosts;
+        await logoutButton.click();
+        await requested;
+        assert.equal(await logoutButton.isDisabled(), true);
+        assert.equal(await logoutForm.getAttribute("aria-busy"), "true");
+        assert.equal(await a.getByTestId("logout-error").count(), 0);
+        await logoutForm.evaluate((form) => {
+          for (let i = 0; i < 3; i++) form.requestSubmit();
+        });
+        assert.equal(refusedLogoutPosts - before, 1);
+        releaseLogout();
+        const failureNotice = a.getByTestId("logout-error");
+        await failureNotice.waitFor();
+        assert.equal(await failureNotice.getAttribute("role"), "alert");
+        assert.equal(await failureNotice.evaluate((el) => el === document.activeElement), true);
+        assert.match(await failureNotice.innerText(), /try again/i);
+        assert.equal(await logoutButton.isDisabled(), false);
+        assert.equal(await logoutForm.getAttribute("aria-busy"), null);
+        assert.equal(a.url(), url("/profile?edit=1"));
+        assert.equal(await a.getByRole("textbox", { name: /^Bio\b/ }).inputValue(), draft);
+        assert.equal(await a.getByRole("textbox", { name: /^Games\b/ }).inputValue(), "Go\nChess");
+        assert.equal(await a.getByLabel("Timezone", { exact: true }).inputValue(), "UTC");
+        assert.equal(await a.evaluate(() => window.TwoAuth.check()), true);
+        assert.equal(await a.evaluate(() => window.logoutNotifications), 0);
+        assert.equal(refusedLogoutPosts - before, 1);
+        assert.equal(f.state.writes, 0);
+        assert.equal(f.profiles.rows.get(MEMBER).bio, "Accepted bio");
+        assert.equal(
+          await a.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+          true,
+        );
+        assert.equal((await new AxeBuilder({ page: a }).analyze()).violations.length, 0);
+        await mkdir(resolve("artifacts/session-recovery"), { recursive: true });
+        await a.screenshot({
+          path: `artifacts/session-recovery/logout-${failure}-${width}.png`,
+          fullPage: true,
+        });
+      } finally {
+        releaseLogout?.();
+        await a.unrouteAll({ behavior: "wait" });
+      }
+    }
+  }
+  console.log(
+    "PASS refused/network logout draft retention, accessible explicit retry and no duplicates",
+  );
+
+  // Successful retry from the editor still revokes the session and notifies the other tab.
+  await logoutButton.focus();
+  await a.keyboard.press("Enter");
   await a.waitForURL(url("/"));
   await b.waitForFunction(
     () => !window.TwoAuth && !!document.querySelector('a[href="/auth/discord"]'),
@@ -348,7 +435,9 @@ try {
         checks: [
           "non-authoritative errors",
           "rotation-cookie race",
-          "broadcast logout",
+          "refused/network logout draft retention and accessible retry at 360/1280",
+          "no duplicate logout or failure notification to other tabs",
+          "successful editor logout retry and broadcast logout",
           "expired draft and explicit reset",
           "keyboard recovery and one-shot banner",
           "focus/visibility revocation",

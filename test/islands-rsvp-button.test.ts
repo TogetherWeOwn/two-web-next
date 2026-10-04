@@ -469,6 +469,9 @@ describe("rsvp-button SSR/server drift", () => {
     p.as(viewer);
     const html = mount(await (await p.request()).text());
     expect(html).toContain(`data-testid="${WAITLIST_POSITION_TESTID}">You&#39;re on the waitlist`);
+    // WaitlistTest.php: the line is announced politely and can take focus.
+    expect(html).toContain(`role="status" tabindex="-1" data-testid="${WAITLIST_POSITION_TESTID}"`);
+    expect(html).not.toContain('role="alert"');
     expect(html).toContain(`data-testid="${WAITLIST_CLAIM_TESTID}"`);
     expect(html).toContain(`data-testid="${WAITLIST_LEAVE_TESTID}"`);
     expect(html).toContain(`data-testid="${RSVP_SYNCING_TESTID}"`);

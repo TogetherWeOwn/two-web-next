@@ -187,6 +187,18 @@ describe("ordinary strong, weak and list validators retain their existing behavi
   });
 });
 
+describe("an empty collection feed settles on its own strong validator", () => {
+  // EventEtagTest.php: with nothing in scope the envelope is still byte-stable,
+  // so its ETag 304s instead of re-sending it.
+  it.each(["/events.ics", "/events.rss"])("%s", async (path) => {
+    vi.mocked(listFeed).mockResolvedValue([]);
+    const baseline = await req(path);
+    expect(baseline.status).toBe(200);
+    await baseline.text();
+    await expectNotModified(path, baseline.headers.get("etag")!, baseline);
+  });
+});
+
 describe("wildcards never replace a denial, missing representation or read failure", () => {
   it.each([null, { ...moderator, moderator: false }])("draft denied to %j", async (session) => {
     vi.mocked(getEventRow).mockResolvedValue({ ...row, status: "draft" });
