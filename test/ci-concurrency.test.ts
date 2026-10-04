@@ -24,6 +24,16 @@ describe("workflow concurrency", () => {
     expect(pr.filter(({ text }) => !cancels(text)).map(({ name }) => name)).toEqual([]);
   });
 
+  it("keeps the nightly schedule run out of main's push-run group", () => {
+    const ci = workflows.find(({ name }) => name === "ci.yml")?.text ?? "";
+    // A pending nightly in main's group would cancel a pending push run, and
+    // deploy.yml only deploys push-event runs, so staging would miss that SHA.
+    expect(triggers(ci)).toMatch(/\n  schedule:\n    - cron: /);
+    expect(ci).toMatch(
+      /\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'schedule' && 'nightly'\) \|\| github\.ref \}\}\n/,
+    );
+  });
+
   it("never cancels deploy, rollback or release runs", () => {
     const protectedRuns = workflows.filter(({ name }) => /^(deploy|rollback|release)/.test(name));
     expect(protectedRuns.length).toBeGreaterThan(1);

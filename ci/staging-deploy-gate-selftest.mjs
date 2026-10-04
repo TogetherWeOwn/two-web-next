@@ -603,6 +603,11 @@ test("main CI runs are never cancelled in progress and finish in push order", ()
   // Main pushes share one group (serialized, in order) and are never cancelled.
   assert.equal(groupOf(main("aaa")), groupOf(main("bbb")));
   assert.equal(cancelsOf(main("aaa")), false);
+  // The nightly schedule runs on main's ref but must not share the push group: a
+  // pending nightly would cancel a pending push run, which deploy never sees.
+  const nightly = { ...main("ccc"), event_name: "schedule" };
+  assert.notEqual(groupOf(nightly), groupOf(main("aaa")));
+  assert.equal(cancelsOf(nightly), false);
   // PR pushes for the same PR share a group and cancel superseded runs.
   assert.equal(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(7, "refs/pull/7/merge")));
   assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));
