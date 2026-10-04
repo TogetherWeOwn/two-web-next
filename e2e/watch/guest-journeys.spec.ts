@@ -6,7 +6,8 @@ import { installReadOnlyGuard, requireWatchOrigin, WATCH_ORIGINS } from "../watc
 // session, no cookies, no sign-in, no RSVP, no join, no OAuth or Discord CTA
 // click: every journey is one navigation to a public URL. A context-level
 // route aborts any non-GET/HEAD request and the test then fails; the only
-// exception is Cloudflare's own edge beacons, stubbed locally (watch-guard.mjs).
+// exceptions are Cloudflare's own edge beacons and Discord's widget frame,
+// both answered locally and never sent (watch-guard.mjs).
 // The config pins baseURL from the same variable; asserting here too keeps the
 // spec fail-closed if it is ever run under another config.
 requireWatchOrigin(process.env.WATCH_ORIGIN);
@@ -29,6 +30,12 @@ const test = base.extend<{ guard: Awaited<ReturnType<typeof installReadOnlyGuard
         base.info().annotations.push({
           type: "edge-beacons-stubbed",
           description: guard.stubbedBeacons.join(", "),
+        });
+      }
+      if (guard.stubbedFrames.length > 0) {
+        base.info().annotations.push({
+          type: "third-party-frames-stubbed",
+          description: guard.stubbedFrames.join(", "),
         });
       }
       guard.assertClean();
