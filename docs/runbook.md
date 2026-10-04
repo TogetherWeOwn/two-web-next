@@ -393,14 +393,28 @@ The telemetry query returns only the newest 100 events. Keep each window to
 
 **Worker rollback (N+1 to N and back)**
 
-1. Confirm that the staging Worker is idle. A deploy during the rehearsal
-   overwrites the rollback, and one starts whenever a `ci` run on `main`
-   succeeds: the `deploy` workflow follows it and reaches the Worker upload
-   about 9 minutes after it starts, because `npm run check` runs first. Start
-   only when no `ci` push run on `main` and no `deploy` run is queued, pending
-   or in progress (Actions page or REST API; `gh` from an agent workspace
-   cannot read this repository, and unauthenticated REST calls share a 60 per
-   hour limit). The whole Worker half takes about 3 minutes.
+1. Obtain a confirmed exclusive staging deploy/migration hold before any
+   rehearsal mutation. The DevOps & Reliability Engineer coordinates the
+   staging release owner and authorized migration/import operators: they must
+   hold automatic and manual staging deploy admission and schema/import writes,
+   and confirm that queued or active staging deploy/migration work has reached
+   a safe disposition. Do not casually cancel an in-flight migration/DDL.
+   Record each owner's acknowledgement, effective hold mechanism, target,
+   start/end window and release procedure in the drill receipt. A merge freeze
+   alone does not exclude already queued work. If the hold cannot be confirmed,
+   stop; a quiet Actions page or historical workflow runtime is not exclusion.
+   The observed nine-minute deploy lead time is not a lock or a minimum runtime.
+   Keep the hold through DNS steps 8–14 and final state verification, not just
+   the Worker half: a staging deploy can reclaim the same custom domain during
+   the DNS flip. With the authorized DNS operator, re-confirm it immediately
+   before each rollback/roll-forward mutation and each DNS mutation. If it lapses
+   or another deploy, migration or schema change appears, stop further drill
+   mutations and follow
+   the [collision response](cutover-rollback.md#staging-collision-response), not an automatic
+   restoration to the captured version. Record the live version, bindings and
+   applied schema/journal identity from authorized release/migration evidence
+   before selecting N; source-file compatibility alone does not prove live
+   schema compatibility.
 2. Save `npx --no-install wrangler deployments list --name two-web-next --json`
    as `$RUN_DIR/dep-before.json`. It returns only the 10 newest deployments, so
    N must be among them. N+1 is the active version. The previous deployment is
@@ -414,10 +428,15 @@ The telemetry query returns only the newest 100 events. Keep each window to
    When both versions were deployed with the `/up` revision marker, read
    `revision.version_id` from `/up` instead: it names the serving version
    directly and needs no discriminator.
-   Map each version to its commit by the deploy job's `Deploy to Cloudflare
-   Workers` step: the deployment's `created_on` is within about 2 seconds of
-   that step's `completed_at` (Actions jobs API), or read the `Current Version
-   ID:` line in the job log. Deploys are not tagged yet.
+   Map each version to its commit using the same deploy job's checkout
+   `ref`/`HEAD`, the successful `Staging gate passed: <sha>` immediately before
+   deployment, and the `Current Version ID:` from `Deploy to Cloudflare
+   Workers`. A deployment's `created_on` near that step's `completed_at`
+   (Actions jobs API) helps locate the job, but is not source proof alone.
+   For a `workflow_run` deploy, the run's `head_sha` can be main's newer tip;
+   printed `GITHUB_SHA` values can also vary by step and are not checkout
+   receipts. If checkout, gate SHA and version cannot be correlated, do not
+   guess the source. Deploys are not tagged yet.
 3. Baseline: `node bin/smoke.mjs https://next.togetherweown.com | tee "$RUN_DIR/smoke-base.log"`.
    Record any existing failures. The rehearsal compares against this
    baseline; it does not require it to be green.
@@ -457,17 +476,42 @@ The telemetry query returns only the newest 100 events. Keep each window to
    ```
 
    Run `served_versions` over the smoke window. Every event must show N.
-7. Roll forward with `wrangler rollback "$N1_VERSION"` (the same block as
-   step 5), prove N+1 the same way, then repeat the step 3 smoke. The result
-   must match the baseline. Confirm that `wrangler deployments list` shows
-   both rehearsal deployments with their messages (the `-m` text is stored in
+7. Re-confirm the hold and unchanged live schema/bindings before rolling
+   forward with `wrangler rollback "$N1_VERSION"` (the same block as step 5).
+   If any intervening release/schema change is detected, stop and follow the
+   collision response instead. Otherwise prove N+1 the same way and repeat
+   the step 3 smoke; the result must match the baseline. After each mutation,
+   save `wrangler deployments list --name two-web-next --json` and record the
+   resulting deployment ID (not version ID), target allocation and message.
+   Save the final list as `$RUN_DIR/dep-after.json`. The `-m` text is stored in
    the deployment's `annotations["workers/message"]`; the version itself shows
-   `Message: -`) and no other deployment in between: compare with
-   `$RUN_DIR/dep-before.json`.
+   `Message: -`.
+
+   Compare `dep-before.json` and `dep-after.json` by deployment ID: the new
+   IDs must be exactly the two recorded rehearsal deployment IDs, with the
+   expected N and N+1 allocations and no other new deployment in the drill
+   window. Overlapping entries must retain their recorded timestamps and
+   version allocations. Allow oldest entries to roll off the ten-entry
+   history window; their eviction is not a collision. For example, ten entries
+   before plus two new deployments leaves eight overlapping entries and two
+   oldest evictions afterward, not a four-deployment collision. Do not use a
+   whole-list or symmetric-difference comparison. Unexpected new IDs or changed
+   overlapping entries invalidate the drill and invoke the collision response.
+   Missing expected IDs or insufficient overlapping history makes the check
+   inconclusive, not pass: stop and ask the release owner for retained history.
+   Confirm N+1 at 100% and unchanged schema/bindings, but do not release the hold:
+   it must cover the DNS half and final verification in steps 8–14.
 
 **DNS flip to the legacy target and back**
 
-8. Record the starting state and the legacy target:
+8. Re-confirm the same hold before the DNS snapshot, including the authorized
+   DNS operator's acknowledgement that the remaining window covers flip,
+   restoration and final checks. No confirmed hold means no DNS drill. For a
+   DNS-only drill after a separately completed Worker half, acquire a fresh hold
+   with the step 1 owners/mechanisms before this snapshot. Capture the current
+   serving version as N+1 and its allocation/live schema/bindings as that drill's
+   restoration baseline; do not reuse an earlier drill's pointer or baseline.
+   Record the starting state and the legacy target:
 
    ```bash
    (
@@ -484,8 +528,10 @@ The telemetry query returns only the newest 100 events. Keep each window to
    proxied with `ttl` 1 (auto).
 9. Run `probe | tee "$RUN_DIR/probe-dns.log"` in the second terminal. The
    signal is the `two-web-next` marker on `/up`, which only Next sends.
-10. Flip to legacy. Between the two calls the host has no record, so keep
-    them in one block:
+10. Re-confirm the hold and unchanged Worker allocation/schema/bindings before
+    the DNS mutation; if exclusion or compatibility has changed, stop and use
+    the collision response. Flip to legacy. Between the calls the host has no
+    record, so keep them in one block:
 
     ```bash
     (
@@ -510,7 +556,11 @@ The telemetry query returns only the newest 100 events. Keep each window to
     intermittent 503s in the window. Loss of the `two-web-next` marker, not
     the legacy status, is the flip signal. For production, see "Before the
     production flip" below.
-12. Flip back. Delete the rehearsal records, then re-attach the custom domain:
+12. Re-confirm the hold and unchanged Worker allocation/schema/bindings before
+    restoration, including before the fallback below. If exclusion or live
+    compatibility has changed, stop and use the collision response rather than
+    blindly reclaiming the domain. Otherwise flip back: delete the rehearsal
+    records, then re-attach the custom domain:
 
     ```bash
     (
@@ -533,9 +583,21 @@ The telemetry query returns only the newest 100 events. Keep each window to
 13. Record the time from B0 to the first probe with the marker, and to the
     start of 10 consecutive probes with it. Repeat the step 3 smoke; it must
     match the baseline.
-14. Read back as in step 8. Expect exactly one custom domain and only the
-    Worker's read-only record. The custom-domain ID can change.
-15. Post the timings, version IDs, smoke results and discrepancies on the W16
+14. Read back as in step 8. Expect exactly one custom domain attached to
+    `two-web-next` and only the Worker's read-only record, matching the saved
+    DNS/custom-domain baseline except that the custom-domain ID can change.
+    Confirm N+1 at 100%, prove the serving version with the `/up` revision marker
+    or telemetry as in steps 2/6, and verify unchanged live schema/bindings against
+    the baseline using authorized release/migration evidence. Unexpected drift
+    or inconclusive evidence invokes the collision response; do not declare pass
+    or release exclusion based only on the returned Next marker or smoke.
+15. Only after step 14 confirms DNS/custom-domain restoration, the serving
+    version, allocation and unchanged live schema/bindings may the authorized
+    owners release the hold. Record their release acknowledgements and time in
+    the receipt. If verification cannot complete within the held window, stop
+    drill mutations and coordinate a safe disposition/hold extension with those
+    owners; expiry is not a successful release or automatic recovery authority.
+16. Post the timings, version IDs, smoke results and discrepancies on the W16
     card, and keep `$RUN_DIR` until the card is closed.
 
 Rehearsal record:
@@ -550,6 +612,39 @@ Rehearsal record:
 | 2026-10-03 18:25 | DNS flip back (records deleted, custom domain re-attached) | 2.1 s | +3.2 s (first probe with the marker) | +14.7 s (10 consecutive with it) | n/a (smoke result in the notes below) |
 | 2026-10-03 20:36 | rollback `59a88ba7` (331122e5) to `da612f07` (bfbaf4d5) | 3.7 s | +4.5 s (last 301 at +1.6 s, first 404 at +4.5 s) | +4.5 s, no alternation | 0 of 137 (both directions) |
 | 2026-10-03 20:37 | roll forward `da612f07` to `59a88ba7` | 3.8 s | +9.6 s (last 404 at +8.2 s, first 301 at +9.6 s) | +9.6 s, no alternation | see above |
+| 2026-10-04 08:51 | rollback `2e803af9` (487ef4a4) to `44878468` (4c65217e) | 4.7 s | +5.6 s | +5.6 s | 0 of 100 |
+| 2026-10-04 08:52 | roll forward `44878468` to `2e803af9` | 3.8 s | +5.5 s | +5.5 s | see above |
+
+Notes from the 2026-10-04 run (probe cadence about 1.3 s; both directions in
+one probe loop, 100 probes, none non-200; the whole Worker half took 136 s):
+
+- N+1's source is `487ef4a4`: [deploy run 455, job 111399209102](https://github.com/TogetherWeOwn/two-web-next/actions/runs/37189725072/job/111399209102)
+  checks out that `ref`/`HEAD`, logs `Staging gate passed: 487ef4a4…` at
+  08:50:28 UTC immediately before deployment, and logs version `2e803af9`
+  at 08:50:34 UTC. The run's API `head_sha` (`72c4f435`) and migration-step
+  `GITHUB_SHA` environment lines are not source receipts.
+- N was the newest deployment whose Worker code differs from N+1: it predates
+  the dependency bump (#409) and the numeric `tabindex` change (#469). The
+  other 5 of the 7 commits between them change workflow, test or backup files
+  only. `/up` returns 200 on both and no public path has a status that
+  differs, so only telemetry (`$workers.scriptVersion.id`) shows which version
+  served. It shows one switch in each direction and no alternation: first N
+  request at +5.6 s, first N+1 request after the roll forward at +5.5 s.
+- `ci` was running on `main` for the next commit while the drill ran; no
+  `deploy` run was active. The deployment list gained `a58f67e3` and
+  `77c4c9b9` only and ended on `2e803af9` at 100%, so the narrower idle rule
+  in step 1 held.
+- Telemetry lags the request. A window queried 4 s after N's own smoke returned
+  0 events; the same window queried about 3 minutes later returned 49 events, all
+  N. Query the smoke window at least 60 s after the smoke, or re-query it.
+- The smoke now covers 17 routes (`/__smoke_unknown_route__` was added). It
+  passed 17 of 17 on N+1 before, on N with N's own `bin` and `ci`, and on
+  N+1 after the roll forward.
+- `wrangler queues info` (read-only) on `two-sync-event` and
+  `two-internal-action` showed one producer and one consumer each, both
+  `worker:two-web-next`. Staging `/up` reported `queue.failed` 161 and an
+  oldest pending message of 9.7 hours; it stays `healthy` under the thresholds.
+- The DNS half was not re-run; it was rehearsed on 2026-10-03 at 18:25 (rows above).
 
 Notes from the 2026-10-03 20:36 run: the discriminator was the plain-HTTP
 status of `/events/01arz3ndektsv4rrffq69g5fab.ics` (301 on `59a88ba7`, 404 on
