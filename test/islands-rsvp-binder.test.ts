@@ -835,6 +835,8 @@ describe("RsvpButton shipped binder", () => {
     expect(b.requests[2]!.init.method).toBe("DELETE");
     b.finish(2, 204);
     await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("waitlist-join")?.disabled).toBe(false);
     b.finish(3, 200, [{ event_key: "raid/one", going_count: 4, capacity: 4 }]);
     await b.settle();
     expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
