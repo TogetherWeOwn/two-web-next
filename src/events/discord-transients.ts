@@ -73,7 +73,10 @@ function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
 
 /** Numeric `retry-after` seconds from a 429; anything else is not worth logging. */
 function retryAfterSeconds(res: Response): number | undefined {
-  const n = Number(res.headers.get("retry-after"));
+  // `Number(null)` and `Number("")` are 0: an absent header must not log as "retry now".
+  const raw = res.headers.get("retry-after")?.trim();
+  if (!raw) return undefined;
+  const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 

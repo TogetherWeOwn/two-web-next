@@ -61,6 +61,23 @@ describe("Discord scheduled-events read failure logging", () => {
     expect(second!.retryAfter).toBeUndefined();
   });
 
+  it("omits retry-after when the header is absent or empty", async () => {
+    const warn = warnings();
+    const fetch = vi.spyOn(globalThis, "fetch");
+    fetch.mockResolvedValueOnce(new Response("{}", { status: 403 }));
+    fetch.mockResolvedValueOnce(
+      new Response("{}", { status: 429, headers: { "retry-after": "" } }),
+    );
+    const source = liveDiscordEventsSource(env);
+    await source.upcoming(NOW);
+    await source.upcoming(NOW);
+    const [absent, empty] = warn.mock.calls.map((call) => call[1] as Record<string, unknown>);
+    expect(absent).toMatchObject({ reason: "status", status: 403 });
+    expect(absent!.retryAfter).toBeUndefined();
+    expect(empty).toMatchObject({ reason: "status", status: 429 });
+    expect(empty!.retryAfter).toBeUndefined();
+  });
+
   it("logs a deadline miss with the elapsed time", async () => {
     const warn = warnings();
     vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>(() => {}));
