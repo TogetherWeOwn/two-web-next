@@ -90,6 +90,11 @@ describe("gitleaks-scan.sh", () => {
     // An unfetched base branch fails the scan instead of falling back to the PR's files.
     expect(scanScript).toMatch(/base branch \$\{BASE_REF\} is not fetched[\s\S]*exit 2/);
   });
+
+  it("unlinks the PR's ignore file before copying the base policy over it", () => {
+    // cp follows a destination symlink, which could point at the running wrapper.
+    expect(scanScript).toMatch(/rm -f \.gitleaksignore\n\s+cp "\$\{ignore\}" \.gitleaksignore/);
+  });
 });
 
 describe("test-gitleaks-scan.sh", () => {
@@ -98,6 +103,7 @@ describe("test-gitleaks-scan.sh", () => {
       "allowlist added in .gitleaks.toml",
       "fingerprint added in .gitleaksignore",
       "fingerprint appended to an existing .gitleaksignore",
+      ".gitleaksignore symlink cannot overwrite the running wrapper",
       "inline gitleaks:allow",
       "allowlist already on the base branch is honoured",
       ".gitleaksignore already on the base branch is honoured",
