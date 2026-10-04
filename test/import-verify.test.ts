@@ -457,7 +457,9 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       expect(run.status, run.stderr).toBe(0);
     },
   );
-  it.each(["join_attempts", "event_search_logs", "agent_event_idempotency_keys"])(
+  // join_attempts/event_search_logs follow the importer instead: it skips NULL-clock
+  // rows (skipped_missing_timestamp), pinned in import-verify-content-funnel.test.ts.
+  it.each(["agent_event_idempotency_keys"])(
     "%s retention retains unknown-age rows on both sides",
     async (name) => {
       const baseline = defaultTableMap({
@@ -607,9 +609,9 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       INSERT INTO ${l}.member_data_access_logs VALUES(1,'42',1,'Users','read','[1]',1,'admin.users','2026-09-01');
       INSERT INTO ${n}.member_data_access_logs VALUES(1,'42','42','Users','read','["42"]',1,'admin.users','2026-09-01+00');
       INSERT INTO ${l}.join_attempts VALUES(1,'joined',NULL,NULL,'42','2026-07-02','2026-07-02'),(2,'joined',NULL,NULL,'42','2026-07-01','2026-07-01');
-      INSERT INTO ${n}.join_attempts(id,outcome,discord_id,created_at) VALUES(1,'joined','42','2026-07-02+00'),(2,'denied','42','2026-07-01+00');
+      INSERT INTO ${n}.join_attempts(id,legacy_id,outcome,discord_id,created_at) VALUES(1,'1','joined','42','2026-07-02+00'),(2,'2','denied','42','2026-07-01+00');
       INSERT INTO ${l}.event_search_logs VALUES(1,'private query',2,'2026-07-02'),(2,'ignored old',0,'2026-07-01');
-      INSERT INTO ${n}.event_search_logs VALUES(1,'private query',2,'2026-07-02+00'),(2,'old mismatch ignored',1,'2026-07-01+00');
+      INSERT INTO ${n}.event_search_logs(id,legacy_id,normalized_query,result_count,occurred_at) VALUES(1,'1','private query',2,'2026-07-02+00'),(2,'2','old mismatch ignored',1,'2026-07-01+00');
     `);
     const baseline = defaultTableMap({
       legacySchema: sourceSchema,

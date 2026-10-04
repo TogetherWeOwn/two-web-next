@@ -46,6 +46,27 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
         where: `(n.${time} IS NULL OR n.${time} >= ${cutoffSql})`,
       },
     });
+  // bin/import/content-funnel.mjs never copies native ids: it upserts on the
+  // nullable, unique legacy_id (drizzle/1012) holding the source PK as text, and
+  // applies the same selection rules mirrored here. Rows created natively on
+  // Next keep legacy_id NULL, so they are not part of the imported set and are
+  // never extras. Source rows with no clock are skipped by the importer (its
+  // skipped_missing_timestamp count) and excluded here for the same reason.
+  // Only prunable tables get the 90-day window; featured content is compared in
+  // full. Next's clock columns are NOT NULL.
+  const contentFunnel = (name, { clock, prune }, columns, legacyFrom) => {
+    const window = (value) => (prune ? ` AND ${value} >= ${cutoffSql}` : "");
+    return table(name, [field("legacy_id", "l.id::text", "n.legacy_id")], columns, {
+      legacy: {
+        from: legacyFrom ?? `${legacy}."${name}" l`,
+        where: `l.${clock} IS NOT NULL${window(`(l.${clock} AT TIME ZONE 'UTC')`)}`,
+      },
+      next: {
+        from: `${next}."${name}" n`,
+        where: `n.legacy_id IS NOT NULL${window(`n.${clock}`)}`,
+      },
+    });
+  };
   return [
     table(
       "users",
@@ -140,9 +161,9 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
         next: { from: `${next}."rsvps" n LEFT JOIN ${next}."events" e ON e.id = n.event_id` },
       },
     ),
-    table(
+    contentFunnel(
       "featured_contents",
-      id(),
+      { clock: "created_at", prune: false },
       [
         ...["title", "body", "url", "image_url", "image_alt", "is_published", "position"].map(
           (name) => field(name),
@@ -150,19 +171,17 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
         timestamp("starts_at"),
         timestamp("ends_at"),
         field("created_by", userId("created_by", "u")),
-        ...times(),
+        timestamp("created_at"),
+        // The importer falls back to the row's own created_at, never import time.
+        field("updated_at", "COALESCE(l.updated_at, l.created_at) AT TIME ZONE 'UTC'"),
       ],
-      {
-        legacy: {
-          from: `${legacy}."featured_contents" l LEFT JOIN ${legacy}."users" u ON u.id = l.created_by`,
-        },
-      },
+      `${legacy}."featured_contents" l LEFT JOIN ${legacy}."users" u ON u.id = l.created_by`,
     ),
-    retained("join_attempts", "created_at", id(), [
+    contentFunnel("join_attempts", { clock: "created_at", prune: true }, [
       ...["outcome", "source", "request_id", "discord_id"].map((name) => field(name)),
       timestamp("created_at"),
     ]),
-    retained("event_search_logs", "occurred_at", id(), [
+    contentFunnel("event_search_logs", { clock: "occurred_at", prune: true }, [
       field("normalized_query"),
       field("result_count"),
       timestamp("occurred_at"),
