@@ -762,6 +762,10 @@ to a live fix or a credential swap.
 - Playwright GET-only guest journeys (homepage, static leaves, events
   list, one published event, robots/sitemap): no sign-in, no RSVP, no
   join, no writes of any kind.
+  Run them with the dispatch-only
+  [watch-guest-journeys](../.github/workflows/watch-guest-journeys.yml)
+  workflow (`npm run e2e:watch`, origin pinned by `WATCH_ORIGIN`; a non-GET
+  request is aborted and fails the run), never from a controller.
 
 ```bash
 (
