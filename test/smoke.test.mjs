@@ -649,4 +649,54 @@ test("invalid input is rejected before making requests", async () => {
   }
   assert.equal((await cli([])).code, 2);
   assert.equal((await cli(["not-a-url"])).code, 2);
+  assert.equal((await cli(["http://127.0.0.1", "--bogus-flag"])).code, 2);
+});
+
+test("allowIndexable passes apex HTML without the staging noindex", async (t) => {
+  // Apex serving apex omits X-Robots-Tag on indexable leaves (src/headers.ts
+  // robotsTagFor); the archive and branded 404 stay meta-noindex, which this
+  // header probe skips.
+  const { url, requests } = await stub(t, (route, result) => {
+    if (route === "/events/past" || route === "/__smoke_unknown_route__") return;
+    delete result.headers["x-robots-tag"];
+  });
+  const result = await run(url, { allowIndexable: true });
+  assert.equal(result.ok, true, result.output);
+  assert.equal(requests.length, 16);
+  assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
+});
+
+test("allowIndexable rejects a staging noindex leaked onto apex HTML", async (t) => {
+  const { url } = await stub(t);
+  const result = await run(url, { allowIndexable: true });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes(
+      "FAIL /: expected no universal X-Robots-Tag noindex on indexable apex HTML",
+    ),
+    result.output,
+  );
+  assert.ok(!result.output.split("\n").includes("PASS /"), result.output);
+});
+
+test("default mode still requires the staging noindex", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/about") delete result.headers["x-robots-tag"];
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes("FAIL /about: expected staging X-Robots-Tag noindex"),
+    result.output,
+  );
+});
+
+test("CLI --allow-indexable reaches the apex posture", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/events/past" || route === "/__smoke_unknown_route__") return;
+    delete result.headers["x-robots-tag"];
+  });
+  const result = await cli([url, "--allow-indexable"]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /16 routes, 0 failed assertions/);
 });
