@@ -754,6 +754,11 @@ to a live fix or a credential swap.
   repo thresholds in [ci/lighthouserc.cjs](../ci/lighthouserc.cjs) (LCP,
   CLS, server response time); thresholds are never relaxed to turn a
   build green.
+  Run `npm run lighthouse:origin -- https://togetherweown.com` or
+  dispatch the [watch-lighthouse](../.github/workflows/watch-lighthouse.yml)
+  workflow with the origin choice; both are GET-only and take the budgets
+  from `ci/lighthouserc.cjs`. A Chrome harness crash (no assertion
+  result) is rerun once, never read as a pass.
 - Playwright GET-only guest journeys (homepage, static leaves, events
   list, one published event, robots/sitemap): no sign-in, no RSVP, no
   join, no writes of any kind.
