@@ -58,3 +58,8 @@ regexes = ['''123456789012345678''']
 description = "Two synthetic ULID event keys in the portable legacy backfill import proof, not credentials"
 targetRules = ["generic-api-key"]
 regexes = ['''01J2ZB2X5X3Q8T1V9W4Y6Z7A8[BC]''']
+
+[[allowlists]]
+description = "Event key of an orphaned staging E2E fixture, kept in git history by an earlier spec; ULID-shaped, not a credential"
+targetRules = ["generic-api-key"]
+regexes = ['''01M41G95P1M3EWP30VWZPFYSG9''']
