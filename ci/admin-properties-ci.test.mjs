@@ -24,11 +24,15 @@ test("the required check runs the identical property suite without npm startup, 
     command,
     `timeout 10s node node_modules/vitest/vitest.mjs ${workflowArgs.join(" ")}`,
   );
-  // Only the docs-only scope gate (TOG-11811) may guard the step; nothing may bypass it.
+  // Only the docs-only/draft scope gate (TOG-11811/TOG-14880) may guard the step; nothing may bypass it.
   assert.doesNotMatch(step[1], /continue-on-error:/);
-  assert.deepEqual(step[1].match(/^        if:.*$/gm) ?? [], [
-    "        if: needs.scope.outputs.docs_only != 'true'",
-  ]);
+  const guards = step[1].match(/^        if:.*$/gm) ?? [];
+  assert.equal(guards.length, 1);
+  assert.ok(
+    guards[0].includes("needs.scope.outputs.docs_only != 'true'") &&
+      guards[0].includes("needs.scope.outputs.draft != 'true'"),
+    `Step guard must stay scope-gated: ${guards[0]}`,
+  );
   assert.match(check, /node --test ci\/a11y-\*\.test\.mjs ci\/admin-properties-ci\.test\.mjs/);
 });
 

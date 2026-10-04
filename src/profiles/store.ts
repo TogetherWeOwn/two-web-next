@@ -13,7 +13,6 @@ export type MemberView = {
   games: string[];
   timezone: string | null;
   joinedAt?: Date | null;
-  rank?: string | null;
 };
 
 export type ProfileStore = {

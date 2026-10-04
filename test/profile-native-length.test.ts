@@ -283,6 +283,9 @@ describe("real island binder: oversized synthetic lists", () => {
       getAttribute: () => ID,
       querySelector: (selector: string) => (selector === "form" ? form : null),
       querySelectorAll: () => [],
+      // document.querySelector hands every selector this root, including the
+      // new-member call to action, so the binder attaches its click listener here.
+      addEventListener: vi.fn(),
     };
     const sandbox = createContext({
       document: { querySelector: () => root, createElement: element },

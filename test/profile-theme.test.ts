@@ -13,7 +13,6 @@ const member: MemberView = {
   bio: "A bio <b>with markup</b>",
   games: ["Chess", "Go <script>"],
   timezone: "Europe/London",
-  rank: "Existing rank",
   joinedAt: new Date("2024-06-15T00:00:00Z"),
 };
 const stats: MemberStats = {
@@ -68,12 +67,60 @@ describe("member profile base theme", () => {
   it("keeps optional stats absent rather than fabricating empty tiles", () => {
     const html = render();
     expect(html).not.toContain('data-testid="profile-stats"');
-    expect(html).toContain('data-testid="profile-rank">Existing rank');
+    // Rank comes from member stats only: the header never invents one.
+    expect(html).not.toContain('data-testid="profile-rank"');
     expect(html).toContain("Joined June 2024");
-    const empty = render({ member: { ...member, bio: null, games: [], timezone: null } });
-    expect(empty).toContain("No bio yet.");
-    expect(empty).toContain("No games listed yet.");
-    expect(empty).toContain('data-testid="profile-timezone" hidden=""');
+  });
+
+  describe("owner-aware empty states", () => {
+    const blank = { ...member, bio: null, games: [], timezone: null };
+
+    it("greets a brand-new owner with the room-to-grow panel and a link to the editor", () => {
+      const html = render({ member: blank });
+      expect(html).toContain('data-testid="profile-new-member"');
+      expect(html).not.toMatch(/data-testid="profile-new-member"[^>]*hidden/);
+      expect(html).toContain("Your profile has room to grow.");
+      expect(html).toContain(
+        "Add a bio, a few games and your timezone so people know when to find you.",
+      );
+      expect(html).toContain(
+        '<a class="btn" href="#edit-heading" data-testid="profile-new-member-cta">Add profile details</a>',
+      );
+      expect(html).toContain("New here. More soon.");
+      expect(html).toContain("Add the games you keep coming back to.");
+      expect(html).toContain(
+        '<p data-testid="profile-timezone">Timezone: Add yours so people know when you are around.</p>',
+      );
+      expect(html).not.toContain("No bio yet.");
+      expect(html).not.toContain("No games listed yet.");
+    });
+
+    it("keeps the panel out of view once the owner has filled anything in", () => {
+      for (const filled of [{ bio: "Hi" }, { games: ["Go"] }, { timezone: "UTC" }]) {
+        expect(render({ member: { ...blank, ...filled } })).toMatch(
+          /data-testid="profile-new-member" hidden=""/,
+        );
+      }
+    });
+
+    it("names what a partly filled owner profile is missing", () => {
+      const html = render({ member: { ...blank, games: ["Go"] } });
+      expect(html).toContain("You have not added a bio yet.");
+      expect(html).not.toContain("New here. More soon.");
+      expect(html).toContain("Timezone: Add yours so people know when you are around.");
+    });
+
+    it("tells visitors what is missing without addressing them or showing owner controls", () => {
+      const fresh = render({ member: blank, isOwner: false });
+      expect(fresh).toContain("New here. More soon.");
+      expect(fresh).toContain("No games listed yet.");
+      expect(fresh).toContain('<p data-testid="profile-timezone">Timezone: Not listed yet.</p>');
+      expect(fresh).not.toContain('data-testid="profile-new-member"');
+      expect(fresh).not.toContain("Add profile details");
+      const partial = render({ member: { ...blank, games: ["Go"] }, isOwner: false });
+      expect(partial).toContain("Player &lt;script&gt; has not added a bio yet.");
+      expect(partial).not.toContain("You have not added");
+    });
   });
 
   it("renders real stat tiles including zero tenure and milestone count without duplicate fallback fields", () => {
@@ -84,7 +131,27 @@ describe("member profile base theme", () => {
     expect(html).toContain("No milestones yet.");
     expect(html.match(/data-testid="profile-rank"/g)).toHaveLength(1);
     expect(html.match(/data-testid="profile-joined"/g)).toHaveLength(1);
-    expect(html).not.toContain("Existing rank");
+    expect(html).toContain("Community Regular");
+  });
+
+  it("shows the @handle, an always-on From Discord chip and a two-character fallback", () => {
+    const html = render();
+    expect(html).toContain('data-testid="profile-handle">@Player &lt;script&gt;</p>');
+    expect(html).toContain(
+      'class="profile-chip" data-testid="profile-provenance">From Discord</p>',
+    );
+    // Provenance is unconditional, with or without stats.
+    expect(render({ stats })).toContain('data-testid="profile-provenance">From Discord');
+    expect(html).toContain('class="avatar-initial">PL</span>');
+    expect(render({ member: { ...member, username: "x" } })).toContain(
+      'class="avatar-initial">X</span>',
+    );
+    expect(render({ member: { ...member, username: "😀😀😀" } })).toContain(
+      'class="avatar-initial">😀😀</span>',
+    );
+    expect(render({ member: { ...member, username: "" } })).toContain(
+      'class="avatar-initial">?</span>',
+    );
   });
 
   it("keeps the plain form, trap, labels, island focus targets and owner-only editing", () => {

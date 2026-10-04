@@ -101,6 +101,17 @@ approved account and binding isolation before any remote mutation.
    )
    ```
 
+   On staging the live Worker also reports its own Version ID:
+   `GET https://next.togetherweown.com/up` carries
+   `revision: { version_id, commit }`. `version_id` is the value
+   `wrangler rollback` takes; `commit` is the SHA the deploy tagged that Version
+   with (`null` for a manual deploy without `--tag`). The deploy job logs it in
+   `Record live revision (rollback pointer)` before any Cloudflare mutation.
+   A Version uploaded before the marker existed reports no `revision`; use
+   `wrangler deployments list` for it. If `/up` and `wrangler deployments`
+   ever disagree, `wrangler deployments` wins. Production `/up` has no
+   `revision` until a cutover PR declares the binding in `env.production`.
+
 3. Normal path: merge to `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
    GitHub Environment `staging` gate. It installs dependencies, applies
@@ -122,8 +133,11 @@ approved account and binding isolation before any remote mutation.
 
    ```bash
    # REMOTE MUTATION: approved target and release only; not a test.
-   npm run deploy
+   npm run deploy -- --tag "$(git rev-parse HEAD)"
    ```
+
+   `--tag` is what lets `/up` name the commit (`revision.commit`); without it
+   the Version is untagged and `commit` is `null`.
 
    This deploys the current checkout. Do not run it from an unmerged working
    branch, and do not bypass the Environment gate to clear a blocked CI release.
@@ -132,9 +146,13 @@ approved account and binding isolation before any remote mutation.
    Worker, run the [Neon migration workflow](#neon-web-schema-migrations-separate-operator-action)
    for the matching target; coordinate with both bot and web owners using
    `docs/db-migrations.md`.
-5. Capture the resulting deployment/version IDs and workflow URL. `/up`
-   reports only limited queue-ledger evidence (below), not successful private
-   persistence. Source behavior and local tests are not proof of live isolation.
+5. Capture the resulting deployment/version IDs and workflow URL. On staging
+   the `Verify deployed revision` step has already proved the live Worker
+   reports the commit this job deployed and logged its Version ID (it runs on
+   every deploy, including docs-only ones that skip the smoke steps). `/up`
+   otherwise reports only limited queue-ledger evidence (below), not successful
+   private persistence. Source behavior and local tests are not proof of live
+   isolation.
 
 ### Neon web schema migrations (separate operator action)
 
@@ -300,7 +318,10 @@ head. Record the rollback deployment and previous/current version IDs.
 ```
 
 Wrangler prompts for confirmation; the rollback becomes active on all this
-Worker's routes/domains. It does **not** undo Postgres migrations, data writes,
+Worker's routes/domains. Then prove the target is live: `curl -fsS
+https://next.togetherweown.com/up` must show `revision.version_id` equal to
+`$GOOD_VERSION` (a Version uploaded before the marker existed reports no
+`revision`; use the `deployments status` output for it). It does **not** undo Postgres migrations, data writes,
 Discord side effects, queue messages or external-resource changes. Check schema
 compatibility first; keep the release workflow from redeploying the bad head.
 Record the rollback deployment and previous/current version IDs. Do not claim a
@@ -322,8 +343,11 @@ Credentials stay in the environment, never on argv. The rollback half needs
 Workers Scripts edit (`CLOUDFLARE_API_TOKEN`). The DNS half also needs Zone
 DNS edit on `togetherweown.com` plus Workers custom-domain edit (`CF_TOKEN`
 below). The deploy token has **no** DNS edit: on 2026-10-02 a record create
-returned `10000 Authentication error`. On any such error, stop and use the
-`Operator:` card; do not try another token.
+returned `10000 Authentication error`. The DNS token needs both scopes: a token
+with Zone DNS edit only passes the record calls and returns the same `10000`
+on every `/accounts/*/workers/domains` call (seen 2026-10-03), so steps 10 and
+12 cannot run. On any such error, stop and use the `Operator:` card; do not
+try another token.
 
 Shared helpers for one shell session (`RUN_DIR` is a private scratch
 directory; `cfapi` reads its token from `CF_TOKEN` and fails on API errors):
@@ -387,6 +411,9 @@ The telemetry query returns only the newest 100 events. Keep each window to
    that has no migration or binding drift
    (`git diff --exit-code "$N_SHA" "$N1_SHA" -- drizzle migrations.lock ci/neon-migrate.mjs wrangler.jsonc`).
    Set `DISC_PATH` to a public path whose status differs between N and N+1.
+   When both versions were deployed with the `/up` revision marker, read
+   `revision.version_id` from `/up` instead: it names the serving version
+   directly and needs no discriminator.
    Map each version to its commit by the deploy job's `Deploy to Cloudflare
    Workers` step: the deployment's `created_on` is within about 2 seconds of
    that step's `completed_at` (Actions jobs API), or read the `Current Version
@@ -477,7 +504,12 @@ The telemetry query returns only the newest 100 events. Keep each window to
 11. Record the time from D0 to the first probe without the marker, and to the
     start of 10 consecutive probes without it. Also record the status that
     the legacy edge returns. Legacy Traefik has no router for `next.*`, so a
-    404 or 5xx is expected and is not an app failure.
+    404 or 5xx is expected and is not an app failure. On the 2026-10-03 run
+    the Cloudflare edge answered **522** on `/up` and `/` (the connection to
+    the legacy origin timed out; the cause was not established), with
+    intermittent 503s in the window. Loss of the `two-web-next` marker, not
+    the legacy status, is the flip signal. For production, see "Before the
+    production flip" below.
 12. Flip back. Delete the rehearsal records, then re-attach the custom domain:
 
     ```bash
@@ -514,9 +546,38 @@ Rehearsal record:
 | 2026-10-02 00:55 | roll forward `60663623` to `62871bf4` | 5.5 s | +6.6 s | +10.7 s | 0 of 90 |
 | 2026-10-03 16:35 | rollback `81da0f67` (c07ad6b) to `cd470835` (4b12bef, five deployments back) | 4.4 s | +5.1 s | +5.1 s | 0 of 48 |
 | 2026-10-03 16:36 | roll forward `cd470835` to `81da0f67` | 4.0 s | +6.0 s | +8.6 s | 0 of 42 |
-| pending | DNS flip to legacy and back | needs a DNS-edit principal | | | |
+| 2026-10-03 18:25 | DNS flip `next.*` to legacy (custom domain deleted, `A`/`AAAA` to legacy added) | 1.6 s | +1.2 s (first probe without the marker) | +11.2 s (10 consecutive without it) | legacy edge answered 522 and intermittent 503, not 200 |
+| 2026-10-03 18:25 | DNS flip back (records deleted, custom domain re-attached) | 2.1 s | +3.2 s (first probe with the marker) | +14.7 s (10 consecutive with it) | n/a (smoke result in the notes below) |
+| 2026-10-03 20:36 | rollback `59a88ba7` (331122e5) to `da612f07` (bfbaf4d5) | 3.7 s | +4.5 s (last 301 at +1.6 s, first 404 at +4.5 s) | +4.5 s, no alternation | 0 of 137 (both directions) |
+| 2026-10-03 20:37 | roll forward `da612f07` to `59a88ba7` | 3.8 s | +9.6 s (last 404 at +8.2 s, first 301 at +9.6 s) | +9.6 s, no alternation | see above |
 
-Notes from the 2026-10-03 run (probe cadence about 1.3 s; both directions in one
+Notes from the 2026-10-03 20:36 run: the discriminator was the plain-HTTP
+status of `/events/01arz3ndektsv4rrffq69g5fab.ics` (301 on `59a88ba7`, 404 on
+`da612f07`); the only source difference between the two was the lowercase-ULID
+redirect fix, with no migration, binding or `wrangler.jsonc` drift. Smoke
+passed 16 of 16 on `59a88ba7`, on `da612f07` (its own smoke) and on `59a88ba7`
+again. Telemetry windows hit the 100-event cap, and on the roll forward they
+showed the versions alternating for about 4 s while the discriminator probe saw
+one switch. The first rollback attempt used a mistyped version ID and failed
+closed (`100146`, no deployment created); the retry used the full ID from
+`deployments list`. The Worker ended on `59a88ba7` at 100%.
+
+Notes from the 2026-10-03 18:25 DNS run (token with Zone DNS edit and account
+custom-domain edit; only `next.togetherweown.com` was touched):
+
+- The marker disappeared 1.2 s after the flip and 10 consecutive probes
+  without it took 11.2 s; the way back took 3.2 s and 14.7 s. The flip back
+  restored the same custom-domain ID (step 14 still says it can change).
+- The custom-domain `DELETE` returns an empty body, so a helper that parses
+  JSON logs a parse error. The delete still took effect: the marker was lost
+  and the legacy records served.
+- The legacy `staging.*` origin did not answer `next.*` with a Traefik 404.
+  It answered 522 (and intermittent 503) at the Cloudflare edge. The
+  rollback timing stands because marker loss was detectable regardless.
+- The zone was clean afterwards: one custom domain and the Worker's read-only
+  `AAAA 100::` record. Smoke was 16 of 16 before and after.
+
+Notes from the 2026-10-03 16:35 run (probe cadence about 1.3 s; both directions in one
 probe loop, 95 probes in all, none non-200):
 
 - N was five deployments back because the adjacent one (`4bac3ea9`, 39b2965)
@@ -543,8 +604,8 @@ probe loop, 95 probes in all, none non-200):
   at 100%, the pre-rehearsal version. The whole Worker half took 134 s
   (baseline smoke to final smoke) with 50 s settle waits.
 - `deployments list` and `versions list` both return only 10 entries.
-- The DNS half was not run. It needs a principal with Zone DNS edit and
-  Workers custom-domain edit, which the `Operator:` step tracks.
+- The DNS half was not run in this window. It was rehearsed later the same
+  day, at 18:25 UTC (rows above).
 
 Notes from the 2026-10-02 run:
 
@@ -559,6 +620,17 @@ Notes from the 2026-10-02 run:
 - For proxied records, resolvers only ever receive Cloudflare anycast
   addresses (`ttl` 1, auto). The DNS flip therefore depends on how fast
   Cloudflare applies edge configuration, not on resolver TTL expiry.
+
+### Before the production flip
+
+The production rollback is this same flip back to legacy, so the legacy origin
+must be able to serve the apex when needed. Staging answered 522, which does
+not prove production will. Before the flip, record the legacy record set for
+the apex and `www`, and confirm that the apex answers 200 on `/` and `/up`
+from legacy. The before-phase gate asserts the apex `/up` identity
+(`X-TWO-Origin: two-web`, see [cutover-check.md](cutover-check.md#phase-contract-and-prerequisites));
+a 522 or other 5xx from the legacy origin, or a missing marker, means the
+rollback path is not proven and the flip does not start.
 
 ## 48h post-flip watch
 
@@ -628,6 +700,15 @@ prove deployment readiness.
 `GET /up` is **readiness**: a required-secret presence check, a read-only DB
 ping and web migration-ledger read, plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
+
+On staging only, a ready or failing body also carries
+`revision: { version_id, commit }` from the `version_metadata` binding
+`CF_VERSION_METADATA`. It is informational and never changes the HTTP status.
+`version_id` is the Worker Version ID (the `wrangler rollback` argument).
+`commit` is the version tag, shown only when it is a full lowercase 40-hex SHA
+and `null` otherwise, so an arbitrary manual tag never reaches the public body.
+`node bin/revision-check.mjs <origin> [<sha>]` reads it: with a SHA it fails
+unless that commit is live, without one it only logs what is live.
 
 DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty
 `DATABASE_URL`, otherwise `DB.connectionString`. If that selected database fails,
@@ -974,7 +1055,18 @@ The [nightly workflow](../.github/workflows/neon-backup.yml) runs at `03:17Z`
 and can skip green when `NEON_STAGING_DATABASE_URL` is absent. Green/skipped is
 not a successful backup. Its `branch` input changes the object prefix only:
 `DATABASE_URL` still comes from `NEON_STAGING_DATABASE_URL`; passing `main`
-does not select a production connection.
+does not select a production connection. The `target` input selects the
+connection: `production` reads `PRODUCTION_DATABASE_URL`.
+
+The job binds the GitHub Environment named by `target` (`staging` for the
+schedule and by default). A production dump therefore waits for the
+`production` Environment's required reviewers and main-only branch policy
+before the secret is readable, and a staging run never has
+`PRODUCTION_DATABASE_URL` mapped into any step. Provision
+`PRODUCTION_DATABASE_URL` on the `production` Environment only; a repo-level
+secret is readable by any job without that gate, so delete it there.
+`ci/check-production-secrets.test.mjs` fails any workflow job that reads a
+`PRODUCTION_*` secret without binding `production`.
 
 Implementation naming wins over older examples in `docs/db-migrations.md`:
 for branch `staging`, the actual manifest is

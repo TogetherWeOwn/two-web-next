@@ -24,6 +24,25 @@ const HORIZON_MS = 90 * 86_400_000;
 /** One budget for headers and the entire body, so Discord cannot hold the calendar open. */
 export const DISCORD_READ_DEADLINE_MS = 1000;
 
+/**
+ * Why one read failed, for the warn line only. Never carries a message, URL, header
+ * or body: a driver message can echo the bot token. `exception` is the error class
+ * name. The error body is deliberately not read: a stalled one must not hold the page.
+ */
+type ReadFailure = {
+  reason: "deadline" | "status" | "aborted" | "no_body" | "invalid_payload" | "exception";
+  status?: number;
+  retryAfter?: number;
+  exception?: string;
+};
+
+class DiscordReadError extends Error {
+  constructor(readonly failure: ReadFailure) {
+    super("DiscordReadFailure");
+    this.name = "DiscordReadError";
+  }
+}
+
 export interface DiscordEventsSource {
   /** Scheduled/active guild events (display-only transients). */
   upcoming(now?: Date): Promise<DiscordTransient[]>;
@@ -52,6 +71,23 @@ function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
   };
 }
 
+/** Numeric `retry-after` seconds from a 429; anything else is not worth logging. */
+function retryAfterSeconds(res: Response): number | undefined {
+  // `Number(null)` and `Number("")` are 0: an absent header must not log as "retry now".
+  const raw = res.headers.get("retry-after")?.trim();
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+/** One warn line per failed read: a silent error state cannot be told from an outage. */
+function warnReadFailed(failure: ReadFailure, startedAt: number): void {
+  console.warn("Discord scheduled-events read failed; rendering the error state.", {
+    ...failure,
+    elapsedMs: Date.now() - startedAt,
+  });
+}
+
 /**
  * The live reader: one GET of the guild's scheduled events per `upcoming()`
  * call, bot-token auth. Any failure — network, non-2xx, malformed rows — flips
@@ -63,12 +99,13 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
     lastReadFailed: () => failed,
     async upcoming(now = new Date()): Promise<DiscordTransient[]> {
       failed = false;
+      const startedAt = Date.now();
       const controller = new AbortController();
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error("DiscordReadDeadline")),
+          () => reject(new DiscordReadError({ reason: "deadline" })),
           DISCORD_READ_DEADLINE_MS,
         );
       });
@@ -78,11 +115,19 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
           signal: controller.signal,
         });
         // A fetch adapter may ignore abort and deliver headers after we have returned.
-        if (controller.signal.aborted || !res.ok) {
+        if (controller.signal.aborted) {
           void res.body?.cancel().catch(() => {});
-          throw new Error("DiscordReadFailure");
+          throw new DiscordReadError({ reason: "aborted" });
         }
-        if (!res.body) throw new Error("DiscordReadFailure");
+        if (!res.ok) {
+          void res.body?.cancel().catch(() => {});
+          throw new DiscordReadError({
+            reason: "status",
+            status: res.status,
+            retryAfter: retryAfterSeconds(res),
+          });
+        }
+        if (!res.body) throw new DiscordReadError({ reason: "no_body" });
         // Own the reader so a stalled body can be cancelled even if it ignores abort.
         reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -90,7 +135,7 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         for (;;) {
           const { done, value } = await reader.read();
           // Cancellation resolves a pending read as done; discard its buffered JSON.
-          if (controller.signal.aborted) throw new Error("DiscordReadFailure");
+          if (controller.signal.aborted) throw new DiscordReadError({ reason: "aborted" });
           if (done) break;
           json += decoder.decode(value, { stream: true });
         }
@@ -100,6 +145,7 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         const rows: unknown = await Promise.race([read(), deadline]);
         if (!Array.isArray(rows)) {
           failed = true;
+          warnReadFailed({ reason: "invalid_payload" }, startedAt);
           return [];
         }
         const horizon = now.getTime() + HORIZON_MS;
@@ -110,11 +156,17 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
           )
           .map(toTransient)
           .filter((t): t is DiscordTransient => t !== null && t.startsAt.getTime() <= horizon);
-      } catch {
+      } catch (err) {
         controller.abort();
         // Cleanup must not extend the deadline if the stream's cancel hook hangs.
         void reader?.cancel().catch(() => {});
         failed = true;
+        warnReadFailed(
+          err instanceof DiscordReadError
+            ? err.failure
+            : { reason: "exception", exception: err instanceof Error ? err.name : typeof err },
+          startedAt,
+        );
         return [];
       } finally {
         clearTimeout(timer);

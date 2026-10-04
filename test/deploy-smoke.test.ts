@@ -168,12 +168,12 @@ describe("deploy public-route smoke (offline)", () => {
     const ci = readFileSync(".github/workflows/ci.yml", "utf8");
     const checkJob = ci.slice(ci.indexOf("  check:\n"));
     expect(checkJob).toMatch(
-      /      - name: Public-route smoke selftest \(loopback fixtures\)\n(?:        if: needs\.scope\.outputs\.docs_only != 'true'\n)?        run: npm run test:smoke\n/,
+      /      - name: Public-route smoke selftest \(loopback fixtures\)\n(?:        if: \(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)\n)?        run: npm run test:smoke\n/,
     );
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
     expect(pkg.scripts.check).toContain("npm run test:smoke");
     expect(pkg.scripts["test:smoke"]).toBe(
-      "node --test test/smoke.test.mjs test/json-smoke.test.mjs",
+      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs",
     );
   });
 });
