@@ -7,9 +7,10 @@ name: e2e-staging
 # Blacksmith. QA_AUTH_TOKEN comes from the staging Environment secret and is
 # never printed; GitHub masks secrets in logs automatically. Browsers run here
 # in CI only, never on the controller.
-# Docs-only deploys (ci/change-scope.sh verdict, mirrored from e2e.yml) skip
-# the journeys below: prose that no gate, test or build reads proves nothing
-# about the deployed Worker. There is no PR context here (workflow_run +
+# Docs-only and test-only deploys (ci/change-scope.sh skip_e2e verdict,
+# mirrored from e2e.yml) skip the journeys below: prose that no gate, test or
+# build reads, and unit tests the journeys never execute, prove nothing about
+# the deployed Worker. There is no PR context here (workflow_run +
 # workflow_dispatch triggers), so the scope job diffs the deployed head SHA
 # against its parent instead of listing PR files. e2e-staging gates no merge
 # (required checks are check, gitleaks and pr-lint), so a skip never blocks
@@ -30,10 +31,11 @@ concurrency:
 
 jobs:
   # Cheap change-scope gate (mirrors e2e.yml): a deploy whose head commit only
-  # touches prose (`docs/**`, root `*.md`) that no gate, test or build reads
-  # fast-passes the journeys below instead of occupying a runner for 25
-  # minutes. Manual dispatches always run the journeys. ci/change-scope.sh
-  # fails closed: every other path resolves to docs_only=false.
+  # touches prose (`docs/**`, root `*.md`) that no gate, test or build reads,
+  # or only the `test/` unit tree the journeys never execute, fast-passes the
+  # journeys below instead of occupying a runner for 25 minutes. Manual
+  # dispatches always run the journeys. ci/change-scope.sh fails closed:
+  # every other path resolves to skip_e2e=false.
   scope:
     name: scope
     if: >-
@@ -45,6 +47,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      skip_e2e: ${{ steps.scope.outputs.skip_e2e }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,7 +77,7 @@ jobs:
     name: staging-journeys
     needs: scope
     if: >-
-      needs.scope.outputs.docs_only != 'true' && (github.event_name == 'workflow_dispatch' ||
+      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository))

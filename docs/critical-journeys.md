@@ -83,7 +83,10 @@ every successful staging deploy (and on manual dispatch) with the
 `playwright.staging.config.ts` project against the staging origin. A
 change-scope gate (mirrored from `e2e.yml`, diffing the deployed head commit
 against its parent) skips the journeys when the deploy only touches prose
-that no gate, test or build reads; manual dispatches always run. The runner
+that no gate, test or build reads, or only the `test/` unit tree the journeys
+never execute; manual dispatches always run. The same verdict also skips the
+two post-deploy smoke steps inside `deploy.yml` itself (the full suite,
+including those tests, already ran in that job). The runner
 is the same `ubuntu-latest` Chromium setup as CI; the difference is the
 target: real Hyperdrive and queues instead of `wrangler dev --local` and the
 disposable Postgres service. The token travels as the `staging` Environment
