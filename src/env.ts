@@ -7,6 +7,10 @@ export type Env = AgentEventsEnv & {
   SYNC_EVENT_QUEUE?: Pick<Queue<QueueMessage>, "send">;
   // Worker-first static assets: fetched only after the host guard admits the request.
   ASSETS?: Pick<Fetcher, "fetch">;
+  // Worker Version metadata binding (`version_metadata`). Bound on the staging
+  // Worker only; absent elsewhere, so `/up` carries no revision there. `id` is
+  // the Version ID that `wrangler rollback` takes; `tag` is the deploy commit.
+  CF_VERSION_METADATA?: Partial<Pick<WorkerVersionMetadata, "id" | "tag">>;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
   DISCORD_INVITE_URL: string;

@@ -14,6 +14,7 @@ import {
   QUEUE_READ_TIMEOUT_MS,
   QUEUE_WARN_AT,
   REQUIRED_SECRETS,
+  revisionReadiness,
   upBody,
   WEB_MIGRATIONS,
   withHealthReadTimeout,
@@ -378,6 +379,75 @@ describe("/up required Worker secrets", () => {
       config: "missing",
       queue: { status: "healthy", pending: 1 },
     });
+  });
+});
+
+describe("/up revision marker", () => {
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  const versionId = "81da0f67-1e2c-4b6e-9a53-0c7c1d2e3f40";
+  const ready = () => withStore(healthSql({ queue: [depthRow()] }));
+  const marked = (meta: unknown) => ({ ...ready(), CF_VERSION_METADATA: meta }) as Env;
+
+  it("adds nothing to the body when the Worker has no version_metadata binding", async () => {
+    // Production declares no binding: its /up body must stay exactly as before.
+    const res = await app.request("/up", {}, ready());
+    expect(Object.keys((await res.json()) as object).sort()).toEqual([
+      "db",
+      "pending_migrations",
+      "queue",
+      "status",
+    ]);
+  });
+
+  it("reports the Worker Version ID and the deploy commit, leaving the rest untouched", async () => {
+    const res = await app.request("/up", {}, marked({ id: versionId, tag: sha }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({
+      status: "healthy",
+      db: "ok",
+      pending_migrations: 0,
+      queue: healthyQueue,
+      revision: { version_id: versionId, commit: sha },
+    });
+  });
+
+  it("is informational: a 503 readiness failure still carries the marker", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const res = await app.request("/up", {}, {
+        ...withStore(healthSql({ ping: new Error("db down") })),
+        CF_VERSION_METADATA: { id: versionId, tag: sha },
+      } as Env);
+      expect(res.status).toBe(503);
+      expect(((await res.json()) as { revision: unknown }).revision).toEqual({
+        version_id: versionId,
+        commit: sha,
+      });
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it.each([
+    ["an empty tag", { id: versionId, tag: "" }],
+    ["a missing tag", { id: versionId }],
+    ["a non-SHA manual tag", { id: versionId, tag: "hotfix-please-read" }],
+    ["an uppercase SHA", { id: versionId, tag: sha.toUpperCase() }],
+    ["a SHA with trailing text", { id: versionId, tag: `${sha}\nextra` }],
+    ["a short SHA", { id: versionId, tag: sha.slice(0, 12) }],
+  ])("never echoes %s: commit is null", (_name, meta) => {
+    expect(revisionReadiness(meta)).toEqual({ revision: { version_id: versionId, commit: null } });
+  });
+
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["no id", { tag: sha }],
+    ["an empty id", { id: "", tag: sha }],
+    ["a non-string id", { id: 7, tag: sha }],
+  ])("omits the marker for %s", (_name, meta) => {
+    expect(revisionReadiness(meta)).toEqual({});
   });
 });
 

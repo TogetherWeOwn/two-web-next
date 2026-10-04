@@ -33,7 +33,9 @@ One row per checkpoint; a blank cell means "not yet checked", never
 
 ## 1. Flip record
 
-`/up` carries no revision, so record both version IDs here at flip.
+Staging `/up` reports `revision.version_id`; production `/up` carries no
+revision until a cutover PR declares the binding, so record both version IDs
+here at flip.
 
 | Field | Value |
 | --- | --- |

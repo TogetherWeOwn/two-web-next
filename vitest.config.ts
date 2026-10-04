@@ -4,7 +4,12 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts", "test/**/*.test.mjs"],
     // Smoke fixtures use node:test and run separately through test:smoke.
-    exclude: [...configDefaults.exclude, "test/smoke.test.mjs", "test/json-smoke.test.mjs"],
+    exclude: [
+      ...configDefaults.exclude,
+      "test/smoke.test.mjs",
+      "test/json-smoke.test.mjs",
+      "test/revision-check.test.mjs",
+    ],
     // Live suites truncate shared tables in one database, so files run serially.
     fileParallelism: false,
     // TOG-12549: refuse non-test DATABASE_URLs before any suite connects.

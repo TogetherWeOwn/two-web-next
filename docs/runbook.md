@@ -101,6 +101,17 @@ approved account and binding isolation before any remote mutation.
    )
    ```
 
+   On staging the live Worker also reports its own Version ID:
+   `GET https://next.togetherweown.com/up` carries
+   `revision: { version_id, commit }`. `version_id` is the value
+   `wrangler rollback` takes; `commit` is the SHA the deploy tagged that Version
+   with (`null` for a manual deploy without `--tag`). The deploy job logs it in
+   `Record live revision (rollback pointer)` before any Cloudflare mutation.
+   A Version uploaded before the marker existed reports no `revision`; use
+   `wrangler deployments list` for it. If `/up` and `wrangler deployments`
+   ever disagree, `wrangler deployments` wins. Production `/up` has no
+   `revision` until a cutover PR declares the binding in `env.production`.
+
 3. Normal path: merge to `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
    GitHub Environment `staging` gate. It installs dependencies, applies
@@ -122,8 +133,11 @@ approved account and binding isolation before any remote mutation.
 
    ```bash
    # REMOTE MUTATION: approved target and release only; not a test.
-   npm run deploy
+   npm run deploy -- --tag "$(git rev-parse HEAD)"
    ```
+
+   `--tag` is what lets `/up` name the commit (`revision.commit`); without it
+   the Version is untagged and `commit` is `null`.
 
    This deploys the current checkout. Do not run it from an unmerged working
    branch, and do not bypass the Environment gate to clear a blocked CI release.
@@ -132,9 +146,13 @@ approved account and binding isolation before any remote mutation.
    Worker, run the [Neon migration workflow](#neon-web-schema-migrations-separate-operator-action)
    for the matching target; coordinate with both bot and web owners using
    `docs/db-migrations.md`.
-5. Capture the resulting deployment/version IDs and workflow URL. `/up`
-   reports only limited queue-ledger evidence (below), not successful private
-   persistence. Source behavior and local tests are not proof of live isolation.
+5. Capture the resulting deployment/version IDs and workflow URL. On staging
+   the `Verify deployed revision` step has already proved the live Worker
+   reports the commit this job deployed and logged its Version ID (it runs on
+   every deploy, including docs-only ones that skip the smoke steps). `/up`
+   otherwise reports only limited queue-ledger evidence (below), not successful
+   private persistence. Source behavior and local tests are not proof of live
+   isolation.
 
 ### Neon web schema migrations (separate operator action)
 
@@ -300,7 +318,10 @@ head. Record the rollback deployment and previous/current version IDs.
 ```
 
 Wrangler prompts for confirmation; the rollback becomes active on all this
-Worker's routes/domains. It does **not** undo Postgres migrations, data writes,
+Worker's routes/domains. Then prove the target is live: `curl -fsS
+https://next.togetherweown.com/up` must show `revision.version_id` equal to
+`$GOOD_VERSION` (a Version uploaded before the marker existed reports no
+`revision`; use the `deployments status` output for it). It does **not** undo Postgres migrations, data writes,
 Discord side effects, queue messages or external-resource changes. Check schema
 compatibility first; keep the release workflow from redeploying the bad head.
 Record the rollback deployment and previous/current version IDs. Do not claim a
@@ -390,6 +411,9 @@ The telemetry query returns only the newest 100 events. Keep each window to
    that has no migration or binding drift
    (`git diff --exit-code "$N_SHA" "$N1_SHA" -- drizzle migrations.lock ci/neon-migrate.mjs wrangler.jsonc`).
    Set `DISC_PATH` to a public path whose status differs between N and N+1.
+   When both versions were deployed with the `/up` revision marker, read
+   `revision.version_id` from `/up` instead: it names the serving version
+   directly and needs no discriminator.
    Map each version to its commit by the deploy job's `Deploy to Cloudflare
    Workers` step: the deployment's `created_on` is within about 2 seconds of
    that step's `completed_at` (Actions jobs API), or read the `Current Version
@@ -676,6 +700,15 @@ prove deployment readiness.
 `GET /up` is **readiness**: a required-secret presence check, a read-only DB
 ping and web migration-ledger read, plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
+
+On staging only, a ready or failing body also carries
+`revision: { version_id, commit }` from the `version_metadata` binding
+`CF_VERSION_METADATA`. It is informational and never changes the HTTP status.
+`version_id` is the Worker Version ID (the `wrangler rollback` argument).
+`commit` is the version tag, shown only when it is a full lowercase 40-hex SHA
+and `null` otherwise, so an arbitrary manual tag never reaches the public body.
+`node bin/revision-check.mjs <origin> [<sha>]` reads it: with a SHA it fails
+unless that commit is live, without one it only logs what is live.
 
 DB/schema readiness uses the web stores' `databaseUrl()` selection: nonempty
 `DATABASE_URL`, otherwise `DB.connectionString`. If that selected database fails,

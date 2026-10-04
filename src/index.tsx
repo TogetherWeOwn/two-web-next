@@ -60,7 +60,13 @@ import {
   takeJoinResult,
 } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
-import { configReadiness, upBody, upHttpStatus, withHealthReadTimeout } from "./up";
+import {
+  configReadiness,
+  revisionReadiness,
+  upBody,
+  upHttpStatus,
+  withHealthReadTimeout,
+} from "./up";
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
@@ -587,7 +593,8 @@ app.get("/up", async (c) => {
       sql,
       configReadiness(c.env),
     );
-    return c.json(body, upHttpStatus(body));
+    // Informational only: the revision never moves the status code.
+    return c.json({ ...body, ...revisionReadiness(c.env.CF_VERSION_METADATA) }, upHttpStatus(body));
   } finally {
     // Close request-owned clients without waiting to drain. Transaction-local
     // server limits bound active queries; disconnect alone is not cancellation.
