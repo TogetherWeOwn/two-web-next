@@ -373,13 +373,17 @@ The telemetry query returns only the newest 100 events. Keep each window to
 **Worker rollback (N+1 to N and back)**
 
 1. Confirm that the staging Worker is idle. A deploy during the rehearsal
-   overwrites the rollback, and one starts whenever a `ci` run on `main`
-   succeeds: the `deploy` workflow follows it and reaches the Worker upload
-   about 9 minutes after it starts, because `npm run check` runs first. Start
-   only when no `ci` push run on `main` and no `deploy` run is queued, pending
-   or in progress (Actions page or REST API; `gh` from an agent workspace
-   cannot read this repository, and unauthenticated REST calls share a 60 per
-   hour limit). The whole Worker half takes about 3 minutes.
+   overwrites the rollback, and a `deploy` run follows each green `ci` run on
+   `main`, reaching the Worker upload about 9 minutes after it starts, because
+   `npm run check` runs first. Start only when no `deploy` run is queued,
+   pending or in progress (Actions page or REST API; unauthenticated REST
+   calls share a 60 per hour limit). A `ci` push run that is still running does
+   not block the start: its deploy cannot upload for about 9 minutes after
+   `ci` succeeds, and the whole Worker half takes about 3 minutes. Waiting for
+   no `ci` run at all never ends while merges land about every 13 minutes (2026-10-04).
+   After the drill, `dep-after.json` must differ from `dep-before.json` by the
+   two rehearsal deployments only; any other deployment means a deploy landed
+   in the window and the drill is void.
 2. Save `npx --no-install wrangler deployments list --name two-web-next --json`
    as `$RUN_DIR/dep-before.json`. It returns only the 10 newest deployments, so
    N must be among them. N+1 is the active version. The previous deployment is
@@ -526,6 +530,34 @@ Rehearsal record:
 | 2026-10-03 18:25 | DNS flip back (records deleted, custom domain re-attached) | 2.1 s | +3.2 s (first probe with the marker) | +14.7 s (10 consecutive with it) | n/a (smoke result in the notes below) |
 | 2026-10-03 20:36 | rollback `59a88ba7` (331122e5) to `da612f07` (bfbaf4d5) | 3.7 s | +4.5 s (last 301 at +1.6 s, first 404 at +4.5 s) | +4.5 s, no alternation | 0 of 137 (both directions) |
 | 2026-10-03 20:37 | roll forward `da612f07` to `59a88ba7` | 3.8 s | +9.6 s (last 404 at +8.2 s, first 301 at +9.6 s) | +9.6 s, no alternation | see above |
+| 2026-10-04 08:51 | rollback `2e803af9` (72c4f435) to `44878468` (4c65217e) | 4.7 s | +5.6 s | +5.6 s | 0 of 100 |
+| 2026-10-04 08:52 | roll forward `44878468` to `2e803af9` | 3.8 s | +5.5 s | +5.5 s | see above |
+
+Notes from the 2026-10-04 run (probe cadence about 1.3 s; both directions in
+one probe loop, 100 probes, none non-200; the whole Worker half took 136 s):
+
+- N was the newest deployment whose Worker code differs from N+1: it predates
+  the dependency bump (#409) and the numeric `tabindex` change (#469). The
+  other 6 of the 8 commits between them change workflow, test or backup files
+  only. `/up` returns 200 on both and no public path has a status that
+  differs, so only telemetry (`$workers.scriptVersion.id`) shows which version
+  served. It shows one switch in each direction and no alternation: first N
+  request at +5.6 s, first N+1 request after the roll forward at +5.5 s.
+- `ci` was running on `main` for the next commit while the drill ran; no
+  `deploy` run was active. The deployment list gained `a58f67e3` and
+  `77c4c9b9` only and ended on `2e803af9` at 100%, so the narrower idle rule
+  in step 1 held.
+- Telemetry lags the request. A window queried 4 s after N's own smoke returned
+  0 events; the same window queried about 3 minutes later returned 49 events, all
+  N. Query the smoke window at least 60 s after the smoke, or re-query it.
+- The smoke now covers 17 routes (`/__smoke_unknown_route__` was added). It
+  passed 17 of 17 on N+1 before, on N with N's own `bin` and `ci`, and on
+  N+1 after the roll forward.
+- `wrangler queues info` (read-only) on `two-sync-event` and
+  `two-internal-action` showed one producer and one consumer each, both
+  `worker:two-web-next`. Staging `/up` reported `queue.failed` 161 and an
+  oldest pending message of 9.7 hours; it stays `healthy` under the thresholds.
+- The DNS half was not re-run; it was rehearsed on 2026-10-03 at 18:25 (rows above).
 
 Notes from the 2026-10-03 20:36 run: the discriminator was the plain-HTTP
 status of `/events/01arz3ndektsv4rrffq69g5fab.ics` (301 on `59a88ba7`, 404 on
