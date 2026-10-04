@@ -397,6 +397,40 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-going")).toBeNull();
   });
 
+  it("tells a claimant who lost the freed seat, keeping their place without a claim control", async () => {
+    const b = browser("waitlisted");
+    b.get("waitlist-claim")!.click();
+    b.finish(0, 200, {
+      data: { status: "waitlisted", waitlist_position: 1, synced_to_discord_at: null },
+    });
+    await b.settle();
+    const note = b.get("waitlist-seat-taken");
+    expect(note?.textContent).toBe("Someone just took that seat.");
+    expect(note?.getAttribute("role")).toBe("status");
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(b.get("waitlist-leave")).not.toBeNull();
+    expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.get("rsvp-confirmed")).toBeNull();
+    // Nothing changed for the member, so no "Saved." line and no alert beside the note.
+    expect(b.get("rsvp-syncing")).toBeNull();
+    expect(b.get("rsvp-failed")).toBeNull();
+    expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "waitlisted" });
+    // The next action clears the note: leaving the line drops it with the controls.
+    b.get("waitlist-leave")!.click();
+    b.finish(1, 204);
+    await b.settle();
+    expect(b.get("waitlist-seat-taken")).toBeNull();
+  });
+
+  it("does not claim a lost seat when a first-time going request lands on the waitlist", async () => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 201, { data: { status: "waitlisted", waitlist_position: 2 } });
+    await b.settle();
+    expect(b.get("waitlist-seat-taken")).toBeNull();
+    expect(b.get("rsvp-syncing")).not.toBeNull();
+  });
+
   it("transitions actual open SSR to a usable waitlist action after a capacity conflict", async () => {
     const b = browser();
     expect(b.get("waitlist-join")).toBeNull();
