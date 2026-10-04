@@ -35,10 +35,46 @@ export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql 
   return sql;
 }
 
+/** IPv6 clients share a /64; IPv4 and its mapped form share the IPv4 key. */
+function normalizeClientIp(ip: string): string {
+  if (!ip.includes(":") || !/^[0-9a-f:.]+$/i.test(ip)) return ip;
+  try {
+    // URL validates IPv6 and serializes embedded IPv4 as hex pieces.
+    // Source: https://url.spec.whatwg.org/#concept-ipv6-parser
+    const address = new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+    const [left, right] = address.split("::");
+    const start = left ? left.split(":") : [];
+    const end = right ? right.split(":") : [];
+    const pieces =
+      right === undefined
+        ? start
+        : [...start, ...Array<string>(8 - start.length - end.length).fill("0"), ...end];
+    if (pieces.slice(0, 5).every((piece) => piece === "0") && pieces[5] === "ffff") {
+      return pieces
+        .slice(6)
+        .flatMap((piece) => {
+          const value = Number.parseInt(piece, 16);
+          return [value >> 8, value & 255];
+        })
+        .join(".");
+    }
+    return `${pieces.slice(0, 4).join(":")}::/64`;
+  } catch {
+    // Preserve the existing fallback key for malformed off-edge headers.
+    return ip;
+  }
+}
+
+/**
+ * Keep header precedence unchanged; normalize only the selected address.
+ * See docs/throttling.md for prefix sharing and rollout behaviour.
+ */
 const clientKey = (c: Context) =>
-  c.req.header("cf-connecting-ip") ??
-  c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
-  "anon";
+  normalizeClientIp(
+    c.req.header("cf-connecting-ip") ??
+      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
+      "anon",
+  );
 
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
 export async function throttleGuard(
