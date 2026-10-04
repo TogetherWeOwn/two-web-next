@@ -48,6 +48,19 @@ The repository rulesets enforce the following on `main`:
   `gitleaks` must pass.
 - `pr-conventions`: `pr-lint` must pass.
 
+### Change-gated CI and `ci-ok`
+
+Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
+`scope` job in `ci.yml` classifies every pull request into areas — `app`
+(served code, assets, tests, journeys), `worker` (dispatch configs, the Tail
+worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
+`.github/**`, shared config, or anything unknown: run everything) and `draft`.
+`a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, `check` always
+runs but skips its heavy steps on docs-only and draft PRs, and the `ci-ok`
+aggregator reports the overall conclusion. Main pushes and the nightly schedule
+run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
+OPERATOR step after merge plus green probes — never part of a PR.
+
 GitHub does not enforce an approval count here. Team policy does: an independent
 reviewer, who did not write the change, reviews the exact head SHA that merges, CI
 is green on that SHA, and a new push needs a new review.
@@ -63,6 +76,21 @@ warnings (`PR_STANDARDS_MODE: "warn"`); the flip to `"error"` is a separate
 one-line change once the repo's open PRs are clear. The script is unit-tested
 beside it: `python3 -m unittest discover -s .github/scripts -p
 'test_pr_standards.py'`.
+
+### Secret-scan allowlists
+
+The required `gitleaks` job (also in `pr-gates.yml`) scans the full history
+reachable from the PR head. On a pull request it applies the base branch's
+`.gitleaks.toml` and `.gitleaksignore` and ignores inline `gitleaks:allow`
+comments, so a PR cannot allowlist its own leak. If a change legitimately needs a
+new allowlist entry, merge that entry first as a small, separately reviewed PR;
+the next scan honours it. A new fixture that trips a rule therefore waits for that
+entry, or uses a value an existing entry already covers. Push-to-main scans use
+the repository's own files. Run `GITLEAKS_BIN=<path>
+.github/scripts/test-gitleaks-scan.sh` to repeat the offline self-test the job
+runs. The scanner archive is pinned by SHA-256 in `pr-gates.yml`; bump
+`GITLEAKS_SHA256` from the release's `gitleaks_<version>_checksums.txt` together
+with `GITLEAKS_VERSION`.
 
 ## Dependency security and static analysis
 

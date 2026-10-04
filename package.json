@@ -18,7 +18,7 @@
     "format": "biome format --write .",
     "check": "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
     "check:offline": "node ci/offline-check.mjs",
-    "test:smoke": "node --test test/smoke.test.mjs test/json-smoke.test.mjs",
+    "test:smoke": "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs",
     "gate:selftest": "node ci/require-performance.mjs --selftest",
     "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
     "seed:staging": "node bin/seed-staging.mjs",

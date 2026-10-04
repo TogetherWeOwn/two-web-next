@@ -113,6 +113,12 @@ jobs:
       - name: Verify zero pending staging web migrations
         run: node ci/neon-migrate.mjs verify
         env: *staging-migration-env
+      # Rollback pointer, read from the live Worker before any Cloudflare
+      # mutation. /up reports the Worker Version ID that `wrangler rollback`
+      # takes; this only logs it, so a Worker that predates the marker, or an
+      # unreachable /up, never fails the deploy.
+      - name: Record live revision (rollback pointer)
+        run: node bin/revision-check.mjs https://next.togetherweown.com
       - name: Ensure queues exist
         # Idempotent: "already exists" is fine; a real permission error surfaces at deploy.
         run: |
@@ -142,10 +148,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy to Cloudflare Workers
-        run: npx wrangler deploy --config wrangler.jsonc
+        # The Version is tagged with the CI-verified commit; /up reads the tag
+        # back as revision.commit (a full lowercase SHA only).
+        run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # workflow_run's github.sha is main's tip; tag the CI-verified checkout.
+          DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      # Runs on every deploy (the smoke steps below skip docs-only ones): the
+      # live Worker must report the commit this job just deployed, with the
+      # Version ID it will be rolled back from. Retries while the old Version
+      # still serves.
+      - name: Verify deployed revision
+        run: node bin/revision-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"
+        env:
+          DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
       # head commit only touches docs prose or the `test/` unit tree the
       # checkers never execute skips the smoke steps below — the full suite,

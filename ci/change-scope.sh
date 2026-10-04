@@ -12,9 +12,17 @@
 # nothing about browser journeys, so it still skips them. `check` ignores
 # `skip_e2e`; only the e2e workflows consume it.
 #
+# Area verdicts (`app`, `worker`, `db`, `full`) let heavy jobs run only when
+# their inputs changed. `full` forces every area on: dependency manifests and
+# lockfiles, `.github/**`, shared build and tooling config, and this script
+# itself. Unknown paths fail closed to `full`. `draft` mirrors the PR draft
+# flag from the caller (never inferred here): drafts skip heavy jobs while the
+# aggregator still reports.
+#
 # Usage: ci/change-scope.sh <pr-files.tsv> <expected-file-count>
 #   pr-files.tsv: one `filename<TAB>previous_filename` line per changed file,
 #   as listed by the pull-request files API. Run from the checked-out PR tree.
+#   DRAFT=true in the environment marks the verdict as a draft PR.
 #
 # No pipelines on purpose: under pipefail an early-exiting reader (grep -q)
 # SIGPIPEs its writer and flips the verdict.
@@ -50,10 +58,80 @@ if [ -s "$files" ]; then
   fi
 fi
 
+# Area verdicts for heavy-job gating. Computed over EVERY changed path (either
+# side of a rename) with no early exit, independent of the docs_only verdict
+# below: a doc a gate reads (docs/config.md) selects no heavy area while still
+# running `check`, and a truncated list fails everything closed.
+app=false
+worker=false
+db=false
+full=false
+if [ -s "$files" ]; then
+  listed_areas=$(wc -l < "$files")
+  if [ "$listed_areas" -ge "$expected" ]; then
+    while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
+      # A rename counts both names: moving code into docs/ is not a docs change.
+      for path in "$name" ${previous:+"$previous"}; do
+        case "$path" in
+          # Full-run triggers: dependency manifests and lockfiles, shared
+          # build and tooling config, CI itself, and this filter.
+          package-lock.json|web/package-lock.json|\
+          package.json|web/package.json|\
+          biome.json|tsconfig.json|ci/tsconfig.json|e2e/tsconfig.json|\
+          vitest.config.ts|playwright.config.ts|playwright.staging.config.ts|\
+          .github/*|ci/change-scope.sh)
+            full=true
+            ;;
+          # Worker deploy surface: dispatch configs, the Tail worker and the
+          # Kit spike. Observed by `check` (dry runs, Kit typecheck and
+          # parity) and the deploy workflows, not by the audit or perf jobs.
+          wrangler*.jsonc|tail/*|web/*)
+            worker=true
+            ;;
+          # Database: migrations, the journal lock, the drizzle config and the
+          # migration tooling under ci/ (history and numbering checks, the
+          # Neon migrate script and its selftest). Observed by `check` (migrate,
+          # history checks, numbering) and `a11y` (the fixtures run the real
+          # migrations), not by the perf jobs. Listed before the `ci/*` app
+          # arm below, which would otherwise claim these paths.
+          drizzle/*|migrations.lock|drizzle.config.ts|\
+          ci/check-migration-*|ci/neon-migrate*)
+            db=true
+            ;;
+          # App: everything the served worker, its assets, the test suites
+          # and the browser journeys observe.
+          src/*|assets/*|public/*|content/*|bin/*|ci/*|test/*|e2e/*|spike/*)
+            app=true
+            ;;
+          # Prose: area-neutral here; the docs_only verdict below decides.
+          docs/*) ;;
+          *.md) ;;
+          # Unknown paths fail closed: run everything.
+          *) full=true ;;
+        esac
+      done
+    done < "$files"
+  else
+    full=true
+  fi
+else
+  full=true
+fi
+
+draft=false
+if [ "${DRAFT:-}" = true ]; then
+  draft=true
+fi
+
 not_docs() {
   echo "change-scope: $1" >&2
   echo "docs_only=false"
   echo "skip_e2e=$skip_e2e"
+  echo "app=$app"
+  echo "worker=$worker"
+  echo "db=$db"
+  echo "full=$full"
+  echo "draft=$draft"
   exit 0
 }
 
@@ -87,3 +165,8 @@ case $rc in
   *) echo "change-scope: git grep failed ($rc)" >&2; exit "$rc" ;;
 esac
 echo "skip_e2e=$skip_e2e"
+echo "app=$app"
+echo "worker=$worker"
+echo "db=$db"
+echo "full=$full"
+echo "draft=$draft"

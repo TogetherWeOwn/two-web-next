@@ -12,6 +12,7 @@ bot rewrite, framework ADR pending).
 |---|---|
 | Staging provider / plan | Neon, Launch (`$0.106`/CU-hr + `$0.35`/GB-mo, no minimum, scale-to-zero) |
 | Production provider / plan | PlanetScale Postgres HA, PS-10 arm, AWS `us-east-1` (N. Virginia), PG17 — per CEO region decision 2026-10-03 on [TOG-12212](/TOG/issues/TOG-12212) (supersedes [TOG-12178](/TOG/issues/TOG-12178#document-decision) rev 2 Frankfurt) |
+| Staging region and Worker placement | Neon `eu-central-1` (Frankfurt). The staging Worker is pinned beside it with `placement.region = "aws:eu-central-1"` in `wrangler.jsonc`: from US colos each statement was a transatlantic Hyperdrive round trip (DB-bound requests: median 0.5-1.8 s, p95 3-4.6 s), from CDG/AMS 125-195 ms. `env.production` sets `placement.mode = "off"`; pick its placement (likely `aws:us-east-1`) at cutover |
 | Branches | Neon `staging` (all pre-cutover work) + PlanetScale `two-production` (prod, at cutover) |
 | Web path | Workers → Hyperdrive (`DB` binding) → staging Neon pooled URL / production PlanetScale `6432` (PgBouncer) URL |
 | Bot path | Container → direct `postgres` driver (no Hyperdrive) → staging Neon pooled URL / production PlanetScale `5432` direct URL |

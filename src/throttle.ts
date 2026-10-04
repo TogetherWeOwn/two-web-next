@@ -35,7 +35,12 @@ export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql 
   return sql;
 }
 
-const clientKey = (c: Context) =>
+/**
+ * The per-client key every human-route bucket is built from. On Cloudflare
+ * `cf-connecting-ip` is always set and cannot be forged by the client; the
+ * `x-forwarded-for` hop and "anon" only matter off-edge (local runs, tests).
+ */
+export const clientKey = (c: Context) =>
   c.req.header("cf-connecting-ip") ??
   c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
   "anon";
