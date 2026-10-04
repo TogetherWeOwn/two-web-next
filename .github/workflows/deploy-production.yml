@@ -32,6 +32,7 @@ jobs:
         run: node ci/production-deploy-gate.mjs
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_SHA: ${{ github.sha }}
 
@@ -42,8 +43,10 @@ jobs:
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
-    # Required reviewers + prevent-self-review are live repo settings. Preflight
-    # refuses a missing/unprotected Environment before GitHub can auto-create it.
+    # Required reviewers + prevent-self-review are live repo settings unless
+    # vars.PRODUCTION_AUTO_APPROVE is true, in which case the gate requires green
+    # staging deploy + e2e-staging on this exact SHA instead. Preflight refuses a
+    # missing/unprotected Environment before GitHub can auto-create it.
     environment:
       name: production
       url: https://togetherweown.com
@@ -61,6 +64,7 @@ jobs:
         run: node ci/production-deploy-gate.mjs
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_SHA: ${{ github.sha }}
       - run: npm ci --include=dev

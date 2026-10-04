@@ -560,3 +560,168 @@ test("rollback smoke enforces the same public-route set as the deploy smoke", ()
     assert.ok(!step.includes("curl "));
   }
 });
+
+// Automated approval mode (repo variable PRODUCTION_AUTO_APPROVE=true).
+const autoEnvironment = {
+  name: "production",
+  deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+  protection_rules: [{ type: "branch_policy" }],
+};
+function stagingRun(file, id, overrides = {}) {
+  return {
+    id,
+    head_sha: dispatchSha,
+    head_branch: "main",
+    path: `.github/workflows/${file}`,
+    head_repository: { full_name: "fixture/repo" },
+    status: "completed",
+    conclusion: "success",
+    ...overrides,
+  };
+}
+function stagingEvidence() {
+  return {
+    "deploy.yml": [stagingRun("deploy.yml", 100)],
+    "e2e-staging.yml": [stagingRun("e2e-staging.yml", 200)],
+  };
+}
+function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
+  const ci = stubProductionApi(ciEvidence());
+  return async (url, init) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/environments/production")) {
+      seen.environment = (seen.environment ?? 0) + 1;
+      return { ok: true, json: async () => environment };
+    }
+    for (const file of ["deploy.yml", "e2e-staging.yml"]) {
+      if (parsed.pathname.endsWith(`/workflows/${file}/runs`)) {
+        seen[file] = (seen[file] ?? 0) + 1;
+        assert.equal(parsed.searchParams.get("head_sha"), dispatchSha);
+        assert.equal(parsed.searchParams.get("branch"), "main");
+        const runs = staging[file];
+        return { ok: true, json: async () => ({ total_count: runs.length, workflow_runs: runs }) };
+      }
+    }
+    return ci(url, init);
+  };
+}
+const autoEnv = { ...greenEnv, PRODUCTION_AUTO_APPROVE: "true" };
+function checkAuto(staging, environment, seen) {
+  return checkProductionGate(autoEnv, stubAutoApi(staging, environment, seen), {
+    checkoutSha: dispatchSha,
+  });
+}
+
+test("auto-approve passes without reviewers when CI, staging deploy and e2e-staging are green on the SHA", async () => {
+  const seen = {};
+  const evidence = await checkAuto(stagingEvidence(), autoEnvironment, seen);
+  assert.equal(evidence.autoApprove, true);
+  assert.equal(evidence.sha, dispatchSha);
+  assert.deepEqual(evidence.staging, [
+    { workflow: "deploy.yml", runId: 100 },
+    { workflow: "e2e-staging.yml", runId: 200 },
+  ]);
+  assert.equal(seen["deploy.yml"], 1);
+  assert.equal(seen["e2e-staging.yml"], 1);
+});
+
+for (const [name, pattern, mutate] of [
+  [
+    "no staging deploy",
+    /Missing or incomplete exact-SHA deploy\.yml/,
+    (s) => (s["deploy.yml"] = []),
+  ],
+  [
+    "no e2e-staging",
+    /Missing or incomplete exact-SHA e2e-staging\.yml/,
+    (s) => (s["e2e-staging.yml"] = []),
+  ],
+  [
+    "failed e2e-staging",
+    /Latest e2e-staging\.yml run on the deployment SHA is not successful/,
+    (s) => (s["e2e-staging.yml"][0].conclusion = "failure"),
+  ],
+  [
+    "older success but newer failure",
+    /Latest e2e-staging\.yml run/,
+    (s) => s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", 201, { conclusion: "failure" })),
+  ],
+  [
+    "staging deploy still running",
+    /Latest deploy\.yml run/,
+    (s) =>
+      s["deploy.yml"].push(
+        stagingRun("deploy.yml", 101, { status: "in_progress", conclusion: null }),
+      ),
+  ],
+  [
+    "evidence for another SHA",
+    /deploy\.yml evidence revision\/branch\/workflow mismatch/,
+    (s) => (s["deploy.yml"][0].head_sha = otherSha),
+  ],
+  [
+    "evidence from another branch",
+    /e2e-staging\.yml evidence revision\/branch\/workflow mismatch/,
+    (s) => (s["e2e-staging.yml"][0].head_branch = "feature"),
+  ],
+]) {
+  test(`auto-approve refuses ${name}`, async () => {
+    const staging = stagingEvidence();
+    mutate(staging);
+    await assert.rejects(checkAuto(staging), pattern);
+  });
+}
+
+test("auto-approve still requires the main-only branch policy", async () => {
+  for (const environment of [
+    { ...autoEnvironment, deployment_branch_policy: null },
+    {
+      ...autoEnvironment,
+      deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
+    },
+    { ...autoEnvironment, protection_rules: [] },
+    { ...autoEnvironment, name: "staging" },
+  ]) {
+    await assert.rejects(
+      checkAuto(stagingEvidence(), environment),
+      /main-only deployment branch policy/,
+    );
+  }
+});
+
+test("auto-approve keeps the enable flag and main-only dispatch checks before any API call", async () => {
+  await assert.rejects(
+    checkProductionGate({ ...autoEnv, PRODUCTION_DEPLOY_ENABLED: "false" }, noNetwork),
+    /deployment disabled/,
+  );
+  await assert.rejects(
+    checkProductionGate({ ...autoEnv, GITHUB_REF: "refs/heads/feature" }, noNetwork),
+    /workflow_dispatch on main/,
+  );
+});
+
+for (const flag of [undefined, "", "false", "TRUE", "1", " true"]) {
+  test(`without PRODUCTION_AUTO_APPROVE=true (${JSON.stringify(flag)}) a reviewer-less Environment is refused`, async () => {
+    await assert.rejects(
+      checkProductionGate(
+        { ...greenEnv, PRODUCTION_AUTO_APPROVE: flag },
+        stubAutoApi(stagingEvidence()),
+        { checkoutSha: dispatchSha },
+      ),
+      /required reviewers and prevent self-review/,
+    );
+  });
+}
+
+test("both production gate steps receive PRODUCTION_AUTO_APPROVE", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const gates = workflow.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+  assert.equal(gates.length, 2);
+  for (const gate of gates) {
+    const block = gate.split("\n      - ")[0];
+    assert.match(block, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
+  }
+});
