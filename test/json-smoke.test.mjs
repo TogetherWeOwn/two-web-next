@@ -8,7 +8,7 @@ import {
   jsonSmoke,
   parseSetCookie,
   sessionCookieProblems,
-  stripCloudflareSnippet,
+  maskCloudflareRay,
 } from "../bin/json-smoke.mjs";
 
 // Loopback implementation of the PR #109 JSON contract plus the staging QA
@@ -34,10 +34,14 @@ const clearedSetCookies = [
   "__Host-two_session_status=; Max-Age=0; Path=/; Secure",
 ];
 // Cloudflare appends a challenge snippet carrying a per-request ray id, so two
-// otherwise identical 404 bodies differ by exactly that block.
-const notFoundPage = (ray) =>
+// otherwise identical 404 bodies differ by exactly that id and its timestamp.
+// The wrapper has changed shape once: staging currently serves the guarded
+// `a.contentWindow&&a.contentWindow.document` form, older captures the bare one.
+const LIVE_FRAME_DOCUMENT = "(a.contentWindow&&a.contentWindow.document)";
+const LEGACY_FRAME_DOCUMENT = "a.contentWindow.document";
+const notFoundPage = (ray, frameDocument = LIVE_FRAME_DOCUMENT) =>
   "<html><body><h1>We cannot find that page</h1><script>(function(){function c(){" +
-  "var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');" +
+  `var b=a.contentDocument||${frameDocument};if(b){var d=b.createElement('script');` +
   `d.innerHTML="window.__CF$cv$params={r:'${ray.padStart(16, "0")}',t:'${Buffer.from(ray).toString("base64")}'};` +
   "var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';" +
   "document.getElementsByTagName('head')[0].appendChild(a);\";b.getElementsByTagName('head')[0].appendChild(d)}}" +
@@ -753,7 +757,7 @@ test("fails when the QA bad-token 404 differs from a missing-route 404", async (
     assert.equal(result.ok, false, actual);
     assert.ok(
       result.output.includes(
-        "FAIL QA bad-token 404 matches missing route: expected identical HTTP 404 status, content type and body (Cloudflare snippet excluded)",
+        "FAIL QA bad-token 404 matches missing route: expected identical HTTP 404 status, content type and body (Cloudflare ray id and timestamp masked)",
       ),
       result.output,
     );
@@ -884,13 +888,25 @@ for (const contentType of [
   });
 }
 
-test("Cloudflare normalization is exact and fails closed on lookalikes", () => {
+test("Cloudflare mask touches only a well-formed ray id and timestamp", () => {
+  // Not a ray/timestamp pair: nothing is rewritten.
   for (const page of [
-    notFoundPage("abc123").replace("appendChild(a);", "appendChild(a);window.extra=true;"),
     notFoundPage("abc123").replace("r:'0000000000abc123'", "r:'not-a-ray'"),
-    notFoundPage("abc123").replace("a.style.top=0", "a.style.top=1"),
+    notFoundPage("abc123").replace(/,t:'[^']*'/, ",t:'not base64!'"),
+    notFoundPage("abc123").replace("r:'0000000000abc123'", "r:'00000000000abc123'"),
   ]) {
-    assert.equal(stripCloudflareSnippet(page), page);
+    assert.equal(maskCloudflareRay(page), page);
+  }
+  // Everything around the pair survives, so a real difference still shows.
+  for (const frameDocument of [LIVE_FRAME_DOCUMENT, LEGACY_FRAME_DOCUMENT]) {
+    const plain = maskCloudflareRay(notFoundPage("abc123", frameDocument));
+    for (const change of [
+      (page) => page.replace("appendChild(a);", "appendChild(a);window.extra=true;"),
+      (page) => page.replace("a.style.top=0", "a.style.top=1"),
+      (page) => page.replace("We cannot find that page", "No such seam"),
+    ]) {
+      assert.notEqual(maskCloudflareRay(change(notFoundPage("abc123", frameDocument))), plain);
+    }
   }
 });
 
@@ -1109,13 +1125,19 @@ test("cookie and snippet helpers handle real header and edge shapes", () => {
   assert.deepEqual(clearedCookieProblems(parseSetCookie(clearedSetCookies[0])), []);
 
   const page = "<html><script>var keep=1;</script>" + notFoundPage("abc123") + "</html>";
-  const stripped = stripCloudflareSnippet(page);
-  assert.ok(stripped.includes("var keep=1"), stripped);
-  assert.ok(!stripped.includes("abc123") && !stripped.includes("cdn-cgi"), stripped);
-  assert.equal(
-    stripCloudflareSnippet(notFoundPage("a".repeat(16))),
-    stripCloudflareSnippet(notFoundPage("b".repeat(16))),
+  const masked = maskCloudflareRay(page);
+  assert.ok(masked.includes("var keep=1"), masked);
+  assert.ok(!masked.includes("abc123") && !masked.includes("YWJjMTIz"), masked);
+  for (const frameDocument of [LIVE_FRAME_DOCUMENT, LEGACY_FRAME_DOCUMENT]) {
+    assert.equal(
+      maskCloudflareRay(notFoundPage("a".repeat(16), frameDocument)),
+      maskCloudflareRay(notFoundPage("b".repeat(16), frameDocument)),
+    );
+  }
+  assert.notEqual(
+    maskCloudflareRay(notFoundPage("a", LIVE_FRAME_DOCUMENT)),
+    maskCloudflareRay(notFoundPage("a", LEGACY_FRAME_DOCUMENT)),
   );
   const external = '<script src="/cdn-cgi/scripts/x.js"></script><p>kept</p>';
-  assert.equal(stripCloudflareSnippet(external), external);
+  assert.equal(maskCloudflareRay(external), external);
 });

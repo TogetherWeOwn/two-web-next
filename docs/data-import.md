@@ -20,13 +20,13 @@ import cards is included:
 
 | Import slice | Legacy → Next table | Comparison key | Compared fields / transforms |
 | --- | --- | --- | --- |
-| [TOG-10831](/TOG/issues/TOG-10831), users/profiles | `users` → `users` | `discord_id` → `id` | `COALESCE(NULLIF(display_name, ''), username)` → username (matches `users-profiles.mjs`), avatar, created/updated timestamps; member mapping remains a gap |
+| [TOG-10831](/TOG/issues/TOG-10831), users/profiles | `users` → `users` | `discord_id` → `id` | `COALESCE(NULLIF(display_name, ''), username)` → username (matches `users-profiles.mjs`), avatar, `member` (`discord_joined_at IS NOT NULL`, the policy in `import-users-profiles.md`), created/updated timestamps |
 | users/profiles | `profiles` → `profiles` | legacy user lookup → Discord `user_id` | bio, games JSONB, timezone, created/updated timestamps; profile surrogate ID deliberately not compared |
-| [TOG-10832](/TOG/issues/TOG-10832), events/RSVPs | `events` → `events` | `event_key` | title, game, description, UTC start/end instants, timezone, location, capacity, status, Discord mirror ID, creator Discord ID, rsvp_open, recurrence frequency/count/end/index, parent event_key, created/updated timestamps |
+| [TOG-10832](/TOG/issues/TOG-10832), events/RSVPs | `events` → `events` | `event_key` | title, game, description, UTC start/end instants, timezone, location, capacity, status, Discord mirror ID, creator Discord ID, rsvp_open, recurrence frequency/count/end/index, parent event_key, Discord sync failure instant (UTC) and code, `agent_attribution` (legacy grant ID, proof marker or nonzero version projected to `true`/`false` and compared to `false`), created/updated timestamps |
 | events/RSVPs | `rsvps` → `rsvps` | event_key + user Discord ID | status, synced-to-Discord and created/updated timestamps; numeric event/user IDs resolved through joins |
-| [TOG-10833](/TOG/issues/TOG-10833), content/funnel | `featured_contents` → `featured_contents` | preserved `id` | title, body, URL, image URL/alt, published flag, position, UTC show window, creator Discord ID, created/updated timestamps |
-| content/funnel | `join_attempts` → `join_attempts` | preserved `id` | outcome, source, request_id, discord_id, created_at; fixed retention cutoff |
-| content/funnel | `event_search_logs` → `event_search_logs` | preserved `id` | normalized_query, result_count, occurred_at; fixed retention cutoff |
+| [TOG-10833](/TOG/issues/TOG-10833), content/funnel | `featured_contents` → `featured_contents` | legacy `id` → preserved `legacy_id` | title, body, URL, image URL/alt, published flag, position, UTC show window, creator Discord ID, created/updated timestamps (NULL `updated_at` falls back to `created_at`, as the importer writes it) |
+| content/funnel | `join_attempts` → `join_attempts` | legacy `id` → preserved `legacy_id` | outcome, source, request_id, discord_id, created_at; fixed retention cutoff |
+| content/funnel | `event_search_logs` → `event_search_logs` | legacy `id` → preserved `legacy_id` | normalized_query, result_count, occurred_at; fixed retention cutoff |
 | [TOG-10834](/TOG/issues/TOG-10834), audit/grants | `member_data_access_logs` → `member_data_access_logs` | preserved `id` | viewer Discord ID, viewer user ID and subject user ID array (both kept as the legacy internal IDs the importer copies, array order preserved), resource, action, subject_count, route, occurred_at |
 | audit/grants | `activity_log` → `activity_log` | preserved `id` | log_name (NULL stays NULL), description, subject_type, subject_id, causer_type, causer_id, event, batch_uuid, properties JSONB (verbatim), created/updated timestamps (NULL `updated_at` stays NULL) |
 | audit/grants | `agent_event_grants` → `agent_event_grants` | UUID `id` | agent/company/guild IDs, verifier hash (internal only), max_events, expires_at, created_at, updated_at; expects disabled_at NOT NULL, not a copied enablement state |
@@ -59,19 +59,27 @@ are compared internally, never emitted as report values or report keys.
 Next-only throttle hits, job locks/queue ledgers, Laravel/Next sessions and other
 operational tables are **not** part of these four import slices.
 
-### Explicit unresolved mappings (fail closed)
+### Mapping dispositions (fail closed)
 
-The current schemas cannot establish full data parity by themselves. The baseline
-reports `mappingGaps` and exits **1 even if all compared rows match**, including
-for an empty database, until importers finalize these policies:
+The verifier fails closed on any table that declares `mappingGaps`: it reports them
+and exits **1 even if all compared rows match**, including for an empty database.
+The baseline declares no gap for these twelve tables. The bullets below record the
+policy each importer-backed projection encodes and the differences that stay
+outside the compared fields:
 
-- `users.member`: there is no legacy member boolean. A non-null
-  `discord_joined_at` is not equivalent: successful join/login paths can leave it
-  NULL. Do not silently invent membership evidence.
-- Event sync failure timestamp/code have no Next destination columns. Legacy
-  proof-event grant ID/marker/version live in `events`, while Next's `agent_events`
-  is separate and uses local wall-time strings. An importer must define the split,
-  preserve the sync fields, and add the resulting verification projection.
+- `users.member` and the event sync failure fields are resolved: the baseline
+  compares `(discord_joined_at IS NOT NULL)` with `users.member`, and the UTC
+  failure instant and code with the columns added by `1009_event-sync-failure`.
+  `discord_joined_at` is historical join evidence, not current membership (see
+  `import-users-profiles.md`). Agent attribution is fail-closed rather than
+  migrated: `import-events-rsvps.md` refuses the whole batch when a legacy event
+  has a grant ID, proof marker or nonzero version, so the verifier projects that
+  predicate as `agent_attribution` against `false`. An attributed event is
+  therefore a named-key mismatch (or a missing key when the refused batch wrote
+  nothing), never excluded and never a MATCH. Splitting machine-owned events
+  into Next's `agent_events` remains a separately authorized migration.
+  `test/import-verify-importers.test.ts` runs the real importers into the
+  verifier and asserts zero diffs and gaps for these tables.
 - Audit evidence has no unresolved mapping. `audit.mjs` copies every column added
   by `1011_legacy-audit-evidence.sql` (`docs/audit-import.md`), the baseline
   compares each one, and `test/import-verify-audit.test.ts` runs the real importer
@@ -82,8 +90,9 @@ for an empty database, until importers finalize these policies:
     Discord IDs or joined to Next users, so the baseline compares them as legacy
     IDs (text, and JSON for the array). `viewer_discord_id` is the stable identity.
   - `properties` is copied verbatim as JSONB. The Spatie `{attributes,old}` shape
-    is not converted to Next's `{field:{before,after}}`; readers handle both for
-    imported rows.
+    is not converted to Next's `{field:{before,after}}`, so imported rows keep the
+    legacy shape. Nothing in `src` reads `activity_log.properties` today (only
+    writes); a future audit-history reader must handle both shapes.
   - NULL `log_name` and `updated_at` stay NULL; no `default` or `now()` is
     fabricated. `max_events` is retained as evidence only, since Next ingress still
     enforces its own one-event quota.
@@ -102,22 +111,37 @@ for an empty database, until importers finalize these policies:
   now(). If an importer needs a fallback, make it deterministic in its finalized
   map and document it. Numeric retained IDs must fit Next's serial range.
 
-A custom map must resolve these gaps with reviewed importer behavior and schema
-coverage, not merely delete `mappingGaps` to obtain a green report. The verifier
-certifies only its configured tables/columns, not omitted fields or domains.
+A custom map that declares `mappingGaps` still fails closed. Resolve a gap with
+reviewed importer behavior and schema coverage, not by deleting the string to obtain
+a green report. The verifier certifies only its configured tables/columns, not
+omitted fields or domains.
 
 ### Retention selection
 
 Use one explicit `--cutoff` UTC instant **shared with the importer**, normally the
-import anchor minus 90 days. The baseline selects `timestamp IS NULL OR timestamp
->= cutoff` on both sides for join attempts, search logs and idempotency keys;
-cutoff-exact and unknown-age rows survive. A NULL timestamp is not evidence of
-expiry: missing unknown-age records must be reported, not silently discarded.
-Importers must preserve them or define a reviewed, deterministic disposition in
-the finalized map (including how Next's NOT NULL columns are populated).
-Agent idempotency keys are the exception to the unknown-age rule: they follow the
-audit importer's window, so the legacy side selects `created_at >= cutoff` and
-finite, and a NULL or non-finite `created_at` is expired rather than missing.
+import anchor minus 90 days. Where a map has no importer-defined disposition it
+selects `timestamp IS NULL OR timestamp >= cutoff` on both sides, so cutoff-exact
+and unknown-age rows survive. A NULL timestamp is not evidence of expiry by itself:
+an unknown-age record the importer should keep must be reported when missing, not
+silently discarded. An importer must preserve it or define a reviewed,
+deterministic disposition in the finalized map (including how Next's NOT NULL
+columns are populated). Every age-filtered baseline table follows its importer's
+disposition instead, below.
+
+The content/funnel tables carry that disposition from `content-funnel.mjs`. Both
+sides are keyed on the preserved source id (`legacy.id::text` against Next
+`legacy_id`), and the Next side selects only `legacy_id IS NOT NULL`, so rows
+created natively on Next after cutover are never extras. Join attempts and search
+logs select `clock >= cutoff` on both sides; featured content is compared in full.
+Legacy rows with a NULL clock (`created_at`) are skipped by the importer and
+counted as `skipped_missing_timestamp`, never revived with a fabricated time, so
+they are outside the verified set: reconcile that count from the importer report.
+
+Agent idempotency keys follow the audit importer's window instead: the legacy side
+selects `created_at >= cutoff` and finite, and a NULL or non-finite `created_at` is
+expired rather than missing. Expired keys are outside the verified set; reconcile
+them from the importer's `expired` count.
+
 Reported counts are the **selected rows after filters**, not whole-table totals.
 No historical query text is renormalized.
 
