@@ -57,12 +57,14 @@ const server = createServer((request, response) => {
   }
   authenticated += 1;
   const url = new URL(request.url ?? "/", origin);
+  // Like GitHub, serve a repository with or without its `.git` suffix.
+  const pathInfo = url.pathname.replace(/^(\/[^/]+\/[^/]+?)(?:\.git)?(\/.*)$/, "$1.git$2");
   const backend = spawn("git", ["http-backend"], {
     env: {
       ...gitEnv(),
       GIT_PROJECT_ROOT: join(root, "remotes"),
       GIT_HTTP_EXPORT_ALL: "1",
-      PATH_INFO: url.pathname,
+      PATH_INFO: pathInfo,
       QUERY_STRING: url.search.slice(1),
       REQUEST_METHOD: request.method ?? "GET",
       CONTENT_TYPE: request.headers["content-type"] ?? "",
@@ -179,10 +181,11 @@ afterAll(async () => {
   if (root) rmSync(root, { recursive: true, force: true });
 });
 
-async function fixture(event: string) {
+// actions/checkout writes `origin` as `<server>/<owner>/<repo>` with no `.git`.
+async function fixture(event: string, suffix: "" | ".git" = "") {
   const checkout = join(root, `checkout-${serial++}`);
   await git(root, "clone", "--depth=1", `file://${source}`, checkout);
-  await git(checkout, "remote", "set-url", "origin", `${origin}/${repository}.git`);
+  await git(checkout, "remote", "set-url", "origin", `${origin}/${repository}${suffix}`);
   const eventPath = join(checkout, "event.json");
   put(
     eventPath,
@@ -203,6 +206,45 @@ async function fixture(event: string) {
   };
 }
 
+async function expectAuthenticatedBaseline(
+  file: string,
+  name: string,
+  event: string,
+  suffix: "" | ".git",
+) {
+  const { checkout, env } = await fixture(event, suffix);
+  const config = readFileSync(join(checkout, ".git/config"), "utf8");
+  const rejectedBefore = refused;
+  const negative = await exec("bash", ["ci/check-migration-numbers.sh"], {
+    cwd: checkout,
+    env,
+  }).then(
+    () => "unexpected success",
+    (error: { stderr: string }) => error.stderr,
+  );
+  expect(negative).toContain("cannot read Git baseline (fetch)");
+  expect(refused).toBeGreaterThan(rejectedBefore);
+  const authenticatedBefore = authenticated;
+  const migration = migrationStep(file, name);
+  const result = await exec(migration.shell, ["-e", "-c", migration.script], {
+    cwd: checkout,
+    env: { ...env, MIGRATION_GIT_TOKEN: token },
+  });
+  expect(result.stdout).toContain("migration-history: ok");
+  expect(authenticated).toBeGreaterThan(authenticatedBefore);
+  expect(readFileSync(join(checkout, ".git/config"), "utf8")).toBe(config);
+  expect(await git(checkout, "config", "--local", "--list")).not.toContain("extraheader");
+  const nextStep = await exec(
+    "bash",
+    [
+      "-c",
+      'test -z "${MIGRATION_GIT_TOKEN:-}${GIT_CONFIG_COUNT:-}${GIT_CONFIG_VALUE_0:-}${GIT_CONFIG_VALUE_1:-}"',
+    ],
+    { cwd: checkout, env },
+  );
+  expect(nextStep.stderr).toBe("");
+}
+
 describe("migration workflow fetch authentication", () => {
   for (const { file, name, events } of steps) {
     it(`${file} explicitly selects Bash for the pipefail wrapper`, () => {
@@ -219,53 +261,33 @@ describe("migration workflow fetch authentication", () => {
 
     for (const event of events) {
       it(`${file}: ${event} fetches an authenticated baseline without persisting credentials`, async () => {
-        const { checkout, env } = await fixture(event);
-        const config = readFileSync(join(checkout, ".git/config"), "utf8");
-        const rejectedBefore = refused;
-        const negative = await exec("bash", ["ci/check-migration-numbers.sh"], {
-          cwd: checkout,
-          env,
-        }).then(
-          () => "unexpected success",
-          (error: { stderr: string }) => error.stderr,
-        );
-        expect(negative).toContain("cannot read Git baseline (fetch)");
-        expect(refused).toBeGreaterThan(rejectedBefore);
-        const authenticatedBefore = authenticated;
-        const migration = migrationStep(file, name);
-        const result = await exec(migration.shell, ["-e", "-c", migration.script], {
-          cwd: checkout,
-          env: { ...env, MIGRATION_GIT_TOKEN: token },
-        });
-        expect(result.stdout).toContain("migration-history: ok");
-        expect(authenticated).toBeGreaterThan(authenticatedBefore);
-        expect(readFileSync(join(checkout, ".git/config"), "utf8")).toBe(config);
-        expect(await git(checkout, "config", "--local", "--list")).not.toContain("extraheader");
-        const nextStep = await exec(
-          "bash",
-          ["-c", 'test -z "${MIGRATION_GIT_TOKEN:-}${GIT_CONFIG_COUNT:-}${GIT_CONFIG_VALUE_0:-}"'],
-          { cwd: checkout, env },
-        );
-        expect(nextStep.stderr).toBe("");
+        await expectAuthenticatedBaseline(file, name, event, "");
       }, 45000);
     }
+
+    // A remote configured with an explicit `.git` suffix must authenticate too.
+    it(`${file}: a .git-suffixed origin fetches an authenticated baseline`, async () => {
+      await expectAuthenticatedBaseline(file, name, "workflow_dispatch", ".git");
+    }, 45000);
   }
 
-  it("does not send the command's header to a different repository URL", async () => {
-    const { checkout, env } = await fixture("workflow_dispatch");
-    await git(checkout, "remote", "set-url", "origin", `${origin}/fixtures/other.git`);
-    const authenticatedBefore = authenticated;
-    const rejectedBefore = refused;
-    const migration = migrationStep("db-migrate.yml", "Validate migration numbering");
-    const result = await exec(migration.shell, ["-e", "-c", migration.script], {
-      cwd: checkout,
-      env: { ...env, MIGRATION_GIT_TOKEN: token },
-    }).then(
-      () => "unexpected success",
-      (error: { stderr: string }) => error.stderr,
-    );
-    expect(result).toContain("cannot read Git baseline (fetch)");
-    expect(authenticated).toBe(authenticatedBefore);
-    expect(refused).toBeGreaterThan(rejectedBefore);
-  });
+  for (const other of ["fixtures/other", "fixtures/other.git", "fixtures/private-sibling"]) {
+    it(`does not send the command's header to ${other}`, async () => {
+      const { checkout, env } = await fixture("workflow_dispatch");
+      await git(checkout, "remote", "set-url", "origin", `${origin}/${other}`);
+      const authenticatedBefore = authenticated;
+      const rejectedBefore = refused;
+      const migration = migrationStep("db-migrate.yml", "Validate migration numbering");
+      const result = await exec(migration.shell, ["-e", "-c", migration.script], {
+        cwd: checkout,
+        env: { ...env, MIGRATION_GIT_TOKEN: token },
+      }).then(
+        () => "unexpected success",
+        (error: { stderr: string }) => error.stderr,
+      );
+      expect(result).toContain("cannot read Git baseline (fetch)");
+      expect(authenticated).toBe(authenticatedBefore);
+      expect(refused).toBeGreaterThan(rejectedBefore);
+    });
+  }
 });
