@@ -194,6 +194,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          # The Kit install below reads web/package-lock.json, a separate
+          # graph from the root lockfile. Hash it into the cache key too so
+          # the shared npm store covers the Kit steps.
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
       # Only explicit success from both performance jobs may read green.
       - name: Performance gate (lighthouse + bundle-budget must succeed)
         if: always() && needs.scope.outputs.docs_only != 'true'
