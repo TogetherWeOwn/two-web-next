@@ -83,11 +83,6 @@ export const RsvpButton: FC<{
             </>
           ) : waitlisted ? (
             <>
-              {full ? (
-                <p role="status" data-testid={EVENT_FULL_TESTID}>
-                  {RSVP_COPY.full} {rsvpFullCapCopy(e.capacity!)}
-                </p>
-              ) : null}
               <p role="status" tabindex={-1} data-testid={WAITLIST_POSITION_TESTID}>
                 {waitlistPositionCopy(waitlistPosition)}
               </p>
