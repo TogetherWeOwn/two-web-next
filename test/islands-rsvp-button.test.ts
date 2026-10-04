@@ -439,6 +439,28 @@ describe("rsvp-button SSR/server drift", () => {
     expect(html).not.toContain(`data-testid="${EVENT_FULL_TESTID}"`);
   });
 
+  it.each([true, false])(
+    "renders a full waitlist holder without refusal copy (RSVPs open: %s)",
+    async (rsvpOpen) => {
+      const p = page(
+        { rsvpOpen },
+        { [viewer.id]: { status: "waitlisted", syncedToDiscordAt: null } },
+      );
+      p.as(viewer);
+      const html = mount(await (await p.request()).text());
+      expect(html).toContain('data-full="true"');
+      expect(html).toContain(
+        `data-testid="${WAITLIST_POSITION_TESTID}">You&#39;re on the waitlist`,
+      );
+      expect(html).toContain(`data-testid="${WAITLIST_LEAVE_TESTID}"`);
+      expect(html).not.toContain(`data-testid="${EVENT_FULL_TESTID}"`);
+      expect(html).not.toContain("This one&#39;s full.");
+      expect(html).not.toContain(`data-testid="${WAITLIST_CLAIM_TESTID}"`);
+      expect(html).not.toContain(`data-testid="${WAITLIST_JOIN_TESTID}"`);
+      expect(html).not.toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
+    },
+  );
+
   it("renders waitlist fallback + claim-seat when room exists, without inventing a position", async () => {
     const p = page(
       { capacity: null },
