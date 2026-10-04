@@ -14,26 +14,78 @@ export const FIXTURE_TITLE_PREFIX = "Staging E2E ";
 /** Statuses a cancel still applies to (src/admin/routes.tsx: draft|published to cancelled). */
 export const SWEEP_STATUSES = Object.freeze(["published", "draft"]);
 
-/** The admin list holds 25 rows a page; each pass cancels what it saw and lists again. */
+/** Re-list after cancellations to catch fixtures that remain or arrive mid-sweep. */
 export const SWEEP_MAX_PASSES = 4;
+
+/** Bound matching admin pages per status, including rejected substring lookalikes. */
+export const SWEEP_MAX_PAGES = 20;
+
+/** Shared throttle waits are separate from useful cancellation passes. */
+export const SWEEP_MAX_THROTTLE_RETRIES = 4;
+export const SWEEP_MAX_DURATION_MS = 300_000;
 
 // Crockford ULID, as in the admin routes.
 const ROW_LINK = /<a href="\/admin\/events\/([0-9A-HJKMNP-TV-Z]{26})">([^<]*)<\/a>/g;
 
 /**
- * Admin events list URL for one status, newest start first: fixtures start in
- * 2099, so they always sit on page 1.
+ * Admin events list URL for one status, newest start first.
  *
  * @param {string} status one of SWEEP_STATUSES
+ * @param {number} [page] matching page, including non-fixture substring matches
  */
-export function sweepListPath(status) {
+export function sweepListPath(status, page = 1) {
   const params = new URLSearchParams({
     q: FIXTURE_TITLE_PREFIX.trim(),
     status,
     sort: "starts_at",
     order: "desc",
   });
+  if (page > 1) params.set("page", String(page));
   return `/admin/events?${params}`;
+}
+
+/**
+ * Follow only the admin renderer's next-page link, with the same origin and
+ * filters and exactly one page of progress. Never forward a session elsewhere.
+ *
+ * @param {string} html admin events list document
+ * @param {string} currentPath current sweep list path
+ * @param {string} origin guarded staging origin
+ * @returns {string | null}
+ */
+export function sweepNextListPath(html, currentPath, origin) {
+  const link = [...html.matchAll(/<a\b([^>]*)>/g)].find((match) =>
+    /\brel=["']next["']/.test(match[1]),
+  );
+  if (!link) return null;
+  const href = /\bhref=["']([^"']*)["']/.exec(link[1])?.[1];
+  const invalid = () => new Error("staging fixture sweep: invalid admin pagination link");
+  if (!href) throw invalid();
+  const current = new URL(currentPath, origin);
+  const page = Number(current.searchParams.get("page") ?? 1);
+  const expected = new URL(
+    sweepListPath(current.searchParams.get("status") ?? "", page + 1),
+    origin,
+  );
+  let next;
+  try {
+    next = new URL(href.replaceAll("&amp;", "&"), current);
+  } catch {
+    throw invalid();
+  }
+  next.searchParams.sort();
+  expected.searchParams.sort();
+  if (
+    next.origin !== expected.origin ||
+    next.username ||
+    next.password ||
+    next.hash ||
+    next.pathname !== expected.pathname ||
+    next.search !== expected.search
+  ) {
+    throw invalid();
+  }
+  return sweepListPath(current.searchParams.get("status") ?? "", page + 1);
 }
 
 /**

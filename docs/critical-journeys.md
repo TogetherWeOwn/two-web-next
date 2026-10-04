@@ -116,7 +116,14 @@ draft behind and no live card on the staging homepage. A test timeout closes the
 browser contexts before that `finally` runs, so the event journeys also have a
 backstop: `e2e/staging/global-teardown.ts` signs the QA moderator in fresh and
 cancels every `Staging E2E` event still published or draft
-(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. On failure the job
+(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. Each list and the
+final verification traverse matching pages even when a page contains only
+substring lookalikes. Pagination keeps the guarded origin and filters, advances
+one page at a time, and fails closed past 20 pages per status. The sweep allows
+four cancellation passes and at most four shared throttle waits within a
+five-minute deadline; a wait retries the same cancel without spending a pass.
+An exhausted bound fails the run rather than claiming cleanup succeeded.
+On failure the job
 uploads `test-results/` traces/screenshots and the HTML report for seven days.
 The repo is public, so artifacts are world-readable and log masking does not
 cover them. Playwright puts request headers (including `X-TWO-QA-Auth`) into a
