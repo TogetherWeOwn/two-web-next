@@ -101,6 +101,13 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
       - run: npx playwright install --with-deps chromium
       - name: Chromium cancellation regressions
         run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
@@ -344,6 +351,13 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
       - name: Install isolated Chromium and process tools
         run: |
           apt-get update -qq && apt-get install -y -qq --no-install-recommends procps >/dev/null
