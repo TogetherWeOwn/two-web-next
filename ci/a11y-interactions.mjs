@@ -41,30 +41,34 @@ export async function assertProfileInteractions(page, scenario) {
       '[data-testid="profile-save"]',
       '[data-testid="profile-cancel"]',
     ]) {
-      const control = page.locator(selector);
-      if (!(await control.isVisible())) continue;
-      for (const state of ["hover", "focus"]) {
-        if (state === "hover") await control.hover();
-        else {
-          await page.mouse.move(0, 0);
-          await control.focus();
+      const controls = page.locator(selector);
+      const count = await controls.count();
+      for (let index = 0; index < count; index++) {
+        const control = controls.nth(index);
+        if (!(await control.isVisible())) continue;
+        for (const state of ["hover", "focus"]) {
+          if (state === "hover") await control.hover();
+          else {
+            await page.mouse.move(0, 0);
+            await control.focus();
+          }
+          const colors = await control.evaluate(async (element) => {
+            await Promise.all(element.getAnimations().map((animation) => animation.finished));
+            let parent = element;
+            while (parent && getComputedStyle(parent).backgroundColor === "rgba(0, 0, 0, 0)")
+              parent = parent.parentElement;
+            return {
+              foreground: getComputedStyle(element).color,
+              background: getComputedStyle(parent).backgroundColor,
+            };
+          });
+          const contrast = textContrast(colors.foreground, colors.background);
+          assert(
+            contrast >= 4.5,
+            `${selector}[${index}] ${state} contrast ${contrast.toFixed(2)}:1 is below 4.5:1`,
+          );
+          results.push({ selector, index, state, ...colors, contrast });
         }
-        const colors = await control.evaluate(async (element) => {
-          await Promise.all(element.getAnimations().map((animation) => animation.finished));
-          let parent = element;
-          while (parent && getComputedStyle(parent).backgroundColor === "rgba(0, 0, 0, 0)")
-            parent = parent.parentElement;
-          return {
-            foreground: getComputedStyle(element).color,
-            background: getComputedStyle(parent).backgroundColor,
-          };
-        });
-        const contrast = textContrast(colors.foreground, colors.background);
-        assert(
-          contrast >= 4.5,
-          `${selector} ${state} contrast ${contrast.toFixed(2)}:1 is below 4.5:1`,
-        );
-        results.push({ selector, state, ...colors, contrast });
       }
     }
   } finally {
