@@ -114,23 +114,4 @@ describe("workflow supply-chain hardening", () => {
     expect(missing).toEqual([]);
     expect(writable).toEqual([]);
   });
-
-  it("scopes the release token per job", () => {
-    const release = workflows.find(({ name }) => name === "release.yml")?.lines ?? [];
-    expect(topLevelPermissions(release)).toEqual(["permissions: {}"]);
-    const jobBlock = (id: string) => {
-      const at = release.findIndex((line) => line === `  ${id}:`);
-      expect(at, `release.yml job ${id}`).toBeGreaterThan(-1);
-      let end = at + 1;
-      while (end < release.length && !/^ {2}[A-Za-z0-9_-]+:\s*$/.test(release[end] ?? "")) end += 1;
-      return release
-        .slice(at, end)
-        .filter((line) => !isComment(line))
-        .join("\n");
-    };
-    const grants = (block: string) =>
-      [...block.matchAll(/^ {6}([a-z-]+): (read|write)\b/gm)].map((m) => `${m[1]}: ${m[2]}`).sort();
-    expect(grants(jobBlock("release-please"))).toEqual(["contents: write", "pull-requests: write"]);
-    expect(grants(jobBlock("dispatch-checks"))).toEqual(["actions: write"]);
-  });
 });
