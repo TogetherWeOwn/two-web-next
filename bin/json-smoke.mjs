@@ -79,14 +79,18 @@ export function parseSetCookie(raw) {
   return { name: first.slice(0, eq).trim(), value: first.slice(eq + 1).trim(), attrs };
 }
 
-const cookieNamed = (response, name) =>
-  setCookiesOf(response)
+const cookieNamed = (response, name) => {
+  const cookies = setCookiesOf(response)
     .map(parseSetCookie)
-    .find((cookie) => cookie?.name === name);
+    .filter((cookie) => cookie?.name === name);
+  // Duplicates fail the gate, but retain the last value for best-effort cleanup.
+  return cookies.length ? { ...cookies.at(-1), duplicate: cookies.length > 1 } : undefined;
+};
 
 // Attribute names only: a violation list can never carry a cookie value.
 function hostCookieProblems(cookie) {
   const problems = [];
+  if (cookie.duplicate) problems.push("duplicate Set-Cookie");
   if (!cookie.name.startsWith("__Host-")) problems.push("__Host- prefix");
   if (cookie.attrs.get("path") !== "/") problems.push("Path=/");
   if (!cookie.attrs.has("secure")) problems.push("Secure");
@@ -110,14 +114,40 @@ export function clearedCookieProblems(cookie) {
   return problems;
 }
 
-/**
- * Drops Cloudflare's injected challenge snippet (it embeds a per-request ray
- * id) so two edge responses to the same app body compare equal.
- */
+const CLOUDFLARE_SCRIPT_START =
+  "<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;" +
+  "if(b){var d=b.createElement('script');d.innerHTML=\"window.__CF$cv$params={r:'";
+const CLOUDFLARE_SCRIPT_END =
+  "'};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';" +
+  "document.getElementsByTagName('head')[0].appendChild(a);\";b.getElementsByTagName('head')[0].appendChild(d)}}" +
+  "if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;" +
+  "a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';" +
+  "document.body.appendChild(a);if('loading'!==document.readyState)c();" +
+  "else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);" +
+  "else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);" +
+  "'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>";
+
+/** Comparison only, not HTML sanitization. Unknown injections remain byte-for-byte. */
 export function stripCloudflareSnippet(html) {
-  return html.replace(/<script\b[^>]*>(?:(?!<\/script>)[\s\S])*<\/script>/gi, (block) =>
-    block.includes("__CF$cv$params") || block.includes("/cdn-cgi/") ? "" : block,
-  );
+  let output = "";
+  let offset = 0;
+  for (;;) {
+    const start = html.indexOf(CLOUDFLARE_SCRIPT_START, offset);
+    if (start < 0) return output + html.slice(offset);
+    const valuesStart = start + CLOUDFLARE_SCRIPT_START.length;
+    // Only the bounded ray and timestamp fields can vary; the whole wrapper must match.
+    const values = html
+      .slice(valuesStart, valuesStart + 160)
+      .match(/^[a-f0-9]{16}',t:'[A-Za-z0-9+/]{1,128}={0,2}/i);
+    const valuesEnd = valuesStart + (values?.[0].length ?? 0);
+    output += html.slice(offset, start);
+    if (values && html.startsWith(CLOUDFLARE_SCRIPT_END, valuesEnd)) {
+      offset = valuesEnd + CLOUDFLARE_SCRIPT_END.length;
+    } else {
+      output += CLOUDFLARE_SCRIPT_START;
+      offset = valuesStart;
+    }
+  }
 }
 
 function parseBody(text) {
@@ -255,18 +285,16 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       headers: { origin: base.origin, [QA_HEADER]: token },
     });
     await response.text();
-    const pair = setCookiesOf(response)
-      .map((header) => header.split(";")[0]?.trim())
-      .find((candidate) => candidate?.startsWith(`${SESSION_COOKIE}=`));
-    if (response.status === 204 && pair && pair.length > SESSION_COOKIE.length + 1) {
-      cookie = pair.slice(SESSION_COOKIE.length + 1);
+    const issued = cookieNamed(response, SESSION_COOKIE);
+    if (response.status === 204 && issued?.value) {
+      cookie = issued.value;
       loginResponse = response;
       pass("QA login issues a session cookie");
     } else {
       fail(
         "QA login",
         "HTTP 204 with a session cookie",
-        `HTTP ${response.status} ${pair ? "with session cookie" : "without session cookie"}`,
+        `HTTP ${response.status} ${issued ? "with session cookie" : "without session cookie"}`,
       );
     }
   } catch (error) {
@@ -568,10 +596,13 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
     let current = cookie;
     try {
       const page = await call("/", { session: cookie, headers: { accept: "text/html" } });
+      const replacement = cookieNamed(page, SESSION_COOKIE);
+      // The server may already have rotated. Cleanup must track the issued value
+      // even when reading the page or checking either status response fails.
+      if (replacement?.value) current = replacement.value;
       await page.text();
       const problems = [];
       if (page.status !== 200) problems.push(`page HTTP ${page.status}`);
-      const replacement = cookieNamed(page, SESSION_COOKIE);
       if (!replacement || !replacement.value) problems.push("no replacement session cookie");
       else if (replacement.value === cookie) problems.push("replacement cookie unchanged");
       else {
@@ -584,7 +615,6 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
         const fresh = await authenticates(replacement.value);
         if (fresh.verdict !== true)
           problems.push(`replacement cookie ${describeReplay(fresh, true)}`);
-        else current = replacement.value;
       }
       if (problems.length)
         fail(
@@ -611,7 +641,7 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
     } catch (error) {
       logoutError = errorName(error);
     }
-    if (!logout) {
+    if (!logout || logoutError) {
       fail("logout revokes session", "HTTP 303 within timeout", logoutError ?? "request error");
       fail("logout clears cookies", "HTTP 303 within timeout", logoutError ?? "request error");
     } else {
@@ -664,22 +694,22 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
     });
     const missing = await call(MISSING_ROUTE, attempt);
     const [badBody, missingBody] = (await Promise.all([bad.text(), missing.text()])).map((text) =>
-      stripCloudflareSnippet(text).trim(),
+      stripCloudflareSnippet(text),
     );
-    const mediaType = (response) =>
-      (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    const contentType = (response) => (response.headers.get("content-type") ?? "").trim();
+    const sameContentType = contentType(bad) === contentType(missing);
     if (
       bad.status === 404 &&
       missing.status === 404 &&
       badBody === missingBody &&
-      mediaType(bad) === mediaType(missing)
+      sameContentType
     ) {
       pass("QA bad-token 404 matches missing route");
     } else {
       fail(
         "QA bad-token 404 matches missing route",
         "identical HTTP 404 status, content type and body (Cloudflare snippet excluded)",
-        `HTTP ${bad.status} vs HTTP ${missing.status}${
+        `HTTP ${bad.status} vs HTTP ${missing.status}${sameContentType ? "" : "; content types differ"}${
           badBody === missingBody
             ? ""
             : `; bodies differ (${badBody.length} vs ${missingBody.length} chars)`

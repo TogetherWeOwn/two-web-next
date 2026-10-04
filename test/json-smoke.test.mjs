@@ -37,8 +37,16 @@ const clearedSetCookies = [
 // otherwise identical 404 bodies differ by exactly that block.
 const notFoundPage = (ray) =>
   "<html><body><h1>We cannot find that page</h1><script>(function(){function c(){" +
-  `d.innerHTML="window.__CF$cv$params={r:'${ray}',t:'x'};var a=document.createElement('script');` +
-  "a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';\";}})();</script></body></html>";
+  "var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');" +
+  `d.innerHTML="window.__CF$cv$params={r:'${ray.padStart(16, "0")}',t:'${Buffer.from(ray).toString("base64")}'};` +
+  "var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';" +
+  "document.getElementsByTagName('head')[0].appendChild(a);\";b.getElementsByTagName('head')[0].appendChild(d)}}" +
+  "if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;" +
+  "a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';" +
+  "document.body.appendChild(a);if('loading'!==document.readyState)c();" +
+  "else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);" +
+  "else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);" +
+  "'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body></html>";
 const PUB_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const GONE_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
@@ -84,7 +92,7 @@ function route(request, origin, state, options) {
     headers: { "content-type": "text/html; charset=UTF-8", ...headers },
     body,
   });
-  const notFound = () => html(404, notFoundPage(`ray${++state.rays}`));
+  const notFound = () => html(404, notFoundPage((++state.rays).toString(16)));
   if (request.method === "POST" && url.pathname === "/auth/qa/qa-member") {
     const ok = request.headers.origin === origin && request.headers["x-two-qa-auth"] === TOKEN;
     if (!ok) return ["qa-404", notFound()];
@@ -212,7 +220,7 @@ async function stub(
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   );
-  return { url: `http://127.0.0.1:${server.address().port}`, requests };
+  return { url: `http://127.0.0.1:${server.address().port}`, requests, state };
 }
 
 async function run(url, options = {}) {
@@ -699,7 +707,7 @@ test("fails when the QA bad-token 404 differs from a missing-route 404", async (
         result.headers = { "content-type": "application/json" };
         result.body = '{"error":"not_found"}';
       },
-      "HTTP 404 vs HTTP 404; bodies differ (",
+      "bodies differ (",
     ],
     [
       (result) => {
@@ -743,6 +751,125 @@ test("a throttled bad-token probe fails the 404 parity check instead of skipping
   assert.ok(result.output.includes("actual HTTP 429 vs HTTP 404"), result.output);
 });
 
+for (const script of [
+  "<script>window.qaSeamVisible=true;/* /cdn-cgi/ */</script>",
+  "<script>window.__CF$cv$params={application:true};</script>",
+  '<script src="/cdn-cgi/scripts/x.js"></script>',
+]) {
+  test(`404 parity preserves unrelated application script: ${script}`, async (t) => {
+    const { url } = await stub(t, (id, result) => {
+      if (id === "qa-404") result.body = result.body.replace("</body>", `${script}</body>`);
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, result.output);
+    assert.match(result.output, /FAIL QA bad-token 404 matches missing route/);
+    assert.match(result.output, /bodies differ/);
+    assert.ok(!result.output.includes("qaSeamVisible"), result.output);
+  });
+}
+
+for (const [id, index, label] of [
+  ["login", 0, "session cookie flags"],
+  ["login", 1, "status cookie flags"],
+  ["home", 0, "session rotation replay"],
+  ["logout", 0, "logout clears cookies"],
+  ["logout", 1, "logout clears cookies"],
+]) {
+  test(`rejects duplicate target cookie ${index} on ${id}`, async (t) => {
+    const { url } = await stub(t, (routeId, result) => {
+      if (routeId === id) {
+        const cookies = result.headers["set-cookie"];
+        const duplicate =
+          id === "logout"
+            ? cookies[index].replace("=;", "=leftover-never-log-this;")
+            : cookies[index].replace("; HttpOnly", "");
+        result.headers["set-cookie"] = [...cookies, duplicate];
+      }
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, result.output);
+    assert.ok(result.output.includes(`FAIL ${label}:`), result.output);
+    assert.match(result.output, /duplicate Set-Cookie/);
+    assert.ok(!result.output.includes("never-log-this"), result.output);
+  });
+}
+
+test("logout headers with a stalled body fail both logout checks", async (t) => {
+  const { url, state } = await stub(t, (id, result) => {
+    if (id === "logout") result.body = null;
+  });
+  const result = await run(url, { timeoutMs: 500 });
+  assert.equal(result.ok, false, result.output);
+  for (const label of ["logout revokes session", "logout clears cookies"]) {
+    assert.ok(
+      result.output.includes(`FAIL ${label}: expected HTTP 303 within timeout`),
+      result.output,
+    );
+    assert.ok(!result.output.includes(`PASS ${label}`), result.output);
+  }
+  assert.match(result.output, /actual (TimeoutError|AbortError)/);
+  assert.equal(state.live.has(ROTATED), false);
+  assert.ok(!result.output.includes("never-log-this"), result.output);
+});
+
+for (const [label, target, occurrence, stalled] of [
+  ["page body timeout", "home", 1, true],
+  ["old status 503", "status", 1, false],
+  ["replacement status 503", "status", 2, false],
+  ["old status body timeout", "status", 1, true],
+  ["replacement status body timeout", "status", 2, true],
+]) {
+  test(`logout cleans up the issued replacement after ${label}`, async (t) => {
+    let count = 0;
+    const { url, requests, state } = await stub(t, (id, result) => {
+      if (id === target && ++count === occurrence) {
+        if (stalled) result.body = null;
+        else {
+          result.status = 503;
+          result.body = '{"authenticated":false}';
+        }
+      }
+    });
+    const result = await run(url, { timeoutMs: 500 });
+    assert.equal(result.ok, false, result.output);
+    assert.match(result.output, /FAIL session rotation replay/);
+    assert.match(result.output, /PASS logout revokes session/);
+    assert.equal(
+      requests.find((request) => request.path === "/logout")?.cookie,
+      `__Host-two_session=${ROTATED}`,
+    );
+    assert.equal(state.live.has(ROTATED), false);
+    assert.equal(state.live.size, 0);
+    assert.ok(!result.output.includes("never-log-this"), result.output);
+  });
+}
+
+for (const contentType of [
+  "text/html; charset=iso-8859-1",
+  'text/html; charset=UTF-8; profile="qa-only"',
+]) {
+  test(`404 parity retains content-type parameters: ${contentType}`, async (t) => {
+    const { url } = await stub(t, (id, result) => {
+      if (id === "qa-404") result.headers["content-type"] = contentType;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, result.output);
+    assert.match(result.output, /FAIL QA bad-token 404 matches missing route/);
+    assert.match(result.output, /content types differ/);
+    assert.ok(!result.output.includes("qa-only"), result.output);
+  });
+}
+
+test("Cloudflare normalization is exact and fails closed on lookalikes", () => {
+  for (const page of [
+    notFoundPage("abc123").replace("appendChild(a);", "appendChild(a);window.extra=true;"),
+    notFoundPage("abc123").replace("r:'0000000000abc123'", "r:'not-a-ray'"),
+    notFoundPage("abc123").replace("a.style.top=0", "a.style.top=1"),
+  ]) {
+    assert.equal(stripCloudflareSnippet(page), page);
+  }
+});
+
 test("cookie and snippet helpers handle real header and edge shapes", () => {
   const good = parseSetCookie(`${sessionSetCookie("value%3D%2Bx")}`);
   assert.equal(good?.name, "__Host-two_session");
@@ -768,9 +895,9 @@ test("cookie and snippet helpers handle real header and edge shapes", () => {
   assert.ok(stripped.includes("var keep=1"), stripped);
   assert.ok(!stripped.includes("abc123") && !stripped.includes("cdn-cgi"), stripped);
   assert.equal(
-    stripCloudflareSnippet(notFoundPage("one")),
-    stripCloudflareSnippet(notFoundPage("two")),
+    stripCloudflareSnippet(notFoundPage("a".repeat(16))),
+    stripCloudflareSnippet(notFoundPage("b".repeat(16))),
   );
   const external = '<script src="/cdn-cgi/scripts/x.js"></script><p>kept</p>';
-  assert.equal(stripCloudflareSnippet(external), "<p>kept</p>");
+  assert.equal(stripCloudflareSnippet(external), external);
 });
