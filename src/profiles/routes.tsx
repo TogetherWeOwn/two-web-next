@@ -13,6 +13,8 @@
 //   (viewer never counts as their own subject, so self-views write none —
 //   AccessRecorder parity). Unknown/invalid ids are 404 and log nothing.
 // - Only the owner may PATCH; origin-checked; 30 writes/min per member.
+// - Bare /members is a retired 404 (URL freeze), answered before the gate:
+//   no session, no cookie, no access-log row (legacy had no such page).
 // Session seam mirrors the admin guard: a row read, never a rotation.
 
 import { getSignedCookie } from "hono/cookie";
@@ -183,6 +185,12 @@ export function profilesApp(deps: ProfileDeps = {}) {
     await next();
     c.header("cache-control", "private, no-store");
   };
+
+  // Bare /members is retired (URL freeze), not a member index: answer the
+  // frozen 404 before the gate below. Registered first so the "/members/*"
+  // middleware never bounces it to OAuth; members get the same 404, with no
+  // session read, no cookie and no access-log row. Hono also serves HEAD here.
+  app.get("/members", (c) => c.notFound());
 
   // Scoped to this slice's paths: the app is mounted at "/", so a "*" here
   // would gate every route in the worker.

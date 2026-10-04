@@ -564,4 +564,20 @@ describe("Production Tail pager wiring", () => {
     expect(production?.tail_consumers).toBeUndefined();
     expect(production?.workers_dev).toBe(false);
   });
+
+  it("the production prober targets the apex /up, never the staging URL", () => {
+    const tail = readWranglerConfig(readFileSync("tail/wrangler.jsonc", "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const production = (tail.env as Record<string, Record<string, unknown> | undefined>).production;
+    expect((production?.vars as Record<string, unknown> | undefined)?.UPTIME_URL).toBe(
+      "https://togetherweown.com/up",
+    );
+    // Wrangler does not inherit top-level vars: the staging default stays
+    // staging-only and cannot leak into production.
+    expect((tail.vars as Record<string, unknown> | undefined)?.UPTIME_URL).toBe(
+      "https://next.togetherweown.com/up",
+    );
+  });
 });

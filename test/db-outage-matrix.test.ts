@@ -70,6 +70,9 @@ const MATRIX: Case[] = [
   // reads the DB without a session cookie, so both stay 200 during an outage.
   { method: "GET", route: "/auth/status", status: 200, format: "json" },
   { method: "GET", route: "/auth/recover", status: 200, format: "html" },
+  // Bare /members is the retired frozen 404: answered before the member gate,
+  // so no session/DB read and the same branded page with or without a binding.
+  { method: "GET", route: "/members", status: 404, format: "html" },
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },

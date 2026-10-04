@@ -11,6 +11,11 @@ const html = [
   ["/events", /id="events-heading"/],
   ["/events/past", /id="past-events-heading"/],
 ];
+// HTML leaves that stay non-indexable even on the indexable apex: the archive
+// and the branded 404 carry their noindex in <meta>, so the deploy smoke
+// asserts the X-Robots-Tag header only on the indexable leaves.
+const nonIndexableHtml = new Set(["/events/past", "/__smoke_unknown_route__"]);
+
 const routes = [
   { path: "/up", statuses: [200], type: "application/json", json: true },
   ...html.map(([path, body]) => ({ path, statuses: [200], type: "text/html", body })),
@@ -29,7 +34,10 @@ const routes = [
   },
 ];
 
-export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = {}) {
+export async function smoke(
+  baseUrl,
+  { timeoutMs = 5_000, log = console.log, allowIndexable = false } = {},
+) {
   const base = new URL(baseUrl);
   if (
     !["http:", "https:"].includes(base.protocol) ||
@@ -77,13 +85,29 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
         headers.get("x-content-type-options") ?? "missing",
       );
       const contentType = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
-      // Staging noindex follows returned HTML, including guest denials (src/headers.ts).
+      // Indexing posture follows the probed origin (src/headers.ts robotsTagFor):
+      // staging and other non-apex hosts send X-Robots-Tag noindex on returned
+      // HTML, including guest denials; the apex omits it on indexable leaves.
+      // The archive and branded 404 stay non-indexable via <meta> in every
+      // env, which this header probe does not assert (ci/cutover-check.mjs
+      // owns the meta half of the gate).
       if (contentType === "text/html") {
-        check(
-          headerIndexingRules(headers.get("x-robots-tag")).some((rule) => rule.crawler === "*"),
-          "staging X-Robots-Tag noindex/none (unscoped)",
-          headers.get("x-robots-tag") ?? "missing",
+        const universalNoindex = headerIndexingRules(headers.get("x-robots-tag")).some(
+          (rule) => rule.crawler === "*",
         );
+        if (allowIndexable && !nonIndexableHtml.has(route.path)) {
+          check(
+            !universalNoindex,
+            "no universal X-Robots-Tag noindex on indexable apex HTML",
+            headers.get("x-robots-tag") ?? "missing",
+          );
+        } else if (!allowIndexable) {
+          check(
+            universalNoindex,
+            "staging X-Robots-Tag noindex/none (unscoped)",
+            headers.get("x-robots-tag") ?? "missing",
+          );
+        }
       }
       if (route.type) {
         check(contentType === route.type, `Content-Type ${route.type}`, contentType ?? "missing");
@@ -181,12 +205,19 @@ export async function smoke(baseUrl, { timeoutMs = 5_000, log = console.log } = 
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 3) {
-    console.error("Usage: node bin/smoke.mjs <staging-base-url>");
+  const args = process.argv.slice(2);
+  const [baseUrl, flag] = args;
+  if (
+    (args.length !== 1 && args.length !== 2) ||
+    (flag !== undefined && flag !== "--allow-indexable")
+  ) {
+    console.error("Usage: node bin/smoke.mjs <base-url> [--allow-indexable]");
     process.exitCode = 2;
   } else {
     try {
-      process.exitCode = (await smoke(process.argv[2])) ? 0 : 1;
+      process.exitCode = (await smoke(baseUrl, { allowIndexable: flag === "--allow-indexable" }))
+        ? 0
+        : 1;
     } catch (error) {
       console.error(`smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
       process.exitCode = 2;

@@ -1,10 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { upBody } from "../src/up";
-import { healthSql } from "./helpers/up";
 
 // Execute the staging workflow's actual shell block with a fake checker and sleep.
 // The checker itself has loopback-fixture coverage in smoke.test.mjs.
@@ -75,47 +73,50 @@ process.exit(pass ? 0 : 1);
   }
 }
 
-// Execute the production workflow's actual /up shell block, not a copied predicate.
-// curl/sleep are local fakes: no production requests, DB connections or retry waits.
-function productionSmoke(body: string, code = "200", curlExit = "0") {
+// Execute the production workflow's actual public-route shell block with a fake
+// checker and sleep, mirroring the staging helper. The checker itself has
+// loopback-fixture coverage in smoke.test.mjs: no production requests here.
+function productionSmoke(succeedOnAttempt: number) {
   const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
   const block = workflow.match(
-    /      - name: Smoke test \/up\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
   )?.[1];
   expect(block).toBeDefined();
   const scratch = mkdtempSync(
     join(
       process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
-      "up-smoke-",
+      "prod-route-smoke-",
     ),
   );
   try {
     writeFileSync(
-      join(scratch, "curl"),
-      `#!/bin/sh
-printf x >> "$RUNNER_TEMP/attempts"
-output=
-seen=
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -o) output="$2"; shift 2 ;;
-    "$SMOKE_URL") seen=1; shift ;;
-    https://*) exit 2 ;;
-    *) shift ;;
-  esac
-done
-[ "$seen" = 1 ] || exit 2
-printf '%s' "$SMOKE_BODY" > "$output"
-printf '%s' "$SMOKE_CODE"
-exit "$SMOKE_CURL_EXIT"
+      join(scratch, "node"),
+      `#!${process.execPath}
+import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const attempts = join(process.env.RUNNER_TEMP, "attempts");
+appendFileSync(attempts, "x");
+if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://togetherweown.com" || process.argv[4] !== "--allow-indexable") {
+  console.error("unexpected checker invocation");
+  process.exit(2);
+}
+const count = readFileSync(attempts, "utf8").length;
+const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
+console.log(pass ? "smoke: 16 routes, 0 failed assertions" : "FAIL /faq: expected HTTP 200; actual HTTP 503");
+process.exit(pass ? 0 : 1);
 `,
       { mode: 0o700 },
     );
-    writeFileSync(join(scratch, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    symlinkSync(process.execPath, join(scratch, "node"));
+    writeFileSync(
+      join(scratch, "sleep"),
+      '#!/bin/sh\nprintf x >> "$RUNNER_TEMP/sleeps"\nexit 0\n',
+      { mode: 0o700 },
+    );
+    writeFileSync(join(scratch, "sleeps"), "");
+    writeFileSync(join(scratch, "attempts"), "");
     const bash = spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" });
     expect(bash.status).toBe(0);
-    // Only Node and our fakes are on PATH: system jq must not be required.
+    // Only our fakes are on PATH: no real network request or retry delay.
     const result = spawnSync(
       bash.stdout.trim(),
       ["-e", "-c", block!.replace(/^          /gm, "")],
@@ -126,10 +127,7 @@ exit "$SMOKE_CURL_EXIT"
           ...process.env,
           PATH: scratch,
           RUNNER_TEMP: scratch,
-          SMOKE_URL: "https://togetherweown.com/up",
-          SMOKE_BODY: body,
-          SMOKE_CODE: code,
-          SMOKE_CURL_EXIT: curlExit,
+          SMOKE_SUCCEED_ON_ATTEMPT: String(succeedOnAttempt),
         },
       },
     );
@@ -138,20 +136,12 @@ exit "$SMOKE_CURL_EXIT"
       status: result.status,
       output: result.stdout + result.stderr,
       attempts: readFileSync(join(scratch, "attempts"), "utf8").length,
+      sleeps: readFileSync(join(scratch, "sleeps"), "utf8").length,
     };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
-
-const depth = (pending: number) => ({
-  pending,
-  delayed: 0,
-  reserved: 0,
-  total: pending,
-  failed: 0,
-  oldestPendingAgeSeconds: null,
-});
 
 describe("deploy public-route smoke (offline)", () => {
   it.each([1, 3, 6])("stops on successful attempt %s", (attempt) => {
@@ -299,68 +289,44 @@ describe("deploy event-JSON smoke (offline)", () => {
   });
 });
 
-describe("production deploy smoke /up (offline)", () => {
-  it.each(["healthy", "degraded", "unknown", "unconfigured"])(
-    "accepts the existing %s response",
-    async (state) => {
-      const body = await upBody(
-        state === "unconfigured"
-          ? null
-          : async () => {
-              if (state === "unknown") throw new Error("fixture outage");
-              return depth(state === "degraded" ? 20 : 0);
-            },
-        healthSql(),
-      );
-      const result = productionSmoke(JSON.stringify(body));
-      expect(result.status, result.output).toBe(0);
-      expect(result.attempts).toBe(1);
-    },
-  );
+describe("production deploy smoke (offline)", () => {
+  it.each([1, 3, 6])("stops on successful attempt %s", (attempt) => {
+    const result = productionSmoke(attempt);
+    expect(result.status, result.output).toBe(0);
+    expect(result.attempts).toBe(attempt);
+    expect(result.sleeps).toBe(attempt - 1);
+    expect(result.output).toContain(`production smoke ok (attempt ${attempt})`);
+    expect(result.output).not.toContain("unexpected checker invocation");
+    expect(result.output).not.toContain("::error::");
+  });
 
-  it.each([
-    [
-      '{"status":"degraded","db":"ok","pending_migrations":1,"queue":{"status":"healthy"}}',
-      "503",
-      "0",
-    ],
-    [
-      '{"status":"degraded","db":"ok","pending_migrations":1,"queue":{"status":"healthy"}}',
-      "200",
-      "0",
-    ],
-    [
-      '{"status":"degraded","db":"ok","pending_migrations":null,"queue":{"status":"healthy"}}',
-      "503",
-      "0",
-    ],
-    [
-      '{"status":"healthy","db":"error","pending_migrations":0,"queue":{"status":"healthy"}}',
-      "200",
-      "0",
-    ],
-    [
-      '{"status":"healthy","db":"ok","pending_migrations":"0","queue":{"status":"healthy"}}',
-      "200",
-      "0",
-    ],
-    ['{"ok":true}', "200", "0"],
-    ["null", "200", "0"],
-    ['{"status":"healthy","queue":null}', "200", "0"],
-    ['{"status":"unknown","queue":{"status":"healthy"}}', "200", "0"],
-    ['{"status":"healthy","queue":{"status":"unknown"}} trailing', "200", "0"],
-    ["<html>not JSON</html>", "200", "0"],
-    ['{"status":"healthy"}', "200", "0"],
-    ['{"status":"healthy","queue":{"status":"unexpected"}}', "200", "0"],
-    ['{"status":"healthy","queue":{"status":"unknown"}}', "503", "0"],
-    ['{"status":"healthy","queue":{"status":"unknown"}}', "200", "28"],
-  ])(
-    "fails closed on an invalid envelope, HTTP error or curl failure (%s / %s / %s)",
-    (body, code, curlExit) => {
-      const result = productionSmoke(body, code, curlExit);
-      expect(result.status, result.output).toBe(1);
-      expect(result.attempts).toBe(6);
-      expect(result.output).toContain("::error::production /up");
-    },
-  );
+  it("fails closed after six failed checker runs without a final sleep", () => {
+    const result = productionSmoke(0);
+    expect(result.status, result.output).toBe(1);
+    expect(result.attempts).toBe(6);
+    expect(result.sleeps).toBe(5);
+    expect(result.output).toContain("FAIL /faq: expected HTTP 200; actual HTTP 503");
+    expect(result.output).toContain("::error::production public-route smoke failed after deploy");
+    expect(result.output).not.toContain("unexpected checker invocation");
+  });
+
+  it("probes the apex origin with the indexable posture, never staging", () => {
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const block = workflow.match(
+      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(block).toBeDefined();
+    expect(block).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(block).not.toContain("next.togetherweown.com");
+  });
+
+  it("stays on standard hosted runners with no secrets", () => {
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const block = workflow.match(
+      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(block).toBeDefined();
+    expect(block).not.toMatch(/secrets\./);
+    expect(block).not.toMatch(/self-hosted/);
+  });
 });
