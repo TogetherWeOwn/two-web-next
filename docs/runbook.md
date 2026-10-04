@@ -523,7 +523,7 @@ Rehearsal record:
 | 2026-10-03 16:35 | rollback `81da0f67` (c07ad6b) to `cd470835` (4b12bef, five deployments back) | 4.4 s | +5.1 s | +5.1 s | 0 of 48 |
 | 2026-10-03 16:36 | roll forward `cd470835` to `81da0f67` | 4.0 s | +6.0 s | +8.6 s | 0 of 42 |
 | 2026-10-03 18:25 | DNS flip `next.*` to legacy (custom domain deleted, `A`/`AAAA` to legacy added) | 1.6 s | +1.2 s (first probe without the marker) | +11.2 s (10 consecutive without it) | legacy edge answered 522 and intermittent 503, not 200 |
-| 2026-10-03 18:25 | DNS flip back (records deleted, custom domain re-attached) | 2.1 s | +3.2 s (first probe with the marker) | +14.7 s (10 consecutive with it) | smoke 16 of 16 before and after |
+| 2026-10-03 18:25 | DNS flip back (records deleted, custom domain re-attached) | 2.1 s | +3.2 s (first probe with the marker) | +14.7 s (10 consecutive with it) | n/a (smoke result in the notes below) |
 | 2026-10-03 20:36 | rollback `59a88ba7` (331122e5) to `da612f07` (bfbaf4d5) | 3.7 s | +4.5 s (last 301 at +1.6 s, first 404 at +4.5 s) | +4.5 s, no alternation | 0 of 137 (both directions) |
 | 2026-10-03 20:37 | roll forward `da612f07` to `59a88ba7` | 3.8 s | +9.6 s (last 404 at +8.2 s, first 301 at +9.6 s) | +9.6 s, no alternation | see above |
 

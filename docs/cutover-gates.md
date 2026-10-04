@@ -1,6 +1,7 @@
 # Production cutover go/no-go gates — snapshot
 
-Snapshot taken 2026-10-04 ~00:35 UTC, from public repo state only.
+Snapshot taken 2026-10-04 ~00:35 UTC, from public repo state only;
+gates 4 and 5 refreshed 2026-10-04 with the staging DNS rehearsal record.
 This is a **coordination snapshot for the cutover decision**, not an
 authorization to flip DNS, migrate data, or deploy.
 
@@ -37,5 +38,6 @@ decision; the rollback rehearsal (gate 5) has staging receipts for both
 halves and waits on DevOps confirmation and the production legacy-origin check.
 
 Suggested order: cut the release (gate 1) → production DB receipt (gate 3)
-→ DNS inputs (gate 4) → DNS rehearsal (gate 5) → staffed roster (gate 6),
+→ DNS inputs (gate 4) → production legacy-origin check and DevOps
+confirmation of the staging rehearsal (gate 5) → staffed roster (gate 6),
 with staging smoke (gate 2) refreshed at each step.
