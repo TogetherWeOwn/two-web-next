@@ -234,7 +234,7 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     await expectFunnel(await post(oversizeBodyWithMarker()));
     await expectFunnel(await post(validBody()));
     expect(warn).toHaveBeenCalledTimes(22);
-    expect(warn.mock.calls[21][0]).toBe("csp.report.dropped_oversize");
+    expect(warn.mock.calls[21]?.[0]).toBe("csp.report.dropped_oversize");
   });
 
   it("caps stored tokens at a twenty-warning burst after a long idle", async () => {
