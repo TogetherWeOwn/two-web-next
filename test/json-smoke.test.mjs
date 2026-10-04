@@ -1166,3 +1166,32 @@ test("404 parity normalizes staging-data event suggestions, nothing else", () =>
     maskNotFoundSuggestions(block("<p>y</p>")),
   );
 });
+
+const withSuggestions = (page, inner) =>
+  page.replace(
+    "</body>",
+    `<section class="recovery-events" data-testid="error-event-suggestions"><h2>Happening soon</h2>${inner}</section></body>`,
+  );
+
+test("the smoke tolerates different staging suggestions in the two 404 bodies", async (t) => {
+  const { url } = await stub(t, (id, result) => {
+    if (id === "qa-404") {
+      result.body = withSuggestions(result.body, '<ul><li><a href="/e/A">Seed 01</a></li></ul>');
+    }
+    if (id === "missing-404") {
+      result.body = withSuggestions(result.body, "<p>Nothing is on the calendar right now.</p>");
+    }
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(result.output, /PASS QA bad-token 404 matches missing route/);
+});
+
+test("the smoke still fails when only one 404 body carries the suggestions block", async (t) => {
+  const { url } = await stub(t, (id, result) => {
+    if (id === "qa-404") result.body = withSuggestions(result.body, "<p>x</p>");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false, result.output);
+  assert.match(result.output, /FAIL QA bad-token 404 matches missing route/);
+});

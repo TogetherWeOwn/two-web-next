@@ -131,8 +131,9 @@ export function maskCloudflareRay(html) {
 // from the staging database. The two parity probes run seconds apart and can
 // land on different isolates (the suggestion cache is per-isolate, 60 s), so
 // the rows are staging data, not seam signal: normalize the section's inner
-// content and leave every other byte in place. Only inner content is replaced —
-// a page that drops the block, or differs anywhere else, still fails.
+// content (including its static links) and leave every other byte in place.
+// Only inner content is replaced — a page that drops the block, or differs
+// anywhere else, still fails.
 const NOT_FOUND_SUGGESTIONS =
   /(<section\b[^>]*data-testid="error-event-suggestions"[^>]*>)[\s\S]*?(<\/section>)/g;
 
