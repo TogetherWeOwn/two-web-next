@@ -285,6 +285,90 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     await assertTracked([ev.eventKey], "0123456789abcdef-LHR"); // Re-answers in one burst share a tracked carrier.
   });
 
+  // Legacy WaitlistTest.php:322-351 at 2eaefb8d: the first five rows are its
+  // non-seat answer matrix; the rest cover the complementary Maybe/NotGoing cases.
+  it.each([
+    { before: "going", after: "going" },
+    { before: "maybe", after: "not_going" },
+    { before: "not_going", after: "maybe" },
+    { before: "waitlisted", after: "maybe" },
+    { before: null, after: "maybe" },
+    { before: "maybe", after: "maybe" },
+    { before: "not_going", after: "not_going" },
+    { before: "waitlisted", after: "not_going" },
+    { before: null, after: "not_going" },
+  ] as const)(
+    "$before → $after preserves a stamped waiter beside a vacancy",
+    async ({ before, after }) => {
+      const ev = await fullWithLine(1);
+      const userId = before === "going" ? "holder" : "answering";
+      if (before !== null && before !== "going") await put(ev.eventKey, userId, before);
+      await client`update rsvps set legacy_id = 4242,
+      created_at = '2020-01-01T00:00:00.000001Z', updated_at = '2020-01-02T00:00:00.000002Z',
+      synced_to_discord_at = '2020-01-03T00:00:00.000003Z'
+      where event_id = ${ev.id} and user_id = 'waiter-1'`;
+      const snapshot = () => client`select id, legacy_id, status, created_at::text,
+      updated_at::text, synced_to_discord_at::text from rsvps
+      where event_id = ${ev.id} and user_id = 'waiter-1'`;
+      const stamped = await snapshot();
+      // Bypass the capacity-edit service deliberately: normal increases settle the
+      // line. One holder and one waiter beside a gap expose unconditional promotion.
+      await db.update(events).set({ capacity: 2 }).where(eq(events.id, ev.id));
+      await completeQueuedDeliveries();
+
+      const res = await put(ev.eventKey, userId, after);
+      expect(res.status).toBe(before === null ? 201 : 200);
+      expect(await res.json()).toEqual({
+        data: { status: after, synced_to_discord_at: null, waitlist_position: null },
+      });
+      expect(await snapshot()).toEqual(stamped);
+      expect(await waitlistPosition(db, ev.id, "waiter-1")).toBe(1);
+      expect(
+        (await rows(ev.id)).filter((row) => row.status === "going").map((row) => row.userId),
+      ).toEqual(["holder"]);
+      await assertTracked([ev.eventKey], "0123456789abcdef-LHR");
+    },
+  );
+
+  it.each([
+    { before: null, request: "going" },
+    { before: null, request: "waitlisted" },
+    { before: "maybe", request: "going" },
+    { before: "maybe", request: "waitlisted" },
+    { before: "not_going", request: "going" },
+    { before: "not_going", request: "waitlisted" },
+    { before: "waitlisted", request: "going" },
+    { before: "waitlisted", request: "waitlisted" },
+  ] as const)(
+    "$before → $request settles an earlier waiter before the caller",
+    async ({ before, request: status }) => {
+      const ev = await fullWithLine(1);
+      if (before !== null) await put(ev.eventKey, "answering", before);
+      const head = (await rows(ev.id)).find((row) => row.userId === "waiter-1")!;
+      await db.update(events).set({ capacity: 2 }).where(eq(events.id, ev.id));
+      await completeQueuedDeliveries();
+
+      const res = await put(ev.eventKey, "answering", status);
+      expect(res.status).toBe(before === null ? 201 : 200);
+      expect(await res.json()).toEqual({
+        data: { status: "waitlisted", synced_to_discord_at: null, waitlist_position: 1 },
+      });
+      const line = await rows(ev.id);
+      const promoted = line.find((row) => row.userId === "waiter-1")!;
+      expect(promoted).toMatchObject({
+        id: head.id,
+        createdAt: head.createdAt,
+        status: "going",
+        syncedToDiscordAt: null,
+      });
+      expect(line.filter((row) => row.status === "going").map((row) => row.userId)).toEqual([
+        "holder",
+        "waiter-1",
+      ]);
+      await assertTracked([ev.eventKey], "0123456789abcdef-LHR");
+    },
+  );
+
   it("a stale-view explicit waitlist answer takes a vacant seat before a newcomer", async () => {
     const ev = await seed();
     await put(ev.eventKey, "holder");
@@ -376,10 +460,18 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     "Going → %s frees a seat to the existing head",
     async (status) => {
       const ev = await fullWithLine();
+      const before = await rows(ev.id);
       const res = await put(ev.eventKey, "holder", status);
       expect(res.status).toBe(200);
       expect((await answer(res)).status).toBe(status);
-      expect((await rows(ev.id)).find((r) => r.userId === "waiter-1")!.status).toBe("going");
+      const line = await rows(ev.id);
+      expect(line.find((r) => r.userId === "waiter-1")).toMatchObject({
+        id: before[1]!.id,
+        createdAt: before[1]!.createdAt,
+        status: "going",
+        syncedToDiscordAt: null,
+      });
+      expect(line.find((r) => r.userId === "waiter-2")).toEqual(before[2]);
       expect(await waitlistPosition(db, ev.id, "holder")).toBe(status === "waitlisted" ? 2 : null);
       expect(await waitlistPosition(db, ev.id, "waiter-2")).toBe(1);
     },
