@@ -57,6 +57,25 @@ Every sink path returns 204 with `no-store` and has no session, cookie or DB
 dependency, so a missing `request_id` on these records is normal. Endpoint
 contract: `docs/same-origin.md` (exemption table).
 
+## Member access-log degrade
+
+When a member-data read cannot be recorded, `src/access-log.ts` refuses to
+serve it silently. `MEMBER_ACCESS_LOG_ENFORCE` selects the failure mode:
+
+- **Unset or empty (default): fail closed.** The read is replaced with a 503
+  via `databaseUnavailable`, with `cache-control` carrying `private` and
+  `no-store`. A loud `console.error` is still emitted.
+- **`false`, `0` or `no` (case-insensitive, trimmed): degrade.** The read is
+  still served, and the same loud `console.error` is emitted:
+  `Member data access could not be recorded; refusing to serve the read.`
+
+The error record carries only `{ route, exception }`, where `exception` is
+the error class name — never the message or stack, which may contain SQL
+bindings. It never includes viewer or subject IDs. Correlate with the
+`http.request` record by searching the same `x-request-id` (the `http.request`
+record is still emitted with the final status). Source: `src/access-log.ts`
+(`enforceOn`, `memberAccessLog`).
+
 ## Privacy and boundaries
 
 Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
