@@ -1,5 +1,6 @@
 // route-inventory: GET /profile
 // route-inventory: GET /members
+// route-inventory: GET /members/
 // route-inventory: GET /members/:user
 // route-inventory: PATCH /members/:user
 // route-inventory: POST /members/:user
@@ -236,25 +237,36 @@ describe("exposure matrix: who sees what (memory doubles)", () => {
     expect(html).toContain("alice");
   });
 
-  it("bare /members is the frozen 404 for every role, with no log row", async () => {
-    const { app, sessions, store, log } = harness();
-    const find = vi.spyOn(store, "find");
-    const guest = await app.request("/members", {}, env);
-    expect(guest.status).toBe(404);
-    expect(guest.headers.get("location")).toBeNull();
-    expect(guest.headers.get("set-cookie")).toBeNull();
-    for (const row of [OUTSIDER, BOB, MOD]) {
-      const res = await app.request(
-        "/members",
-        { headers: { cookie: await cookieFor(sessions, row) } },
-        env,
-      );
-      expect(res.status, row.username).toBe(404);
-      expect(res.headers.get("location"), row.username).toBeNull();
-    }
-    expect(find).not.toHaveBeenCalled();
-    expect(log).toHaveLength(0);
-  });
+  it.each([
+    ["GET", "/members"],
+    ["HEAD", "/members"],
+    ["GET", "/members/"],
+    ["HEAD", "/members/"],
+  ])(
+    "%s %s is the frozen 404 for every role, with no session read or log row",
+    async (method, path) => {
+      const { app, sessions, store, log } = harness();
+      const getSession = vi.spyOn(sessions, "get");
+      const find = vi.spyOn(store, "find");
+      const guest = await app.request(path, { method }, env);
+      expect(guest.status).toBe(404);
+      expect(guest.headers.get("location")).toBeNull();
+      expect(guest.headers.get("set-cookie")).toBeNull();
+      for (const row of [OUTSIDER, BOB, MOD]) {
+        const res = await app.request(
+          path,
+          { method, headers: { cookie: await cookieFor(sessions, row) } },
+          env,
+        );
+        expect(res.status, row.username).toBe(404);
+        expect(res.headers.get("location"), row.username).toBeNull();
+        expect(res.headers.get("set-cookie"), row.username).toBeNull();
+      }
+      expect(getSession).not.toHaveBeenCalled();
+      expect(find).not.toHaveBeenCalled();
+      expect(log).toHaveLength(0);
+    },
+  );
 
   it("unknown and malformed ids are 404 with no log row", async () => {
     const { app, sessions, log } = harness();

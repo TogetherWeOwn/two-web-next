@@ -83,6 +83,7 @@ export const ALERT_ROUTES = new Set([
   "/join/discord",
   "/logout",
   "/members",
+  "/members/",
   "/members/:user",
   "/privacy",
   "/profile",

@@ -73,6 +73,7 @@ const MATRIX: Case[] = [
   // Bare /members is the retired frozen 404: answered before the member gate,
   // so no session/DB read and the same branded page with or without a binding.
   { method: "GET", route: "/members", status: 404, format: "html" },
+  { method: "GET", route: "/members/", status: 404, format: "html" },
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },

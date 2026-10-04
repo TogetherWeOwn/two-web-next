@@ -76,6 +76,7 @@ const OTHER_READS = [
   "/auth/status",
   "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
   "/members", // Retired bare path: frozen 404, answered before the member gate.
+  "/members/", // Trailing-slash form is retired before the same gate.
   "/events",
   "/events/past",
   "/events.json",

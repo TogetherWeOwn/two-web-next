@@ -76,9 +76,11 @@ function fixture(url, phase) {
     (row) => row.path.replace("{key}", eventKey).replace("{user}", "0") === path,
   );
   assert.ok(row, `unrecognised fixture URL ${url}`);
-  // Pin the retired diagnostic contract independently of the checker table.
+  // Pin retired paths independently of the checker table.
   const response = {
-    status: ["/health", "/healthz", "/db-ping"].includes(path) ? 404 : row.status,
+    status: ["/health", "/healthz", "/db-ping", "/members", "/members/"].includes(path)
+      ? 404
+      : row.status,
     headers,
     body: "",
   };
@@ -431,9 +433,9 @@ test("all no-store gates require a complete directive outside quoted values in b
   }
 });
 
-test("retired diagnostics reject soft-404s and redirects in both phases", async () => {
+test("retired paths reject soft-404s and redirects in both phases", async () => {
   for (const phase of ["before", "after"]) {
-    for (const path of ["/health", "/healthz", "/db-ping"]) {
+    for (const path of ["/health", "/healthz", "/db-ping", "/members", "/members/"]) {
       for (const status of [200, 302]) {
         const result = await runChecks(options(phase), {
           freeze,
