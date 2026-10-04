@@ -243,7 +243,15 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "npx wrangler deploy --dry-run --outdir dist",
     "npx wrangler deploy --dry-run --env production --outdir dist-production",
   ]) {
-    const step = steps.find((entry) => entry.split("\n").includes(`        run: ${command}`));
+    const step = steps.find(
+      (entry) =>
+        entry.split("\n").includes(`        run: ${command}`) ||
+        // Migration fetch auth is command-scoped, not persisted by checkout.
+        // Keep the real gate as the final command of a fail-fast run block.
+        (command === "bash ci/check-migration-numbers.sh" &&
+          /\n        run: \|\n          set -euo pipefail\n/.test(entry) &&
+          entry.trimEnd().endsWith(`\n            ${command}`)),
+    );
     assert(step, `Required gate missing: ${command}`);
     // The docs-only/draft scope gate (TOG-11811/TOG-14880) is the one sanctioned
     // bypass: the fast-pass step keeps `check` green while every gate keeps
