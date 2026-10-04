@@ -1,5 +1,12 @@
 import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
-import { expect, memberStorageState, moderatorStorageState, stagingOrigin, test } from "./fixtures";
+import {
+  emptyStorageState,
+  expect,
+  memberStorageState,
+  moderatorStorageState,
+  stagingOrigin,
+  test,
+} from "./fixtures";
 import { loginQaIdentities } from "./qa-login";
 
 // Fresh sessions per file: event pages rotate the bearer on read, so a stored
@@ -21,7 +28,9 @@ async function cancelFixtureViaApi(request: APIRequestContext, eventKey: string)
     headers: { Origin: stagingOrigin },
     maxRedirects: 0,
   });
-  return response.status();
+  const status = response.status();
+  console.info("event-fixture-cleanup", JSON.stringify({ eventKey, status }));
+  return status;
 }
 
 // `finally` cleanup that never throws, so the contexts below always close.
@@ -93,10 +102,10 @@ async function publishDraft(admin: Page): Promise<void> {
 // writes enqueue sync-event carriers (src/events/sync.ts), but with no
 // SYNC_EVENT_QUEUE consumer pointed at the live guild there is no Discord
 // write-back; the cancelled fixture doubles as the 410 case.
-test("staging member RSVPs going on a fixture, then withdraws", async ({ browser }) => {
-  // Admin form, publish, RSVP, two reloads and a withdraw: run 37192224803 hit
-  // the 30s default on a slow episode, which closed the contexts mid-journey
-  // and orphaned the fixture. Triples the timeout to 90s.
+test("staging member RSVPs going on a fixture, then withdraws", async ({ browser, playwright }) => {
+  // Admin form, publish, anonymous feed reads, RSVP, two reloads and a withdraw:
+  // run 37192224803 hit the 30s default on a slow episode, which closed the
+  // contexts mid-journey and orphaned the fixture. Triples the timeout to 90s.
   test.slow();
   const moderator = await browser.newContext({ storageState: moderatorStorageState });
   const member = await browser.newContext({ storageState: memberStorageState });
@@ -106,6 +115,53 @@ test("staging member RSVPs going on a fixture, then withdraws", async ({ browser
     const stem = `Staging E2E RSVP ${Date.now()}`;
     eventKey = await createDraft(admin, stem, 10);
     await publishDraft(admin);
+
+    // Standalone cookie storage cannot inherit either authenticated context.
+    // https://playwright.dev/docs/api-testing#context-isolation
+    // This step stays inside the fixture's try/finally: a feed assertion failure
+    // still cancels this exact owned key, without creating another event.
+    await test.step("published owned event appears in anonymous RSS and per-event ICS", async () => {
+      const anonymous = await playwright.request.newContext({
+        baseURL: stagingOrigin,
+        storageState: emptyStorageState,
+        timeout: 5_000,
+      });
+      try {
+        const up = await anonymous.get("/up");
+        expect(up.status()).toBe(200);
+        const { revision } = (await up.json()) as {
+          revision: { version_id: string; commit: string | null };
+        };
+        console.info("published-feed-fixture", JSON.stringify({ eventKey, revision }));
+
+        const rss = await anonymous.get("/events.rss");
+        expect(rss.status()).toBe(200);
+        expect(rss.headers()["content-type"]).toBe("application/rss+xml; charset=utf-8");
+        expect(rss.headers()["cache-control"]).toBe("max-age=300, public");
+        expect(rss.headers()["set-cookie"] ?? null).toBeNull();
+        const rssBody = await rss.text();
+        // Match the owned item's identity, never an arbitrary ambient feed key.
+        expect(rssBody).toContain(`<guid isPermaLink="true">${stagingOrigin}/e/${eventKey}</guid>`);
+        const rssItems = (rssBody.match(/<item>/g) ?? []).length;
+        console.info("published-feed-rss", JSON.stringify({ eventKey, rssItems }));
+
+        const ics = await anonymous.get(`/events/${eventKey}.ics`);
+        expect(ics.status()).toBe(200);
+        expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
+        expect(ics.headers()["cache-control"]).toBe("max-age=300, private");
+        expect(ics.headers()["content-disposition"]).toBe(`attachment; filename="${eventKey}.ics"`);
+        expect(ics.headers()["set-cookie"] ?? null).toBeNull();
+        const body = await ics.text();
+        expect(body).toContain("BEGIN:VCALENDAR");
+        expect(body).toContain(`UID:${eventKey}@`);
+        expect(body).toContain("STATUS:CONFIRMED");
+        expect(body).toContain("END:VCALENDAR");
+        expect((await anonymous.storageState()).cookies).toEqual([]);
+        console.info("published-feed-ics", JSON.stringify({ eventKey, status: ics.status() }));
+      } finally {
+        await anonymous.dispose();
+      }
+    });
 
     const page = await member.newPage();
     await page.goto(`/e/${eventKey}`);
