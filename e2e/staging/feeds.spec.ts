@@ -27,7 +27,9 @@ test("staging feeds and SEO endpoints answer public GETs", async ({ request }) =
 
   const rss = await request.get("/events.rss");
   expect(rss.status()).toBe(200);
-  expect(rss.headers()["content-type"]).toContain("application/rss+xml");
+  expect(rss.headers()["content-type"]).toBe("application/rss+xml; charset=utf-8");
+  expect(rss.headers()["cache-control"]).toBe("max-age=300, public");
+  expect(rss.headers()["set-cookie"] ?? null).toBeNull();
   const rssBody = await rss.text();
   expect(rssBody).toContain('<?xml version="1.0" encoding="UTF-8"?>');
   expect(rssBody).toContain("<rss");
@@ -36,8 +38,30 @@ test("staging feeds and SEO endpoints answer public GETs", async ({ request }) =
 
   const ics = await request.get("/events.ics");
   expect(ics.status()).toBe(200);
-  expect(ics.headers()["content-type"]).toContain("text/calendar");
+  expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
+  expect(ics.headers()["cache-control"]).toBe("max-age=300, public");
+  expect(ics.headers()["set-cookie"] ?? null).toBeNull();
   const icsBody = await ics.text();
   expect(icsBody).toContain("BEGIN:VCALENDAR");
   expect(icsBody).toContain("END:VCALENDAR");
+});
+
+// Per-event ICS for a key read from the live RSS: still GET-only, no fixture
+// and no QA write. Handler contract lives in src/events/routes.tsx: published
+// and cancelled rows download sessionless, drafts 403, unknown keys 404.
+test("staging per-event ICS downloads for a published feed event", async ({ request }) => {
+  const rss = await request.get("/events.rss");
+  expect(rss.status()).toBe(200);
+  const key = /\/e\/([0-9A-HJKMNP-TV-Z]{26})/.exec(await rss.text())?.[1] ?? "";
+  expect(key).not.toBe("");
+  const ics = await request.get(`/events/${key}.ics`);
+  expect(ics.status()).toBe(200);
+  expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
+  expect(ics.headers()["cache-control"]).toBe("max-age=300, private");
+  expect(ics.headers()["content-disposition"]).toBe(`attachment; filename="${key}.ics"`);
+  expect(ics.headers()["set-cookie"] ?? null).toBeNull();
+  const body = await ics.text();
+  expect(body).toContain("BEGIN:VCALENDAR");
+  expect(body).toContain(`UID:${key}@`);
+  expect(body).toContain("END:VCALENDAR");
 });

@@ -102,6 +102,7 @@ Coverage reuses the CI journey logic with staging-safe setup:
 | Moderator draft create and cancel | `e2e/staging/admin.spec.ts` | `Create draft` → `Status: draft`; guest draft 403; `Cancel event` → `Status: cancelled`; guest cancelled 410. Never publishes |
 | Join funnel CTA, entries, QA profile | `e2e/staging/join.spec.ts` | Guest: homepage `join` CTA href `/auth/discord`, `/join` one-click href `/join/discord`, both entries 302 to Discord authorize with no follow; QA member session opens `/profile` (`QA Member`) with the tested staging revision recorded as a report annotation |
 | QA member sign-out, revoked replay | `e2e/staging/logout.spec.ts` | Sign out returns to guest `/`; session cookie cleared; old cookie replays to guest home and `/profile` bounces to OAuth |
+| Public feeds and per-event calendar download | `e2e/staging/feeds.spec.ts` | Guest GETs only, no QA token, no fixtures: sitemap/robots/RSS/ICS collections 200 with contract content-types; per-event ICS 200 for a key read from the live RSS, exact cache headers, no `set-cookie` |
 
 The list spec also runs as `mobile-375` (375×812 viewport) and
 `reduced-motion` (`reducedMotion: reduce`) projects. Cleanup is structural:
