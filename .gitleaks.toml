@@ -60,6 +60,6 @@ targetRules = ["generic-api-key"]
 regexes = ['''01J2ZB2X5X3Q8T1V9W4Y6Z7A8[BC]''']
 
 [[allowlists]]
-description = "Orphaned staging E2E fixture key cancelled best-effort by the waitlist journey cleanup; ULID-shaped, not a credential"
+description = "Event key of an orphaned staging E2E fixture, kept in git history by an earlier spec; ULID-shaped, not a credential"
 targetRules = ["generic-api-key"]
 regexes = ['''01M41G95P1M3EWP30VWZPFYSG9''']

@@ -11,7 +11,7 @@
     "e2e": "playwright test",
     "e2e:staging": "playwright test --config playwright.staging.config.ts",
     "e2e:typecheck": "tsc --noEmit -p e2e/tsconfig.json",
-    "e2e:safety": "node --test e2e/safety.test.mjs e2e/qa-request.test.mjs e2e/search-retry.test.mjs",
+    "e2e:safety": "node --test e2e/safety.test.mjs e2e/qa-request.test.mjs e2e/search-retry.test.mjs e2e/fixture-sweep.test.mjs",
     "test:coverage": "vitest run --coverage --pool=threads",
     "test:admin-properties": "vitest run test/admin-validation.property.test.ts",
     "lint": "biome ci . --error-on-warnings",
