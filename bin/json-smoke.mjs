@@ -127,6 +127,21 @@ export function maskCloudflareRay(html) {
   return html.replace(CLOUDFLARE_PARAMS, () => "window.__CF$cv$params={r:'',t:''}");
 }
 
+// The branded 404 embeds up to three "Happening soon" event suggestions read
+// from the staging database. The two parity probes run seconds apart and can
+// land on different isolates (the suggestion cache is per-isolate, 60 s), so
+// the rows are staging data, not seam signal: normalize the section's inner
+// content (including its static links) and leave every other byte in place.
+// Only inner content is replaced — a page that drops the block, or differs
+// anywhere else, still fails.
+const NOT_FOUND_SUGGESTIONS =
+  /(<section\b[^>]*data-testid="error-event-suggestions"[^>]*>)[\s\S]*?(<\/section>)/g;
+
+/** Comparison only. Staging-data suggestion rows are not QA-seam signal. */
+export function maskNotFoundSuggestions(html) {
+  return html.replace(NOT_FOUND_SUGGESTIONS, (_, open, close) => `${open}${close}`);
+}
+
 function firstDifference(left, right) {
   const limit = Math.min(left.length, right.length);
   for (let index = 0; index < limit; index += 1) if (left[index] !== right[index]) return index;
@@ -738,9 +753,13 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       headers: { ...attempt.headers, [QA_HEADER]: BAD_TOKEN },
     });
     // Consume each body within its own request deadline, not after another fetch.
-    const badBody = maskCloudflareRay(await bad.text());
+    // Two masks: the Cloudflare ray/timestamp pair, and the staging-data
+    // "Happening soon" suggestions (per-isolate cache can differ between the
+    // two probes). Anything else must still match byte-for-byte.
+    const normalize = (body) => maskNotFoundSuggestions(maskCloudflareRay(body));
+    const badBody = normalize(await bad.text());
     const missing = await call(MISSING_ROUTE, attempt);
-    const missingBody = maskCloudflareRay(await missing.text());
+    const missingBody = normalize(await missing.text());
     const contentType = (response) => (response.headers.get("content-type") ?? "").trim();
     const sameContentType = contentType(bad) === contentType(missing);
     if (
@@ -753,7 +772,7 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
     } else {
       fail(
         "QA bad-token 404 matches missing route",
-        "identical HTTP 404 status, content type and body (Cloudflare ray id and timestamp masked)",
+        "identical HTTP 404 status, content type and body (Cloudflare ray id, timestamp and staging event suggestions masked)",
         `HTTP ${bad.status} vs HTTP ${missing.status}${sameContentType ? "" : "; content types differ"}${
           badBody === missingBody
             ? ""

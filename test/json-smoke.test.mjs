@@ -9,6 +9,7 @@ import {
   parseSetCookie,
   sessionCookieProblems,
   maskCloudflareRay,
+  maskNotFoundSuggestions,
 } from "../bin/json-smoke.mjs";
 
 // Loopback implementation of the PR #109 JSON contract plus the staging QA
@@ -757,7 +758,7 @@ test("fails when the QA bad-token 404 differs from a missing-route 404", async (
     assert.equal(result.ok, false, actual);
     assert.ok(
       result.output.includes(
-        "FAIL QA bad-token 404 matches missing route: expected identical HTTP 404 status, content type and body (Cloudflare ray id and timestamp masked)",
+        "FAIL QA bad-token 404 matches missing route: expected identical HTTP 404 status, content type and body (Cloudflare ray id, timestamp and staging event suggestions masked)",
       ),
       result.output,
     );
@@ -1140,4 +1141,57 @@ test("cookie and snippet helpers handle real header and edge shapes", () => {
   );
   const external = '<script src="/cdn-cgi/scripts/x.js"></script><p>kept</p>';
   assert.equal(maskCloudflareRay(external), external);
+});
+
+test("404 parity normalizes staging-data event suggestions, nothing else", () => {
+  const block = (inner) =>
+    `<section class="recovery-events" data-testid="error-event-suggestions"><h2>Happening soon</h2>${inner}</section>`;
+  const withRows = block(
+    '<ul class="facts"><li class="card"><a href="/e/ABC">Seed 01</a></li></ul>',
+  );
+  const emptyRows = block("<p>Nothing is on the calendar right now.</p>");
+  // Different suggestion rows on the two probes compare equal.
+  assert.equal(maskNotFoundSuggestions(withRows), maskNotFoundSuggestions(emptyRows));
+  // The section shell survives: a page that drops the block still differs.
+  assert.notEqual(maskNotFoundSuggestions(withRows), maskNotFoundSuggestions("<p>gone</p>"));
+  // Content outside the block is untouched: a real seam change still fails.
+  assert.notEqual(
+    maskNotFoundSuggestions(`<h1>No such seam</h1>${withRows}`),
+    maskNotFoundSuggestions(`<h1>We cannot find that page</h1>${emptyRows}`),
+  );
+  // Only the rows vary between isolates: the same shell with different rows
+  // still compares equal.
+  assert.equal(
+    maskNotFoundSuggestions(block("<p>x</p>")),
+    maskNotFoundSuggestions(block("<p>y</p>")),
+  );
+});
+
+const withSuggestions = (page, inner) =>
+  page.replace(
+    "</body>",
+    `<section class="recovery-events" data-testid="error-event-suggestions"><h2>Happening soon</h2>${inner}</section></body>`,
+  );
+
+test("the smoke tolerates different staging suggestions in the two 404 bodies", async (t) => {
+  const { url } = await stub(t, (id, result) => {
+    if (id === "qa-404") {
+      result.body = withSuggestions(result.body, '<ul><li><a href="/e/A">Seed 01</a></li></ul>');
+    }
+    if (id === "missing-404") {
+      result.body = withSuggestions(result.body, "<p>Nothing is on the calendar right now.</p>");
+    }
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(result.output, /PASS QA bad-token 404 matches missing route/);
+});
+
+test("the smoke still fails when only one 404 body carries the suggestions block", async (t) => {
+  const { url } = await stub(t, (id, result) => {
+    if (id === "qa-404") result.body = withSuggestions(result.body, "<p>x</p>");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false, result.output);
+  assert.match(result.output, /FAIL QA bad-token 404 matches missing route/);
 });
