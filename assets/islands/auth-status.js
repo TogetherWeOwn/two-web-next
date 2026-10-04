@@ -132,24 +132,43 @@
   var form = document.querySelector('form[action="/logout"]');
   if (form) {
     var signingOut = false;
+    var button = form.querySelector('[type="submit"]');
+    var failureNotice = null;
+    function failedLogout() {
+      signingOut = false;
+      form.removeAttribute("aria-busy");
+      if (button) button.disabled = false;
+      // A refused or uncertain logout must not replace an editor's in-memory draft.
+      failureNotice = document.createElement("p");
+      failureNotice.className = "notice";
+      failureNotice.setAttribute("data-testid", "logout-error");
+      failureNotice.setAttribute("role", "alert");
+      failureNotice.setAttribute("tabindex", "-1");
+      failureNotice.textContent = "Could not sign out. Please try again.";
+      form.appendChild(failureNotice);
+      failureNotice.focus();
+    }
     form.addEventListener("submit", function (event) {
       if (event.defaultPrevented) return;
       event.preventDefault();
       if (signingOut) return;
       signingOut = true;
+      if (failureNotice) {
+        failureNotice.remove();
+        failureNotice = null;
+      }
+      form.setAttribute("aria-busy", "true");
+      if (button) button.disabled = true;
       fetch("/logout", { method: "POST", credentials: "same-origin", redirect: "manual" })
         .then(function (response) {
           if (response.type === "opaqueredirect" || response.status === 303) {
             publish();
             location.assign("/");
           } else {
-            signingOut = false;
-            location.reload();
+            failedLogout();
           }
         })
-        .catch(function () {
-          signingOut = false;
-        });
+        .catch(failedLogout);
     });
   }
 })();

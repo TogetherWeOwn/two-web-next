@@ -239,6 +239,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
         member={member}
         stats={stats}
         isOwner={viewer.id === member.id}
+        isModerator={viewer.moderator}
         appUrl={c.env.APP_URL}
         joinResult={joinResult}
       />,
@@ -297,6 +298,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
           member={member}
           stats={await statsFor(c, member.id)}
           isOwner
+          isModerator={c.get("viewer").moderator}
           appUrl={c.env.APP_URL}
           errors={result.errors}
           values={{
