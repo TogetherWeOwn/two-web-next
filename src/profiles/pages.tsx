@@ -26,6 +26,9 @@ import type { MemberStats } from "./stats";
 
 const statsLabel = (key: string) =>
   key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+// Legacy parity: the avatar fallback is the first two code points, uppercased.
+export const profileInitials = (username: string) =>
+  [...username].slice(0, 2).join("").toUpperCase() || "?";
 const statsDate = (date: Date) =>
   date.toLocaleDateString("en-GB", {
     day: "numeric",
@@ -156,7 +159,7 @@ export const ProfilePage: FC<{
                 />
               ) : null}
               <span data-avatar-initial="" class="avatar-initial" hidden={!!img}>
-                {[...member.username][0]?.toUpperCase() ?? "?"}
+                {profileInitials(member.username)}
               </span>
             </span>
             <div>
@@ -164,10 +167,13 @@ export const ProfilePage: FC<{
               <h1 id="member-heading" tabindex={-1} data-testid={PROFILE_NAME_TESTID}>
                 {member.username}
               </h1>
+              <p class="profile-handle" data-testid="profile-handle">
+                @{member.username}
+              </p>
               <div class="profile-meta">
-                {!stats?.rankKey && member.rank ? (
-                  <p data-testid={PROFILE_RANK_TESTID}>{member.rank}</p>
-                ) : null}
+                <p class="profile-chip" data-testid="profile-provenance">
+                  From Discord
+                </p>
                 {!stats?.joinedAt && joined ? (
                   <p data-testid={PROFILE_JOINED_TESTID}>Joined {joined}</p>
                 ) : null}

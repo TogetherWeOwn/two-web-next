@@ -1,6 +1,6 @@
 // Legacy ProfileAvatarFailureTest pin: a broken avatar URL falls back to the
 // initial on /profile, /members/:user and the event attendee list — no
-// broken-image icon, no layout shift of the name/rank row.
+// broken-image icon, no layout shift of the name/handle row.
 //
 // DB-free: mounted profilesApp with memory doubles plus direct EventPage
 // renders from local fixtures. No DATABASE_URL, no fetch, no session/DB reads
@@ -101,7 +101,6 @@ async function setup() {
       bio: null,
       games: [],
       timezone: null,
-      rank: "Veteran",
       joinedAt: new Date("2024-03-15T00:00:00Z"),
     },
     {
@@ -111,7 +110,6 @@ async function setup() {
       bio: null,
       games: [],
       timezone: "Europe/London",
-      rank: "Regular",
       joinedAt: new Date("2024-04-01T00:00:00Z"),
     },
   ]);
@@ -198,13 +196,13 @@ describe("avatar load-failure fallback render", () => {
     expect(html).toContain(`srcset="${expected.srcset}"`);
     expect(html).toContain('alt="" width="64" height="64" loading="eager"');
     expect(html).toContain(
-      '<span data-avatar-initial="" class="avatar-initial" hidden="">A</span>',
+      '<span data-avatar-initial="" class="avatar-initial" hidden="">AL</span>',
     );
     expect(html).toContain('<script src="/islands/avatar.js" defer=""></script>');
     expect(html).not.toMatch(/\son(?:error|load)=/i);
-    // Name/rank row survives alongside the avatar — the row the fallback must not shift.
+    // Name/handle row survives alongside the avatar — the row the fallback must not shift.
     expect(html).toContain('data-testid="profile-name"');
-    expect(html).toContain('data-testid="profile-rank">Veteran');
+    expect(html).toContain('data-testid="profile-handle">@alice');
   });
 
   it("member page SSR matches the profile fallback markup", async () => {
@@ -216,15 +214,15 @@ describe("avatar load-failure fallback render", () => {
     expect(html).toContain(`src="${expected.src}"`);
     expect(html).toContain(`srcset="${expected.srcset}"`);
     expect(html).toContain(
-      '<span data-avatar-initial="" class="avatar-initial" hidden="">B</span>',
+      '<span data-avatar-initial="" class="avatar-initial" hidden="">BO</span>',
     );
     expect(html).toContain('<script src="/islands/avatar.js" defer=""></script>');
     expect(html).not.toMatch(/\son(?:error|load)=/i);
     expect(html).toContain('data-testid="profile-name"');
-    expect(html).toContain('data-testid="profile-rank">Regular');
+    expect(html).toContain('data-testid="profile-handle">@bob');
   });
 
-  it("a load failure swaps to the initial while the name/rank row stays put", async () => {
+  it("a load failure swaps to the initial while the name/handle row stays put", async () => {
     const before = await getHtml("/profile");
     const avatar = mockAvatar();
     runBinder([avatar]);
@@ -239,7 +237,7 @@ describe("avatar load-failure fallback render", () => {
     // No layout shift: the SSR row is still rendered; the swap only toggles
     // hidden inside the size-reserved avatar box (pinned below).
     expect(before).toContain('data-testid="profile-name"');
-    expect(before).toContain('data-testid="profile-rank">Veteran');
+    expect(before).toContain('data-testid="profile-handle">@alice');
     expect(before).not.toContain("broken-image");
   });
 
@@ -274,7 +272,7 @@ describe("avatar load-failure fallback render", () => {
     expect(html).not.toMatch(/\son(?:error|load)=/i);
   });
 
-  it("size is reserved so the fallback cannot shift the name/rank row", () => {
+  it("size is reserved so the fallback cannot shift the name/handle row", () => {
     // Profile avatar box: fixed size + no shrink; both states fill it; hidden
     // never displays. Img carries width/height attributes (asserted above).
     // Whitespace-tolerant: the served stylesheet is the minified build output.

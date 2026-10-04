@@ -308,7 +308,7 @@ describe("member-profile states rendered", () => {
       expect(html).toContain(`srcset="${profileAvatarSrcset(id, "abc")!.srcset}"`);
       expect(html).toContain('alt="" width="64" height="64" loading="eager"');
       expect(html).toContain(
-        `<span data-avatar-initial="" class="avatar-initial" hidden="">${id === ALICE ? "A" : "B"}</span>`,
+        `<span data-avatar-initial="" class="avatar-initial" hidden="">${id === ALICE ? "AL" : "BO"}</span>`,
       );
       expect(html).toContain('<script src="/islands/avatar.js" defer=""></script>');
       expect(html).not.toMatch(/\son(?:error|load)=/i);
@@ -324,7 +324,7 @@ describe("member-profile states rendered", () => {
       const html = await (
         await app.request("/profile", { headers: { cookie: await cookie(ALICE, "alice") } }, env)
       ).text();
-      expect(html).toContain('<span data-avatar-initial="" class="avatar-initial">&lt;</span>');
+      expect(html).toContain('<span data-avatar-initial="" class="avatar-initial">&lt;S</span>');
       expect(html).not.toContain("cdn.discordapp.com/avatars/");
     },
   );
