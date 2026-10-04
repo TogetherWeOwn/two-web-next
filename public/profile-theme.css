@@ -16,9 +16,11 @@
 .profile-theme .profile-player { border-top: 4px solid var(--brand); }
 .profile-theme .profile-identity { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 1.5rem; align-items: center; }
 .profile-theme .avatar { width: 96px; height: 96px; }
-.profile-theme .avatar-initial { background: var(--paper); color: var(--ink); border: 1px solid var(--line); font: 700 3rem/1 Display, 'Arial Narrow', sans-serif; }
+.profile-theme .avatar-initial { background: var(--paper); color: var(--ink); border: 1px solid var(--line); font: 700 2.25rem/1 Display, 'Arial Narrow', sans-serif; overflow: hidden; }
 .profile-theme .profile-caption { margin: 0; font-size: .9rem; }
 .profile-theme .profile-meta { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; }
+.profile-theme .profile-handle { margin: 0 0 .75rem; overflow-wrap: anywhere; }
+.profile-theme .profile-chip { padding: .1rem .5rem; background: var(--paper); border: 1px solid var(--line); font-size: .85rem; }
 .profile-theme .profile-meta p { margin: 0; }
 .profile-theme .profile-details { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 2rem; margin-top: 2rem; }
 .profile-theme .profile-details section { min-width: 0; padding: 1.5rem 0 0; }

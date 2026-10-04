@@ -13,7 +13,6 @@ const member: MemberView = {
   bio: "A bio <b>with markup</b>",
   games: ["Chess", "Go <script>"],
   timezone: "Europe/London",
-  rank: "Existing rank",
   joinedAt: new Date("2024-06-15T00:00:00Z"),
 };
 const stats: MemberStats = {
@@ -68,7 +67,8 @@ describe("member profile base theme", () => {
   it("keeps optional stats absent rather than fabricating empty tiles", () => {
     const html = render();
     expect(html).not.toContain('data-testid="profile-stats"');
-    expect(html).toContain('data-testid="profile-rank">Existing rank');
+    // Rank comes from member stats only: the header never invents one.
+    expect(html).not.toContain('data-testid="profile-rank"');
     expect(html).toContain("Joined June 2024");
   });
 
@@ -131,7 +131,27 @@ describe("member profile base theme", () => {
     expect(html).toContain("No milestones yet.");
     expect(html.match(/data-testid="profile-rank"/g)).toHaveLength(1);
     expect(html.match(/data-testid="profile-joined"/g)).toHaveLength(1);
-    expect(html).not.toContain("Existing rank");
+    expect(html).toContain("Community Regular");
+  });
+
+  it("shows the @handle, an always-on From Discord chip and a two-character fallback", () => {
+    const html = render();
+    expect(html).toContain('data-testid="profile-handle">@Player &lt;script&gt;</p>');
+    expect(html).toContain(
+      'class="profile-chip" data-testid="profile-provenance">From Discord</p>',
+    );
+    // Provenance is unconditional, with or without stats.
+    expect(render({ stats })).toContain('data-testid="profile-provenance">From Discord');
+    expect(html).toContain('class="avatar-initial">PL</span>');
+    expect(render({ member: { ...member, username: "x" } })).toContain(
+      'class="avatar-initial">X</span>',
+    );
+    expect(render({ member: { ...member, username: "😀😀😀" } })).toContain(
+      'class="avatar-initial">😀😀</span>',
+    );
+    expect(render({ member: { ...member, username: "" } })).toContain(
+      'class="avatar-initial">?</span>',
+    );
   });
 
   it("keeps the plain form, trap, labels, island focus targets and owner-only editing", () => {

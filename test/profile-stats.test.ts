@@ -240,7 +240,6 @@ async function harness(db: Db, deps: Pick<ProfileDeps, "stats"> = {}) {
         bio: "Profile still here",
         games: [],
         timezone: null,
-        rank: "Existing rank",
         joinedAt: new Date("2024-06-15T00:00:00Z"),
       },
     ]),
@@ -327,7 +326,7 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
     { rank: "community_regular", joined: null },
     { rank: null, joined: fullMember.joined_at },
   ])(
-    "preserves existing fields individually for partial stats ($rank / $joined)",
+    "keeps rank stats-only and preserves the joined fallback for partial stats ($rank / $joined)",
     async ({ rank, joined }) => {
       const { db } = fixture([{ ...fullMember, rank_key: rank, joined_at: joined }], []);
       const { app, cookieFor, bindings } = await harness(db);
@@ -339,9 +338,10 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
       const html = await res.text();
       expect(res.status).toBe(200);
       expect(html).toContain('data-testid="profile-stats"');
-      expect(html).toContain(rank ? "Community Regular" : "Existing rank");
+      if (rank) expect(html).toContain("Community Regular");
+      else expect(html).not.toContain('data-testid="profile-rank"');
       expect(html).toContain(joined ? "1 Jan 2025" : "Joined June 2024");
-      expect(html.match(/data-testid="profile-rank"/g)).toHaveLength(1);
+      expect(html.match(/data-testid="profile-rank"/g) ?? []).toHaveLength(rank ? 1 : 0);
       expect(html.match(/data-testid="profile-joined"/g)).toHaveLength(1);
     },
   );
