@@ -161,7 +161,7 @@ export const ProfilePage: FC<{
             </span>
             <div>
               <p class="profile-caption">Member profile</p>
-              <h1 id="member-heading" tabindex="-1" data-testid={PROFILE_NAME_TESTID}>
+              <h1 id="member-heading" tabindex={-1} data-testid={PROFILE_NAME_TESTID}>
                 {member.username}
               </h1>
               <div class="profile-meta">
@@ -210,7 +210,7 @@ export const ProfilePage: FC<{
             {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }}
             data-member-id={member.id}
           >
-            <h2 id="edit-heading" tabindex="-1">
+            <h2 id="edit-heading" tabindex={-1}>
               Edit your profile
             </h2>
             <div data-testid="profile-edit-control" hidden>
@@ -219,7 +219,7 @@ export const ProfilePage: FC<{
               </button>
             </div>
             {errors && Object.keys(errors).length > 0 ? (
-              <div role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}>
+              <div role="alert" tabindex={-1} data-testid={PROFILE_ERROR_TESTID}>
                 <ul>
                   {Object.values(errors).map((e) => (
                     <li>{e}</li>
@@ -247,7 +247,7 @@ export const ProfilePage: FC<{
               </label>
               <div aria-hidden="true" class="sr-only">
                 <label>
-                  Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" />
+                  Website <input name={PROFILE_HONEY_FIELD} tabindex={-1} autocomplete="off" />
                 </label>
               </div>
               <input type="hidden" name={PROFILE_OPENED_AT_FIELD} value={String(Date.now())} />
