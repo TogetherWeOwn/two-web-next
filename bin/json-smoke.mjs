@@ -114,40 +114,23 @@ export function clearedCookieProblems(cookie) {
   return problems;
 }
 
-const CLOUDFLARE_SCRIPT_START =
-  "<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;" +
-  "if(b){var d=b.createElement('script');d.innerHTML=\"window.__CF$cv$params={r:'";
-const CLOUDFLARE_SCRIPT_END =
-  "'};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';" +
-  "document.getElementsByTagName('head')[0].appendChild(a);\";b.getElementsByTagName('head')[0].appendChild(d)}}" +
-  "if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;" +
-  "a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';" +
-  "document.body.appendChild(a);if('loading'!==document.readyState)c();" +
-  "else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);" +
-  "else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);" +
-  "'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>";
+// Cloudflare appends a challenge script to HTML responses. Its only per-request
+// parts are the ray id and a timestamp, and the script around them has already
+// changed shape once. Mask just those two values and leave every other byte in
+// place: a change to Cloudflare's wrapper cannot cause a false mismatch, and a
+// real difference between two pages still fails the comparison.
+const CLOUDFLARE_PARAMS =
+  /window\.__CF\$cv\$params=\{r:'[a-f0-9]{16}',t:'[A-Za-z0-9+/]{1,128}={0,2}'\}/gi;
 
-/** Comparison only, not HTML sanitization. Unknown injections remain byte-for-byte. */
-export function stripCloudflareSnippet(html) {
-  let output = "";
-  let offset = 0;
-  for (;;) {
-    const start = html.indexOf(CLOUDFLARE_SCRIPT_START, offset);
-    if (start < 0) return output + html.slice(offset);
-    const valuesStart = start + CLOUDFLARE_SCRIPT_START.length;
-    // Only the bounded ray and timestamp fields can vary; the whole wrapper must match.
-    const values = html
-      .slice(valuesStart, valuesStart + 160)
-      .match(/^[a-f0-9]{16}',t:'[A-Za-z0-9+/]{1,128}={0,2}/i);
-    const valuesEnd = valuesStart + (values?.[0].length ?? 0);
-    output += html.slice(offset, start);
-    if (values && html.startsWith(CLOUDFLARE_SCRIPT_END, valuesEnd)) {
-      offset = valuesEnd + CLOUDFLARE_SCRIPT_END.length;
-    } else {
-      output += CLOUDFLARE_SCRIPT_START;
-      offset = valuesStart;
-    }
-  }
+/** Comparison only, not HTML sanitization. Anything that is not a well-formed ray/timestamp pair stays as is. */
+export function maskCloudflareRay(html) {
+  return html.replace(CLOUDFLARE_PARAMS, () => "window.__CF$cv$params={r:'',t:''}");
+}
+
+function firstDifference(left, right) {
+  const limit = Math.min(left.length, right.length);
+  for (let index = 0; index < limit; index += 1) if (left[index] !== right[index]) return index;
+  return limit;
 }
 
 function parseBody(text) {
@@ -755,9 +738,9 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       headers: { ...attempt.headers, [QA_HEADER]: BAD_TOKEN },
     });
     // Consume each body within its own request deadline, not after another fetch.
-    const badBody = stripCloudflareSnippet(await bad.text());
+    const badBody = maskCloudflareRay(await bad.text());
     const missing = await call(MISSING_ROUTE, attempt);
-    const missingBody = stripCloudflareSnippet(await missing.text());
+    const missingBody = maskCloudflareRay(await missing.text());
     const contentType = (response) => (response.headers.get("content-type") ?? "").trim();
     const sameContentType = contentType(bad) === contentType(missing);
     if (
@@ -770,11 +753,11 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
     } else {
       fail(
         "QA bad-token 404 matches missing route",
-        "identical HTTP 404 status, content type and body (Cloudflare snippet excluded)",
+        "identical HTTP 404 status, content type and body (Cloudflare ray id and timestamp masked)",
         `HTTP ${bad.status} vs HTTP ${missing.status}${sameContentType ? "" : "; content types differ"}${
           badBody === missingBody
             ? ""
-            : `; bodies differ (${badBody.length} vs ${missingBody.length} chars)`
+            : `; bodies differ (${badBody.length} vs ${missingBody.length} chars, first difference at offset ${firstDifference(badBody, missingBody)})`
         }`,
       );
     }
