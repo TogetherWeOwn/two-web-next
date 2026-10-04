@@ -394,13 +394,15 @@ The telemetry query returns only the newest 100 events. Keep each window to
    that has no migration or binding drift
    (`git diff --exit-code "$N_SHA" "$N1_SHA" -- drizzle migrations.lock ci/neon-migrate.mjs wrangler.jsonc`).
    Set `DISC_PATH` to a public path whose status differs between N and N+1.
-   Map each version to its commit by the deploy job's `Deploy to Cloudflare
-   Workers` step: the deployment's `created_on` is within about 2 seconds of
-   that step's `completed_at` (Actions jobs API), or read the `Current Version
-   ID:` line in the job log. For a `workflow_run` deploy, the Actions run's
-   `head_sha` is main's tip at trigger time, not necessarily the checked-out
-   source: read `GITHUB_SHA` in the deploy step's log for that same version ID.
-   Deploys are not tagged yet.
+   Map each version to its commit using the same deploy job's checkout
+   `ref`/`HEAD`, the successful `Staging gate passed: <sha>` immediately before
+   deployment, and the `Current Version ID:` from `Deploy to Cloudflare
+   Workers`. A deployment's `created_on` near that step's `completed_at`
+   (Actions jobs API) helps locate the job, but is not source proof alone.
+   For a `workflow_run` deploy, the run's `head_sha` can be main's newer tip;
+   printed `GITHUB_SHA` values can also vary by step and are not checkout
+   receipts. If checkout, gate SHA and version cannot be correlated, do not
+   guess the source. Deploys are not tagged yet.
 3. Baseline: `node bin/smoke.mjs https://next.togetherweown.com | tee "$RUN_DIR/smoke-base.log"`.
    Record any existing failures. The rehearsal compares against this
    baseline; it does not require it to be green.
@@ -539,9 +541,11 @@ Rehearsal record:
 Notes from the 2026-10-04 run (probe cadence about 1.3 s; both directions in
 one probe loop, 100 probes, none non-200; the whole Worker half took 136 s):
 
-- N+1's source is `487ef4a4`: [deploy run 455](https://github.com/TogetherWeOwn/two-web-next/actions/runs/37189725072)
-  logs that `GITHUB_SHA` and version `2e803af9` in the deploy step. The run's
-  API `head_sha` (`72c4f435`) is not the deployed source.
+- N+1's source is `487ef4a4`: [deploy run 455, job 111399209102](https://github.com/TogetherWeOwn/two-web-next/actions/runs/37189725072/job/111399209102)
+  checks out that `ref`/`HEAD`, logs `Staging gate passed: 487ef4a4…` at
+  08:50:28 UTC immediately before deployment, and logs version `2e803af9`
+  at 08:50:34 UTC. The run's API `head_sha` (`72c4f435`) and migration-step
+  `GITHUB_SHA` environment lines are not source receipts.
 - N was the newest deployment whose Worker code differs from N+1: it predates
   the dependency bump (#409) and the numeric `tabindex` change (#469). The
   other 5 of the 7 commits between them change workflow, test or backup files
