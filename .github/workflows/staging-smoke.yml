@@ -56,7 +56,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci --include=dev
+      - run: npm ci --include=dev --no-audit --no-fund
       - name: Moderator role-config probe (pre-smoke gate)
         run: npm run check:worker-moderators
       - name: Internal-action smoke against the staging bot
