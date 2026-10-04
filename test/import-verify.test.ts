@@ -245,12 +245,6 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     await admin.unsafe(
       `CREATE TABLE "${destination.schemaName}".samples (id bigint, part text, label text, properties jsonb, instant timestamptz)`,
     );
-    await admin.unsafe(
-      `CREATE TABLE "${sourceSchema}".retention_samples (id bigint, created_at timestamp, occurred_at timestamp)`,
-    );
-    await admin.unsafe(
-      `CREATE TABLE "${destination.schemaName}".retention_samples (id bigint, created_at timestamptz, occurred_at timestamptz)`,
-    );
     map = fixtureMap(sourceSchema, destination.schemaName);
     scratch = await mkdtemp(
       join(
@@ -271,7 +265,6 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
   });
   beforeEach(async () => {
     await admin.unsafe(`TRUNCATE "${sourceSchema}".samples, "${destination.schemaName}".samples,
-      "${sourceSchema}".retention_samples, "${destination.schemaName}".retention_samples,
       "${sourceSchema}".users, "${destination.schemaName}".users CASCADE`);
     await admin.unsafe(`INSERT INTO "${sourceSchema}".samples VALUES
       (1, 'a', 'MEMBER-FIELD-SENTINEL', '{"b":2,"a":1}', '2026-01-01 02:03:04.123456'),
@@ -460,50 +453,10 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       expect(run.status, run.stderr).toBe(0);
     },
   );
-  // join_attempts/event_search_logs follow the importer instead: it skips NULL-clock
-  // rows (skipped_missing_timestamp), pinned in import-verify-content-funnel.test.ts.
-  it.each(["agent_event_idempotency_keys"])(
-    "%s retention retains unknown-age rows on both sides",
-    async (name) => {
-      const baseline = defaultTableMap({
-        legacySchema: sourceSchema,
-        nextSchema: destination.schemaName,
-        cutoff,
-      });
-      const table = baseline.find((t) => t.name === name)!;
-      const time = name === "event_search_logs" ? "occurred_at" : "created_at";
-      const retentionMap: TableMapping[] = [
-        {
-          ...table,
-          mappingGaps: [],
-          legacy: { ...table.legacy, from: `"${sourceSchema}".retention_samples l` },
-          next: { ...table.next, from: `"${destination.schemaName}".retention_samples n` },
-          columns: table.columns.filter((f) => f.name === time),
-        },
-      ];
-      await admin.unsafe(`INSERT INTO "${sourceSchema}".retention_samples (id, ${time}) VALUES
-      (1,NULL),(2,'2026-07-02'),(3,'2026-07-01'),(4,'2026-09-01')`);
-      await admin.unsafe(`INSERT INTO "${destination.schemaName}".retention_samples (id, ${time}) VALUES
-      (2,'2026-07-02+00'),(3,'2026-06-01+00'),(4,'2026-09-01+00'),(5,NULL)`);
-      const jsonPath = join(scratch, "retention-diff.json");
-      const run = await runCli(retentionMap, ["--json", jsonPath]);
-      expect(run.status, run.stderr).toBe(1);
-      expect(JSON.parse(await readFile(jsonPath, "utf8")).tables[0]).toMatchObject({
-        legacyCount: 3,
-        nextCount: 3,
-        missingCount: 1,
-        extraCount: 1,
-        mismatchCount: 0,
-        missingKeys: [["1"]],
-        extraKeys: [["5"]],
-      });
-      await admin.unsafe(
-        `INSERT INTO "${destination.schemaName}".retention_samples (id) VALUES(1)`,
-      );
-      await admin.unsafe(`INSERT INTO "${sourceSchema}".retention_samples (id) VALUES(5)`);
-      expect((await runCli(retentionMap)).status).toBe(0);
-    },
-  );
+  // Retention of unknown-age rows is pinned per table against the real importers:
+  // join_attempts/event_search_logs skip NULL-clock rows (skipped_missing_timestamp) in
+  // import-verify-content-funnel.test.ts, and agent_event_idempotency_keys counts a NULL or
+  // non-finite created_at as expired in import-verify-audit.test.ts.
   it.each(["null", "duplicate"])(
     "%s keys fail loudly instead of certifying a lossy projection",
     async (kind) => {
@@ -529,7 +482,7 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     );
     expect(count[0]!.n).toBe(6);
   });
-  it("baseline map queries all migrated tables and refuses success on unresolved gaps", async () => {
+  it("baseline map queries all migrated tables and declares no unresolved gaps", async () => {
     const baseline = defaultTableMap({
       legacySchema: sourceSchema,
       nextSchema: destination.schemaName,
@@ -537,11 +490,35 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     });
     const report = await verify({ legacy, next, map: baseline, batchSize: 2 });
     expect(report.tables).toHaveLength(12);
+    expect(report.tables.flatMap((t) => t.mappingGaps)).toEqual([]);
+    expect(
+      report.tables.every((t) => t.legacyCount === 0 && t.nextCount === 0 && t.mismatchCount === 0),
+    ).toBe(true);
+    expect(report.ok).toBe(true);
+    expect(renderMarkdown(report)).not.toContain("Incomplete mapping");
+  });
+  it("a map that declares mappingGaps refuses success even when every compared row matches", async () => {
+    const baseline = defaultTableMap({
+      legacySchema: sourceSchema,
+      nextSchema: destination.schemaName,
+      cutoff,
+    });
+    const gapped = baseline.map((t) =>
+      t.name === "activity_log" ? { ...t, mappingGaps: ["synthetic unresolved policy"] } : t,
+    );
+    const report = await verify({ legacy, next, map: gapped, batchSize: 2 });
+    expect(report.tables).toHaveLength(12);
     expect(report.ok).toBe(false);
+    expect(report.tables.filter((t) => t.mappingGaps.length).map((t) => t.table)).toEqual([
+      "activity_log",
+    ]);
     expect(
       report.tables.every((t) => t.legacyCount === 0 && t.nextCount === 0 && t.mismatchCount === 0),
     ).toBe(true);
     expect(renderMarkdown(report)).toContain("Incomplete mapping");
+    expect(
+      (await runCli([{ ...map[0]!, mappingGaps: ["synthetic unresolved policy"] }])).status,
+    ).toBe(1);
   });
   it.each([null, "", "PRIVATE-DISPLAY-NAME", " "])(
     "baseline username follows the importer for display_name=%s and carries no mapping gap",
@@ -592,7 +569,7 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       }
     },
   );
-  it("baseline natural keys remap users, event parents, RSVPs and audit subjects without losing instants", async () => {
+  it("baseline natural keys remap users, event parents and RSVPs, and keep audit references as legacy IDs, without losing instants", async () => {
     const l = `"${sourceSchema}"`;
     const n = `"${destination.schemaName}"`;
     await admin.unsafe(`
@@ -610,7 +587,7 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
       INSERT INTO ${n}.rsvps(id,event_id,user_id,status,synced_to_discord_at,created_at,updated_at)
         VALUES(120,200,'42','waitlisted','2026-09-01 01:02:03.123456+00','2026-09-01+00','2026-09-01+00');
       INSERT INTO ${l}.member_data_access_logs VALUES(1,'42',1,'Users','read','[1]',1,'admin.users','2026-09-01');
-      INSERT INTO ${n}.member_data_access_logs VALUES(1,'42','42','Users','read','["42"]',1,'admin.users','2026-09-01+00');
+      INSERT INTO ${n}.member_data_access_logs VALUES(1,'42','1','Users','read','[1]',1,'admin.users','2026-09-01+00');
       INSERT INTO ${l}.join_attempts VALUES(1,'joined',NULL,NULL,'42','2026-07-02','2026-07-02'),(2,'joined',NULL,NULL,'42','2026-07-01','2026-07-01');
       INSERT INTO ${n}.join_attempts(id,legacy_id,outcome,discord_id,created_at) VALUES(1,'1','joined','42','2026-07-02+00'),(2,'2','denied','42','2026-07-01+00');
       INSERT INTO ${l}.event_search_logs VALUES(1,'private query',2,'2026-07-02'),(2,'ignored old',0,'2026-07-01');
@@ -628,7 +605,8 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
     expect(report.tables.find((t) => t.table === "events")!.legacyCount).toBe(2);
     expect(report.tables.find((t) => t.table === "join_attempts")!.legacyCount).toBe(1);
     expect(report.tables.find((t) => t.table === "event_search_logs")!.nextCount).toBe(1);
-    expect(report.ok).toBe(false); // Explicit gaps still prevent cutover certification.
+    expect(report.tables.flatMap((t) => t.mappingGaps)).toEqual([]);
+    expect(report.ok).toBe(true);
     expect(JSON.stringify(report)).not.toContain("private-bio");
     // Changing only a remapped relationship must fail the row hash.
     await admin.unsafe(`UPDATE ${n}.events SET parent_event_id=NULL WHERE id=200`);
