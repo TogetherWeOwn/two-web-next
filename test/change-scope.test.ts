@@ -35,6 +35,11 @@ function scope(rows: string[][], expected = rows.length, cwd = repo) {
     stderr: result.stderr,
     docsOnly: verdict("docs_only"),
     skipE2e: verdict("skip_e2e"),
+    app: verdict("app"),
+    worker: verdict("worker"),
+    db: verdict("db"),
+    full: verdict("full"),
+    draft: verdict("draft"),
   };
 }
 
@@ -81,6 +86,61 @@ describe("change-scope gate", () => {
     ]);
     expect(result.docsOnly).toBe("false");
     expect(result.skipE2e).toBe("false");
+  });
+
+  it("emits per-area verdicts for heavy-job gating", () => {
+    const verdict = (rows: string[][]) => {
+      const r = scope(rows);
+      return { app: r.app, worker: r.worker, db: r.db, full: r.full, draft: r.draft };
+    };
+    expect(verdict([["src/app.ts", ""]])).toEqual({
+      app: "true", worker: "false", db: "false", full: "false", draft: "false",
+    });
+    expect(verdict([["wrangler.jsonc", ""], ["tail/worker.ts", ""]])).toEqual({
+      app: "false", worker: "true", db: "false", full: "false", draft: "false",
+    });
+    expect(verdict([["web/src/lib/Shell.svelte", ""]])).toEqual({
+      app: "false", worker: "true", db: "false", full: "false", draft: "false",
+    });
+    expect(verdict([["drizzle/0001_init.sql", ""]])).toEqual({
+      app: "false", worker: "false", db: "true", full: "false", draft: "false",
+    });
+    expect(verdict([["docs/guide.md", ""], ["README.md", ""]])).toEqual({
+      app: "false", worker: "false", db: "false", full: "false", draft: "false",
+    });
+  });
+
+  it("forces a full run on lockfiles, CI, shared config and itself", () => {
+    for (const path of [
+      "package-lock.json",
+      "web/package-lock.json",
+      "package.json",
+      "biome.json",
+      "tsconfig.json",
+      "vitest.config.ts",
+      ".github/workflows/ci.yml",
+      "ci/change-scope.sh",
+    ]) {
+      expect(scope([[path, ""]]).full, path).toBe("true");
+    }
+  });
+
+  it("fails unknown paths closed to a full run", () => {
+    expect(scope([["some-new-top-level-file", ""]]).full).toBe("true");
+  });
+
+  it("mirrors the draft flag without inferring it", () => {
+    const prev = process.env.DRAFT;
+    try {
+      process.env.DRAFT = "true";
+      const r = scope([["src/app.ts", ""]]);
+      expect(r.draft).toBe("true");
+      expect(r.app).toBe("true");
+    } finally {
+      if (prev === undefined) delete process.env.DRAFT;
+      else process.env.DRAFT = prev;
+    }
+    expect(scope([["src/app.ts", ""]]).draft).toBe("false");
   });
 
   it("counts the old name of a rename", () => {
@@ -207,17 +267,47 @@ describe("ci heavy-job scope gates", () => {
   const jobBlock = (id: string) =>
     ci.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
 
-  it.each(["a11y", "lighthouse", "bundle-budget"])("%s still fast-passes docs-only PRs", (id) => {
+  it("a11y runs on app or db inputs, never on drafts", () => {
+    const block = jobBlock("a11y");
+    expect(block).toMatch(/(^|\n)    needs: scope\n/);
+    expect(block).toContain("needs.scope.outputs.draft != 'true'");
+    expect(block).toContain("needs.scope.outputs.app == 'true'");
+    expect(block).toContain("needs.scope.outputs.db == 'true'");
+  });
+
+  it.each(["lighthouse", "bundle-budget"])("%s runs on app inputs, never on drafts", (id) => {
     const block = jobBlock(id);
     // lighthouse and bundle-budget put needs: first (no name: line above it).
     expect(block).toMatch(/(^|\n)    needs: scope\n/);
-    expect(block).toMatch(/\n    if: needs\.scope\.outputs\.docs_only != 'true'\n/);
+    expect(block).toContain("needs.scope.outputs.draft != 'true'");
+    expect(block).toContain("needs.scope.outputs.app == 'true'");
   });
 
   it("check still runs on every verdict and gates on the audit result", () => {
     const block = jobBlock("check");
     expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, scope\]\n/);
     expect(block).toMatch(/\n    if: always\(\)\n/);
+  });
+
+  it("ci-ok aggregates every gated job and fails closed on scope", () => {
+    const block = jobBlock("ci-ok");
+    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
+    expect(block).toMatch(/\n    if: always\(\)\n/);
+    expect(block).toContain('SCOPE_RESULT: ${{ needs.scope.result }}');
+    expect(block).toContain('CHECK_RESULT: ${{ needs.check.result }}');
+  });
+
+  it("every check step respects the draft flag", () => {
+    const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+    const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+    const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+    const heavyIfs = steps
+      .filter((step) => !step.includes("Docs-only fast pass"))
+      .flatMap((step) => step.split("\n").filter((line) => /^        if:/.test(line)));
+    expect(heavyIfs.length).toBeGreaterThan(10);
+    for (const line of heavyIfs) {
+      expect(line).toContain("needs.scope.outputs.draft != 'true'");
+    }
   });
 });
 
@@ -232,7 +322,7 @@ describe("e2e scope gate", () => {
     expect(scopeJob).toContain("skip_e2e:");
     expect(scopeJob).toContain("repos/$REPO/pulls/$PR_NUMBER/files");
     expect(smoke).toMatch(/\n    needs: scope\n/);
-    expect(smoke).toMatch(/\n    if: needs\.scope\.outputs\.skip_e2e != 'true'\n/);
+    expect(smoke).toContain("needs.scope.outputs.skip_e2e != 'true'");
   });
 
   it("keeps the pull_request trigger unfiltered so the workflow always reports", () => {
@@ -240,6 +330,9 @@ describe("e2e scope gate", () => {
     const prBlock = trigger.match(/(?:^|\n)  pull_request:[^\n]*((?:\n {4,}[^\n]*)*)/)?.[1] ?? "";
     expect(trigger).toMatch(/(^|\n)  pull_request:/);
     expect(prBlock).not.toMatch(/\b(paths|paths-ignore|branches|branches-ignore):/);
+    // Drafts skip the smoke; undrafting re-runs via ready_for_review.
+    expect(smoke).toContain("github.event.pull_request.draft != true");
+    expect(trigger).toMatch(/(^|\n)  schedule:\n/);
   });
 
   it("stays on standard hosted runners and skips only the smoke, never a required check", () => {

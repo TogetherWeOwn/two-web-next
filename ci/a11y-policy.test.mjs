@@ -171,19 +171,25 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   assert.match(check, /\n    if: always\(\)\n/);
   assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
   const guard = check.match(
-    /- name: Require successful accessibility audit\n        if: needs\.scope\.outputs\.docs_only != 'true'\n        env:\n          A11Y_RESULT: [^\n]+\n        run: ([^\n]+)/,
+    /- name: Require successful accessibility audit\n        if: \(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)\n        env:\n          A11Y_RESULT: [^\n]+\n          A11Y_SELECTED: [^\n]+\n        run: ([^\n]+)/,
   );
   assert(
     guard,
     "Audit guard must precede the heavy suite (only the docs-only fast pass may run before it)",
   );
-  for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
-    const execution = spawnSync("bash", ["-c", guard[1]], { env: { A11Y_RESULT: result } });
-    assert.equal(
-      execution.status,
-      result === "success" ? 0 : 1,
-      `Audit result ${result || "missing"}`,
-    );
+  for (const [result, selected, expected] of [
+    ["success", "true", 0],
+    ["success", "false", 0],
+    ["failure", "true", 1],
+    ["cancelled", "true", 1],
+    ["skipped", "false", 0],
+    ["skipped", "true", 1],
+    ["", "true", 1],
+  ]) {
+    const execution = spawnSync("bash", ["-c", guard[1]], {
+      env: { A11Y_RESULT: result, A11Y_SELECTED: selected },
+    });
+    assert.equal(execution.status, expected, `Audit result ${result || "missing"} selected=${selected}`);
   }
 });
 
@@ -211,13 +217,18 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
   ]) {
     const step = steps.find((entry) => entry.split("\n").includes(`        run: ${command}`));
     assert(step, `Required gate missing: ${command}`);
-    // The docs-only scope gate (TOG-11811) is the one sanctioned bypass: the
-    // fast-pass step keeps `check` green while every gate keeps its command.
+    // The docs-only/draft scope gate (TOG-11811/TOG-14880) is the one sanctioned
+    // bypass: the fast-pass step keeps `check` green while every gate keeps
+    // its command.
     for (const line of step.split("\n")) {
       if (/^        (?:if|continue-on-error):/.test(line)) {
-        assert.equal(
+        // Sanctioned forms: the plain docs/draft gate, that gate plus an
+        // area selection (Kit, dry-runs, probes, numbering), and the perf
+        // gate (always() plus an app selection). Anything else — including
+        // continue-on-error — bypasses a required gate.
+        assert.match(
           line,
-          "        if: needs.scope.outputs.docs_only != 'true'",
+          /^        if: (always\(\) && )?\(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)( && \(needs\.scope\.outputs\.full == 'true'[^)]*\))?$/,
           `Required gate must not be bypassed: ${command}`,
         );
       }

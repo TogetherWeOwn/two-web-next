@@ -57,3 +57,112 @@ if [ -s "$files" ]; then
     done < "$files"
   fi
 fi
+
+# Area verdicts for heavy-job gating. Computed over EVERY changed path (either
+# side of a rename) with no early exit, independent of the docs_only verdict
+# below: a doc a gate reads (docs/config.md) selects no heavy area while still
+# running `check`, and a truncated list fails everything closed.
+app=false
+worker=false
+db=false
+full=false
+if [ -s "$files" ]; then
+  listed_areas=$(wc -l < "$files")
+  if [ "$listed_areas" -ge "$expected" ]; then
+    while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
+      # A rename counts both names: moving code into docs/ is not a docs change.
+      for path in "$name" ${previous:+"$previous"}; do
+        case "$path" in
+          # Full-run triggers: dependency manifests and lockfiles, shared
+          # build and tooling config, CI itself, and this filter.
+          package-lock.json|web/package-lock.json|\
+          package.json|web/package.json|\
+          biome.json|tsconfig.json|ci/tsconfig.json|e2e/tsconfig.json|\
+          vitest.config.ts|playwright.config.ts|playwright.staging.config.ts|\
+          .github/*|ci/change-scope.sh)
+            full=true
+            ;;
+          # Worker deploy surface: dispatch configs, the Tail worker and the
+          # Kit spike. Observed by `check` (dry runs, Kit typecheck and
+          # parity) and the deploy workflows, not by the audit or perf jobs.
+          wrangler*.jsonc|tail/*|web/*)
+            worker=true
+            ;;
+          # Database: migrations, the journal lock and the drizzle config.
+          # Observed by `check` (migrate, history checks) and `a11y` (the
+          # fixtures run the real migrations), not by the perf jobs.
+          drizzle/*|migrations.lock|drizzle.config.ts)
+            db=true
+            ;;
+          # App: everything the served worker, its assets, the test suites
+          # and the browser journeys observe.
+          src/*|assets/*|public/*|content/*|bin/*|ci/*|test/*|e2e/*|spike/*)
+            app=true
+            ;;
+          # Prose: area-neutral here; the docs_only verdict below decides.
+          docs/*) ;;
+          *.md) ;;
+          # Unknown paths fail closed: run everything.
+          *) full=true ;;
+        esac
+      done
+    done < "$files"
+  else
+    full=true
+  fi
+else
+  full=true
+fi
+
+draft=false
+if [ "${DRAFT:-}" = true ]; then
+  draft=true
+fi
+
+not_docs() {
+  echo "change-scope: $1" >&2
+  echo "docs_only=false"
+  echo "skip_e2e=$skip_e2e"
+  echo "app=$app"
+  echo "worker=$worker"
+  echo "db=$db"
+  echo "full=$full"
+  echo "draft=$draft"
+  exit 0
+}
+
+[ -s "$files" ] || not_docs "no changed-file list"
+listed=$(wc -l < "$files")
+# The files API stops at 3000 entries; a truncated list proves nothing.
+[ "$listed" -ge "$expected" ] || not_docs "listed $listed of $expected changed files"
+
+patterns=()
+while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
+  # A rename counts both names: moving code into docs/ is not a docs change.
+  for path in "$name" ${previous:+"$previous"}; do
+    case "$path" in
+      docs/*) ;;
+      # Markdown elsewhere (content/, src/, test fixtures) may be shipped or read.
+      */*) not_docs "$path is outside docs/" ;;
+      *.md) ;;
+      *) not_docs "${path:-<empty path>} is not documentation" ;;
+    esac
+    patterns+=(-e "$path")
+  done
+done < "$files"
+
+# A doc that a gate, test or build reads (docs/url-freeze.md, docs/config.md,
+# docs/runbook.md, ...) is an input to `check`, not prose.
+rc=0
+readers=$(git grep -lF "${patterns[@]}" -- . ':(exclude)*.md') || rc=$?
+case $rc in
+  0) not_docs "changed docs are read by: ${readers//$'\n'/, }" ;;
+  1) echo "docs_only=true" ;;
+  *) echo "change-scope: git grep failed ($rc)" >&2; exit "$rc" ;;
+esac
+echo "skip_e2e=$skip_e2e"
+echo "app=$app"
+echo "worker=$worker"
+echo "db=$db"
+echo "full=$full"
+echo "draft=$draft"

@@ -63,3 +63,13 @@ describe("required checks always report", () => {
     expect(gitleaks).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 });
+  it("ci-ok aggregates the gated jobs but is not itself required yet", () => {
+    const ci = readFileSync(join(dir, "ci.yml"), "utf8");
+    const ok = job(ci, "ci-ok");
+    expect(ok).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
+    expect(ok).toMatch(/\n    if: always\(\)\n/);
+    // The ruleset cutover is an OPERATOR step after merge + green probes, so
+    // the required-check bullets above still name exactly check, gitleaks and
+    // pr-lint — while the change-gating section below documents ci-ok.
+    expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
+  });

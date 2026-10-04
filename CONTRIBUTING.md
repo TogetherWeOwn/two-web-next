@@ -48,6 +48,19 @@ The repository rulesets enforce the following on `main`:
   `gitleaks` must pass.
 - `pr-conventions`: `pr-lint` must pass.
 
+### Change-gated CI and `ci-ok`
+
+Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
+`scope` job in `ci.yml` classifies every pull request into areas — `app`
+(served code, assets, tests, journeys), `worker` (dispatch configs, the Tail
+worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
+`.github/**`, shared config, or anything unknown: run everything) and `draft`.
+`a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, `check` always
+runs but skips its heavy steps on docs-only and draft PRs, and the `ci-ok`
+aggregator reports the overall conclusion. Main pushes and the nightly schedule
+run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
+OPERATOR step after merge plus green probes — never part of a PR.
+
 GitHub does not enforce an approval count here. Team policy does: an independent
 reviewer, who did not write the change, reviews the exact head SHA that merges, CI
 is green on that SHA, and a new push needs a new review.
