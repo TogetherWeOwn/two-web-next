@@ -30,10 +30,8 @@ on:
     - cron: '23 4 * * 1'
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+# Least privilege: no workflow-wide token. Each job below grants only its own.
+permissions: {}
 
 concurrency:
   group: release
@@ -42,6 +40,9 @@ concurrency:
 jobs:
   release-please:
     name: release-please
+    permissions:
+      contents: write # Publish tags/releases and reconcile the release branch.
+      pull-requests: write # Create and reconcile the release PR.
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -62,6 +63,8 @@ jobs:
 
   dispatch-checks:
     name: dispatch-checks
+    permissions:
+      actions: write # Dispatch required checks for GITHUB_TOKEN-created release PRs.
     needs: release-please
     # Never on a push: it did not regenerate the PR, so there is no new head.
     if: github.event_name != 'push' && needs.release-please.outputs.prs_created == 'true'
