@@ -140,6 +140,7 @@ function executeStaging(ctx, evidence, changes = {}) {
           GITHUB_REPOSITORY: ctx.repository,
           GITHUB_REF: ctx.ref,
           GITHUB_SHA: ctx.sha,
+          DEPLOY_SHA: ctx.checkoutSha,
           GITHUB_TOKEN: "offline-stub",
           TEST_CHECKOUT_SHA: ctx.checkoutSha,
           TEST_EVIDENCE: join(dir, "evidence.json"),
@@ -324,7 +325,7 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
       "wrangler queues create two-sync-event",
       "wrangler queues create two-internal-action",
       "wrangler deploy --config tail/wrangler.jsonc",
-      "wrangler deploy --config wrangler.jsonc",
+      `wrangler deploy --config wrangler.jsonc --tag ${sha}`,
     ]);
     assert.match(result.stdout, new RegExp(`Staging gate passed: ${sha}`));
   });
@@ -342,7 +343,7 @@ const mutationCalls = [
   "wrangler queues create two-sync-event",
   "wrangler queues create two-internal-action",
   "wrangler deploy --config tail/wrangler.jsonc",
-  "wrangler deploy --config wrangler.jsonc",
+  `wrangler deploy --config wrangler.jsonc --tag ${sha}`,
 ];
 for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   for (const [phase, allowedCalls] of [

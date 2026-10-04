@@ -173,7 +173,7 @@ describe("deploy public-route smoke (offline)", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
     expect(pkg.scripts.check).toContain("npm run test:smoke");
     expect(pkg.scripts["test:smoke"]).toBe(
-      "node --test test/smoke.test.mjs test/json-smoke.test.mjs",
+      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs",
     );
   });
 });

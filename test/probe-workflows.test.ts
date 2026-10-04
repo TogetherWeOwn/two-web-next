@@ -262,7 +262,9 @@ describe("source-managed moderator deployment preflight", () => {
     expect(scripts["check:worker-moderators"]).toContain(
       "--config=wrangler.jsonc --require-configured",
     );
-    expect(deploy).toContain("run: npx wrangler deploy --config wrangler.jsonc\n");
+    expect(deploy).toContain(
+      'run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"\n',
+    );
     const gate = deploy.indexOf("run: npm run check:worker-moderators");
     expect(gate).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(deploy.indexOf("npx wrangler queues create"));
@@ -361,5 +363,37 @@ describe("staging smoke workflow safety", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("deployed revision marker is staging-only", () => {
+  const config = readWranglerConfig(read("wrangler.jsonc"));
+
+  it("binds version_metadata on the staging Worker and not in env.production", () => {
+    expect(config.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
+    // Bindings are not inherited. A production /up marker is a reviewed
+    // cutover decision: declare the binding in env.production in that PR and
+    // update this pin with it.
+    expect(config.env?.production?.version_metadata).toBeUndefined();
+    expect(read(".github/workflows/deploy-production.yml")).not.toMatch(/--tag|revision-check/);
+  });
+
+  it("logs the live revision before any mutation and verifies the deployed commit after", () => {
+    const record = deploy.indexOf(
+      "run: node bin/revision-check.mjs https://next.togetherweown.com\n",
+    );
+    const verify = deploy.indexOf(
+      'run: node bin/revision-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"\n',
+    );
+    expect(record).toBeGreaterThan(-1);
+    expect(record).toBeLessThan(deploy.indexOf("npx wrangler queues create"));
+    expect(verify).toBeGreaterThan(
+      deploy.indexOf("run: npx wrangler deploy --config wrangler.jsonc"),
+    );
+    expect(verify).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
+    // The tag and the verified commit come from the same CI-verified expression.
+    const expr =
+      "DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}";
+    expect(deploy.split(expr)).toHaveLength(3);
   });
 });
