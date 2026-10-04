@@ -153,6 +153,10 @@ jobs:
       # ci/change-scope.sh fails closed: every other path runs the smoke.
       - name: Scope post-deploy smoke to web-affecting changes
         id: smoke-scope
+        # The deploy-staging job runs in a container where the default run
+        # shell is sh (dash), which rejects `set -o pipefail`. Run this step
+        # under bash.
+        shell: bash
         run: |
           set -euo pipefail
           # A deploy with no parent (practically impossible on main) fails
