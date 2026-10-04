@@ -559,6 +559,8 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
         )
         .where(eq(events.id, ev.id));
       expect((await put(ev.eventKey, "newcomer")).status).toBe(403);
+      // WaitlistTest.php: joining the line is no more open than the door.
+      expect((await put(ev.eventKey, "newcomer", "waitlisted")).status).toBe(403);
       expect((await withdraw(ev.eventKey, "holder")).status).toBe(204);
       expect((await patch(ev.eventKey, 3)).status).toBe(200);
       expect(
