@@ -66,3 +66,13 @@ test("staging moderator creates a draft then cancels it without publishing", asy
     await guest.close();
   }
 });
+
+// Read-only: a moderator's profile shell links to /admin,
+// and the link lands on the guarded dashboard.
+test("staging moderator reaches the admin panel from their profile header", async ({ page }) => {
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();
+  await page.getByTestId("profile-admin-link").click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.getByRole("heading", { name: "Moderation", exact: true })).toBeVisible();
+});

@@ -64,6 +64,25 @@ describe("member profile base theme", () => {
     expect(html).not.toContain("<script>");
   });
 
+  it("carries sign-out for everyone and the moderator admin shortcut only when asked", () => {
+    const member = render();
+    expect(member).toContain(
+      '<form method="post" action="/logout" data-testid="profile-signout"><button type="submit" class="link">Sign out</button></form>',
+    );
+    expect(member).not.toContain('data-testid="profile-admin-link"');
+    expect(member).not.toContain('href="/admin"');
+    expect(render({ isModerator: false })).not.toContain('href="/admin"');
+    const moderator = render({ isModerator: true });
+    expect(moderator).toContain(
+      'href="/admin" data-testid="profile-admin-link">Moderator admin</a>',
+    );
+    expect(moderator).toContain('action="/logout"');
+    // Viewing another member's page keeps the viewer's own header actions.
+    const other = render({ isOwner: false, isModerator: true });
+    expect(other).toContain('data-testid="profile-admin-link"');
+    expect(other).toContain('data-testid="profile-signout"');
+  });
+
   it("keeps optional stats absent rather than fabricating empty tiles", () => {
     const html = render();
     expect(html).not.toContain('data-testid="profile-stats"');
