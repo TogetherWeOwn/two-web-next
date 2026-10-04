@@ -27,7 +27,7 @@ version.
 - Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
   followed by digits), private URLs, tokens or secrets in any title, body, commit,
   comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
-  or a commit subject.
+  or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
 - Be honest about the model and the tests. Name the model that wrote or assisted the
   change, give the exact commands you ran and their results, and say what you did
   not run. Never claim a green run you did not see.
