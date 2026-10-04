@@ -21,13 +21,17 @@ steps against `togetherweown.com`, `www`, or
 
 ## Ordered revert steps (staging rehearsal)
 
-1. Confirm staging is idle: no `deploy` run queued, pending, or in
-   progress on `main` (Actions page or REST API). A merge deploy during
-   the rehearsal overwrites the rollback. A `ci` push run in progress
-   does not block the drill: its deploy reaches the Worker upload about
-   9 minutes after `ci` succeeds, and the Worker half takes about 3.
-   Under a merge burst (a `main` push about every 13 minutes) waiting
-   for no `ci` run never ends; the clean window opens when a deploy lands.
+1. Require a confirmed exclusive staging deploy/migration hold, coordinated
+   by the DevOps & Reliability Engineer with the staging release owner and
+   authorized migration/import operators. Hold automatic/manual deploy
+   admission and schema/import writes; resolve queued/active work safely,
+   without casually cancelling in-flight DDL. Record acknowledgements, hold
+   mechanisms, targets, window and release procedure in the receipt as in
+   [runbook step 1](runbook.md#staging-rehearsal-worker-rollback-and-dns-flip-back).
+   No confirmed hold means no drill. Historical runtimes or a quiet Actions
+   page do not establish exclusion. Keep and re-confirm the hold through
+   final verification; record live version/bindings and applied schema/journal
+   identity from authorized release/migration evidence before selecting N.
 2. Record the rollback pointer: save `wrangler deployments list
    --name two-web-next --json` and note the active (N+1) version ID
    plus the chosen known-good N version ID. Prefer the newest N
@@ -42,10 +46,17 @@ steps against `togetherweown.com`, `www`, or
 5. Prove N serves (telemetry `$workers.scriptVersion.id` plus a
    public-path status discriminator when versions differ on one),
    then run N's own smoke from `git archive <N_SHA> bin ci`.
-6. Roll forward to N+1 the same way, repeat the baseline smoke, and
-   confirm the deployment list differs from step 2 only by the two
-   rehearsal deployments. Restore staging to the pre-rehearsal
-   version at 100%.
+6. Re-confirm the hold and unchanged live schema/bindings before rolling
+   forward to N+1; on an intervening release/schema change, use the collision
+   response below instead. Repeat the baseline smoke and save the final
+   deployment list. Compare newly added deployment IDs: exactly the two
+   recorded rehearsal IDs with expected allocations, no other new deployment
+   in the drill window, and unchanged overlapping entries. Allow oldest entries
+   to roll off the ten-entry history window; eviction alone is not a collision.
+   Missing expected IDs or insufficient overlap is inconclusive, not pass
+   ([runbook step 7](runbook.md#staging-rehearsal-worker-rollback-and-dns-flip-back)).
+   Confirm the pre-rehearsal version at 100% and unchanged schema/bindings, then
+   obtain the authorized owners' hold-release acknowledgements.
 
 ## Staging DNS restoration and import recovery limits
 
@@ -149,10 +160,32 @@ the incident card) on any of these:
 - Pager storm (`error.alert` / `queue.failing` delivery).
 - Red after-gate (`node ci/cutover-check.mjs --phase after --target togetherweown.com --json`).
 - Member-visible breakage (sign-in, profiles, RSVPs, event pages).
-- During a staging drill: a merge deploy landing in the window (the
-  deployment list differs by more than the two rehearsal deployments), a
-  `deploy` run starting on `main`, or the baseline smoke changing
-  mid-drill. Restore the pre-drill version and re-run in a quiet window.
+- During a staging drill: loss of the confirmed deploy/migration hold,
+  unexpected deploy/migration activity or live schema/binding drift, any new
+  deployment ID other than the two recorded rehearsal IDs, changed overlapping
+  history, or baseline smoke changing mid-drill. Oldest entries rolling off
+  the ten-entry history window are not a collision; missing expected IDs or
+  insufficient overlap makes the evidence inconclusive, not pass.
+
+### Staging collision response
+
+Stop further drill mutations and preserve the evidence; do not automatically
+restore the pre-drill version. With the staging release owner and authorized
+migration operator, re-establish the hold and bring any in-flight deploy or
+migration to a safe disposition without casually cancelling DDL. Inspect the
+current serving Worker version, deployment history, live schema/applied journal
+and bindings from authorized release/migration evidence. The earlier N/N+1
+source diff and `/up` zero pending do not prove compatibility with a concurrent
+N+2 release or its schema.
+
+Select a compatible recovery target with the staging release owner, or use a
+reviewed forward repair; keeping a healthy intervening release may be the right
+disposition. Normal pre-drill restoration is permitted only with a confirmed
+hold, no intervening release/schema change and verified live compatibility.
+Record the collision, current state, recovery decision and result; the affected
+drill is invalid or inconclusive, not a pass. Re-run only with a fresh baseline
+and confirmed exclusive hold. This is staging-only and grants no production
+recovery authority.
 
 ## Who calls rollback
 

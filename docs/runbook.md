@@ -393,18 +393,25 @@ The telemetry query returns only the newest 100 events. Keep each window to
 
 **Worker rollback (N+1 to N and back)**
 
-1. Confirm that the staging Worker is idle. A deploy during the rehearsal
-   overwrites the rollback, and a `deploy` run follows each green `ci` run on
-   `main`, reaching the Worker upload about 9 minutes after it starts, because
-   `npm run check` runs first. Start only when no `deploy` run is queued,
-   pending or in progress (Actions page or REST API; unauthenticated REST
-   calls share a 60 per hour limit). A `ci` push run that is still running does
-   not block the start: its deploy cannot upload for about 9 minutes after
-   `ci` succeeds, and the whole Worker half takes about 3 minutes. Waiting for
-   no `ci` run at all never ends while merges land about every 13 minutes (2026-10-04).
-   After the drill, `dep-after.json` must differ from `dep-before.json` by the
-   two rehearsal deployments only; any other deployment means a deploy landed
-   in the window and the drill is void.
+1. Obtain a confirmed exclusive staging deploy/migration hold before any
+   rehearsal mutation. The DevOps & Reliability Engineer coordinates the
+   staging release owner and authorized migration/import operators: they must
+   hold automatic and manual staging deploy admission and schema/import writes,
+   and confirm that queued or active staging deploy/migration work has reached
+   a safe disposition. Do not casually cancel an in-flight migration/DDL.
+   Record each owner's acknowledgement, effective hold mechanism, target,
+   start/end window and release procedure in the drill receipt. A merge freeze
+   alone does not exclude already queued work. If the hold cannot be confirmed,
+   stop; a quiet Actions page or historical workflow runtime is not exclusion.
+   The observed nine-minute deploy lead time is not a lock or a minimum runtime.
+   Keep the hold through final state verification; re-confirm it immediately
+   before each rollback/roll-forward mutation. If it lapses or another deploy,
+   migration or schema change appears, stop further drill mutations and follow
+   the [collision response](cutover-rollback.md#staging-collision-response), not an automatic
+   restoration to the captured version. Record the live version, bindings and
+   applied schema/journal identity from authorized release/migration evidence
+   before selecting N; source-file compatibility alone does not prove live
+   schema compatibility.
 2. Save `npx --no-install wrangler deployments list --name two-web-next --json`
    as `$RUN_DIR/dep-before.json`. It returns only the 10 newest deployments, so
    N must be among them. N+1 is the active version. The previous deployment is
@@ -466,13 +473,31 @@ The telemetry query returns only the newest 100 events. Keep each window to
    ```
 
    Run `served_versions` over the smoke window. Every event must show N.
-7. Roll forward with `wrangler rollback "$N1_VERSION"` (the same block as
-   step 5), prove N+1 the same way, then repeat the step 3 smoke. The result
-   must match the baseline. Confirm that `wrangler deployments list` shows
-   both rehearsal deployments with their messages (the `-m` text is stored in
+7. Re-confirm the hold and unchanged live schema/bindings before rolling
+   forward with `wrangler rollback "$N1_VERSION"` (the same block as step 5).
+   If any intervening release/schema change is detected, stop and follow the
+   collision response instead. Otherwise prove N+1 the same way and repeat
+   the step 3 smoke; the result must match the baseline. After each mutation,
+   save `wrangler deployments list --name two-web-next --json` and record the
+   resulting deployment ID (not version ID), target allocation and message.
+   Save the final list as `$RUN_DIR/dep-after.json`. The `-m` text is stored in
    the deployment's `annotations["workers/message"]`; the version itself shows
-   `Message: -`) and no other deployment in between: compare with
-   `$RUN_DIR/dep-before.json`.
+   `Message: -`.
+
+   Compare `dep-before.json` and `dep-after.json` by deployment ID: the new
+   IDs must be exactly the two recorded rehearsal deployment IDs, with the
+   expected N and N+1 allocations and no other new deployment in the drill
+   window. Overlapping entries must retain their recorded timestamps and
+   version allocations. Allow oldest entries to roll off the ten-entry
+   history window; their eviction is not a collision. For example, ten entries
+   before plus two new deployments leaves eight overlapping entries and two
+   oldest evictions afterward, not a four-deployment collision. Do not use a
+   whole-list or symmetric-difference comparison. Unexpected new IDs or changed
+   overlapping entries invalidate the drill and invoke the collision response.
+   Missing expected IDs or insufficient overlapping history makes the check
+   inconclusive, not pass: stop and ask the release owner for retained history.
+   Confirm N+1 at 100% and unchanged schema/bindings before the authorized
+   owners release the hold; record release acknowledgements in the receipt.
 
 **DNS flip to the legacy target and back**
 
