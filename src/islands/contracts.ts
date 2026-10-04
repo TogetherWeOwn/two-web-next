@@ -852,8 +852,8 @@ export function rsvpTrapTripped(input: Record<string, unknown>): boolean {
  * (W7, TOG-9686). Re-spec §5.
  *
  * Deviations from the legacy row list, recorded so nobody hunts for them:
- * - Rank has no W7 source yet; the view renders it only when SSR is handed
- *   one (`MemberView.rank`), never a placeholder. Joined month comes from
+ * - Rank has no profile-row source; the view renders it only from member
+ *   stats (`stats.rankKey`), never a placeholder. Joined month comes from
  *   users.created_at.
  * - The save is one PATCH /members/{id} sent as JSON with `accept:
  *   application/json`; the no-JS form posts `_method=PATCH` and gets the same
