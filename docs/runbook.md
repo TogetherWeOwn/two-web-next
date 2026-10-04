@@ -716,6 +716,52 @@ Notes from the 2026-10-02 run:
   addresses (`ttl` 1, auto). The DNS flip therefore depends on how fast
   Cloudflare applies edge configuration, not on resolver TTL expiry.
 
+## Final import and reconcile
+
+Cutover plan step 2: the final legacy import into production Neon, with the
+reconcile report. Run it under the write freeze
+([cutover-freeze.md](cutover-freeze.md) in force), with legacy writes paused
+and the import destination quiescent. Both snapshots in this section are
+production mutations through the authorized operator procedure; the steps
+below name only environment variable **names**, never values. Credentials
+stay in the environment, never on argv.
+
+Ordered commands (one shared fixed cutoff for every importer and the
+verifier; the importers derive it from the same retention window):
+
+```bash
+# 1. Snapshot order: users/profiles, events/RSVPs, content/funnel, audit.
+node bin/import/users-profiles.mjs --apply
+node bin/import/events-rsvps.mjs --apply
+node bin/import/content-funnel.mjs --apply
+node bin/import/audit.mjs --apply   # add --enable-grants only after admission review
+# 2. Reconcile what the importers wrote.
+node bin/import/verify.mjs --cutoff <ISO-UTC> --json verification.json --markdown verification.md
+```
+
+Connections come only from `LEGACY_DATABASE_URL` and `DATABASE_URL`. The
+content/funnel and audit importers also read `LEGACY_DATABASE_SCHEMA` and
+`DATABASE_SCHEMA` when the legacy snapshot and the Next schema differ.
+`--dry-run` previews with no writes; `--apply` is the only write mode.
+
+Exit codes:
+
+| Exit | Meaning | Operator action |
+| --- | --- | --- |
+| 0 | Complete match for the configured projection | Proceed to the next cutover step |
+| 1 | Data diff or incomplete mapping | Stop. Triage by named key (`missingKeys`, `extraKeys`, `mismatchKeys`, `mappingGaps`); repair with a same-key importer re-run where the update rules permit, or with separately approved backup/repair recovery |
+| 2 | Configuration, connection, query or output error | Stop. Fix the tool invocation or environment, then re-run |
+
+Caveat: once traffic starts, rows created natively on Next appear outside
+the imported set (`legacy_id IS NOT NULL` on the Next side), never as
+extras. Stop rule: a re-run is not an undo — it repairs same-key values
+only where the importer update rules permit
+([cutover-rollback.md row 4](cutover-rollback.md#production-cutover-capability--reverse-map)).
+Wrong identities or keys, extra rows and lost overwritten state need
+separately approved backup/repair recovery under writer holds. Archive the
+counts-only `verification.json` / `verification.md` with the cutover
+evidence; the reports carry keys and counts, never row values.
+
 ### Before the production flip
 
 The production rollback is this same flip back to legacy, so the legacy origin

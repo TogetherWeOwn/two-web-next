@@ -238,6 +238,8 @@ previous invocation: always check the current exit status, not just file presenc
 Two database snapshots are not atomic across servers. Freeze writes/prunes and
 record the importer SHA, verifier SHA, map, fixed cutoff and both database backup
 references with operator cutover evidence. This task does not grant that access.
+The production step is
+[Final import and reconcile](runbook.md#final-import-and-reconcile).
 
 ## Tests
 
@@ -258,6 +260,8 @@ batch boundaries, sample truncation, opaque bigint/composite/unicode keys,
 microseconds, SQL NULL versus JSON null, nested numeric-scale canonicalization,
 unknown-age retention rows, required/optional channel-binding DSNs, duplicate/NULL
 keys, read-only enforcement, redacted errors, display-name precedence with NULL/empty
-fallbacks (without resolving the membership gap), and baseline-map query compatibility.
+fallbacks, and baseline-map query compatibility. `test/import-verify-chain.test.ts`
+runs all four importers in slice order into one synthetic fixture and asserts
+the CLI exits 0 with empty `mappingGaps` on all twelve tables.
 CI runs this same test on
 its service container; no real member records are present.
