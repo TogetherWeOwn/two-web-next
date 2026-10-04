@@ -69,9 +69,11 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () =
       total: 4,
       failed: 1,
       oldestPendingAgeSeconds: expect.any(Number),
+      oldestReadyWaitAgeSeconds: expect.any(Number),
     });
     expect(depth.oldestPendingAgeSeconds!).toBeGreaterThanOrEqual(0);
     expect(depth.oldestPendingAgeSeconds!).toBeLessThan(60);
+    expect(depth.oldestReadyWaitAgeSeconds!).toBeGreaterThanOrEqual(60);
   });
 
   it("released moves a reserved row back to the right availability bucket", async () => {
@@ -206,5 +208,6 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres queue ledger + depth", () =
     expect(depth.total).toBe(0);
     expect(depth.failed).toBe(0);
     expect(depth.oldestPendingAgeSeconds).toBeNull();
+    expect(depth.oldestReadyWaitAgeSeconds).toBeNull();
   });
 });

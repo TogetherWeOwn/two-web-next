@@ -39,6 +39,7 @@ const depthRow = (over: Record<string, unknown> = {}) => ({
   total: 4,
   failed: 2,
   oldest_pending_age_seconds: 42,
+  oldest_ready_wait_age_seconds: 12.5,
   ...over,
 });
 const withStore = (sql: unknown) => ({ ...env, QUEUE_DEPTH_STORE: sql }) as Env;
@@ -53,6 +54,8 @@ const healthyQueue = {
   total: 4,
   failed: 2,
   oldest_pending_age_seconds: 42,
+  oldest_ready_wait_age_seconds: 12.5,
+  ready_wait_severity: "healthy",
   warn_at: 20,
   critical_at: 100,
   detail: null,
@@ -65,6 +68,8 @@ const unknownQueue = {
   total: null,
   failed: null,
   oldest_pending_age_seconds: null,
+  oldest_ready_wait_age_seconds: null,
+  ready_wait_severity: "unknown",
   warn_at: 20,
   critical_at: 100,
   detail: null,
@@ -104,6 +109,7 @@ describe("upBody queue compatibility", () => {
           total: pending,
           failed: 0,
           oldestPendingAgeSeconds: 9,
+          oldestReadyWaitAgeSeconds: 1,
         }),
         healthSql(),
       );
@@ -126,8 +132,108 @@ describe("upBody queue compatibility", () => {
   });
 });
 
+describe("/up additive ready-wait signal", () => {
+  it.each([
+    [null, "healthy"],
+    [0, "healthy"],
+    [299.9, "healthy"],
+    [300, "healthy"],
+    [300.1, "warning"],
+    [1800, "warning"],
+    [1800.1, "critical"],
+  ])("classifies %s seconds as %s without changing readiness", async (age, severity) => {
+    const res = await app.request(
+      "/up",
+      {},
+      withStore(healthSql({ queue: [depthRow({ oldest_ready_wait_age_seconds: age })] })),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      status: "healthy",
+      db: "ok",
+      pending_migrations: 0,
+      queue: {
+        ...healthyQueue,
+        oldest_ready_wait_age_seconds: age,
+        ready_wait_severity: severity,
+      },
+    });
+  });
+
+  it("retained failures and old creation age alone do not trip ready-wait severity", async () => {
+    const res = await app.request(
+      "/up",
+      {},
+      withStore(
+        healthSql({
+          queue: [
+            depthRow({
+              pending: 0,
+              total: 0,
+              delayed: 0,
+              failed: 200,
+              oldest_pending_age_seconds: null,
+              oldest_ready_wait_age_seconds: null,
+            }),
+          ],
+        }),
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      status: "healthy",
+      queue: {
+        status: "healthy",
+        failed: 200,
+        oldest_ready_wait_age_seconds: null,
+        ready_wait_severity: "healthy",
+      },
+    });
+    const retry = await app.request(
+      "/up",
+      {},
+      withStore(healthSql({ queue: [depthRow({ oldest_pending_age_seconds: 39706 })] })),
+    );
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ queue: { ready_wait_severity: "healthy" } });
+  });
+
+  it("keeps the depth status and ready-wait severity independent", async () => {
+    const res = await app.request(
+      "/up",
+      {},
+      withStore(healthSql({ queue: [depthRow({ pending: 100, total: 101 })] })),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      status: "degraded",
+      queue: { status: "degraded", ready_wait_severity: "healthy" },
+    });
+  });
+
+  it("a hung queue alone reports unknown on a ready HTTP 200", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = Promise.resolve(
+        app.request("/up", {}, withStore(healthSql({ queue: never }))),
+      );
+      await vi.advanceTimersByTimeAsync(QUEUE_READ_TIMEOUT_MS);
+      const res = await pending;
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        queue: unknownQueue,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("GET /up", () => {
-  it("answers 200 fully migrated with the existing queue payload unchanged", async () => {
+  it("answers 200 fully migrated with only additive queue fields", async () => {
     const res = await app.request("/up", {}, withStore(healthSql({ queue: [depthRow()] })));
     expect(res.status).toBe(200);
     expect(res.headers.get("x-two-origin")).toBe("two-web-next");
@@ -368,6 +474,7 @@ describe("/up required Worker secrets", () => {
         total: 1,
         failed: 0,
         oldestPendingAgeSeconds: 1,
+        oldestReadyWaitAgeSeconds: 1,
       }),
       healthSql(),
       { config: "missing" },
@@ -687,6 +794,109 @@ describe.skipIf(!process.env.DATABASE_URL)("/up queue.failed redrive linkage", (
   });
   afterAll(async () => {
     await fixture.dispose();
+  });
+
+  it("empty and failed-only ledgers have null ready-wait age and healthy severity", async () => {
+    for (const failed of [0, 1]) {
+      if (failed) await fail("sync-event", "sync-event:history", "retained history");
+      const measured = await pgQueueDepth(sql);
+      expect(measured).toEqual({
+        pending: 0,
+        delayed: 0,
+        reserved: 0,
+        total: 0,
+        failed,
+        oldestPendingAgeSeconds: null,
+        oldestReadyWaitAgeSeconds: null,
+      });
+      const body = await upBody(() => pgQueueDepth(sql), healthSql());
+      expect(body.status).toBe("healthy");
+      expect(body.queue).toMatchObject({
+        failed,
+        oldest_ready_wait_age_seconds: null,
+        ready_wait_severity: "healthy",
+      });
+    }
+  });
+
+  it("ready-wait excludes future/reserved rows, retains creation age and never changes rows", async () => {
+    await sql`
+      insert into queue_jobs (job_id, kind, key, created_at, available_at, reserved_at) values
+        (${crypto.randomUUID()}::uuid, 'sync-event', 'old-retry',
+          statement_timestamp() - interval '2 days', statement_timestamp() - interval '12.25 seconds', null),
+        (${crypto.randomUUID()}::uuid, 'sync-event', 'recent',
+          statement_timestamp() - interval '1 day', statement_timestamp() - interval '5 seconds', null),
+        (${crypto.randomUUID()}::uuid, 'sync-event', 'future',
+          statement_timestamp() - interval '4 days', statement_timestamp() + interval '10 minutes', null),
+        (${crypto.randomUUID()}::uuid, 'sync-event', 'reserved',
+          statement_timestamp() - interval '4 days', statement_timestamp() - interval '3 days',
+          statement_timestamp() - interval '2 days')`;
+    const before = await sql`select * from queue_jobs order by job_id`;
+    const [earliest] =
+      await sql`select extract(epoch from statement_timestamp() - min(available_at))::double precision as age
+      from queue_jobs where available_at <= statement_timestamp() and reserved_at is null`;
+    const measured = await withHealthReadTimeout(sql, pgQueueDepth);
+    const [latest] =
+      await sql`select extract(epoch from statement_timestamp() - min(available_at))::double precision as age
+      from queue_jobs where available_at <= statement_timestamp() and reserved_at is null`;
+    expect(measured).toMatchObject({ pending: 2, delayed: 1, reserved: 1, total: 4, failed: 0 });
+    expect(measured.oldestReadyWaitAgeSeconds).toBeGreaterThanOrEqual(earliest!.age);
+    expect(measured.oldestReadyWaitAgeSeconds).toBeLessThanOrEqual(latest!.age);
+    expect(measured.oldestPendingAgeSeconds).toBeGreaterThanOrEqual(172800);
+    expect(await sql`select * from queue_jobs order by job_id`).toEqual(before);
+  });
+
+  it("only delayed or reserved rows leave both ages null", async () => {
+    await sql`
+      insert into queue_jobs (job_id, kind, key, available_at, reserved_at) values
+        (${crypto.randomUUID()}::uuid, 'sync-event', 'future-only', statement_timestamp() + interval '1 hour', null),
+        (${crypto.randomUUID()}::uuid, 'sync-event', 'reserved-only', statement_timestamp() - interval '1 hour', statement_timestamp())`;
+    expect(await pgQueueDepth(sql)).toEqual({
+      pending: 0,
+      delayed: 1,
+      reserved: 1,
+      total: 2,
+      failed: 0,
+      oldestPendingAgeSeconds: null,
+      oldestReadyWaitAgeSeconds: null,
+    });
+  });
+
+  it("ready-wait uses statement time even when health setup begins earlier", async () => {
+    await sql`insert into queue_jobs (job_id, kind, key, available_at)
+      values (${crypto.randomUUID()}::uuid, 'sync-event', 'clock', statement_timestamp() - interval '1 second')`;
+    const measured = await sql.begin("read only", async (tx) => {
+      await tx`select pg_sleep(0.05)`;
+      const depth = await pgQueueDepth(tx);
+      const [clock] =
+        await tx`select extract(epoch from transaction_timestamp() - min(available_at))::double precision as age
+        from queue_jobs`;
+      return { depth, transactionAge: clock!.age };
+    });
+    expect(measured.depth.oldestReadyWaitAgeSeconds).toBeGreaterThan(
+      measured.transactionAge + 0.04,
+    );
+    expect(typeof measured.depth.oldestReadyWaitAgeSeconds).toBe("number");
+  });
+
+  it("a just-released old retry measures its new eligibility, not its old creation", async () => {
+    const jobId = crypto.randomUUID();
+    await pgQueueLedger(sql).enqueued({
+      jobId,
+      kind: "sync-event",
+      key: "retry",
+      availableAt: new Date(Date.now() - 86_400_000),
+    });
+    await sql`update queue_jobs set created_at = statement_timestamp() - interval '2 days'
+      where job_id = ${jobId}::uuid`;
+    await pgQueueLedger(sql).reserved(jobId);
+    await pgQueueLedger(sql).released(jobId, new Date(Date.now() - 1000));
+    const body = await upBody(() => pgQueueDepth(sql), healthSql());
+    expect(body.queue.oldest_pending_age_seconds).toBeGreaterThanOrEqual(172800);
+    expect(body.queue.oldest_ready_wait_age_seconds).toBeGreaterThanOrEqual(0);
+    expect(body.queue.oldest_ready_wait_age_seconds).toBeLessThan(300);
+    expect(body.queue.ready_wait_severity).toBe("healthy");
+    expect(body.status).toBe("healthy");
   });
 
   it("queue.failed mirrors the dead letter newest-first, independent of live backlog", async () => {

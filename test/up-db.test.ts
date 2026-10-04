@@ -253,12 +253,18 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       const depth = await withHealthReadTimeout(client, pgQueueDepth);
       expect(depth).toMatchObject({ pending: 20, delayed: 0, reserved: 0, total: 20, failed: 0 });
       expect(depth.oldestPendingAgeSeconds).toBeGreaterThanOrEqual(2);
-      // Real queue measurement through the unchanged envelope, with offline DB readiness.
+      expect(depth.oldestReadyWaitAgeSeconds).toBeGreaterThanOrEqual(2);
+      // Real queue measurement through the additive envelope, with offline DB readiness.
       expect(await upBody(async () => depth, healthSql())).toMatchObject({
         status: "degraded",
         db: "ok",
         pending_migrations: 0,
-        queue: { status: "degraded", pending: 20 },
+        queue: {
+          status: "degraded",
+          pending: 20,
+          oldest_ready_wait_age_seconds: depth.oldestReadyWaitAgeSeconds,
+          ready_wait_severity: "healthy",
+        },
       });
     } finally {
       await reader.end({ timeout: 0 });
