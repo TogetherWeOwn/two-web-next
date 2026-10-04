@@ -127,11 +127,11 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
     },
   );
 
-  it.each([null, "not-a-member-key", "123"])(
-    "invalid/partial key %s refuses contents before audit",
+  it.each(["", "not-a-member-key", "123"])(
+    "invalid non-null key %s refuses contents before audit",
     async (key) => {
-      // Nullable join-attempt owners reproduce incomplete legacy projections
-      // without weakening the users table's primary key constraint.
+      // Only actual SQL NULL is ownerless; malformed non-null IDs must not
+      // silently drop a subject from a mixed result.
       const connection = db();
       const { joinAttempts } = await import("../src/db/schema");
       await fixture.db.insert(joinAttempts).values([

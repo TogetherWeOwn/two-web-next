@@ -36,7 +36,10 @@ const valueAt = (row: unknown, path: string[]): unknown => {
 
 function ownerProjection(fields?: SelectedField[]) {
   if (!fields?.length) refuseMemberRead();
-  const tables = new Map<string, { key?: SelectedField; fields: SelectedField[] }>();
+  const tables = new Map<
+    string,
+    { key?: SelectedField; fields: SelectedField[]; nullableOwner: boolean }
+  >();
   for (const selected of fields) {
     // Raw SQL/aliased expressions do not establish owner-column provenance.
     if (!is(selected.field, Column)) refuseMemberRead();
@@ -52,7 +55,10 @@ function ownerProjection(fields?: SelectedField[]) {
       original,
       getTableName(table),
     ]);
-    const group = tables.get(relation) ?? { fields: [] };
+    const group = tables.get(relation) ?? {
+      fields: [],
+      nullableOwner: original === "join_attempts",
+    };
     group.fields.push(selected);
     if (selected.field.name === owners[original]) group.key = selected;
     tables.set(relation, group);
@@ -132,7 +138,11 @@ export function observeMemberReads(db: Db): Db {
                             const absent = group.fields.every(
                               (field) => valueAt(row, field.path) === null,
                             );
-                            return absent ? [] : [valueAt(row, group.key!.path)];
+                            const key = valueAt(row, group.key!.path);
+                            // Pre-identity join attempts have no member subject.
+                            // Only this nullable owner column permits SQL NULL;
+                            // missing projections and malformed keys still refuse.
+                            return absent || (group.nullableOwner && key === null) ? [] : [key];
                           }),
                         );
                     captureMemberKeys(capture, keys);
