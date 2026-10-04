@@ -100,7 +100,7 @@ Coverage reuses the CI journey logic with staging-safe setup:
 | --- | --- | --- |
 | QA sign-in, member and moderator | `e2e/staging/auth.spec.ts` | Saved storage states open `/profile` (`QA Member`) and `/admin/events` (`Events`); bad token and unknown identity answer 404 |
 | Events list, search miss, calendar month step | `e2e/staging/events-list.spec.ts` | `events-content` plus list or never-empty; unique miss string shows the miss block and clears; month label steps forward and back |
-| Fixture event, RSVP going, withdraw, waitlist join + leave, waitlist promotion, cancel | `e2e/staging/event-rsvp.spec.ts` | Moderator draft → publish; member PUT 201, `You're in`, reload persists; DELETE 204, going returns; capacity-1 fixture: moderator fills the seat, member waitlist-join asserts `#1 in line`, leave returns the join control; second capacity-1 fixture: moderator withdraws (204) and the member's reload shows `You're in` and `1 of 1 going` with `waitlist-position`, `waitlist-claim`, `waitlist-join` and `event-full` gone (promotion is automatic, no claim click), persisting across another reload; every fixture cancelled in `finally` through the request API (no cleanup page) |
+| Fixture event, RSVP going, withdraw, waitlist join + leave, waitlist promotion, cancel | `e2e/staging/event-rsvp.spec.ts` | Moderator draft → publish; member PUT 201, `You're in`, reload persists; DELETE 204, going returns; capacity-1 fixture: moderator fills the seat, member waitlist-join asserts `#1 in line`, leave returns the join control; second capacity-1 fixture: moderator withdraws (204) and the member's reload shows `You're in` and `1 of 1 going` with `waitlist-position`, `waitlist-claim`, `waitlist-join` and `event-full` gone (promotion is automatic, no claim click), persisting across another reload; every fixture cancelled in `finally` through the request API (no cleanup page), with the global teardown sweep as backstop |
 | QA member keyboard profile edit | `e2e/staging/profile.spec.ts` | Same 1000 ms floor and Tab flow as CI; PATCH 200; `Profile saved.` focused; unique bio and games survive reload |
 | Moderator draft create and cancel | `e2e/staging/admin.spec.ts` | `Create draft` → `Status: draft`; guest draft 403; `Cancel event` → `Status: cancelled`; guest cancelled 410. Never publishes |
 | Moderator featured slot create, homepage render, edit, delete | `e2e/staging/featured.spec.ts` | `/admin/featured/new` form (published, UTC window, last position, no image) → `/admin/featured/<id>`; guest `/` shows a `featured-item` under `featured-content` ("From the community team") with the headline and body (bounded poll); edited headline replaces the old one; `delete-featured` → guest `/` drops it and `/admin/featured/<id>` answers 404; the fixture is deleted by id in `finally` through the request API, so a red run leaves no live card on the homepage |
@@ -112,7 +112,11 @@ The list spec also runs as `mobile-375` (375×812 viewport) and
 `reduced-motion` (`reducedMotion: reduce`) projects. Cleanup is structural:
 RSVPs are withdrawn in-spec and every fixture the suite creates is cancelled
 (events) or deleted (featured slots) in a `finally`, so a failed run leaves no
-draft behind and no live card on the staging homepage. On failure the job
+draft behind and no live card on the staging homepage. A test timeout closes the
+browser contexts before that `finally` runs, so the event journeys also have a
+backstop: `e2e/staging/global-teardown.ts` signs the QA moderator in fresh and
+cancels every `Staging E2E` event still published or draft
+(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. On failure the job
 uploads `test-results/` traces/screenshots and the HTML report for seven days.
 The repo is public, so artifacts are world-readable and log masking does not
 cover them. Playwright puts request headers (including `X-TWO-QA-Auth`) into a
