@@ -140,6 +140,26 @@ describe("change-scope gate", () => {
     });
   });
 
+  it("maps migration tooling under ci/ to db, not app", () => {
+    for (const path of [
+      "ci/check-migration-history.mjs",
+      "ci/check-migration-history-selftest.mjs",
+      "ci/check-migration-numbers.sh",
+      "ci/neon-migrate.mjs",
+      "ci/neon-migrate-selftest.mjs",
+    ]) {
+      const r = scope([[path, ""]]);
+      expect({ app: r.app, db: r.db, full: r.full }, path).toEqual({
+        app: "false",
+        db: "true",
+        full: "false",
+      });
+    }
+    // Other ci/ tooling is still an app input.
+    const other = scope([["ci/neon-backup-selftest.sh", ""]]);
+    expect({ app: other.app, db: other.db }).toEqual({ app: "true", db: "false" });
+  });
+
   it("forces a full run on lockfiles, CI, shared config and itself", () => {
     for (const path of [
       "package-lock.json",
@@ -286,6 +306,8 @@ describe("check job", () => {
     const unguarded = steps.filter(
       (step) =>
         !step.includes("Docs-only fast pass") &&
+        // The scope guard is deliberately unconditional: pinned below.
+        !step.includes("Require successful scope") &&
         !step.includes("needs.scope.outputs.docs_only != 'true'"),
     );
     expect(unguarded.map((step) => step.split("\n")[0])).toEqual([]);
@@ -325,6 +347,59 @@ describe("ci heavy-job scope gates", () => {
     expect(block).toMatch(/\n    if: always\(\)\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
     expect(block).toContain("CHECK_RESULT: ${{ needs.check.result }}");
+  });
+
+  it("check fails when scope did not succeed, as its first and unconditional step", () => {
+    const steps = jobBlock("check").split("\n    steps:\n")[1] ?? "";
+    // No `if:` between the step name and its env: it runs on every verdict.
+    const guard = steps.match(
+      /^      - name: Require successful scope\n        env:\n          SCOPE_RESULT: \$\{\{ needs\.scope\.result \}\}\n        run: ([^\n]+)\n/,
+    )?.[1];
+    expect(guard, "scope guard must be check's first, unconditional step").toBeDefined();
+    // `scope` is not a required check: a red scope must not leave `check` green.
+    for (const [result, expected] of [
+      ["success", 0],
+      ["failure", 1],
+      ["cancelled", 1],
+      ["skipped", 1],
+      ["", 1],
+    ] as const) {
+      const run = spawnSync("bash", ["-c", guard ?? "exit 99"], {
+        env: { SCOPE_RESULT: result },
+        encoding: "utf8",
+      });
+      expect(run.status, `scope result ${result || "missing"}`).toBe(expected);
+    }
+  });
+
+  it("ci-ok rejects scope outputs that are not exactly true or false", () => {
+    const body = jobBlock("ci-ok").split("\n        run: |\n")[1] ?? "";
+    const script = body
+      .split("\n")
+      .map((line) => line.replace(/^ {10}/, ""))
+      .join("\n");
+    const ok: Record<string, string> = {
+      SCOPE_RESULT: "success",
+      FULL: "false",
+      APP: "false",
+      WORKER: "false",
+      DB: "false",
+      DRAFT: "false",
+      CHECK_RESULT: "success",
+      A11Y_RESULT: "skipped",
+      LIGHTHOUSE_RESULT: "skipped",
+      BUDGET_RESULT: "skipped",
+    };
+    const status = (env: Record<string, string>) =>
+      spawnSync("bash", ["-c", script], { env, encoding: "utf8" }).status;
+    expect(status(ok)).toBe(0);
+    for (const key of ["FULL", "APP", "WORKER", "DB", "DRAFT"]) {
+      expect(status({ ...ok, [key]: "" }), `${key} empty`).toBe(1);
+      expect(status({ ...ok, [key]: "maybe" }), `${key} not a boolean`).toBe(1);
+    }
+    expect(status({ ...ok, SCOPE_RESULT: "failure" })).toBe(1);
+    // A selected area whose job was skipped must not read green.
+    expect(status({ ...ok, APP: "true" })).toBe(1);
   });
 
   it("every check step respects the draft flag", () => {
