@@ -226,7 +226,16 @@ const CalCard: FC<{
       >
         <ScheduleDate date={e.startsAt} zone={tz} />
         <div class="schedule-info">
-          <h3>{transient ? rowTitle(e) : <a href={`/e/${e.eventKey}`}>{rowTitle(e)}</a>}</h3>
+          {/* Cancelled rows stay listed with their badge, but their detail
+              page answers 410 — so the title is plain text, never a dead
+              anchor. Transients have no detail page either. */}
+          <h3>
+            {transient || e.status === "cancelled" ? (
+              rowTitle(e)
+            ) : (
+              <a href={`/e/${e.eventKey}`}>{rowTitle(e)}</a>
+            )}
+          </h3>
           {!transient && e.game ? <p>{e.game}</p> : null}
           {!transient && e.status === "draft" ? (
             <span class="schedule-badge" data-testid={EVENT_DRAFT_TESTID}>
@@ -298,7 +307,9 @@ const EmptyGap: FC<{ past: PublicEvent[]; zone: string }> = ({ past, zone }) => 
     <ul data-testid={EVENTS_EMPTY_GAP_LIST_TESTID}>
       {past.slice(0, EVENTS_GAP_LIST_LIMIT).map((e) => (
         <li data-testid={EVENTS_EMPTY_GAP_ITEM_TESTID}>
-          <a href={`/e/${e.eventKey}`}>{e.title}</a>{" "}
+          {/* Same dead-anchor rule as the card title: cancelled detail pages
+              answer 410, so the gap list keeps the title as plain text. */}
+          {e.status === "cancelled" ? e.title : <a href={`/e/${e.eventKey}`}>{e.title}</a>}{" "}
           <time datetime={e.startsAt.toISOString()}>
             {cardTimeLabel(e.startsAt, rowZone(e, zone))}
           </time>
