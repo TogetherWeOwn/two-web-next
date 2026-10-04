@@ -13,10 +13,11 @@ steps against `togetherweown.com`, `www`, or
 - In scope: Worker rollback N+1 to N and back on staging host
   `next.togetherweown.com`, Worker `two-web-next`; ordered revert
   checklist with import backout and schema-compat notes below.
-- Out of scope (needs a DNS-edit principal): DNS flip to the legacy
-  target and back. The deploy credential has no DNS edit, so the DNS
-  half stays pending until an authorized operator runs it per
-  [runbook.md](runbook.md#staging-rehearsal-worker-rollback-and-dns-flip-back).
+- Rehearsed separately (needs a DNS-edit principal): DNS flip to the
+  legacy target and back. The deploy credential has no DNS edit, so an
+  authorized operator ran it on 2026-10-03 per
+  [runbook.md](runbook.md#staging-rehearsal-worker-rollback-and-dns-flip-back);
+  timings are in the record below.
 
 ## Ordered revert steps (staging rehearsal)
 
@@ -51,7 +52,12 @@ steps against `togetherweown.com`, `www`, or
   fails, `wrangler triggers deploy` re-applies the domain from
   `wrangler.jsonc` without uploading code. Proxied records use `ttl`
   1 (auto): the flip depends on edge-config apply, not resolver
-  expiry.
+  expiry. Rehearsed on staging: the flip back took 2.1 s to run and
+  the Next marker returned 3.2 s later, stable after 14.7 s.
+- The production rollback is the same flip to legacy, so the legacy
+  origin must answer for the apex. On staging it answered 522 for
+  `next.*`; confirm production legacy before the flip, per the
+  [runbook](runbook.md#before-the-production-flip).
 - Import backout: the member-data importers are idempotent upserts
   (users/profiles upsert, events upsert on `event_key` in
   parent-first order, RSVPs upsert on the resolved key; re-runs
@@ -88,13 +94,20 @@ steps against `togetherweown.com`, `www`, or
 |---|---|---|
 | 2026-10-02 00:53–00:55 | Worker rollback and roll-forward | 5.2 s / 5.5 s commands, 0 non-200 of 150 / 90 probes |
 | 2026-10-03 16:35–16:36 | Worker rollback `81da0f67` to `cd470835` and back | 4.4 s / 4.0 s commands, settled 5.1 s / 8.6 s, 0 non-200 of 90 probes, smoke 16/16 before/during/after |
-| 2026-10-03 20:36–20:37 | Worker rollback and roll-forward (deployment annotations on staging list) | both directions recorded; staging restored to pre-rehearsal version at 100% |
-| 2026-10-03 ~22:30 | Rehearsal scoping for this card: staging `/up` 200 `db:ok` 0 pending, staging idle (no `ci`/`deploy` in flight on `main`), Worker at merge-deploy version | Worker half already receipted twice same-day; DNS half still pending DNS-edit principal |
-| pending | DNS flip to legacy and back | needs a DNS-edit principal |
+| 2026-10-03 18:25 | DNS flip `next.*` to legacy and back (staging only) | flip 1.6 s, marker gone +1.2 s, 10 consecutive probes without it at +11.2 s; flip back 2.1 s, marker back +3.2 s, stable +14.7 s; smoke 16/16 before and after; zone clean; legacy edge answered 522 and intermittent 503 |
+| 2026-10-03 20:36–20:37 | Worker rollback `59a88ba7` to `da612f07` and back | 3.7 s / 3.8 s commands, one switch each way (+4.5 s / +9.6 s), 0 non-200 of 137 probes, smoke 16/16 on `59a88ba7`, `da612f07` and `59a88ba7` again; staging restored at 100% |
+| 2026-10-03 ~22:30 | Rehearsal scoping for this card: staging `/up` 200 `db:ok` 0 pending, staging idle (no `ci`/`deploy` in flight on `main`), Worker at merge-deploy version | Worker half already receipted twice same-day; the DNS half had already run at 18:25 (row above), which this scoping did not know |
 
 ## Follow-ups
 
-- Run the DNS half with a DNS-edit principal, or record a decision
-  accepting the unrehearsed DNS path with compensating controls.
+- Importer dry-run: dispatched on 2026-10-03 and failed closed in 29 s
+  by design, because `LEGACY_STAGING_SNAPSHOT_DATABASE_URL` is not
+  provisioned on the staging environment. Re-dispatch once a
+  staging-safe snapshot is in place; never substitute production or
+  test databases.
+- Legacy edge: the staging legacy origin answered 522 for `next.*`
+  during the DNS rehearsal. Confirm that the production legacy origin
+  answers the apex before the flip (runbook, "Before the production
+  flip").
 - Keep this record current: append each rehearsal row with timings,
   version IDs, smoke results, and discrepancies.
