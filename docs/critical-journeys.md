@@ -80,7 +80,10 @@ legacy `ci/critical-journeys.json`/`tests/Browser/*` (legacy is frozen).
 
 `.github/workflows/e2e-staging.yml` runs the deployed Worker end to end after
 every successful staging deploy (and on manual dispatch) with the
-`playwright.staging.config.ts` project against the staging origin. The runner
+`playwright.staging.config.ts` project against the staging origin. A
+change-scope gate (mirrored from `e2e.yml`, diffing the deployed head commit
+against its parent) skips the journeys when the deploy only touches prose
+that no gate, test or build reads; manual dispatches always run. The runner
 is the same `ubuntu-latest` Chromium setup as CI; the difference is the
 target: real Hyperdrive and queues instead of `wrangler dev --local` and the
 disposable Postgres service. The token travels as the `staging` Environment
