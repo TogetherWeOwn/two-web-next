@@ -35,6 +35,9 @@
 .profile-theme .profile-milestones li:last-child { border: 0; padding-bottom: 0; }
 .profile-theme .profile-milestones p { margin: .25rem 0 0; white-space: pre-wrap; }
 .profile-theme .profile-milestones time { color: var(--muted); font-size: .9rem; }
+.profile-theme .profile-new-member { text-align: center; }
+.profile-theme .profile-new-member h2 { font-size: 1.5rem; margin-bottom: .5rem; }
+.profile-theme .profile-new-member p { max-width: 40rem; margin: 0 auto 1.25rem; }
 .profile-theme .profile-editor form { max-width: 44rem; }
 .profile-theme .profile-field { display: block; font-weight: 700; margin-top: 1.25rem; }
 .profile-theme .profile-field input, .profile-theme .profile-field textarea { display: block; width: 100%; min-height: 44px; margin-top: .5rem; padding: .75rem; font: inherit; font-weight: 400; color: var(--ink); background: var(--paper); border: 1px solid var(--muted); border-radius: 0; }

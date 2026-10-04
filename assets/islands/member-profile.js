@@ -83,18 +83,23 @@
       form.elements[key].defaultValue = values[key];
       if (unchanged) form.elements[key].value = values[key];
     });
+    // Empty-state copy mirrors PROFILE_EMPTY_COPY; the binder only runs for the owner.
+    var isNew = !values.bio && !games.length && !values.timezone;
     var bio = document.querySelector('[data-testid="profile-bio"]');
-    if (bio) bio.textContent = values.bio || "No bio yet.";
+    if (bio)
+      bio.textContent =
+        values.bio || (isNew ? "New here. More soon." : "You have not added a bio yet.");
     var timezone = document.querySelector('[data-testid="profile-timezone"]');
-    if (timezone) {
-      timezone.textContent = values.timezone ? "Timezone: " + values.timezone : "";
-      timezone.hidden = !values.timezone;
-    }
+    if (timezone)
+      timezone.textContent =
+        "Timezone: " + (values.timezone || "Add yours so people know when you are around.");
+    var newMember = document.querySelector('[data-testid="profile-new-member"]');
+    if (newMember) newMember.hidden = !isNew;
     var list = document.querySelector('[data-testid="profile-games"]');
     if (list) {
       list.textContent = "";
       var content = document.createElement(games.length ? "ul" : "p");
-      if (!games.length) content.textContent = "No games listed yet.";
+      if (!games.length) content.textContent = "Add the games you keep coming back to.";
       games.forEach(function (game) {
         var li = document.createElement("li");
         li.textContent = game;
@@ -253,13 +258,23 @@
     alert.focus();
   }
 
-  if (edit)
-    edit.addEventListener("click", function () {
-      clearNotices();
-      form.hidden = false;
-      if (editControl) editControl.hidden = true;
-      var heading = root.querySelector('[id="edit-heading"]');
-      if (heading) heading.focus();
+  function openEditor() {
+    clearNotices();
+    form.hidden = false;
+    if (editControl) editControl.hidden = true;
+    var heading = root.querySelector('[id="edit-heading"]');
+    if (heading) heading.focus();
+  }
+
+  if (edit) edit.addEventListener("click", openEditor);
+
+  // The new-member call to action jumps to the editor; reopen it first when a
+  // save has collapsed it. Without script the plain #edit-heading link works.
+  var cta = document.querySelector('[data-testid="profile-new-member-cta"]');
+  if (cta)
+    cta.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      openEditor();
     });
 
   form.addEventListener("reset", function () {

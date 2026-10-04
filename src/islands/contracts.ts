@@ -905,6 +905,39 @@ export const PROFILE_COPY = {
   cancel: "Cancel",
 } as const;
 
+/**
+ * Empty-state copy, owner-aware: the owner is told what to add,
+ * visitors are told what is missing, and a profile with nothing filled in
+ * reads as new rather than neglected. The binder only ever runs for the
+ * owner, so it mirrors the `*Owner`/`bioNew` strings verbatim.
+ */
+export const PROFILE_EMPTY_COPY = {
+  bioOwner: "You have not added a bio yet.",
+  bioOther: (name: string) => `${name} has not added a bio yet.`,
+  bioNew: "New here. More soon.",
+  gamesOwner: "Add the games you keep coming back to.",
+  gamesOther: "No games listed yet.",
+  timezoneOwner: "Add yours so people know when you are around.",
+  timezoneOther: "Not listed yet.",
+} as const;
+
+export const PROFILE_NEW_MEMBER_TESTID = "profile-new-member";
+export const PROFILE_NEW_MEMBER_CTA_TESTID = "profile-new-member-cta";
+export const PROFILE_NEW_MEMBER_COPY = {
+  heading: "Your profile has room to grow.",
+  body: "Add a bio, a few games and your timezone so people know when to find you.",
+  cta: "Add profile details",
+} as const;
+
+/** New member: nothing the member can edit has been filled in yet. */
+export function profileIsNewMember(profile: {
+  bio: string | null;
+  games: readonly string[];
+  timezone: string | null;
+}): boolean {
+  return !profile.bio && profile.games.length === 0 && !profile.timezone;
+}
+
 /** Spam trap (TOG-8715/TOG-9361): decoy field + server-side open-time floor. */
 export const PROFILE_HONEY_FIELD = "website";
 export const PROFILE_OPENED_AT_FIELD = "formOpenedAt";
