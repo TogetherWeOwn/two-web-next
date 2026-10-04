@@ -1,5 +1,5 @@
 // route-inventory: POST /csp-reports
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
 import { MAX_CSP_REPORT_URI_LENGTH, redactCspReportUri } from "../src/csp-report-uri";
@@ -35,6 +35,13 @@ const env = new Proxy({ APP_URL: "https://next.example.test" } as Env, {
     }
     return Reflect.get(target, key, receiver);
   },
+});
+
+let now = Date.now();
+beforeEach(() => {
+  // Each redaction case starts after a full isolate log-budget refill.
+  now += 60_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
 });
 
 afterEach(() => {

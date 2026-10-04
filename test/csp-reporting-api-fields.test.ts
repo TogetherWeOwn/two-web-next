@@ -1,5 +1,5 @@
 // route-inventory: POST /csp-reports
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { MAX_CSP_REPORT_BYTES, cspReportLogFields } from "../src/csp-reports";
 import type { Env } from "../src/env";
@@ -54,6 +54,13 @@ const env = new Proxy({ APP_URL: "https://next.example.test" } as Env, {
     }
     return Reflect.get(target, key, receiver);
   },
+});
+
+let now = Date.now();
+beforeEach(() => {
+  // Each shape case starts after a full isolate log-budget refill.
+  now += 60_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
 });
 
 // Check actual binding reads, not just the 204: the sink catches exceptions.
