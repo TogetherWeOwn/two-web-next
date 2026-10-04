@@ -1,0 +1,64 @@
+name: watch-lighthouse
+
+# Dispatch-only Lighthouse run for the production cutover 48h watch
+# (docs/runbook.md, docs/watch-run-record.md section 6). It measures one
+# allowlisted origin with the budgets of ci/lighthouserc.cjs, which stay the
+# single source: the config is cloned there, never copied. GET only: no sign-in,
+# no write, no secret. The tool re-validates the origin, so the choice list is a
+# convenience, not the guard.
+on:
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: Origin to measure
+        type: choice
+        required: true
+        default: https://next.togetherweown.com
+        options:
+          - https://next.togetherweown.com
+          - https://togetherweown.com
+          - https://www.togetherweown.com
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watch-lighthouse
+  cancel-in-progress: false
+
+jobs:
+  lighthouse:
+    name: lighthouse
+    # Public repo: standard GitHub-hosted Linux only, no larger or third-party runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      # Same Chromium as the CI lighthouse job, so the numbers compare.
+      - name: Install Chromium
+        run: |
+          npx playwright install --with-deps chromium
+          node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
+      - name: Lighthouse against the origin (GET only)
+        env:
+          ORIGIN: ${{ inputs.origin }}
+        run: npm run lighthouse:origin -- "$ORIGIN"
+      - name: Per-route summary
+        if: always() && hashFiles('.lighthouseci/watch-summary.md') != ''
+        run: cat .lighthouseci/watch-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Performance evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lighthouse-origin-${{ github.run_id }}
+          path: .lighthouseci/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

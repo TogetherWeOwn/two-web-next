@@ -76,6 +76,7 @@ const OTHER_READS = [
   "/auth/status",
   "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
   "/members", // Retired bare path: frozen 404, answered before the member gate.
+  "/members/", // Trailing-slash form is retired before the same gate.
   "/events",
   "/events/past",
   "/events.json",
@@ -297,7 +298,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(member.status).toBe(200);
       expect(moderator.status).toBe(200);
       const html = await member.text();
-      expect(await moderator.text()).toBe(html);
+      // A moderator's header adds only the /admin shortcut; no member data differs.
+      const adminLink =
+        '<a class="btn profile-secondary" href="/admin" data-testid="profile-admin-link">Moderator admin</a>';
+      const moderatorHtml = await moderator.text();
+      expect(html).not.toContain("/admin");
+      expect(moderatorHtml).toContain(adminLink);
+      expect(moderatorHtml.replace(adminLink, "")).toBe(html);
       for (const personal of PERSONAL_STRINGS) expect(html).toContain(personal);
       expect(html).not.toContain("Edit your profile");
       expect(html).toContain('name="robots" content="noindex, nofollow"');

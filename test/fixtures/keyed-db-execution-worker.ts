@@ -5,10 +5,10 @@ import { alias } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { Hono } from "hono";
 import { memberReadDb } from "../../src/db/member-reads";
-import { events } from "../../src/db/admin-schema";
+import { events, rsvps } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import type { SelectedField } from "../../src/db/read-classification";
-import { users } from "../../src/db/schema";
+import { joinAttempts, profiles, users } from "../../src/db/schema";
 import {
   bufferedMemberText,
   keyedMemberRead,
@@ -39,12 +39,18 @@ app.get("/:mode", async (c) => {
       const row: Record<string, unknown> = {};
       for (const { path, field } of fields ?? []) {
         if (!is(field, Column)) throw new Error("Unsupported fixture field");
-        const value =
-          field.name === "id"
-            ? getTableName(field.table) === "users" && mode.startsWith("alias")
-              ? viewer
-              : subject
-            : "workerd-private-name";
+        const owner = ["id", "discord_id", "user_id"].includes(field.name);
+        const value = owner
+          ? mode.endsWith("-null")
+            ? null
+            : mode === "join-undefined"
+              ? undefined
+              : mode === "join-invalid"
+                ? "invalid-owner"
+                : getTableName(field.table) === "users" && mode.startsWith("alias")
+                  ? viewer
+                  : subject
+          : "workerd-private-name";
         let target = row;
         for (const part of path.slice(0, -1))
           target = (target[part] ??= {}) as Record<string, unknown>;
@@ -77,6 +83,26 @@ app.get("/:mode", async (c) => {
     if (mode.startsWith("prebuilt")) {
       const read = () => (mode.includes("prepared") ? prepared.execute() : query);
       await (mode.endsWith("keyed") ? keyedMemberRead(read) : read());
+    } else if (mode.startsWith("join-")) {
+      const table = mode === "join-alias-null" ? alias(joinAttempts, "attempt") : joinAttempts;
+      await keyedMemberRead(() =>
+        db
+          .select({
+            trace: table.requestId,
+            ...(mode === "join-missing" ? {} : { owner: table.discordId }),
+          })
+          .from(table),
+      );
+    } else if (mode === "users-null") {
+      await keyedMemberRead(() => db.select({ owner: users.id, name: users.username }).from(users));
+    } else if (mode === "profiles-null") {
+      await keyedMemberRead(() =>
+        db.select({ owner: profiles.userId, bio: profiles.bio }).from(profiles),
+      );
+    } else if (mode === "rsvps-null") {
+      await keyedMemberRead(() =>
+        db.select({ owner: rsvps.userId, status: rsvps.status }).from(rsvps),
+      );
     } else if (mode.startsWith("alias")) {
       const other = alias(users, "other");
       await keyedMemberRead(() =>

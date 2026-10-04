@@ -130,7 +130,7 @@ to an error page, on the Next candidate in both phases.
 |---|---|
 | `/about-us/` | 404 |
 | `/news/` | 404 |
-| `/members` | 404 (distinct from member-gated `/members/{user}`) |
+| `/members`, `/members/` | 404 (distinct from member-gated `/members/{user}`) |
 | `/gamipress/points/` | 404 |
 | `/events/month/2024-01/` | 404 |
 | `/this-url-never-existed-abc123xyz/` | 404 (never existed) |
@@ -209,6 +209,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /join/callback` | oauth-state | join: one-click callback |
 | `GET /join/discord` | public | join: OAuth start |
 | `GET /members` | public | profiles: retired bare path, frozen 404 for every role |
+| `GET /members/` | public | profiles: retired trailing-slash path, frozen 404 for every role |
 | `GET /members/:user` | member | profiles: legacy `/members/{user}` |
 | `GET /privacy` | public | privacy: versioned policy |
 | `GET /profile` | member | profiles: current member |

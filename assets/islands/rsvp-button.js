@@ -40,6 +40,7 @@
     waitlistFallback: "You're on the waitlist",
     waitlistClaim: "A seat opened up — I'm in",
     waitlistLeave: "Leave the waitlist",
+    waitlistSeatTaken: "Someone just took that seat.",
     syncing: "Saved. Syncing to Discord.",
     syncFailed: "Saved. Discord sync didn't go through — your spot is still held.",
     synced: "Synced to Discord.",
@@ -67,6 +68,7 @@
     waitlistPosition: "waitlist-position",
     waitlistClaim: "waitlist-claim",
     waitlistLeave: "waitlist-leave",
+    waitlistSeatTaken: "waitlist-seat-taken",
     syncing: "rsvp-syncing",
     syncFailed: "rsvp-sync-failed",
     synced: "rsvp-synced",
@@ -141,6 +143,7 @@
       TESTID.failed,
       TESTID.sessionExpired,
       TESTID.closed,
+      TESTID.waitlistSeatTaken,
       TESTID.syncing,
       TESTID.synced,
       TESTID.syncFailed,
@@ -319,12 +322,14 @@
   function paintWaitlisted(position) {
     // Join path: a waitlisted PUT swaps the join CTA(s) for the position
     // line; confirmed/withdraw leftovers from a re-answer are dropped too.
-    // Full is kept (full + position).
-    [TESTID.going, TESTID.waitlistJoin, TESTID.confirmed, TESTID.withdraw].forEach(function (t) {
-      var n = root.querySelector('[data-testid="' + t + '"]');
-      if (n && n.parentNode) n.parentNode.removeChild(n);
-      else if (n && n.remove) n.remove();
-    });
+    // A settled place in line supersedes the full-event join invitation.
+    [TESTID.going, TESTID.waitlistJoin, TESTID.confirmed, TESTID.withdraw, TESTID.full].forEach(
+      function (t) {
+        var n = root.querySelector('[data-testid="' + t + '"]');
+        if (n && n.parentNode) n.parentNode.removeChild(n);
+        else if (n && n.remove) n.remove();
+      },
+    );
     var pos = root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
     if (!pos) {
       pos = document.createElement("p");
@@ -439,7 +444,7 @@
       });
     }
     var message = root.querySelector('[data-testid="' + TESTID.full + '"]');
-    if (full && (join || position)) {
+    if (full && join) {
       if (!message) {
         message = document.createElement("p");
         message.setAttribute("role", "status");
@@ -490,6 +495,15 @@
     join.addEventListener("click", function (ev) {
       onAction(join.getAttribute("data-action"), join, ev);
     });
+    if (full && !root.querySelector('[data-testid="' + TESTID.full + '"]')) {
+      var message = document.createElement("p");
+      message.setAttribute("role", "status");
+      message.setAttribute("data-testid", TESTID.full);
+      var capRaw = root.getAttribute("data-capacity");
+      var capNum = capRaw === null || capRaw === "" ? NaN : Number(capRaw);
+      message.textContent = COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
+      controls.appendChild(message);
+    }
     focusTestid([TESTID.going, TESTID.waitlistJoin]);
   }
 
@@ -543,6 +557,10 @@
     clearOutcome();
     var controller = {};
     inflight = controller;
+    // A waitlisted member clicking the claim control: if the locked server
+    // keeps them waitlisted, a rival took the freed seat first.
+    var claimingFromWaitlist =
+      action === "going" && !!root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
     var isWithdraw = action === "withdraw";
     var method = isWithdraw ? "DELETE" : "PUT";
     setBusy(true, button, isWithdraw ? COPY.removing : COPY.saving);
@@ -586,6 +604,21 @@
                     paintConfirmed();
                   }
                   broadcast(viewerState(d.status));
+                  if (claimingFromWaitlist && d.status === "waitlisted") {
+                    // Lost the race: the place in line is unchanged, so say so
+                    // politely (role=status, no focus move) instead of "Saved."
+                    var note = notice(TESTID.waitlistSeatTaken, "status", "", false, false);
+                    note.setAttribute("aria-live", "polite");
+                    // Expose the empty region before a later task changes its content.
+                    setTimeout(function () {
+                      if (
+                        root.querySelector('[data-testid="' + TESTID.waitlistSeatTaken + '"]') ===
+                        note
+                      )
+                        note.textContent = COPY.waitlistSeatTaken;
+                    }, 0);
+                    return;
+                  }
                   syncNote(d.synced_to_discord_at || null, !!d.sync_failed);
                 },
                 function () {
@@ -662,16 +695,21 @@
             var paintFull = function (capNum) {
               if (controller && inflight !== controller) return;
               setBusy(false, button);
-              var msg = COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
+              var position = root.querySelector('[data-testid="' + TESTID.waitlistPosition + '"]');
               var old = root.querySelector('[data-testid="' + TESTID.full + '"]');
-              if (!old) {
-                old = document.createElement("p");
-                old.setAttribute("role", "status");
-                old.setAttribute("data-testid", TESTID.full);
-                old.setAttribute("tabindex", "-1");
-                controls.appendChild(old);
+              if (position) {
+                if (old) old.remove();
+              } else {
+                if (!old) {
+                  old = document.createElement("p");
+                  old.setAttribute("role", "status");
+                  old.setAttribute("data-testid", TESTID.full);
+                  old.setAttribute("tabindex", "-1");
+                  controls.appendChild(old);
+                }
+                old.textContent =
+                  COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
               }
-              old.textContent = msg;
               root.setAttribute("data-full", "true");
               var claim = root.querySelector('[data-testid="' + TESTID.waitlistClaim + '"]');
               if (claim) claim.remove();
@@ -682,7 +720,8 @@
                 going.setAttribute("value", "waitlisted");
                 going.textContent = COPY.waitlistJoin;
               }
-              if (old.focus) old.focus();
+              if (position) focusTestid([TESTID.waitlistPosition]);
+              else if (old && old.focus) old.focus();
             };
             var domRaw = root.getAttribute("data-capacity");
             var domNum = domRaw === null || domRaw === "" ? NaN : Number(domRaw);

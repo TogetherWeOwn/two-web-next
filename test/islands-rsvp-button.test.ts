@@ -40,6 +40,7 @@ import {
   WAITLIST_JOIN_TESTID,
   WAITLIST_LEAVE_TESTID,
   WAITLIST_POSITION_TESTID,
+  WAITLIST_SEAT_TAKEN_TESTID,
   loginUrl,
   rsvpBroadcast,
   rsvpClosedCopy,
@@ -108,6 +109,7 @@ describe("rsvp-button states rendered: copy + testids", () => {
       RSVP_RATE_LIMITED_TESTID,
       RSVP_FAILED_TESTID,
       RSVP_SESSION_EXPIRED_TESTID,
+      WAITLIST_SEAT_TAKEN_TESTID,
     ]).toEqual([
       "rsvp-going",
       "rsvp-withdraw",
@@ -126,6 +128,7 @@ describe("rsvp-button states rendered: copy + testids", () => {
       "rsvp-rate-limited",
       "rsvp-failed",
       "rsvp-session-expired",
+      "waitlist-seat-taken",
     ]);
   });
 
@@ -146,6 +149,7 @@ describe("rsvp-button states rendered: copy + testids", () => {
     expect(RSVP_COPY.paused).toBe("RSVPs are paused for this event — check back soon.");
     expect(RSVP_COPY.sessionExpired).toBe("Your session expired.");
     expect(RSVP_COPY.guestCta).toBe("Log in with Discord");
+    expect(RSVP_COPY.waitlistSeatTaken).toBe("Someone just took that seat.");
   });
 
   it("names the closed reason in words: cancelled, draft, or been-and-gone", () => {
@@ -435,6 +439,28 @@ describe("rsvp-button SSR/server drift", () => {
     expect(html).not.toContain(`data-testid="${EVENT_FULL_TESTID}"`);
   });
 
+  it.each([true, false])(
+    "renders a full waitlist holder without refusal copy (RSVPs open: %s)",
+    async (rsvpOpen) => {
+      const p = page(
+        { rsvpOpen },
+        { [viewer.id]: { status: "waitlisted", syncedToDiscordAt: null } },
+      );
+      p.as(viewer);
+      const html = mount(await (await p.request()).text());
+      expect(html).toContain('data-full="true"');
+      expect(html).toContain(
+        `data-testid="${WAITLIST_POSITION_TESTID}">You&#39;re on the waitlist`,
+      );
+      expect(html).toContain(`data-testid="${WAITLIST_LEAVE_TESTID}"`);
+      expect(html).not.toContain(`data-testid="${EVENT_FULL_TESTID}"`);
+      expect(html).not.toContain("This one&#39;s full.");
+      expect(html).not.toContain(`data-testid="${WAITLIST_CLAIM_TESTID}"`);
+      expect(html).not.toContain(`data-testid="${WAITLIST_JOIN_TESTID}"`);
+      expect(html).not.toContain(`data-testid="${RSVP_CONFIRMED_TESTID}"`);
+    },
+  );
+
   it("renders waitlist fallback + claim-seat when room exists, without inventing a position", async () => {
     const p = page(
       { capacity: null },
@@ -443,6 +469,9 @@ describe("rsvp-button SSR/server drift", () => {
     p.as(viewer);
     const html = mount(await (await p.request()).text());
     expect(html).toContain(`data-testid="${WAITLIST_POSITION_TESTID}">You&#39;re on the waitlist`);
+    // WaitlistTest.php: the line is announced politely and can take focus.
+    expect(html).toContain(`role="status" tabindex="-1" data-testid="${WAITLIST_POSITION_TESTID}"`);
+    expect(html).not.toContain('role="alert"');
     expect(html).toContain(`data-testid="${WAITLIST_CLAIM_TESTID}"`);
     expect(html).toContain(`data-testid="${WAITLIST_LEAVE_TESTID}"`);
     expect(html).toContain(`data-testid="${RSVP_SYNCING_TESTID}"`);

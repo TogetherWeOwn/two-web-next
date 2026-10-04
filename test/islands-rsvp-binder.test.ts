@@ -21,11 +21,13 @@ class Node {
   focused = false;
   href = "";
   private text = "";
+  onTextChange?: (value: string) => void;
   listeners = new Map<string, (e: { preventDefault: () => void }) => void>();
   get textContent(): string {
     return this.text + this.children.map((n) => n.textContent).join("");
   }
   set textContent(value: string) {
+    this.onTextChange?.(value);
     this.text = value;
     this.children = [];
   }
@@ -189,6 +191,8 @@ function browser(
   }[] = [];
   const broadcasts: { type: string; detail: unknown }[] = [];
   let reloads = 0;
+  const timers: (() => void)[] = [];
+  const runTimers = () => timers.splice(0).forEach((callback) => callback());
   const listeners = new Map<string, (event: { type: string; detail: unknown }) => void>();
   const context = {
     document: {
@@ -224,6 +228,7 @@ function browser(
     },
     fetch: (url: string, init: RequestInit) =>
       new Promise<Response>((resolve, reject) => requests.push({ url, init, resolve, reject })),
+    setTimeout: (callback: () => void) => timers.push(callback),
   };
   if (integrated)
     runInNewContext(
@@ -241,7 +246,10 @@ function browser(
     requests[i]!.resolve(
       new Response(status === 204 ? null : JSON.stringify(body), { status, headers }),
     );
-  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const settle = async (flushTimers = true) => {
+    await new Promise((resolve) => setImmediate(resolve));
+    if (flushTimers) runTimers();
+  };
   const emit = (type: string, detail: unknown) => context.document.dispatchEvent({ type, detail });
   return {
     root,
@@ -252,6 +260,8 @@ function browser(
     broadcasts,
     finish,
     settle,
+    timers,
+    runTimers,
     emit,
     reloads: () => reloads,
   };
@@ -397,6 +407,130 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-going")).toBeNull();
   });
 
+  it("tells a claimant who lost the freed seat, keeping their place without a claim control", async () => {
+    const b = browser("waitlisted");
+    const staleFull = new Node();
+    staleFull.setAttribute("data-testid", "event-full");
+    staleFull.textContent = "This one's full. Cap is 4.";
+    b.root.querySelector("[data-rsvp-form]")!.appendChild(staleFull);
+    b.get("waitlist-claim")!.click();
+    b.finish(0, 200, {
+      data: { status: "waitlisted", waitlist_position: 1, synced_to_discord_at: null },
+    });
+    await b.settle();
+    const note = b.get("waitlist-seat-taken");
+    expect(note?.textContent).toBe("Someone just took that seat.");
+    expect(note?.getAttribute("role")).toBe("status");
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(b.get("waitlist-leave")).not.toBeNull();
+    expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.get("rsvp-confirmed")).toBeNull();
+    expect(b.get("event-full")).toBeNull();
+    expect(b.root.textContent).not.toContain("This one's full.");
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 });
+    expect(b.get("event-full")).toBeNull();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.get("waitlist-seat-taken")).toBe(note);
+    // Nothing changed for the member, so no "Saved." line and no alert beside the note.
+    expect(b.get("rsvp-syncing")).toBeNull();
+    expect(b.get("rsvp-failed")).toBeNull();
+    expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "waitlisted" });
+    // The next action clears the note: leaving the line drops it with the controls.
+    b.get("waitlist-leave")!.click();
+    b.finish(1, 204);
+    await b.settle();
+    expect(b.get("waitlist-seat-taken")).toBeNull();
+  });
+
+  it("keeps the settled position and Leave control without refusal copy on a claim conflict", async () => {
+    const b = browser("waitlisted");
+    const position = b.get("waitlist-position")!;
+    b.get("waitlist-claim")!.click();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(b.get("waitlist-position")).toBe(position);
+    expect(position.textContent).toBe("You're on the waitlist");
+    expect(position.focused).toBe(true);
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.get("event-full")).toBeNull();
+    expect(b.get("rsvp-confirmed")).toBeNull();
+    expect(b.broadcasts).toHaveLength(0);
+    expect(b.requests).toHaveLength(1);
+  });
+
+  it("mounts an empty polite claim-loss region before updating it in a later task", async () => {
+    const b = browser("waitlisted");
+    b.get("waitlist-claim")!.click();
+    b.finish(0, 200, { data: { status: "waitlisted", waitlist_position: 1 } });
+    await b.settle(false);
+    const note = b.get("waitlist-seat-taken")!;
+    const position = b.get("waitlist-position")!;
+    expect(note.textContent).toBe("");
+    expect(note.getAttribute("role")).toBe("status");
+    expect(note.getAttribute("aria-live")).toBe("polite");
+    expect(b.page.querySelector('[data-testid="waitlist-seat-taken"]')).toBe(note);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(position.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(position.focused).toBe(true);
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.root.querySelectorAll('[role="alert"]')).toHaveLength(0);
+    expect(b.timers).toHaveLength(1);
+    const updates: { text: string; mounted: boolean; polite: boolean; focused: boolean }[] = [];
+    note.onTextChange = (text) => {
+      updates.push({
+        text,
+        mounted: b.page.querySelector('[data-testid="waitlist-seat-taken"]') === note,
+        polite:
+          note.getAttribute("role") === "status" && note.getAttribute("aria-live") === "polite",
+        focused: note.focused,
+      });
+    };
+    b.runTimers();
+    expect(updates).toEqual([
+      { text: "Someone just took that seat.", mounted: true, polite: true, focused: false },
+    ]);
+    expect(b.get("waitlist-seat-taken")).toBe(note);
+    expect(note.textContent).toBe("Someone just took that seat.");
+    expect(b.get("waitlist-position")).toBe(position);
+    expect(position.focused).toBe(true);
+    expect(b.get("waitlist-leave")).not.toBeNull();
+    expect(b.get("waitlist-claim")).toBeNull();
+    expect(b.get("rsvp-syncing")).toBeNull();
+    expect(b.requests).toHaveLength(1);
+  });
+
+  it("does not populate a pending claim-loss note cleared by the next action", async () => {
+    const b = browser("waitlisted");
+    b.get("waitlist-claim")!.click();
+    b.finish(0, 200, { data: { status: "waitlisted", waitlist_position: 1 } });
+    await b.settle(false);
+    const note = b.get("waitlist-seat-taken")!;
+    expect(note.textContent).toBe("");
+    b.get("waitlist-leave")!.click();
+    expect(b.get("waitlist-seat-taken")).toBeNull();
+    b.runTimers();
+    expect(note.textContent).toBe("");
+    expect(note.parentNode).toBeNull();
+    expect(b.requests).toHaveLength(2);
+    expect(b.requests[1]!.init.method).toBe("DELETE");
+    b.finish(1, 204);
+    await b.settle();
+    expect(b.get("waitlist-seat-taken")).toBeNull();
+  });
+
+  it("does not claim a lost seat when a first-time going request lands on the waitlist", async () => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 201, { data: { status: "waitlisted", waitlist_position: 2 } });
+    await b.settle();
+    expect(b.get("waitlist-seat-taken")).toBeNull();
+    expect(b.get("rsvp-syncing")).not.toBeNull();
+  });
+
   it("transitions actual open SSR to a usable waitlist action after a capacity conflict", async () => {
     const b = browser();
     expect(b.get("waitlist-join")).toBeNull();
@@ -411,6 +545,16 @@ describe("RsvpButton shipped binder", () => {
     expect(b.requests[1]!.init.body).toBe('{"status":"waitlisted"}');
     expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #3 in line");
     expect(b.get("waitlist-claim")).toBeNull();
+    // WaitlistTest.php: the place is announced politely (status, never alert),
+    // takes focus after joining, and the join broadcasts the waitlisted state.
+    const position = b.get("waitlist-position")!;
+    expect(position.getAttribute("role")).toBe("status");
+    expect(position.getAttribute("tabindex")).toBe("-1");
+    expect(position.focused).toBe(true);
+    expect(b.broadcasts.at(-1)!.detail).toEqual({
+      eventKey: "raid/one",
+      viewerState: "waitlisted",
+    });
   });
 
   it("honors the current FIFO server's waitlisted answer to a going request", async () => {
@@ -421,6 +565,19 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-confirmed")).toBeNull();
     expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #2 in line");
     expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "waitlisted" });
+  });
+
+  it("announces the settled Going answer when a waitlist join returns the former holder's seat", async () => {
+    // WaitlistTest.php: the only waiter is a former holder, so the locked server
+    // settles the join to Going; the view confirms it and broadcasts `going`.
+    const b = browser("full");
+    b.get("waitlist-join")!.click();
+    expect(b.requests[0]!.init.body).toBe('{"status":"waitlisted"}');
+    b.finish(0, 200, { data: { status: "going", synced_to_discord_at: null } });
+    await b.settle();
+    expect(b.get("rsvp-confirmed")).not.toBeNull();
+    expect(b.get("waitlist-position")).toBeNull();
+    expect(b.broadcasts.at(-1)!.detail).toEqual({ eventKey: "raid/one", viewerState: "going" });
   });
 
   it.each([
@@ -675,14 +832,41 @@ describe("RsvpButton shipped binder", () => {
     },
   );
 
-  it("keeps full copy and does not offer a seat claim after joining a full waitlist", async () => {
-    const b = browser("full");
+  it("replaces the full-event invitation with a settled waitlist position, not refusal copy", async () => {
+    const b = browser("full", undefined, true);
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
     b.get("waitlist-join")!.click();
     b.finish(0, 201, { data: { status: "waitlisted", waitlist_position: 1 } });
     await b.settle();
-    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(b.get("waitlist-position")?.focused).toBe(true);
+    expect(b.get("event-full")).toBeNull();
+    expect(b.root.textContent).not.toContain("This one's full.");
     expect(b.get("waitlist-claim")).toBeNull();
-    expect(b.get("waitlist-leave")).not.toBeNull();
+    expect(b.get("waitlist-join")).toBeNull();
+    expect(b.get("rsvp-confirmed")).toBeNull();
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.get("waitlist-seat-taken")).toBeNull();
+    b.finish(1, 200, [{ event_key: "raid/one", going_count: 4, capacity: 4 }]);
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(b.get("event-full")).toBeNull();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #1 in line");
+    expect(b.get("waitlist-leave")?.disabled).toBe(false);
+    expect(b.page.querySelector("[data-count]")?.textContent).toBe("4 of 4 going");
+    b.get("waitlist-leave")!.click();
+    expect(b.requests[2]!.init.method).toBe("DELETE");
+    b.finish(2, 204);
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("waitlist-join")?.disabled).toBe(false);
+    b.finish(3, 200, [{ event_key: "raid/one", going_count: 4, capacity: 4 }]);
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("waitlist-position")).toBeNull();
+    expect(b.get("waitlist-join")?.disabled).toBe(false);
+    expect(b.get("rsvp-going")).toBeNull();
+    expect(b.requests).toHaveLength(4);
   });
 
   it("a paused holder can leave without reopening joins or claims", async () => {
@@ -888,6 +1072,8 @@ describe("RsvpButton shipped binder", () => {
     b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 });
     expect(b.get("waitlist-claim")).toBeNull();
     expect(b.get("waitlist-leave")).not.toBeNull();
+    expect(b.get("event-full")).toBeNull();
+    expect(b.get("rsvp-confirmed")).toBeNull();
     expect(b.requests).toHaveLength(2);
   });
 
@@ -945,6 +1131,8 @@ describe("RsvpButton shipped binder", () => {
     const b = browser("closed");
     expect(b.requests).toHaveLength(0);
     expect(b.root.querySelectorAll("[data-action]")).toHaveLength(0);
-    expect(binder).not.toMatch(/setInterval|setTimeout|window\.confirm|website/);
+    // A one-shot status announcement after a click is not load-time polling.
+    expect(b.timers).toHaveLength(0);
+    expect(binder).not.toMatch(/setInterval|window\.confirm|website/);
   });
 });

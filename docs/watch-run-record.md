@@ -108,9 +108,16 @@ marker, `pending >= 100`, or `unknown` across two consecutive polls.
 - Lighthouse against the production origin, held to the repo thresholds
   in [ci/lighthouserc.cjs](../ci/lighthouserc.cjs); thresholds are never
   relaxed to turn a build green.
+  Run `npm run lighthouse:origin -- https://togetherweown.com` or dispatch
+  [watch-lighthouse](../.github/workflows/watch-lighthouse.yml); record
+  the run URL and the per-route verdicts from its summary below.
 - Playwright GET-only guest journeys: homepage, static leaves, events
   list, one published event, robots/sitemap. No sign-in, no RSVP, no
   join, no writes of any kind.
+  Run via the dispatch-only
+  [watch-guest-journeys](../.github/workflows/watch-guest-journeys.yml)
+  workflow (`e2e/watch/`, origin input `https://togetherweown.com`) and
+  record the run URL in the table below.
 
 | Check | Time (UTC) | Result | Within budget |
 | --- | --- | --- | --- |

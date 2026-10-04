@@ -36,3 +36,33 @@ test("QA member edits and persists their profile using the keyboard", async ({ p
   await expect(view.getByText("Timezone: Europe/London", { exact: true })).toBeVisible();
   await expect(view.getByRole("listitem")).toHaveText(["Deep Rock Galactic", "Minecraft"]);
 });
+
+test("QA member signs out from the profile header and sees no moderator shortcut", async ({
+  page,
+  context,
+}) => {
+  await qaLogin(context, "qa-member");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
+  await expect(page.getByTestId("profile-admin-link")).toHaveCount(0);
+  const logoutRequest = page.waitForRequest(
+    (request) => request.url().endsWith("/logout") && request.method() === "POST",
+  );
+  await page.getByTestId("profile-signout").getByRole("button", { name: "Sign out" }).click();
+  await logoutRequest;
+  // The 303 lands on / as a guest; the cookie is cleared.
+  await expect(page.getByTestId("signin")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+  expect(
+    (await context.cookies()).find((item) => item.name === "__Host-two_session"),
+  ).toBeUndefined();
+});
+
+test("QA moderator reaches the admin panel from the profile header", async ({ page, context }) => {
+  await qaLogin(context, "qa-moderator");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();
+  await page.getByTestId("profile-admin-link").click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.getByRole("heading", { name: "Moderation", exact: true })).toBeVisible();
+});

@@ -42,7 +42,33 @@ describe("borrowed Drizzle execution in workerd", () => {
       expect(await response.text()).not.toContain("workerd-private-name");
     },
   );
-  it.each(["prebuilt-prepared-keyed", "prebuilt-lazy-keyed", "alias-owned"])(
+  it.each(["join-null", "join-alias-null"])(
+    "%s permits only the mapped nullable join owner, with no invented audit subject",
+    async (mode) => {
+      const response = await mf.dispatchFetch(`https://runtime.test/${mode}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.text()).toBe("workerd-private-name");
+      expect(response.headers.get("x-fixture-executions")).toBe("1");
+      expect(JSON.parse(response.headers.get("x-fixture-audit")!)).toEqual([]);
+    },
+  );
+  it.each([
+    "join-missing",
+    "join-undefined",
+    "join-invalid",
+    "users-null",
+    "profiles-null",
+    "rsvps-null",
+  ])("%s cannot borrow the nullable join-owner exception", async (mode) => {
+    const response = await mf.dispatchFetch(`https://runtime.test/${mode}`);
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("x-fixture-executions")).toBe(mode === "join-missing" ? "0" : "1");
+    expect(JSON.parse(response.headers.get("x-fixture-audit")!)).toEqual([]);
+    expect(await response.text()).not.toContain("workerd-private-name");
+  });
+  it.each(["prebuilt-prepared-keyed", "prebuilt-lazy-keyed", "alias-owned", "join-valid"])(
     "%s captures the actual owner exactly once",
     async (mode) => {
       const response = await mf.dispatchFetch(`https://runtime.test/${mode}`);

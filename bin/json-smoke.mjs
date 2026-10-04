@@ -9,6 +9,14 @@ import { pathToFileURL } from "node:url";
 // collection row is always viewer-visible. Never probes production or unknown
 // hosts, and never logs the token, cookies or response bodies.
 //
+// Session lifecycle: after the event checks the probe also pins the QA
+// session's cookie attributes (login Set-Cookie for both the session and the
+// auth-status probe cookie), one-shot rotation on an authenticated page view
+// (the replayed old cookie stops authenticating on /auth/status, the new one
+// does), server-side logout revocation with both cookies cleared, and that the
+// QA bad-token 404 is indistinguishable from a missing-route 404. Failure
+// output names attributes and states only, never a token or cookie value.
+//
 // Contract gate: PR #109 (GET /events/:key show route + collection `meta`
 // envelope) may not be deployed yet. The collection response decides: a 200
 // without the `meta` envelope means the contract is pending, so the
@@ -20,6 +28,10 @@ export const STAGING_ORIGIN = "https://next.togetherweown.com";
 const QA_IDENTITY = "qa-member";
 const QA_HEADER = "X-TWO-QA-Auth";
 const SESSION_COOKIE = "__Host-two_session";
+const STATUS_COOKIE = "__Host-two_session_status";
+// Never a real credential: the 404-parity probe must be unable to log in.
+const BAD_TOKEN = "json-smoke-bad-token";
+const MISSING_ROUTE = "/auth/json-smoke-missing-route";
 // Well-formed Crockford key with no fixture behind it: the guest gate runs
 // before the row lookup, so this proves guest 401 without staging data.
 const ABSENT_KEY = "0".repeat(26);
@@ -45,6 +57,81 @@ const PRIVATE_KEYS = ["id", "attendees", "user_id", "session", "token"];
 const isJson = (response) =>
   (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase() ===
   "application/json";
+
+const errorName = (error) => (error instanceof Error ? error.name : "request error");
+
+const setCookiesOf = (response) =>
+  typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : [response.headers.get("set-cookie") ?? ""];
+
+/** Parses one Set-Cookie header into `{name, value, attrs}`; attribute names are lower-cased. */
+export function parseSetCookie(raw) {
+  const [first = "", ...rest] = raw.split(";");
+  const eq = first.indexOf("=");
+  if (eq < 1) return null;
+  const attrs = new Map();
+  for (const part of rest) {
+    const [key = "", ...value] = part.split("=");
+    const name = key.trim().toLowerCase();
+    if (name) attrs.set(name, value.join("=").trim());
+  }
+  return { name: first.slice(0, eq).trim(), value: first.slice(eq + 1).trim(), attrs };
+}
+
+const cookieNamed = (response, name) => {
+  const cookies = setCookiesOf(response)
+    .map(parseSetCookie)
+    .filter((cookie) => cookie?.name === name);
+  // Duplicates fail the gate, but retain the last value for best-effort cleanup.
+  return cookies.length ? { ...cookies.at(-1), duplicate: cookies.length > 1 } : undefined;
+};
+
+// Attribute names only: a violation list can never carry a cookie value.
+function hostCookieProblems(cookie) {
+  const problems = [];
+  if (cookie.duplicate) problems.push("duplicate Set-Cookie");
+  if (!cookie.name.startsWith("__Host-")) problems.push("__Host- prefix");
+  if (cookie.attrs.get("path") !== "/") problems.push("Path=/");
+  if (!cookie.attrs.has("secure")) problems.push("Secure");
+  if (cookie.attrs.has("domain")) problems.push("no Domain");
+  return problems;
+}
+
+export function sessionCookieProblems(cookie) {
+  const problems = hostCookieProblems(cookie);
+  if (!cookie.attrs.has("httponly")) problems.push("HttpOnly");
+  if ((cookie.attrs.get("samesite") ?? "").toLowerCase() !== "lax") problems.push("SameSite=Lax");
+  const maxAge = cookie.attrs.get("max-age") ?? "";
+  if (!/^\d+$/.test(maxAge) || Number(maxAge) <= 0) problems.push("positive Max-Age");
+  return problems;
+}
+
+export function clearedCookieProblems(cookie) {
+  const problems = hostCookieProblems(cookie);
+  if (cookie.value !== "") problems.push("empty value");
+  if (cookie.attrs.get("max-age") !== "0") problems.push("Max-Age=0");
+  return problems;
+}
+
+// Cloudflare appends a challenge script to HTML responses. Its only per-request
+// parts are the ray id and a timestamp, and the script around them has already
+// changed shape once. Mask just those two values and leave every other byte in
+// place: a change to Cloudflare's wrapper cannot cause a false mismatch, and a
+// real difference between two pages still fails the comparison.
+const CLOUDFLARE_PARAMS =
+  /window\.__CF\$cv\$params=\{r:'[a-f0-9]{16}',t:'[A-Za-z0-9+/]{1,128}={0,2}'\}/gi;
+
+/** Comparison only, not HTML sanitization. Anything that is not a well-formed ray/timestamp pair stays as is. */
+export function maskCloudflareRay(html) {
+  return html.replace(CLOUDFLARE_PARAMS, () => "window.__CF$cv$params={r:'',t:''}");
+}
+
+function firstDifference(left, right) {
+  const limit = Math.min(left.length, right.length);
+  for (let index = 0; index < limit; index += 1) if (left[index] !== right[index]) return index;
+  return limit;
+}
 
 function parseBody(text) {
   try {
@@ -172,6 +259,7 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
   // Origin, and the QA seam needs its header. The token travels in the header
   // only, never in a URL, and is never logged.
   let cookie = null;
+  let loginResponse = null;
   try {
     const response = await fetch(new URL(`/auth/qa/${QA_IDENTITY}`, base), {
       method: "POST",
@@ -180,21 +268,16 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       headers: { origin: base.origin, [QA_HEADER]: token },
     });
     await response.text();
-    const raw =
-      typeof response.headers.getSetCookie === "function"
-        ? response.headers.getSetCookie()
-        : [response.headers.get("set-cookie") ?? ""];
-    const pair = raw
-      .map((header) => header.split(";")[0]?.trim())
-      .find((candidate) => candidate?.startsWith(`${SESSION_COOKIE}=`));
-    if (response.status === 204 && pair && pair.length > SESSION_COOKIE.length + 1) {
-      cookie = pair.slice(SESSION_COOKIE.length + 1);
+    const issued = cookieNamed(response, SESSION_COOKIE);
+    if (response.status === 204 && issued?.value) {
+      cookie = issued.value;
+      loginResponse = response;
       pass("QA login issues a session cookie");
     } else {
       fail(
         "QA login",
         "HTTP 204 with a session cookie",
-        `HTTP ${response.status} ${pair ? "with session cookie" : "without session cookie"}`,
+        `HTTP ${response.status} ${issued ? "with session cookie" : "without session cookie"}`,
       );
     }
   } catch (error) {
@@ -433,6 +516,257 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
       if (returned && typeof returned === "object" && Array.isArray(returned.data))
         collection = returned;
     }
+  }
+
+  // Session lifecycle. Runs after the event checks because rotation and logout
+  // consume the QA session. Replays send the session cookie alone: /auth/status
+  // prefers the probe cookie, whose key is stable across rotation, so a replay
+  // that carried it would prove the live session rather than the old token.
+  const call = (path, { method = "GET", session, headers = {} } = {}) =>
+    fetch(new URL(path, base), {
+      method,
+      redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { ...(session ? { cookie: `${SESSION_COOKIE}=${session}` } : {}), ...headers },
+    });
+
+  let current = cookie;
+  let statusMutated = false;
+  const cleanupSessions = new Set();
+  // A status probe must observe without changing authentication. Track unexpected
+  // bearers before reading its body, but never trust a mutating probe's verdict.
+  const authenticates = async (session) => {
+    const response = await call("/auth/status", {
+      session,
+      headers: { accept: "application/json" },
+    });
+    const issued = setCookiesOf(response)
+      .map(parseSetCookie)
+      .filter((cookie) => cookie && [SESSION_COOKIE, STATUS_COOKIE].includes(cookie.name));
+    const mutated = issued.length > 0;
+    if (mutated) {
+      statusMutated = true;
+      const bearers = issued.filter((cookie) => cookie.name === SESSION_COOKIE && cookie.value);
+      if (bearers.length) {
+        if (current) cleanupSessions.add(current);
+        for (const bearer of bearers) cleanupSessions.add(bearer.value);
+        current = bearers.at(-1).value;
+      }
+    }
+    const body = parseBody(await response.text());
+    const verdict =
+      !mutated &&
+      response.status === 200 &&
+      isJson(response) &&
+      typeof body?.authenticated === "boolean"
+        ? body.authenticated
+        : null;
+    return { verdict, status: response.status, mutated };
+  };
+  const describeReplay = ({ verdict, status, mutated }, wanted) =>
+    mutated
+      ? "status probe issued auth cookies"
+      : verdict === null
+        ? `status probe HTTP ${status}`
+        : wanted
+          ? "rejected"
+          : "still authenticates";
+
+  const flagsExpected =
+    "__Host- prefix, Path=/, Secure, HttpOnly, SameSite=Lax, positive Max-Age, no Domain";
+  const lifecycleLabels = [
+    "session cookie flags",
+    "status cookie flags",
+    "session rotation replay",
+    "logout revokes session",
+    "logout clears cookies",
+  ];
+
+  if (!cookie || !loginResponse) {
+    for (const label of lifecycleLabels) skip(label, "no QA session");
+  } else {
+    for (const [label, name] of [
+      ["session cookie flags", SESSION_COOKIE],
+      ["status cookie flags", STATUS_COOKIE],
+    ]) {
+      const issued = cookieNamed(loginResponse, name);
+      if (!issued) {
+        fail(label, `login Set-Cookie ${name}`, "cookie not issued");
+        continue;
+      }
+      const problems = sessionCookieProblems(issued);
+      if (problems.length) fail(label, flagsExpected, `violated ${problems.join(", ")}`);
+      else pass(label);
+    }
+
+    // One authenticated page view rotates the token: the old value is revoked
+    // in the same statement that mints its replacement.
+    try {
+      const page = await call("/", { session: cookie, headers: { accept: "text/html" } });
+      const replacement = cookieNamed(page, SESSION_COOKIE);
+      // The server may already have rotated. Cleanup must track the issued value
+      // even when reading the page or checking either status response fails.
+      if (replacement?.value) current = replacement.value;
+      await page.text();
+      const problems = [];
+      if (page.status !== 200) problems.push(`page HTTP ${page.status}`);
+      if (!replacement || !replacement.value) problems.push("no replacement session cookie");
+      else if (replacement.value === cookie) problems.push("replacement cookie unchanged");
+      else {
+        const flags = sessionCookieProblems(replacement);
+        if (flags.length) problems.push(`replacement cookie violated ${flags.join(", ")}`);
+      }
+      const replacementStatus = cookieNamed(page, STATUS_COOKIE);
+      if (!replacementStatus) problems.push("no replacement status cookie");
+      else {
+        if (!replacementStatus.value) problems.push("empty replacement status cookie");
+        const flags = sessionCookieProblems(replacementStatus);
+        if (flags.length) problems.push(`replacement status cookie violated ${flags.join(", ")}`);
+      }
+      const old = await authenticates(cookie);
+      if (old.verdict !== false) problems.push(`old cookie ${describeReplay(old, false)}`);
+      if (replacement?.value && replacement.value !== cookie) {
+        const fresh = await authenticates(replacement.value);
+        if (fresh.verdict !== true)
+          problems.push(`replacement cookie ${describeReplay(fresh, true)}`);
+      }
+      if (problems.length)
+        fail(
+          "session rotation replay",
+          "old cookie unauthenticated and replacement authenticated on /auth/status",
+          problems.join("; "),
+        );
+      else pass("session rotation replay");
+    } catch (error) {
+      fail("session rotation replay", "HTTP responses within timeout", errorName(error));
+    }
+
+    // Logout needs the correct Origin (same-origin gate) and must revoke the
+    // row server-side, not only clear the browser cookie.
+    const preLogout = current;
+    let logout = null;
+    let logoutError = null;
+    try {
+      logout = await call("/logout", {
+        method: "POST",
+        session: preLogout,
+        headers: { origin: base.origin },
+      });
+      await logout.text();
+      if (logout.status === 303) cleanupSessions.delete(preLogout);
+    } catch (error) {
+      logoutError = errorName(error);
+    }
+    if (!logout || logoutError) {
+      fail("logout revokes session", "HTTP 303 within timeout", logoutError ?? "request error");
+      fail("logout clears cookies", "HTTP 303 within timeout", logoutError ?? "request error");
+    } else {
+      const problems = [];
+      if (logout.status !== 303) problems.push(`logout HTTP ${logout.status}`);
+      try {
+        const replay = await authenticates(preLogout);
+        if (replay.verdict !== false)
+          problems.push(`pre-logout cookie ${describeReplay(replay, false)}`);
+      } catch (error) {
+        problems.push(`status probe ${errorName(error)}`);
+      }
+      if (statusMutated) problems.push("status probe mutated authentication state");
+      if (problems.length)
+        fail(
+          "logout revokes session",
+          "HTTP 303 and the pre-logout cookie unauthenticated on /auth/status",
+          problems.join("; "),
+        );
+      else pass("logout revokes session");
+
+      const unclear = [];
+      for (const [short, name] of [
+        ["session", SESSION_COOKIE],
+        ["status", STATUS_COOKIE],
+      ]) {
+        const cleared = cookieNamed(logout, name);
+        if (!cleared) unclear.push(`${short} cookie not cleared`);
+        else {
+          const problems = clearedCookieProblems(cleared);
+          if (problems.length) unclear.push(`${short} cookie violated ${problems.join(", ")}`);
+        }
+      }
+      if (unclear.length)
+        fail(
+          "logout clears cookies",
+          "both cookies empty with __Host- prefix, Path=/, Secure, Max-Age=0, no Domain",
+          unclear.join("; "),
+        );
+      else pass("logout clears cookies");
+    }
+
+    // Best-effort teardown after a broken observer. Never probe these bearers
+    // again: doing so could mint more sessions. Bound extra logout attempts.
+    const pending = [...cleanupSessions];
+    if (pending.length > 8)
+      fail(
+        "unexpected status session cleanup",
+        "at most 8 pending bearers",
+        "cleanup limit exceeded",
+      );
+    for (const session of pending.slice(-8)) {
+      try {
+        const cleanup = await call("/logout", {
+          method: "POST",
+          session,
+          headers: { origin: base.origin },
+        });
+        await cleanup.text();
+        if (cleanup.status !== 303)
+          fail(
+            "unexpected status session cleanup",
+            "HTTP 303 within timeout",
+            `HTTP ${cleanup.status}`,
+          );
+      } catch (error) {
+        fail("unexpected status session cleanup", "HTTP 303 within timeout", errorName(error));
+      }
+    }
+  }
+
+  // Needs no session: a wrong token must be indistinguishable from a route
+  // that does not exist (staging-only seam, so the seam is not discoverable).
+  try {
+    const attempt = { method: "POST", headers: { origin: base.origin } };
+    const bad = await call(`/auth/qa/${QA_IDENTITY}`, {
+      ...attempt,
+      headers: { ...attempt.headers, [QA_HEADER]: BAD_TOKEN },
+    });
+    // Consume each body within its own request deadline, not after another fetch.
+    const badBody = maskCloudflareRay(await bad.text());
+    const missing = await call(MISSING_ROUTE, attempt);
+    const missingBody = maskCloudflareRay(await missing.text());
+    const contentType = (response) => (response.headers.get("content-type") ?? "").trim();
+    const sameContentType = contentType(bad) === contentType(missing);
+    if (
+      bad.status === 404 &&
+      missing.status === 404 &&
+      badBody === missingBody &&
+      sameContentType
+    ) {
+      pass("QA bad-token 404 matches missing route");
+    } else {
+      fail(
+        "QA bad-token 404 matches missing route",
+        "identical HTTP 404 status, content type and body (Cloudflare ray id and timestamp masked)",
+        `HTTP ${bad.status} vs HTTP ${missing.status}${sameContentType ? "" : "; content types differ"}${
+          badBody === missingBody
+            ? ""
+            : `; bodies differ (${badBody.length} vs ${missingBody.length} chars, first difference at offset ${firstDifference(badBody, missingBody)})`
+        }`,
+      );
+    }
+  } catch (error) {
+    fail(
+      "QA bad-token 404 matches missing route",
+      "HTTP responses within timeout",
+      errorName(error),
+    );
   }
 
   log(`json-smoke: ${checks} checks, ${failures} failed, ${skipped} skipped`);

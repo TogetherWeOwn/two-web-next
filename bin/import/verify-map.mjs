@@ -35,17 +35,27 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
   });
   const id = () => [field("id", "l.id::text", "n.id::text")];
   const times = () => [timestamp("created_at"), timestamp("updated_at")];
-  const retained = (name, time, keys, columns) =>
-    table(name, keys, columns, {
+  // bin/import/content-funnel.mjs never copies native ids: it upserts on the
+  // nullable, unique legacy_id (drizzle/1012) holding the source PK as text, and
+  // applies the same selection rules mirrored here. Rows created natively on
+  // Next keep legacy_id NULL, so they are not part of the imported set and are
+  // never extras. Source rows with no clock are skipped by the importer (its
+  // skipped_missing_timestamp count) and excluded here for the same reason.
+  // Only prunable tables get the 90-day window; featured content is compared in
+  // full. Next's clock columns are NOT NULL.
+  const contentFunnel = (name, { clock, prune }, columns, legacyFrom) => {
+    const window = (value) => (prune ? ` AND ${value} >= ${cutoffSql}` : "");
+    return table(name, [field("legacy_id", "l.id::text", "n.legacy_id")], columns, {
       legacy: {
-        from: `${legacy}."${name}" l`,
-        where: `(l.${time} IS NULL OR (l.${time} AT TIME ZONE 'UTC') >= ${cutoffSql})`,
+        from: legacyFrom ?? `${legacy}."${name}" l`,
+        where: `l.${clock} IS NOT NULL${window(`(l.${clock} AT TIME ZONE 'UTC')`)}`,
       },
       next: {
         from: `${next}."${name}" n`,
-        where: `(n.${time} IS NULL OR n.${time} >= ${cutoffSql})`,
+        where: `n.legacy_id IS NOT NULL${window(`n.${clock}`)}`,
       },
     });
+  };
   return [
     table(
       "users",
@@ -53,13 +63,11 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
       [
         field("username", "COALESCE(NULLIF(l.display_name, ''), l.username)"),
         field("avatar"),
+        // Import policy (docs/import-users-profiles.md): non-null historical
+        // join evidence imports as member, null as false.
+        field("member", "(l.discord_joined_at IS NOT NULL)", "n.member"),
         ...times(),
       ],
-      {
-        mappingGaps: [
-          "member: legacy has no member flag; importer must define the guild-membership evidence transform.",
-        ],
-      },
     ),
     table(
       "profiles",
@@ -102,6 +110,17 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
           "n.recurrence_ends_on::timestamp",
         ),
         field("created_by", userId("created_by", "u")),
+        timestamp("discord_sync_failed_at"),
+        field("discord_sync_failure_code"),
+        // The importer refuses a batch containing agent attribution (grant ID,
+        // proof marker or nonzero version), and Next's human events carry none.
+        // Compare the legacy predicate to a literal so an attributed event is
+        // a named-key mismatch, never silently excluded or a MATCH.
+        field(
+          "agent_attribution",
+          "(l.agent_grant_id IS NOT NULL OR l.proof_marker IS NOT NULL OR l.agent_version IS DISTINCT FROM 0)::text",
+          "'false'",
+        ),
         field(
           "parent_event_key",
           "COALESCE(p.event_key, CASE WHEN l.parent_event_id IS NOT NULL THEN 'unresolved-legacy-event:' || l.parent_event_id::text END)",
@@ -116,10 +135,6 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
         next: {
           from: `${next}."events" n LEFT JOIN ${next}."events" p ON p.id = n.parent_event_id`,
         },
-        mappingGaps: [
-          "discord_sync_failed_at, discord_sync_failure_code: no destination columns yet.",
-          "agent_grant_id, proof_marker, agent_version: importer must define events to agent_events split; no silent exclusion of proof events.",
-        ],
       },
     ),
     table(
@@ -140,9 +155,9 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
         next: { from: `${next}."rsvps" n LEFT JOIN ${next}."events" e ON e.id = n.event_id` },
       },
     ),
-    table(
+    contentFunnel(
       "featured_contents",
-      id(),
+      { clock: "created_at", prune: false },
       [
         ...["title", "body", "url", "image_url", "image_alt", "is_published", "position"].map(
           (name) => field(name),
@@ -150,107 +165,90 @@ export function defaultTableMap({ legacySchema = "public", nextSchema = "public"
         timestamp("starts_at"),
         timestamp("ends_at"),
         field("created_by", userId("created_by", "u")),
-        ...times(),
+        timestamp("created_at"),
+        // The importer falls back to the row's own created_at, never import time.
+        field("updated_at", "COALESCE(l.updated_at, l.created_at) AT TIME ZONE 'UTC'"),
       ],
-      {
-        legacy: {
-          from: `${legacy}."featured_contents" l LEFT JOIN ${legacy}."users" u ON u.id = l.created_by`,
-        },
-      },
+      `${legacy}."featured_contents" l LEFT JOIN ${legacy}."users" u ON u.id = l.created_by`,
     ),
-    retained("join_attempts", "created_at", id(), [
+    contentFunnel("join_attempts", { clock: "created_at", prune: true }, [
       ...["outcome", "source", "request_id", "discord_id"].map((name) => field(name)),
       timestamp("created_at"),
     ]),
-    retained("event_search_logs", "occurred_at", id(), [
+    contentFunnel("event_search_logs", { clock: "occurred_at", prune: true }, [
       field("normalized_query"),
       field("result_count"),
       timestamp("occurred_at"),
     ]),
+    // Audit slice: projections mirror bin/import/audit.mjs, which copies each column
+    // verbatim under its preserved id (docs/audit-import.md). Historical user
+    // references stay legacy internal IDs, so they are compared as text, not
+    // remapped to Discord IDs.
+    table("member_data_access_logs", id(), [
+      ...["viewer_discord_id", "resource", "action", "subject_count", "route"].map((name) =>
+        field(name),
+      ),
+      field("viewer_user_id", "l.viewer_user_id::text", "n.viewer_user_id"),
+      timestamp("occurred_at"),
+      field("subject_user_ids", "l.subject_user_ids::jsonb", "n.subject_user_ids"),
+    ]),
+    table("activity_log", id(), [
+      // The importer keeps a NULL log_name NULL (migration 1011 permits it).
+      field("log_name"),
+      ...["description", "subject_type", "subject_id", "causer_type", "causer_id", "event"].map(
+        (name) => field(name, `l.${name}::text`, `n.${name}::text`),
+      ),
+      field("batch_uuid", "l.batch_uuid::text", "n.batch_uuid::text"),
+      field("properties", "l.properties::jsonb"),
+      ...times(),
+    ]),
+    table("agent_event_grants", id(), [
+      ...["agent_id", "company_id", "guild_id", "verifier_hash", "max_events"].map((name) =>
+        field(name),
+      ),
+      timestamp("expires_at"),
+      timestamp("created_at"),
+      timestamp("updated_at"),
+      // Grants import disabled unless --enable-grants admits an untouched one,
+      // so the conservative expectation is a stamped disabled_at.
+      field("disabled", "TRUE", "n.disabled_at IS NOT NULL"),
+    ]),
+    table("agent_event_audits", id(), [
+      ...[
+        "grant_id",
+        "operation",
+        "event_key",
+        "idempotency_key",
+        "payload_digest",
+        "request_id",
+        "result",
+        "reason_code",
+        "discord_event_id",
+      ].map((name) => field(name)),
+      timestamp("created_at"),
+      timestamp("updated_at"),
+    ]),
     table(
-      "member_data_access_logs",
+      "agent_event_idempotency_keys",
       id(),
       [
-        ...["viewer_discord_id", "resource", "action", "subject_count", "route"].map((name) =>
-          field(name),
-        ),
-        field("viewer_user_id", userId("viewer_user_id", "u")),
-        timestamp("occurred_at"),
-        field(
-          "subject_user_ids",
-          `(SELECT COALESCE(jsonb_agg(COALESCE(su.discord_id, 'unresolved-legacy-user:' || subject.value) ORDER BY subject.ordinality), '[]'::jsonb)
-        FROM jsonb_array_elements_text(l.subject_user_ids::jsonb) WITH ORDINALITY AS subject(value, ordinality)
-        LEFT JOIN ${legacy}."users" su ON su.id::text = subject.value)`,
-        ),
-      ],
-      {
-        legacy: {
-          from: `${legacy}."member_data_access_logs" l LEFT JOIN ${legacy}."users" u ON u.id = l.viewer_user_id`,
-        },
-      },
-    ),
-    table(
-      "activity_log",
-      id(),
-      [
-        field("log_name", "COALESCE(l.log_name, 'default')"),
-        ...["description", "subject_type", "subject_id", "causer_id"].map((name) =>
-          field(name, `l.${name}::text`, `n.${name}::text`),
-        ),
-        field("properties", "l.properties::jsonb"),
-        ...times(),
-      ],
-      {
-        mappingGaps: [
-          "subject_id/causer_id and properties: importer must define morph-ID and Spatie dirty-map conversion.",
-          "causer_type, event, batch_uuid: intentionally absent from Next; audit loss requires an explicit import disposition.",
-        ],
-      },
-    ),
-    table(
-      "agent_event_grants",
-      id(),
-      [
-        ...["agent_id", "company_id", "guild_id", "verifier_hash"].map((name) => field(name)),
-        timestamp("expires_at"),
-        timestamp("created_at"),
-        field("disabled", "TRUE", "n.disabled_at IS NOT NULL"),
-      ],
-      {
-        mappingGaps: [
-          "max_events, updated_at: absent from Next; importer must record preservation/disposition.",
-        ],
-      },
-    ),
-    table(
-      "agent_event_audits",
-      id(),
-      [
-        ...[
-          "grant_id",
-          "operation",
-          "event_key",
-          "idempotency_key",
-          "payload_digest",
-          "request_id",
-          "result",
-          "reason_code",
-        ].map((name) => field(name)),
-        timestamp("created_at"),
-      ],
-      {
-        mappingGaps: [
-          "discord_event_id, updated_at: absent from Next; importer must record preservation/disposition.",
-        ],
-      },
-    ),
-    {
-      ...retained("agent_event_idempotency_keys", "created_at", id(), [
         ...["grant_id", "key", "payload_digest", "status", "event_key"].map((name) => field(name)),
         field("body", "l.body::jsonb"),
         timestamp("created_at"),
-      ]),
-      mappingGaps: ["updated_at: absent from Next; importer must record preservation/disposition."],
-    },
+        timestamp("updated_at"),
+      ],
+      {
+        // Same window as the importer: NULL and non-finite created_at cannot place a
+        // key inside the retention window, so they are counted expired, not imported.
+        legacy: {
+          from: `${legacy}."agent_event_idempotency_keys" l`,
+          where: `(l.created_at IS NOT NULL AND isfinite(l.created_at) AND (l.created_at AT TIME ZONE 'UTC') >= ${cutoffSql})`,
+        },
+        next: {
+          from: `${next}."agent_event_idempotency_keys" n`,
+          where: `(n.created_at IS NULL OR n.created_at >= ${cutoffSql})`,
+        },
+      },
+    ),
   ];
 }

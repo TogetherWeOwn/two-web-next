@@ -128,10 +128,16 @@ def real_items(content):
     return n
 
 
-def internal_hits(text, prefixes):
+def internal_hits(text, prefixes, slug=False):
+    """Ticket ids are case-sensitive in prose (`tog-1` is plain text there). A branch name is a slug that
+    tooling lowercases (`qa/tog-1-fix`), so pass `slug=True` to match any case and to count `_` as a separator."""
     text = strip_comments(text)
     hits = []
-    m = re.search(rf"\b(?:{prefixes})-\d+\b", text)
+    if slug:
+        # [^\W_] keeps Unicode alphanumeric boundaries while allowing underscore separators.
+        m = re.search(rf"(?<![^\W_])(?:{prefixes})-\d+(?![^\W_])", text, re.I)
+    else:
+        m = re.search(rf"\b(?:{prefixes})-\d+\b", text)
     if m:
         hits.append(f"ticket id {m.group(0)}")
     for pat, label in FIXED_INTERNAL:
@@ -194,7 +200,7 @@ def check_pull_request(env):
             out.append(Finding(level, "Card reference", "Add 'Refs: TOG-1234' to the PR body."))
     else:
         for where, text in (("title", title), ("body", body), ("branch name", head_ref)):
-            hits = internal_hits(text, prefixes)
+            hits = internal_hits(text, prefixes, slug=where == "branch name")
             if hits:
                 out.append(Finding(mode, "Internal reference", f"The PR {where} holds {', '.join(hits)}. Public "
                                    "repos carry no internal references: say it in plain words, link only public "

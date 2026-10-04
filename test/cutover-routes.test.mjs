@@ -3,10 +3,10 @@ import app from "../src/index";
 import { parseArgs, runChecks } from "../ci/cutover-check.mjs";
 
 const leaves = ["/about", "/faq", "/rules", "/privacy"];
-const retiredDiagnostics = ["/health", "/healthz", "/db-ping"];
+const retiredPaths = ["/health", "/healthz", "/db-ping", "/members", "/members/"];
 
 for (const phase of ["before", "after"]) {
-  it(`${phase} URL gates accept actual retired diagnostic 404s without database bindings`, async () => {
+  it(`${phase} URL gates accept actual retired-path 404s without database bindings`, async () => {
     const target = phase === "before" ? "next.togetherweown.com" : "togetherweown.com";
     const options = parseArgs(["--phase", phase, "--target", target, "--event-key", "fixture"]);
     const env = { APP_URL: `https://${target}` };
@@ -15,7 +15,7 @@ for (const phase of ["before", "after"]) {
       resolver: { resolve4: async () => ["127.0.0.1"], resolve6: async () => [] },
       request: async (url) => {
         const parsed = new URL(url);
-        if (parsed.hostname !== target || !retiredDiagnostics.includes(parsed.pathname)) {
+        if (parsed.hostname !== target || !retiredPaths.includes(parsed.pathname)) {
           return { status: 404, headers: {}, body: "", tlsVerified: true };
         }
         seen.push(parsed.pathname);
@@ -30,12 +30,12 @@ for (const phase of ["before", "after"]) {
         };
       },
     });
-    // Unrelated gates deliberately fail; all three diagnostic gates must exist and pass.
-    expect(seen.sort()).toEqual([...retiredDiagnostics].sort());
+    // Unrelated gates deliberately fail; all retired-path gates must exist and pass.
+    expect(seen.sort()).toEqual([...retiredPaths].sort());
     const diagnosticChecks = result.checks.filter((check) =>
-      retiredDiagnostics.some((path) => check.id === `url:${path}`),
+      retiredPaths.some((path) => check.id === `url:${path}`),
     );
-    expect(diagnosticChecks).toHaveLength(retiredDiagnostics.length);
+    expect(diagnosticChecks).toHaveLength(retiredPaths.length);
     expect(diagnosticChecks.filter((check) => !check.ok)).toEqual([]);
   });
 

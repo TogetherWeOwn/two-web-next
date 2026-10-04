@@ -104,6 +104,7 @@ describe.skipIf(!process.env.DATABASE_URL).each([
     reserved: 0,
     total: 0,
     oldestPendingAgeSeconds: null,
+    oldestReadyWaitAgeSeconds: null,
   };
 
   it("keeps the first outcome across sequential redelivery after the live row is gone", async () => {

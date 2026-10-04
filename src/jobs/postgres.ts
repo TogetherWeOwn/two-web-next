@@ -149,7 +149,7 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
   };
 }
 
-/** The one counted shape: pending/delayed/reserved/total/failed + oldest pending age. */
+/** Ledger counts plus creation age (parity) and current eligibility age (operational). */
 export type QueueDepth = {
   pending: number;
   delayed: number;
@@ -157,6 +157,7 @@ export type QueueDepth = {
   total: number;
   failed: number;
   oldestPendingAgeSeconds: number | null;
+  oldestReadyWaitAgeSeconds: number | null;
 };
 
 /**
@@ -168,6 +169,8 @@ export type QueueDepth = {
 export async function pgQueueDepth(sql: Sql | postgres.TransactionSql): Promise<QueueDepth> {
   // Health setup precedes this statement inside a transaction. now() would
   // freeze availability at BEGIN; use one measurement-time clock instead.
+  // Ready-wait starts at current available_at, not created_at (retries keep it).
+  // Preserve fractional seconds so strict age tripwires never round up/down.
   // https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT
   const [row] = await sql`
     select
@@ -177,7 +180,9 @@ export async function pgQueueDepth(sql: Sql | postgres.TransactionSql): Promise<
       count(*)::int as total,
       (select count(*)::int from queue_failed_jobs) as failed,
       extract(epoch from statement_timestamp() - (min(created_at) filter (where available_at <= statement_timestamp() and reserved_at is null)))::int
-        as oldest_pending_age_seconds
+        as oldest_pending_age_seconds,
+      extract(epoch from statement_timestamp() - (min(available_at) filter (where available_at <= statement_timestamp() and reserved_at is null)))::double precision
+        as oldest_ready_wait_age_seconds
     from queue_jobs`;
   if (!row) throw new Error("queue depth query returned no row");
   return {
@@ -187,5 +192,6 @@ export async function pgQueueDepth(sql: Sql | postgres.TransactionSql): Promise<
     total: row.total,
     failed: row.failed,
     oldestPendingAgeSeconds: row.oldest_pending_age_seconds,
+    oldestReadyWaitAgeSeconds: row.oldest_ready_wait_age_seconds,
   };
 }

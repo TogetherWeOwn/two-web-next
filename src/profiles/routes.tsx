@@ -190,7 +190,10 @@ export function profilesApp(deps: ProfileDeps = {}) {
   // frozen 404 before the gate below. Registered first so the "/members/*"
   // middleware never bounces it to OAuth; members get the same 404, with no
   // session read, no cookie and no access-log row. Hono also serves HEAD here.
+  // Strict routing distinguishes the trailing slash; retire that form too.
+  // https://hono.dev/docs/api/hono#strict-mode
   app.get("/members", (c) => c.notFound());
+  app.get("/members/", (c) => c.notFound());
 
   // Scoped to this slice's paths: the app is mounted at "/", so a "*" here
   // would gate every route in the worker.
@@ -236,6 +239,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
         member={member}
         stats={stats}
         isOwner={viewer.id === member.id}
+        isModerator={viewer.moderator}
         appUrl={c.env.APP_URL}
         joinResult={joinResult}
       />,
@@ -294,6 +298,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
           member={member}
           stats={await statsFor(c, member.id)}
           isOwner
+          isModerator={c.get("viewer").moderator}
           appUrl={c.env.APP_URL}
           errors={result.errors}
           values={{

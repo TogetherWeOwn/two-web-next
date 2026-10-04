@@ -10,6 +10,8 @@ export default defineConfig({
   testDir: "./e2e/staging",
   testMatch: "**/*.spec.ts",
   globalSetup: "./e2e/staging/global-setup.ts",
+  // Cancels any "Staging E2E" fixture a journey's own cleanup left live.
+  globalTeardown: "./e2e/staging/global-teardown.ts",
   fullyParallel: false,
   workers: 1,
   retries: 0,

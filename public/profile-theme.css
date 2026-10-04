@@ -11,6 +11,10 @@
 .profile-theme .notice { background: var(--surface); color: var(--ink); margin: 1rem 0; }
 .profile-theme .profile-header-bar { max-width: 90rem; margin: auto; min-height: 80px; border: 0; padding: .5rem 2rem; }
 .profile-theme .profile-header-bar .btn { min-height: 44px; padding: .5rem 1rem; }
+.profile-theme .profile-header-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .5rem 1rem; }
+.profile-theme .profile-header-actions nav { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.profile-theme .profile-header-actions form { margin: 0; }
+.profile-theme .profile-header-actions .link { min-height: 44px; padding: 0 .5rem; }
 .profile-theme .brand { font-family: Display, 'Arial Narrow', sans-serif; }
 .profile-theme .profile-player, .profile-theme .profile-panel { padding: 2rem; background: var(--surface); border: 1px solid var(--line); margin-bottom: 1.5rem; min-width: 0; overflow-wrap: anywhere; }
 .profile-theme .profile-player { border-top: 4px solid var(--brand); }
@@ -54,11 +58,12 @@
 .profile-theme [hidden] { display: none; }
 @media (max-width: 48rem) {
   .profile-theme main { padding: 1rem 1.25rem 2rem; }
-  .profile-theme .profile-header-bar { padding: .5rem 1.25rem; }
+  .profile-theme .profile-header-bar { padding: .5rem 1.25rem; flex-wrap: wrap; gap: .25rem 1rem; }
+  .profile-theme .profile-header-actions { flex: 1 1 100%; justify-content: flex-start; padding-bottom: .5rem; }
   .profile-theme .profile-player, .profile-theme .profile-panel { padding: 1.25rem; }
   .profile-theme .profile-identity { grid-template-columns: 64px minmax(0, 1fr); gap: 1rem; }
   .profile-theme .avatar { width: 64px; height: 64px; }
-  .profile-theme .avatar-initial { font-size: 2rem; }
+  .profile-theme .avatar-initial { font-size: 1.75rem; }
   .profile-theme .profile-details { grid-template-columns: 1fr; gap: 1.5rem; margin-top: 1.5rem; }
   .profile-theme .profile-milestones li { grid-template-columns: 1fr; }
 }

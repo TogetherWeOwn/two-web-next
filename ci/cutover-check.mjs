@@ -67,6 +67,7 @@ export const URL_CASES = [
     "/about-us/",
     "/news/",
     "/members",
+    "/members/",
     "/gamipress/points/",
     "/events/month/2024-01/",
     "/this-url-never-existed-abc123xyz/",

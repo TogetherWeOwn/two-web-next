@@ -40,6 +40,7 @@
   { "method": "GET", "path": "/join/callback", "auth": "oauth-state" },
   { "method": "GET", "path": "/join/discord", "auth": "public" },
   { "method": "GET", "path": "/members", "auth": "public" },
+  { "method": "GET", "path": "/members/", "auth": "public" },
   { "method": "GET", "path": "/members/:user", "auth": "member" },
   { "method": "GET", "path": "/privacy", "auth": "public" },
   { "method": "GET", "path": "/profile", "auth": "member" },
