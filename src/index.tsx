@@ -614,6 +614,8 @@ app.get("/auth/discord/redirect", (c) => {
 });
 
 app.get("/auth/discord", async (c) => {
+  // Mints the OAuth state and sets its cookie: never cacheable, whatever sits at the edge.
+  c.header("cache-control", "no-store, private");
   // throttle:10,1 like the other three OAuth routes (TOG-6788 envelope; W15b
   // TOG-12088 ports OAuthReplayAndThrottleTest's all-four-routes guard). The
   // guard degrades to allow without a store, so DB-free leaves stay up.
@@ -639,6 +641,9 @@ app.get("/auth/discord", async (c) => {
 });
 
 app.get("/auth/discord/callback", async (c) => {
+  // Clears the state cookie and issues the session on success: every outcome is
+  // per-visitor, so a shared cache must never keep one.
+  c.header("cache-control", "no-store, private");
   const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
   if (limited) return limited;
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
