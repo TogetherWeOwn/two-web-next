@@ -538,7 +538,7 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.match(workflow, /ROLLBACK_VERSION_ID: \$\{\{ inputs\.version_id \}\}/);
 });
 
-test("rollback smoke enforces the same /up envelope as the deploy smoke", () => {
+test("rollback smoke enforces the same public-route set as the deploy smoke", () => {
   const deploy = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
@@ -549,9 +549,14 @@ test("rollback smoke enforces the same /up envelope as the deploy smoke", () => 
   );
   const block = (text) =>
     text.match(
-      /      - name: Smoke test \/up\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
     )?.[1];
   assert.ok(block(deploy) && block(rollback));
   // Identical checks and retries; only the failure message names the operation.
   assert.equal(block(rollback), block(deploy).replaceAll("after deploy", "after rollback"));
+  // GET-only public-route set through the shared checker; no curl /up one-off.
+  for (const step of [block(deploy), block(rollback)]) {
+    assert.match(step, /node bin\/smoke\.mjs https:\/\/togetherweown\.com --allow-indexable/);
+    assert.ok(!step.includes("curl "));
+  }
 });

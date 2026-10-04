@@ -106,9 +106,20 @@ describe("staging alert probe gates", () => {
     },
   );
 
-  it("missing queue is an explicit 503, not a successful probe", async () => {
-    expect((await request(staging)).status).toBe(503);
-  });
+  const missingQueueCases: Record<string, string>[] = [
+    {},
+    { [ALERT_PROBE_HEADER]: "token=private" },
+  ];
+  it.each(missingQueueCases)(
+    "missing queue is an explicit 503 probe_queue_unavailable, not a successful probe %#",
+    async (headers) => {
+      // No INTERNAL_ACTION_QUEUE on staging: the queue check precedes probe-id
+      // validation, so even a malformed explicit probe id is a 503 here.
+      const res = await request(staging, headers);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: "probe_queue_unavailable" });
+    },
+  );
 });
 
 describe("local end-to-end probe chain", () => {

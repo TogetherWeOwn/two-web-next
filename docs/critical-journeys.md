@@ -80,7 +80,13 @@ legacy `ci/critical-journeys.json`/`tests/Browser/*` (legacy is frozen).
 
 `.github/workflows/e2e-staging.yml` runs the deployed Worker end to end after
 every successful staging deploy (and on manual dispatch) with the
-`playwright.staging.config.ts` project against the staging origin. The runner
+`playwright.staging.config.ts` project against the staging origin. A
+change-scope gate (mirrored from `e2e.yml`, diffing the deployed head commit
+against its parent) skips the journeys when the deploy only touches prose
+that no gate, test or build reads, or only the `test/` unit tree the journeys
+never execute; manual dispatches always run. The same verdict also skips the
+two post-deploy smoke steps inside `deploy.yml` itself (the full suite,
+including those tests, already ran in that job). The runner
 is the same `ubuntu-latest` Chromium setup as CI; the difference is the
 target: real Hyperdrive and queues instead of `wrangler dev --local` and the
 disposable Postgres service. The token travels as the `staging` Environment
@@ -94,9 +100,12 @@ Coverage reuses the CI journey logic with staging-safe setup:
 | --- | --- | --- |
 | QA sign-in, member and moderator | `e2e/staging/auth.spec.ts` | Saved storage states open `/profile` (`QA Member`) and `/admin/events` (`Events`); bad token and unknown identity answer 404 |
 | Events list, search miss, calendar month step | `e2e/staging/events-list.spec.ts` | `events-content` plus list or never-empty; unique miss string shows the miss block and clears; month label steps forward and back |
-| Fixture event, RSVP going, withdraw, cancel | `e2e/staging/event-rsvp.spec.ts` | Moderator draft → publish; member PUT 201, `You're in`, reload persists; DELETE 204, going returns; fixture cancelled in `finally` |
+| Fixture event, RSVP going, withdraw, waitlist join + leave, cancel | `e2e/staging/event-rsvp.spec.ts` | Moderator draft → publish; member PUT 201, `You're in`, reload persists; DELETE 204, going returns; capacity-1 fixture: moderator fills the seat, member waitlist-join asserts `#1 in line`, leave returns the join control; every fixture cancelled in `finally` through the request API (no cleanup page) |
 | QA member keyboard profile edit | `e2e/staging/profile.spec.ts` | Same 1000 ms floor and Tab flow as CI; PATCH 200; `Profile saved.` focused; unique bio and games survive reload |
 | Moderator draft create and cancel | `e2e/staging/admin.spec.ts` | `Create draft` → `Status: draft`; guest draft 403; `Cancel event` → `Status: cancelled`; guest cancelled 410. Never publishes |
+| Join funnel CTA, entries, QA profile | `e2e/staging/join.spec.ts` | Guest: homepage `join` CTA href `/auth/discord`, `/join` one-click href `/join/discord`, both entries 302 to Discord authorize with no follow; QA member session opens `/profile` (`QA Member`) with the tested staging revision recorded as a report annotation |
+| QA member sign-out, revoked replay | `e2e/staging/logout.spec.ts` | Sign out returns to guest `/`; session cookie cleared; old cookie replays to guest home and `/profile` bounces to OAuth |
+| Public feeds and per-event calendar download | `e2e/staging/feeds.spec.ts` | Guest GETs only, no QA token, no fixtures: sitemap/robots/RSS/ICS collections 200 with contract content-types; per-event ICS 200 for a key read from the live RSS, exact cache headers, no `set-cookie` |
 
 The list spec also runs as `mobile-375` (375×812 viewport) and
 `reduced-motion` (`reducedMotion: reduce`) projects. Cleanup is structural:

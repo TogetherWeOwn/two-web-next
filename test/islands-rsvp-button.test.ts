@@ -25,7 +25,6 @@ import {
   RSVP_FIRST_WRITE_STATUS,
   RSVP_GOING_TESTID,
   RSVP_HONEY_FIELD,
-  RSVP_MIN_FILL_MS,
   RSVP_PAUSED_TESTID,
   RSVP_RATE_LIMIT,
   RSVP_RATE_LIMITED_TESTID,
@@ -46,6 +45,8 @@ import {
   rsvpClosedCopy,
   rsvpFocusTargets,
   rsvpFullCapCopy,
+  rsvpHoneyFilled,
+  rsvpTrapTripped,
   rsvpUrl,
   rsvpViewerState,
   rsvpWithdrawRequest,
@@ -214,9 +215,18 @@ describe("rsvp-button abuse surface: status codes + budget + decoy (PR #431, Spa
     );
   });
 
-  it("pins the honeypot field and legacy floor constant, not a bare-click timing gate", () => {
+  it("pins the honeypot contract: no bare-click timing gate, arrays and non-strings fail closed", () => {
     expect(RSVP_HONEY_FIELD).toBe("website");
-    expect(RSVP_MIN_FILL_MS).toBe(1000);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: "spam" })).toBe(true);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: "" })).toBe(false);
+    expect(rsvpTrapTripped({})).toBe(false);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: ["", "spam"] })).toBe(true);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: ["spam", ""] })).toBe(true);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: ["", ""] })).toBe(false);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: [] })).toBe(false);
+    expect(rsvpTrapTripped({ [RSVP_HONEY_FIELD]: true })).toBe(true);
+    expect(rsvpHoneyFilled(undefined)).toBe(false);
+    expect(rsvpHoneyFilled(null)).toBe(false);
   });
 });
 

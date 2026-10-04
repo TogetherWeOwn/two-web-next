@@ -54,6 +54,7 @@ export const NON_HTML_READS = [
   "/robots.txt",
   "/up",
   "/auth/status", // Bool-only JSON, never an HTML document.
+  "/members", // Retired bare path: branded 404, never a member index.
   "/events.json",
   "/events/:key",
   "/events.ics",

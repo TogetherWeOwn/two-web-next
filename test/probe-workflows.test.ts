@@ -242,7 +242,7 @@ describe("source-managed moderator deployment preflight", () => {
     expect(production).toContain("run: npm run check:worker-moderators-production");
     // The moderator preflight runs after the credentials check and before
     // the first Cloudflare mutation (shared step order: gate → dry-run →
-    // credentials → moderator preflight → deploy → /up smoke).
+    // credentials → moderator preflight → deploy → public-route smoke).
     const prodGate = production.indexOf("run: npm run check:worker-moderators-production");
     expect(prodGate).toBeGreaterThan(-1);
     expect(prodGate).toBeGreaterThan(

@@ -21,7 +21,10 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}", "tail/**/*.ts"],
-      reporter: ["text", "json-summary", "lcov", "html"],
+      // CI uploads the artifact and the job summary reads only
+      // json-summary; lcov/html are unread artifacts, so they stay off the
+      // hot path (CI timing audit: `check` mean 9.5 min across 20 main runs).
+      reporter: ["text", "json-summary"],
       reportOnFailure: true,
       // Node 24 + full test-DB suite: baseline minus 1 point, rounded down to 0.1.
       // Aggregate area floors prevent unrelated coverage from masking a regression.

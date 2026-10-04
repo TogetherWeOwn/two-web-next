@@ -208,6 +208,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /join` | public | join: landing page |
 | `GET /join/callback` | oauth-state | join: one-click callback |
 | `GET /join/discord` | public | join: OAuth start |
+| `GET /members` | public | profiles: retired bare path, frozen 404 for every role |
 | `GET /members/:user` | member | profiles: legacy `/members/{user}` |
 | `GET /privacy` | public | privacy: versioned policy |
 | `GET /profile` | member | profiles: current member |
