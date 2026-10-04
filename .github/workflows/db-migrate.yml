@@ -61,7 +61,19 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Validate migration numbering
-        run: bash ci/check-migration-numbers.sh
+        env:
+          MIGRATION_GIT_TOKEN: ${{ github.token }}
+        # The baseline checker can fetch. Authenticate only this command, never
+        # persist the read token beside dependency/lifecycle scripts.
+        # https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGCOUNT
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "${MIGRATION_GIT_TOKEN:?}" | base64 -w0)"
+          echo "::add-mask::$auth"
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git.extraheader" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+            bash ci/check-migration-numbers.sh
       - name: Dry-run listing (read-only journal diff, no DDL)
         run: node ci/neon-migrate.mjs plan
         env: &migration-env

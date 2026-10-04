@@ -616,7 +616,7 @@ describe("performance CI", () => {
     expect(check).toContain(
       'node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',
     );
-    expect(check).toContain("if: always() && needs.scope.outputs.docs_only != 'true'");
+    expect(check).toContain("if: always() && (needs.scope.outputs.docs_only != 'true'");
     expect(check).toContain("run: npm run deps:audit:selftest");
     expect(check).toContain("run: npm run deps:audit");
   });

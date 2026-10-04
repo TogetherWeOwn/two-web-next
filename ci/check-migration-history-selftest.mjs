@@ -397,10 +397,10 @@ for (const defaultBranch of ["main", "master"]) {
     const env = { GITHUB_ACTIONS: "true", GITHUB_EVENT_PATH: eventPath };
     assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "pull_request" }), f.base);
     assert.deepEqual(checkMigrations(clone, f.base), { total: 5, historical: 4 });
-    assert.equal(
-      resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: "workflow_dispatch" }),
-      f.base,
-    );
+    // The nightly schedule has no event base either (the full-run cron in ci.yml).
+    for (const name of ["workflow_dispatch", "schedule"]) {
+      assert.equal(resolveBaseline(clone, { ...env, GITHUB_EVENT_NAME: name }), f.base);
+    }
   });
 }
 

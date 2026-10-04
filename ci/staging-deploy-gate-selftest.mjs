@@ -140,6 +140,7 @@ function executeStaging(ctx, evidence, changes = {}) {
           GITHUB_REPOSITORY: ctx.repository,
           GITHUB_REF: ctx.ref,
           GITHUB_SHA: ctx.sha,
+          DEPLOY_SHA: ctx.checkoutSha,
           GITHUB_TOKEN: "offline-stub",
           TEST_CHECKOUT_SHA: ctx.checkoutSha,
           TEST_EVIDENCE: join(dir, "evidence.json"),
@@ -324,7 +325,7 @@ for (const eventName of ["workflow_run", "workflow_dispatch"]) {
       "wrangler queues create two-sync-event",
       "wrangler queues create two-internal-action",
       "wrangler deploy --config tail/wrangler.jsonc",
-      "wrangler deploy --config wrangler.jsonc",
+      `wrangler deploy --config wrangler.jsonc --tag ${sha}`,
     ]);
     assert.match(result.stdout, new RegExp(`Staging gate passed: ${sha}`));
   });
@@ -342,7 +343,7 @@ const mutationCalls = [
   "wrangler queues create two-sync-event",
   "wrangler queues create two-internal-action",
   "wrangler deploy --config tail/wrangler.jsonc",
-  "wrangler deploy --config wrangler.jsonc",
+  `wrangler deploy --config wrangler.jsonc --tag ${sha}`,
 ];
 for (const eventName of ["workflow_run", "workflow_dispatch"]) {
   for (const [phase, allowedCalls] of [
@@ -602,6 +603,11 @@ test("main CI runs are never cancelled in progress and finish in push order", ()
   // Main pushes share one group (serialized, in order) and are never cancelled.
   assert.equal(groupOf(main("aaa")), groupOf(main("bbb")));
   assert.equal(cancelsOf(main("aaa")), false);
+  // The nightly schedule runs on main's ref but must not share the push group: a
+  // pending nightly would cancel a pending push run, which deploy never sees.
+  const nightly = { ...main("ccc"), event_name: "schedule" };
+  assert.notEqual(groupOf(nightly), groupOf(main("aaa")));
+  assert.equal(cancelsOf(nightly), false);
   // PR pushes for the same PR share a group and cancel superseded runs.
   assert.equal(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(7, "refs/pull/7/merge")));
   assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));

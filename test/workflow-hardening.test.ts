@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 // Supply-chain hardening for every workflow (grep-level, no YAML parser):
 //  - each `uses:` is pinned to a full commit SHA, so a moved tag cannot swap code
 //    into a job that holds secrets;
-//  - each `actions/checkout` sets `persist-credentials: false`, so the job token
-//    is not left in .git/config beside code that `npm ci` lifecycle scripts run;
+//  - each `actions/checkout` sets `persist-credentials: false`, so checkout's
+//    retained credentials are not available to `npm ci` lifecycle scripts;
 //  - no workflow grants a write scope to every job; a job that needs one declares
 //    it itself.
 const dir = ".github/workflows";

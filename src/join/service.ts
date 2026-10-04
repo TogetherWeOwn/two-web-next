@@ -32,7 +32,10 @@ import type { Sql } from "../sessions";
 export const JOIN_OUTCOMES = ["added", "already_member", "error", "denied", "degraded"] as const;
 export type JoinOutcome = (typeof JOIN_OUTCOMES)[number];
 
-/** Legacy 10/min budget on /join/discord + /join/callback (one shared bucket). */
+/**
+ * Legacy 10/min budget on /join/discord + /join/callback. One bucket per client
+ * (legacy `throttle:10,1` keyed guests by IP), shared by the two routes.
+ */
 export const JOIN_THROTTLE_PER_MINUTE = 10;
 export const JOIN_THROTTLE_BUCKET = "join";
 

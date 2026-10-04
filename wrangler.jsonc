@@ -6,6 +6,12 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Staging Neon is eu-central-1 and every statement is a round trip through Hyperdrive, so run
+  // the Worker beside it. Served from CDG/AMS, DB-bound requests had a median of 125-195 ms; served
+  // from ORD/MSP/DFW/SEA/IAD (where GitHub-hosted runners land) 0.5-1.8 s, p95 3-4.6 s. A
+  // far-away user now pays one hop to the Worker instead of one per statement. env.production
+  // opts out below: its database lives elsewhere and that placement is a cutover decision.
+  "placement": { "region": "aws:eu-central-1" },
   // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
   "tail_consumers": [{ "service": "two-web-next-alerts" }],
   "workers_dev": false,
@@ -38,6 +44,11 @@
       }
     ]
   },
+  // Revision marker for `/up` (staging only). Bindings are not inherited by
+  // `env.production`, so production stays unmarked until a reviewed cutover PR
+  // declares this binding there. The deploy workflow tags each Version with its
+  // commit SHA; `/up` reads both back so a rollback target is provable live.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
@@ -61,6 +72,8 @@
     "production": {
       "name": "two-web-next-production",
       "workers_dev": false,
+      // Not inherited from the staging placement above; unchanged until the cutover decision.
+      "placement": { "mode": "off" },
       "preview_urls": false,
       // tail_consumers are not inherited from the top level: Wrangler needs
       // this repeated in every named environment that must page.

@@ -12,6 +12,12 @@ name: neon-backup
 # endpoint), CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID. While a target is
 # unprovisioned the probe step skips the rest green so the schedule is
 # quiet, not red.
+# Environment scoping: the job binds `production` only when the production
+# target is dispatched, so PRODUCTION_DATABASE_URL (provisioned on the
+# production Environment only, never at repo scope) is readable only after the
+# Environment's required reviewers and main-only branch policy pass. The
+# schedule and staging dispatches bind `staging`, and the production secret is
+# never mapped into their steps (ci/check-production-secrets.test.mjs).
 
 on:
   schedule:
@@ -45,6 +51,9 @@ jobs:
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
+    # Required reviewers + main-only branch policy are live repo settings on
+    # the `production` Environment, not YAML.
+    environment: ${{ inputs.target || 'staging' }}
     env:
       TARGET: ${{ inputs.target || 'staging' }}
       BRANCH: ${{ inputs.branch || (inputs.target == 'production' && 'production' || 'staging') }}
@@ -57,7 +66,7 @@ jobs:
         name: Probe provisioning
         env:
           STAGING_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
-          PRODUCTION_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRODUCTION_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || '' }}
         run: |
           set -euo pipefail
           case "$TARGET" in
@@ -90,7 +99,7 @@ jobs:
         env:
           # Staging reads the Neon secret; production reads the PlanetScale
           # direct-endpoint secret. The script only ever sees DATABASE_URL.
-          DATABASE_URL: ${{ env.TARGET == 'production' && secrets.PRODUCTION_DATABASE_URL || secrets.NEON_STAGING_DATABASE_URL }}
+          DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || secrets.NEON_STAGING_DATABASE_URL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: ./bin/neon-backup.sh backup "$BRANCH"

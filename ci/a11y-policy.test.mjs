@@ -171,19 +171,53 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   assert.match(check, /\n    if: always\(\)\n/);
   assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
   const guard = check.match(
-    /- name: Require successful accessibility audit\n        if: needs\.scope\.outputs\.docs_only != 'true'\n        env:\n          A11Y_RESULT: [^\n]+\n        run: ([^\n]+)/,
+    /- name: Require successful accessibility audit\n        if: \(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)\n        env:\n          A11Y_RESULT: [^\n]+\n          A11Y_SELECTED: [^\n]+\n        run: ([^\n]+)/,
   );
   assert(
     guard,
     "Audit guard must precede the heavy suite (only the docs-only fast pass may run before it)",
   );
-  for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
-    const execution = spawnSync("bash", ["-c", guard[1]], { env: { A11Y_RESULT: result } });
+  for (const [result, selected, expected] of [
+    ["success", "true", 0],
+    ["success", "false", 0],
+    ["failure", "true", 1],
+    ["cancelled", "true", 1],
+    ["skipped", "false", 0],
+    ["skipped", "true", 1],
+    ["", "true", 1],
+  ]) {
+    const execution = spawnSync("bash", ["-c", guard[1]], {
+      env: { A11Y_RESULT: result, A11Y_SELECTED: selected },
+    });
     assert.equal(
       execution.status,
-      result === "success" ? 0 : 1,
-      `Audit result ${result || "missing"}`,
+      expected,
+      `Audit result ${result || "missing"} selected=${selected}`,
     );
+  }
+});
+
+test("the required CI job fails first when scope did not succeed, before any guard reads its outputs", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  assert(check, "Required check job must exist");
+  const steps = check.split("\n    steps:\n")[1] ?? "";
+  // First step, unconditional: no `if:` between its name and its env.
+  const guard = steps.match(
+    /^      - name: Require successful scope\n        env:\n          SCOPE_RESULT: \$\{\{ needs\.scope\.result \}\}\n        run: ([^\n]+)\n/,
+  );
+  assert(guard, "Scope guard must be the first, unconditional step of check");
+  // `scope` is not a required check; empty outputs would otherwise read as
+  // unselected areas and let `check` pass on a skipped audit.
+  for (const [result, expected] of [
+    ["success", 0],
+    ["failure", 1],
+    ["cancelled", 1],
+    ["skipped", 1],
+    ["", 1],
+  ]) {
+    const execution = spawnSync("bash", ["-c", guard[1]], { env: { SCOPE_RESULT: result } });
+    assert.equal(execution.status, expected, `Scope result ${result || "missing"}`);
   }
 });
 
@@ -209,15 +243,28 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "npx wrangler deploy --dry-run --outdir dist",
     "npx wrangler deploy --dry-run --env production --outdir dist-production",
   ]) {
-    const step = steps.find((entry) => entry.split("\n").includes(`        run: ${command}`));
+    const step = steps.find(
+      (entry) =>
+        entry.split("\n").includes(`        run: ${command}`) ||
+        // Migration fetch auth is command-scoped, not persisted by checkout.
+        // Keep the real gate as the final command of a fail-fast run block.
+        (command === "bash ci/check-migration-numbers.sh" &&
+          /\n        run: \|\n          set -euo pipefail\n/.test(entry) &&
+          entry.trimEnd().endsWith(`\n            ${command}`)),
+    );
     assert(step, `Required gate missing: ${command}`);
-    // The docs-only scope gate (TOG-11811) is the one sanctioned bypass: the
-    // fast-pass step keeps `check` green while every gate keeps its command.
+    // The docs-only/draft scope gate (TOG-11811/TOG-14880) is the one sanctioned
+    // bypass: the fast-pass step keeps `check` green while every gate keeps
+    // its command.
     for (const line of step.split("\n")) {
       if (/^        (?:if|continue-on-error):/.test(line)) {
-        assert.equal(
+        // Sanctioned forms: the plain docs/draft gate, that gate plus an
+        // area selection (Kit, dry-runs, probes, numbering), and the perf
+        // gate (always() plus an app selection). Anything else — including
+        // continue-on-error — bypasses a required gate.
+        assert.match(
           line,
-          "        if: needs.scope.outputs.docs_only != 'true'",
+          /^        if: (always\(\) && )?\(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)( && \(needs\.scope\.outputs\.full == 'true'[^)]*\))?$/,
           `Required gate must not be bypassed: ${command}`,
         );
       }
