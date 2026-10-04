@@ -31,10 +31,13 @@ permissions:
 # are serialized (finish in push order; a newer pending run replaces an older
 # pending one before it starts), and an older SHA can never finish after, and
 # deploy over, a newer one. PR pushes still cancel superseded runs (TOG-11811
-# queue economy). test/ci-concurrency.test.ts and the staging gate selftest pin
+# queue economy). The nightly schedule run has its own group: it also runs on
+# main's ref, and a pending nightly would otherwise replace a pending push run,
+# whose cancelled conclusion the staging deploy trigger rejects (it deploys only
+# push-event runs). test/ci-concurrency.test.ts and the staging gate selftest pin
 # this.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:

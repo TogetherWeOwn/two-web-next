@@ -189,7 +189,11 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
     const execution = spawnSync("bash", ["-c", guard[1]], {
       env: { A11Y_RESULT: result, A11Y_SELECTED: selected },
     });
-    assert.equal(execution.status, expected, `Audit result ${result || "missing"} selected=${selected}`);
+    assert.equal(
+      execution.status,
+      expected,
+      `Audit result ${result || "missing"} selected=${selected}`,
+    );
   }
 });
 

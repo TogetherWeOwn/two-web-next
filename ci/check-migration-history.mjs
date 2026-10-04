@@ -186,7 +186,8 @@ export function resolveBaseline(root, env = process.env) {
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
     if (env.GITHUB_EVENT_NAME === "pull_request") base = event.pull_request?.base?.sha;
     else if (env.GITHUB_EVENT_NAME === "push") base = event.before;
-    else if (env.GITHUB_EVENT_NAME !== "workflow_dispatch")
+    // Dispatch and the nightly schedule have no event base: both check main's tip.
+    else if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" && env.GITHUB_EVENT_NAME !== "schedule")
       throw new Error("unsupported CI event for historical baseline");
     if (base !== "origin/main" && !/^[0-9a-f]{40}$/.test(base ?? ""))
       throw new Error("missing/invalid CI base SHA");

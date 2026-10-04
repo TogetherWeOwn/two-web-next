@@ -94,19 +94,49 @@ describe("change-scope gate", () => {
       return { app: r.app, worker: r.worker, db: r.db, full: r.full, draft: r.draft };
     };
     expect(verdict([["src/app.ts", ""]])).toEqual({
-      app: "true", worker: "false", db: "false", full: "false", draft: "false",
+      app: "true",
+      worker: "false",
+      db: "false",
+      full: "false",
+      draft: "false",
     });
-    expect(verdict([["wrangler.jsonc", ""], ["tail/worker.ts", ""]])).toEqual({
-      app: "false", worker: "true", db: "false", full: "false", draft: "false",
+    expect(
+      verdict([
+        ["wrangler.jsonc", ""],
+        ["tail/worker.ts", ""],
+      ]),
+    ).toEqual({
+      app: "false",
+      worker: "true",
+      db: "false",
+      full: "false",
+      draft: "false",
     });
     expect(verdict([["web/src/lib/Shell.svelte", ""]])).toEqual({
-      app: "false", worker: "true", db: "false", full: "false", draft: "false",
+      app: "false",
+      worker: "true",
+      db: "false",
+      full: "false",
+      draft: "false",
     });
     expect(verdict([["drizzle/0001_init.sql", ""]])).toEqual({
-      app: "false", worker: "false", db: "true", full: "false", draft: "false",
+      app: "false",
+      worker: "false",
+      db: "true",
+      full: "false",
+      draft: "false",
     });
-    expect(verdict([["docs/guide.md", ""], ["README.md", ""]])).toEqual({
-      app: "false", worker: "false", db: "false", full: "false", draft: "false",
+    expect(
+      verdict([
+        ["docs/guide.md", ""],
+        ["README.md", ""],
+      ]),
+    ).toEqual({
+      app: "false",
+      worker: "false",
+      db: "false",
+      full: "false",
+      draft: "false",
     });
   });
 
@@ -293,8 +323,8 @@ describe("ci heavy-job scope gates", () => {
     const block = jobBlock("ci-ok");
     expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
     expect(block).toMatch(/\n    if: always\(\)\n/);
-    expect(block).toContain('SCOPE_RESULT: ${{ needs.scope.result }}');
-    expect(block).toContain('CHECK_RESULT: ${{ needs.check.result }}');
+    expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
+    expect(block).toContain("CHECK_RESULT: ${{ needs.check.result }}");
   });
 
   it("every check step respects the draft flag", () => {
