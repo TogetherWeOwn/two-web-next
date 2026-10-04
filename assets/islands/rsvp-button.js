@@ -596,13 +596,16 @@
                   if (claimingFromWaitlist && d.status === "waitlisted") {
                     // Lost the race: the place in line is unchanged, so say so
                     // politely (role=status, no focus move) instead of "Saved."
-                    notice(
-                      TESTID.waitlistSeatTaken,
-                      "status",
-                      COPY.waitlistSeatTaken,
-                      false,
-                      false,
-                    );
+                    var note = notice(TESTID.waitlistSeatTaken, "status", "", false, false);
+                    note.setAttribute("aria-live", "polite");
+                    // Expose the empty region before a later task changes its content.
+                    setTimeout(function () {
+                      if (
+                        root.querySelector('[data-testid="' + TESTID.waitlistSeatTaken + '"]') ===
+                        note
+                      )
+                        note.textContent = COPY.waitlistSeatTaken;
+                    }, 0);
                     return;
                   }
                   syncNote(d.synced_to_discord_at || null, !!d.sync_failed);
