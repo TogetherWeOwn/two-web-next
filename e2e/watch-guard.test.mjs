@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   installReadOnlyGuard,
+  isDiscordWidgetFrame,
+  isEdgeBeacon,
   isReadOnlyMethod,
   requireWatchOrigin,
   WATCH_ORIGINS,
@@ -74,6 +76,10 @@ function fakeRoute(method, url) {
     async abort(code) {
       route.abortedWith = code;
     },
+    fulfilledWith: undefined,
+    async fulfill(options) {
+      route.fulfilledWith = options;
+    },
   };
   return route;
 }
@@ -112,6 +118,131 @@ test("read guard keeps failing after a write is followed by reads", async () => 
   await context.handler(fakeRoute("POST", "https://togetherweown.com/csp-reports"));
   await context.handler(fakeRoute("GET", "https://togetherweown.com/"));
   assert.throws(() => guard.assertClean(), /POST https:\/\/togetherweown\.com\/csp-reports/);
+});
+
+const RUM = "https://next.togetherweown.com/cdn-cgi/rum?";
+const JSD =
+  "https://next.togetherweown.com/cdn-cgi/challenge-platform/h/b/jsd/oneshot/d76008a69eab/0.33:1791126314:abc/a4554893c81ceae0";
+const DISCORD_JSD =
+  "https://discord.com/cdn-cgi/challenge-platform/h/b/jsd/oneshot/d76008a69eab/0.33:1791126314:abc/a45548964d3e0056";
+const WIDGET = "https://discord.com/widget?id=1545644954272137297&theme=dark";
+
+test("Cloudflare edge beacons are stubbed locally, never sent and never a violation", async () => {
+  const context = fakeContext();
+  const guard = await installReadOnlyGuard(context);
+  for (const url of [RUM, JSD, "https://togetherweown.com/cdn-cgi/rum"]) {
+    const route = fakeRoute("POST", url);
+    await context.handler(route);
+    assert.equal(route.continued, false, `${url} must not reach the network`);
+    assert.equal(route.abortedWith, undefined, `${url} must not be an abort`);
+    assert.deepEqual(route.fulfilledWith, { status: 204 });
+  }
+  assert.deepEqual(guard.violations, []);
+  assert.doesNotThrow(() => guard.assertClean());
+  // The report still names each stubbed beacon (method and path, no query).
+  assert.equal(guard.stubbedBeacons.length, 3);
+  assert.equal(guard.stubbedBeacons[0], "POST https://next.togetherweown.com/cdn-cgi/rum");
+  for (const entry of guard.stubbedBeacons) assert.doesNotMatch(entry, /\?/);
+});
+
+test("the beacon carve-out is exact: any other write still aborts and fails", async () => {
+  for (const [method, url] of [
+    // Right path, wrong method.
+    ["PUT", RUM],
+    ["DELETE", JSD],
+    // Dot-segment and encoded-dot-segment escapes out of /cdn-cgi/.
+    ["POST", "https://next.togetherweown.com/cdn-cgi/challenge-platform/../api/rsvp"],
+    ["POST", "https://next.togetherweown.com/cdn-cgi/challenge-platform/%2e%2e/api/rsvp"],
+    // Near misses on the exact path and on the prefix.
+    ["POST", "https://next.togetherweown.com/cdn-cgi/rum/extra"],
+    ["POST", "https://next.togetherweown.com/cdn-cgi/rumble"],
+    ["POST", "https://next.togetherweown.com/cdn-cgi/challenge-platform"],
+    ["POST", "https://next.togetherweown.com/cdn-cgi/trace"],
+    ["POST", "https://next.togetherweown.com/e/01ABC/rsvp"],
+    ["POST", "https://next.togetherweown.com/csp-reports"],
+    // Other hosts: only the three watch origins. Discord's own beacon is not
+    // stubbed either: its widget frame is, so that script never runs.
+    ["POST", DISCORD_JSD],
+    ["POST", "https://discord.com/api/v10/channels/1/messages"],
+    ["POST", "https://discord.com/cdn-cgi/rum"],
+    ["POST", "https://evil.example/cdn-cgi/rum"],
+    ["POST", "https://togetherweown.com.evil.example/cdn-cgi/rum"],
+    ["POST", "https://api.togetherweown.com/cdn-cgi/rum"],
+    ["POST", "http://togetherweown.com/cdn-cgi/rum"],
+    ["POST", "not a url"],
+  ]) {
+    assert.equal(isEdgeBeacon(method, url), false, `${method} ${url} must not be a beacon`);
+    const context = fakeContext();
+    const guard = await installReadOnlyGuard(context);
+    const route = fakeRoute(method, url);
+    await context.handler(route);
+    assert.equal(route.fulfilledWith, undefined, `${method} ${url} must not be stubbed`);
+    assert.equal(route.abortedWith, "blockedbyclient", `${method} ${url} must be aborted`);
+    assert.throws(() => guard.assertClean(), /GET-only; blocked 1 write attempt/);
+  }
+});
+
+test("Discord's widget frame is answered locally, never fetched and never a failure", async () => {
+  const context = fakeContext();
+  const guard = await installReadOnlyGuard(context);
+  const route = fakeRoute("GET", WIDGET);
+  await context.handler(route);
+  assert.equal(route.continued, false, "the widget frame must not reach Discord");
+  assert.equal(route.abortedWith, undefined);
+  assert.equal(route.fulfilledWith.status, 200);
+  assert.match(route.fulfilledWith.contentType, /^text\/html\b/);
+  assert.deepEqual(guard.violations, []);
+  assert.doesNotThrow(() => guard.assertClean());
+  // Method and path only; the guild id in the query is not echoed.
+  assert.deepEqual(guard.stubbedFrames, ["GET https://discord.com/widget"]);
+  assert.deepEqual(guard.stubbedBeacons, []);
+});
+
+test("the widget-frame carve-out is exact: everything else on discord.com is read or refused as before", async () => {
+  for (const [method, url] of [
+    // Right URL, wrong method: a write is never a widget frame.
+    ["POST", WIDGET],
+    ["PUT", WIDGET],
+    // Near misses on the host and the path.
+    ["GET", "https://discord.com/widget/extra"],
+    ["GET", "https://discord.com/widgets"],
+    ["GET", "https://discord.com/api/guilds/1545644954272137297/widget.json"],
+    ["GET", "https://discord.com/widget/../api/v10/users/@me"],
+    ["GET", "https://discord.com/widget/%2e%2e/api/v10/users/@me"],
+    ["GET", "https://canary.discord.com/widget?id=1"],
+    ["GET", "https://discord.com.evil.example/widget?id=1"],
+    ["GET", "http://discord.com/widget?id=1"],
+    ["GET", "https://togetherweown.com/widget"],
+    ["GET", "not a url"],
+  ]) {
+    assert.equal(isDiscordWidgetFrame(method, url), false, `${method} ${url} is not the frame`);
+  }
+  assert.equal(isDiscordWidgetFrame("get", WIDGET), true);
+  // Anything that is not the frame keeps its old handling: reads pass through.
+  const context = fakeContext();
+  const guard = await installReadOnlyGuard(context);
+  const read = fakeRoute("GET", "https://discord.com/api/guilds/1/widget.json");
+  await context.handler(read);
+  assert.equal(read.continued, true);
+  assert.equal(read.fulfilledWith, undefined);
+  assert.deepEqual(guard.stubbedFrames, []);
+  // ...and a write to the widget URL is still aborted and fails the run.
+  const write = fakeRoute("POST", WIDGET);
+  await context.handler(write);
+  assert.equal(write.abortedWith, "blockedbyclient");
+  assert.equal(write.fulfilledWith, undefined);
+  assert.throws(() => guard.assertClean(), /blocked 1 write attempt/);
+});
+
+test("a beacon does not mask a real write in the same run", async () => {
+  const context = fakeContext();
+  const guard = await installReadOnlyGuard(context);
+  await context.handler(fakeRoute("POST", RUM));
+  await context.handler(fakeRoute("POST", "https://togetherweown.com/e/01ABC/rsvp"));
+  await context.handler(fakeRoute("POST", JSD));
+  assert.equal(guard.stubbedBeacons.length, 2);
+  assert.deepEqual(guard.violations, ["POST https://togetherweown.com/e/01ABC/rsvp"]);
+  assert.throws(() => guard.assertClean(), /blocked 1 write attempt/);
 });
 
 test("watch config stays guest-only and out of the default project", () => {

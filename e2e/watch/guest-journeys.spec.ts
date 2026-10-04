@@ -5,7 +5,9 @@ import { installReadOnlyGuard, requireWatchOrigin, WATCH_ORIGINS } from "../watc
 // post-flip watch", docs/48h-watch-spec.md route classes). Fresh context, no
 // session, no cookies, no sign-in, no RSVP, no join, no OAuth or Discord CTA
 // click: every journey is one navigation to a public URL. A context-level
-// route aborts any non-GET/HEAD request and the test then fails.
+// route aborts any non-GET/HEAD request and the test then fails; the only
+// exceptions are Cloudflare's own edge beacons and Discord's widget frame,
+// both answered locally and never sent (watch-guard.mjs).
 // The config pins baseURL from the same variable; asserting here too keeps the
 // spec fail-closed if it is ever run under another config.
 requireWatchOrigin(process.env.WATCH_ORIGIN);
@@ -22,6 +24,20 @@ const test = base.extend<{ guard: Awaited<ReturnType<typeof installReadOnlyGuard
       expect(await context.cookies(), "guest journeys start with no cookies").toEqual([]);
       const guard = await installReadOnlyGuard(context);
       await use(guard);
+      // Cloudflare's edge telemetry is answered locally, never sent; keep it
+      // visible in the report rather than silent.
+      if (guard.stubbedBeacons.length > 0) {
+        base.info().annotations.push({
+          type: "edge-beacons-stubbed",
+          description: guard.stubbedBeacons.join(", "),
+        });
+      }
+      if (guard.stubbedFrames.length > 0) {
+        base.info().annotations.push({
+          type: "third-party-frames-stubbed",
+          description: guard.stubbedFrames.join(", "),
+        });
+      }
       guard.assertClean();
     },
     { auto: true },
