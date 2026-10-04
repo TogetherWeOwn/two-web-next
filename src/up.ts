@@ -163,6 +163,18 @@ export function revisionReadiness(
 
 export const QUEUE_WARN_AT = 20;
 export const QUEUE_CRITICAL_AT = 100;
+export const READY_WAIT_WARN_AFTER_SECONDS = 300;
+export const READY_WAIT_CRITICAL_AFTER_SECONDS = 1800;
+
+export type ReadyWaitSeverity = "healthy" | "warning" | "critical" | "unknown";
+
+// Ledger eligibility only: not domain-claim eligibility or consumer progress.
+// Retained terminal failures and creation age do not participate in this signal.
+function readyWaitSeverity(age: number | null): ReadyWaitSeverity {
+  if (age !== null && age > READY_WAIT_CRITICAL_AFTER_SECONDS) return "critical";
+  if (age !== null && age > READY_WAIT_WARN_AFTER_SECONDS) return "warning";
+  return "healthy";
+}
 
 /** A hung ledger must not hang the probe: past this the read reports `unknown`. */
 export const QUEUE_READ_TIMEOUT_MS = 3000;
@@ -189,6 +201,8 @@ export type QueuePayload = {
   total: number | null;
   failed: number | null;
   oldest_pending_age_seconds: number | null;
+  oldest_ready_wait_age_seconds: number | null;
+  ready_wait_severity: ReadyWaitSeverity;
   warn_at: number;
   critical_at: number;
   detail: string | null;
@@ -221,6 +235,8 @@ function unknownQueue(detail: string | null): QueuePayload {
     total: null,
     failed: null,
     oldest_pending_age_seconds: null,
+    oldest_ready_wait_age_seconds: null,
+    ready_wait_severity: "unknown",
     warn_at: QUEUE_WARN_AT,
     critical_at: QUEUE_CRITICAL_AT,
     detail,
@@ -258,6 +274,8 @@ async function queueBody(measure: (() => Promise<QueueDepth>) | null): Promise<Q
     total: depth.total,
     failed: depth.failed,
     oldest_pending_age_seconds: depth.oldestPendingAgeSeconds,
+    oldest_ready_wait_age_seconds: depth.oldestReadyWaitAgeSeconds,
+    ready_wait_severity: readyWaitSeverity(depth.oldestReadyWaitAgeSeconds),
     warn_at: QUEUE_WARN_AT,
     critical_at: QUEUE_CRITICAL_AT,
     detail: null,

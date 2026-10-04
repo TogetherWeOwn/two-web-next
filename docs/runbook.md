@@ -765,7 +765,7 @@ Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready*
 | --- | --- | --- |
 | Read succeeds, `pending < 20` | `healthy` | `healthy`, measured values |
 | `pending >= 20` (including `>= 100`) | `degraded` | `degraded`, measured values |
-| Read rejects or reaches a server/response limit | `healthy` | `unknown`, all six measurements `null`, `detail: null` |
+| Read rejects or reaches a server/response limit | `healthy` | `unknown`, all seven measurements `null`, `ready_wait_severity: unknown`, `detail: null` |
 | No usable queue client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
 
 The deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`** and the
@@ -808,7 +808,30 @@ Measurements from [src/jobs/postgres.ts](../src/jobs/postgres.ts):
 - `total`: live ledger rows; `failed`: cumulative failed-history rows, not a
   retryable transport backlog.
 - `oldest_pending_age_seconds`: age from **creation**, not latest retry time;
-  `null` when no pending rows (or when the entire read is unknown).
+  `null` when no pending rows (or when the entire read is unknown). Kept unchanged
+  for parity: a due retry can have an old creation age but a short ready-wait.
+- `oldest_ready_wait_age_seconds`: statement time minus the minimum current
+  **`available_at`** among due, unreserved rows. Future-delayed and reserved rows
+  are excluded, including stale reservations. Fractional seconds are preserved;
+  `null` means no runnable ledger rows when the read succeeds, not zero on an
+  unreadable ledger. No new schema or migration is needed.
+- `ready_wait_severity`: additive operational indicator, **not `queue.status` or
+  top-level `status`**. `healthy` when age is `null` or <=300 s; `warning` strictly
+  >300 s through 1800 s; `critical` strictly >1800 s; `unknown` when the read is
+  unavailable, unconfigured or times out. These age tripwires reuse the
+  [48h watch specification](48h-watch-spec.md#queue-depth-and-db-errors), not a new
+  pager policy or proof that any alert was delivered. Retained `failed > 0` alone
+  never changes this indicator.
+
+Ready-wait is **ledger eligibility age**, not proof of domain-claim eligibility
+or Cloudflare consumer progress: the ledger is best-effort and a domain claim can
+still fence a due carrier. Measuring health never resets `created_at`, expires
+reservations, redrives jobs or discards failures. Investigate with the existing
+[queue redrive runbook](queue-redrive-runbook.md), not by deleting old evidence.
+Queue-only warning/critical/unknown remains HTTP 200 when DB/schema/config is
+ready; deploy smoke and uptime/liveness acceptance are unchanged. This field
+neither repairs the queue nor grants staging SQL/redrive or production deployment
+permission; existing production approval gates still apply.
 
 ## Neon / Hyperdrive outage behavior
 

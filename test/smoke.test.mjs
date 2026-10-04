@@ -376,7 +376,7 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
   const { upBody } = await import(
     `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
   );
-  for (const state of ["healthy", "degraded", "unknown", "unconfigured"]) {
+  for (const state of ["healthy", "warning", "critical", "degraded", "unknown", "unconfigured"]) {
     const body = await upBody(
       state === "unconfigured"
         ? null
@@ -390,11 +390,20 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
               total: pending,
               failed: 0,
               oldestPendingAgeSeconds: null,
+              oldestReadyWaitAgeSeconds:
+                state === "critical" ? 1800.1 : state === "warning" ? 300.1 : null,
             };
           },
     );
     // The envelope's queue slice comes from the real renderer; DB readiness fields are set explicitly.
     const ready = { ...body, db: "ok", pending_migrations: 0 };
+    const expectedSeverity = ["unknown", "unconfigured"].includes(state)
+      ? "unknown"
+      : ["warning", "critical"].includes(state)
+        ? state
+        : "healthy";
+    assert.equal(ready.queue.ready_wait_severity, expectedSeverity);
+    assert.ok(Object.hasOwn(ready.queue, "oldest_ready_wait_age_seconds"));
     const { url } = await stub(t, (route, result) => {
       if (route === "/up") result.body = JSON.stringify(ready);
     });

@@ -54,6 +54,11 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(health).toContain("HTTP 200 + `db:ok` + `pending_migrations:0`");
     expect(health).toContain("healthy + unknown");
     expect(health).toContain("lack of evidence");
+    expect(health).toContain("oldest_ready_wait_age_seconds");
+    expect(health).toContain("ready_wait_severity");
+    expect(health).toContain("ledger eligibility age");
+    expect(health).toContain("not proof of domain-claim eligibility");
+    expect(health).toContain("strictly >1800 s");
     expect(routeRow("/up")).toMatch(/\*\*503\*\* `db:error`, `pending_migrations:null`.*`unknown`/);
   });
 

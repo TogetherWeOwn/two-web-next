@@ -36,6 +36,7 @@ beforeEach(() => {
               total: url === explicit ? 25 : 0,
               failed: 0,
               oldest_pending_age_seconds: 0,
+              oldest_ready_wait_age_seconds: url === explicit ? 0 : null,
             },
           ],
         }),
@@ -69,7 +70,12 @@ for (const [name, sources, expected, pending] of [
       expect(
         (await response.json()) as { queue: { pending: number; status: string } },
       ).toMatchObject({
-        queue: { pending, status: pending ? "degraded" : "healthy" },
+        queue: {
+          pending,
+          status: pending ? "degraded" : "healthy",
+          oldest_ready_wait_age_seconds: pending ? 0 : null,
+          ready_wait_severity: "healthy",
+        },
       });
       expect(vi.mocked(postgres).mock.calls.map(([url]) => url)).toEqual([
         expected,
@@ -99,7 +105,12 @@ it("a selected backend queue read failure stays unknown without trying the other
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
     db: "ok",
-    queue: { status: "unknown", pending: null },
+    queue: {
+      status: "unknown",
+      pending: null,
+      oldest_ready_wait_age_seconds: null,
+      ready_wait_severity: "unknown",
+    },
   });
   expect(vi.mocked(postgres).mock.calls.map(([url]) => url)).toEqual([explicit]);
 });
@@ -116,7 +127,12 @@ it("selected client construction failure never falls back to the other binding",
   expect(response.status).toBe(503);
   expect(await response.json()).toMatchObject({
     db: "error",
-    queue: { status: "unknown", pending: null },
+    queue: {
+      status: "unknown",
+      pending: null,
+      oldest_ready_wait_age_seconds: null,
+      ready_wait_severity: "unknown",
+    },
   });
   expect(vi.mocked(postgres).mock.calls.map(([url]) => url)).toEqual([explicit]);
 });

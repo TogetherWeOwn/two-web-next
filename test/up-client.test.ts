@@ -26,6 +26,7 @@ const queueRow = {
   total: 26,
   failed: 2,
   oldest_pending_age_seconds: 42,
+  oldest_ready_wait_age_seconds: 12.5,
 };
 const clientWithEnd = (options: Parameters<typeof healthSql>[0] = {}) =>
   Object.assign(healthSql(options), { end: vi.fn(async () => {}) });
@@ -49,7 +50,14 @@ describe("/up database selection (offline)", () => {
       expect(await res.json()).toMatchObject({
         db: webDown ? "error" : "ok",
         pending_migrations: webDown ? null : 0,
-        queue: { status: "degraded", ...queueRow, warn_at: 20, critical_at: 100, detail: null },
+        queue: {
+          status: "degraded",
+          ...queueRow,
+          ready_wait_severity: "healthy",
+          warn_at: 20,
+          critical_at: 100,
+          detail: null,
+        },
       });
       expect(factory).toHaveBeenCalledExactlyOnceWith(webUrl, {
         max: 2,
