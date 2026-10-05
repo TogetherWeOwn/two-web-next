@@ -380,6 +380,7 @@ describe("deploy event-JSON smoke (offline)", () => {
       "GITHUB_STEP_SUMMARY",
       "::warning::",
       "#531",
+      "ledger write failed",
       "::error::staging event-JSON smoke failed after deploy",
     ]) {
       expect(block).toContain(marker);

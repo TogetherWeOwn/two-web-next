@@ -224,7 +224,7 @@ jobs:
           SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
           if [ -z "${QA_AUTH_TOKEN:-}" ]; then
             echo "json-smoke skipped: staging QA_AUTH_TOKEN is not configured"
-            node bin/json-smoke.mjs --skip-ledger "staging QA_AUTH_TOKEN is not configured" --ledger "$LEDGER"
+            node bin/json-smoke.mjs --skip-ledger "staging QA_AUTH_TOKEN is not configured" --ledger "$LEDGER" || echo "::warning::staging json-smoke skipped with unverified exposure guards (ledger write failed). Tracked follow-up: #531"
             if [ -f "$LEDGER" ]; then
               node bin/json-smoke.mjs --report-ledger "$LEDGER" "Staging event-JSON smoke: skipped (no QA token)" "staging json-smoke skipped with unverified exposure guards" >> "$SUMMARY" || echo "::warning::staging json-smoke skipped with unverified exposure guards (ledger report failed). Tracked follow-up: #531"
             else
