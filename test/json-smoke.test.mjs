@@ -1315,6 +1315,73 @@ test("CLI --ledger writes the probe ledger alongside the normal run", async (t) 
   assert.equal((await cli(["--report-ledger", ledgerPath])).code, 2);
 });
 
+test("an unwritable ledger never fails a passing probe", async (t) => {
+  const { url } = await stub(t);
+  const lines = [];
+  const warnings = [];
+  const ok = await jsonSmoke(url, {
+    token: TOKEN,
+    ledgerPath: "/nonexistent-dir-json-smoke/ledger.json",
+    log: (line) => lines.push(line),
+    warn: (line) => warnings.push(line),
+  });
+  assert.equal(ok, true, lines.join("\n"));
+  assert.ok(
+    lines.some((line) => line.includes("ledger write failed")),
+    lines.join("\n"),
+  );
+  assert.ok(
+    warnings.some((line) => line.includes("::warning::json-smoke ledger unwritten")),
+    warnings.join("\n"),
+  );
+  assert.ok(!lines.join("\n").includes("never-log-this"));
+});
+
+test("an unwritable ledger never masks a failing probe", async (t) => {
+  const { url } = await stub(t, (id, result) => {
+    if (id === "qa-404") result.body = withSuggestions(result.body, "<p>x</p>");
+  });
+  const lines = [];
+  const warnings = [];
+  const ok = await jsonSmoke(url, {
+    token: TOKEN,
+    ledgerPath: "/nonexistent-dir-json-smoke/ledger.json",
+    log: (line) => lines.push(line),
+    warn: (line) => warnings.push(line),
+  });
+  assert.equal(ok, false, lines.join("\n"));
+  assert.ok(
+    warnings.some((line) => line.includes("::warning::json-smoke ledger unwritten")),
+    warnings.join("\n"),
+  );
+});
+
+test("CLI --ledger with an unwritable path keeps the passing probe green", async (t) => {
+  const { url } = await stub(t);
+  const probed = await cli(["--ledger", "/nonexistent-dir-json-smoke/ledger.json", url]);
+  assert.equal(probed.code, 0, probed.output);
+  assert.match(probed.output, /json-smoke: 14 checks, 0 failed, 0 skipped/);
+  assert.ok(probed.output.includes("ledger write failed"), probed.output);
+  assert.ok(probed.output.includes("::warning::json-smoke ledger unwritten"), probed.output);
+  assert.ok(probed.output.includes("Tracked follow-up: #531"), probed.output);
+});
+
+test("CLI --skip-ledger with an unwritable path still exits 0", async (t) => {
+  const skipped = await cli(
+    [
+      "--skip-ledger",
+      "staging QA_AUTH_TOKEN is not configured",
+      "--ledger",
+      "/nonexistent-dir-json-smoke/ledger.json",
+    ],
+    { QA_AUTH_TOKEN: "" },
+  );
+  assert.equal(skipped.code, 0, skipped.output);
+  assert.ok(skipped.output.includes("SKIP JSON show:"), skipped.output);
+  assert.ok(skipped.output.includes("ledger write failed"), skipped.output);
+  assert.ok(skipped.output.includes("::warning::json-smoke ledger unwritten"), skipped.output);
+});
+
 test("CLI --report-ledger renders the summary section and warns on skipped guards", async (t) => {
   const dir = scratchDir(t);
   const skippedPath = join(dir, "skipped.json");

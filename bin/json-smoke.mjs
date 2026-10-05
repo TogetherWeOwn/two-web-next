@@ -131,6 +131,28 @@ export function reportLedger(
   }
 }
 
+/** Writes the ledger but never throws: a reporting failure must not fail a
+ * passing probe. Returns true on success; on failure emits a warning and
+ * returns false so the probe result (not the evidence write) decides the exit. */
+export function tryWriteLedgerFile(
+  path,
+  origin,
+  entries,
+  { log = console.log, warn = console.error } = {},
+) {
+  try {
+    writeLedgerFile(path, origin, entries);
+    return true;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown write error";
+    warn(
+      `::warning::json-smoke ledger unwritten (${detail}). Deploy evidence is incomplete; Tracked follow-up: #531`,
+    );
+    log(`json-smoke: ledger write failed (${detail}); probe result stands`);
+    return false;
+  }
+}
+
 /** Writes the per-check pass/skip/fail ledger as JSON. Atomic for one run; the deploy step publishes it as evidence. */
 export function writeLedgerFile(path, origin, entries) {
   const passed = entries.filter((entry) => entry.status === "pass").length;
@@ -255,7 +277,7 @@ function parseBody(text) {
 
 export async function jsonSmoke(
   baseUrl,
-  { token, timeoutMs = 5_000, log = console.log, ledgerPath = null } = {},
+  { token, timeoutMs = 5_000, log = console.log, warn = console.error, ledgerPath = null } = {},
 ) {
   if (typeof token !== "string" || !token) {
     throw new Error("QA_AUTH_TOKEN is required (staging QA login token)");
@@ -897,7 +919,9 @@ export async function jsonSmoke(
   }
 
   // The ledger is written on failure too: a red deploy keeps its evidence.
-  if (ledgerPath) writeLedgerFile(ledgerPath, base.origin, entries);
+  // Reporting never decides the exit: a failed evidence write warns and the
+  // probe result stands.
+  if (ledgerPath) tryWriteLedgerFile(ledgerPath, base.origin, entries, { log, warn });
   log(`json-smoke: ${checks} checks, ${failures} failed, ${skipped} skipped`);
   return failures === 0;
 }
@@ -927,7 +951,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else {
       const entries = skippedLedgerEntries(reason);
       for (const entry of entries) console.log(`SKIP ${entry.check}: ${entry.reason}`);
-      if (ledgerPath) writeLedgerFile(ledgerPath, null, entries);
+      if (ledgerPath) tryWriteLedgerFile(ledgerPath, null, entries);
       console.log(`json-smoke: ${entries.length} checks, 0 failed, ${entries.length} skipped`);
     }
   } else if (rest[0] === "--report-ledger") {
