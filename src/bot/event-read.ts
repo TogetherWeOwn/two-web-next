@@ -66,7 +66,8 @@ export function signedEventReader(
       const response = await fetcher(url.toString(), {
         method: "POST",
         body,
-        redirect: "error",
+        // Workers fetch rejects redirect "error"; "manual" hands back the 3xx, refused below.
+        redirect: "manual",
         signal: AbortSignal.timeout(2500),
         headers: {
           ...headers,
@@ -74,6 +75,7 @@ export function signedEventReader(
           "Idempotency-Key": crypto.randomUUID(),
         },
       });
+      if (response.status >= 300 && response.status < 400) return unreachable;
       const doc: unknown = await response.json();
       if (!object(doc) || !("ok" in doc)) return unreachable;
       if (!response.ok || doc.ok !== true) {

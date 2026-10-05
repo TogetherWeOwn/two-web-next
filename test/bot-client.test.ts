@@ -58,7 +58,7 @@ describe("createBotClient (ported InternalActionClient)", () => {
     const r = await client.assignRole({ userId: "900000000000009999", roleKey: "rocketleague" });
     expect(r).toMatchObject({ ok: true, outcome: "assigned", requestId: "r1" });
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.init.redirect).toBe("error");
+    expect(seen[0]!.init.redirect).toBe("manual");
     expect(seen[0]!.url).toBe("https://bot-staging.internal.example/internal/actions");
     const headers = seen[0]!.init.headers as Record<string, string>;
     expect(Object.keys(headers).sort()).toEqual(
@@ -72,6 +72,22 @@ describe("createBotClient (ported InternalActionClient)", () => {
     expect(body).toBe(
       '{"action":"role.assign","discord_id":"900000000000009999","role_key":"rocketleague"}',
     );
+  });
+
+  it("refuses a redirect from the bot instead of trusting or following it", async () => {
+    const { client, seen } = clientWith([
+      jsonResponse(
+        307,
+        { ok: true, result: { outcome: "assigned" }, request_id: "r1" },
+        {
+          location: "https://elsewhere.example/internal/actions",
+        },
+      ),
+    ]);
+    await expect(
+      client.assignRole({ userId: "900000000000009999", roleKey: "rocketleague" }),
+    ).rejects.toBeInstanceOf(BotTransportError);
+    expect(seen).toHaveLength(1);
   });
 
   it("rejects a non-snowflake discord_id before sending (terminal, no network)", async () => {

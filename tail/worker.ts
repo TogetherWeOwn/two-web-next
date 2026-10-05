@@ -236,7 +236,7 @@ export function createTailWorker(
     try {
       const response = await send(target, {
         method: "GET",
-        redirect: "error",
+        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
         signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
       });
       const ok =
@@ -271,7 +271,7 @@ export function createTailWorker(
                   content: JSON.stringify(alert),
                   allowed_mentions: { parse: [] },
                 }),
-                redirect: "error",
+                redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
                 signal: AbortSignal.timeout(5000),
               });
               delivered = response.ok;
@@ -319,7 +319,7 @@ export function createTailWorker(
             content: JSON.stringify(alert),
             allowed_mentions: { parse: [] },
           }),
-          redirect: "error",
+          redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
           signal: AbortSignal.timeout(5000),
         });
         delivered = response.ok;

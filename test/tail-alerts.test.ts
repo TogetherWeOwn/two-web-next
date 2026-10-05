@@ -152,7 +152,7 @@ describe("Tail delivery", () => {
     for (const [, init] of calls) {
       expect(init).toMatchObject({
         method: "POST",
-        redirect: "error",
+        redirect: "manual",
         headers: { "content-type": "application/json" },
       });
       expect(init.signal).toBeInstanceOf(AbortSignal);
