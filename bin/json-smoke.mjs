@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 // Staging-only post-deploy probe for the session-gated event JSON contract
@@ -53,6 +54,124 @@ const REQUIRED_SHOW_KEYS = [
   "waitlist_position",
 ];
 const PRIVATE_KEYS = ["id", "attendees", "user_id", "session", "token"];
+
+// Canonical check order for the deploy-evidence ledger. Every PASS/SKIP/FAIL
+// line the probe prints uses one of these labels, and the deploy step replays
+// exactly these names when the probe cannot run at all (missing QA token), so
+// a skipped deploy still names each guard instead of passing silently.
+export const JSON_SMOKE_CHECKS = [
+  "guest collection refusal",
+  "guest show refusal",
+  "QA login issues a session cookie",
+  "collection paging envelope",
+  "malformed event_key filter",
+  "JSON show",
+  "cancelled show",
+  "malformed show key",
+  "session cookie flags",
+  "status cookie flags",
+  "session rotation replay",
+  "logout revokes session",
+  "logout clears cookies",
+  "QA bad-token 404 matches missing route",
+];
+
+// The subset that guards member data: the refusals prove outsiders see
+// nothing, the paging/show/cancelled checks prove drafts stay hidden from
+// non-moderators, and the show-shape checks prove no private fields leave the
+// server. A skip here must stay loud in deploy evidence until it passes
+// (tracked follow-up: issue #531).
+export const JSON_SMOKE_EXPOSURE_GUARDS = [
+  "guest collection refusal",
+  "guest show refusal",
+  "collection paging envelope",
+  "JSON show",
+  "cancelled show",
+  "malformed show key",
+];
+
+/** Ledger entries for a run that never probed: every check skipped with one reason. */
+export function skippedLedgerEntries(reason) {
+  return JSON_SMOKE_CHECKS.map((check) => ({ check, status: "skip", reason }));
+}
+
+/** The skipped entries that guard member data. Never carries secrets: entries hold check names and static reasons only. */
+export function skippedExposureGuards(entries) {
+  const guards = new Set(JSON_SMOKE_EXPOSURE_GUARDS);
+  return entries.filter((entry) => entry?.status === "skip" && guards.has(entry.check));
+}
+
+/** Renders a ledger file as deploy evidence: a markdown section for the step
+ * summary on stdout, plus a warning annotation naming every skipped exposure
+ * guard on stderr. Stdout is redirected to the summary file, so the warning
+ * stays in the job log where annotations pick it up. */
+export function reportLedger(
+  ledgerPath,
+  heading,
+  warnContext,
+  { log = console.log, warn = console.error } = {},
+) {
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  const guards = skippedExposureGuards(ledger.checks ?? []);
+  log(`## ${heading}`);
+  log("");
+  log("```json");
+  log(JSON.stringify(ledger));
+  log("```");
+  log("");
+  if (guards.length) {
+    log("Skipped exposure guards (tracked follow-up #531):");
+    log("");
+    for (const guard of guards) log(`- ${guard.check}: ${guard.reason}`);
+    warn(
+      `::warning::${warnContext}: ${guards.map((guard) => `${guard.check} (${guard.reason})`).join("; ")}. Tracked follow-up: #531`,
+    );
+  } else {
+    log("Skipped exposure guards: none.");
+  }
+}
+
+/** Writes the ledger but never throws: a reporting failure must not fail a
+ * passing probe. Returns true on success; on failure emits a warning and
+ * returns false so the probe result (not the evidence write) decides the exit. */
+export function tryWriteLedgerFile(
+  path,
+  origin,
+  entries,
+  { log = console.log, warn = console.error } = {},
+) {
+  try {
+    writeLedgerFile(path, origin, entries);
+    return true;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown write error";
+    warn(
+      `::warning::json-smoke ledger unwritten (${detail}). Deploy evidence is incomplete; Tracked follow-up: #531`,
+    );
+    log(`json-smoke: ledger write failed (${detail}); probe result stands`);
+    return false;
+  }
+}
+
+/** Writes the per-check pass/skip/fail ledger as JSON. Atomic for one run; the deploy step publishes it as evidence. */
+export function writeLedgerFile(path, origin, entries) {
+  const passed = entries.filter((entry) => entry.status === "pass").length;
+  const failed = entries.filter((entry) => entry.status === "fail").length;
+  const skipped = entries.filter((entry) => entry.status === "skip").length;
+  writeFileSync(
+    path,
+    `${JSON.stringify(
+      {
+        ledger: "json-smoke/1",
+        origin,
+        checks: entries,
+        summary: { total: entries.length, passed, failed, skipped },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
 
 const isJson = (response) =>
   (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase() ===
@@ -156,7 +275,10 @@ function parseBody(text) {
   }
 }
 
-export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = console.log } = {}) {
+export async function jsonSmoke(
+  baseUrl,
+  { token, timeoutMs = 5_000, log = console.log, warn = console.error, ledgerPath = null } = {},
+) {
   if (typeof token !== "string" || !token) {
     throw new Error("QA_AUTH_TOKEN is required (staging QA login token)");
   }
@@ -184,18 +306,26 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
   let checks = 0;
   let failures = 0;
   let skipped = 0;
+  const entries = [];
   const pass = (label) => {
     checks++;
+    entries.push({ check: label, status: "pass" });
     log(`PASS ${label}`);
   };
   const skip = (label, reason) => {
     checks++;
     skipped++;
+    entries.push({ check: label, status: "skip", reason });
     log(`SKIP ${label}: ${reason}`);
   };
   const fail = (label, expected, actual) => {
     checks++;
     failures++;
+    entries.push({
+      check: label,
+      status: "fail",
+      reason: `expected ${expected}; actual ${actual}`,
+    });
     log(`FAIL ${label}: expected ${expected}; actual ${actual}`);
   };
 
@@ -788,15 +918,59 @@ export async function jsonSmoke(baseUrl, { token, timeoutMs = 5_000, log = conso
     );
   }
 
+  // The ledger is written on failure too: a red deploy keeps its evidence.
+  // Reporting never decides the exit: a failed evidence write warns and the
+  // probe result stands.
+  if (ledgerPath) tryWriteLedgerFile(ledgerPath, base.origin, entries, { log, warn });
   log(`json-smoke: ${checks} checks, ${failures} failed, ${skipped} skipped`);
   return failures === 0;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 3) {
-    console.error(
-      "Usage: QA_AUTH_TOKEN=<staging QA token> node bin/json-smoke.mjs <staging-base-url>",
-    );
+  const args = process.argv.slice(2);
+  const ledgerFlag = args.indexOf("--ledger");
+  const ledgerPath = ledgerFlag >= 0 ? args[ledgerFlag + 1] : null;
+  const rest =
+    ledgerFlag >= 0
+      ? args.filter((_, index) => index !== ledgerFlag && index !== ledgerFlag + 1)
+      : args;
+  const usage =
+    "Usage: QA_AUTH_TOKEN=<staging QA token> node bin/json-smoke.mjs [--ledger <path>] <staging-base-url> | " +
+    "node bin/json-smoke.mjs --skip-ledger <reason> [--ledger <path>] | " +
+    "node bin/json-smoke.mjs --report-ledger <path> <heading> <warn-context>";
+  if (ledgerFlag >= 0 && !ledgerPath) {
+    console.error(usage);
+    process.exitCode = 2;
+  } else if (rest[0] === "--skip-ledger") {
+    // No token, no network: replays every check as skipped with one reason so
+    // a deploy that cannot probe still names each guard in its evidence.
+    const reason = rest[1];
+    if (!reason || rest.length !== 2) {
+      console.error(usage);
+      process.exitCode = 2;
+    } else {
+      const entries = skippedLedgerEntries(reason);
+      for (const entry of entries) console.log(`SKIP ${entry.check}: ${entry.reason}`);
+      if (ledgerPath) tryWriteLedgerFile(ledgerPath, null, entries);
+      console.log(`json-smoke: ${entries.length} checks, 0 failed, ${entries.length} skipped`);
+    }
+  } else if (rest[0] === "--report-ledger") {
+    // Evidence-only: formats a ledger the probe (or --skip-ledger) wrote.
+    // Never probes, never needs a token.
+    const [reportPath, heading, warnContext] = rest.slice(1);
+    if (!reportPath || !heading || !warnContext || rest.length !== 4) {
+      console.error(usage);
+      process.exitCode = 2;
+    } else {
+      try {
+        reportLedger(reportPath, heading, warnContext);
+      } catch (error) {
+        console.error(`json-smoke: ${error instanceof Error ? error.message : "invalid ledger"}`);
+        process.exitCode = 2;
+      }
+    }
+  } else if (rest.length !== 1) {
+    console.error(usage);
     process.exitCode = 2;
   } else {
     const token = process.env.QA_AUTH_TOKEN;
@@ -805,7 +979,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exitCode = 2;
     } else {
       try {
-        process.exitCode = (await jsonSmoke(process.argv[2], { token })) ? 0 : 1;
+        process.exitCode = (await jsonSmoke(rest[0], { token, ledgerPath })) ? 0 : 1;
       } catch (error) {
         console.error(`json-smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
         process.exitCode = 2;
