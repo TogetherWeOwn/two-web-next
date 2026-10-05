@@ -131,3 +131,15 @@ test("pipe characters in names do not break the markdown table", () => {
   assert.match(row ?? "", /a \\| b/);
   assert.match(row ?? "", /x \\| y/);
 });
+
+test("a backslash before a pipe stays one escaped cell", () => {
+  const summary = summarizeJourneys(reportWith([skippedSpec("a\\|b", "x\\|y")]));
+  const row = formatLedgerMarkdown(summary)
+    .split("\n")
+    .find((line) => line.startsWith("| a"));
+  // Backslash escaped first, then the pipe: `a\\\|b` renders as one cell, so
+  // the row still splits into exactly 6 segments on unescaped pipes (a live
+  // pipe inside the cell would make 7).
+  assert.match(row ?? "", /a\\\\\\\|b/);
+  assert.equal((row ?? "").split(/(?<!\\)\|/).length, 6);
+});

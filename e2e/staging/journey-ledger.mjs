@@ -140,7 +140,7 @@ export function formatLedgerMarkdown(summary) {
   lines.push("| Journey | Project | Status | Reason |", "| --- | --- | --- | --- |");
   for (const journey of journeys) {
     const cells = [journey.name, journey.project, journey.status, journey.reason ?? "—"].map(
-      (cell) => cell.replace(/\|/g, "\\|"),
+      (cell) => cell.replace(/\\/g, "\\\\").replace(/\|/g, "\\|"),
     );
     lines.push(`| ${cells.join(" | ")} |`);
   }
