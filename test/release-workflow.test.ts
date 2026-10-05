@@ -80,10 +80,16 @@ describe("release workflow triggers", () => {
     }
   });
 
-  it("keeps publication enabled and the job permissions unchanged", () => {
+  it("keeps publication enabled and scopes the write token to each job", () => {
     expect(text).not.toMatch(/skip-github-release\s*:/);
-    expect(text).toMatch(
-      /^permissions:\n {2}contents: write\n {2}pull-requests: write\n {2}actions: write\n/m,
+    // No workflow-wide token: release-please publishes and reconciles the PR,
+    // dispatch-checks only starts the required workflows.
+    expect(text).toMatch(/^permissions: \{\}\n/m);
+    expect(job("release-please")).toMatch(
+      /^ {4}permissions:\n {6}contents: write[^\n]*\n {6}pull-requests: write[^\n]*\n(?! {6})/m,
+    );
+    expect(job("dispatch-checks")).toMatch(
+      /^ {4}permissions:\n {6}actions: write[^\n]*\n(?! {6})/m,
     );
     expect(job("dispatch-checks")).toContain('gh workflow run ci.yml --ref "$HEAD_BRANCH"');
     expect(job("dispatch-checks")).toContain(

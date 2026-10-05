@@ -46,22 +46,5 @@ test("staging feeds and SEO endpoints answer public GETs", async ({ request }) =
   expect(icsBody).toContain("END:VCALENDAR");
 });
 
-// Per-event ICS for a key read from the live RSS: still GET-only, no fixture
-// and no QA write. Handler contract lives in src/events/routes.tsx: published
-// and cancelled rows download sessionless, drafts 403, unknown keys 404.
-test("staging per-event ICS downloads for a published feed event", async ({ request }) => {
-  const rss = await request.get("/events.rss");
-  expect(rss.status()).toBe(200);
-  const key = /\/e\/([0-9A-HJKMNP-TV-Z]{26})/.exec(await rss.text())?.[1] ?? "";
-  expect(key).not.toBe("");
-  const ics = await request.get(`/events/${key}.ics`);
-  expect(ics.status()).toBe(200);
-  expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
-  expect(ics.headers()["cache-control"]).toBe("max-age=300, private");
-  expect(ics.headers()["content-disposition"]).toBe(`attachment; filename="${key}.ics"`);
-  expect(ics.headers()["set-cookie"] ?? null).toBeNull();
-  const body = await ics.text();
-  expect(body).toContain("BEGIN:VCALENDAR");
-  expect(body).toContain(`UID:${key}@`);
-  expect(body).toContain("END:VCALENDAR");
-});
+// Published per-event RSS/ICS coverage lives in event-rsvp.spec.ts while that
+// journey's owned fixture is published. Empty collection feeds are valid here.

@@ -73,9 +73,14 @@ async function expectFunnel(res: Response) {
   expect(await res.text()).toBe("");
   expect(res.headers.get("cache-control")).toBe("no-store");
   expect(res.headers.getSetCookie()).toEqual([]);
+  expect(res.headers.get("retry-after")).toBeNull();
 }
 
+let now = Date.now();
 beforeEach(() => {
+  // Refill the isolate budget between independent cases, never within a flood.
+  now += 60_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   waitUntilCalls.length = 0;
   bindingAccess.mockClear();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -121,11 +126,10 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
   it("absorbs a valid-report flood without amplifying: all 204, fixed keys, no echo", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const log = vi.mocked(console.log);
-    const n = 20;
-    for (let i = 0; i < n; i += 1) {
+    for (let i = 0; i < 80; i += 1) {
       await expectFunnel(await post(validBody()));
     }
-    expect(warn).toHaveBeenCalledTimes(n);
+    expect(warn).toHaveBeenCalledTimes(20);
     for (const call of warn.mock.calls) {
       expect(call).toEqual([
         "csp.report.violation",
@@ -171,14 +175,112 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     const body = oversizeBodyWithMarker();
     expect(body).toHaveLength(CAP + 1);
     expect(body).toContain(MARKER);
-    for (let i = 0; i < 10; i += 1) {
+    for (let i = 0; i < 80; i += 1) {
       await expectFunnel(await post(body));
     }
-    expect(warn).toHaveBeenCalledTimes(10);
+    expect(warn).toHaveBeenCalledTimes(20);
     for (const call of warn.mock.calls) {
       expect(call).toEqual(["csp.report.dropped_oversize", { bytes: CAP + 1 }]);
     }
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
+  });
+
+  it("shares one budget across warning types, distinct reports and concurrent clients", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Seed one violation: oversize bodies may finish before every valid body.
+    await expectFunnel(await post(validBody()));
+    const responses = await Promise.all(
+      Array.from({ length: 80 }, (_, i) =>
+        post(
+          i % 2 === 0
+            ? oversizeBodyWithMarker()
+            : JSON.stringify([
+                {
+                  type: "csp-violation",
+                  body: {
+                    blockedURL: `https://blocked-${i}.example.test/script.js`,
+                    effectiveDirective: `script-src-${i}`,
+                  },
+                },
+              ]),
+          makeEnv(i % 3 === 0 ? "typo" : "1"),
+          {
+            "cf-connecting-ip": `192.0.2.${i + 1}`,
+            origin: `https://sender-${i}.example.test`,
+          },
+        ),
+      ),
+    );
+    for (const res of responses) await expectFunnel(res);
+    expect(warn).toHaveBeenCalledTimes(20);
+    expect(warn.mock.calls.some((call) => call[0] === "csp.report.violation")).toBe(true);
+    expect(warn.mock.calls.some((call) => call[0] === "csp.report.dropped_oversize")).toBe(true);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
+  });
+
+  it("refills one token per three seconds, retaining fractional credit", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 20; i += 1) await expectFunnel(await post(validBody()));
+    await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(20);
+    now += 2_999;
+    await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(20);
+    now += 1;
+    await expectFunnel(await post(validBody()));
+    await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(21);
+    now += 3_000;
+    await expectFunnel(await post(oversizeBodyWithMarker()));
+    await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(22);
+    expect(warn.mock.calls[21]?.[0]).toBe("csp.report.dropped_oversize");
+  });
+
+  it("caps stored tokens at a twenty-warning burst after a long idle", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 20; i += 1) await expectFunnel(await post(validBody()));
+    now += 600_000;
+    for (let i = 0; i < 80; i += 1) await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(40);
+  });
+
+  it("does not spend tokens on malformed or sampled-out reports", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    for (let i = 0; i < 80; i += 1) {
+      await expectFunnel(await post("not-json"));
+      await expectFunnel(await post(validBody(), makeEnv("0")));
+      await expectFunnel(await post(validBody(), makeEnv("0.5")));
+    }
+    expect(warn).not.toHaveBeenCalled();
+    for (let i = 0; i < 21; i += 1) await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(20);
+  });
+
+  it("does not mint extra tokens if the clock moves backwards", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (let i = 0; i < 20; i += 1) await expectFunnel(await post(validBody()));
+    const spentAt = now;
+    now += 2_999;
+    await expectFunnel(await post(validBody()));
+    now -= 10_000;
+    await expectFunnel(await post(validBody()));
+    now = spentAt + 2_999;
+    await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(20);
+    now += 1;
+    await expectFunnel(await post(validBody()));
+    await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(21);
+  });
+
+  it("keeps logger failures always-204 without restoring spent tokens", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("synthetic logger failure");
+    });
+    for (let i = 0; i < 80; i += 1) await expectFunnel(await post(validBody()));
+    expect(warn).toHaveBeenCalledTimes(20);
   });
 
   it("touches no persistence seam across a mixed abuse burst", async () => {

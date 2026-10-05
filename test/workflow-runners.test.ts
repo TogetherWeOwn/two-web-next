@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 // a self-hosted label queues forever while this repo is public (TOG-12326). Every
 // job must reach the self-hosted fleet only behind a repo-visibility check and
 // otherwise run on GitHub-hosted Linux; the CI_OVERFLOW_* repo vars may still
-// route a switch-enabled job elsewhere without a PR.
+// route a switch-enabled job elsewhere without a PR, but only while the repo is
+// private: the public guard is evaluated first, so a repo variable can never
+// send a public repo's run (a fork's pull_request included) to another runner.
 const dir = ".github/workflows";
 const workflows = readdirSync(dir)
   .filter((name) => /\.ya?ml$/.test(name))
@@ -14,8 +16,9 @@ const workflows = readdirSync(dir)
 
 const hosted = "ubuntu-latest";
 const byVisibility = `\${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
+const publicGuard = `!github.event.repository.private && '["${hosted}"]'`;
 const overflowSwitch = (job: string) =>
-  `\${{ fromJSON((contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), '${job}') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || (github.event.repository.private && '["self-hosted","two-selfhosted"]') || '["${hosted}"]') }}`;
+  `\${{ fromJSON((${publicGuard}) || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), '${job}') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}`;
 
 function jobs(text: string) {
   const body = text.slice(text.search(/^jobs:\n/m));
@@ -39,6 +42,26 @@ describe("workflow runner labels", () => {
         expect([hosted, byVisibility, overflowSwitch(id)], `${name} job ${id}`).toContain(runsOn);
       }
     }
+  });
+
+  it("evaluates the public-repo guard before any CI_OVERFLOW_* variable", () => {
+    let overflowJobs = 0;
+    for (const { name, text } of workflows) {
+      for (const { id, runsOn } of jobs(text)) {
+        if (!runsOn?.includes("vars.CI_OVERFLOW_")) continue;
+        overflowJobs += 1;
+        const guard = runsOn.indexOf(publicGuard);
+        const firstOverflowVar = runsOn.indexOf("vars.CI_OVERFLOW_");
+        expect(guard, `${name} job ${id} has the public guard`).toBeGreaterThan(-1);
+        expect(guard, `${name} job ${id} guards before reading the overflow vars`).toBeLessThan(
+          firstOverflowVar,
+        );
+        expect(runsOn, `${name} job ${id} routes public repos only to ${hosted}`).toMatch(
+          /^\$\{\{ fromJSON\(\(!github\.event\.repository\.private && '\["ubuntu-latest"\]'\) \|\| /,
+        );
+      }
+    }
+    expect(overflowJobs).toBeGreaterThan(0);
   });
 
   it("keeps self-hosted labels behind the repo-visibility check", () => {
