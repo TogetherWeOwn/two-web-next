@@ -147,3 +147,15 @@ Worker has no queue consumer pointed at the live guild — carriers expire or
 fail closed without a Discord write. The admin journey never publishes, so it
 enqueues nothing at all, and the featured journey is a plain Postgres write
 with no queue or Discord path.
+
+Journey accounting: Playwright exits 0 when every journey skips, so an
+all-skipped run looks green unless something counts outcomes. The staging
+config also writes a JSON report (`test-results/staging-journeys.json`), and a
+follow-up step (`node ci/check-staging-journeys.mjs`, logic in
+`e2e/staging/journey-ledger.mjs`) ledgers every journey as passed, failed or
+skipped with its reason, appends that table to the step summary, and uploads
+the ledger as an artifact. When nothing passed — all skipped, or no journeys
+recorded at all — the gate fails loud (exit 2) with every skipped journey and
+its reason named. Never add a quiet `test.skip` precondition for an empty
+staging fixture without a reason string: the ledger surfaces that reason as
+the failure evidence.

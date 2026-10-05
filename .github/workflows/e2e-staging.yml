@@ -109,6 +109,14 @@ jobs:
         run: npm run e2e:staging
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Journey ledger (pass/skip/fail accounting)
+        # Playwright exits 0 when every journey skips, so without this gate an
+        # all-skipped run looks green. The gate writes the per-journey ledger
+        # (JSON + Markdown) and fails loud with every skipped journey and its
+        # reason named when nothing passed.
+        id: ledger
+        if: always()
+        run: node ci/check-staging-journeys.mjs
       - name: Scrub QA token from failure artifacts
         # The repo is public and artifacts are downloadable without log
         # masking. Delete any file holding the token (also inside the report's
@@ -128,4 +136,18 @@ jobs:
             test-results/
             playwright-report/
           if-no-files-found: ignore
+          retention-days: 7
+      - name: Journey ledger artifact
+        # Runs after the sweep above, so on failure the ledger files here are
+        # the post-sweep tree. Always uploaded: the ledger is the per-journey
+        # accounting for the run, green or red.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-staging-ledger-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/staging-journeys.json
+            test-results/staging-journey-ledger.json
+            test-results/staging-journey-ledger.md
+          if-no-files-found: warn
           retention-days: 7
