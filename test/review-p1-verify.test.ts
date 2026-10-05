@@ -66,7 +66,7 @@ function msg(body: unknown, attempts = 1) {
 // the shared agent-testdb host. Never hardcode the host: CI has no
 // `agent-testdb` DNS and fails with EAI_AGAIN (PR #30 `check` on d276d0b).
 // No fallback: an unset DATABASE_URL means the live-DB proofs below skip via
-// `skipIf`, so offline runs never open SQL (TOG-16644).
+// `skipIf`, so offline runs never open SQL.
 const URL = process.env.DATABASE_URL!;
 const hasDb = Boolean(process.env.DATABASE_URL);
 
