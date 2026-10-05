@@ -209,7 +209,9 @@ async function send(
   try {
     res = await o.fetchFn(endpointOf(o.url), {
       method: "POST",
-      redirect: "error", // Never forward signed bodies/headers to an unvalidated origin.
+      // Never follow: a redirect would forward signed bodies/headers to an unvalidated origin.
+      // Workers fetch rejects redirect "error" outright, so take the 3xx back and refuse it below.
+      redirect: "manual",
       headers: out,
       body,
       signal: AbortSignal.timeout(o.timeoutSeconds * 1000),
@@ -217,6 +219,8 @@ async function send(
   } catch (e) {
     throw new BotTransportError(`bot unreachable: ${e instanceof Error ? e.message : String(e)}`);
   }
+  if (res.status >= 300 && res.status < 400)
+    throw new BotTransportError(`bot answered with a redirect (${res.status}); not followed`);
   let json: unknown;
   try {
     json = await res.json();

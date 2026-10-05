@@ -40,7 +40,7 @@ describe("signed bot event.read observation", () => {
     expect(url).toBe("https://bot.fixture.test/internal/actions");
     expect(init).toMatchObject({
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       body: encodeCanonicalJson({ action: "event.read", event_key: local.event_key }),
     });
     const h = init!.headers as Record<string, string>;
@@ -82,6 +82,20 @@ describe("signed bot event.read observation", () => {
       unavailable: "verification_unavailable",
       reason: "mirror_mismatch",
     });
+  });
+
+  it("a redirect is unreachable, never parsed as an observation", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: observation }), {
+        status: 302,
+        headers: { location: "https://elsewhere.example/" },
+      }),
+    );
+    expect(await observeDiscordEvent(local, signedEventReader(cfg, fetcher))).toEqual({
+      unavailable: "verification_unavailable",
+      reason: "bot_unreachable",
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it("transport failure has no retry or alternate credentials", async () => {
