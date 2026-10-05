@@ -51,7 +51,7 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `DISCORD_MODERATOR_ROLE_IDS` | Optional public var (comma-separated snowflakes) | dev/staging/prod | Main Wrangler: approved SySOp `508654771276873729`; local/unset: blank, no moderators | Only trimmed 10–25 digit role IDs survive parsing. Blank/invalid allowlist or lookup failure gives `moderator=false`; sign-in continues. Deployment preflight requires exactly SySOp from the same top-level source config published by Wrangler; extras fail. This is source policy, not live binding/isolation evidence. |
 | `QA_AUTH_TOKEN` | Optional secret | staging only; leave unset in dev/prod | Unset; QA route disabled | QA route requires exact `APP_URL=https://next.togetherweown.com` plus the matching nonempty token. Missing/bad token or unknown identity returns 404. Throttle executes before the gate. |
 | `MEMBER_ACCESS_LOG_ENFORCE` | Optional boolean-like var | dev/staging/prod | On | Trimmed, case-insensitive `false`, `0`, `no` disable enforcement; all other values enable it. Failed access-log writes refuse member/admin reads with 503 by default; disabled enforcement logs and serves instead. |
-| `CSP_REPORT_SAMPLE_RATE` | Optional numeric var | dev/staging/prod | `1.0` | Absent/nonfinite values fall back to 1; parsed values clamp to 0–1 (`parseFloat` accepts numeric prefixes). Changes logging only; report sink remains 204. |
+| `CSP_REPORT_SAMPLE_RATE` | Optional numeric var | dev/staging/prod | `1.0` | Absent/nonfinite values fall back to 1; parsed values clamp to 0–1 (`parseFloat` accepts numeric prefixes). Violation sampling precedes the shared per-isolate log budget; setting 1 does not bypass that budget. Report sink remains 204. |
 | `BOT_ENDPOINT_URL` | Optional signed bot base URL | dev: stub only; staging: provision separately; prod: no new access implied | None | Missing/non-HTTPS URL fails read observation closed to `bot_unreachable`; redirects are refused. The jobs Worker (`JobsEnv`) uses the same three bindings to send sync/announcement/role jobs; if any is missing the job fails terminally and alerts (`queue.failing`), never acks as success. |
 | `BOT_KEY_ID` | Optional bot signing key identifier | dev/staging/prod | None | Missing ID fails observation closed; no implicit production key selection. |
 | `BOT_SHARED_SECRET` | Optional signing secret | dev: fixture value; staging/prod: separately authorized secret binding | None | Missing/invalid secret fails observation closed. Never logged or substituted; one attempt, 2.5 s deadline. |
@@ -68,6 +68,32 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `INTERNAL_ACTION_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-internal-action`; local config: `two-internal-action-local` | Declared/configured but no consumer reads this producer property in current source; both configured queue consumers share the Worker dispatch path. No application-side default. |
 | `HYPERDRIVE` | Optional Hyperdrive legacy alias (`JobsEnv`) | dev/staging/prod | Unbound in Wrangler | Jobs use this only when nonempty `DATABASE_URL` and `DB.connectionString` are both absent/empty. With no usable database source, job DB selection throws. No retry fallback after a connection error. |
 <!-- config-docs:end -->
+
+### CSP report log budget
+
+`POST /csp-reports` has no session, auth or database dependency. All sink paths
+return an empty, no-store `204`, including suppressed logs; there is no `429` or
+`Retry-After`. Body size and read deadlines still apply.
+
+One token bucket per Worker isolate permits a burst of 20 warnings and refills
+one token every 3 seconds (20 per minute), capped at 20 stored tokens. Valid
+violation reports and `csp.report.dropped_oversize` warnings share this budget,
+so neither input shape bypasses the cap. Malformed and sampled-out reports do
+not consume tokens. Exhaustion is silent: no per-drop warning or extra summary
+line amplifies a flood. The bucket stores only two numbers, not IPs or report
+contents, and uses no database, network calls or background timers.
+
+`CSP_REPORT_SAMPLE_RATE` remains an additional gate for valid reports only.
+Lower it to reduce ordinary violation log volume; `1` includes every valid
+report **eligible for the bucket**, not every received report. It cannot bypass
+the cap. Oversize diagnostics do not use the sample rate but are capped too.
+
+This is best-effort **per-isolate log suppression**, not a request-rate or
+fleet-wide cost guarantee. Isolates refill independently; eviction, restart and
+new isolates start with a fresh burst. A flood can spend the shared budget and
+hide legitimate CSP warnings. Absence of warnings does not prove absence of
+violations. Workers invocation logs and other application log keys are not
+limited by this bucket.
 
 ### Connection selection is not uniform
 

@@ -13,9 +13,10 @@
 // `{"csp-report": [...]}` list payload stays silent instead of logging an
 // all-null row.
 //
-// Flood control lives here instead of a throttle layer: like `/discord`, this
-// route must answer during an app-DB outage, and a throttle would read the
-// database-backed store — which is the database everywhere shipped.
+// Log flood control uses one in-memory token bucket per isolate, shared by
+// violation and oversize warnings. Sampling alone cannot bound log volume.
+// This is not a global request limit: isolates refill/reset independently.
+// The route stays DB-free and always-204, even after its log budget is spent.
 
 import type { Context } from "hono";
 import type { Env } from "./env";
@@ -124,20 +125,37 @@ export function shouldSampleReport(rate: number, random: () => number = Math.ran
   return random() <= rate;
 }
 
+const CSP_LOG_BURST = 20;
+const CSP_LOG_REFILL_MS = 3_000;
+let logTokens = CSP_LOG_BURST;
+let lastLogRefill = 0;
+
+// Fixed-size isolate state, no client keys or timers. Consume synchronously
+// just before logging so concurrent body reads cannot overspend the budget.
+function takeCspLogToken(): boolean {
+  const now = Date.now();
+  const elapsed = Math.max(0, now - lastLogRefill);
+  logTokens = Math.min(CSP_LOG_BURST, logTokens + elapsed / CSP_LOG_REFILL_MS);
+  lastLogRefill = Math.max(lastLogRefill, now);
+  if (logTokens < 1) return false;
+  logTokens -= 1;
+  return true;
+}
+
 // No session, no cookie, no DB: an unauthenticated sink that must answer when
 // everything behind it is down. Every path — valid, malformed, oversized,
-// empty, aborted — ends in 204.
+// empty, aborted, log-budget exhausted — ends in 204.
 export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Response> {
   c.header("cache-control", "no-store");
   try {
     const body = await readCappedBody(c.req.raw);
     if (body.truncated) {
-      console.warn("csp.report.dropped_oversize", { bytes: body.bytes });
+      if (takeCspLogToken()) console.warn("csp.report.dropped_oversize", { bytes: body.bytes });
       return c.body(null, 204);
     }
     const report = extractCspReport(body.text);
     if (report === null) return c.body(null, 204);
-    if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
+    if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE)) && takeCspLogToken()) {
       console.warn("csp.report.violation", cspReportLogFields(report));
     }
     return c.body(null, 204);
