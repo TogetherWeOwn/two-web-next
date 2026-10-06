@@ -1,6 +1,11 @@
 import type { APIRequestContext, APIResponse } from "@playwright/test";
 import { sendTokenRequest } from "../qa-request.mjs";
-import { parseRetryAfterSeconds, QA_LOGIN_MAX_ATTEMPTS, sleep } from "../qa-login-retry.mjs";
+import {
+  parseRetryAfterSeconds,
+  QA_LOGIN_MAX_ATTEMPTS,
+  QA_LOGIN_RETRY_AFTER_CAP_SECONDS,
+  sleep,
+} from "../qa-login-retry.mjs";
 import { test, expect, stagingOrigin, emptyStorageState, moderatorStorageState } from "./fixtures";
 import { loginQaIdentities } from "./qa-login";
 
@@ -62,6 +67,12 @@ async function probeQaStatus(
 
 test.describe("negative QA cases", () => {
   test("staging QA rejects a bad token and an unknown identity with 404", async ({ browser }) => {
+    // The config's 30s covers the probes themselves; the bounded 429 retries
+    // get their own budget: up to QA_LOGIN_MAX_ATTEMPTS - 1 capped waits per
+    // probe, times two probes (events-list/featured setTimeout precedent).
+    test.setTimeout(
+      30_000 + 2 * (QA_LOGIN_MAX_ATTEMPTS - 1) * QA_LOGIN_RETRY_AFTER_CAP_SECONDS * 1000,
+    );
     const origin = stagingOrigin;
     // Explicitly empty: a bare newContext() inherits the member storageState
     // from the staging config, and these probes must not present a session.
