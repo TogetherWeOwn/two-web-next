@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { formatLedgerMarkdown, summarizeJourneys } from "./journey-ledger.mjs";
 
@@ -142,4 +143,21 @@ test("a backslash before a pipe stays one escaped cell", () => {
   // pipe inside the cell would make 7).
   assert.match(row ?? "", /a\\\\\\\|b/);
   assert.equal((row ?? "").split(/(?<!\\)\|/).length, 6);
+});
+
+test("the always-run ledger upload ships only derived files, never the raw report", () => {
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  const step = workflow
+    .split(/\n {6}- name: /)
+    .find((s) => s.startsWith("Journey ledger artifact"));
+  assert.ok(step, "Journey ledger artifact step exists");
+  // The step runs on green runs too, where the token scrub never ran, so it
+  // must not upload the raw Playwright JSON report.
+  assert.match(step, /if: always\(\)/);
+  assert.doesNotMatch(step, /staging-journeys\.json/);
+  assert.match(step, /staging-journey-ledger\.json/);
+  assert.match(step, /staging-journey-ledger\.md/);
 });
