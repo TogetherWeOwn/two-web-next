@@ -1,4 +1,11 @@
+import type { APIRequestContext, APIResponse } from "@playwright/test";
 import { sendTokenRequest } from "../qa-request.mjs";
+import {
+  parseRetryAfterSeconds,
+  QA_LOGIN_MAX_ATTEMPTS,
+  QA_LOGIN_RETRY_AFTER_CAP_SECONDS,
+  sleep,
+} from "../qa-login-retry.mjs";
 import { test, expect, stagingOrigin, emptyStorageState, moderatorStorageState } from "./fixtures";
 import { loginQaIdentities } from "./qa-login";
 
@@ -33,8 +40,39 @@ test("staging QA moderator session opens the admin event list", async ({ browser
   }
 });
 
+// A negative probe shares the `qa-login` throttle budget (10/min per runner
+// IP) with every per-file QA login in the run, and the throttle runs before
+// the token/identity check — so a probe can answer 429 when the run's burst
+// lands in one window. A 429 names the budget, not the verdict: honor
+// Retry-After into a fresh window and re-probe, then assert the authoritative
+// 404. Bounded like the login retry (qa-login-retry.mjs).
+async function probeQaStatus(
+  request: APIRequestContext,
+  identity: string,
+  headers: Record<string, string>,
+): Promise<APIResponse> {
+  let response = await request.post(`/auth/qa/${identity}`, {
+    headers,
+    maxRedirects: 0,
+  });
+  for (let attempt = 1; attempt < QA_LOGIN_MAX_ATTEMPTS && response.status() === 429; attempt++) {
+    await sleep(parseRetryAfterSeconds(response.headers()) * 1000);
+    response = await request.post(`/auth/qa/${identity}`, {
+      headers,
+      maxRedirects: 0,
+    });
+  }
+  return response;
+}
+
 test.describe("negative QA cases", () => {
   test("staging QA rejects a bad token and an unknown identity with 404", async ({ browser }) => {
+    // The config's 30s covers the probes themselves; the bounded 429 retries
+    // get their own budget: up to QA_LOGIN_MAX_ATTEMPTS - 1 capped waits per
+    // probe, times two probes (events-list/featured setTimeout precedent).
+    test.setTimeout(
+      30_000 + 2 * (QA_LOGIN_MAX_ATTEMPTS - 1) * QA_LOGIN_RETRY_AFTER_CAP_SECONDS * 1000,
+    );
     const origin = stagingOrigin;
     // Explicitly empty: a bare newContext() inherits the member storageState
     // from the staging config, and these probes must not present a session.
@@ -43,18 +81,23 @@ test.describe("negative QA cases", () => {
       storageState: emptyStorageState,
     });
     try {
-      const bad = await context.request.post("/auth/qa/qa-member", {
-        headers: { "X-TWO-QA-Auth": "staging-e2e-wrong-token", Origin: origin },
-        maxRedirects: 0,
-      });
+      const bad = await sendTokenRequest(
+        "staging QA bad-token probe",
+        "staging-e2e-wrong-token",
+        () =>
+          probeQaStatus(context.request, "qa-member", {
+            "X-TWO-QA-Auth": "staging-e2e-wrong-token",
+            Origin: origin,
+          }),
+      );
       expect(bad.status()).toBe(404);
       const token = process.env.QA_AUTH_TOKEN ?? "";
       // A transport error's text carries the request headers; keep them out of
       // the report.
       const unknown = await sendTokenRequest("staging QA unknown-identity probe", token, () =>
-        context.request.post("/auth/qa/no-such-identity", {
-          headers: { "X-TWO-QA-Auth": token, Origin: origin },
-          maxRedirects: 0,
+        probeQaStatus(context.request, "no-such-identity", {
+          "X-TWO-QA-Auth": token,
+          Origin: origin,
         }),
       );
       expect(unknown.status()).toBe(404);
