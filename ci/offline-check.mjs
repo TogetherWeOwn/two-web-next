@@ -28,8 +28,9 @@ const commands = [
   ["npm", ["run", "lint"]],
   ["npm", ["run", "typecheck"]],
   ["npm", ["run", "config:check"]],
-  // This suite opens SQL even without DATABASE_URL; the other SQL suites skip.
-  ["npm", ["run", "test", "--", "--exclude", "test/review-p1-verify.test.ts"]],
+  // SQL suites skip without DATABASE_URL; test/review-p1-verify.test.ts keeps its
+  // P1-3 refusal proofs offline and gates its live-DB proofs behind skipIf.
+  ["npm", ["run", "test"]],
   [process.execPath, ["--test", ...a11yTests]],
   ["npm", ["run", "test:cutover"]],
   // Smoke self-tests answer a stubbed local HTTP server; they never reach a Worker or database.
