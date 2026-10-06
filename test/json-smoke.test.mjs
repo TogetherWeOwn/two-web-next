@@ -2,14 +2,22 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
+  JSON_SMOKE_CHECKS,
+  JSON_SMOKE_EXPOSURE_GUARDS,
   clearedCookieProblems,
   jsonSmoke,
   parseSetCookie,
+  reportLedger,
   sessionCookieProblems,
   maskCloudflareRay,
   maskNotFoundSuggestions,
+  skippedExposureGuards,
+  skippedLedgerEntries,
 } from "../bin/json-smoke.mjs";
 
 // Loopback implementation of the PR #109 JSON contract plus the staging QA
@@ -1195,3 +1203,261 @@ test("the smoke still fails when only one 404 body carries the suggestions block
   assert.equal(result.ok, false, result.output);
   assert.match(result.output, /FAIL QA bad-token 404 matches missing route/);
 });
+
+function scratchDir(t) {
+  const dir = mkdtempSync(join(tmpdir(), "json-smoke-ledger-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+test("the probe writes a per-check JSON ledger without secrets", async (t) => {
+  const dir = scratchDir(t);
+  const ledgerPath = join(dir, "ledger.json");
+  const { url } = await stub(t);
+  const output = [];
+  const ok = await jsonSmoke(url, {
+    token: TOKEN,
+    ledgerPath,
+    log: (line) => output.push(line),
+  });
+  assert.equal(ok, true, output.join("\n"));
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(ledger.ledger, "json-smoke/1");
+  assert.equal(ledger.origin, new URL(url).origin);
+  assert.deepEqual(
+    ledger.checks.map((entry) => entry.check),
+    JSON_SMOKE_CHECKS,
+  );
+  assert.ok(ledger.checks.every((entry) => entry.status === "pass"));
+  assert.deepEqual(ledger.summary, { total: 14, passed: 14, failed: 0, skipped: 0 });
+  assert.ok(!JSON.stringify(ledger).includes("never-log-this"), JSON.stringify(ledger));
+});
+
+test("the ledger records skipped exposure guards with their reason", async (t) => {
+  const dir = scratchDir(t);
+  const ledgerPath = join(dir, "ledger.json");
+  const { url } = await stub(t, () => {}, { preContract: true });
+  const output = [];
+  const ok = await jsonSmoke(url, {
+    token: TOKEN,
+    ledgerPath,
+    log: (line) => output.push(line),
+  });
+  assert.equal(ok, true, output.join("\n"));
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.deepEqual(ledger.summary, { total: 14, passed: 9, failed: 0, skipped: 5 });
+  const guards = skippedExposureGuards(ledger.checks);
+  assert.deepEqual(
+    guards.map((entry) => entry.check),
+    [
+      "guest show refusal",
+      "collection paging envelope",
+      "JSON show",
+      "cancelled show",
+      "malformed show key",
+    ],
+  );
+  for (const guard of guards) {
+    assert.equal(guard.reason, "event JSON contract not deployed yet (PR #109 pending)");
+  }
+  // Non-guard skips never surface as exposure guards.
+  assert.deepEqual(
+    skippedExposureGuards([
+      { check: "malformed event_key filter", status: "skip", reason: "no QA session" },
+      { check: "JSON show", status: "skip", reason: "no QA session" },
+      { check: "JSON show", status: "pass" },
+    ]).map((entry) => entry.check),
+    ["JSON show"],
+  );
+});
+
+test("CLI --skip-ledger replays every check as skipped without a token or network", async (t) => {
+  const dir = scratchDir(t);
+  const ledgerPath = join(dir, "ledger.json");
+  // No stub server: skip mode must not fetch at all, so even an
+  // unroutable base proves it. The token is empty on purpose.
+  const skipped = await cli(
+    ["--skip-ledger", "staging QA_AUTH_TOKEN is not configured", "--ledger", ledgerPath],
+    { QA_AUTH_TOKEN: "" },
+  );
+  assert.equal(skipped.code, 0, skipped.output);
+  for (const label of JSON_SMOKE_CHECKS) {
+    assert.ok(
+      skipped.output.includes(`SKIP ${label}: staging QA_AUTH_TOKEN is not configured`),
+      `${label}: ${skipped.output}`,
+    );
+  }
+  for (const label of JSON_SMOKE_EXPOSURE_GUARDS) {
+    assert.ok(skipped.output.includes(`SKIP ${label}:`), `${label}: ${skipped.output}`);
+  }
+  assert.match(skipped.output, /json-smoke: 14 checks, 0 failed, 14 skipped/);
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(ledger.checks.length, 14);
+  assert.ok(ledger.checks.every((entry) => entry.status === "skip"));
+  assert.deepEqual(
+    skippedExposureGuards(ledger.checks).map((entry) => entry.check),
+    [...JSON_SMOKE_EXPOSURE_GUARDS],
+  );
+  assert.ok(!skipped.output.includes("never-log-this"), skipped.output);
+});
+
+test("CLI --ledger writes the probe ledger alongside the normal run", async (t) => {
+  const dir = scratchDir(t);
+  const ledgerPath = join(dir, "ledger.json");
+  const { url } = await stub(t);
+  const probed = await cli(["--ledger", ledgerPath, url]);
+  assert.equal(probed.code, 0, probed.output);
+  assert.match(probed.output, /json-smoke: 14 checks, 0 failed, 0 skipped/);
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.deepEqual(ledger.summary, { total: 14, passed: 14, failed: 0, skipped: 0 });
+  assert.equal((await cli(["--ledger"])).code, 2);
+  assert.equal((await cli(["--skip-ledger"])).code, 2);
+  assert.equal((await cli(["--report-ledger", ledgerPath])).code, 2);
+});
+
+test("an unwritable ledger never fails a passing probe", async (t) => {
+  const { url } = await stub(t);
+  const lines = [];
+  const warnings = [];
+  const ok = await jsonSmoke(url, {
+    token: TOKEN,
+    ledgerPath: "/nonexistent-dir-json-smoke/ledger.json",
+    log: (line) => lines.push(line),
+    warn: (line) => warnings.push(line),
+  });
+  assert.equal(ok, true, lines.join("\n"));
+  assert.ok(
+    lines.some((line) => line.includes("ledger write failed")),
+    lines.join("\n"),
+  );
+  assert.ok(
+    warnings.some((line) => line.includes("::warning::json-smoke ledger unwritten")),
+    warnings.join("\n"),
+  );
+  assert.ok(!lines.join("\n").includes("never-log-this"));
+});
+
+test("an unwritable ledger never masks a failing probe", async (t) => {
+  const { url } = await stub(t, (id, result) => {
+    if (id === "qa-404") result.body = withSuggestions(result.body, "<p>x</p>");
+  });
+  const lines = [];
+  const warnings = [];
+  const ok = await jsonSmoke(url, {
+    token: TOKEN,
+    ledgerPath: "/nonexistent-dir-json-smoke/ledger.json",
+    log: (line) => lines.push(line),
+    warn: (line) => warnings.push(line),
+  });
+  assert.equal(ok, false, lines.join("\n"));
+  assert.ok(
+    warnings.some((line) => line.includes("::warning::json-smoke ledger unwritten")),
+    warnings.join("\n"),
+  );
+});
+
+test("CLI --ledger with an unwritable path keeps the passing probe green", async (t) => {
+  const { url } = await stub(t);
+  const probed = await cli(["--ledger", "/nonexistent-dir-json-smoke/ledger.json", url]);
+  assert.equal(probed.code, 0, probed.output);
+  assert.match(probed.output, /json-smoke: 14 checks, 0 failed, 0 skipped/);
+  assert.ok(probed.output.includes("ledger write failed"), probed.output);
+  assert.ok(probed.output.includes("::warning::json-smoke ledger unwritten"), probed.output);
+  assert.ok(probed.output.includes("Tracked follow-up: #531"), probed.output);
+});
+
+test("CLI --skip-ledger with an unwritable path still exits 0", async (t) => {
+  const skipped = await cli(
+    [
+      "--skip-ledger",
+      "staging QA_AUTH_TOKEN is not configured",
+      "--ledger",
+      "/nonexistent-dir-json-smoke/ledger.json",
+    ],
+    { QA_AUTH_TOKEN: "" },
+  );
+  assert.equal(skipped.code, 0, skipped.output);
+  assert.ok(skipped.output.includes("SKIP JSON show:"), skipped.output);
+  assert.ok(skipped.output.includes("ledger write failed"), skipped.output);
+  assert.ok(skipped.output.includes("::warning::json-smoke ledger unwritten"), skipped.output);
+});
+
+test("CLI --report-ledger renders the summary section and warns on skipped guards", async (t) => {
+  const dir = scratchDir(t);
+  const skippedPath = join(dir, "skipped.json");
+  writeLedgerForReport(skippedPath);
+  const reported = await cli(
+    [
+      "--report-ledger",
+      skippedPath,
+      "Staging event-JSON smoke: skipped (no QA token)",
+      "staging json-smoke skipped with unverified exposure guards",
+    ],
+    { QA_AUTH_TOKEN: "" },
+  );
+  assert.equal(reported.code, 0, reported.output);
+  assert.ok(
+    reported.output.includes("## Staging event-JSON smoke: skipped (no QA token)"),
+    reported.output,
+  );
+  assert.ok(reported.output.includes("```json"), reported.output);
+  assert.ok(reported.output.includes('"status":"skip"'), reported.output);
+  assert.ok(
+    reported.output.includes("- JSON show: staging QA_AUTH_TOKEN is not configured"),
+    reported.output,
+  );
+  assert.ok(
+    reported.output.includes(
+      "::warning::staging json-smoke skipped with unverified exposure guards: " +
+        "guest collection refusal (staging QA_AUTH_TOKEN is not configured); " +
+        "guest show refusal (staging QA_AUTH_TOKEN is not configured); " +
+        "collection paging envelope (staging QA_AUTH_TOKEN is not configured); " +
+        "JSON show (staging QA_AUTH_TOKEN is not configured); " +
+        "cancelled show (staging QA_AUTH_TOKEN is not configured); " +
+        "malformed show key (staging QA_AUTH_TOKEN is not configured). Tracked follow-up: #531",
+    ),
+    reported.output,
+  );
+  assert.ok(!reported.output.includes("never-log-this"), reported.output);
+});
+
+test("reportLedger stays quiet when no exposure guard skipped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "json-smoke-ledger-"));
+  const target = join(dir, "ledger.json");
+  const list = [
+    { check: "guest collection refusal", status: "pass" },
+    { check: "malformed event_key filter", status: "skip", reason: "no QA session" },
+    { check: "QA bad-token 404 matches missing route", status: "pass" },
+  ];
+  writeFileSync(target, JSON.stringify({ ledger: "json-smoke/1", origin: null, checks: list }));
+  const lines = [];
+  const warnings = [];
+  reportLedger(target, "heading", "context", {
+    log: (line) => lines.push(line),
+    warn: (line) => warnings.push(line),
+  });
+  const body = lines.join("\n");
+  assert.ok(body.includes("## heading"), body);
+  // Only a non-guard check skipped, so no warning fires.
+  assert.deepEqual(warnings, []);
+  assert.ok(body.includes("Skipped exposure guards: none."), body);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+function writeLedgerForReport(path) {
+  const list = skippedLedgerEntries("staging QA_AUTH_TOKEN is not configured");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      ledger: "json-smoke/1",
+      origin: null,
+      checks: list,
+      summary: {
+        total: list.length,
+        passed: 0,
+        failed: 0,
+        skipped: list.filter((entry) => entry.status === "skip").length,
+      },
+    }),
+  );
+}

@@ -62,10 +62,9 @@ self-tests, cutover self-tests and smoke self-tests. It unsets `DATABASE_URL`,
 `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_*` variables and `PG*` settings
 for every child. Conditional SQL suites then skip, including the fixed
 agent-testdb control in `test/staging-fixed-agent-testdb.test.ts` enabled solely
-by `W1_AGENT_TESTDB=1`. Only Vitest receives the
-fixed `--exclude test/review-p1-verify.test.ts`; this file has unconditional SQL
-cases and a fallback to `agent-testdb` database `postgres`. Unset `DATABASE_URL`
-alone is **not** fixture-only. The command accepts no extra arguments, and
+by `W1_AGENT_TESTDB=1`. `test/review-p1-verify.test.ts` gates its live-DB proofs
+behind the same skip and keeps its P1-3 refusal proofs offline, so Vitest runs
+without exclusions. The command accepts no extra arguments, and
 reports success as **limited evidence**, not a substitute for exact-head CI with
 service-container DB coverage. Appending flags to the full shell-chain `check`
 script sends them to its final cutover command, not the earlier Vitest command.
@@ -73,7 +72,7 @@ script sends them to its final cutover command, not the earlier Vitest command.
 Full `npm run check`, coverage thresholds and required CI gates are unchanged.
 Full database verification must explicitly use
 `postgres://agent_test@agent-testdb:5432/two_web_next` and the migrated schema,
-never that fallback or a live service. Required CI runs the complete suite on
+never a live service. Required CI runs the complete suite on
 its disposable Postgres service.
 
 ## Deploy and record the rollback pointer

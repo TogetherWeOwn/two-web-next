@@ -92,9 +92,9 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite runs. Most live suites skip when
-`DATABASE_URL` is unset, but `test/review-p1-verify.test.ts` falls back to
-agent-testdb's `postgres` database, so an unset URL is not an offline run.
+Always supply the test URL for full-suite runs. Live suites skip when
+`DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB
+proofs behind the same skip and keeps its P1-3 refusal proofs offline.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
