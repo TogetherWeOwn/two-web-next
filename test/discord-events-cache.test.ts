@@ -89,6 +89,56 @@ describe("Discord events cache", () => {
     expect(h.inner.calls()).toBe(2);
   });
 
+  it("does not let a concurrent failure wipe a good read that landed first", async () => {
+    // Two views miss a cold cache together: A 200s, B 429s. B must not write
+    // back its pre-await snapshot over A's good rows.
+    let openA!: () => void;
+    let openB!: () => void;
+    const gateA = new Promise<void>((r) => (openA = r));
+    const gateB = new Promise<void>((r) => (openB = r));
+    let calls = 0;
+    const gated = (gate: Promise<void>, outcome: DiscordTransient[] | "fail") => {
+      let failed = false;
+      const source: DiscordEventsSource = {
+        lastReadFailed: () => failed,
+        async upcoming() {
+          calls += 1;
+          await gate;
+          failed = outcome === "fail";
+          return failed ? [] : (outcome as DiscordTransient[]);
+        },
+      };
+      return source;
+    };
+    let now = 1_000_000;
+    const clock = () => now;
+    const srcA = cachedDiscordEventsSource(env, gated(gateA, [row("1")]), clock);
+    const srcB = cachedDiscordEventsSource(env, gated(gateB, "fail"), clock);
+    const pendingA = srcA.upcoming();
+    const pendingB = srcB.upcoming();
+    openA();
+    expect(await pendingA).toEqual([row("1")]);
+    openB();
+    // B's 429 lands after A's 200: serve A's rows, not the error state.
+    expect(await pendingB).toEqual([row("1")]);
+    expect(srcB.lastReadFailed()).toBe(false);
+    // A view a second later is served from the cache without calling Discord.
+    now += 1_000;
+    let lateCalls = 0;
+    const lateInner: DiscordEventsSource = {
+      lastReadFailed: () => true,
+      async upcoming() {
+        lateCalls += 1;
+        return [];
+      },
+    };
+    const later = cachedDiscordEventsSource(env, lateInner, clock);
+    expect(await later.upcoming()).toEqual([row("1")]);
+    expect(later.lastReadFailed()).toBe(false);
+    expect(lateCalls).toBe(0);
+    expect(calls).toBe(2);
+  });
+
   it("stops serving stale rows once they are older than the stale window", async () => {
     const h = harness([[row("1")], "fail"]);
     await h.request();

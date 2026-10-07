@@ -233,11 +233,21 @@ export function cachedDiscordEventsSource(
           cachedGuilds.set(key, { rows, readAt: clock(), failedAt: null });
           return [...rows];
         }
+        // Race: another view may have filled the cache while this read was in
+        // flight. Re-read instead of writing back the pre-await snapshot — a
+        // 429 landing after a 200 would wipe the good rows and hold down the
+        // error state for ten seconds despite a good read a second earlier.
+        const latest = cachedGuilds.get(key);
+        const latestRecent =
+          latest?.rows && clock() - latest.readAt < DISCORD_CACHE_STALE_MS
+            ? [...latest.rows]
+            : null;
         cachedGuilds.set(key, {
-          rows: entry?.rows ?? null,
-          readAt: entry?.readAt ?? 0,
+          rows: latest?.rows ?? null,
+          readAt: latest?.readAt ?? 0,
           failedAt: clock(),
         });
+        if (latestRecent) return latestRecent;
       }
       if (recent) return recent;
       failed = true;
