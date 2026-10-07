@@ -75,7 +75,8 @@
       "tmp": "0.2.7",
       "@puppeteer/browsers": "3.2.3"
     },
-    "basic-ftp": "6.2.1"
+    "basic-ftp": "6.2.1",
+    "sharp": "0.35.5"
   },
   "engines": {
     "node": "^22.18.0 || >=24"
