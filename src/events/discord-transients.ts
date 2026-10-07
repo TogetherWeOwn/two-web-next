@@ -1,8 +1,8 @@
 // Discord-native scheduled events for the calendar (legacy
 // App\Support\Events\DiscordEventsSource, TOG-5168): the recurring community
 // events live in the bot's database, so the page merges them in as
-// display-only transients — never persisted, never published, never handed to
-// the write-back. Fail-open by contract: a dark collector is the error empty
+// display-only transients — expiring cache bytes, never canonical events,
+// published, or handed to the write-back. Fail-open by contract: a dark collector is the error empty
 // state on an otherwise-empty page, never a 500.
 //
 // One resolve per request (legacy render() resolve rule): the rows and the
@@ -12,6 +12,24 @@
 import type { Env } from "../env";
 import type { DiscordTransient } from "../islands/contracts";
 import { admitScheduledEvent, type AdmittedScheduledEvent } from "./discord-transient-shape";
+import {
+  DISCORD_CACHE_FRESH_MS,
+  type SnapshotCompletion,
+  DISCORD_FAILURE_HOLD_MS,
+  DISCORD_SNAPSHOT_MAX_BYTES,
+  DISCORD_SNAPSHOT_MAX_ROWS,
+  type DiscordSnapshotStore,
+  discordSnapshotKey,
+  encodeDiscordSnapshot,
+  usableDiscordSnapshot,
+} from "./discord-snapshot";
+import { postgresDiscordSnapshotStore } from "./discord-snapshot-postgres";
+
+export {
+  DISCORD_CACHE_FRESH_MS,
+  DISCORD_CACHE_STALE_MS,
+  DISCORD_FAILURE_HOLD_MS,
+} from "./discord-snapshot";
 
 const API = "https://discord.com/api/v10";
 
@@ -25,11 +43,11 @@ const HORIZON_MS = 90 * 86_400_000;
 export const DISCORD_READ_DEADLINE_MS = 1000;
 
 /**
- * Why one read failed, for the warn line only. Never carries a message, URL, header
- * or body: a driver message can echo the bot token. `exception` is the error class
- * name. The error body is deliberately not read: a stalled one must not hold the page.
+ * Why one read failed, for diagnostics and shared retry eligibility. Never carries a message, URL, header
+ * or body: a driver message can echo the bot token. `exception` is a fixed safe
+ * error category. The error body is deliberately not read: a stalled one must not hold the page.
  */
-type ReadFailure = {
+export type ReadFailure = {
   reason: "deadline" | "status" | "aborted" | "no_body" | "invalid_payload" | "exception";
   status?: number;
   retryAfter?: number;
@@ -48,6 +66,8 @@ export interface DiscordEventsSource {
   upcoming(now?: Date): Promise<DiscordTransient[]>;
   /** True when the read behind `upcoming` failed — drives the error state. */
   lastReadFailed(): boolean;
+  /** Sanitized internal metadata from this read, never reparsed from logs. */
+  lastReadFailure?(): ReadFailure | null;
 }
 
 function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
@@ -59,7 +79,7 @@ function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
   if (Number.isNaN(startsAt.getTime())) return null;
   const ends = row.scheduled_end_time == null ? null : new Date(row.scheduled_end_time);
   if (ends && Number.isNaN(ends.getTime())) return null;
-  return {
+  const transient: DiscordTransient = {
     discordId: row.id,
     status: row.status === 2 ? "active" : "scheduled",
     title: row.name,
@@ -69,20 +89,28 @@ function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
     // Preserve no-end voice/stage events; Discord's live status is their boundary.
     endsAt: ends,
   };
+  try {
+    // Malformed live rows are dropped alone; stored corruption rejects the whole snapshot.
+    encodeDiscordSnapshot([transient]);
+    return transient;
+  } catch {
+    return null;
+  }
 }
 
 /** Numeric `retry-after` seconds from a 429; anything else is not worth logging. */
 function retryAfterSeconds(res: Response): number | undefined {
   // `Number(null)` and `Number("")` are 0: an absent header must not log as "retry now".
   const raw = res.headers.get("retry-after")?.trim();
-  if (!raw) return undefined;
+  if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : undefined;
+  // Only representable numeric delays are valid; no HTTP dates or infinity.
+  return Number.isFinite(n) && n * 1000 <= 8_000_000_000_000_000 ? n : undefined;
 }
 
 /** One warn line per failed read: a silent error state cannot be told from an outage. */
 function warnReadFailed(failure: ReadFailure, startedAt: number): void {
-  console.warn("Discord scheduled-events read failed; rendering the error state.", {
+  console.warn("Discord scheduled-events read failed.", {
     ...failure,
     elapsedMs: Date.now() - startedAt,
   });
@@ -95,10 +123,13 @@ function warnReadFailed(failure: ReadFailure, startedAt: number): void {
  */
 export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
   let failed = false;
+  let failure: ReadFailure | null = null;
   return {
     lastReadFailed: () => failed,
+    lastReadFailure: () => failure && { ...failure },
     async upcoming(now = new Date()): Promise<DiscordTransient[]> {
       failed = false;
+      failure = null;
       const startedAt = Date.now();
       const controller = new AbortController();
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -124,7 +155,7 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
           throw new DiscordReadError({
             reason: "status",
             status: res.status,
-            retryAfter: retryAfterSeconds(res),
+            retryAfter: res.status === 429 ? retryAfterSeconds(res) : undefined,
           });
         }
         if (!res.body) throw new DiscordReadError({ reason: "no_body" });
@@ -132,22 +163,23 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         reader = res.body.getReader();
         const decoder = new TextDecoder();
         let json = "";
+        let bytes = 0;
         for (;;) {
           const { done, value } = await reader.read();
           // Cancellation resolves a pending read as done; discard its buffered JSON.
           if (controller.signal.aborted) throw new DiscordReadError({ reason: "aborted" });
           if (done) break;
+          bytes += value.byteLength;
+          if (bytes > DISCORD_SNAPSHOT_MAX_BYTES)
+            throw new DiscordReadError({ reason: "invalid_payload" });
           json += decoder.decode(value, { stream: true });
         }
         return JSON.parse(json + decoder.decode()) as unknown;
       };
       try {
         const rows: unknown = await Promise.race([read(), deadline]);
-        if (!Array.isArray(rows)) {
-          failed = true;
-          warnReadFailed({ reason: "invalid_payload" }, startedAt);
-          return [];
-        }
+        if (!Array.isArray(rows) || rows.length > DISCORD_SNAPSHOT_MAX_ROWS)
+          throw new DiscordReadError({ reason: "invalid_payload" });
         const horizon = now.getTime() + HORIZON_MS;
         return rows
           .map(admitScheduledEvent)
@@ -161,12 +193,21 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         // Cleanup must not extend the deadline if the stream's cancel hook hangs.
         void reader?.cancel().catch(() => {});
         failed = true;
-        warnReadFailed(
+        failure =
           err instanceof DiscordReadError
             ? err.failure
-            : { reason: "exception", exception: err instanceof Error ? err.name : typeof err },
-          startedAt,
-        );
+            : {
+                reason: "exception",
+                exception:
+                  err instanceof TypeError
+                    ? "TypeError"
+                    : err instanceof SyntaxError
+                      ? "SyntaxError"
+                      : err instanceof Error
+                        ? "Error"
+                        : typeof err,
+              };
+        warnReadFailed(failure, startedAt);
         return [];
       } finally {
         clearTimeout(timer);
@@ -176,82 +217,83 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
   };
 }
 
-/**
- * Discord rate-limits the scheduled-events route hard: on staging every second
- * page view in a burst got a 429 with `retry-after` of 1-10 s, and a 429 on an
- * otherwise-empty page is the error state. The legacy reader cached for ten
- * minutes (DiscordEventsReader::CACHE_SECONDS), so a page view never called out.
- * Same idea here, kept per isolate: plain data in module scope, never a shared
- * promise or stream (a Worker cannot await another request's I/O).
- */
-export const DISCORD_CACHE_FRESH_MS = 60_000;
-/** A failed read serves the last good one this long, matching the legacy ten-minute cache. */
-export const DISCORD_CACHE_STALE_MS = 10 * 60_000;
-/** After a failed read, leave Discord alone at least as long as its longest observed `retry-after`. */
-export const DISCORD_FAILURE_HOLD_MS = 10_000;
-
-interface CachedGuild {
-  rows: DiscordTransient[] | null;
-  readAt: number;
-  failedAt: number | null;
-}
-
-const cachedGuilds = new Map<string, CachedGuild>();
-
-/** Test seam: the cache is module state, so suites that mock `fetch` reset it between cases. */
-export function resetDiscordEventsCache(): void {
-  cachedGuilds.clear();
-}
-
-/**
- * The live reader behind a per-isolate cache: a fresh read is served without
- * calling Discord, a failed read serves the last good rows while they are
- * still recent (no error state: the data is real, just a few minutes old), and
- * a failure holds Discord off for a few seconds so a burst cannot keep earning
- * 429s. With nothing recent to serve, the failure is the error state, as before.
- */
+/** Shared completed snapshots and atomic admission; the HTTP reader remains request-owned. */
 export function cachedDiscordEventsSource(
   env: Env,
   inner: DiscordEventsSource = liveDiscordEventsSource(env),
-  clock: () => number = () => Date.now(),
+  store: DiscordSnapshotStore = postgresDiscordSnapshotStore(env),
 ): DiscordEventsSource {
   let failed = false;
   return {
     lastReadFailed: () => failed,
     async upcoming(now = new Date()): Promise<DiscordTransient[]> {
       failed = false;
-      const key = env.DISCORD_GUILD_ID;
-      const entry = cachedGuilds.get(key);
-      const t = clock();
-      const recent =
-        entry?.rows && t - entry.readAt < DISCORD_CACHE_STALE_MS ? [...entry.rows] : null;
-      if (entry?.rows && recent && t - entry.readAt < DISCORD_CACHE_FRESH_MS) return recent;
-      const held = entry?.failedAt != null && t - entry.failedAt < DISCORD_FAILURE_HOLD_MS;
-      if (!held) {
-        const rows = await inner.upcoming(now);
-        if (!inner.lastReadFailed()) {
-          cachedGuilds.set(key, { rows, readAt: clock(), failedAt: null });
-          return [...rows];
+      try {
+        const key = discordSnapshotKey(env);
+        const claimStartedAt = performance.now();
+        const claim = await store.claim(key);
+        usableDiscordSnapshot(claim);
+        let snapshot = claim;
+        let liveRows: DiscordTransient[] | null = null;
+        let completionFailed = false;
+        if (claim.token) {
+          let result: SnapshotCompletion = { retryMs: DISCORD_FAILURE_HOLD_MS };
+          try {
+            const rows = await inner.upcoming(now);
+            if (!inner.lastReadFailed()) {
+              result = { payload: encodeDiscordSnapshot(rows) };
+              liveRows = rows;
+            } else {
+              const failure = inner.lastReadFailure?.();
+              const retry = failure?.status === 429 ? failure.retryAfter : undefined;
+              if (
+                typeof retry === "number" &&
+                Number.isFinite(retry) &&
+                retry >= 0 &&
+                retry * 1000 <= 8_000_000_000_000_000
+              )
+                result = { retryMs: Math.max(DISCORD_FAILURE_HOLD_MS, Math.ceil(retry * 1000)) };
+            }
+          } catch {
+            // A throwing reader or rejected payload is a failed refresh, not a success.
+          }
+          try {
+            snapshot = { ...(await store.complete(key, claim.token, result)), token: null };
+          } catch {
+            completionFailed = true;
+            // Keep valid live data, or re-check the claim's stale age after the I/O above.
+            snapshot = {
+              ...claim,
+              now: claim.now + Math.max(0, performance.now() - claimStartedAt),
+            };
+          }
         }
-        // Race: another view may have filled the cache while this read was in
-        // flight. Re-read instead of writing back the pre-await snapshot — a
-        // 429 landing after a 200 would wipe the good rows and hold down the
-        // error state for ten seconds despite a good read a second earlier.
-        const latest = cachedGuilds.get(key);
-        const latestRecent =
-          latest?.rows && clock() - latest.readAt < DISCORD_CACHE_STALE_MS
-            ? [...latest.rows]
-            : null;
-        cachedGuilds.set(key, {
-          rows: latest?.rows ?? null,
-          readAt: latest?.readAt ?? 0,
-          failedAt: clock(),
+        const recent = liveRows ?? usableDiscordSnapshot(snapshot);
+        failed = recent === null;
+        // One bounded diagnostic per request, never a key, payload or error message.
+        console.info("Discord snapshot outcome", {
+          outcome: failed
+            ? "cold"
+            : snapshot.retryAt > snapshot.now
+              ? "held"
+              : snapshot.now - snapshot.succeededAt! < DISCORD_CACHE_FRESH_MS
+                ? "fresh"
+                : "stale",
+          completionFailed,
         });
-        if (latestRecent) return latestRecent;
+        return recent ?? [];
+      } catch (err) {
+        // No unadmitted live read on storage/corruption failure. Only known SQLSTATE
+        // codes may leave the store; never log the driver's message or other fields.
+        failed = true;
+        const rawCode = err && typeof err === "object" && "code" in err ? err.code : undefined;
+        const code =
+          typeof rawCode === "string" && ["42501", "42P01", "55P03", "57014"].includes(rawCode)
+            ? rawCode
+            : undefined;
+        console.warn("Discord snapshot outcome", { outcome: "error", code });
+        return [];
       }
-      if (recent) return recent;
-      failed = true;
-      return [];
     },
   };
 }

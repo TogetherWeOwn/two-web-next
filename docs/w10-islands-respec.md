@@ -118,7 +118,8 @@ TOG-5624 share tags, TOG-8400 search logging, TOG-7332 announcements, TOG-6958 t
   Host-zone event/today buckets use the same canonical ISO years, interpreting
   Gregorian eras (1 BC = year zero); unsupported implicit host months fall back.
 - Drafts invisible to non-moderators including inside search; withCount aggregate (no N+1);
-  Discord display-only transients merged in start order, never persisted/published.
+  Discord display-only transients merged in start order. [Expiring shared snapshots](discord-snapshots.md)
+  are not canonical events and never enter feeds, RSVP or write-back.
 - Drift tests pin: requests per action (single in flight, abort), all empty states,
   URL-bound search, grid math (weeks/today/fallbacks), draft invisibility, log shape.
 

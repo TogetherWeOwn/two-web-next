@@ -88,6 +88,10 @@
     {
       "path": "drizzle/1020_event-sync-revisions.sql",
       "sha256": "33ad25cddd846eae9ba35c1265fc1584fcfa4c8ad3334e03ecfba556824be8f8"
+    },
+    {
+      "path": "drizzle/1021_discord-event-snapshots.sql",
+      "sha256": "e0b67fd7455fe9edae9e940b6a64b4e6b84174958a4ec02f7e908dd77514eab1"
     }
   ]
 }

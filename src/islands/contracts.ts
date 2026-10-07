@@ -403,7 +403,7 @@ export function gridTitle(title: string): string {
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the
- * upcoming list in start order — never persisted, never published, never
+ * upcoming list in start order — expiring cache bytes, never canonical events, published, or
  * handed to the write-back. A transient card shows the Discord RSVP link and
  * no going count. */
 export interface DiscordTransient {

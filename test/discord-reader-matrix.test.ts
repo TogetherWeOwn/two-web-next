@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { liveDiscordEventsSource, resetDiscordEventsCache } from "../src/events/discord-transients";
+import { liveDiscordEventsSource } from "../src/events/discord-transients";
 import { registerEventRoutes } from "../src/events/routes";
 import { EVENTS_EMPTY_ERROR_TESTID, EVENTS_EMPTY_SEARCH_TESTID } from "../src/islands/contracts";
 
@@ -58,7 +58,6 @@ describe("Discord transient reader matrix", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-    resetDiscordEventsCache();
   });
 
   it("filters rows with invalid id, time or name and keeps healthy siblings", async () => {

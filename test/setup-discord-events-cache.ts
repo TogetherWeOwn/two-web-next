@@ -1,6 +1,12 @@
-// The Discord events cache is module state that outlives a request, so a read cached by one
-// test would answer the next test's mocked `fetch`. Reset it before every case.
-import { beforeEach } from "vitest";
-import { resetDiscordEventsCache } from "../src/events/discord-transients";
+// Route fixtures share test-owned completed bytes only. Production never uses this store.
+import { beforeEach, vi } from "vitest";
+import { memoryDiscordBacking, memoryDiscordStore } from "./helpers/discord-snapshot-store";
 
-beforeEach(() => resetDiscordEventsCache());
+let backing = memoryDiscordBacking();
+vi.mock("../src/events/discord-snapshot-postgres", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/events/discord-snapshot-postgres")>()),
+  postgresDiscordSnapshotStore: () => memoryDiscordStore(backing),
+}));
+beforeEach(() => {
+  backing = memoryDiscordBacking();
+});
