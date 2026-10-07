@@ -8,10 +8,15 @@ PRs, logs or command arguments.
 
 ## Environment model
 
-- **dev:** local Wrangler plus untracked `.dev.vars`; SQL tests use only
-  `agent-testdb`, database `two_web_next`, user `agent_test`, empty password.
-  CI uses its disposable Postgres service. Never test/probe/verify production
-  or staging databases. On a credential failure, stop without substitution.
+- **dev:** local Wrangler plus untracked `.dev.vars`; SQL tests use the central
+  `testDatabaseUrl` guard: `agent-testdb:5432` with user `agent_test`, an empty
+  password, and database `postgres`, `two_web_next`, `w15_tests`, or numeric
+  `two_web_next_tog<digits>`. Arbitrary database names are refused. The disposable
+  CI Postgres service is accepted only with both CI flags set to `true` and its
+  `localhost:5432/postgres` coordinates plus `postgres:ci` credentials. Full
+  local checks use a fresh run-owned database, not shared `two_web_next`. Never
+  test/probe/verify production or staging databases. On a credential failure, stop
+  without substitution.
 - **staging:** the checked-in **top-level** Worker configuration points at
   `next.togetherweown.com`. The GitHub Environment `staging` is a deployment
   gate, not a Wrangler named environment. Worker name is `two-web-next`;
