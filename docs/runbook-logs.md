@@ -60,9 +60,19 @@ No Logpush or external shipping is configured by this change.
 
 ```sh
 # Focused request/correlation tests use fixtures only.
-env -u DATABASE_URL -u BOT_DATABASE_URL npx vitest run test/request-log.test.ts test/request-correlation.test.ts test/alerts.test.ts
-# The full suite includes real SQL proofs; pin it to the authorized test DB.
-env -u BOT_DATABASE_URL DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next npm run check
+env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL \
+  -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
+  npx vitest run test/request-log.test.ts test/request-correlation.test.ts test/alerts.test.ts
+# First create a fresh run-owned database following README's database setup; replace the suffix.
+export TEST_DB=two_web_next_tog1234567890123456
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/${TEST_DB}"
+export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+unset LEGACY_DATABASE_URL
+export PGPASSWORD=
+export W1_AGENT_TESTDB=0
+npm run db:migrate
+npm run db:check
+env -u BOT_DATABASE_URL npm run check
 ```
 
 Never point tests or probes at staging or production databases.
