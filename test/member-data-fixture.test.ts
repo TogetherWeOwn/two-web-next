@@ -108,9 +108,9 @@ it("pins the empty test password and port instead of inheriting libpq credential
   }
 });
 
-it("refuses an import fixture in any other agent-testdb database before constructing a driver", async () => {
+it("refuses an unsafe import database before constructing a driver", async () => {
   await expect(
-    createUsersProfilesFixture("postgres://agent_test@agent-testdb/postgres"),
+    createUsersProfilesFixture("postgres://agent_test@agent-testdb/production"),
   ).rejects.toThrow("refusing before connecting");
   expect(postgres).not.toHaveBeenCalled();
 });

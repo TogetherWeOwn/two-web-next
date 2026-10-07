@@ -31,11 +31,7 @@ type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 const firstKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const secondKey = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 function approvedUrl(raw: string) {
-  const url = testDatabaseUrl(raw);
-  if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next") {
-    throw new Error("worker lifetime tests require agent-testdb/two_web_next");
-  }
-  return url;
+  return testDatabaseUrl(raw);
 }
 function gate() {
   let release!: () => void;

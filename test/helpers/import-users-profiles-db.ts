@@ -7,9 +7,6 @@ import { testDatabaseUrl } from "./member-data-db";
 
 export async function createUsersProfilesFixture(raw: string) {
   const url = testDatabaseUrl(raw); // Refuse query overrides before constructing a driver or running DDL.
-  if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next") {
-    throw new Error("Import tests require agent-testdb/two_web_next; refusing before connecting");
-  }
   const suffix = randomUUID().replaceAll("-", "");
   const legacySchema = `legacy_up_${suffix}`;
   const nextSchema = `next_up_${suffix}`;

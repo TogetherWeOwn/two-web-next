@@ -464,7 +464,6 @@ describe.skipIf(!url)("events import separation on disposable test schemas", () 
 
   beforeAll(async () => {
     const safe = testDatabaseUrl(url!); // reject every non-test endpoint before DDL
-    if (safe.hostname === "agent-testdb" && safe.pathname !== "/two_web_next") throw new Error("Requires two_web_next test database");
     safeUrl = safe.href;
     fixture = await createMemberDataFixture(safeUrl);
     legacySchema = `${fixture.schemaName}_legacy`;

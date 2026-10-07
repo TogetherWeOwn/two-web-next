@@ -53,6 +53,7 @@ describe("global test-database guard matrix", () => {
     "postgres://agent_test@agent-testdb:5432/two_web_next",
     "postgres://agent_test@agent-testdb/two_web_next_tog12345",
     "postgres://agent_test@agent-testdb:5432/two_web_next_tog12345",
+    "postgres://agent_test@agent-testdb/two_web_next_tog1234567890123456",
   ])("allows agent-testdb URL %s", (raw) => {
     expect(testDatabaseUrl(raw, {}).hostname).toBe("agent-testdb");
   });

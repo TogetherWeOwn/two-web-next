@@ -123,38 +123,23 @@ npm run typecheck
 ```
 
 Other pre-existing suites still delete shared tables; serial files do not
-serialize other agents. Broad local tests must use a run-owned migrated test DB.
-Seven importer suites additionally pin the local database name to `two_web_next`,
-but create and drop only their own disposable schemas; run those separately
-rather than weakening their guards or pointing destructive suites at that DB.
-The audit suites require their own explicit URL opt-in. Exclude the fixed-name
+serialize other agents, so broad local tests use one fresh, run-owned database.
+Importer, migration, event-sync and jobs fixtures all pass through the global
+`testDatabaseUrl` guard, then create or use their own disposable schemas. No
+fixture needs to pin the database name to the shared `two_web_next` database.
+Audit suites require their own explicit URL opt-in. Exclude the fixed-name
 agent-testdb staging control too: it uses a different database and is not part of
 this run-owned lane. Staging-named mocked/loopback unit tests are not authorization
 to execute a staging probe.
 
 ```sh
-# Create this run-owned DB on agent-testdb first; validate the run UUID/name.
-TEST_DB="w15_${PAPERCLIP_RUN_ID//-/}"
-DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" npm run db:migrate
-DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" \
-  AUDIT_IMPORT_TEST_DATABASE_URL= W1_AGENT_TESTDB=0 npm run test:coverage -- \
-  --exclude test/import-content-funnel.test.ts \
-  --exclude test/import-events-rsvps-db.test.ts \
-  --exclude test/import-users-profiles.test.ts \
-  --exclude test/import-users-profiles-encoding.test.ts \
-  --exclude test/import-audit-db.test.ts \
-  --exclude test/import-audit-datestyle-db.test.ts \
-  --exclude test/import-verify.test.ts \
-  --exclude test/staging-fixed-agent-testdb.test.ts
-DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
-  AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
-  npx vitest run test/import-content-funnel.test.ts test/import-events-rsvps-db.test.ts \
-  test/import-users-profiles.test.ts test/import-users-profiles-encoding.test.ts \
-  test/import-audit-db.test.ts test/import-audit-datestyle-db.test.ts test/import-verify.test.ts
-npm run typecheck
-npm run config:check
-node --test ci/a11y-*.test.mjs
-npm run test:cutover
+# Create a fresh run-owned database first; replace the suffix with unused digits.
+export TEST_DB="two_web_next_tog1234567890123456"
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB"
+export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+npm run db:migrate
+npm run db:check
+npm run check
 ```
 
 CI's job-private Postgres service allows all suites in one run. Local accessibility

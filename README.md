@@ -74,14 +74,19 @@ defaults and failure behaviour. Use only test credentials for local auth.
 ### Database and migrations
 
 Schema is in `src/db/`, migrations in `drizzle/`. Tests are permitted only on
-`agent-testdb` (database `two_web_next`, user `agent_test`, empty password), the
-CI job's disposable Postgres service, or local fixtures. **Never point tests,
-probes or verification at a production or staging database.** If access fails,
-stop; do not substitute another credential or database.
+`agent-testdb` (user `agent_test`, empty password), the CI job's disposable
+Postgres service, or local fixtures. For a full local check, use a fresh,
+run-owned database named `two_web_next_tog<unique-digits>`; do not run the full
+suite against the shared `two_web_next` database. **Never point tests, probes or
+verification at a production or staging database.** If access fails, stop; do
+not substitute another credential or database.
 
 ```sh
-export DATABASE_URL="postgres://agent_test@agent-testdb:5432/two_web_next"
-npm run db:migrate    # apply the tracked migrations to this test database
+# Create a new isolated test database first; replace the numeric suffix each run.
+export TEST_DB=two_web_next_tog1234567890123456
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/${TEST_DB}"
+export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+npm run db:migrate    # apply tracked migrations to this run-owned test database
 npm run db:check      # validate migration history
 npm run format        # formatting only; no lint fixes or import reordering
 npm run lint          # read-only Biome lint + format gate
@@ -102,7 +107,7 @@ run concurrent suites against the same test database.
 ## Coverage ratchet
 
 ```sh
-DATABASE_URL="postgres://agent_test@agent-testdb:5432/two_web_next" npm run test:coverage
+DATABASE_URL="postgres://agent_test@agent-testdb:5432/two_web_next_tog1234567890123456" npm run test:coverage
 node ci/coverage-summary.mjs
 ```
 
