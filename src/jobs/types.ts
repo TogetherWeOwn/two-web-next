@@ -86,6 +86,14 @@ export interface EventStore {
   needsSync(eventKey: string): Promise<boolean>;
   /** Recovery preserves request identity, eligibility and attempts across carriers. */
   pendingSync(eventKey: string): Promise<SyncAttempt | null>;
+  /**
+   * True when the current `sync_revision` carries a `failed` (definitive
+   * refusal) snapshot. `needsSync` is false for both clean and refused
+   * revisions, so reconciliation must check this before treating a clean
+   * read as obsolete — deleting the only ledger evidence of an event that
+   * never reached Discord is forbidden (docs/runbook.md).
+   */
+  hasFailedSync?(eventKey: string): Promise<boolean>;
   /** Published events past ends_at -> past. Returns rows changed. */
   closeFinished(now: Date): Promise<number>;
   /** Top up every live series (draft/published parent). Returns rows created; idempotent. */
