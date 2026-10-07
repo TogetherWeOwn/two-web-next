@@ -62,6 +62,7 @@ export function memoryDiscordStore(backing: MemoryDiscordBacking): DiscordSnapsh
   return {
     async claim(key) {
       let entry = backing.entries.get(key);
+      const nowQueryStartedAt = performance.now();
       const now = backing.clock();
       const initial = read(key);
       const rows = usableDiscordSnapshot(initial);
@@ -70,7 +71,7 @@ export function memoryDiscordStore(backing: MemoryDiscordBacking): DiscordSnapsh
         initial.retryAt > now ||
         (initial.leaseExpiresAt ?? 0) > now
       )
-        return { ...initial, token: null };
+        return { ...initial, token: null, nowQueryStartedAt };
       if (!entry) {
         let removed = 0;
         for (const [k, v] of backing.entries) {
@@ -90,7 +91,7 @@ export function memoryDiscordStore(backing: MemoryDiscordBacking): DiscordSnapsh
       }
       entry.token = crypto.randomUUID();
       entry.leaseExpiresAt = now + DISCORD_REFRESH_LEASE_MS;
-      return { ...read(key), token: entry.token };
+      return { ...read(key), token: entry.token, nowQueryStartedAt };
     },
     async complete(key, token, result) {
       const entry = backing.entries.get(key);

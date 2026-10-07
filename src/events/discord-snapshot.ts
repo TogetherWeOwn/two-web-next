@@ -18,7 +18,11 @@ export type SnapshotView = {
   leaseExpiresAt: number | null;
   now: number;
 };
-export type SnapshotClaim = SnapshotView & { token: string | null };
+export type SnapshotClaim = SnapshotView & {
+  token: string | null;
+  /** Monotonic time before the DB query that sampled `now`, for conservative stale-age rechecks. */
+  nowQueryStartedAt?: number;
+};
 export type SnapshotCompletion = { payload: string } | { retryMs: number };
 
 /** Completed values only. Every implementation owns its clock and fences completion. */

@@ -32,6 +32,14 @@ export {
 } from "./discord-snapshot";
 
 const API = "https://discord.com/api/v10";
+const SAFE_SNAPSHOT_SQLSTATES = ["42501", "42P01", "55P03", "57014"];
+
+function safeSnapshotSqlState(error: unknown): string | undefined {
+  const rawCode = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  return typeof rawCode === "string" && SAFE_SNAPSHOT_SQLSTATES.includes(rawCode)
+    ? rawCode
+    : undefined;
+}
 
 /** Discord guild scheduled-event statuses we show: 1 scheduled, 2 active. */
 const LIVE_STATUSES = new Set([1, 2]);
@@ -230,12 +238,19 @@ export function cachedDiscordEventsSource(
       failed = false;
       try {
         const key = discordSnapshotKey(env);
-        const claimStartedAt = performance.now();
         const claim = await store.claim(key);
+        const claimReturnedAt = performance.now();
+        const claimClockAnchor =
+          typeof claim.nowQueryStartedAt === "number" &&
+          Number.isFinite(claim.nowQueryStartedAt) &&
+          claim.nowQueryStartedAt <= claimReturnedAt
+            ? claim.nowQueryStartedAt
+            : null;
         usableDiscordSnapshot(claim);
         let snapshot = claim;
         let liveRows: DiscordTransient[] | null = null;
         let completionFailed = false;
+        let completionCode: string | undefined;
         if (claim.token) {
           let result: SnapshotCompletion = { retryMs: DISCORD_FAILURE_HOLD_MS };
           try {
@@ -259,16 +274,21 @@ export function cachedDiscordEventsSource(
           }
           try {
             snapshot = { ...(await store.complete(key, claim.token, result)), token: null };
-          } catch {
+          } catch (error) {
             completionFailed = true;
-            // Keep valid live data, or re-check the claim's stale age after the I/O above.
+            completionCode = safeSnapshotSqlState(error);
+            // Keep valid live data, or re-check stale age from the DB-clock query start.
             snapshot = {
               ...claim,
-              now: claim.now + Math.max(0, performance.now() - claimStartedAt),
+              ...(claimClockAnchor === null
+                ? {}
+                : { now: claim.now + Math.max(0, performance.now() - claimClockAnchor) }),
             };
           }
         }
-        const recent = liveRows ?? usableDiscordSnapshot(snapshot);
+        const recent = completionFailed
+          ? (liveRows ?? (claimClockAnchor === null ? null : usableDiscordSnapshot(snapshot)))
+          : usableDiscordSnapshot(snapshot);
         failed = recent === null;
         // One bounded diagnostic per request, never a key, payload or error message.
         console.info("Discord snapshot outcome", {
@@ -280,17 +300,14 @@ export function cachedDiscordEventsSource(
                 ? "fresh"
                 : "stale",
           completionFailed,
+          ...(completionCode ? { code: completionCode } : {}),
         });
         return recent ?? [];
       } catch (err) {
         // No unadmitted live read on storage/corruption failure. Only known SQLSTATE
         // codes may leave the store; never log the driver's message or other fields.
         failed = true;
-        const rawCode = err && typeof err === "object" && "code" in err ? err.code : undefined;
-        const code =
-          typeof rawCode === "string" && ["42501", "42P01", "55P03", "57014"].includes(rawCode)
-            ? rawCode
-            : undefined;
+        const code = safeSnapshotSqlState(err);
         console.warn("Discord snapshot outcome", { outcome: "error", code });
         return [];
       }

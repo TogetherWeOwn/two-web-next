@@ -254,6 +254,40 @@ describe("shared Discord snapshots", () => {
       expect(h.calls()).toBe(1);
     },
   );
+  it("logs only an allowlisted SQLSTATE when completion storage fails", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const h = harness([[row()]]),
+        store = memoryDiscordStore(h.backing);
+      const source = cachedDiscordEventsSource(env, h.inner, {
+        claim: store.claim,
+        complete: async () => {
+          throw Object.assign(new Error("private DSN"), { code: "55P03" });
+        },
+      });
+      expect(await source.upcoming()).toEqual([row()]);
+      expect(source.lastReadFailed()).toBe(false);
+      expect(info).toHaveBeenNthCalledWith(
+        1,
+        "Discord snapshot outcome",
+        expect.objectContaining({ completionFailed: true, code: "55P03" }),
+      );
+
+      const unsafe = harness([[row()]]),
+        unsafeStore = memoryDiscordStore(unsafe.backing);
+      const unsafeSource = cachedDiscordEventsSource(env, unsafe.inner, {
+        claim: unsafeStore.claim,
+        complete: async () => {
+          throw Object.assign(new Error("private DSN"), { code: "P0001" });
+        },
+      });
+      expect(await unsafeSource.upcoming()).toEqual([row()]);
+      expect(info.mock.calls[1]?.[1]).not.toHaveProperty("code");
+      expect(JSON.stringify(info.mock.calls)).not.toContain("private DSN");
+    } finally {
+      info.mockRestore();
+    }
+  });
   it("uses a usable stale snapshot when completion storage fails after a read failure", async () => {
     const stale = [row("stale")],
       h = harness([stale, "fail"]),
@@ -271,6 +305,117 @@ describe("shared Discord snapshots", () => {
     expect(await source.upcoming()).toEqual(stale);
     expect(source.lastReadFailed()).toBe(false);
     expect(h.calls()).toBe(2);
+  });
+  it("does not count claim latency twice when rechecking stale age", async () => {
+    vi.useFakeTimers();
+    try {
+      const stale = [row("stale")],
+        h = harness([stale]),
+        store = memoryDiscordStore(h.backing);
+      await h.request();
+      h.advance(DISCORD_CACHE_STALE_MS - 600);
+      let failed = false;
+      const source = cachedDiscordEventsSource(
+        env,
+        {
+          lastReadFailed: () => failed,
+          async upcoming() {
+            await new Promise<void>((resolve) => setTimeout(resolve, 200));
+            h.advance(200);
+            failed = true;
+            return [];
+          },
+        },
+        {
+          claim: async (key) => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 300));
+            h.advance(300);
+            return store.claim(key);
+          },
+          complete: async () => {
+            throw new Error();
+          },
+        },
+      );
+      const pending = source.upcoming();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await pending).toEqual(stale);
+      expect(source.lastReadFailed()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("includes post-sample claim completion latency in stale-age checks", async () => {
+    vi.useFakeTimers();
+    try {
+      const stale = [row("stale")],
+        h = harness([stale, "fail"]),
+        store = memoryDiscordStore(h.backing);
+      await h.request();
+      h.advance(DISCORD_CACHE_STALE_MS - 10);
+      const source = cachedDiscordEventsSource(env, h.inner, {
+        claim: async (key) => {
+          const claim = await store.claim(key);
+          await new Promise<void>((resolve) => setTimeout(resolve, 20));
+          h.advance(20);
+          return claim;
+        },
+        complete: async () => {
+          throw new Error();
+        },
+      });
+      const pending = source.upcoming();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await pending).toEqual([]);
+      expect(source.lastReadFailed()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("fails closed to stale data when completion fails without a claim clock anchor", async () => {
+    vi.useFakeTimers();
+    try {
+      const stale = [row("stale")],
+        h = harness([stale, "fail"]),
+        store = memoryDiscordStore(h.backing);
+      await h.request();
+      h.advance(DISCORD_CACHE_STALE_MS - 500);
+      const source = cachedDiscordEventsSource(env, h.inner, {
+        claim: async (key) => {
+          const claim = await store.claim(key);
+          delete claim.nowQueryStartedAt;
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          h.advance(500);
+          return claim;
+        },
+        complete: async () => {
+          throw new Error();
+        },
+      });
+      const pending = source.upcoming();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await pending).toEqual([]);
+      expect(source.lastReadFailed()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("serves live rows when completion fails without a claim clock anchor", async () => {
+    const rows = [row()],
+      h = harness([rows]),
+      store = memoryDiscordStore(h.backing);
+    const source = cachedDiscordEventsSource(env, h.inner, {
+      claim: async (key) => {
+        const claim = await store.claim(key);
+        delete claim.nowQueryStartedAt;
+        return claim;
+      },
+      complete: async () => {
+        throw new Error();
+      },
+    });
+    expect(await source.upcoming()).toEqual(rows);
+    expect(source.lastReadFailed()).toBe(false);
   });
   it("reports failure when completion fails and neither live nor stale data are available", async () => {
     const h = harness(["fail"]),

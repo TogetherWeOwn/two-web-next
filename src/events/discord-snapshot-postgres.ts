@@ -57,6 +57,7 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
   const run = async <T>(
     key: string,
     body: (tx: Tx, check: () => void) => Promise<T>,
+    refreshClaimClock = false,
   ): Promise<T> => {
     if (!key || key.length > 512) throw new DiscordSnapshotError();
     const client = connect();
@@ -84,16 +85,34 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
       return body(tx, check);
     });
     try {
-      return (await Promise.race([operation, deadline])) as T;
+      const result = await Promise.race([operation, deadline]);
+      if (
+        refreshClaimClock &&
+        result &&
+        typeof result === "object" &&
+        "token" in result &&
+        result.token
+      ) {
+        const nowQueryStartedAt = performance.now();
+        const [row] = await Promise.race([client`select clock_timestamp() as now`, deadline]);
+        check();
+        if (!row) throw new DiscordSnapshotError();
+        const now = new Date(row.now as string | Date).getTime();
+        if (!Number.isFinite(now)) throw new DiscordSnapshotError();
+        Object.assign(result, { now, nowQueryStartedAt });
+      }
+      return result as T;
     } finally {
       expired = true;
       clearTimeout(timer);
       await client.end({ timeout: 0 });
     }
   };
+  const runClaim = <T>(key: string, body: (tx: Tx, check: () => void) => Promise<T>) =>
+    run(key, body, true);
   return {
     claim: (key) =>
-      run(key, async (tx, check) => {
+      runClaim(key, async (tx, check) => {
         let initial = await read(tx, key);
         check();
         if (refreshHeld(initial)) return { ...initial, token: null };
