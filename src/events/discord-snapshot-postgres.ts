@@ -57,7 +57,6 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
   const run = async <T>(
     key: string,
     body: (tx: Tx, check: () => void) => Promise<T>,
-    refreshClaimClock = false,
   ): Promise<T> => {
     if (!key || key.length > 512) throw new DiscordSnapshotError();
     const client = connect();
@@ -86,21 +85,6 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
     });
     try {
       const result = await Promise.race([operation, deadline]);
-      if (
-        refreshClaimClock &&
-        result &&
-        typeof result === "object" &&
-        "token" in result &&
-        result.token
-      ) {
-        const nowQueryStartedAt = performance.now();
-        const [row] = await Promise.race([client`select clock_timestamp() as now`, deadline]);
-        check();
-        if (!row) throw new DiscordSnapshotError();
-        const now = new Date(row.now as string | Date).getTime();
-        if (!Number.isFinite(now)) throw new DiscordSnapshotError();
-        Object.assign(result, { now, nowQueryStartedAt });
-      }
       return result as T;
     } finally {
       expired = true;
@@ -108,11 +92,9 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
       await client.end({ timeout: 0 });
     }
   };
-  const runClaim = <T>(key: string, body: (tx: Tx, check: () => void) => Promise<T>) =>
-    run(key, body, true);
   return {
     claim: (key) =>
-      runClaim(key, async (tx, check) => {
+      run(key, async (tx, check) => {
         let initial = await read(tx, key);
         check();
         if (refreshHeld(initial)) return { ...initial, token: null };
@@ -146,6 +128,8 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
         const token = crypto.randomUUID();
         // Atomic current-row admission, never granted by the preceding SELECT.
         // https://www.postgresql.org/docs/17/sql-insert.html#SQL-ON-CONFLICT
+        // Anchor before the same RETURNING clock sample; never strand a lease on a second query.
+        const nowQueryStartedAt = performance.now();
         const [claimed] = initial.exists
           ? await tx`
         update discord_event_snapshots set lease_token = ${token}::uuid,
@@ -168,6 +152,7 @@ export function pgDiscordSnapshotStore(connect: () => Sql): DiscordSnapshotStore
         return {
           ...(claimed ? view(claimed) : await read(tx, key)),
           token: claimed ? token : null,
+          ...(claimed ? { nowQueryStartedAt } : {}),
         };
       }),
     complete: (key, token, result: SnapshotCompletion) =>
