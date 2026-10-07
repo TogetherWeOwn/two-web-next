@@ -9,9 +9,9 @@ import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { liveDiscordEventsSource } from "../src/events/discord-transients";
+import { liveDiscordEventsSource, resetDiscordEventsCache } from "../src/events/discord-transients";
 import { registerEventRoutes } from "../src/events/routes";
-import { EVENTS_EMPTY_ERROR_TESTID } from "../src/islands/contracts";
+import { EVENTS_EMPTY_ERROR_TESTID, EVENTS_EMPTY_SEARCH_TESTID } from "../src/islands/contracts";
 
 const NOW = new Date("2030-01-01T00:00:00Z");
 const TOKEN = "fixture-bot-token-must-never-echo";
@@ -58,6 +58,7 @@ describe("Discord transient reader matrix", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    resetDiscordEventsCache();
   });
 
   it("filters rows with invalid id, time or name and keeps healthy siblings", async () => {
@@ -125,5 +126,23 @@ describe("Discord transient reader matrix", () => {
     expect(await source.upcoming(NOW)).toEqual([]);
     expect(source.lastReadFailed()).toBe(false);
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it("keeps the search-miss block when Discord rate-limits the next page view", async () => {
+    // Staging: every second view of a burst got a 429. The first clean read is cached,
+    // so the second view never calls Discord and cannot turn the miss into the error state.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json([]))
+      .mockResolvedValue(
+        new Response("rate limited", { status: 429, headers: { "retry-after": "2" } }),
+      );
+    const { app, bindings } = mountedCalendar();
+    for (const q of ["zzqxj-nomatch-1", "zzqxj-nomatch-2"]) {
+      const html = await (await app.request(`/events?q=${q}`, undefined, bindings)).text();
+      expect(html).toContain(EVENTS_EMPTY_SEARCH_TESTID);
+      expect(html).not.toContain(EVENTS_EMPTY_ERROR_TESTID);
+    }
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

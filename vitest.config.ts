@@ -17,6 +17,8 @@ export default defineConfig({
     // the helper here cannot bind the real `postgres` driver ahead of suites
     // that vi.mock it (e.g. test/member-data-fixture.test.ts).
     globalSetup: ["./test/global-test-db-guard.ts"],
+    // The Discord events cache is module state shared across requests; reset it per case.
+    setupFiles: ["./test/setup-discord-events-cache.ts"],
     // Hang detectors, not performance budgets: shared self-hosted runners are 4-5x
     // slower than hosted ones and DB-heavy tests blew the 5s/10s defaults under load
     // (TOG-12177). Deliberate per-test limits and timing asserts are listed in
