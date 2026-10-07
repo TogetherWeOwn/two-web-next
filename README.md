@@ -75,22 +75,28 @@ defaults and failure behaviour. Use only test credentials for local auth.
 
 Schema is in `src/db/`, migrations in `drizzle/`. Tests are permitted only on
 `agent-testdb` (user `agent_test`, empty password), the CI job's disposable
-Postgres service, or local fixtures. For a full local check, use a fresh,
-run-owned database named `two_web_next_tog<unique-digits>`; do not run the full
-suite against the shared `two_web_next` database. **Never point tests, probes or
-verification at a production or staging database.** If access fails, stop; do
-not substitute another credential or database.
+Postgres service, or local fixtures. On `agent-testdb`, the shared
+`testDatabaseUrl` guard allows only `postgres`, `two_web_next`, `w15_tests`, and
+numeric `two_web_next_tog<digits>` databases; arbitrary names are refused. For a
+full local check, use a fresh, run-owned database named
+`two_web_next_tog<unique-digits>`; do not run the full suite against the shared
+`two_web_next` database. **Never point tests, probes or verification at a
+production or staging database.** If access fails, stop; do not substitute
+another credential or database.
 
 ```sh
 # Create a new isolated test database first; replace the numeric suffix each run.
 export TEST_DB=two_web_next_tog1234567890123456
 export DATABASE_URL="postgres://agent_test@agent-testdb:5432/${TEST_DB}"
 export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+unset LEGACY_DATABASE_URL
+export PGPASSWORD=
+export W1_AGENT_TESTDB=0
 npm run db:migrate    # apply tracked migrations to this run-owned test database
 npm run db:check      # validate migration history
 npm run format        # formatting only; no lint fixes or import reordering
 npm run lint          # read-only Biome lint + format gate
-npm run check         # lint + format + types + config drift/selftest + Vitest (including SQL suites)
+env -u BOT_DATABASE_URL npm run check # lint + format + types + config drift/selftest + Vitest
 ```
 
 For schema changes, `npm run db:generate` generates a migration; use the web
