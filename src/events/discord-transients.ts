@@ -176,6 +176,86 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
   };
 }
 
+/**
+ * Discord rate-limits the scheduled-events route hard: on staging every second
+ * page view in a burst got a 429 with `retry-after` of 1-10 s, and a 429 on an
+ * otherwise-empty page is the error state. The legacy reader cached for ten
+ * minutes (DiscordEventsReader::CACHE_SECONDS), so a page view never called out.
+ * Same idea here, kept per isolate: plain data in module scope, never a shared
+ * promise or stream (a Worker cannot await another request's I/O).
+ */
+export const DISCORD_CACHE_FRESH_MS = 60_000;
+/** A failed read serves the last good one this long, matching the legacy ten-minute cache. */
+export const DISCORD_CACHE_STALE_MS = 10 * 60_000;
+/** After a failed read, leave Discord alone at least as long as its longest observed `retry-after`. */
+export const DISCORD_FAILURE_HOLD_MS = 10_000;
+
+interface CachedGuild {
+  rows: DiscordTransient[] | null;
+  readAt: number;
+  failedAt: number | null;
+}
+
+const cachedGuilds = new Map<string, CachedGuild>();
+
+/** Test seam: the cache is module state, so suites that mock `fetch` reset it between cases. */
+export function resetDiscordEventsCache(): void {
+  cachedGuilds.clear();
+}
+
+/**
+ * The live reader behind a per-isolate cache: a fresh read is served without
+ * calling Discord, a failed read serves the last good rows while they are
+ * still recent (no error state: the data is real, just a few minutes old), and
+ * a failure holds Discord off for a few seconds so a burst cannot keep earning
+ * 429s. With nothing recent to serve, the failure is the error state, as before.
+ */
+export function cachedDiscordEventsSource(
+  env: Env,
+  inner: DiscordEventsSource = liveDiscordEventsSource(env),
+  clock: () => number = () => Date.now(),
+): DiscordEventsSource {
+  let failed = false;
+  return {
+    lastReadFailed: () => failed,
+    async upcoming(now = new Date()): Promise<DiscordTransient[]> {
+      failed = false;
+      const key = env.DISCORD_GUILD_ID;
+      const entry = cachedGuilds.get(key);
+      const t = clock();
+      const recent =
+        entry?.rows && t - entry.readAt < DISCORD_CACHE_STALE_MS ? [...entry.rows] : null;
+      if (entry?.rows && recent && t - entry.readAt < DISCORD_CACHE_FRESH_MS) return recent;
+      const held = entry?.failedAt != null && t - entry.failedAt < DISCORD_FAILURE_HOLD_MS;
+      if (!held) {
+        const rows = await inner.upcoming(now);
+        if (!inner.lastReadFailed()) {
+          cachedGuilds.set(key, { rows, readAt: clock(), failedAt: null });
+          return [...rows];
+        }
+        // Race: another view may have filled the cache while this read was in
+        // flight. Re-read instead of writing back the pre-await snapshot — a
+        // 429 landing after a 200 would wipe the good rows and hold down the
+        // error state for ten seconds despite a good read a second earlier.
+        const latest = cachedGuilds.get(key);
+        const latestRecent =
+          latest?.rows && clock() - latest.readAt < DISCORD_CACHE_STALE_MS
+            ? [...latest.rows]
+            : null;
+        cachedGuilds.set(key, {
+          rows: latest?.rows ?? null,
+          readAt: latest?.readAt ?? 0,
+          failedAt: clock(),
+        });
+        if (latestRecent) return latestRecent;
+      }
+      if (recent) return recent;
+      failed = true;
+      return [];
+    },
+  };
+}
+
 type EnvWithDiscord = Env & { DISCORD_EVENTS?: DiscordEventsSource };
 
 /**
@@ -183,5 +263,5 @@ type EnvWithDiscord = Env & { DISCORD_EVENTS?: DiscordEventsSource };
  * (like `ADMIN_DB`): injected fakes answer instead of the live read.
  */
 export function discordEventsSource(env: Env): DiscordEventsSource {
-  return (env as EnvWithDiscord).DISCORD_EVENTS ?? liveDiscordEventsSource(env);
+  return (env as EnvWithDiscord).DISCORD_EVENTS ?? cachedDiscordEventsSource(env);
 }
