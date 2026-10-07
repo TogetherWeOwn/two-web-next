@@ -29,11 +29,13 @@ export type BotSuccess<T> = { ok: true; requestId: string | null } & T;
 export class BotTransportError extends Error {}
 /** Missing secret / payload the bot would call malformed: terminal. */
 export class BotTerminalError extends Error {}
+export const SYNC_RETRY_PERSISTENCE_REASON =
+  "sync retry result could not be persisted; request remains fenced";
 /** Known retry result could not be committed; the durable claim remains closed. */
 export class SyncRetryPersistenceError extends Error {
   readonly nextAttemptAt: Date | null;
   constructor(nextAttemptAt: Date | null, cause: unknown) {
-    super("sync retry result could not be persisted; request remains fenced", { cause });
+    super(SYNC_RETRY_PERSISTENCE_REASON, { cause });
     this.nextAttemptAt = nextAttemptAt;
   }
 }
