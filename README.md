@@ -107,11 +107,19 @@ run concurrent suites against the same test database.
 ## Coverage ratchet
 
 ```sh
-DATABASE_URL="postgres://agent_test@agent-testdb:5432/two_web_next_tog1234567890123456" npm run test:coverage
+# Choose a fresh, unused numeric suffix for each run.
+export TEST_DB="two_web_next_tog1234567890123456"
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB"
+export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+unset LEGACY_DATABASE_URL
+export PGPASSWORD=
+export W1_AGENT_TESTDB=0
+npm run db:migrate
+npm run test:coverage
 node ci/coverage-summary.mjs
 ```
 
-Apply migrations to that test database first. Coverage includes every
+Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
 area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`) live in
 `vitest.config.ts`. The baseline uses the full suite with the test database;

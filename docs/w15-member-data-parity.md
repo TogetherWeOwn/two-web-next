@@ -134,9 +134,12 @@ to execute a staging probe.
 
 ```sh
 # Create a fresh run-owned database first; replace the suffix with unused digits.
-export TEST_DB="two_web_next_tog1234567890123456"
+export TEST_DB="two_web_next_tog1234567890123456" # replace with unused digits
 export DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB"
 export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+unset LEGACY_DATABASE_URL
+export PGPASSWORD=
+export W1_AGENT_TESTDB=0
 npm run db:migrate
 npm run db:check
 npm run check
