@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import type { Env } from "../env";
+import { eventKeyAllowed } from "../events/keys";
 import { pgEventStore } from "./events";
 import { eventKeyFromFailedJob, reconcileFailedJob, type ReplayDisposition } from "./replay";
 
@@ -26,6 +27,7 @@ export function parseFailureId(raw: string): number | null {
 export async function previewFailedJobWithSql(
   sql: postgres.Sql,
   failureId: number,
+  appUrl: string,
 ): Promise<FailedJobPreview | null> {
   if (parseFailureId(String(failureId)) !== failureId) throw new Error("invalid failure ID");
   return sql.begin("isolation level repeatable read read only", async (tx) => {
@@ -49,7 +51,9 @@ export async function previewFailedJobWithSql(
     }
     const eventKey = eventKeyFromFailedJob(failed);
     let disposition: ReplayDisposition;
-    if (eventKey && !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(eventKey)) {
+    // Same key contract as the public event routes: ULIDs everywhere, plus the
+    // fixed staging/local demo keys on those bindings only.
+    if (eventKey && !eventKeyAllowed(eventKey, appUrl)) {
       disposition = {
         action: "keep",
         eventKey: null,
@@ -100,7 +104,7 @@ export async function previewFailedJob(
     connection: { statement_timeout: 5000 },
   });
   try {
-    return await previewFailedJobWithSql(sql, failureId);
+    return await previewFailedJobWithSql(sql, failureId, env.APP_URL);
   } finally {
     await sql.end({ timeout: 1 });
   }

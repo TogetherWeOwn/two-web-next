@@ -4,6 +4,7 @@ import { recordQueuePreviewAccess } from "../src/admin/queue-preview";
 import type { Env } from "../src/env";
 import * as eventStores from "../src/jobs/events";
 import { previewFailedJobWithSql } from "../src/jobs/preview";
+import { STAGING_APP_URL } from "../src/qa";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 vi.mock("postgres", async (importOriginal) => {
@@ -49,7 +50,7 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
 
   async function expectPreview(action: string, reason: RegExp) {
     const before = await state();
-    const preview = await previewFailedJobWithSql(sql, failureId);
+    const preview = await previewFailedJobWithSql(sql, failureId, STAGING_APP_URL);
     expect(preview).toMatchObject({
       failure: { id: failureId, kind: "sync-event" },
       disposition: { action },
@@ -73,7 +74,7 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
 
   it("the operational receipt persists only bounded metadata in the existing activity trail", async () => {
     const before = await state();
-    const preview = await previewFailedJobWithSql(sql, failureId);
+    const preview = await previewFailedJobWithSql(sql, failureId, STAGING_APP_URL);
     const close = vi.fn().mockResolvedValue(undefined);
     // Borrow only our migrated fixture schema; resource ownership is tested separately.
     vi.mocked(postgres).mockReturnValueOnce(
@@ -154,14 +155,59 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
     await expectPreview("keep", /invalid source identity/);
     await sql`update queue_failed_jobs set kind = 'announcement', key = null where id = ${failureId}`;
     const before = await state();
-    expect(await previewFailedJobWithSql(sql, failureId)).toMatchObject({
+    expect(await previewFailedJobWithSql(sql, failureId, STAGING_APP_URL)).toMatchObject({
       disposition: { action: "keep", reason: "non-sync-event kind is outside this tool" },
     });
     expect(await state()).toEqual(before);
   });
+  describe("staging demo event keys", () => {
+    const seedKey = "seed-calendar-05";
+    async function seedSource(key: string, title = "Seed fixture") {
+      await sql`delete from events`;
+      await sql`insert into events (event_key, title, starts_at, ends_at, status)
+        values (${key}, ${title}, now(), now() + interval '1 hour', 'published')`;
+      await sql`update queue_failed_jobs set key = ${`sync-event:${key}`} where id = ${failureId}`;
+    }
+    it("a dirty seed event on staging gets replay advice, not an invalid-identity refusal", async () => {
+      // Seeded events never receive a Discord mapping, so they stay dirty.
+      await seedSource(seedKey);
+      const before = await state();
+      expect(await previewFailedJobWithSql(sql, failureId, STAGING_APP_URL)).toMatchObject({
+        disposition: { action: "replay", reason: expect.stringMatching(/fresh dispatch/) },
+      });
+      expect(await state()).toEqual(before);
+    });
+    it("a clean seed event on staging is stale advice, and a missing one is preserved", async () => {
+      await seedSource(seedKey);
+      await sql`update events set discord_event_id = 'mapped', synced_revision = sync_revision where event_key = ${seedKey}`;
+      expect(await previewFailedJobWithSql(sql, failureId, STAGING_APP_URL)).toMatchObject({
+        disposition: { action: "discard-stale" },
+      });
+      await sql`delete from events`;
+      expect(await previewFailedJobWithSql(sql, failureId, STAGING_APP_URL)).toMatchObject({
+        disposition: { action: "keep", reason: expect.stringMatching(/source is missing/) },
+      });
+    });
+    it.each([
+      ["production binding", "https://togetherweown.com", seedKey],
+      ["unlisted seed number", STAGING_APP_URL, "seed-calendar-51"],
+      ["unlisted seed shape", STAGING_APP_URL, "seed-calendar-5"],
+      ["other staging text", STAGING_APP_URL, "seed-other"],
+    ])("%s keeps the dead row without a source lookup", async (_label, appUrl, key) => {
+      await seedSource(key);
+      await sql`update events set title = 'Changed' where event_key = ${key}`;
+      const before = await state();
+      expect(await previewFailedJobWithSql(sql, failureId, appUrl)).toMatchObject({
+        disposition: { action: "keep", reason: "invalid source identity; preserve dead row" },
+      });
+      expect(await state()).toEqual(before);
+    });
+  });
   it("unknown ID returns nothing and malformed IDs refuse before opening a transaction", async () => {
-    expect(await previewFailedJobWithSql(sql, Number.MAX_SAFE_INTEGER)).toBeNull();
-    await expect(previewFailedJobWithSql(sql, -1)).rejects.toThrow("invalid failure ID");
+    expect(await previewFailedJobWithSql(sql, Number.MAX_SAFE_INTEGER, STAGING_APP_URL)).toBeNull();
+    await expect(previewFailedJobWithSql(sql, -1, STAGING_APP_URL)).rejects.toThrow(
+      "invalid failure ID",
+    );
   });
   it.each(["needsSync", "pendingSync", "hasFailedSync"] as const)(
     "absence of %s fails closed, even for a clean source",
@@ -170,7 +216,7 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
         (tx) => ({ ...realEventStore(tx), [name]: undefined }) as never,
       );
       const before = await state();
-      await expect(previewFailedJobWithSql(sql, failureId)).rejects.toThrow(
+      await expect(previewFailedJobWithSql(sql, failureId, STAGING_APP_URL)).rejects.toThrow(
         "incomplete reconciliation store",
       );
       expect(await state()).toEqual(before);
@@ -185,7 +231,9 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
       },
     }));
     const before = await state();
-    await expect(previewFailedJobWithSql(sql, failureId)).rejects.toMatchObject({ code: "25006" });
+    await expect(previewFailedJobWithSql(sql, failureId, STAGING_APP_URL)).rejects.toMatchObject({
+      code: "25006",
+    });
     expect(await state()).toEqual(before);
   });
   it("every preview SELECT bypasses Hyperdrive read caching without exposing the marker", async () => {
@@ -200,7 +248,7 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
     });
     try {
       const before = await state();
-      const preview = await previewFailedJobWithSql(monitored, failureId);
+      const preview = await previewFailedJobWithSql(monitored, failureId, STAGING_APP_URL);
       const sourceReads = queries.filter((query) => /^select\b/i.test(query.trim()));
       expect(sourceReads).toHaveLength(5);
       for (const query of sourceReads) expect(query).toContain("clock_timestamp()");
@@ -224,7 +272,7 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
         },
       };
     });
-    const first = await previewFailedJobWithSql(sql, failureId);
+    const first = await previewFailedJobWithSql(sql, failureId, STAGING_APP_URL);
     expect(first!.disposition.action).toBe("discard-stale");
     // A preview conveys no write authority. A later invocation freshly sees
     // the committed refusal rather than reusing the old clean snapshot.
