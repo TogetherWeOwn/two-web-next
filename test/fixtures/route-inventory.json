@@ -1,6 +1,7 @@
 [
   { "method": "ALL", "path": "/*", "auth": "middleware" },
   { "method": "ALL", "path": "/admin/*", "auth": "moderator" },
+  { "method": "ALL", "path": "/admin/queue/*", "auth": "staging-operator" },
   { "method": "ALL", "path": "/events/:key/rsvp", "auth": "public" },
   { "method": "ALL", "path": "/members/*", "auth": "member" },
   { "method": "ALL", "path": "/profile", "auth": "member" },
@@ -21,6 +22,7 @@
   { "method": "GET", "path": "/admin/featured-contents/create", "auth": "moderator" },
   { "method": "GET", "path": "/admin/join-attempts", "auth": "moderator" },
   { "method": "GET", "path": "/admin/join-attempts/:id", "auth": "moderator" },
+  { "method": "GET", "path": "/admin/queue/failed/:id/preview", "auth": "staging-operator" },
   { "method": "GET", "path": "/auth/discord", "auth": "public" },
   { "method": "GET", "path": "/auth/discord/callback", "auth": "oauth-state" },
   { "method": "GET", "path": "/auth/discord/redirect", "auth": "public" },

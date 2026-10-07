@@ -1102,10 +1102,13 @@ age-delete old rows or clear unique locks as an outage workaround.
 
 `queue_failed_jobs` ([drizzle/1007_queue-ledger.sql](../drizzle/1007_queue-ledger.sql))
 has `id`, `job_id`, `kind`, `key`, `reason`, `failed_at` only. It has **no payload
-and no original bot idempotency key**, and there is no repo replay script,
-`queue:retry` command, Wrangler message-send subcommand, or operator entrypoint —
-only the reviewed one-row sync-event library function (`src/jobs/replay.ts`,
-proved in `test/queue-replay.test.ts`). The operator
+and no original bot idempotency key**. There is no repo replay script,
+`queue:retry` command, Wrangler message-send subcommand, or operational mutation
+entrypoint. The default-off staging preview at
+`GET /admin/queue/failed/:id/preview` supplies read-only one-row advice, not replay
+or discard authority. Its activation, dedicated principal, audit and custody
+prerequisites are in [queue-redrive-runbook.md](queue-redrive-runbook.md#read-only-runtime-preview-disabled-until-separately-authorized).
+The sync-event library remains proved in `test/queue-replay.test.ts`. The operator
 inspect-list-redrive loop over these rows lives in
 [queue-redrive-runbook.md](queue-redrive-runbook.md) (proved in
 `test/queue-redrive.test.ts`). Terminal jobs are
@@ -1135,15 +1138,18 @@ handoff to the Director with the original authorized message source, destination
 side-effect reconciliation and required replay tool. Do **not** reconstruct an
 announcement/role action from a diagnostic key or fabricate an idempotency key.
 The reviewed one-row library function (`reconcileFailedJob` in
-`src/jobs/replay.ts`, no operator entrypoint yet — no CLI, route, or worker
-wiring calls it) recovers the event identity from the row key, reconciles
-whether the source is still dirty, keeps definitively refused revisions and
-surviving pending requests instead of discarding them, reuses a due pending
-request's key or mints a fresh one, and re-dispatches via `replayFailedSyncEvent`,
-which wraps the caller's raw queue binding and ledger with `trackingQueue` so the
-new message records its ledger job ID. Only after successful reconciliation should separately approved
-history cleanup be considered; this runbook intentionally provides no blind
-`DELETE`, fabricated SQL replay, or live replay command.
+`src/jobs/replay.ts`) recovers the event identity from the row key and returns
+advice after checking dirty source, current-revision refusal and surviving
+pending requests. The disabled runtime preview calls only that reconciliation
+function inside a consistent read-only snapshot; it never executes the advice.
+`replayFailedSyncEvent` remains a library-only mutation helper. It reuses a due
+pending request's key or mints a fresh one, then wraps the caller's raw queue
+binding and ledger with `trackingQueue` so the new message records its ledger
+job ID. No CLI, route or operational Worker caller wires replay or discard.
+A later explicit replay requires fresh reconciliation and separate authority.
+Only after confirmed recovery should separately approved history cleanup be
+considered; this runbook intentionally provides no blind `DELETE`, fabricated
+SQL replay, or live replay command.
 
 Message contracts from [src/jobs/types.ts](../src/jobs/types.ts):
 

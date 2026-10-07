@@ -125,6 +125,19 @@ export function bufferedMemberText(
   return c.res;
 }
 
+/** JSON, like HTML/text, must be fully buffered before the audit boundary releases it. */
+export function bufferedMemberJson(
+  c: Context,
+  body: unknown,
+  status: ContentfulStatusCode = 200,
+): Response {
+  const response = c.json(body, status);
+  c.res = response;
+  const capture = captures.getStore();
+  if (capture) capture.response = c.res;
+  return c.res;
+}
+
 type ReadDeclaration = Omit<AccessDecl, "subjects"> & { viewer: string | null };
 
 /** Renders the caller's sanitized outage envelope (branded HTML or negotiated JSON). */
