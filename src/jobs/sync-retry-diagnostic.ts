@@ -16,6 +16,23 @@ export type SyncRetryDiagnostic = {
   sync_snapshot_age_at_claim_seconds?: number;
 };
 
+function record(value: unknown): value is Record<string, unknown> {
+  try {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function dataField(value: unknown, key: string): unknown {
+  try {
+    // Sample only own data: observation must not execute input accessors.
+    return record(value) ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function retryCode(value: unknown): SyncRetryCode {
   switch (value) {
     case "in_progress":
@@ -33,17 +50,20 @@ function retryCode(value: unknown): SyncRetryCode {
   }
 }
 
+export function refusalRetryCode(answer: unknown): SyncRetryCode {
+  return retryCode(dataField(answer, "code"));
+}
+
 const count = (value: unknown, minimum: number): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
 
 /** The only projection logs/alerts may spread: no input object or provider string survives. */
 export function projectSyncRetryDiagnostic(value: unknown): Partial<SyncRetryDiagnostic> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-  const input = value as Record<string, unknown>;
-  const retryClass = input.sync_retry_class;
-  const carrierAttempts = input.queue_carrier_attempts;
-  const requestAttempts = input.sync_request_attempts;
-  const snapshotAge = input.sync_snapshot_age_at_claim_seconds;
+  if (!record(value)) return {};
+  const retryClass = dataField(value, "sync_retry_class");
+  const carrierAttempts = dataField(value, "queue_carrier_attempts");
+  const requestAttempts = dataField(value, "sync_request_attempts");
+  const snapshotAge = dataField(value, "sync_snapshot_age_at_claim_seconds");
   const fields: SyncRetryDiagnostic = {
     sync_retry_class:
       retryClass === "BotFailure"
@@ -53,7 +73,7 @@ export function projectSyncRetryDiagnostic(value: unknown): Partial<SyncRetryDia
           : "unknown",
   };
   if (fields.sync_retry_class === "BotFailure")
-    fields.sync_retry_code = retryCode(input.sync_retry_code);
+    fields.sync_retry_code = retryCode(dataField(value, "sync_retry_code"));
   if (count(carrierAttempts, 1)) fields.queue_carrier_attempts = carrierAttempts;
   if (count(requestAttempts, 0)) fields.sync_request_attempts = requestAttempts;
   if (count(snapshotAge, 0)) fields.sync_snapshot_age_at_claim_seconds = snapshotAge;
@@ -76,16 +96,14 @@ export function syncRetryDiagnostic(
   attempt: Pick<SyncAttempt, "requestAttempts" | "mirroredAt">,
   claimedAt: Date,
 ): SyncRetryDiagnostic {
-  return {
-    ...projectSyncRetryDiagnostic({
-      sync_retry_class: retryClass,
-      sync_retry_code: code,
-      queue_carrier_attempts: carrierAttempts,
-      sync_request_attempts: attempt.requestAttempts,
-      sync_snapshot_age_at_claim_seconds: Math.floor(
-        (timestamp(claimedAt) - timestamp(attempt.mirroredAt)) / 1000,
-      ),
-    }),
+  const fields = projectSyncRetryDiagnostic({
     sync_retry_class: retryClass,
-  };
+    sync_retry_code: code,
+    queue_carrier_attempts: carrierAttempts,
+    sync_request_attempts: dataField(attempt, "requestAttempts"),
+    sync_snapshot_age_at_claim_seconds: Math.floor(
+      (timestamp(claimedAt) - timestamp(dataField(attempt, "mirroredAt"))) / 1000,
+    ),
+  });
+  return { ...fields, sync_retry_class: fields.sync_retry_class ?? "unknown" };
 }

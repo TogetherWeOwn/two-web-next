@@ -257,7 +257,7 @@ describe("finite sync retry projection", () => {
     "queue_carrier_attempts",
     "sync_request_attempts",
     "sync_snapshot_age_at_claim_seconds",
-  ])("reads and validates the same %s value in logs and alerts", (key) => {
+  ])("omits accessor-backed %s without executing it in logs or alerts", (key) => {
     const toJSON = vi.fn(() => sentinels);
     for (const privateValue of [hostileText, { ...sentinels, toJSON }]) {
       for (const surface of ["projection", "alert"]) {
@@ -269,7 +269,7 @@ describe("finite sync retry projection", () => {
         const calls: unknown[][] = [];
         if (surface === "projection") {
           const fields = projectSyncRetryDiagnostic(input);
-          expect(fields).toEqual({ sync_retry_class: "BotTransportError", [key]: 6 });
+          expect(fields).toEqual({ sync_retry_class: "BotTransportError" });
           calls.push([fields]);
         } else {
           alertQueueFailing(
@@ -283,16 +283,130 @@ describe("finite sync retry projection", () => {
             } as FailedJob,
             (line) => calls.push([line]),
           );
-          expect(alerts(calls)[0]).toMatchObject({
-            sync_retry_class: "BotTransportError",
-            [key]: 6,
-          });
+          expect(alerts(calls)).toHaveLength(1);
+          expect(alerts(calls)[0]).toMatchObject({ sync_retry_class: "BotTransportError" });
+          expect(alerts(calls)[0]).not.toHaveProperty(key);
         }
-        expect(read).toHaveBeenCalledOnce();
+        expect(read).not.toHaveBeenCalled();
         expect(toJSON).not.toHaveBeenCalled();
         assertSafe(calls);
       }
     }
+  });
+  it.each(diagnosticKeys)("a throwing %s accessor cannot suppress the failure alert", (key) => {
+    const read = vi.fn(() => {
+      throw new Error(hostileText);
+    });
+    const input = Object.defineProperty(
+      {
+        sync_retry_class: "BotFailure",
+        sync_retry_code: "internal",
+        queue_carrier_attempts: 6,
+        sync_request_attempts: 2,
+        sync_snapshot_age_at_claim_seconds: 12,
+      },
+      key,
+      { get: read, enumerable: true },
+    );
+    const calls: unknown[][] = [];
+    expect(() =>
+      alertQueueFailing(
+        {
+          connection: "cloudflare-queues",
+          queue: "two-sync-event",
+          job: "SyncEventToDiscord",
+          attempts: 6,
+          exception: "constant",
+          syncRetry: input,
+        } as FailedJob,
+        (line) => calls.push([line]),
+      ),
+    ).not.toThrow();
+    expect(alerts(calls)).toHaveLength(1);
+    expect(alerts(calls)[0]).toMatchObject({ event: "queue.failing", exception: "constant" });
+    expect(read).not.toHaveBeenCalled();
+    assertSafe(calls);
+  });
+  it.each(diagnosticKeys)(
+    "a throwing %s descriptor trap cannot suppress the failure alert",
+    (key) => {
+      const input = new Proxy(
+        {
+          sync_retry_class: "BotFailure",
+          sync_retry_code: "internal",
+          queue_carrier_attempts: 6,
+          sync_request_attempts: 2,
+          sync_snapshot_age_at_claim_seconds: 12,
+        },
+        {
+          getOwnPropertyDescriptor(target, property) {
+            if (property === key) throw new Error(hostileText);
+            return Reflect.getOwnPropertyDescriptor(target, property);
+          },
+        },
+      );
+      const calls: unknown[][] = [];
+      expect(() =>
+        alertQueueFailing(
+          {
+            connection: "cloudflare-queues",
+            queue: "two-sync-event",
+            job: "SyncEventToDiscord",
+            attempts: 6,
+            exception: "constant",
+            syncRetry: input,
+          } as FailedJob,
+          (line) => calls.push([line]),
+        ),
+      ).not.toThrow();
+      expect(alerts(calls)).toHaveLength(1);
+      expect(alerts(calls)[0]).toMatchObject({ event: "queue.failing", exception: "constant" });
+      assertSafe(calls);
+    },
+  );
+  it("a revoked receipt proxy cannot suppress the failure alert", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(projectSyncRetryDiagnostic(proxy)).toEqual({});
+    const calls: unknown[][] = [];
+    expect(() =>
+      alertQueueFailing(
+        {
+          connection: "cloudflare-queues",
+          queue: "two-sync-event",
+          job: "SyncEventToDiscord",
+          attempts: 6,
+          exception: "constant",
+          syncRetry: proxy,
+        } as FailedJob,
+        (line) => calls.push([line]),
+      ),
+    ).not.toThrow();
+    expect(alerts(calls)).toHaveLength(1);
+    for (const key of diagnosticKeys) expect(alerts(calls)[0]).not.toHaveProperty(key);
+    assertSafe(calls);
+  });
+  it("an optional receipt accessor cannot suppress the failure alert or execute private code", () => {
+    const read = vi.fn(() => {
+      throw new Error(hostileText);
+    });
+    const job = Object.defineProperty(
+      {
+        connection: "cloudflare-queues",
+        queue: "two-sync-event",
+        job: "SyncEventToDiscord",
+        attempts: 6,
+        exception: "constant",
+      },
+      "syncRetry",
+      { get: read, enumerable: true },
+    );
+    const calls: unknown[][] = [];
+    expect(() => alertQueueFailing(job, (line) => calls.push([line]))).not.toThrow();
+    expect(alerts(calls)).toHaveLength(1);
+    expect(read).not.toHaveBeenCalled();
+    for (const key of diagnosticKeys) expect(alerts(calls)[0]).not.toHaveProperty(key);
+    assertSafe(calls);
   });
   it.each([Object.create(Date.prototype), new Proxy(new Date(clock), {})])(
     "omits only age for an invalid Date-shaped claim clock %#",
@@ -568,7 +682,7 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
           { ...d, bot, onRetryDiagnostic },
         ),
       ).resolves.toEqual({ retryInSeconds: 42 });
-      expect(readCode).toHaveBeenCalledTimes(observed ? 1 : 0);
+      expect(readCode).not.toHaveBeenCalled();
       if (onRetryDiagnostic)
         expect(onRetryDiagnostic).toHaveBeenCalledExactlyOnceWith({
           sync_retry_class: "BotFailure",
@@ -654,6 +768,73 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
     ).resolves.toEqual({ retryInSeconds: 42 });
     expect(onRetryDiagnostic).toHaveBeenCalledOnce();
     expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(d.attempt, new Date(clock + 42_000));
+  });
+  it.each(["event.upsert", "event.cancel"] as const)(
+    "%s retains cause/counts when the snapshot property is unreadable",
+    async (action) => {
+      const calls = capture();
+      const d = fixture(1, action);
+      const read = vi.fn(() => {
+        throw new Error(hostileText);
+      });
+      Object.defineProperty(d.attempt, "mirroredAt", { get: read });
+      const m = carrier(6);
+      await consume({ messages: [m] }, { ...d, bot: botFor("internal") });
+      expect(alerts(calls)[0]).toMatchObject({
+        sync_retry_class: "BotFailure",
+        sync_retry_code: "internal",
+        queue_carrier_attempts: 6,
+        sync_request_attempts: 2,
+      });
+      expect(alerts(calls)[0]).not.toHaveProperty("sync_snapshot_age_at_claim_seconds");
+      expect(read).not.toHaveBeenCalled();
+      expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(
+        d.attempt,
+        new Date(clock + 42_000),
+      );
+      expect(m.ack).toHaveBeenCalledOnce();
+      expect(m.retry).not.toHaveBeenCalled();
+      assertSafe(calls);
+    },
+  );
+  it("diagnostic accessors cannot mutate the authoritative wait or request budget", async () => {
+    const d = fixture(1);
+    const read = vi.fn(() => {
+      answer.retryAfterSeconds = 0;
+      d.attempt.requestAttempts = 100;
+      return "internal";
+    });
+    const answer: BotFailure = {
+      ok: false,
+      get code() {
+        return read();
+      },
+      status: 429,
+      requestId: null,
+      message: hostileText,
+      retryable: true,
+      retryAfterSeconds: 42,
+    };
+    const bot = botFor("internal");
+    vi.mocked(bot.upsertEvent).mockResolvedValue(answer);
+    const onRetryDiagnostic = vi.fn();
+    await expect(
+      handleSyncEvent(
+        { eventKey: sentinels.eventKey, idempotencyKey: sentinels.idempotencyKey },
+        1,
+        { ...d, bot, onRetryDiagnostic },
+      ),
+    ).resolves.toEqual({ retryInSeconds: 42 });
+    expect(read).not.toHaveBeenCalled();
+    expect(d.attempt.requestAttempts).toBe(2);
+    expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(d.attempt, new Date(clock + 42_000));
+    expect(onRetryDiagnostic).toHaveBeenCalledExactlyOnceWith({
+      sync_retry_class: "BotFailure",
+      sync_retry_code: "unknown",
+      queue_carrier_attempts: 1,
+      sync_request_attempts: 2,
+      sync_snapshot_age_at_claim_seconds: 12,
+    });
   });
   it("keeps the handler outcome contract unchanged and uses the existing claim clock", async () => {
     const d = fixture(1);

@@ -48,8 +48,11 @@ persistence fails. It adds only these optional fields:
 These fields do not control retries. The bot's existing `retryable` flag and
 Retry-After/backoff still determine behavior, even for an unknown code. No
 provider request ID, error message, payload, response body, raw key or additional
-input field is copied into the projection. The Tail's outbound summary is
-unchanged and does **not** forward these fields.
+input field is copied into the projection. Only own data properties are sampled;
+accessors are never invoked. Unreadable fields are omitted or use the constant
+fallback, and a malformed optional receipt cannot suppress the failure alert.
+An unavailable snapshot property omits only age, not the observed cause/counts.
+The Tail's outbound summary is unchanged and does **not** forward these fields.
 
 **Correlation and history boundary:** no vetted safe durable request reference
 is exposed by the current objects, so this receipt deliberately omits it. Do not

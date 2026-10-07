@@ -113,6 +113,12 @@ export type FailedJob = {
 
 /** Failing queue job (ports Queue::failing): connection, queue, job class, attempts, exception. */
 export function alertQueueFailing(job: FailedJob, sink: Sink = consoleSink): void {
+  let syncRetry: Partial<SyncRetryDiagnostic> = {};
+  try {
+    syncRetry = projectSyncRetryDiagnostic(
+      Object.getOwnPropertyDescriptor(job, "syncRetry")?.value,
+    );
+  } catch {}
   sink(
     JSON.stringify({
       level: "critical",
@@ -124,7 +130,7 @@ export function alertQueueFailing(job: FailedJob, sink: Sink = consoleSink): voi
       exception: job.exception,
       probeId: job.probeId,
       request_id: safeRequestId(job.requestId),
-      ...projectSyncRetryDiagnostic(job.syncRetry),
+      ...syncRetry,
     }),
   );
 }

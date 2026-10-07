@@ -3,7 +3,11 @@ import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./q
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
 import type { BotClient, BotFailure, EventStore, UniqueLock } from "./types";
 import { safeRequestId } from "../request-log";
-import { syncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
+import {
+  refusalRetryCode,
+  syncRetryDiagnostic,
+  type SyncRetryDiagnostic,
+} from "./sync-retry-diagnostic";
 
 export type Outcome =
   | { done: true }
@@ -104,12 +108,10 @@ export async function handleSyncEvent(
     try {
       const observe = deps.onRetryDiagnostic;
       if (!observe) return;
-      let code: unknown;
-      try {
-        code = answer?.code;
-      } catch {}
       Promise.resolve(
-        observe(syncRetryDiagnostic(retryClass, code, attempts, attempt, claimedAt)),
+        observe(
+          syncRetryDiagnostic(retryClass, refusalRetryCode(answer), attempts, attempt, claimedAt),
+        ),
       ).catch(() => {});
     } catch {}
   };
