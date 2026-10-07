@@ -156,7 +156,14 @@ test("the always-run ledger upload ships only derived files, never the raw repor
   assert.ok(step, "Journey ledger artifact step exists");
   // The step runs on green runs too, where the token scrub never ran, so it
   // must not upload the raw Playwright JSON report.
-  assert.match(step, /if: always\(\)/);
+  // The ledger quotes failure error text, so on a failed run it must wait for
+  // the scrub sweep like the failure upload does, and a scrub crash (swept
+  // unset) must upload nothing. A green run (scrub skipped) still uploads.
+  assert.doesNotMatch(step, /if: always\(\)/);
+  assert.match(
+    step,
+    /if: \$\{\{ !cancelled\(\) && \(steps\.scrub\.outcome == 'skipped' \|\| steps\.scrub\.outputs\.swept == 'true'\) \}\}/,
+  );
   assert.doesNotMatch(step, /staging-journeys\.json/);
   assert.match(step, /staging-journey-ledger\.json/);
   assert.match(step, /staging-journey-ledger\.md/);

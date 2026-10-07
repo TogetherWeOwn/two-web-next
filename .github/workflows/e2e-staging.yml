@@ -140,12 +140,13 @@ jobs:
       - name: Journey ledger artifact
         # Ships only the derived ledger files (journey titles, outcomes and
         # skip reasons), never the raw Playwright JSON report: that report can
-        # hold request and error text, the scrub sweep above runs only on
-        # failure (and may itself fail), and this step runs on green runs too.
-        # The raw report reaches an artifact solely through the swept failure
-        # upload above. Always uploaded so the per-journey accounting exists
-        # for every run, green or red.
-        if: always()
+        # hold request and error text. The raw report reaches an artifact
+        # solely through the swept failure upload above. The ledger still
+        # carries the first line of each failure's error text, so it follows
+        # the same gate: uploaded on a green run (the scrub is skipped) and on
+        # a failed run only once the scrub finished the whole tree. A crashed
+        # or incomplete scrub (swept unset) uploads nothing.
+        if: ${{ !cancelled() && (steps.scrub.outcome == 'skipped' || steps.scrub.outputs.swept == 'true') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-staging-ledger-${{ github.run_id }}-${{ github.run_attempt }}

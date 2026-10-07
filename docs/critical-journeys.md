@@ -154,7 +154,8 @@ config also writes a JSON report (`test-results/staging-journeys.json`), and a
 follow-up step (`node ci/check-staging-journeys.mjs`, logic in
 `e2e/staging/journey-ledger.mjs`) ledgers every journey as passed, failed or
 skipped with its reason, appends that table to the step summary, and uploads
-the ledger as an artifact. When nothing passed — all skipped, or no journeys
+the ledger as an artifact (on a green run, or after the token scrub finished
+the whole tree; never the raw report). When nothing passed — all skipped, or no journeys
 recorded at all — the gate fails loud (exit 2) with every skipped journey and
 its reason named. Never add a quiet `test.skip` precondition for an empty
 staging fixture without a reason string: the ledger surfaces that reason as
