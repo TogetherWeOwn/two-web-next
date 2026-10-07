@@ -148,6 +148,14 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
     },
     needsSync: async (eventKey) => (await staleKeys(eventKey)).length > 0,
+    async hasFailedSync(eventKey) {
+      const rows = await sql`select 1 from event_sync_attempts rejected
+        join events e on e.id = rejected.event_id
+        where e.event_key = ${eventKey}
+          and rejected.revision = e.sync_revision
+          and rejected.state = 'failed' limit 1`;
+      return rows.length > 0;
+    },
     async pendingSync(eventKey) {
       const [row] =
         await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id

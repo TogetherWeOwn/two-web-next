@@ -15,9 +15,9 @@ sync-event replay reconciliation is proved in `test/queue-replay.test.ts`.
   `reason`, `failed_at`) — no payload, no original bot idempotency key. Never
   reconstruct an announcement/role action from a key or fabricate a key.
 - Every step is one row at a time. There is no batch redrive, no blind `DELETE`,
-  and no CLI replay command: the only replay path is the one-row helper in
-  `src/jobs/replay.ts` (`reconcileFailedJob` then `replayFailedSyncEvent` or
-  `discardFailedJob`).
+  and no CLI replay command: the one-row library helper in `src/jobs/replay.ts`
+  (`reconcileFailedJob` then `replayFailedSyncEvent` or `discardFailedJob`) has
+  no operator entrypoint yet — no CLI, route, or worker wiring calls it.
 
 ## The loop
 
@@ -29,13 +29,14 @@ sync-event replay reconciliation is proved in `test/queue-replay.test.ts`.
    Helper: `listFailedJobs(sql)` (newest-first, bounded, optional `kind` filter).
 2. **Retry once** — for a transient failure (transport/outage class in `reason`)
    with the original authorized message source still available: first reconcile
-   the single row with `reconcileFailedJob` (dirty source replays, clean source
-   discards as stale, otherwise keep), then re-dispatch a `replay` row with
-   `replayFailedSyncEvent` through that source's producer path (`trackingQueue`),
-   which mints a fresh `jobId`. The dead row stays until recovery of the new
-   message is confirmed; the test pins the old `jobId` untouched while the new
-   live row exists. Role assignments have no idempotency key: reconcile
-   downstream first, or the retry double-applies.
+   the single row with `reconcileFailedJob` (dirty source replays; clean source
+   with no failed snapshot and no pending request discards as stale; definitive
+   refusal or surviving pending request keeps), then re-dispatch a `replay` row
+   with `replayFailedSyncEvent`, which wraps the caller's raw queue binding and
+   ledger with `trackingQueue` and mints a fresh `jobId`. The dead row stays
+   until recovery of the new message is confirmed; the test pins the old `jobId`
+   untouched while the new live row exists. Role assignments have no idempotency
+   key: reconcile downstream first, or the retry double-applies.
 3. **Discard** — after a confirmed recovery, or for poison that must never run
    again: `discardFailedJob(sql, failureId)` deletes exactly that row and
    reports `false` for an unknown id. The `/up` `failed` count drops by one per

@@ -1,20 +1,31 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consume } from "../src/jobs/consumer";
+import { pgEventStore } from "../src/jobs/events";
 import { trackingQueue } from "../src/jobs/ledger";
-import { pgQueueLedger } from "../src/jobs/postgres";
+import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { discardFailedJob, listFailedJobs } from "../src/jobs/redrive";
 import {
   eventKeyFromFailedJob,
   reconcileFailedJob,
   replayFailedSyncEvent,
+  type ReconcileStore,
 } from "../src/jobs/replay";
-import type { EventStore, SyncAttempt, UniqueLock } from "../src/jobs/types";
+import { dispatchSyncEvent } from "../src/jobs/sync-event";
+import { BotTerminalError } from "../src/jobs/types";
+import type {
+  BotClient,
+  EventStore,
+  QueueMessage,
+  SyncAttempt,
+  UniqueLock,
+} from "../src/jobs/types";
 import { createLedgerFixture } from "./helpers/queue-ledger-fixture";
-
-type ReconcileStore = Pick<EventStore, "needsSync" | "pendingSync">;
+import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 const stubStore = (overrides: Partial<ReconcileStore> = {}): ReconcileStore => ({
   needsSync: async () => false,
   pendingSync: async () => null,
+  hasFailedSync: async () => false,
   ...overrides,
 });
 
@@ -88,6 +99,40 @@ describe("sync-event replay key and reconciliation", () => {
     expect(
       await reconcileFailedJob(events, { kind: "sync-event", key: "sync-event:e1" }),
     ).toMatchObject({ action: "discard-stale", eventKey: "e1" });
+  });
+
+  it("keeps a definitively refused revision instead of discarding it", async () => {
+    // `needsSync === false` covers both clean and refused revisions; the
+    // `failed` snapshot (e.g. BotTerminalError → failSync) must keep the row.
+    const events = stubStore({
+      needsSync: async () => false,
+      pendingSync: async () => null,
+      hasFailedSync: async () => true,
+    });
+    const disposition = await reconcileFailedJob(events, {
+      kind: "sync-event",
+      key: "sync-event:e1",
+    });
+    expect(disposition).toMatchObject({ action: "keep", eventKey: "e1" });
+    if (disposition.action === "keep") expect(disposition.reason).toMatch(/definitive refusal/);
+    else throw new Error("expected a keep disposition for a refused revision");
+  });
+
+  it("keeps a surviving pending request on a clean source instead of discarding it", async () => {
+    // An exhausted/unsettled pending request on an event since closed to
+    // `past` still reports `needsSync === false`; the dead row must be kept.
+    const events = stubStore({
+      needsSync: async () => false,
+      pendingSync: async () => pendingAttempt(),
+      hasFailedSync: async () => false,
+    });
+    const disposition = await reconcileFailedJob(events, {
+      kind: "sync-event",
+      key: "sync-event:e1",
+    });
+    expect(disposition).toMatchObject({ action: "keep", eventKey: "e1" });
+    if (disposition.action === "keep") expect(disposition.reason).toMatch(/operator recovery/);
+    else throw new Error("expected a keep disposition for a surviving pending request");
   });
 
   it("replays a dirty source with a fresh dispatch when no request is pending", async () => {
@@ -165,15 +210,15 @@ describe.skipIf(!process.env.DATABASE_URL)("sync-event replay ledger transitions
     if (disposition.action !== "replay") throw new Error("expected a replay disposition");
 
     const sent: unknown[] = [];
-    const queue = trackingQueue(
-      {
-        send: async (body) => {
-          sent.push(body);
-        },
+    const rawQueue = {
+      send: async (body: unknown) => {
+        sent.push(body);
       },
-      pgQueueLedger(sql),
-    );
-    await replayFailedSyncEvent(queue, memoryLock(), disposition.eventKey);
+    };
+    // The helper wraps the raw binding with `trackingQueue` itself, so the
+    // live message always records a `queue_jobs` row even though the caller
+    // passes an untracked binding.
+    await replayFailedSyncEvent(rawQueue, pgQueueLedger(sql), memoryLock(), disposition.eventKey);
 
     expect(sent).toHaveLength(1);
     const live = (await sql`select job_id, kind, key from queue_jobs`).map(
@@ -221,3 +266,98 @@ describe.skipIf(!process.env.DATABASE_URL)("sync-event replay ledger transitions
     expect((await listFailedJobs(sql)).map((r) => r.jobId)).toEqual([other]);
   });
 });
+
+// Real-store proof for the unsafe-discard fix: a `BotTerminalError` row that
+// the real `pgEventStore` reports as clean (`needsSync === false`) still
+// carries a `failed` snapshot for the current revision, so reconciliation
+// must keep — never discard — the dead letter.
+describe.skipIf(!process.env.DATABASE_URL)(
+  "sync-event replay refusal keeps the dead letter",
+  () => {
+    let fixture: JobsFixture | undefined;
+    type Sql = JobsFixture["client"];
+    let sql: Sql;
+
+    beforeAll(async () => {
+      fixture = await createJobsFixture(process.env.DATABASE_URL!);
+      sql = fixture.client;
+    });
+    afterAll(async () => {
+      await fixture?.dispose();
+      fixture = undefined;
+    });
+    beforeEach(async () => {
+      await sql`delete from queue_jobs`;
+      await sql`delete from queue_failed_jobs`;
+      await sql`delete from event_sync_attempts`;
+      await sql`delete from rsvps`;
+      await sql`delete from events`;
+    });
+
+    it("a real BotTerminalError → failSync row reconciles to keep", async () => {
+      const eventKey = `replay-refusal-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+      await sql`insert into events (event_key, title, starts_at, ends_at, status)
+      values (${eventKey}, 'Refusal proof', now() - interval '1 hour',
+        now() + interval '1 hour', 'published')`;
+
+      const events: EventStore = pgEventStore(sql);
+      const sent: QueueMessage[] = [];
+      const queue = trackingQueue(
+        {
+          send: async (body) => {
+            sent.push(body as QueueMessage);
+          },
+        },
+        pgQueueLedger(sql),
+      );
+      expect(await dispatchSyncEvent(queue, pgUniqueLock(sql), eventKey)).toBe(true);
+      const body = sent.at(-1);
+      expect(body?.kind).toBe("sync-event");
+      if (body?.kind !== "sync-event") throw new Error("expected a sync-event message");
+
+      const terminalBot = {
+        upsertEvent: async () => {
+          throw new BotTerminalError("Bot is not configured: BOT_SHARED_SECRET is missing.");
+        },
+        cancelEvent: async () => {
+          throw new BotTerminalError("Bot is not configured: BOT_SHARED_SECRET is missing.");
+        },
+        postAnnouncement: vi.fn(),
+        assignRole: vi.fn(),
+      } as unknown as BotClient;
+
+      await consume(
+        {
+          messages: [
+            {
+              body,
+              attempts: 1,
+              ack: vi.fn(),
+              retry: vi.fn(),
+            },
+          ],
+        },
+        {
+          bot: terminalBot,
+          events,
+          ledger: pgQueueLedger(sql),
+          lock: pgUniqueLock(sql),
+        },
+      );
+
+      // The terminal failure settled a `failed` snapshot and a dead letter.
+      expect(await events.needsSync(eventKey)).toBe(false);
+      expect(await events.hasFailedSync?.(eventKey)).toBe(true);
+      expect(await events.pendingSync(eventKey)).toBeNull();
+      const dead = (await listFailedJobs(sql)).find((r) => r.key === `sync-event:${eventKey}`);
+      expect(dead?.reason).toMatch(/terminal/i);
+
+      // Reconciliation must keep the only ledger evidence of the refused event.
+      const disposition = await reconcileFailedJob(events as ReconcileStore, dead!);
+      expect(disposition).toMatchObject({ action: "keep", eventKey });
+      if (disposition.action === "keep") expect(disposition.reason).toMatch(/definitive refusal/);
+      else throw new Error("refused revision must reconcile to keep, never discard-stale");
+      expect(await listFailedJobs(sql)).toHaveLength(1);
+    });
+  },
+);

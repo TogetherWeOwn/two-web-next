@@ -1,8 +1,9 @@
 import { SYNC_EVENT } from "./constants";
+import { trackingQueue } from "./ledger";
 import { sanitizeQueueScope } from "./queue-error";
 import type { FailedJob } from "./redrive";
 import { dispatchSyncEvent } from "./sync-event";
-import type { EventStore, UniqueLock } from "./types";
+import type { EventStore, QueueLedger, UniqueLock } from "./types";
 
 type Sendable = { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> };
 
@@ -28,6 +29,16 @@ export type ReplayDisposition =
   | { action: "keep"; eventKey: string | null; reason: string };
 
 /**
+ * Narrow store surface reconciliation needs. `hasFailedSync` is required here
+ * (not optional as on `EventStore`) because `needsSync === false` covers both
+ * a clean source and a definitively refused revision — only the explicit
+ * refusal check distinguishes them.
+ */
+export type ReconcileStore = Pick<EventStore, "needsSync" | "pendingSync"> & {
+  hasFailedSync: (eventKey: string) => Promise<boolean>;
+};
+
+/**
  * Per-event reconciliation for one kept dead-letter row, before any retry or
  * discard. One row in, one disposition out — never a batch. The caller then
  * runs exactly one follow-up for that row: `replayFailedSyncEvent` (then
@@ -37,14 +48,18 @@ export type ReplayDisposition =
  * - `replay`: the source is still dirty. A due pending request reuses its
  *   immutable idempotency key (same rule as `reconcileEvents` in cron.ts);
  *   otherwise the caller mints a fresh key via `replayFailedSyncEvent`.
- * - `discard-stale`: the source is clean, so the dead row is obsolete and
- *   `discardFailedJob` may remove exactly that row.
- * - `keep`: not a sync-event row, no rebuildable key, or the live request is
- *   not due (unsettled claim, future attempt, exhausted budget) — leave the
- *   row and the live request to the scheduler.
+ * - `discard-stale`: the source is clean AND has no failed snapshot and no
+ *   live pending request, so the dead row is obsolete and `discardFailedJob`
+ *   may remove exactly that row.
+ * - `keep`: not a sync-event row, no rebuildable key, a definitive refusal,
+ *   or a live request that is not due (unsettled claim, future attempt,
+ *   exhausted budget) or that survives on a non-dirty event (e.g. a pending
+ *   request on an event since closed to `past`) — leave the row and the live
+ *   request to the scheduler/operator. Deleting the only ledger evidence of
+ *   an event that never reached Discord is forbidden (docs/runbook.md).
  */
 export async function reconcileFailedJob(
-  events: Pick<EventStore, "needsSync" | "pendingSync">,
+  events: ReconcileStore,
   failed: Pick<FailedJob, "kind" | "key">,
   now: () => Date = () => new Date(),
 ): Promise<ReplayDisposition> {
@@ -65,6 +80,25 @@ export async function reconcileFailedJob(
   }
   const scope = sanitizeQueueScope(eventKey);
   if (!(await events.needsSync(eventKey))) {
+    // `needsSync === false` is ambiguous: the source may be clean, or the
+    // current revision may carry a definitive refusal (`failed` snapshot),
+    // which `staleKeys` also excludes. A pending request may also survive on
+    // a non-dirty event (e.g. closed to `past`). All three must keep the row.
+    const pending = await events.pendingSync(eventKey);
+    if (pending) {
+      return {
+        action: "keep",
+        eventKey,
+        reason: `pending sync request for ${scope} needs operator recovery; preserve dead row and snapshot`,
+      };
+    }
+    if (await events.hasFailedSync(eventKey)) {
+      return {
+        action: "keep",
+        eventKey,
+        reason: `definitive refusal for ${scope}; operator recovery required, preserve dead row and snapshot`,
+      };
+    }
     return {
       action: "discard-stale",
       eventKey,
@@ -116,9 +150,16 @@ export async function reconcileFailedJob(
  * The dead row stays untouched until the new message's recovery is confirmed.
  * Pass the `idempotencyKey` from a `replay` disposition when present; a fresh
  * key is minted otherwise (the constructor in Laravel).
+ *
+ * Library function with no operator entrypoint yet: no CLI, route, or worker
+ * wiring imports this helper. The caller passes the raw queue binding plus
+ * its ledger; the helper wraps them with `trackingQueue` itself so the live
+ * message always records a `queue_jobs` row for the runbook's
+ * dead-row-stays-until-recovery-confirmed check.
  */
 export async function replayFailedSyncEvent(
   queue: Sendable,
+  ledger: QueueLedger,
   lock: UniqueLock,
   eventKey: string,
   idempotencyKey: string = crypto.randomUUID(),
@@ -126,5 +167,12 @@ export async function replayFailedSyncEvent(
   // Originating HTTP request for queue.failing correlation; optional, same as dispatchSyncEvent.
   requestId?: string,
 ): Promise<boolean> {
-  return dispatchSyncEvent(queue, lock, eventKey, idempotencyKey, signal, requestId);
+  return dispatchSyncEvent(
+    trackingQueue(queue, ledger),
+    lock,
+    eventKey,
+    idempotencyKey,
+    signal,
+    requestId,
+  );
 }
