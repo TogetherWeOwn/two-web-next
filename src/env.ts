@@ -34,6 +34,10 @@ export type Env = AgentEventsEnv & {
   DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  // Separate default-off operational read boundary. No grant or principal is
+  // provisioned here; both settings require independent security review.
+  QUEUE_RECONCILE_PREVIEW_ENABLED?: string;
+  QUEUE_RECONCILE_OPERATOR_ID?: string;
   // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
   INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
   MEMBER_ACCESS_LOG_ENFORCE?: string;

@@ -34,6 +34,9 @@ export const coverage = {
   "/sitemap_index.xml": skip("XML sitemap"),
   "/robots.txt": skip("Plain-text robots policy"),
   "/up": skip("JSON queue health response"),
+  "/admin/queue/failed/:id/preview": skip(
+    "Default-off operator-only JSON advice, not an HTML document",
+  ),
   "/events.json": skip("Session-gated JSON feed"),
   "/events/:key": skip("Session-gated JSON event detail; browser guests redirect to sign-in"),
   "/events.ics": skip("Calendar feed, not HTML"),

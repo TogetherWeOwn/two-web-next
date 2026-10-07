@@ -42,14 +42,20 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
 }
 
 /** Durable request snapshot; first claims recheck eligibility, attempted retries are immutable. */
-export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): EventStore {
+export function pgEventStore(
+  sql: ReturnType<typeof postgres> | TxClient,
+  { bypassReadCache = false }: { bypassReadCache?: boolean } = {},
+): EventStore {
+  // Operational previews cannot combine a fresh timestamp with cached source reads.
+  // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
+  const readMarker = () => (bypassReadCache ? sql`, clock_timestamp() as preview_read_at` : sql``);
   // Revision dirtiness survives a rejected send and deletion of the last RSVP.
   // The missing-mapping/RSVP predicate remains a migration backstop.
   // Attempted requests recover independently of first-request eligibility:
   // closure or later refusal cannot resolve an ambiguous immutable request.
   // Reconciliation owns the due-time check using its scheduler clock.
   const staleKeys = async (eventKey: string | null) => {
-    const rows = await sql`select event_key from events
+    const rows = await sql`select event_key${readMarker()} from events
       where (${eventKey}::text is null or event_key = ${eventKey}) and (
         exists (select 1 from event_sync_attempts pending
           where pending.event_id = events.id and pending.state = 'pending'
@@ -149,7 +155,7 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
     },
     needsSync: async (eventKey) => (await staleKeys(eventKey)).length > 0,
     async hasFailedSync(eventKey) {
-      const rows = await sql`select 1 from event_sync_attempts rejected
+      const rows = await sql`select 1${readMarker()} from event_sync_attempts rejected
         join events e on e.id = rejected.event_id
         where e.event_key = ${eventKey}
           and rejected.revision = e.sync_revision
@@ -158,7 +164,7 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
     },
     async pendingSync(eventKey) {
       const [row] =
-        await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
+        await sql`select a.*${readMarker()} from event_sync_attempts a join events e on e.id = a.event_id
         where e.event_key = ${eventKey} and a.state = 'pending'`;
       return row ? attemptFrom(row) : null;
     },

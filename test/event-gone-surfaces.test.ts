@@ -9,11 +9,12 @@
 // uses data-testid="event-cancelled" on current markup (theme restyle owned elsewhere).
 // (agent-testdb; skipped without DATABASE_URL like test/events.test.ts).
 import { serializeSigned } from "hono/utils/cookie";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import { clearAuditRows } from "./helpers/audit-rows";
-import { createDb } from "../src/db/index";
+import type { Db } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import {
   createMemorySessionStore,
@@ -75,20 +76,27 @@ function jsonLdOf(html: string): Record<string, unknown> {
 }
 
 describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: Db;
   const store = createMemorySessionStore();
-  const env = {
-    ...baseEnv,
-    ADMIN_DB: db,
-    SESSION_STORE: store,
-    DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-  } as unknown as Env;
+  const bindings = () =>
+    ({
+      ...baseEnv,
+      ADMIN_DB: db,
+      SESSION_STORE: store,
+      DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+    }) as unknown as Env;
   // Apex config silences the global staging middleware, so every robots
   // assertion below proves a route-level signal, not middleware interference.
-  const apexEnv = { ...env, APP_URL: "https://togetherweown.com" } as unknown as Env;
+  const req = (path: string, init: RequestInit = {}) => app.request(path, init, bindings());
+  const apex = (path: string, init: RequestInit = {}) =>
+    app.request(path, init, { ...bindings(), APP_URL: "https://togetherweown.com" });
 
-  const req = (path: string, init: RequestInit = {}) => app.request(path, init, env);
-  const apex = (path: string, init: RequestInit = {}) => app.request(path, init, apexEnv);
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(() => fixture?.dispose());
   // View sessions rotate on every authenticated page read, so each request
   // mints a fresh cookie.
   const auth = async (moderator: boolean, extra: RequestInit = {}) => ({

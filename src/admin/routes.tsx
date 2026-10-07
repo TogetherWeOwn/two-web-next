@@ -1,7 +1,8 @@
 // Admin routes (W11 pt1). Ports the Filament panel screens the legacy admin ran
 // on, minus Filament: HTML tables + forms in this repo's JSX idiom.
 //
-// Routes (all behind adminGuard — moderator 403, guest OAuth redirect):
+// Routes behind adminGuard (non-moderator 403, guest OAuth redirect).
+// Queue preview additionally requires default-off staging/operator admission:
 // - GET  /admin                      dashboard (index of resources)
 // - GET  /admin/events               list (search, status/series/fill, sort, page)
 // - GET  /admin/events/new           create form
@@ -12,6 +13,7 @@
 // - POST /admin/events/:key/cancel   draft|published → cancelled
 // - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
 // - GET  /admin/join-attempts/:id    read-only attempt detail
+// - GET  /admin/queue/failed/:id/preview  one-row advice only
 // - GET  /admin/featured             list, position order
 // - GET  /admin/featured/new         create form
 // - POST /admin/featured             create
@@ -27,7 +29,7 @@ import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
-import type { Env } from "../env";
+import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
@@ -37,7 +39,7 @@ import {
   parseJoinAttemptsQuery,
   parseRosterQuery,
 } from "./table-list";
-import { type AccessDecl, type Actor, type AdminOverrides, adminGuard } from "./guard";
+import { type AccessDecl, type AdminOverrides, adminGuard } from "./guard";
 import type { SessionStore } from "../sessions";
 import {
   type EventRow,
@@ -77,10 +79,7 @@ import {
   JoinAttemptsPage,
 } from "./pages";
 
-type Vars = {
-  Bindings: Env;
-  Variables: { adminActor: Actor; access: AccessDecl };
-};
+type Vars = QueuePreviewVars;
 
 const SESSION_GUEST_REDIRECT = "/auth/discord";
 
@@ -141,7 +140,9 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
+  admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
+  admin.get("/queue/failed/:id/preview", queuePreviewHandler);
 
   // Legacy Filament bookmarks: guard first, no query forwarding.
   // Only the featured edit alias needs a resource read to resolve the imported ID.

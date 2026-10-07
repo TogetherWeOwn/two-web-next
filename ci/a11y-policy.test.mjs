@@ -55,6 +55,14 @@ test("event JSON reads are explicitly classified as non-documents, not HTML succ
   );
 });
 
+test("operational preview JSON is explicitly a non-document", () => {
+  const path = "/admin/queue/failed/:id/preview";
+  const entry = documentCoverage[path];
+  assert.equal(entry.skip, true);
+  assert.match(entry.reason, /operator-only JSON/);
+  assert.deepEqual(auditCases([{ method: "GET", path }], { [path]: entry }), []);
+});
+
 test("removed routes and unexplained exclusions fail", () => {
   assert.throws(() => auditCases(routes.slice(1), coverage), /stale=\//);
   assert.throws(

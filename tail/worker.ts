@@ -53,6 +53,7 @@ export const ALERT_ROUTES = new Set([
   "/admin/featured-contents/create",
   "/admin/join-attempts",
   "/admin/join-attempts/:id",
+  "/admin/queue/failed/:id/preview",
   "/api/agent-events",
   "/auth/discord",
   "/auth/discord/callback",
