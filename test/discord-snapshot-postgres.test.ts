@@ -159,6 +159,41 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
     expect(claim.nowQueryStartedAt).toBeLessThanOrEqual(claimQueryStartedAt!);
     expect(outsideTransactionQueries).toBe(0);
   });
+  it("anchors tokenless snapshots before their database-clock read", async () => {
+    await fixture.client`insert into discord_event_snapshots (key, payload, succeeded_at, lease_token, lease_expires_at)
+      values (${key}, '[]', clock_timestamp() - interval '61 seconds', gen_random_uuid(), clock_timestamp() + interval '1 minute')`;
+    let readQueryStartedAt: number | undefined;
+    const connectWithDelayedRead = () => {
+      const client = connect();
+      return new Proxy(client, {
+        get(target, prop) {
+          if (prop !== "begin") return Reflect.get(target, prop);
+          return (fn: (tx: postgres.TransactionSql) => Promise<unknown>) =>
+            target.begin(async (tx) =>
+              fn(
+                new Proxy(tx, {
+                  apply(targetTx, thisArg, args) {
+                    const query = (args[0] as TemplateStringsArray).join("?");
+                    if (!query.includes("select s.key as stored_key"))
+                      return Reflect.apply(targetTx, thisArg, args);
+                    readQueryStartedAt = performance.now();
+                    return (async () => {
+                      await new Promise((resolve) => setTimeout(resolve, 10));
+                      return Reflect.apply(targetTx, thisArg, args);
+                    })();
+                  },
+                }),
+              ),
+            );
+        },
+      }) as ReturnType<typeof postgres>;
+    };
+    const claim = await pgDiscordSnapshotStore(connectWithDelayedRead).claim(key);
+    expect(claim.token).toBeNull();
+    expect(claim.nowQueryStartedAt).toEqual(expect.any(Number));
+    expect(readQueryStartedAt).toEqual(expect.any(Number));
+    expect(claim.nowQueryStartedAt).toBeLessThanOrEqual(readQueryStartedAt!);
+  });
   it("stale losing callers do not fetch and do not wait for HTTP", async () => {
     await fixture.client`insert into discord_event_snapshots (key,payload,succeeded_at) values (${key}, '[]', clock_timestamp() - interval '61 seconds')`;
     const owner = await pgDiscordSnapshotStore(connect).claim(key);

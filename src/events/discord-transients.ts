@@ -246,8 +246,16 @@ export function cachedDiscordEventsSource(
           claim.nowQueryStartedAt <= claimReturnedAt
             ? claim.nowQueryStartedAt
             : null;
-        usableDiscordSnapshot(claim);
-        let snapshot = claim;
+        const snapshotAt = (at: number): typeof claim | null => {
+          if (claimClockAnchor === null) {
+            // A tokenless success without an anchor could expire before it reaches the caller.
+            if (!claim.token && claim.succeededAt !== null) return null;
+            return claim;
+          }
+          return { ...claim, now: claim.now + Math.max(0, at - claimClockAnchor) };
+        };
+        const claimAtReturn = snapshotAt(claimReturnedAt);
+        let snapshot = claimAtReturn ?? claim;
         let liveRows: DiscordTransient[] | null = null;
         let completionFailed = false;
         let completionCode: string | undefined;
@@ -286,9 +294,18 @@ export function cachedDiscordEventsSource(
             };
           }
         }
+        const claimCheckedNow = snapshotAt(performance.now());
+        if (!claim.token && claimCheckedNow) snapshot = claimCheckedNow;
         const recent = completionFailed
-          ? (liveRows ?? (claimClockAnchor === null ? null : usableDiscordSnapshot(snapshot)))
-          : usableDiscordSnapshot(snapshot);
+          ? (liveRows ??
+            (claimClockAnchor === null || claimCheckedNow === null
+              ? null
+              : usableDiscordSnapshot(claimCheckedNow)))
+          : claim.token === null
+            ? claimCheckedNow === null
+              ? null
+              : usableDiscordSnapshot(claimCheckedNow)
+            : usableDiscordSnapshot(snapshot);
         failed = recent === null;
         // One bounded diagnostic per request, never a key, payload or error message.
         console.info("Discord snapshot outcome", {

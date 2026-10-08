@@ -14,6 +14,8 @@ is unchanged.
 - A successful `[]` is a populated snapshot; SQL `NULL` means no completed success.
 - Fresh: less than 60 seconds from the last completed success, with no Discord call.
   Usable stale: less than 600 seconds **total** from that success, not 60 + 600.
+  Tokenless successes require a monotonic claim-time anchor to recheck age at use;
+  without one, the source fails closed.
 - Database-clock admission grants one UUID-owned five-second refresh lease. Other
   requests return valid stale data immediately; an in-flight/held cold cache is
   an honest failure. No transaction or row lock survives into the HTTP read.

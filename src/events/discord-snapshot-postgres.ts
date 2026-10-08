@@ -33,14 +33,18 @@ function view(row: Record<string, unknown>): SnapshotView {
   };
 }
 
-async function read(tx: Tx, key: string): Promise<SnapshotView & { exists: boolean }> {
+async function read(
+  tx: Tx,
+  key: string,
+): Promise<SnapshotView & { exists: boolean; nowQueryStartedAt: number }> {
   // Volatile time makes this authoritative through Hyperdrive query caching.
   // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
+  const nowQueryStartedAt = performance.now();
   const [row] = await tx`
     select s.key as stored_key, s.payload, s.succeeded_at, s.retry_at, s.lease_expires_at, clock_timestamp() as now
     from (select ${key}::text as key) k left join discord_event_snapshots s using (key)`;
   if (!row) throw new DiscordSnapshotError();
-  return { ...view(row), exists: row.stored_key !== null };
+  return { ...view(row), exists: row.stored_key !== null, nowQueryStartedAt };
 }
 
 function refreshHeld(view: SnapshotView): boolean {

@@ -372,6 +372,63 @@ describe("shared Discord snapshots", () => {
       vi.useRealTimers();
     }
   });
+  it("rechecks tokenless stale claims after claim-return latency", async () => {
+    vi.useFakeTimers();
+    try {
+      const stale = [row("stale")],
+        h = harness([stale]),
+        store = memoryDiscordStore(h.backing),
+        key = discordSnapshotKey(env);
+      await h.request();
+      h.advance(DISCORD_CACHE_STALE_MS - 100);
+      expect((await store.claim(key)).token).toBeTruthy();
+      const source = cachedDiscordEventsSource(env, h.inner, {
+        claim: async (claimKey) => {
+          const claim = await store.claim(claimKey);
+          expect(claim.nowQueryStartedAt).toEqual(expect.any(Number));
+          await new Promise<void>((resolve) => setTimeout(resolve, 200));
+          h.advance(200);
+          return claim;
+        },
+        complete: store.complete,
+      });
+      const pending = source.upcoming();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(await pending).toEqual([]);
+      expect(source.lastReadFailed()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("fails closed when an unanchored tokenless success can exceed its maximum age", async () => {
+    vi.useFakeTimers();
+    try {
+      const rows = [row("stale")],
+        h = harness([rows]),
+        store = memoryDiscordStore(h.backing),
+        delay = DISCORD_CACHE_STALE_MS - DISCORD_CACHE_FRESH_MS + 2;
+      await h.request();
+      h.advance(DISCORD_CACHE_FRESH_MS - 1);
+      const source = cachedDiscordEventsSource(env, h.inner, {
+        claim: async (claimKey) => {
+          const claim = await store.claim(claimKey);
+          expect(claim.token).toBeNull();
+          delete claim.nowQueryStartedAt;
+          await new Promise<void>((resolve) => setTimeout(resolve, delay));
+          h.advance(delay);
+          return claim;
+        },
+        complete: store.complete,
+      });
+      const pending = source.upcoming();
+      await vi.advanceTimersByTimeAsync(delay);
+      expect(await pending).toEqual([]);
+      expect(source.lastReadFailed()).toBe(true);
+      expect(h.calls()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("fails closed to stale data when completion fails without a claim clock anchor", async () => {
     vi.useFakeTimers();
     try {
