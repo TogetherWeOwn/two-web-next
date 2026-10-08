@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import testApp from "./app";
 import type { Env } from "../src/env";
+import { STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR } from "./helpers/member-data";
 
@@ -188,6 +189,8 @@ const MATRIX: Case[] = [
     contentType: "application/x-www-form-urlencoded",
   },
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
+  // Operational admission is disabled before any session/source/audit lookup.
+  { method: "GET", route: "/admin/queue/failed/:id/preview", status: 404, format: "json" },
   // Static aliases need a valid moderator session, but no resource lookup.
   {
     method: "GET",
@@ -284,6 +287,7 @@ const MIDDLEWARE = [
   "ALL /*",
   "ALL /*",
   "ALL /admin/*",
+  "ALL /admin/queue/*",
   "ALL /profile",
   "ALL /profile",
   "ALL /members/*",
@@ -305,6 +309,28 @@ function assertInventory(router: { routes: { method: string; path: string }[] })
       .sort(),
   ).toEqual([...MIDDLEWARE, "ALL /events/:key/rsvp"].sort());
 }
+
+it("an enabled dedicated operator preview refuses a real source socket outage", async () => {
+  const store = createMemorySessionStore();
+  const bindings = {
+    ...outageEnv(),
+    APP_URL: STAGING_APP_URL,
+    QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
+    QUEUE_RECONCILE_OPERATOR_ID: MODERATOR.userId,
+    SESSION_STORE: store,
+  };
+  const res = await testApp.request(
+    "/admin/queue/failed/7/preview",
+    {
+      headers: { origin: STAGING_APP_URL, cookie: await cookieFor(store, MODERATOR) },
+    },
+    bindings,
+  );
+  expect(res.status).toBe(503);
+  expect(await res.json()).toEqual({ error: "preview_unavailable" });
+  expect(res.headers.get("cache-control")).toBe("private, no-store");
+  expect(clients).toHaveLength(1);
+});
 
 beforeEach(() => {
   // HTTP dependencies stay local too. No real Discord/OAuth/alert traffic.

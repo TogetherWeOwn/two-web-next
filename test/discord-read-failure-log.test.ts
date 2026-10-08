@@ -13,7 +13,7 @@ import {
 const NOW = new Date("2030-01-01T00:00:00Z");
 const TOKEN = "fixture-bot-token-must-never-echo";
 const env = { DISCORD_GUILD_ID: "326474832151838730", DISCORD_BOT_TOKEN: TOKEN } as Env;
-const MESSAGE = "Discord scheduled-events read failed; rendering the error state.";
+const MESSAGE = "Discord scheduled-events read failed.";
 
 function warnings() {
   return vi.spyOn(console, "warn").mockImplementation(() => {});

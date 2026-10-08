@@ -54,8 +54,6 @@ describe.skipIf(!databaseUrl)("importer output verifies clean for the audit tabl
 
   beforeAll(async () => {
     const url = testDatabaseUrl(databaseUrl!); // Refuse before creating a driver or schema.
-    if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next")
-      throw new Error("verifier fixtures require two_web_next");
     fixture = await createMemberDataFixture(url.href);
     // Raw drivers like the CLIs; the fixture's Drizzle client overrides serializers.
     const config = { max: 1, port: 5432, password: () => url.password, onnotice: () => {} };

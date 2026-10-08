@@ -44,6 +44,11 @@ it.each([
 it.each([
   ["production host", "postgres://agent_test@production.example.test/postgres"],
   ["staging host", "postgres://agent_test@staging.example.test/postgres"],
+  ["staging database name", "postgres://agent_test@agent-testdb/staging"],
+  ["unknown database name", "postgres://agent_test@agent-testdb/events"],
+  ["unknown W15 database name", "postgres://agent_test@agent-testdb/w15_staging"],
+  ["W15-prefixed worktree name", "postgres://agent_test@agent-testdb/two_web_next_w15_tog10114"],
+  ["non-numeric worktree suffix", "postgres://agent_test@agent-testdb/two_web_next_togstaging"],
   ["wrong principal", "postgres://postgres@agent-testdb/postgres"],
   ["unexpected password", "postgres://agent_test:sentinel-secret@agent-testdb/postgres"],
   ["wrong port", "postgres://agent_test@agent-testdb:5433/postgres"],
@@ -108,9 +113,9 @@ it("pins the empty test password and port instead of inheriting libpq credential
   }
 });
 
-it("refuses an import fixture in any other agent-testdb database before constructing a driver", async () => {
+it("refuses an unsafe import database before constructing a driver", async () => {
   await expect(
-    createUsersProfilesFixture("postgres://agent_test@agent-testdb/postgres"),
+    createUsersProfilesFixture("postgres://agent_test@agent-testdb/production"),
   ).rejects.toThrow("refusing before connecting");
   expect(postgres).not.toHaveBeenCalled();
 });

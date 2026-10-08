@@ -50,12 +50,23 @@ The verification diff tool tracked by [TOG-10835](/TOG/issues/TOG-10835) is not 
 
 ## Synthetic verification
 
-`test/fixtures/legacy/users-profiles.sql` transcribes the three migrations and adds only synthetic rows/token sentinels. Tests create isolated `legacy_up_*` and `next_up_*` schemas to avoid collisions with other import domains or agent runs, and apply the canonical Next users/profiles migrations. The suite explicitly refuses database targets other than `agent-testdb:5432/two_web_next` (empty-password `agent_test`) or this repository's CI PostgreSQL service container.
+`test/fixtures/legacy/users-profiles.sql` transcribes the three migrations and adds only synthetic rows/token sentinels. Tests create isolated `legacy_up_*` and `next_up_*` schemas to avoid collisions with other import domains or agent runs, and apply the canonical Next users/profiles migrations. The suite validates URLs through `testDatabaseUrl`: agent-testdb at port 5432 with empty-password `agent_test` and database `postgres`, `two_web_next`, `w15_tests`, or numeric run-owned `two_web_next_tog<digits>`, or this repository's disposable CI PostgreSQL service with both CI flags set to `true`, `localhost:5432/postgres` coordinates and `postgres:ci` credentials. Other database names, hosts, credentials, query strings and fragments are rejected before connecting or running DDL.
 
 ```sh
-# With DATABASE_URL supplied via env for the approved disposable test service:
-npx vitest run test/import-users-profiles.test.ts test/import-users-profiles-encoding.test.ts
-npm run check
+# Focused fixture tests use the approved disposable test service.
+env -u AUDIT_IMPORT_TEST_DATABASE_URL -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
+  DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
+  npx vitest run test/import-users-profiles.test.ts test/import-users-profiles-encoding.test.ts
+# First create a fresh run-owned database; replace the suffix each run.
+export TEST_DB=two_web_next_tog1234567890123456
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/${TEST_DB}"
+export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+unset LEGACY_DATABASE_URL
+export PGPASSWORD=
+export W1_AGENT_TESTDB=0
+npm run db:migrate
+npm run db:check
+env -u BOT_DATABASE_URL npm run check
 ```
 
 Without `DATABASE_URL`, CLI safety tests run and the DB fixture tests skip. With it, tests prove counts, dry-run no writes, display-name/null/empty/whitespace mapping, exact-key/time mapping (including conflicting DateStyles), normalized avatar import-to-render and refusal cases, no moderator/token import, actual no-op row versions, equal-timestamp mapping corrections, newer Next user preservation, conflict updates, source immutability, validation failures and transaction rollback. Fixture construction reuses the strict test URL validator: caller query strings/fragments are rejected before driver construction or DDL, CI requires both `CI=true` and `GITHUB_ACTIONS=true`, and test port/password are pinned rather than inherited from libpq environment variables. Only fixture-generated connection URLs carry an isolated `search_path`; CLI tests remove the helper's hostile timezone parameter and exercise timezone/DateStyle overrides through direct clients instead. The dedicated encoding suite proves inert-constructor URL refusal/startup pins and byte-exact Unicode display names, fallback handles, bios and JSON games under directly supplied LATIN1/WIN1252 sessions, with preview/apply/replay, unchanged source/target row versions and synthetic microseconds. Timestamp parameters are bound as text before the explicit timestamp cast to avoid the driver's millisecond-only Date serializer. Dedicated timestamp-domain regressions cover both users/profile creation and update fields with ±infinity and an out-of-Date-range finite year: preview and apply refuse them, existing target/source row versions remain unchanged, later finite corrections still apply, and replay writes nothing. CLI refusal is redacted and leaves an empty destination empty. Mocked-driver coverage in `test/member-data-fixture.test.ts` proves refusal before connecting. Tests never contact Discord, legacy VPS, Neon, production or staging.

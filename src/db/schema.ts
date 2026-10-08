@@ -1,6 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
   bigserial,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -25,6 +27,35 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Expiring Discord display cache, not canonical events, RSVP or reconciliation input.
+export const discordEventSnapshots = pgTable(
+  "discord_event_snapshots",
+  {
+    key: varchar("key", { length: 512 }).primaryKey(),
+    payload: jsonb("payload"),
+    succeededAt: timestamp("succeeded_at", { withTimezone: true }),
+    retryAt: timestamp("retry_at", { withTimezone: true }).notNull().default(new Date(0)),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  },
+  (t) => [
+    check(
+      "discord_snapshot_success_pair",
+      sql`(${t.payload} IS NULL) = (${t.succeededAt} IS NULL)`,
+    ),
+    check(
+      "discord_snapshot_lease_pair",
+      sql`(${t.leaseToken} IS NULL) = (${t.leaseExpiresAt} IS NULL)`,
+    ),
+    check(
+      "discord_snapshot_payload_bound",
+      sql`${t.payload} IS NULL OR CASE WHEN jsonb_typeof(${t.payload}) = 'array'
+      THEN jsonb_array_length(${t.payload}) <= 100 AND octet_length(${t.payload}::text) <= 262144
+      ELSE false END`,
+    ),
+  ],
+);
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

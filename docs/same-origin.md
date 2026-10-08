@@ -50,11 +50,21 @@ both admitted header forms, safe methods and exact exemption boundaries.
 Existing auth, CRUD, profile, RSVP, throttle and machine-ingress suites continue
 to exercise same-origin behavior. Synthetic POST fixtures explicitly provide
 Origin; isolated-router origin tests mount the shared outer guard, since the
-per-handler checks have been removed. Run with local fixtures or the authorized
-test container only:
+per-handler checks have been removed. For a full local check, first create and
+migrate a fresh run-owned database following the [README database setup](../README.md#database-and-migrations);
+never run the full suite against shared `two_web_next`.
 
 ```sh
-DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next PGPASSWORD= npm run check
+# Replace the numeric suffix with unused digits for each run.
+export TEST_DB=two_web_next_tog1234567890123456
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/${TEST_DB}"
+export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+unset LEGACY_DATABASE_URL
+export PGPASSWORD=
+export W1_AGENT_TESTDB=0
+npm run db:migrate
+npm run db:check
+env -u BOT_DATABASE_URL npm run check
 ```
 
 Never use a production or staging database for these tests.

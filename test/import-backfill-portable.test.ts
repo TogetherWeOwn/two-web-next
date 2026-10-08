@@ -58,9 +58,6 @@ describe.skipIf(!url)("portable legacy event backfill import (EventScheduleTest.
 
   beforeAll(async () => {
     const safe = testDatabaseUrl(url!);
-    if (safe.hostname === "agent-testdb" && safe.pathname !== "/two_web_next") {
-      throw new Error("Importer fixtures require the two_web_next test database");
-    }
     fixture = await createMemberDataFixture(safe.href);
     legacySchema = `${fixture.schemaName}_legacy`;
     // Sessions are Pacific/Honolulu (legacy) and Asia/Tokyo (target). A hostile

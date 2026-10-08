@@ -111,20 +111,27 @@ function gitEnv(): NodeJS.ProcessEnv {
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
-    GIT_AUTHOR_NAME: "Fixture",
-    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-    GIT_COMMITTER_NAME: "Fixture",
-    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
     PAPERCLIP_SCRATCH_DIR: root,
   };
 }
 
 async function git(cwd: string, ...args: string[]) {
   return (
-    await exec("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args], {
-      cwd,
-      env: gitEnv(),
-    })
+    await exec(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgSign=false",
+        ...args,
+      ],
+      { cwd, env: gitEnv() },
+    )
   ).stdout.trim();
 }
 

@@ -37,9 +37,6 @@ let target: ReturnType<typeof postgres>;
 suite("audit import DateStyle boundary (disposable test DB only)", () => {
   beforeAll(async () => {
     const url = testDatabaseUrl(raw!);
-    if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next") {
-      throw new Error("Audit fixtures require agent-testdb database two_web_next");
-    }
     fixture = await createMemberDataFixture(raw!);
     const options = {
       max: 1,

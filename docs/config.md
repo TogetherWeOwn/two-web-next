@@ -8,10 +8,15 @@ PRs, logs or command arguments.
 
 ## Environment model
 
-- **dev:** local Wrangler plus untracked `.dev.vars`; SQL tests use only
-  `agent-testdb`, database `two_web_next`, user `agent_test`, empty password.
-  CI uses its disposable Postgres service. Never test/probe/verify production
-  or staging databases. On a credential failure, stop without substitution.
+- **dev:** local Wrangler plus untracked `.dev.vars`; SQL tests use the central
+  `testDatabaseUrl` guard: `agent-testdb:5432` with user `agent_test`, an empty
+  password, and database `postgres`, `two_web_next`, `w15_tests`, or numeric
+  `two_web_next_tog<digits>`. Arbitrary database names are refused. The disposable
+  CI Postgres service is accepted only with both CI flags set to `true` and its
+  `localhost:5432/postgres` coordinates plus `postgres:ci` credentials. Full
+  local checks use a fresh run-owned database, not shared `two_web_next`. Never
+  test/probe/verify production or staging databases. On a credential failure, stop
+  without substitution.
 - **staging:** the checked-in **top-level** Worker configuration points at
   `next.togetherweown.com`. The GitHub Environment `staging` is a deployment
   gate, not a Wrangler named environment. Worker name is `two-web-next`;
@@ -50,6 +55,8 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `DATABASE_URL` | Optional connection string; treat credential-bearing URLs as secrets | dev: test database; staging/prod: optional explicit override, normally use `DB` | None in runtime; local example uses the test container | Normal web selection is explicit URL then `DB`. No source means guest-only sessions, no-op roster persistence and unavailable DB-backed features. Generic human throttles use only this URL and allow requests when missing or failing. Web producers, jobs and `/up` share explicit URL then `DB` selection, with jobs accepting the legacy alias last (below). |
 | `DISCORD_MODERATOR_ROLE_IDS` | Optional public var (comma-separated snowflakes) | dev/staging/prod | Main Wrangler: approved SySOp `508654771276873729`; local/unset: blank, no moderators | Only trimmed 10–25 digit role IDs survive parsing. Blank/invalid allowlist or lookup failure gives `moderator=false`; sign-in continues. Deployment preflight requires exactly SySOp from the same top-level source config published by Wrangler; extras fail. This is source policy, not live binding/isolation evidence. |
 | `QA_AUTH_TOKEN` | Optional secret | staging only; leave unset in dev/prod | Unset; QA route disabled | QA route requires exact `APP_URL=https://next.togetherweown.com` plus the matching nonempty token. Missing/bad token or unknown identity returns 404. Throttle executes before the gate. |
+| `QUEUE_RECONCILE_PREVIEW_ENABLED` | Optional operational flag var | staging only; leave unset elsewhere | Unset; disabled | Only exact `true`, exact staging `APP_URL`, and a valid non-QA operator ID admit the read-only preview namespace; otherwise DB-free 404. No Worker config sets this flag. Activation requires independent security review and separate authorization. |
+| `QUEUE_RECONCILE_OPERATOR_ID` | Optional operational principal var (Discord snowflake) | staging only; no grant provisioned | Unset; nobody admitted | Exactly one 10–25 digit non-QA identity, plus the live session moderator bit, is required. Invalid/missing configuration disables previews; any other actor gets 403. QA tokens do not grant operational authority. |
 | `MEMBER_ACCESS_LOG_ENFORCE` | Optional boolean-like var | dev/staging/prod | On | Trimmed, case-insensitive `false`, `0`, `no` disable enforcement; all other values enable it. Failed access-log writes refuse member/admin reads with 503 by default; disabled enforcement logs and serves instead. |
 | `CSP_REPORT_SAMPLE_RATE` | Optional numeric var | dev/staging/prod | `1.0` | Absent/nonfinite values fall back to 1; parsed values clamp to 0–1 (`parseFloat` accepts numeric prefixes). Violation sampling precedes the shared per-isolate log budget; setting 1 does not bypass that budget. Report sink remains 204. |
 | `BOT_ENDPOINT_URL` | Optional signed bot base URL | dev: stub only; staging: provision separately; prod: no new access implied | None | Missing/non-HTTPS URL fails read observation closed to `bot_unreachable`; redirects are refused. The jobs Worker (`JobsEnv`) uses the same three bindings to send sync/announcement/role jobs; if any is missing the job fails terminally and alerts (`queue.failing`), never acks as success. |

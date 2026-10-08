@@ -50,6 +50,7 @@ export const NON_HTML_READS = [
   "/admin/featured-contents",
   "/admin/featured-contents/create",
   "/admin/featured-contents/:id/edit",
+  "/admin/queue/failed/:id/preview", // Operational advice is buffered JSON, never HTML.
   "/sitemap_index.xml",
   "/robots.txt",
   "/up",

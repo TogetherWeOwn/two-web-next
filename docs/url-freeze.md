@@ -178,6 +178,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 |---|---|---|
 | `ALL /*` | middleware | member-exposure: global security headers |
 | `ALL /admin/*` | moderator | member-exposure: mounted admin gate |
+| `ALL /admin/queue/*` | staging-operator | queue-preview-route: default-off, exact staging origin, explicit GET Origin, non-QA dedicated principal, fail-closed operational audit |
 | `ALL /events/:key/rsvp` | public | rsvp: 405 fallback, not a public read |
 | `ALL /members/*` | member | member-exposure: gate + access log |
 | `ALL /profile` | member | member-exposure: gate + access log |
@@ -193,6 +194,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/featured/new` | moderator | admin: create form |
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
+| `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; no replay/delete entrypoint |
 | `GET /auth/discord` | public | app: OAuth start; legacy `/auth/discord/redirect` now temporarily redirects here |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
 | `GET /discord` | public | seo: invite redirect |

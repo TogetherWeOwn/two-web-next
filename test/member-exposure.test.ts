@@ -57,6 +57,7 @@ const ADMIN_READS = [
   "/join-attempts/:id",
   ...ADMIN_REDIRECTS,
 ];
+const OPERATIONAL_READS = ["/queue/failed/:id/preview"];
 const OTHER_READS = [
   "/",
   "/discord",
@@ -96,7 +97,9 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
   expect(readInventory(router)).toEqual(
     [
       ...[...OTHER_READS, ...PROFILE_READS].map((path) => `GET ${path}`),
-      ...ADMIN_READS.map((path) => `GET /admin${path === "/" ? "" : path}`),
+      ...[...ADMIN_READS, ...OPERATIONAL_READS].map(
+        (path) => `GET /admin${path === "/" ? "" : path}`,
+      ),
       // ALL includes middleware as well as handlers. Pin their multiplicity;
       // filtering wildcards or deduplicating would hide added ALL endpoints.
       // The six global ALL /* registrations are the composed security/robots
@@ -114,6 +117,7 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
       "ALL /*",
       "ALL /*",
       "ALL /admin/*",
+      "ALL /admin/queue/*",
       "ALL /events/:key/rsvp",
       "ALL /profile",
       "ALL /profile",
@@ -263,6 +267,20 @@ describe.skipIf(!process.env.DATABASE_URL)(
           expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
       },
     );
+
+    it("operational reads remain opaque to every role when disabled on the mounted Worker", async () => {
+      for (const actor of [null, OUTSIDER, MEMBER, MODERATOR]) {
+        for (const pattern of OPERATIONAL_READS) {
+          const res = await request(`/admin${pattern.replace(":id", "7")}`, {
+            headers: actor ? await headers(actor) : {},
+          });
+          expect(res.status).toBe(404);
+          for (const personal of PERSONAL_STRINGS)
+            expect(await res.clone().text()).not.toContain(personal);
+          expect(res.headers.get("cache-control")).toBe("private, no-store");
+        }
+      }
+    });
 
     it("non-member: profile reads and direct/form writes expose and change nothing", async () => {
       for (const [method, path, body] of [
