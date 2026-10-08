@@ -34,7 +34,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 - Event listing, calendar and past-event islands, event detail/search, iCalendar
   and Google Calendar links, event feeds, RSVP/leave endpoints and going counts.
   RSVP endpoints are implemented; the event detail page does not yet mount an
-  RSVP-button island.
+  RSVP-button island. Discord-native calendar rows use [shared expiring snapshots](docs/discord-snapshots.md)
+  and atomic refresh admission in the existing database; they never become canonical events.
 - Moderator admin screens: event and featured-event CRUD, read-only RSVP roster,
   join audit and funnel summary.
 - Guarded agent-event ingress with caller/guild validation, idempotency and
