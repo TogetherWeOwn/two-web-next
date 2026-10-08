@@ -1,8 +1,13 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
-import type { BotClient, EventStore, UniqueLock } from "./types";
+import type { BotClient, BotFailure, EventStore, UniqueLock } from "./types";
 import { safeRequestId } from "../request-log";
+import {
+  refusalRetryCode,
+  syncRetryDiagnostic,
+  type SyncRetryDiagnostic,
+} from "./sync-retry-diagnostic";
 
 export type Outcome =
   | { done: true }
@@ -66,7 +71,12 @@ export async function dispatchSyncEvent(
 export async function handleSyncEvent(
   msg: { eventKey: string; idempotencyKey: string },
   attempts: number,
-  deps: { bot: BotClient; events: EventStore; now?: () => Date },
+  deps: {
+    bot: BotClient;
+    events: EventStore;
+    now?: () => Date;
+    onRetryDiagnostic?: (receipt: SyncRetryDiagnostic) => void | Promise<void>;
+  },
 ): Promise<Outcome> {
   const now = deps.now ?? (() => new Date());
   const waiting = (seconds: number = SYNC_EVENT.debounceSeconds): Outcome =>
@@ -87,11 +97,24 @@ export async function handleSyncEvent(
   const remaining = Math.ceil((prepared.nextAttemptAt.getTime() - now().getTime()) / 1000);
   if (remaining > 0) return waiting(remaining);
   // A durable closed claim fences concurrent carriers until its result commits.
-  const attempt = await deps.events.claimSync(prepared, now());
+  const claimedAt = now();
+  const attempt = await deps.events.claimSync(prepared, claimedAt);
   if (!attempt) return waiting();
   // A never-attempted snapshot may have become obsolete since preparation.
   // Its atomic first claim retires it without remote I/O or revision acknowledgement.
   if (attempt.state !== "pending") return { done: true };
+  const reportRetry = (retryClass: "BotFailure" | "BotTransportError", answer?: BotFailure) => {
+    // Observability must not turn a known refusal into transport ambiguity or change its wait.
+    try {
+      const observe = deps.onRetryDiagnostic;
+      if (!observe) return;
+      Promise.resolve(
+        observe(
+          syncRetryDiagnostic(retryClass, refusalRetryCode(answer), attempts, attempt, claimedAt),
+        ),
+      ).catch(() => {});
+    } catch {}
+  };
   let retryDeadline: Date | null | undefined;
   const retry = async (seconds: number): Promise<Outcome> => {
     const exhausted = attempt.requestAttempts >= SYNC_EVENT.tries;
@@ -117,6 +140,8 @@ export async function handleSyncEvent(
             answer.code,
           ),
         };
+      // Record the refusal before persistence can throw and obscure its cause.
+      reportRetry("BotFailure", answer);
       return await retry(answer.retryAfterSeconds ?? backoff());
     }
     await deps.events.completeSync(attempt, answer.discordEventId);
@@ -135,7 +160,10 @@ export async function handleSyncEvent(
     if (e instanceof BotTerminalError) return { failed: terminalFailureReason(), definitive: true };
     // Transport loss and local completion failure are both ambiguous. Never
     // replace their identity even at the carrier/request cap.
-    if (e instanceof BotTransportError) return retry(backoff());
+    if (e instanceof BotTransportError) {
+      reportRetry("BotTransportError");
+      return retry(backoff());
+    }
     await deps.events.deferSync(
       attempt,
       attempt.requestAttempts >= SYNC_EVENT.tries

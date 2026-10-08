@@ -13,6 +13,7 @@
 
 import { AlertProbeError } from "./alert-probe-error";
 import { safeRequestId } from "./request-log";
+import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./jobs/sync-retry-diagnostic";
 
 export const ALERT_WINDOW_MS = 5 * 60 * 1000;
 const MAX_TRACKED = 500;
@@ -107,17 +108,29 @@ export type FailedJob = {
   exception: string;
   probeId?: string;
   requestId?: string;
+  syncRetry?: SyncRetryDiagnostic;
 };
 
 /** Failing queue job (ports Queue::failing): connection, queue, job class, attempts, exception. */
 export function alertQueueFailing(job: FailedJob, sink: Sink = consoleSink): void {
-  const { requestId, ...fields } = job;
+  let syncRetry: Partial<SyncRetryDiagnostic> = {};
+  try {
+    syncRetry = projectSyncRetryDiagnostic(
+      Object.getOwnPropertyDescriptor(job, "syncRetry")?.value,
+    );
+  } catch {}
   sink(
     JSON.stringify({
       level: "critical",
       event: "queue.failing",
-      ...fields,
-      request_id: safeRequestId(requestId),
+      connection: job.connection,
+      queue: job.queue,
+      job: job.job,
+      attempts: job.attempts,
+      exception: job.exception,
+      probeId: job.probeId,
+      request_id: safeRequestId(job.requestId),
+      ...syncRetry,
     }),
   );
 }

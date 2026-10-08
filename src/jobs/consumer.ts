@@ -5,7 +5,8 @@ import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
-import { SyncRetryPersistenceError } from "./types";
+import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
+import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
 import type { BotClient, EventStore, QueueLedger, QueueMessage, UniqueLock } from "./types";
 
@@ -44,6 +45,7 @@ function alertFailing(
   attempts: number,
   exception: string,
   ids: { probeId?: string; requestId?: string },
+  syncRetry?: SyncRetryDiagnostic,
 ) {
   const j = JOBS[kind];
   alertQueueFailing({
@@ -52,7 +54,9 @@ function alertFailing(
     job: j.job,
     attempts,
     exception,
-    ...ids,
+    probeId: ids.probeId,
+    requestId: ids.requestId,
+    syncRetry,
   });
 }
 
@@ -141,6 +145,12 @@ export async function consume(
     };
     if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
 
+    // Delivery-local only: never infer a previous carrier's cause from a waiting claim.
+    let syncRetry: SyncRetryDiagnostic | undefined;
+    const onRetryDiagnostic = (receipt: SyncRetryDiagnostic) => {
+      syncRetry = receipt;
+      console.warn("sync retry classified", projectSyncRetryDiagnostic(receipt));
+    };
     let outcome: Outcome;
     try {
       if (body.kind === "alert-probe") {
@@ -151,17 +161,22 @@ export async function consume(
       } else {
         outcome =
           body.kind === "sync-event"
-            ? await handleSyncEvent(body, m.attempts, deps)
+            ? await handleSyncEvent(body, m.attempts, {
+                bot: deps.bot,
+                events: deps.events,
+                now: deps.now,
+                onRetryDiagnostic,
+              })
             : await handleCallInternalAction(body, m.attempts, deps.bot);
       }
     } catch (e) {
       if (body.kind === "sync-event" && e instanceof SyncRetryPersistenceError) {
         // Carry the known wait on this delivery, but only a committed result can
         // reopen the durable claim. Recovery must not substitute a short lease.
-        console.error("sync retry result persistence failed", e.message);
+        console.error("sync retry result persistence failed", SYNC_RETRY_PERSISTENCE_REASON);
         outcome =
           e.nextAttemptAt === null || m.attempts >= SYNC_EVENT.tries
-            ? { failed: e.message }
+            ? { failed: SYNC_RETRY_PERSISTENCE_REASON }
             : {
                 retryInSeconds: Math.max(
                   0,
@@ -178,10 +193,13 @@ export async function consume(
         console.error("job threw", body.kind, { exception: queueExceptionClass(e) });
         // Laravel only fires Queue::failing once the job is out of tries; a redeliverable throw is not a failure yet.
         if (m.attempts >= JOBS[body.kind].tries) {
-          alertFailing(body.kind, m.attempts, queueExceptionClass(e), {
-            probeId: e instanceof AlertProbeError ? e.probeId : undefined,
-            requestId,
-          });
+          alertFailing(
+            body.kind,
+            m.attempts,
+            queueExceptionClass(e),
+            { probeId: e instanceof AlertProbeError ? e.probeId : undefined, requestId },
+            syncRetry,
+          );
           // Out of tries: a terminal failure, not a phantom pending row — and not
           // a retry either. The job already spent its tries (the transport's
           // max_retries is only a backstop above this cap), so ack it and free
@@ -214,7 +232,7 @@ export async function consume(
     if ("failed" in outcome) {
       if (outcome.definitive && !(await failAttempt())) continue;
       console.error("job failed", body.kind, outcome.failed);
-      alertFailing(body.kind, m.attempts, outcome.failed, { requestId });
+      alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));

@@ -30,6 +30,47 @@ The app writes ONE single-line JSON object on `console.error`, with
   `exception` can be a bot refusal message**, not just a class. Neither that field
   nor any trace exception/request/header/body is forwarded by the Tail Worker.
 
+### Sync-event retry-cause diagnostics
+
+`sync retry classified` is a source warning at the retryable refusal/transport
+boundary, before the retry deadline is persisted. The same narrow projection
+appears in the final `queue.failing` source alert, including when retry-result
+persistence fails. It adds only these optional fields:
+
+| Field | Meaning and safe values |
+| --- | --- |
+| `sync_retry_class` | `BotFailure` (a retryable refusal), `BotTransportError` (no usable bot result), or constant `unknown` for malformed diagnostic input |
+| `sync_retry_code` | Refusals only: exactly `in_progress`, `rate_limited`, `internal`, `discord_unavailable`, `upstream_timeout`; every other/missing/malformed code becomes `unknown` |
+| `queue_carrier_attempts` | Positive integer from the current queue message's delivery attempts; existing `attempts` remains this same carrier count for compatibility |
+| `sync_request_attempts` | Nonnegative integer from the durable snapshot returned by `claimSync`; counts durable claims, not necessarily completed HTTP sends |
+| `sync_snapshot_age_at_claim_seconds` | Whole seconds from the snapshot's `mirroredAt` to this delivery's claim clock; unavailable, invalid or future times are omitted |
+
+These fields do not control retries. The bot's existing `retryable` flag and
+Retry-After/backoff still determine behavior, even for an unknown code. No
+provider request ID, error message, payload, response body, raw key or additional
+input field is copied into the projection. Only own data properties are sampled;
+accessors are never invoked. Unreadable fields are omitted or use the constant
+fallback, and a malformed optional receipt cannot suppress the failure alert.
+An unavailable snapshot property omits only age, not the observed cause/counts.
+The Tail's outbound summary is unchanged and does **not** forward these fields.
+
+**Correlation and history boundary:** no vetted safe durable request reference
+is exposed by the current objects, so this receipt deliberately omits it. Do not
+hash an event/member key or describe a carrier UUID or HTTP `request_id` as a
+stable durable identity across replay. The age is snapshot age at claim, not
+dispatch age, request creation age or final-alert age. A waiting/fenced claim or
+already-exhausted request has no new refusal/transport observation: its receipt
+omits cause and durable count rather than guessing from carrier timing or
+inventing a prior cause. No new query, schema, secret or identity is added.
+Cause is delivery-local; the receipt cannot reconstruct prior carriers' causes.
+
+Count exhaustion **occurrences**, not distinct durable requests. A transport
+classification can include an unusable response, not just network downtime.
+Neither a missing classification nor deployment/E2E timing proves an originating
+cause. Instrumentation is not replay, discard, restart or deployment authority;
+later observation requires a separately authorized release and naturally
+occurring work.
+
 ## Delivery and redaction
 
 For source alerts, `tail/worker.ts` accepts only critical `error.alert` and
