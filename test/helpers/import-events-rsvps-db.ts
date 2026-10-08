@@ -7,9 +7,6 @@ export function createImportFixtureClients(
   targetSchema: string,
 ) {
   const safe = testDatabaseUrl(raw);
-  if (safe.hostname === "agent-testdb" && safe.pathname !== "/two_web_next") {
-    throw new Error("Importer fixtures require the two_web_next test database");
-  }
   const options = { max: 1, port: 5432, password: () => safe.password, onnotice: () => {} };
   return {
     legacy: postgres(safe.href, {

@@ -29,9 +29,6 @@ describe.skipIf(!url)("legacy event/RSVP import on owned test schemas", () => {
 
   beforeAll(async () => {
     const safe = testDatabaseUrl(url!);
-    if (safe.hostname === "agent-testdb" && safe.pathname !== "/two_web_next") {
-      throw new Error("Importer fixtures require the two_web_next test database");
-    }
     fixture = await createMemberDataFixture(safe.href);
     legacySchema = `${fixture.schemaName}_legacy`;
     ({ legacy, target } = createImportFixtureClients(safe.href, legacySchema, fixture.schemaName));

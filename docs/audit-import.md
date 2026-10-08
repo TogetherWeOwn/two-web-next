@@ -110,18 +110,36 @@ read-only transactions and does not insert-then-rollback or touch sequences.
 
 ## Fixture verification
 
+For a full local check, first create and migrate a fresh run-owned database using the
+[README database setup](../README.md#database-and-migrations).
+
 ```sh
-# Explicit test-only URL: never use an inherited DATABASE_URL for this suite.
-AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \\
+# Focused tests own and drop their schemas; use only the approved test service.
+env -u DATABASE_URL -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
+  AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
   npm exec vitest run test/import-audit*.test.*
-npm run check
+# Full local checks require a fresh run-owned database; replace the suffix each run.
+export TEST_DB=two_web_next_tog1234567890123456
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/${TEST_DB}"
+export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+unset LEGACY_DATABASE_URL
+export PGPASSWORD=
+export W1_AGENT_TESTDB=0
+npm run db:migrate
+npm run db:check
+env -u BOT_DATABASE_URL npm run check
 ```
 
-The DB suite rejects all hosts except agent-testdb (empty-password `agent_test`,
-database `two_web_next`) and the GitHub Actions Postgres service defined in
-`.github/workflows/ci.yml`. It migrates a disposable Next schema and creates a
-unique `legacy_audit_*` schema from the fixture's `legacy` DDL, so parallel agent
-runs cannot truncate another card's tables. Cleanup drops only those schemas.
+The DB suite validates URLs through `testDatabaseUrl`: agent-testdb at port 5432
+with empty-password `agent_test` and database `postgres`, `two_web_next`,
+`w15_tests`, or numeric run-owned `two_web_next_tog<digits>`, or the GitHub Actions
+Postgres service in `.github/workflows/ci.yml` with both CI flags set to `true`,
+`localhost:5432/postgres` coordinates and `postgres:ci` credentials. Other
+database names, hosts, credentials, query strings and fragments are rejected
+before connecting or running DDL. The fixture migrates a disposable Next schema
+and creates a unique
+`legacy_audit_*` schema from the fixture's `legacy` DDL, so parallel agent runs
+cannot truncate another run's tables. Cleanup drops only those schemas.
 Without the explicit test URL, DB tests skip and credential-free CLI tests run.
 CI supplies the disposable service URL explicitly and runs the fixture suite.
 The importer uses raw postgres.js source/destination clients, not the Drizzle

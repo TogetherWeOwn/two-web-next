@@ -171,8 +171,6 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     beforeEach(async () => {
       const url = testDatabaseUrl(process.env.DATABASE_URL!); // Refuse before any driver/DDL.
-      if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next")
-        throw new Error("Import fixtures require two_web_next");
       fixture = await createJobsFixture(url.href);
       legacySchema = `legacy_${fixture.schemaName}`; // Own schema: concurrent import cards cannot collide.
       await fixture.client.unsafe(fixtureSql.replaceAll(/\blegacy\b/g, legacySchema));

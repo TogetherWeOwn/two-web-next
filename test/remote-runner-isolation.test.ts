@@ -235,20 +235,28 @@ function python(file: string, body: string, args: string[] = []) {
   return JSON.parse(result);
 }
 function git(repo: string, ...args: string[]) {
-  return execFileSync("git", ["-C", repo, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      PATH: process.env.PATH,
-      HOME: repo,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_AUTHOR_NAME: "Synthetic Fixture",
-      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-      GIT_COMMITTER_NAME: "Synthetic Fixture",
-      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Synthetic Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-C",
+      repo,
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        PATH: process.env.PATH,
+        HOME: repo,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: os.devNull,
+      },
     },
-  }).trim();
+  ).trim();
 }
 function committedFixture(dir: string) {
   // Git objects/HEAD exist only in this disposable fixture, never this worktree.
