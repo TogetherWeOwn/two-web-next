@@ -8,6 +8,13 @@ const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
 const lockKey = 11161001;
 
+// Staging accepts either direct endpoint during the provider transition;
+// pooled hosts never are.
+const isDirectStagingHost = (hostname) =>
+  (/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(hostname) ||
+    /^[a-z0-9-]+\.pg\.psdb\.cloud$/.test(hostname)) &&
+  !hostname.split(".")[0].endsWith("-pooler");
+
 class MigrationError extends Error {}
 const refuse = (message) => {
   throw new MigrationError(message);
@@ -49,12 +56,8 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     if ((!agent && !ci) || url.search || !/^\/web_migrate_test_[a-f0-9]+$/.test(url.pathname)) {
       refuse("Selftest requires its owned database on agent-testdb or the CI Postgres service.");
     }
-  } else if (
-    target === "staging" &&
-    (!/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(url.hostname) ||
-      url.hostname.split(".")[0].endsWith("-pooler"))
-  ) {
-    refuse("Migrations require a direct Neon endpoint with TLS; value withheld.");
+  } else if (target === "staging" && !isDirectStagingHost(url.hostname)) {
+    refuse("Migrations require a direct Neon or PlanetScale endpoint with TLS; value withheld.");
   } else if (
     target === "production" &&
     // PlanetScale Postgres direct endpoint: <id>.pg.psdb.cloud:5432.

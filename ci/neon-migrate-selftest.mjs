@@ -224,9 +224,19 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
       }),
     /PlanetScale/,
   );
+  // During the provider transition a direct PlanetScale URL must be
+  // accepted for staging.
+  assert.equal(
+    migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: production }).target,
+    "staging",
+  );
   assert.throws(
-    () => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: production }),
-    /Neon/,
+    () =>
+      migrationConfig({
+        ...mainEnv,
+        NEON_STAGING_DATABASE_URL: production.replace(".pg.psdb.cloud", "-pooler.pg.psdb.cloud"),
+      }),
+    /Neon or PlanetScale/,
   );
   assert.doesNotMatch(
     safeMigrationError(new Error("DO_NOT_ECHO postgres://credentials/ SQL")),
