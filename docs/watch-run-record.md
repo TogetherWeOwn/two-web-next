@@ -6,7 +6,8 @@ production writes, migrations, credential changes or queue purges.
 
 - Watch procedure and cadence:
   [runbook.md](runbook.md#48h-post-flip-watch). The first 60 minutes use
-  the denser poll script in [first-hour-watch.md](first-hour-watch.md);
+  the denser first-hour polls and ladder in
+  [48h-watch-spec.md](48h-watch-spec.md#escalation-ladder);
   record each of its checkpoints in §3 below.
 - Staffing: the approved 48h roster (roles pre-filled per block in §2;
   start/end UTC are set at the CEO go). Handoffs go on the cutover card
