@@ -52,8 +52,8 @@
 #     also fails those. Missing new receipts always fail. See docs/backup-integrity.md.
 #
 # Connection: DATABASE_URL env only (e.g. NEON_STAGING_DATABASE_URL or
-# PRODUCTION_DATABASE_URL exported as DATABASE_URL by the caller or the CI
-# workflow; production is the PlanetScale direct 5432 endpoint, never 6432).
+# PRODUCTION_BACKUP_DATABASE_URL exported as DATABASE_URL by the caller or the
+# CI workflow; production is the PlanetScale direct 5432 endpoint, never 6432).
 # There is no argv, file, or default-credential fallback: an unset
 # DATABASE_URL is a hard error, so a half-configured box can never silently
 # dump the wrong database. Tests run against agent-testdb / the Neon staging

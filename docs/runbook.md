@@ -1241,14 +1241,14 @@ and can skip green when `NEON_STAGING_DATABASE_URL` is absent. Green/skipped is
 not a successful backup. Its `branch` input changes the object prefix only:
 `DATABASE_URL` still comes from `NEON_STAGING_DATABASE_URL`; passing `main`
 does not select a production connection. The `target` input selects the
-connection: `production` reads `PRODUCTION_DATABASE_URL`.
+connection: `production` reads `PRODUCTION_BACKUP_DATABASE_URL`, a read-only role.
 
 The job binds the GitHub Environment named by `target` (`staging` for the
 schedule and by default). A production dump therefore waits for the
 `production` Environment's required reviewers and main-only branch policy
 before the secret is readable, and a staging run never has
-`PRODUCTION_DATABASE_URL` mapped into any step. Provision
-`PRODUCTION_DATABASE_URL` on the `production` Environment only; a repo-level
+`PRODUCTION_BACKUP_DATABASE_URL` mapped into any step. Provision
+`PRODUCTION_BACKUP_DATABASE_URL` on the `production` Environment only; a repo-level
 secret is readable by any job without that gate, so delete it there.
 `ci/check-production-secrets.test.mjs` fails any workflow job that reads a
 `PRODUCTION_*` secret without binding `production`.
