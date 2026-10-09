@@ -75,9 +75,11 @@ describe("revoke-sessions CLI safety", () => {
   });
 
   it("preserves validated TLS and IPv6 connection settings", () => {
-    let options;
-    const capture = (_url: string, received: unknown) => {
-      options = received;
+    let first: unknown;
+    let options: any;
+    const capture = (firstArg: unknown, secondArg?: unknown) => {
+      first = firstArg;
+      options = secondArg ?? firstArg;
       return {};
     };
     createRevokeClient(capture, "postgres://fixture@[::1]:5432/test?sslmode=disable");
@@ -86,6 +88,19 @@ describe("revoke-sessions CLI safety", () => {
     expect(options).toMatchObject({ host: ["localhost"], port: [5432], ssl: "verify-full" });
     createRevokeClient(capture, "postgres://fixture@db.example.test/neondb");
     expect(options).toMatchObject({ host: ["db.example.test"], port: [5432], ssl: "verify-full" });
+    // The raw URL must never reach postgres.js: its query string would be
+    // forwarded as server startup parameters (sslrootcert -> Postgres 42704).
+    for (const raw of [
+      "postgres://fixture@localhost/test?sslrootcert=system",
+      "postgres://fixture@db.example.test/neondb?sslmode=verify-full",
+    ]) {
+      createRevokeClient(capture, raw);
+      expect(typeof first).not.toBe("string");
+      expect(JSON.stringify(options)).not.toContain("sslrootcert");
+      expect(options).not.toHaveProperty("sslrootcert");
+      expect(options.connection).not.toHaveProperty("sslrootcert");
+      expect(options.ssl).toBe("verify-full");
+    }
     expect(() =>
       validateRevokeEnvironment(
         { DATABASE_URL: "postgres://fixture@db.example.test/neondb?sslmode=require" },

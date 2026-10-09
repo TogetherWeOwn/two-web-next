@@ -112,7 +112,10 @@ export function createRevokeClient(postgres, raw) {
     !url.searchParams.has("sslrootcert")
   )
     endpoint.ssl = "verify-full";
-  return postgres(raw, {
+  // Pass only the parsed endpoint fields: the raw URL's query string must
+  // never reach postgres.js, which would forward unknown keys such as
+  // sslrootcert as server startup parameters (Postgres 42704).
+  return postgres({
     ...endpoint,
     max: 1,
     connect_timeout: 10,

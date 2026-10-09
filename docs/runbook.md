@@ -84,7 +84,7 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
 ```
 
-`DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
+`DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
 
 ## Deploy and record the rollback pointer
 
