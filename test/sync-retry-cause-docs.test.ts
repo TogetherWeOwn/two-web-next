@@ -11,6 +11,7 @@ const source = readFileSync(
   "utf8",
 );
 const runbook = readFileSync(new URL("../docs/runbook-logs.md", import.meta.url), "utf8");
+const paging = readFileSync(new URL("../docs/runbook-alerts.md", import.meta.url), "utf8");
 
 function emittedCodes(): string[] {
   const block = source.match(/export type SyncRetryCode\s*=\s*([^;]+);/)?.[1];
@@ -54,10 +55,18 @@ describe("sync retry-cause runbook contract", () => {
     for (const code of emittedCodes()) {
       expect(body).toContain(`\`${code}\``);
       expect(
-        body.split("\n").some((l) => l.includes(`\`${code}\``) && l.startsWith("|")),
+        body.split("\n").some((l) => l.startsWith(`| \`${code}\` |`)),
         `cause table row for ${code}`,
       ).toBe(true);
     }
+  });
+
+  it("lists the same refusal codes in the paging runbook", () => {
+    const listed = paging.match(/Refusals only: exactly ([^;]+);/)?.[1];
+    expect(listed, "runbook-alerts.md lists the refusal codes").toBeDefined();
+    expect([...listed!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!).sort()).toEqual(
+      emittedCodes().filter((code) => code !== "unknown"),
+    );
   });
 
   it("documents the field table, the no-payload guarantee and the tally recipe", () => {

@@ -38,7 +38,7 @@ propagate it; it is not a deduplication key and does not change job execution.
 
 ## Sync-event retry-cause diagnostics
 
-The queue consumer emits one single-line `sync retry classified` warning per
+The queue consumer emits one `sync retry classified` warning per
 delivery at the retryable refusal/transport boundary, before the retry deadline
 is persisted (`src/jobs/consumer.ts`, via `projectSyncRetryDiagnostic` in
 `src/jobs/sync-retry-diagnostic.ts`). The same narrow projection is retained
@@ -104,7 +104,9 @@ Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
 `duration_ms` and `colo`. They never include headers, cookies, tokens, bodies,
 query strings, IPs, resolved URL paths or Discord IDs. Error alerts include the
 exception class, not its message or stack (which may contain SQL bindings or
-personal data). Do not add those values when investigating an incident.
+personal data). Queue failure lines carry a fixed or sanitized reason instead;
+see [the alert runbook](runbook-alerts.md). Do not add those values when
+investigating an incident.
 
 This is the application-log contract, not a claim that all platform telemetry
 is sanitized. Cloudflare invocation records may independently include the
