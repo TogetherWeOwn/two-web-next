@@ -128,8 +128,12 @@ describe("Worker redirect-manual behavior", () => {
       observed_at: "2030-07-01T18:00:00Z",
     };
     const { fetchFn, seen } = workersRedirectEmulator({
+      // The body carries a typed error code so the explicit 3xx guard in
+      // signedEventReader is pinned: with the guard the reader returns
+      // bot_unreachable without parsing; if the guard is removed the body
+      // parses to "redirect_body", failing the assertion below.
       redirect: () =>
-        new Response(JSON.stringify({ ok: true, result: observation }), {
+        new Response(JSON.stringify({ ok: false, error: { code: "redirect_body" } }), {
           status: 302,
           headers: {
             "content-type": "application/json",
