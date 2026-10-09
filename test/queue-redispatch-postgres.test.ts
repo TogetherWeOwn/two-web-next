@@ -213,7 +213,7 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     expect(preview.body).toMatchObject({ disposition: { action: "replay" } });
   });
 
-  it("a double submit sends once, receipts once, and reports the in-flight dispatch", async () => {
+  it("a double submit sends once, receipts each attempt, and reports the in-flight dispatch", async () => {
     await sql`update events set title = 'Changed' where event_key = ${sourceIdentity}`;
     const failureId = await seedDeadRow();
     const first = await (await request(`/admin/queue/failed/${failureId}/redispatch`)).json();
@@ -226,7 +226,9 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     const { dead, live, receipts } = await state(failureId);
     expect(dead).toBeDefined();
     expect(live).toHaveLength(1);
-    expect(receipts).toHaveLength(1);
+    // One receipt per attempt: the deduped report reuses its own attempt's
+    // receipt instead of borrowing the in-flight dispatch's.
+    expect(receipts).toHaveLength(2);
   });
 
   it("a definitive refusal is refused untouched with unchanged advice", async () => {
@@ -251,7 +253,8 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     const { dead, live, receipts } = await state(failureId);
     expect(dead).toBeDefined();
     expect(live).toHaveLength(0);
-    expect(receipts).toHaveLength(0);
+    // The refusal carries the preview advice, so it carries a receipt.
+    expect(receipts).toHaveLength(1);
     const preview = await previewAdvice(failureId);
     expect(preview.body).toMatchObject({ disposition: { action: "keep" } });
   });
@@ -268,12 +271,13 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     const { dead, live, receipts } = await state(failureId);
     expect(dead).toBeDefined();
     expect(live).toHaveLength(0);
-    expect(receipts).toHaveLength(0);
+    // The refusal carries the preview advice, so it carries a receipt.
+    expect(receipts).toHaveLength(1);
     const preview = await previewAdvice(failureId);
     expect(preview.body).toMatchObject({ disposition: { action: "discard-stale" } });
   });
 
-  it("a queue failure leaves the row, the ledger and the advice untouched", async () => {
+  it("a queue failure leaves the row and the advice untouched but audits the attempt", async () => {
     await sql`update events set title = 'Changed' where event_key = ${sourceIdentity}`;
     const failureId = await seedDeadRow();
     const app = new Hono().route("/admin", adminApp(store));
@@ -293,7 +297,8 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     expect(dead).toBeDefined();
     // The ledger compensation removes the un-sent row: no phantom backlog.
     expect(live).toHaveLength(0);
-    expect(receipts).toHaveLength(0);
+    // The receipt is written before the queue send, so the 503 keeps it.
+    expect(receipts).toHaveLength(1);
     const preview = await previewAdvice(failureId);
     expect(preview.body).toMatchObject({ disposition: { action: "replay" } });
   });
@@ -310,6 +315,7 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     expect(sent).toHaveLength(0);
     const { dead, receipts } = await state(failureId);
     expect(dead).toBeDefined();
-    expect(receipts).toHaveLength(0);
+    // The refusal carries the preview advice, so it carries a receipt.
+    expect(receipts).toHaveLength(1);
   });
 });

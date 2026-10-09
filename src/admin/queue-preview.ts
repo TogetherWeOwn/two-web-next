@@ -14,7 +14,6 @@ export type QueuePreviewVars = {
     adminActor: Actor;
     access: AccessDecl;
     queuePreviewAudit?: FailedJobPreview;
-    queueRedispatchAudit?: FailedJobPreview;
   };
 };
 

@@ -410,7 +410,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(dispatch).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
   });
-  it("a keep advice refuses without dispatching, deleting or auditing", async () => {
+  it("a keep advice refuses without dispatching or deleting, but audits the refusal", async () => {
     const store = createMemorySessionStore();
     const dispatch = vi.fn();
     const send = vi.fn();
@@ -430,7 +430,9 @@ describe("staging one-row guarded re-dispatch admission", () => {
     });
     expect(dispatch).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
-    expect(mocks.audit).not.toHaveBeenCalled();
+    // The refusal carries the preview advice, so it carries a receipt.
+    expect(mocks.audit).toHaveBeenCalledTimes(1);
+    expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
   });
   it("a missing queue binding fails closed before anything is written", async () => {
     const store = createMemorySessionStore();
@@ -446,24 +448,26 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
     expect(mocks.audit).not.toHaveBeenCalled();
   });
-  it("a dispatch failure fails closed without an audit receipt", async () => {
+  it("a dispatch failure fails closed but keeps the attempt receipt", async () => {
     const store = createMemorySessionStore();
+    const dispatch = vi.fn(async () => {
+      throw new Error("private queue failure");
+    });
     const res = await request(
       store,
       { headers: { cookie: await cookie(store) } },
       env,
       undefined,
       undefined,
-      {
-        loadCandidate: async () => replayCandidate,
-        dispatch: async () => {
-          throw new Error("private queue failure");
-        },
-      },
+      { loadCandidate: async () => replayCandidate, dispatch },
     );
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
-    expect(mocks.audit).not.toHaveBeenCalled();
+    // The receipt is written before the message is queued, so the 503 keeps
+    // the attempt receipt and a retry writes its own.
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(mocks.audit).toHaveBeenCalledTimes(1);
+    expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
   });
   it("a held lock reports the in-flight dispatch instead of queueing a duplicate", async () => {
     const store = createMemorySessionStore();
@@ -486,8 +490,10 @@ describe("staging one-row guarded re-dispatch admission", () => {
       ...replayCandidate.preview,
     });
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(replayCandidate.eventKey, expect.any(String));
-    // No second send means no second receipt: the first submit owns the audit.
-    expect(mocks.audit).not.toHaveBeenCalled();
+    // The deduped report reuses this attempt's receipt: advice never answers
+    // without a trail written earlier in the same request.
+    expect(mocks.audit).toHaveBeenCalledTimes(1);
+    expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
   });
   it("a due recovery reuses its immutable request identity", async () => {
     const store = createMemorySessionStore();
@@ -539,8 +545,12 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(mocks.audit).toHaveBeenCalledTimes(1);
     expect(mocks.audit.mock.calls[0]![0]).toBeInstanceOf(Array);
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
+    // The receipt is written before the dispatch is attempted.
+    expect(mocks.audit.mock.invocationCallOrder[0]!).toBeLessThan(
+      dispatch.mock.invocationCallOrder[0]!,
+    );
   });
-  it("audit failure always refuses the dispatch", async () => {
+  it("audit failure always refuses the dispatch before anything is queued", async () => {
     mocks.audit.mockRejectedValue(new Error("private audit failure"));
     const store = createMemorySessionStore();
     const dispatch = vi.fn(async () => true);
@@ -557,6 +567,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     );
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
+    expect(dispatch).not.toHaveBeenCalled();
     expect(mocks.end).toHaveBeenCalledTimes(1);
   });
 });

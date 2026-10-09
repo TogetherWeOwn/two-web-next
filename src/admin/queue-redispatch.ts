@@ -111,8 +111,8 @@ export async function recordQueueRedispatchAccess(
 /**
  * Register before adminGuard. Same staging/default-off gating and principal
  * check as the preview admission: disabled means no session or source lookup.
- * Its post-next audit runs after the dispatch, before any buffered contents
- * leave the request. Audit failure always refuses.
+ * The handler writes its own audit receipts before dispatching or refusing,
+ * so this middleware only gates and never touches the trail.
  * https://hono.dev/docs/guides/middleware#execution-order
  */
 export async function queueRedispatchAdmission(c: Context<QueuePreviewVars>, next: Next) {
@@ -134,27 +134,27 @@ export async function queueRedispatchAdmission(c: Context<QueuePreviewVars>, nex
     return c.json({ error: "method_not_allowed" }, 405);
   }
   await next();
-  if (c.res.status !== 200) return;
-  // A deduped report carries no new receipt: the in-flight dispatch owns it.
-  const preview = c.get("queueRedispatchAudit");
-  if (!preview) {
-    c.header("cache-control", "private, no-store");
-    return;
-  }
+  c.header("cache-control", "private, no-store");
+}
+
+/**
+ * Every response that carries redispatch advice carries a receipt written
+ * earlier in the same request. Refusals and dispatch attempts (including
+ * ones that turn out deduped) are audited before their outcome is known, so
+ * a response never shows preview advice without a trail. A receipt that
+ * cannot be written refuses the attempt before anything is queued.
+ */
+async function recordAttemptOrRefuse(
+  c: Context<QueuePreviewVars>,
+  preview: FailedJobPreview,
+): Promise<Response | null> {
   try {
-    const actor = c.get("adminActor");
-    if (!actor || actor.id !== configuredOperator(c.env))
-      throw new Error("missing redispatch audit context");
-    await recordQueueRedispatchAccess(c.env, actor.id, preview);
+    await recordQueueRedispatchAccess(c.env, c.get("adminActor").id, preview);
+    return null;
   } catch {
     // No raw exception message, SQL bindings or diagnostic payload in logs.
-    // Fail-closed like the preview: a receipt that cannot be written refuses
-    // the response even though the live message is already queued. The new
-    // `queue_jobs` row stays as evidence, and a retry is safe — the held
-    // lock reports it deduped instead of queueing a duplicate.
-    c.res = c.json({ error: "redispatch_unavailable" }, 503);
+    return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
-  c.header("cache-control", "private, no-store");
 }
 
 export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
@@ -177,7 +177,11 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
   if (!candidate) return bufferedMemberJson(c, { error: "failure_not_found" }, 404);
   if (candidate.preview.disposition.action !== "replay" || !candidate.eventKey) {
     // Refusal: the row stays untouched and the preview advice is unchanged.
-    // Stale rows are never deleted here either — only replay dispatches.
+    // Stale rows are never deleted here either — only replay dispatches. The
+    // refusal carries the preview advice, so it carries a receipt too: audit
+    // first, and refuse the refusal when the trail cannot be written.
+    const refused = await recordAttemptOrRefuse(c, candidate.preview);
+    if (refused) return refused;
     return bufferedMemberJson(
       c,
       {
@@ -188,12 +192,23 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
       409,
     );
   }
+  // The real producer path prerequisites fail closed before any write, the
+  // same rule dispatchRedispatch enforces; the injected seam owns its path.
+  if (deps.dispatch === undefined && (!c.env.SYNC_EVENT_QUEUE || !databaseUrl(c.env)))
+    return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
+  // The receipt is written before the message is queued: a write that fails
+  // refuses the dispatch, so no dispatch ever answers without a trail. When
+  // the queue send itself fails afterwards, the 503 keeps the attempt
+  // receipt and the ledger compensation removes the un-sent row; a retry
+  // writes its own receipt for its own report.
+  const audited = await recordAttemptOrRefuse(c, candidate.preview);
+  if (audited) return audited;
   let dispatched: boolean;
   try {
     // A due recovery reuses its immutable request identity, the same rule the
     // scheduled pass applies; otherwise a fresh key is minted. A held lock
     // means another dispatch is already in flight: report it instead of
-    // queueing a duplicate.
+    // queueing a duplicate. The deduped report reuses this attempt's receipt.
     const key = candidate.idempotencyKey ?? crypto.randomUUID();
     dispatched =
       deps.dispatch !== undefined
@@ -209,6 +224,5 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
       ...candidate.preview,
     });
   }
-  c.set("queueRedispatchAudit", candidate.preview);
   return bufferedMemberJson(c, { redispatched: true, ...candidate.preview });
 }
