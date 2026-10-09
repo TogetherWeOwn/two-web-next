@@ -41,11 +41,20 @@ function isMarkdownFile(path) {
 // contribute their inner text. Intra-word underscores are literal text (kept),
 // so `_` emphasis only counts at word boundaries.
 function stripTagRuns(input) {
+  const text = String(input);
   let output = "";
   let inTag = false;
-  for (const char of input) {
-    if (char === "<") {
-      inTag = true;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    // Only `<` followed by a letter, `/` or `!` starts raw HTML (CommonMark).
+    // A bare `<` (for example `p95 < 300 ms`) is literal text, so keeping it
+    // preserves the rest of the heading for the slug.
+    if (!inTag && char === "<") {
+      if (/[A-Za-z/!]/.test(text[i + 1] ?? "")) {
+        inTag = true;
+        continue;
+      }
+      output += char;
       continue;
     }
     if (char === ">" && inTag) {
@@ -498,12 +507,30 @@ function selftest() {
       ['missing anchor "#setup-2"'],
     );
 
+    check(
+      "bare angle brackets are literal text in slugs",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write(
+          "docs/page.md",
+          ["# Page", "", "[budget](target.md#p95--300-ms-budget)"].join("\n"),
+        );
+        write("docs/target.md", "# Target\n\n## p95 < 300 ms budget\n");
+      },
+      0,
+    );
+
     assert.equal(slugifyHeading("Change-gated CI and `ci-ok`"), "change-gated-ci-and-ci-ok");
     assert.equal(
       slugifyHeading("Production cutover capability ↔ reverse map"),
       "production-cutover-capability--reverse-map",
     );
     assert.equal(slugifyHeading("Topology (target)"), "topology-target");
+    assert.equal(slugifyHeading("p95 < 300 ms budget"), "p95--300-ms-budget");
+    assert.equal(slugifyHeading("x <= y"), "x--y");
+    assert.equal(slugifyHeading("Hello <code>world</code> done"), "hello-world-done");
     assert.ok(collectAnchors("```\n# Not a heading\n```\n## Real\n").has("real"));
     assert.ok(!collectAnchors("```\n# Not a heading\n```\n## Real\n").has("not-a-heading"));
     cases += 1;
