@@ -4,8 +4,9 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import type { Env } from "../env";
 import { parseFailureId, previewFailedJob, type FailedJobPreview } from "../jobs/preview";
 import { bufferedMemberJson, declareMemberResult } from "../member-reads";
-import { QA_IDENTITIES, STAGING_APP_URL } from "../qa";
+import { STAGING_APP_URL } from "../qa";
 import type { AccessDecl, Actor } from "./guard";
+import { configuredOperator, queueRedispatchAdmission } from "./queue-redispatch";
 
 export type QueuePreviewVars = {
   Bindings: Env;
@@ -13,17 +14,9 @@ export type QueuePreviewVars = {
     adminActor: Actor;
     access: AccessDecl;
     queuePreviewAudit?: FailedJobPreview;
+    queueRedispatchAudit?: FailedJobPreview;
   };
 };
-
-function configuredOperator(env: Env): string | null {
-  const id = env.QUEUE_RECONCILE_OPERATOR_ID;
-  return id &&
-    /^\d{10,25}$/.test(id) &&
-    !Object.values(QA_IDENTITIES).some((qa) => qa.discordId === id)
-    ? id
-    : null;
-}
 
 /** Operational reads use the existing activity trail, not invented member subjects. */
 export async function recordQueuePreviewAccess(
@@ -60,6 +53,10 @@ export async function recordQueuePreviewAccess(
  * https://hono.dev/docs/guides/middleware#execution-order
  */
 export async function queuePreviewAdmission(c: Context<QueuePreviewVars>, next: Next) {
+  // One middleware registration covers the queue namespace so the route
+  // inventory keeps a single staging-operator entry; the apply path owns its
+  // own admission and audit below.
+  if (c.req.path.endsWith("/redispatch")) return queueRedispatchAdmission(c, next);
   c.header("cache-control", "private, no-store");
   if (
     c.env.QUEUE_RECONCILE_PREVIEW_ENABLED !== "true" ||

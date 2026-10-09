@@ -14,6 +14,8 @@
 // - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
 // - GET  /admin/join-attempts/:id    read-only attempt detail
 // - GET  /admin/queue/failed/:id/preview  one-row advice only
+// - POST /admin/queue/failed/:id/redispatch  one-row guarded re-dispatch
+//   (replay advice only; refusals and stale rows are never deleted here)
 // - GET  /admin/featured             list, position order
 // - GET  /admin/featured/new         create form
 // - POST /admin/featured             create
@@ -30,6 +32,7 @@ import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
+import { queueRedispatchHandler } from "./queue-redispatch";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
@@ -143,6 +146,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
+  // No throttle or body limit: the handler never parses a payload, and only
+  // the dedicated staging operator principal can reach it.
+  admin.post("/queue/failed/:id/redispatch", queueRedispatchHandler);
 
   // Legacy Filament bookmarks: guard first, no query forwarding.
   // Only the featured edit alias needs a resource read to resolve the imported ID.
