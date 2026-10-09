@@ -10,6 +10,10 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import {
+  PLANETSCALE_PRODUCTION_BRANCH_ID,
+  PLANETSCALE_PRODUCTION_HOST,
+  PLANETSCALE_STAGING_BRANCH_ID,
+  PLANETSCALE_STAGING_HOST,
   migrationClient,
   migrationConfig,
   runMigration,
@@ -224,20 +228,47 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
       }),
     /PlanetScale/,
   );
-  // During the provider transition a direct PlanetScale URL must be
-  // accepted for staging.
+  // During the provider transition only the pinned PlanetScale staging
+  // branch is accepted for staging: the username suffix carries the branch id,
+  // so a production URL in the staging secret fails closed even though staging
+  // migrations run automatically on every push to main.
+  const stagingPlanetScale = `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
   assert.equal(
-    migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: production }).target,
+    migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: stagingPlanetScale }).target,
     "staging",
   );
-  assert.throws(
-    () =>
-      migrationConfig({
-        ...mainEnv,
-        NEON_STAGING_DATABASE_URL: production.replace(".pg.psdb.cloud", "-pooler.pg.psdb.cloud"),
-      }),
-    /Neon or PlanetScale/,
-  );
+  // Production identity is refused explicitly, whether it arrives via the
+  // production host, the production branch suffix, or both.
+  const productionShaped = [
+    `postgres://role-stub.${PLANETSCALE_PRODUCTION_BRANCH_ID}:stub@${PLANETSCALE_PRODUCTION_HOST}/db?sslmode=require`,
+    `postgres://role-stub.${PLANETSCALE_PRODUCTION_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`,
+    `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_PRODUCTION_HOST}/db?sslmode=require`,
+  ];
+  for (const raw of productionShaped) {
+    assert.throws(
+      () => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: raw }),
+      (error) => {
+        assert.match(safeMigrationError(error), /production database/);
+        assert.doesNotMatch(safeMigrationError(error), /stub|postgres:\/\//);
+        return true;
+      },
+    );
+  }
+  // Unpinned PlanetScale hosts and pooled hosts are refused without naming
+  // the production identity.
+  for (const raw of [
+    production,
+    production.replace(".pg.psdb.cloud", "-pooler.pg.psdb.cloud"),
+    stagingPlanetScale.replace(".pg.psdb.cloud", "-pooler.pg.psdb.cloud"),
+  ]) {
+    assert.throws(
+      () => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: raw }),
+      (error) => {
+        assert.doesNotMatch(safeMigrationError(error), /stub|postgres:\/\//);
+        return true;
+      },
+    );
+  }
   assert.doesNotMatch(
     safeMigrationError(new Error("DO_NOT_ECHO postgres://credentials/ SQL")),
     /DO_NOT_ECHO|postgres:\/\/credentials|SQL/,
@@ -320,9 +351,7 @@ test("fresh database: plan is read-only, apply includes bootstraps, zero-pending
       Number((await client`select count(*) from drizzle.__drizzle_migrations`)[0].count),
       journal.entries.length,
     );
-    assert.ok(
-      output.some((line) => /Pre-migration Neon PITR timestamp \(UTC\): \d{4}-.*Z/.test(line)),
-    );
+    assert.ok(output.some((line) => /Pre-migration PITR timestamp \(UTC\): \d{4}-.*Z/.test(line)));
     assert.ok(output.some((line) => line.includes("0000_init-users")));
     assert.ok(output.some((line) => line === "Post-check: zero pending web migrations."));
   });
@@ -378,7 +407,7 @@ test("connection loss after the PITR receipt fails closed while another session 
         testDatabase: true,
         report: (line) => {
           output.push(line);
-          if (!line.startsWith("Pre-migration Neon PITR timestamp")) return;
+          if (!line.startsWith("Pre-migration PITR timestamp")) return;
           interrupted = (async () => {
             // Select only the lock holder in our UUID-owned fixture, never other backends.
             const holders =
@@ -447,9 +476,7 @@ test("hostile database DateStyle cannot skew the PITR receipt", async () => {
     const [db] = await client`select current_database() as name`;
     await client.unsafe(`alter database "${db.name}" set datestyle to 'SQL, DMY'`);
     await run("apply");
-    const line = output.find((entry) =>
-      entry.startsWith("Pre-migration Neon PITR timestamp (UTC): "),
-    );
+    const line = output.find((entry) => entry.startsWith("Pre-migration PITR timestamp (UTC): "));
     assert.ok(line, "apply must record a PITR receipt");
     const stamp = line.match(/\(UTC\): (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+)Z/)?.[1];
     assert.ok(stamp, "PITR receipt must stay ISO UTC text under a hostile DateStyle");
@@ -481,6 +508,6 @@ test("failed SQL rolls back the full pending batch; timestamp survives and error
       (await client`select to_regclass('drizzle.__drizzle_migrations') as ledger`)[0].ledger,
       null,
     );
-    assert.ok(output.some((line) => line.startsWith("Pre-migration Neon PITR timestamp")));
+    assert.ok(output.some((line) => line.startsWith("Pre-migration PITR timestamp")));
   });
 });
