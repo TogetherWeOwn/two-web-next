@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { adminApp } from "../src/admin/routes";
 import type { Env } from "../src/env";
 import { pgEventStore } from "../src/jobs/events";
+import type { QueueMessage } from "../src/jobs/types";
 import { STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 
@@ -15,7 +16,7 @@ const operator = "100000000000000111";
 const secret = "test-session-secret-at-least-32-bytes-long";
 const sourceIdentity = "01ARZ3NDEKTSV4RRFFQ69G5FAA";
 
-function baseEnv(queueSend: (body: unknown) => Promise<unknown>): Env {
+function baseEnv(queueSend: (body: QueueMessage) => void): Env {
   return {
     APP_URL: STAGING_APP_URL,
     DISCORD_CLIENT_ID: "client-id",
@@ -27,7 +28,10 @@ function baseEnv(queueSend: (body: unknown) => Promise<unknown>): Env {
     DATABASE_URL: `postgres://agent_test@agent-testdb:5432/${DB_NAME}`,
     QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
     QUEUE_RECONCILE_OPERATOR_ID: operator,
-    SYNC_EVENT_QUEUE: { send: queueSend },
+    // The transport receipt is irrelevant here; the suite counts deliveries.
+    SYNC_EVENT_QUEUE: {
+      send: queueSend as unknown as NonNullable<Env["SYNC_EVENT_QUEUE"]>["send"],
+    },
   };
 }
 
@@ -47,15 +51,14 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       onnotice: () => {},
     });
     try {
-      const [existing] = await admin.unsafe(
+      const rows = (await admin.unsafe(
         "select pg_get_userbyid(datdba) as owner from pg_database where datname = $1",
         [DB_NAME],
-      );
-      if (existing) {
-        if ((existing as { owner: string }).owner !== "agent_test") {
-          throw new Error(
-            `refusing to drop database owned by ${(existing as { owner: string }).owner}`,
-          );
+      )) as unknown as { owner: string }[];
+      const owner = rows[0]?.owner;
+      if (owner) {
+        if (owner !== "agent_test") {
+          throw new Error(`refusing to drop database owned by ${owner}`);
         }
         await admin.unsafe(`DROP DATABASE "${DB_NAME}" WITH (FORCE)`);
       }
@@ -160,7 +163,7 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
         ...init,
         headers: { origin: STAGING_APP_URL, cookie: bearer, ...init.headers },
       },
-      baseEnv(async (body) => void sent.push(body)),
+      baseEnv((body) => void sent.push(body)),
     );
   }
 
@@ -169,7 +172,7 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     const res = await app.request(
       `${STAGING_APP_URL}/admin/queue/failed/${failureId}/preview`,
       { headers: { origin: STAGING_APP_URL, cookie: bearer } },
-      baseEnv(async () => {}),
+      baseEnv(() => {}),
     );
     return { status: res.status, body: await res.json() };
   }
@@ -186,7 +189,7 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       disposition: { action: "replay" },
     });
     expect(JSON.stringify(body)).not.toContain("private transport diagnostics");
-    expect(body).not.toHaveProperty("deduped");
+    expect(body as Record<string, unknown>).not.toHaveProperty("deduped");
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: sourceIdentity });
     const { dead, live, receipts } = await state(failureId);
@@ -241,7 +244,9 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       failure: { id: failureId },
       disposition: { action: "keep" },
     });
-    expect(body.disposition.reason).toMatch(/definitive refusal/);
+    expect(
+      (body as { disposition: { reason: string } }).disposition.reason,
+    ).toMatch(/definitive refusal/);
     expect(sent).toHaveLength(0);
     const { dead, live, receipts } = await state(failureId);
     expect(dead).toBeDefined();
@@ -278,7 +283,7 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
         method: "POST",
         headers: { origin: STAGING_APP_URL, cookie: bearer },
       },
-      baseEnv(async () => {
+      baseEnv(() => {
         throw new Error("private queue outage");
       }),
     );
