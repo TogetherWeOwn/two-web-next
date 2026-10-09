@@ -14,7 +14,7 @@
 // route-inventory: POST /api/agent-events
 // route-inventory: POST /__probe/alert
 // route-inventory: POST /auth/qa/:identity
-// Expired-write recovery audit for the remaining non-RSVP write surfaces (TOG-19073).
+// Expired-write recovery audit for the remaining non-RSVP write surfaces.
 //
 // Full POST/PATCH/PUT/DELETE inventory (25 routes, from test/fixtures/route-inventory.json):
 // - Already integrated, not re-proven here:
@@ -374,7 +374,7 @@ describe("admin: every POST bounces on a dead session with no write and no echo"
 });
 
 describe.skipIf(!process.env.DATABASE_URL)(
-  "admin: fresh-session retry succeeds (agent-testdb)",
+  "admin: fresh-session retry succeeds (requires DATABASE_URL)",
   () => {
     let fixture: MemberDataFixture;
     beforeAll(async () => {
