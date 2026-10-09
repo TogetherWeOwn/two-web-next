@@ -41,8 +41,10 @@ function isMarkdownFile(path) {
 // contribute their inner text. Intra-word underscores are literal text (kept),
 // so `_` emphasis only counts at word boundaries.
 export function headingText(raw) {
-  let text = raw;
-  text = text.replace(/<[^<>]*>/g, "");
+  // Markdown heading text is plain-text input and the return value is a
+  // slug-comparison string, never HTML output: strip any angle-bracket tag
+  // runs first, then links, images, code spans and emphasis below.
+  let text = String(raw).replace(/<[^<>]*>/g, "");
   text = text.replace(/!\[([^\]]*)\]\([^()]*\)/g, "$1");
   text = text.replace(/\[([^\]]*)\]\([^()]*\)/g, "$1");
   text = text.replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1");
