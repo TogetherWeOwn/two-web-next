@@ -44,9 +44,9 @@ A second apply is a no-op: every count returns 0.
 
 ## What is retained and why
 
-- `events.created_by` / featured `created_by` stay in place. They record
-  authorship of moderator content, not member data; removing them would
-  rewrite community history without removing anything about the member.
+- `events.created_by` / `featured_contents.created_by` stay in place. They
+  record authorship of moderator content, not member data; removing them
+  would rewrite community history without removing anything about the member.
 - `member_data_access_logs` is immutable with a 90-day prune
   (`drizzle/1018_audit-immutability.sql`, W13 `model:prune`). Past access
   records are compliance evidence and cannot be rewritten per request.
@@ -56,6 +56,21 @@ A second apply is a no-op: every count returns 0.
 - The Discord-side mirror (roles, messages, tickets) is out of scope here:
   Discord is governed by Discord's own privacy policy, and removal there
   happens through Discord's moderation tools, not this command.
+
+## Throttle buckets (ephemeral, self-deleting)
+
+`web_throttle_hits.bucket` embeds a Discord id in two write budgets:
+`rsvp-write:<discord id>` (`src/events/rsvp.ts`) and
+`profile-write:<discord id>` (`src/profiles/routes.tsx`). These rows are not
+deleted by `eraseMember`: the rsvp path prunes counters older than five
+minutes before judging the budget (`pruneThrottle` in `src/events/rsvp.ts`);
+the join admission path (`checkJoinThrottle` in `src/join/service.ts`, shared
+by the profile path) judges and records first, then prunes expired rows for
+admitted requests. Both prunes are bounded by
+`THROTTLE_COUNTER_RETENTION_MINUTES = 5`, so a member's buckets age out on the
+next counted request anywhere on the site. `test/member-erasure-coverage.test.ts`
+pins this: it fails on any new member-keyed column or `*-write:${...}` bucket
+that is neither erased above nor documented here with its own deletion proof.
 
 ## Scope
 
