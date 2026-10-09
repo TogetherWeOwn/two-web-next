@@ -148,6 +148,10 @@ export async function queueRedispatchAdmission(c: Context<QueuePreviewVars>, nex
     await recordQueueRedispatchAccess(c.env, actor.id, preview);
   } catch {
     // No raw exception message, SQL bindings or diagnostic payload in logs.
+    // Fail-closed like the preview: a receipt that cannot be written refuses
+    // the response even though the live message is already queued. The new
+    // `queue_jobs` row stays as evidence, and a retry is safe — the held
+    // lock reports it deduped instead of queueing a duplicate.
     c.res = c.json({ error: "redispatch_unavailable" }, 503);
   }
   c.header("cache-control", "private, no-store");

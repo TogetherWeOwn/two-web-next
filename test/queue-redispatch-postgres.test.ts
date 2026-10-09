@@ -244,9 +244,9 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       failure: { id: failureId },
       disposition: { action: "keep" },
     });
-    expect(
-      (body as { disposition: { reason: string } }).disposition.reason,
-    ).toMatch(/definitive refusal/);
+    expect((body as { disposition: { reason: string } }).disposition.reason).toMatch(
+      /definitive refusal/,
+    );
     expect(sent).toHaveLength(0);
     const { dead, live, receipts } = await state(failureId);
     expect(dead).toBeDefined();
