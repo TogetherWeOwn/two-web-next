@@ -80,6 +80,12 @@ function pageFixture(
           : [],
       };
     }
+    // Neighbor reads carry the same not-ended bound as related ones, so route
+    // them on their starts_at comparisons before the ends_at branch below.
+    if (sql.includes('"starts_at" <') || sql.includes('"starts_at" >')) {
+      const neighbor = sql.includes('"starts_at" desc') ? previous : next;
+      return { rows: neighbor ? [linkValues(neighbor)] : [] };
+    }
     if (sql.includes('"ends_at" >=')) return { rows: related.map(linkValues) };
     const neighbor = sql.includes('"starts_at" desc') ? previous : next;
     return { rows: neighbor ? [linkValues(neighbor)] : [] };
@@ -132,9 +138,9 @@ const relatedKeys = (html: string) =>
   [...html.matchAll(/href="\/e\/([^"]+)" data-testid="event-related-link"/g)].map((m) => m[1]);
 
 describe("event navigation SQL and SSR (local fixtures)", () => {
-  it("uses three bounded, published-only reads, with id tiebreaks and no RSVP aggregates", async () => {
+  it("uses three bounded, published, not-ended reads, with id tiebreaks and no RSVP aggregates", async () => {
     const f = pageFixture();
-    await getEventNeighbors(f.db, row(2));
+    await getEventNeighbors(f.db, row(2), NOW);
     await listRelatedEvents(f.db, row(2), NOW);
     expect(f.queries).toHaveLength(3);
     for (const q of f.queries) {
@@ -142,6 +148,10 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
       expect(q.params).toContain("published");
       expect(q.sql).not.toContain("rsvps");
       expect(q.sql).toContain('isfinite("events"."starts_at")');
+      // Navigation and related rails share the visibility scope: published and
+      // not yet ended, so drafts and ended-only neighbours never leak.
+      expect(q.sql).toContain('"events"."ends_at" >=');
+      expect(q.params).toContain(NOW.toISOString());
     }
     expect(f.queries[0]!.sql).toMatch(/"starts_at" < .*"starts_at" = .*"id" </);
     expect(f.queries[0]!.sql).toContain('order by "events"."starts_at" desc, "events"."id" desc');
@@ -150,7 +160,6 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     for (const q of f.queries.slice(0, 2)) {
       expect(q.sql).toContain('"events"."id" <>');
       expect(q.sql).toContain('(select "starts_at" from "events" where "events"."id" =');
-      expect(q.params).not.toContain(NOW.toISOString());
     }
     expect(f.queries.slice(0, 2).map((q) => q.params.at(-1))).toEqual([1, 1]);
     const related = f.queries[2]!;
@@ -394,14 +403,61 @@ describe.skipIf(!process.env.DATABASE_URL)(
       });
     });
 
-    it("orders neighbors by starts_at before id, including ended published events", async () => {
+    it("orders neighbors by starts_at before id, excluding ended published events", async () => {
       const [current] = await seed([
         row(3),
         row(9, { startsAt: new Date("2020-01-01"), endsAt: new Date("2020-01-02") }),
         row(1, { startsAt: new Date("2040-01-01"), endsAt: new Date("2040-01-02") }),
       ]);
-      expect(await getEventNeighbors(fixture.db, current!)).toMatchObject({
-        previous: { id: 9 },
+      // The 2020 row is published but ended, so it never leaks into navigation.
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toMatchObject({
+        previous: null,
+        next: { id: 1 },
+      });
+    });
+
+    it("keeps an event ending exactly now, drops one ended a millisecond earlier", async () => {
+      const [current] = await seed([
+        row(3),
+        row(9, {
+          startsAt: new Date("2029-01-01"),
+          endsAt: new Date(NOW.getTime() - 1),
+        }),
+        row(1, {
+          startsAt: new Date("2031-01-01"),
+          endsAt: NOW,
+        }),
+      ]);
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toMatchObject({
+        previous: null,
+        next: { id: 1 },
+      });
+    });
+
+    it("hides ended-only neighbours entirely, leaving no dangling links", async () => {
+      const [current] = await seed([
+        row(3),
+        row(9, { startsAt: new Date("2020-01-01"), endsAt: new Date("2020-01-02") }),
+        row(1, { startsAt: new Date("2040-01-01"), endsAt: new Date("2020-01-03") }),
+      ]);
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toEqual({
+        previous: null,
+        next: null,
+      });
+    });
+
+    it("never links drafts, cancelled or past rows, even beside a moderator-visible draft page", async () => {
+      const [current] = await seed([
+        row(3),
+        row(9, { startsAt: new Date("2029-06-01"), status: "draft" }),
+        row(8, { startsAt: new Date("2029-07-01"), status: "cancelled" }),
+        row(7, { startsAt: new Date("2029-08-01"), status: "past" }),
+        row(1, { startsAt: new Date("2040-01-01"), endsAt: new Date("2040-01-02") }),
+      ]);
+      // Drafts are the moderator-only rows: invisible to members, and never
+      // navigation destinations even when the current page is itself a draft.
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toMatchObject({
+        previous: null,
         next: { id: 1 },
       });
     });
