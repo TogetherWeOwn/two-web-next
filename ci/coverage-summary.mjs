@@ -66,6 +66,6 @@ console.log(
     "",
     table(leastCovered),
     "",
-    "Download the coverage artifact for the HTML report, LCOV and JSON summary.",
+    "Download the coverage artifact for the JSON summary.",
   ].join("\n"),
 );
