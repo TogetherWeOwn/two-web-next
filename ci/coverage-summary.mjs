@@ -33,7 +33,16 @@ function table(rows) {
   ].join("\n");
 }
 
-const scopes = ["src/admin/", "src/events/", "src/join/", "src/sessions.ts"];
+const scopes = [
+  "src/admin/",
+  "src/events/",
+  "src/join/",
+  "src/sessions.ts",
+  "src/jobs/",
+  "src/bot/",
+  "src/agent-events/",
+  "src/profiles/",
+];
 const scoped = scopes.map((scope) => {
   const entries = files.filter(({ file }) =>
     scope.endsWith("/") ? file.startsWith(scope) : file === scope,
