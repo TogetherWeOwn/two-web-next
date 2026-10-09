@@ -1,10 +1,18 @@
 // TOG-18976: anonymous event-card cache decision (ledger A5,
 // docs/w15-events-acceptance-ledger.md:90).
 //
-// Decision: DROP the home-page (`/`) shared cache. The TOG-9277 card-cache
-// intent is already satisfied where it matters: anonymous `/events` cards are
-// `public, max-age=60` with `Vary: Cookie` and proven anonymous
-// (test/guest-calendar-anon.test.ts). Home stays `private, no-store` because:
+// Decision: PARTIAL/ADAPTED. Drop the home-page (`/`) shared cache with
+// measurement; keep timed expiry on `/events` + `/events/past` with a
+// documented invalidation divergence from legacy
+// (Feature/Events/AnonymousEventCardCacheTest.php, TOG-9277). Anonymous
+// `/events` cards are `public, max-age=60` with `Vary: Cookie` and proven
+// anonymous (test/guest-calendar-anon.test.ts); anonymous `/events/past`
+// cards are `public, max-age=300` with no RSVP controls
+// (test/islands-past-events.test.ts:107-122). Divergence: legacy retired the
+// guest fragment on a model edit and on RSVP land/leave; Next uses timed
+// expiry with no retire, so guests can read a stale title or going count for
+// up to 60 s (`/events`) or 300 s (`/events/past`). Home stays
+// `private, no-store` because:
 // - no measured p95 problem: staging anonymous `/`, n=20, median 175 ms /
 //   p95 261 ms TTFB, inside the 600 ms server-response tripwire;
 // - home is viewer-specific funnel top (guest/member header, hero CTA,
@@ -14,9 +22,10 @@
 //   isolate-local 60 s counts cache, 400 ms statement timeouts + 1000 ms
 //   deadline with graceful fallback.
 //
-// This suite pins the disposition: the ledger row says Dropped, anonymous home
-// bodies stay private with no session data, and viewer-specific variants
-// (flash, notice) stay private too. Hermetic pg-proxy fixtures only.
+// This suite pins the disposition: the ledger row says Partial/adapted with
+// the timed-expiry divergence, anonymous home bodies stay private with no
+// session data, and viewer-specific variants (flash, notice) stay private
+// too. Hermetic pg-proxy fixtures only.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getTableColumns } from "drizzle-orm";
@@ -111,15 +120,19 @@ async function flashCookie(): Promise<string> {
 }
 
 describe("anonymous event-card cache decision (TOG-18976, ledger A5)", () => {
-  it("records the Drop disposition in the ledger", () => {
+  it("records the Partial/adapted disposition with the timed-expiry divergence", () => {
     const ledger = readFileSync(
       join(__dirname, "..", "docs", "w15-events-acceptance-ledger.md"),
       "utf8",
     );
     const row = ledger.split("\n").find((line) => line.startsWith("| A5 "));
     expect(row, "ledger keeps an A5 row").toBeDefined();
-    expect(row!).toMatch(/Dropped/i);
+    expect(row!).toMatch(/Partial\/adapted/i);
     expect(row!).toMatch(/TOG-18976/);
+    expect(row!).toMatch(/timed expiry/i);
+    expect(row!).toMatch(/guest-calendar-anon/);
+    expect(row!).toMatch(/islands-past-events/);
+    expect(row!).not.toMatch(/Dropped for home/);
   });
 
   it("serves anonymous home cards private with no session data", async () => {
