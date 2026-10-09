@@ -1,10 +1,11 @@
 name: mutation-sessions-join
 
-# Nightly mutation signal for the auth blast radius (`src/sessions.ts` and
-# `src/join/service.ts`). The runner weakens one auth check at a time and runs
-# the hermetic DB-free kill suite against it; survivors are coverage gaps and
-# are listed in the uploaded report artifact. Hermetic on purpose: no database,
-# no Discord, no secrets, so a schedule tick can never be blocked on a service.
+# Nightly mutation signal for the auth blast radius (`src/sessions.ts`,
+# `src/join/service.ts` and `src/join/route.ts`). The runner weakens one auth
+# check at a time and runs the hermetic DB-free kill suite against it; survivors
+# are coverage gaps and are listed in the uploaded report artifact. Hermetic on
+# purpose: no database, no Discord, no secrets, so a schedule tick can never be
+# blocked on a service.
 #
 # Non-blocking by design: this workflow gates no merge. The required checks
 # stay exactly `check`, `gitleaks` and `pr-lint`; there is deliberately no

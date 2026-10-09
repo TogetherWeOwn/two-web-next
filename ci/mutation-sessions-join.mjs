@@ -1,5 +1,5 @@
-// Nightly mutation signal for the auth blast radius: `src/sessions.ts` and
-// `src/join/service.ts`.
+// Nightly mutation signal for the auth blast radius: `src/sessions.ts`,
+// `src/join/service.ts` and `src/join/route.ts`.
 //
 // Each mutant weakens exactly one auth check (expired-session blindness, lost
 // revocation, throttle/review bypass, forged join outcomes). The runner applies
@@ -125,6 +125,35 @@ const MUTANTS = [
     replace:
       'if (result === "failed") return { kind: "recoverable", outcome: "added", requestId };',
   },
+  {
+    id: "J9-state-cookie-binding-dropped",
+    file: "src/join/route.ts",
+    note: "callback state must match the journey cookie: the binding is dropped",
+    find: "state && expected && state === expected ? await hooks.storeFor(c)",
+    replace: "state && expected ? await hooks.storeFor(c)",
+  },
+  {
+    id: "J10-journey-replay-admitted",
+    file: "src/join/route.ts",
+    note: "callback admits a consumed journey: a replayed state is accepted",
+    find: '(await store.journeys.consume(await hashToken(state!), "join").catch(() => false))',
+    replace:
+      '(true || await store.journeys.consume(await hashToken(state!), "join").catch(() => false))',
+  },
+  {
+    id: "J11-start-throttle-ignored",
+    file: "src/join/route.ts",
+    note: "start route ignores its per-client budget: no 429 is returned",
+    find: "if (limited) return limited;\n    const source = sanitizeSource(",
+    replace: "if (limited && false) return limited;\n    const source = sanitizeSource(",
+  },
+  {
+    id: "J12-callback-throttle-ignored",
+    file: "src/join/route.ts",
+    note: "callback ignores its per-client budget: token exchanges are unthrottled",
+    find: "if (limited) return limited;\n    const sql = await joinStore(c);",
+    replace: "if (limited && false) return limited;\n    const sql = await joinStore(c);",
+  },
 ];
 
 function sha(text) {
@@ -245,14 +274,11 @@ export function run(root, kill) {
   // target file is dirty so a mutant never stacks on uncommitted work.
   if (!process.argv.includes("--allow-dirty")) {
     try {
-      const dirty = execFileSync(
-        "git",
-        ["status", "--porcelain", "--", "src/sessions.ts", "src/join/service.ts"],
-        {
-          cwd: root,
-          encoding: "utf8",
-        },
-      ).trim();
+      const targets = [...new Set(MUTANTS.map((m) => m.file))];
+      const dirty = execFileSync("git", ["status", "--porcelain", "--", ...targets], {
+        cwd: root,
+        encoding: "utf8",
+      }).trim();
       if (dirty) {
         console.error(
           `refusing: target files are dirty:\n${dirty}\nre-run with --allow-dirty on a clean tree.`,
