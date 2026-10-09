@@ -106,14 +106,31 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
     async (state) => {
       if (state === "stale")
         await fixture.client`insert into discord_event_snapshots (key,payload,succeeded_at) values (${key}, '[]', clock_timestamp() - interval '61 seconds')`;
-      const claims = await Promise.all(
-        Array.from({ length: 8 }, () => pgDiscordSnapshotStore(connect).claim(key)),
-      );
-      expect(claims.filter((c) => c.token)).toHaveLength(1);
-      const winner = claims.find((c) => c.token)!;
-      expect(winner.leaseExpiresAt! - winner.now).toBeGreaterThan(DISCORD_REFRESH_LEASE_MS - 100);
-      expect(winner.leaseExpiresAt! - winner.now).toBeLessThanOrEqual(DISCORD_REFRESH_LEASE_MS);
-      expect(clients).toBe(8);
+      const requestClients = Array.from({ length: 8 }, connect);
+      try {
+        // postgres.js connects lazily: open every session before the race.
+        const backendPids = [];
+        for (const client of requestClients) {
+          const [backend] = await client`select pg_backend_pid() as pid`;
+          backendPids.push(backend!.pid);
+        }
+        expect(new Set(backendPids).size).toBe(8);
+
+        const settled = await Promise.allSettled(
+          requestClients.map((client) => pgDiscordSnapshotStore(() => client).claim(key)),
+        );
+        const claims = settled.map((result) => {
+          if (result.status === "rejected") throw result.reason;
+          return result.value;
+        });
+        expect(claims.filter((c) => c.token)).toHaveLength(1);
+        const winner = claims.find((c) => c.token)!;
+        expect(winner.leaseExpiresAt! - winner.now).toBeGreaterThan(DISCORD_REFRESH_LEASE_MS - 100);
+        expect(winner.leaseExpiresAt! - winner.now).toBeLessThanOrEqual(DISCORD_REFRESH_LEASE_MS);
+        expect(clients).toBe(8);
+      } finally {
+        await Promise.all(requestClients.map((client) => client.end({ timeout: 0 })));
+      }
     },
   );
   it("samples the claim clock anchor before its transaction query without an outer query", async () => {
