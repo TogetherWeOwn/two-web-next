@@ -184,6 +184,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `ALL /profile` | member | member-exposure: gate + access log |
 | `DELETE /events/:key/rsvp` | member-decoy | rsvp: owner withdrawal + decoy |
 | `GET /` | public | app: home / optional session |
+| `GET /.well-known/security.txt` | public | security-txt: RFC 9116 contact, database-free leaf |
 | `GET /about` | public | seo: frozen funnel leaf |
 | `GET /admin` | moderator | admin: dashboard |
 | `GET /admin/events` | moderator | admin: event table |

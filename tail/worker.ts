@@ -88,6 +88,7 @@ export const ALERT_ROUTES = new Set([
   "/members/:user",
   "/privacy",
   "/profile",
+  "/.well-known/security.txt",
   "/robots.txt",
   "/rules",
   "/sitemap_index.xml",

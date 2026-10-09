@@ -70,6 +70,7 @@ const OTHER_READS = [
   "/join/callback",
   "/sitemap_index.xml",
   "/robots.txt",
+  "/.well-known/security.txt",
   "/up",
   "/auth/discord",
   "/auth/discord/callback",

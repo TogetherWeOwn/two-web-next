@@ -60,6 +60,7 @@ import {
   takeJoinResult,
 } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
+import { buildSecurityTxt } from "./security-txt";
 import {
   configReadiness,
   revisionReadiness,
@@ -536,6 +537,13 @@ app.get("/robots.txt", (c) => {
   c.header("content-type", "text/plain; charset=UTF-8");
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildRobots(c.env.APP_URL));
+});
+
+// RFC 9116 disclosure file. Database-free like robots.txt: no session, cookie or DB read.
+app.get("/.well-known/security.txt", (c) => {
+  c.header("content-type", "text/plain; charset=utf-8");
+  c.header("cache-control", "public, max-age=3600");
+  return c.body(buildSecurityTxt(c.env.APP_URL, new Date()));
 });
 
 // CSP violation sink (TOG-10107 — ports two-web routes/funnel.php's

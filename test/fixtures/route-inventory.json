@@ -7,6 +7,7 @@
   { "method": "ALL", "path": "/profile", "auth": "member" },
   { "method": "DELETE", "path": "/events/:key/rsvp", "auth": "member-decoy" },
   { "method": "GET", "path": "/", "auth": "public" },
+  { "method": "GET", "path": "/.well-known/security.txt", "auth": "public" },
   { "method": "GET", "path": "/about", "auth": "public" },
   { "method": "GET", "path": "/admin", "auth": "moderator" },
   { "method": "GET", "path": "/admin/events", "auth": "moderator" },

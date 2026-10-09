@@ -53,6 +53,7 @@ export const NON_HTML_READS = [
   "/admin/queue/failed/:id/preview", // Operational advice is buffered JSON, never HTML.
   "/sitemap_index.xml",
   "/robots.txt",
+  "/.well-known/security.txt", // Plain-text RFC 9116 disclosure file, never an HTML document.
   "/up",
   "/auth/status", // Bool-only JSON, never an HTML document.
   "/members", // Retired bare path: branded 404, never a member index.
