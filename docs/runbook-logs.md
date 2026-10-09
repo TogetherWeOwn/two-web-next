@@ -74,11 +74,11 @@ these lines. Background: [Discord calendar snapshots](discord-snapshots.md).
 
 | Outcome | Meaning |
 | --- | --- |
-| `cold` | No usable snapshot: nothing served, and the page shows the error state on an otherwise-empty page. First request against an empty store, an expired snapshot, or a failed completion with neither live nor stale data. |
-| `held` | A usable snapshot exists but a shared retry hold is active, so this request served snapshot data without calling Discord. Expect during Discord 429 or slow episodes. |
-| `fresh` | Served a snapshot completed less than 60 seconds ago, with no Discord call. |
-| `stale` | Served a snapshot 60 to 600 seconds old while another request holds the refresh lease or a refresh failed. Slightly old data, not an error. |
-| `error` | The snapshot store read or write failed, or the stored payload was corrupt. Logged at warn level with no live Discord fallback. Points at the database, not at Discord. |
+| `cold` | No usable snapshot: nothing served, and the page shows the error state on an otherwise-empty page. The successful first refresh logs `fresh`, not `cold`: `cold` is for requests that arrive while that first refresh still holds the lease, a refresh that failed with nothing usable left (for example an empty store during a Discord 429 episode), a snapshot older than 600 seconds, or a completion failure with neither live rows nor a usable snapshot. |
+| `held` | A usable snapshot was served while a retry hold is active. That covers requests that skipped Discord because another request set the hold, and the request that just set the hold itself after its own Discord read failed. Expect during Discord 429 or slow episodes. |
+| `fresh` | Served a usable snapshot completed less than 60 seconds ago. That includes a snapshot this request just refreshed: the lease winner calls Discord, completes, then logs `fresh`. Other requests served from a fresh snapshot skip Discord. |
+| `stale` | Served data while the snapshot is 60 to 600 seconds old and another request holds the refresh lease, or after publishing the refresh result threw (`completionFailed: true`, which can serve even live rows because the outcome is derived from the pre-claim view). A failed refresh itself logs `held` (or `cold` when nothing usable is left), never `stale`. |
+| `error` | The snapshot store read (claim) failed, the stored payload was corrupt and failed to decode, or the snapshot key config was invalid (an `APP_URL` with a path, query or credentials, or a missing or oversized `DISCORD_GUILD_ID`). Logged at warn level with no live Discord fallback. Points at the store or the config, not at Discord. A store completion failure is not `error`: it stays on the info line with `completionFailed: true`. |
 
 A healthy mix is mostly `fresh`, with `stale` around the 60-second refresh
 boundary and brief `held` stretches while Discord throttles or slows.
