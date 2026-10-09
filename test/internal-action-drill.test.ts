@@ -304,7 +304,7 @@ describe("internal-action-drill CLI", () => {
       "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
     );
     expect(scripts.check).toBe(
-      "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
+      "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run docs:links && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
     );
   });
 });
