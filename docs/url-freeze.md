@@ -179,7 +179,6 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `ALL /*` | middleware | member-exposure: global security headers |
 | `ALL /admin/*` | moderator | member-exposure: mounted admin gate |
 | `ALL /admin/queue/*` | staging-operator | queue-preview-route / queue-redispatch-route: default-off, exact staging origin, explicit Origin (GET preview, POST apply), non-QA dedicated principal, fail-closed operational audit |
-| `ALL /admin/queue/failed/:id/redispatch` | staging-operator | queue-redispatch-route: 4 KiB wire cap ahead of admission, so oversized uploads refuse even while disabled |
 | `ALL /events/:key/rsvp` | public | rsvp: 405 fallback, not a public read |
 | `ALL /members/*` | member | member-exposure: gate + access log |
 | `ALL /profile` | member | member-exposure: gate + access log |

@@ -1,5 +1,4 @@
 // route-inventory: ALL /admin/queue/*
-// route-inventory: ALL /admin/queue/failed/:id/redispatch
 // route-inventory: POST /admin/queue/failed/:id/redispatch
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";

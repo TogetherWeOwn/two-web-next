@@ -143,12 +143,11 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
-  // Same write envelope as every other admin POST. The wire cap runs before
-  // admission so oversized uploads refuse even while the boundary is
-  // disabled; the handler itself never parses a payload (dispatch always
-  // starts from the reconciled source) and only the dedicated staging
-  // operator principal can reach it.
-  admin.use("/queue/failed/:id/redispatch", requestBodyLimit("action"));
+  // Same write envelope as every other admin POST: throttle admits before
+  // buffering (oversized attempts count against the bucket), the wire cap
+  // refuses before parsing, and the handler itself never parses a payload
+  // (dispatch always starts from the reconciled source). Only the dedicated
+  // staging operator principal can reach the handler.
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);

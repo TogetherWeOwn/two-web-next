@@ -2,7 +2,6 @@
   { "method": "ALL", "path": "/*", "auth": "middleware" },
   { "method": "ALL", "path": "/admin/*", "auth": "moderator" },
   { "method": "ALL", "path": "/admin/queue/*", "auth": "staging-operator" },
-  { "method": "ALL", "path": "/admin/queue/failed/:id/redispatch", "auth": "staging-operator" },
   { "method": "ALL", "path": "/events/:key/rsvp", "auth": "public" },
   { "method": "ALL", "path": "/members/*", "auth": "member" },
   { "method": "ALL", "path": "/profile", "auth": "member" },

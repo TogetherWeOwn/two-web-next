@@ -289,7 +289,6 @@ const MIDDLEWARE = [
   "ALL /*",
   "ALL /admin/*",
   "ALL /admin/queue/*",
-  "ALL /admin/queue/failed/:id/redispatch",
   "ALL /profile",
   "ALL /profile",
   "ALL /members/*",
