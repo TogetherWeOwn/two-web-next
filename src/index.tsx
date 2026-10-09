@@ -55,6 +55,7 @@ import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import {
   consumeLoginReturn,
+  JOURNEY_TTL_SECONDS,
   LOGIN_INTENDED_COOKIE,
   rememberLoginNext,
   takeJoinResult,
@@ -84,7 +85,7 @@ export { rulesLastUpdated } from "./rules-last-updated";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
-const STATE_TTL_SECONDS = 600;
+export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -751,7 +752,7 @@ app.get("/auth/discord/callback", async (c) => {
         secure: true,
         httpOnly: true,
         sameSite: "Lax",
-        maxAge: 600,
+        maxAge: JOURNEY_TTL_SECONDS,
       });
     }
     return c.redirect("/?n=join_failed", 302);

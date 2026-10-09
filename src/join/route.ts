@@ -45,8 +45,8 @@ import {
 export const JOIN_STATE_COOKIE = "__Host-two_join_state";
 export const JOIN_SOURCE_COOKIE = "__Host-two_join_source";
 export const JOIN_NEXT_COOKIE = "__Host-two_join_next";
-const STATE_TTL_SECONDS = 600;
-const JOURNEY_TTL_SECONDS = 600;
+export const STATE_TTL_SECONDS = 600;
+export const JOURNEY_TTL_SECONDS = 600;
 
 /** Injectable at the call site (`{...env, JOIN_STORE: …}`), like SESSION_STORE. */
 export type JoinRouteDeps = {
