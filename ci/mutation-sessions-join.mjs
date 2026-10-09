@@ -284,6 +284,11 @@ export function run(root, kill = defaultKill) {
     console.error("vitest is not installed; run npm ci --include=dev first.");
     return 2;
   }
+  const missing = KILL_SUITE.filter((file) => !existsSync(join(root, file)));
+  if (missing.length) {
+    console.error(`refusing: kill-suite files are missing: ${missing.join(", ")}`);
+    return 1;
+  }
   // Guard: the runner rewrites working-tree files briefly. Refuse when a
   // target file is dirty so a mutant never stacks on uncommitted work.
   if (!process.argv.includes("--allow-dirty")) {
