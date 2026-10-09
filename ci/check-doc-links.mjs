@@ -87,7 +87,6 @@ export function headingText(raw) {
   };
   text = text.replace(/``([^`]+)``/g, lift).replace(/`([^`]*)`/g, lift);
   text = stripTagRuns(text);
-  text = text.replace(/\u0000(\d+)\u0000/g, (_, index) => spans[Number(index)]);
   text = text.replace(/!\[([^\]]*)\]\([^()]*\)/g, "$1");
   text = text.replace(/\[([^\]]*)\]\([^()]*\)/g, "$1");
   text = text.replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1");
@@ -96,6 +95,9 @@ export function headingText(raw) {
   text = text.replace(/\*([^*]+)\*/g, "$1");
   text = text.replace(/(?<!\w)_([^_]+)_(?!\w)/g, "$1");
   text = text.replace(/~~([^~]+)~~/g, "$1");
+  // Restore code spans last: GitHub renders them literally, so the link and
+  // emphasis passes above must not rewrite their content (`__init__` stays).
+  text = text.replace(/\u0000(\d+)\u0000/g, (_, index) => spans[Number(index)]);
   return text;
 }
 
@@ -547,6 +549,8 @@ function selftest() {
     assert.equal(slugifyHeading("`Array<T>`"), "arrayt");
     assert.equal(slugifyHeading("Use `<div>` wrappers"), "use-div-wrappers");
     assert.equal(slugifyHeading("if a<b then"), "if-ab-then");
+    assert.equal(slugifyHeading("`__init__` method"), "__init__-method");
+    assert.equal(slugifyHeading("`__proto__` access"), "__proto__-access");
     assert.ok(collectAnchors("```\n# Not a heading\n```\n## Real\n").has("real"));
     assert.ok(!collectAnchors("```\n# Not a heading\n```\n## Real\n").has("not-a-heading"));
     cases += 1;
