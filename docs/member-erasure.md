@@ -47,8 +47,9 @@ A second apply is a no-op: every count returns 0.
 - `member_data_access_logs` is immutable with a 90-day prune
   (`drizzle/1018_audit-immutability.sql`, W13 `model:prune`). Past access
   records are compliance evidence and cannot be rewritten per request.
-- `activity_log` is append-only for the same reason: cutover and moderation
-  evidence, pruned by age, never edited per subject.
+- `activity_log` is append-only and retained. No job prunes it today; although
+  the database trigger permits deletion after 90 days, nothing currently does so.
+  It records cutover and moderation evidence and is never edited per subject.
 - The Discord-side mirror (roles, messages, tickets) is out of scope here:
   Discord is governed by Discord's own privacy policy, and removal there
   happens through Discord's moderation tools, not this command.
