@@ -513,10 +513,7 @@ function selftest() {
         write("README.md", "# Root\n");
         write("CONTRIBUTING.md", "# Contributing\n");
         write("SECURITY.md", "# Security\n");
-        write(
-          "docs/page.md",
-          ["# Page", "", "[budget](target.md#p95--300-ms-budget)"].join("\n"),
-        );
+        write("docs/page.md", ["# Page", "", "[budget](target.md#p95--300-ms-budget)"].join("\n"));
         write("docs/target.md", "# Target\n\n## p95 < 300 ms budget\n");
       },
       0,
