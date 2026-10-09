@@ -43,7 +43,7 @@ delivery at the retryable refusal/transport boundary, before the retry deadline
 is persisted (`src/jobs/consumer.ts`, via `projectSyncRetryDiagnostic` in
 `src/jobs/sync-retry-diagnostic.ts`). The same narrow projection is retained
 through retry-result persistence failure into the terminal `queue.failing`
-source alert; see [request-log queries](runbook-logs.md) for correlation and
+source alert; see [request-log queries](#find-a-request) for correlation and
 the [alert runbook](runbook-alerts.md#sync-event-retry-cause-diagnostics) for
 the paging side. These fields describe only the current delivery: they do not
 control retries (the bot's `retryable` flag and backoff still decide), and a
@@ -84,11 +84,11 @@ npx wrangler tail two-web-next --format json \
   | jq -c 'select(.logs[]?.message[]? | tostring | contains("sync retry classified"))'
 
 # Count occurrences per cause over a saved tail file
-jq -r '.logs[]?.message[]? | tostring | select(contains("sync retry classified"))' \
+jq -c '.logs[]? | select(any(.message[]?; . == "sync retry classified")) | .message[]? | select(type == "object")' \
   deliveries.json | grep -o '"sync_retry_code":"[a-z_]*"' | sort | uniq -c
 
 # Same tally grouped by class
-jq -r '.logs[]?.message[]? | tostring | select(contains("sync retry classified"))' \
+jq -c '.logs[]? | select(any(.message[]?; . == "sync retry classified")) | .message[]? | select(type == "object")' \
   deliveries.json | grep -o '"sync_retry_class":"[A-Za-z]*"' | sort | uniq -c
 ```
 
