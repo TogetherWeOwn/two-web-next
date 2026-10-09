@@ -51,6 +51,13 @@ function stripTagRuns(input) {
     // preserves the rest of the heading for the slug.
     if (!inTag && char === "<") {
       if (/[A-Za-z/!]/.test(text[i + 1] ?? "")) {
+        // Only a `<...>` run closed by `>` is a tag (CommonMark raw HTML).
+        // An unclosed `<` (for example `if a<b then`) is literal text, so
+        // keeping it preserves the rest of the heading for the slug.
+        if (!text.includes(">", i + 1)) {
+          output += char;
+          continue;
+        }
         inTag = true;
         continue;
       }
@@ -67,15 +74,23 @@ function stripTagRuns(input) {
 }
 export function headingText(raw) {
   // Markdown heading text is plain-text input and the return value is a
-  // slug-comparison string, never HTML output. Tags are stripped with a
-  // single-pass scanner (not a repeated regex replace) before links,
-  // images, code spans and emphasis below.
-  let text = stripTagRuns(String(raw));
+  // slug-comparison string, never HTML output. Code spans are lifted out
+  // first: GitHub renders them literally, so `<div>` inside backticks
+  // contributes "div" to the slug instead of being stripped as a tag.
+  // Tags are stripped with a single-pass scanner (not a repeated regex
+  // replace) before links, images and emphasis below.
+  let text = String(raw);
+  const spans = [];
+  const lift = (_, inner) => {
+    spans.push(inner);
+    return `\u0000${spans.length - 1}\u0000`;
+  };
+  text = text.replace(/``([^`]+)``/g, lift).replace(/`([^`]*)`/g, lift);
+  text = stripTagRuns(text);
+  text = text.replace(/\u0000(\d+)\u0000/g, (_, index) => spans[Number(index)]);
   text = text.replace(/!\[([^\]]*)\]\([^()]*\)/g, "$1");
   text = text.replace(/\[([^\]]*)\]\([^()]*\)/g, "$1");
   text = text.replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1");
-  text = text.replace(/``([^`]+)``/g, "$1");
-  text = text.replace(/`([^`]*)`/g, "$1");
   text = text.replace(/\*\*([^*]+)\*\*/g, "$1");
   text = text.replace(/(?<!\w)__([^_]+)__(?!\w)/g, "$1");
   text = text.replace(/\*([^*]+)\*/g, "$1");
@@ -528,6 +543,10 @@ function selftest() {
     assert.equal(slugifyHeading("p95 < 300 ms budget"), "p95--300-ms-budget");
     assert.equal(slugifyHeading("x <= y"), "x--y");
     assert.equal(slugifyHeading("Hello <code>world</code> done"), "hello-world-done");
+    assert.equal(slugifyHeading("`Map<K, V>` helper"), "mapk-v-helper");
+    assert.equal(slugifyHeading("`Array<T>`"), "arrayt");
+    assert.equal(slugifyHeading("Use `<div>` wrappers"), "use-div-wrappers");
+    assert.equal(slugifyHeading("if a<b then"), "if-ab-then");
     assert.ok(collectAnchors("```\n# Not a heading\n```\n## Real\n").has("real"));
     assert.ok(!collectAnchors("```\n# Not a heading\n```\n## Real\n").has("not-a-heading"));
     cases += 1;
