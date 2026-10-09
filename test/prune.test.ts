@@ -178,9 +178,10 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
   });
 
   it("audit pruning skips only rows inside the worker/database clock-skew window", async () => {
+    // Fixed 2160 hours, as the trigger guard is; '90 days' shifts by an hour across DST.
     await sql`insert into agent_event_audits (operation, request_id, result, created_at)
-      values ('create', 'skew-old', 'ok', clock_timestamp() - interval '90 days' - interval '60 seconds'),
-             ('create', 'skew-in-window', 'ok', clock_timestamp() - interval '90 days' + interval '60 seconds')`;
+      values ('create', 'skew-old', 'ok', clock_timestamp() - interval '2160 hours' - interval '60 seconds'),
+             ('create', 'skew-in-window', 'ok', clock_timestamp() - interval '2160 hours' + interval '60 seconds')`;
 
     try {
       const workerNow = new Date(Date.now() + 120_000);
