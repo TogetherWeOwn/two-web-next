@@ -40,11 +40,28 @@ function isMarkdownFile(path) {
 // their visible text, code spans contribute their content, and emphasis pairs
 // contribute their inner text. Intra-word underscores are literal text (kept),
 // so `_` emphasis only counts at word boundaries.
+function stripTagRuns(input) {
+  let output = "";
+  let inTag = false;
+  for (const char of input) {
+    if (char === "<") {
+      inTag = true;
+      continue;
+    }
+    if (char === ">" && inTag) {
+      inTag = false;
+      continue;
+    }
+    if (!inTag) output += char;
+  }
+  return output;
+}
 export function headingText(raw) {
   // Markdown heading text is plain-text input and the return value is a
-  // slug-comparison string, never HTML output: strip any angle-bracket tag
-  // runs first, then links, images, code spans and emphasis below.
-  let text = String(raw).replace(/<[^<>]*>/g, "");
+  // slug-comparison string, never HTML output. Tags are stripped with a
+  // single-pass scanner (not a repeated regex replace) before links,
+  // images, code spans and emphasis below.
+  let text = stripTagRuns(String(raw));
   text = text.replace(/!\[([^\]]*)\]\([^()]*\)/g, "$1");
   text = text.replace(/\[([^\]]*)\]\([^()]*\)/g, "$1");
   text = text.replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1");
