@@ -116,7 +116,8 @@ approved account and binding isolation before any remote mutation.
    GitHub Environment `staging` gate. It installs dependencies, applies
    migrations to its disposable Postgres, runs `npm run check`, then plans,
    applies and verifies the **staging web migrations** of the CI-verified SHA
-   against the Neon staging database (`ci/neon-migrate.mjs`, see
+   against the staging database — the pinned PlanetScale staging branch
+   (Neon endpoints still accepted during the transition; `ci/neon-migrate.mjs`, see
    [Neon web schema migrations](#neon-web-schema-migrations-separate-operator-action)),
    ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
    failed migration step fails the job before any Cloudflare mutation. The
@@ -179,10 +180,13 @@ migration or Neon branch creation is performed by its selftest.
 - Provision `NEON_STAGING_DATABASE_URL` **only on the staging Environment** and
   `PRODUCTION_DATABASE_URL` **only on the production Environment**, using
   the authorized operator's secret-provisioning path. Verify the intended
-  project/branch/database and direct endpoint out of band; a hostname alone
-  cannot distinguish staging from production. Staging is Neon; production is
-  PlanetScale Postgres (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
-  pooled `6432` port). The driver pins port 5432, uses
+  project/branch/database and direct endpoint out of band. Staging is the pinned
+  PlanetScale staging branch and host (direct Neon endpoints still accepted
+  during the transition); production is PlanetScale Postgres on its own branch
+  and host (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
+  pooled `6432` port). The migrate gate pins the staging host and branch id and
+  refuses the production identity in code, so a production URL in the staging
+  secret fails closed. The driver pins port 5432, uses
   certificate-verified TLS, strips optional `channel_binding=prefer|disable`, and
   refuses `channel_binding=require` (unsupported by postgres.js) before connecting.
   Never weaken a required channel-binding policy just to run migrations; stop and
@@ -195,8 +199,8 @@ migration or Neon branch creation is performed by its selftest.
   `NEON_STAGING_DATABASE_URL` at repo scope; that is **not** migration approval
   or provisioning. YAML cannot attest a resolved secret's scope. Missing
   Environment provisioning is a stop, even if a same-named repo secret exists.
-- Verify Neon history retention/PITR eligibility for the target branch and a
-  tested recovery procedure before apply. The summary's timestamp is a recovery
+- Verify backup/PITR eligibility for the target branch (Neon history retention
+  or PlanetScale backups) and a tested recovery procedure before apply. The summary's timestamp is a recovery
   reference, **not** a snapshot, a restore drill, or proof PITR is available.
 
 **Operator execution after those gates:** select Actions → `db-migrate` → Run
@@ -209,7 +213,7 @@ available. The workflow validates migration numbers, then:
    This is a journal diff, not a SQL execution rehearsal.
 2. `apply` starts one connection-bound transaction, acquires the web transaction
    advisory lock, rechecks history, and records the database clock's UTC
-   **pre-migration Neon PITR timestamp** and release SHA in the job summary
+   **pre-migration PITR timestamp** and release SHA in the job summary
    **before DDL**. Ledger initialization, canonical Drizzle journal SQL and
    hash/timestamp inserts, and the zero-pending check all run in that transaction.
    Connection loss fails closed, never reconnects mid-apply; the success receipt
@@ -236,8 +240,8 @@ history stays intact. On connection loss, do not infer commit success: re-plan a
 verify under the approved recovery procedure before retrying. After a successful
 but harmful migration, prefer a reviewed forward repair.
 If authorized PITR is required, pause writers and coordinate **both** consumers,
-verify the recorded timestamp is eligible, and use Neon's documented restore
-procedure. Restore can overwrite all databases on the branch and lose later
+verify the recorded timestamp is eligible, and use the provider's documented
+restore procedure (Neon branch restore or PlanetScale backup/restore). Restore can overwrite all databases on the branch and lose later
 writes; retain the prior branch as required by that procedure. Reconcile bot,
 queues and external side effects separately. Do not run an unreviewed down
 migration or assume restoring the Worker restores the database.
