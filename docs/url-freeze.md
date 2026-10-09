@@ -186,6 +186,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /` | public | app: home / optional session |
 | `GET /about` | public | seo: frozen funnel leaf |
 | `GET /admin` | moderator | admin: dashboard |
+| `GET /admin/activity-log` | moderator | admin-activity-log: read-only activity viewer |
 | `GET /admin/events` | moderator | admin: event table |
 | `GET /admin/events/:key` | moderator | admin: edit form |
 | `GET /admin/events/new` | moderator | admin: create form |

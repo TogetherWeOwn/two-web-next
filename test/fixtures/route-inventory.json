@@ -9,6 +9,7 @@
   { "method": "GET", "path": "/", "auth": "public" },
   { "method": "GET", "path": "/about", "auth": "public" },
   { "method": "GET", "path": "/admin", "auth": "moderator" },
+  { "method": "GET", "path": "/admin/activity-log", "auth": "moderator" },
   { "method": "GET", "path": "/admin/events", "auth": "moderator" },
   { "method": "GET", "path": "/admin/events/:key", "auth": "moderator" },
   { "method": "GET", "path": "/admin/events/:key/edit", "auth": "moderator" },

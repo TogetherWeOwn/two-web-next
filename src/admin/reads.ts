@@ -1,14 +1,20 @@
 // Admin read surfaces (W12: M6 roster, M8 join viewer + funnel stats).
 // Read-only by construction: nothing here inserts, updates or deletes.
 
-import { and, asc, count, desc, eq, gte, ilike, or } from "drizzle-orm";
-import { JOIN_ATTEMPT_PAGE_SIZE, parseJoinAttemptsQuery, type RosterQuery } from "./table-list";
+import { and, asc, count, desc, eq, gte, ilike, or, type SQL } from "drizzle-orm";
+import {
+  ACTIVITY_LOG_PAGE_SIZE,
+  JOIN_ATTEMPT_PAGE_SIZE,
+  parseActivityLogQuery,
+  parseJoinAttemptsQuery,
+  type RosterQuery,
+} from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
-import { events, rsvps } from "../db/admin-schema";
+import { activityLog, events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
-import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
+import { declareMemberResult, keyedMemberRead, nonSensitiveRead } from "../member-reads";
 
 /** config/join.php retention: attempts older than this are pruned (W13 cron). Canonical value lives in jobs/constants (legacy parity pin). */
 export const JOIN_RETENTION_DAYS = JOIN_ATTEMPT_RETENTION_DAYS;
@@ -123,4 +129,70 @@ export async function joinFunnelStats(
   for (const r of rows.sort((a, b) => a.outcome.localeCompare(b.outcome)))
     out[r.outcome] = Number(r.n);
   return out;
+}
+
+// Read-only activity-log viewer (R11). The projection deliberately excludes
+// `properties`: the dirty before/after map is never selected, so it cannot be
+// rendered, and the read classifier refuses any statement that mentions it.
+export type ActivityLogViewerRow = Pick<
+  typeof activityLog.$inferSelect,
+  "id" | "description" | "subjectType" | "subjectId" | "causerId" | "event" | "createdAt"
+>;
+const activityLogColumns = {
+  id: activityLog.id,
+  description: activityLog.description,
+  subjectType: activityLog.subjectType,
+  subjectId: activityLog.subjectId,
+  causerId: activityLog.causerId,
+  event: activityLog.event,
+  createdAt: activityLog.createdAt,
+};
+
+/**
+ * Paginated activity rows, newest first. `subject` matches the subject
+ * type/id or description (substring); `causer` matches the causer snowflake
+ * (substring). The retrieved causer snowflakes are the access-log subjects:
+ * a page that names moderators writes one access-log row, and a failed
+ * access-log write fails closed in the guard's boundary. System rows with a
+ * null/non-snowflake causer contribute no subject, like pre-identity join
+ * attempts.
+ */
+export async function listActivityLog(
+  db: Db,
+  opts: { subject?: string; causer?: string; page?: number },
+): Promise<ActivityLogViewerRow[]> {
+  const parsed = parseActivityLogQuery({
+    subject: opts.subject,
+    causer: opts.causer,
+    page: String(opts.page ?? 1),
+  });
+  const conds: SQL[] = [];
+  if (parsed.subject) {
+    const term = `%${escapeLikeTerm(parsed.subject)}%`;
+    conds.push(
+      or(
+        ilike(activityLog.subjectType, term),
+        ilike(activityLog.subjectId, term),
+        ilike(activityLog.description, term),
+      )!,
+    );
+  }
+  if (parsed.causer) conds.push(ilike(activityLog.causerId, `%${escapeLikeTerm(parsed.causer)}%`));
+  const rows = await nonSensitiveRead("activity-log", () =>
+    db
+      .select(activityLogColumns)
+      .from(activityLog)
+      .where(and(...conds))
+      .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+      .limit(ACTIVITY_LOG_PAGE_SIZE + 1)
+      .offset((parsed.page - 1) * ACTIVITY_LOG_PAGE_SIZE),
+  );
+  // Only well-formed snowflakes become subjects; nulls (cron) and malformed
+  // values never reach the access log as invented members.
+  declareMemberResult(
+    rows.flatMap((r) =>
+      r.causerId !== null && /^\d{10,25}$/.test(r.causerId) ? [r.causerId] : [],
+    ),
+  );
+  return rows;
 }
