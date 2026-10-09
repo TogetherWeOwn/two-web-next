@@ -67,7 +67,7 @@ these lines. Background: [Discord calendar snapshots](discord-snapshots.md).
 | Field | Present | Meaning |
 | --- | --- | --- |
 | `outcome` | always | One of the outcomes below. The code can emit exactly these outcomes: `cold`, `held`, `fresh`, `stale`, `error`. |
-| `completionFailed` | `console.info` line only | `true` when publishing the refresh result to the store threw, but the request still served live rows or a usable stale snapshot. |
+| `completionFailed` | `console.info` line only | `true` when publishing the refresh result to the store threw. The request served live rows or a usable snapshot when one was available; otherwise the outcome is `cold` and nothing was served. |
 | `code` | only for allowlisted SQLSTATEs | The store driver's SQLSTATE when `completionFailed` is true or the line is `error`. |
 
 ### What each outcome means
@@ -82,7 +82,7 @@ these lines. Background: [Discord calendar snapshots](discord-snapshots.md).
 
 A healthy mix is mostly `fresh`, with `stale` around the 60-second refresh
 boundary and brief `held` stretches while Discord throttles or slows.
-`completionFailed: true` is rare and still serves data. An unhealthy mix is a
+`completionFailed: true` is rare and usually still serves data (a `cold` line with `completionFailed: true` served nothing). An unhealthy mix is a
 `cold` spike (the page error state from the staging incident), `held`/`stale`
 that age into `cold`, or any sustained `error` lines.
 
