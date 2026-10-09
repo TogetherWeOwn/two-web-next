@@ -120,7 +120,7 @@ export const AdminDashboard: FC<{
           <h2>
             <a href="/admin/activity-log">Activity log</a>
           </h2>
-          <p>Who changed what, when. Read-only; every view is access-logged.</p>
+          <p>Who changed what, when. Read-only; views that name a member are access-logged.</p>
         </li>
       </ul>
       {funnel ? (
@@ -325,6 +325,13 @@ export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
   </Shell>
 );
 
+// Imported rows keep legacy internal causer IDs (docs/data-import.md), which the
+// access-log guard cannot take as subjects (snowflakes only). Label them so a
+// legacy ID never reads as a Discord identity.
+const SNOWFLAKE_ID = /^\d{10,25}$/;
+const formatActivityCauser = (causerId: string | null): string =>
+  causerId === null ? "—" : SNOWFLAKE_ID.test(causerId) ? causerId : `${causerId} (legacy ID)`;
+
 export const ActivityLogPage: FC<{
   rows: ActivityLogViewerRow[];
   query: ActivityLogQuery;
@@ -333,7 +340,10 @@ export const ActivityLogPage: FC<{
   <Shell title="Activity log">
     <section>
       <h1>Activity log</h1>
-      <p class="hint">Read-only. Who changed what, when. Every view is access-logged.</p>
+      <p class="hint">
+        Read-only. Who changed what, when. Views that name a member are access-logged; imported
+        causer IDs are labeled legacy.
+      </p>
       <form method="get" action="/admin/activity-log" class="filters">
         <div class="field">
           <label for="subject">Subject</label>
@@ -379,7 +389,7 @@ export const ActivityLogPage: FC<{
             ) : (
               rows.map((r) => (
                 <tr key={r.id}>
-                  <td>{r.causerId ?? "—"}</td>
+                  <td>{formatActivityCauser(r.causerId)}</td>
                   <td>{r.description}</td>
                   <td>
                     <time datetime={r.createdAt.toISOString()}>{r.createdAt.toISOString()}</time>

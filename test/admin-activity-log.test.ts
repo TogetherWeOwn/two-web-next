@@ -188,6 +188,17 @@ describe.skipIf(!process.env.DATABASE_URL)("activity-log viewer (isolated agent-
     expect(await logs()).toHaveLength(0);
   });
 
+  it("labels imported legacy causer IDs without inventing access-log subjects", async () => {
+    // Legacy imports keep internal causer IDs, not Discord snowflakes
+    // (docs/data-import.md). They render labeled, never as member subjects.
+    await seedRow({ description: "migrated legacy change", causerId: "42" });
+    const res = await read();
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("42 (legacy ID)");
+    expect(await logs()).toHaveLength(0);
+  });
+
   it("fails closed when the access-log insert fails, without releasing contents", async () => {
     const row = await seedRow();
     vi.spyOn(console, "error").mockImplementation(() => {});

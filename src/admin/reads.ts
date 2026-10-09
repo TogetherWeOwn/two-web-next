@@ -155,7 +155,10 @@ const activityLogColumns = {
  * a page that names moderators writes one access-log row, and a failed
  * access-log write fails closed in the guard's boundary. System rows with a
  * null/non-snowflake causer contribute no subject, like pre-identity join
- * attempts.
+ * attempts. Imported rows keep legacy internal causer IDs (docs/data-import.md):
+ * they render with an explicit legacy label and never become access-log
+ * subjects, because the guard only accepts snowflakes and inventing a member
+ * subject would be worse than logging none.
  */
 export async function listActivityLog(
   db: Db,
