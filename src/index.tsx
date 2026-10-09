@@ -3,7 +3,7 @@ import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
-import { registerAuthRoutes } from "./auth/routes";
+import { registerAuthRoutes, SESSION_COOKIE } from "./auth/routes";
 import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
 import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
@@ -56,9 +56,9 @@ import { freezeBanner } from "./freeze-banner";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
-const SESSION_COOKIE = "__Host-two_session";
-// Single definition lives in ./auth/routes (it owns the OAuth state cookie);
-// re-exported here so existing `from "../src/index"` imports keep working.
+// The session cookie name is defined once in ./auth/routes (it owns logout).
+// STATE_TTL_SECONDS is re-exported here so existing `from "../src/index"`
+// imports keep working.
 export { STATE_TTL_SECONDS } from "./auth/routes";
 
 const app = new Hono<{ Bindings: Env }>();

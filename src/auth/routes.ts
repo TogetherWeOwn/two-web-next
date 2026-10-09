@@ -1,10 +1,7 @@
-// OAuth and login routes (R14).
-//
 // The Discord sign-in round trip plus the session-adjacent auth endpoints:
 // GET /auth/status, GET /auth/recover, GET /auth/discord/redirect,
 // GET /auth/discord, GET /auth/discord/callback, POST /logout and
-// POST /auth/qa/:identity. Moved verbatim out of the app module so
-// src/index.tsx only wires them; no behavior change.
+// POST /auth/qa/:identity.
 //
 // Session + issue helpers live in the app module (it owns the Postgres store
 // selection and the roster write). They are passed in at mount time to keep
@@ -41,7 +38,7 @@ import {
 } from "../throttle";
 import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding } from "../write-recovery";
 
-const SESSION_COOKIE = "__Host-two_session";
+export const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
 // Re-exported by src/index.tsx so existing `from "../src/index"` imports keep working.
 export const STATE_TTL_SECONDS = 600;
@@ -82,9 +79,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
   app.get("/auth/discord", async (c) => {
     // Mints the OAuth state and sets its cookie: never cacheable, whatever sits at the edge.
     c.header("cache-control", "no-store, private");
-    // throttle:10,1 like the other three OAuth routes (TOG-6788 envelope; W15b
-    // TOG-12088 ports OAuthReplayAndThrottleTest's all-four-routes guard). The
-    // guard degrades to allow without a store, so DB-free leaves stay up.
+    // throttle:10,1 like the other three OAuth routes (the all-four-routes guard
+    // of the legacy OAuth throttle test). The guard degrades to allow without a
+    // store, so DB-free leaves stay up.
     const limited = await throttleGuard(c, "login-redirect", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const state = crypto.randomUUID();
@@ -101,7 +98,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     } catch {
       return c.redirect("/?n=signin_failed", 302);
     }
-    // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
+    // Return journey (legacy login_next): a safe ?next= rides the
     // OAuth round trip in a signed cookie; a hostile value leaves no trace.
     await rememberLoginNext(c, c.req.query("next"));
     await setSignedCookie(c, STATE_COOKIE, state, c.env.SESSION_SECRET, {
@@ -231,7 +228,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     throttle("logout", WRITE_THROTTLE_PER_MINUTE),
     requestBodyLimit("action"),
     async (c) => {
-      // The route-scoped same-origin guard runs before throttling or session storage.
+      // The app-wide same-origin guard runs before throttling or session storage.
       const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
       // No bearer: nothing to revoke — clear cookies and leave without touching
       // session storage (stays 303 when the store is down; main #239 pins the
