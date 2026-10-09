@@ -58,6 +58,11 @@ Related links prefer the same non-null game, then fill to three by `starts_at, i
 including ongoing events (`ends_at >= now`) and excluding the current event.
 Links are **published-only for every viewer**, per [TOG-10821](/TOG/issues/TOG-10821):
 this deliberately narrows legacy's moderator-draft and `past`-status eligibility.
+Prev/next neighbors carry the same not-ended bound as the related rail
+(`ends_at >= now`, PR #565): this deliberately narrows legacy
+`EventPageController::neighbor()`, which applies no `ends_at` bound, so an
+archived page shows no `previous` link and `next` jumps to the first ongoing or
+upcoming event. Ended events stay browsable in `/events/past`.
 Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
 private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
 per-event RSVP reads.
