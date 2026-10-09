@@ -23,6 +23,7 @@ import { JOURNEY_TTL_SECONDS as RETURN_JOURNEY_TTL_SECONDS } from "../src/return
 import { WRITE_RECOVERY_TTL_SECONDS } from "../src/write-recovery";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const read = (file: string): string => readFileSync(resolve(root, file), "utf8");
 
 const WORDS = [
   "zero",
@@ -67,6 +68,11 @@ function paragraphNaming(anchor: string): Paragraph {
 // Whole-word match: "90 days" must not pass on "190 days", nor "five minutes" on "twenty-five minutes".
 const mentions = (text: string, phrase: string): boolean =>
   new RegExp(`(?<![\\w-])${phrase}(?![\\w-])`).test(text);
+
+const UNIT =
+  /(?<![\w-])(?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|ms)(?![\w-])/i;
+const DURATION =
+  /(?<![\w-])(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|sixty|ninety|half a|a)[ -](?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|ms)(?![\w-])/gi;
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -179,18 +185,6 @@ const OUT_OF_SCOPE = [
   },
 ];
 
-const UNIT = /\b(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\b/i;
-
-// The append-only trigger refuses to delete an audit row younger than its floor, so a retention
-// shorter than the floor would not hold. Each source must sit at or under the policy's days.
-const ACCESS_LOG_FLOORS: [file: string, floor: RegExp][] = [
-  ["src/jobs/postgres.ts", /const accessLog[\s\S]*?interval '(\d+) hours'/],
-  [
-    "drizzle/1018_audit-immutability.sql",
-    /"audit_rows_append_only"\(\)[\s\S]*?interval '(\d+) hours'/,
-  ],
-];
-
 // Every cookie lifetime in src must be one of these; each is pinned by a CLAIMS row above.
 const PINNED_COOKIE_LIFETIMES = [
   "SESSION_TTL_SECONDS",
@@ -199,24 +193,58 @@ const PINNED_COOKIE_LIFETIMES = [
   "WRITE_RECOVERY_TTL_SECONDS",
 ];
 
+// Each call to a cookie writer, from its name to its closing parenthesis.
+function cookieCalls(text: string): string[] {
+  return [...text.matchAll(/\b(?:setSignedCookie|generateSignedCookie|setCookie)\(/g)].map(
+    (call) => {
+      const start = call.index ?? 0;
+      let depth = 0;
+      let end = start + call[0].length - 1;
+      for (; end < text.length; end++) {
+        if (text[end] === "(") depth++;
+        else if (text[end] === ")" && --depth === 0) break;
+      }
+      return text.slice(start, end + 1);
+    },
+  );
+}
+
+const pinnedLifetime = (text: string): boolean => {
+  const name = text.match(/maxAge:\s*(\w+)/)?.[1];
+  return name !== undefined && PINNED_COOKIE_LIFETIMES.includes(name);
+};
+
+// A call passes when its options carry a pinned maxAge, inline or through a same-file options constant.
+function unpinnedCookieCalls(file: string, text: string): string[] {
+  return cookieCalls(text).flatMap((call) => {
+    if (pinnedLifetime(call)) return [];
+    const lastArg = call.slice(0, -1).split(",").at(-1)?.trim() ?? "";
+    if (/^\w+$/.test(lastArg)) {
+      const definition = new RegExp(`const ${lastArg} = \\{[\\s\\S]*?\\};`).exec(text)?.[0] ?? "";
+      if (pinnedLifetime(definition)) return [];
+    }
+    return [`${relative(root, file)}: ${call.replace(/\s+/g, " ").slice(0, 80)}`];
+  });
+}
+
 describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
   it.each(CLAIMS)('$label states "$phrase" (pinned: $pin)', ({ label, anchor, phrase, pin }) => {
     const paragraph = paragraphNaming(anchor);
     expect(
-      paragraph.text,
-      `${POLICY_FILE} "${paragraph.section}" paragraph "${label}" must state "${phrase}" (${pin}). ` +
+      mentions(paragraph.text, phrase),
+      `${POLICY_FILE} "${paragraph.section}" paragraph "${label}" must state "${phrase}" as a whole phrase (${pin}). ` +
         "Change the policy only as a new numbered version.",
-    ).toContain(phrase);
+    ).toBe(true);
   });
 
   it.each(OUT_OF_SCOPE)(
     'lists "$claim" as out of scope ($reason): $anchor',
     ({ anchor, claim }) => {
-      expect(paragraphNaming(anchor).text).toContain(claim);
+      expect(mentions(paragraphNaming(anchor).text, claim)).toBe(true);
     },
   );
 
-  it("accounts for every sentence that states a duration: pinned or out of scope", () => {
+  it("accounts for every duration sentence in the policy: pinned or out of scope", () => {
     const phrasesByParagraph = new Map<string, string[]>();
     const pinParagraph = (anchor: string, phrase: string) => {
       const { text } = paragraphNaming(anchor);
@@ -224,43 +252,65 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
     };
     for (const { anchor, phrase } of CLAIMS) pinParagraph(anchor, phrase);
     for (const { anchor, claim } of OUT_OF_SCOPE) pinParagraph(anchor, claim);
-    const unaccounted = POLICY.flatMap(({ text }) =>
-      text
+    const unaccounted = POLICY.flatMap(({ text }) => {
+      const pinned = phrasesByParagraph.get(text) ?? [];
+      return text
         .split(/(?<=[.!?])\s+/)
         .filter((sentence) => UNIT.test(sentence))
-        .filter(
-          (sentence) =>
-            !(phrasesByParagraph.get(text) ?? []).some((phrase) => mentions(sentence, phrase)),
-        )
-        .map((sentence) => sentence.slice(0, 90)),
-    );
+        .filter((sentence) => {
+          const durations = sentence.match(DURATION) ?? [];
+          return (
+            durations.length === 0 ||
+            durations.some(
+              (duration) => !pinned.some((phrase) => phrase.includes(duration.toLowerCase())),
+            )
+          );
+        })
+        .map((sentence) => sentence.slice(0, 90));
+    });
     expect(unaccounted, `${POLICY_FILE} states a duration that no test pins`).toEqual([]);
   });
 
-  it.each(ACCESS_LOG_FLOORS)(
-    "keeps the access-log floor in %s within the policy",
-    (file, floor) => {
-      const hours = Number(readFileSync(resolve(root, file), "utf8").match(floor)?.[1]);
-      expect(hours, `${file} must declare its access-log floor in hours`).toBeGreaterThan(0);
-      expect(
-        hours,
-        `${file} refuses to delete access-log rows younger than ${hours} hours, longer than the ${MEMBER_ACCESS_LOG_RETENTION_DAYS}-day retention the policy states`,
-      ).toBeLessThanOrEqual(MEMBER_ACCESS_LOG_RETENTION_DAYS * 24);
-    },
-  );
+  it("keeps the access-log prune floor equal to the retention", () => {
+    const floor = Number(
+      read("src/jobs/postgres.ts").match(/const accessLog[\s\S]*?interval '(\d+) hours'/)?.[1],
+    );
+    expect(
+      floor,
+      `src/jobs/postgres.ts access-log floor must equal ${MEMBER_ACCESS_LOG_RETENTION_DAYS} days; a different floor needs a migration and a policy change`,
+    ).toBe(MEMBER_ACCESS_LOG_RETENTION_DAYS * 24);
+  });
+
+  it("keeps the audit trigger floor equal to the retention", () => {
+    const floors = readdirSync(resolve(root, "drizzle"))
+      .filter((file) => file.endsWith(".sql"))
+      .sort()
+      .flatMap((file) => {
+        const match = read(`drizzle/${file}`).match(
+          /CREATE (?:OR REPLACE )?FUNCTION "public"\."audit_rows_append_only"\(\)[\s\S]*?interval '(\d+) hours'/,
+        );
+        return match ? [Number(match[1])] : [];
+      });
+    expect(
+      floors.at(-1),
+      `the latest audit_rows_append_only definition must keep access-log rows ${MEMBER_ACCESS_LOG_RETENTION_DAYS} days`,
+    ).toBe(MEMBER_ACCESS_LOG_RETENTION_DAYS * 24);
+  });
 
   it("gives every cookie lifetime in src a pinned constant", () => {
     const offenders = sourceFiles(resolve(root, "src")).flatMap((file) => {
       const text = readFileSync(file, "utf8");
       const where = relative(root, file);
-      const lifetimes = [...text.matchAll(/maxAge:\s*([^,}\n]+)/g)].map((match) =>
+      const expressions = [...text.matchAll(/maxAge:\s*([^,}\n]+)/g)].map((match) =>
         match[1]!.trim(),
       );
       return [
-        ...lifetimes
+        ...expressions
           .filter((expr) => !PINNED_COOKIE_LIFETIMES.includes(expr))
           .map((expr) => `${where}: maxAge: ${expr}`),
-        ...(/Max-Age=|\bexpires:/.test(text) ? [`${where}: raw cookie expiry`] : []),
+        ...(/\bmaxAge\s*[,}]/.test(text) ? [`${where}: shorthand maxAge`] : []),
+        ...(/\b(?:Max-Age|Expires)=/.test(text) ? [`${where}: raw cookie expiry`] : []),
+        ...unpinnedCookieCalls(file, text),
       ];
     });
     expect(offenders, "every cookie lifetime in src must be one of the pinned constants").toEqual(
