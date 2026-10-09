@@ -56,6 +56,55 @@ before concluding the request did not occur. `duration_ms` includes downstream
 middleware and handler work, not queue execution or streamed-body completion.
 No Logpush or external shipping is configured by this change.
 
+## Discord snapshot outcome
+
+The calendar's Discord snapshot source (`src/events/discord-transients.ts`)
+emits one bounded `Discord snapshot outcome` diagnostic per request through the
+shared snapshot path. The staging events incident, where Discord 429s made the
+events page show an error state instead of events, was diagnosed by tallying
+these lines. Background: [Discord calendar snapshots](discord-snapshots.md).
+
+| Field | Present | Meaning |
+| --- | --- | --- |
+| `outcome` | always | One of the outcomes below. The code can emit exactly these outcomes: `cold`, `held`, `fresh`, `stale`, `error`. |
+| `completionFailed` | `console.info` line only | `true` when publishing the refresh result to the store threw. The request served live rows or a usable snapshot when one was available; otherwise the outcome is `cold` and nothing was served. |
+| `code` | only for allowlisted SQLSTATEs | The store driver's SQLSTATE when `completionFailed` is true or the line is `error`. |
+
+### What each outcome means
+
+| Outcome | Meaning |
+| --- | --- |
+| `cold` | No usable snapshot: nothing served, and the page shows the error state on an otherwise-empty page. The successful first refresh logs `fresh`, not `cold`: `cold` is for requests that arrive while that first refresh still holds the lease, a refresh that failed with nothing usable left (for example an empty store during a Discord 429 episode), a snapshot older than 600 seconds, or a completion failure with neither live rows nor a usable snapshot. |
+| `held` | A usable snapshot was served while a retry hold is active. That covers requests that skipped Discord because another request set the hold, and the request that just set the hold itself after its own Discord read failed. Expect during Discord 429 or slow episodes. |
+| `fresh` | Served a usable snapshot completed less than 60 seconds ago. That includes a snapshot this request just refreshed: the lease winner calls Discord, completes, then logs `fresh`. Other requests served from a fresh snapshot skip Discord. |
+| `stale` | Served data while the snapshot is 60 to 600 seconds old and another request holds the refresh lease, or after publishing the refresh result threw (`completionFailed: true`, which can serve even live rows because the outcome is derived from the pre-claim view). A failed refresh itself logs `held` (or `cold` when nothing usable is left), never `stale`. |
+| `error` | The snapshot store read (claim) failed, the stored payload was corrupt and failed to decode, or the snapshot key config was invalid (an `APP_URL` with a path, query or credentials, or a missing or oversized `DISCORD_GUILD_ID`). Logged at warn level with no live Discord fallback. Points at the store or the config, not at Discord. A store completion failure is not `error`: it stays on the info line with `completionFailed: true`. |
+
+A healthy mix is mostly `fresh`, with `stale` around the 60-second refresh
+boundary and brief `held` stretches while Discord throttles or slows.
+`completionFailed: true` is rare and usually still serves data (a `cold` line with `completionFailed: true` served nothing). An unhealthy mix is a
+`cold` spike (the page error state from the staging incident), `held`/`stale`
+that age into `cold`, or any sustained `error` lines.
+
+Only these SQLSTATE codes can appear as `code`: `42501`, `42P01`, `55P03`, `57014`.
+Any other driver code is dropped before logging.
+
+The line never carries the snapshot key, the display payload, the driver's
+error message (it can echo credentials), the Discord bot token, or member
+identity. The `code` is a fixed allowlisted class, not a message.
+
+### Tally in Workers telemetry
+
+1. Open **Cloudflare dashboard → Workers & Pages → two-web-next → Observability**.
+   Choose a time window around the report and the correct deployed Worker.
+2. Use the message/text **contains** filter with `Discord snapshot outcome`.
+   These console records are serialized JSON strings; do not assume an indexed
+   `outcome` field.
+3. Tally the `"outcome":"cold"`, `"outcome":"held"`, `"outcome":"fresh"`,
+   `"outcome":"stale"` and `"outcome":"error"` substrings across the window,
+   and note any `"completionFailed":true` or `"code":"..."` values. Compare the
+   mix against the healthy and unhealthy shapes above.
+
 ## Local regression check
 
 ```sh
