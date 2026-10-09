@@ -120,7 +120,7 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       if (state === "stale")
         await fixture.client`insert into discord_event_snapshots (key,payload,succeeded_at) values (${key}, '[]', clock_timestamp() - interval '61 seconds')`;
       const requestClients = Array.from({ length: 8 }, connect);
-      let storeOpens = 0;
+      const storeOpens = Array<number>(8).fill(0);
       try {
         // postgres.js connects lazily: open every session before the race.
         const backendPids = [];
@@ -131,9 +131,9 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
         expect(new Set(backendPids).size).toBe(8);
 
         const settled = await Promise.allSettled(
-          requestClients.map((client) =>
+          requestClients.map((client, i) =>
             pgDiscordSnapshotStore(() => {
-              storeOpens++;
+              storeOpens[i]! += 1;
               return client;
             }).claim(key),
           ),
@@ -146,7 +146,7 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
         const winner = claims.find((c) => c.token)!;
         expect(winner.leaseExpiresAt! - winner.now).toBeGreaterThan(DISCORD_REFRESH_LEASE_MS - 100);
         expect(winner.leaseExpiresAt! - winner.now).toBeLessThanOrEqual(DISCORD_REFRESH_LEASE_MS);
-        expect(storeOpens).toBe(8);
+        expect(storeOpens).toEqual(Array(8).fill(1));
       } finally {
         await Promise.all(requestClients.map((client) => client.end({ timeout: 0 })));
       }
