@@ -69,40 +69,45 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       await gate;
       return [];
     });
-    const a = cachedDiscordEventsSource(
-      env,
-      { upcoming: read, lastReadFailed: () => false },
-      pgDiscordSnapshotStore(connect),
-    );
-    const pending = a.upcoming();
-    await started;
     const loserClients = Array.from({ length: 6 }, connect);
-    for (const client of loserClients) await client`select pg_backend_pid()`;
-    const losers = await Promise.all(
-      loserClients.map(async (client) => {
-        const source = cachedDiscordEventsSource(
-          env,
-          { upcoming: read, lastReadFailed: () => false },
-          pgDiscordSnapshotStore(() => client),
-        );
-        expect(await source.upcoming()).toEqual([]);
-        return source.lastReadFailed();
-      }),
-    );
-    expect(losers).toEqual(Array(6).fill(true));
-    expect(read).toHaveBeenCalledTimes(1);
-    release();
-    expect(await pending).toEqual([]);
-    expect(a.lastReadFailed()).toBe(false);
-    expect(clients).toBe(8);
-    const fresh = cachedDiscordEventsSource(
-      env,
-      { upcoming: read, lastReadFailed: () => false },
-      pgDiscordSnapshotStore(connect),
-    );
-    expect(await fresh.upcoming()).toEqual([]);
-    expect(fresh.lastReadFailed()).toBe(false);
-    expect(read).toHaveBeenCalledTimes(1);
+    try {
+      // Open loser sessions before the owner takes its lease, so setup never runs under it.
+      for (const client of loserClients) await client`select pg_backend_pid()`;
+      const a = cachedDiscordEventsSource(
+        env,
+        { upcoming: read, lastReadFailed: () => false },
+        pgDiscordSnapshotStore(connect),
+      );
+      const pending = a.upcoming();
+      await started;
+      const losers = await Promise.all(
+        loserClients.map(async (client) => {
+          const source = cachedDiscordEventsSource(
+            env,
+            { upcoming: read, lastReadFailed: () => false },
+            pgDiscordSnapshotStore(() => client),
+          );
+          expect(await source.upcoming()).toEqual([]);
+          return source.lastReadFailed();
+        }),
+      );
+      expect(losers).toEqual(Array(6).fill(true));
+      expect(read).toHaveBeenCalledTimes(1);
+      release();
+      expect(await pending).toEqual([]);
+      expect(a.lastReadFailed()).toBe(false);
+      expect(clients).toBe(8);
+      const fresh = cachedDiscordEventsSource(
+        env,
+        { upcoming: read, lastReadFailed: () => false },
+        pgDiscordSnapshotStore(connect),
+      );
+      expect(await fresh.upcoming()).toEqual([]);
+      expect(fresh.lastReadFailed()).toBe(false);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      await Promise.all(loserClients.map((client) => client.end({ timeout: 0 })));
+    }
   });
   it.each(["cold", "stale"])(
     "simultaneous %s claims have exactly one database-clock winner",
