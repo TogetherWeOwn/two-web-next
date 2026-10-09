@@ -12,12 +12,15 @@
 // statements with ten rows present) and flat (the same count with more rows),
 // so an N+1 regression — one extra per-row query — fails the suite. The
 // aggregates are asserted exactly, with non-going answers present, so a
-// wrong aggregate fails too.
+// wrong aggregate fails too. The collection path mirrors the route: listJson
+// plus the one batched waitlistPositions call over the page rows
+// (src/events/routes.tsx), counted together, so a per-event waitlist query
+// fails the suite as well.
 import { drizzle } from "drizzle-orm/postgres-js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { adminSchema, schema } from "../src/db/index";
 import { getPublicEvent, listHomeUpcoming, listJson } from "../src/events/reads";
-import { goingCount } from "../src/events/waitlist";
+import { goingCount, waitlistPositions } from "../src/events/waitlist";
 import { listVisibleFeatured } from "../src/featured";
 import {
   createMemberDataFixture,
@@ -96,6 +99,22 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     }
   }
 
+  // One waitlisted row per event for a fixed viewer, so the batched
+  // waitlistPositions read over a page returns an exact rank per row. The
+  // viewer row is inserted after the seeded waitlisted row, so FIFO ranks it
+  // second on every event. Seeding uses the uncounted fixture client.
+  async function seedViewerWaitlisted(
+    n: number,
+    keyPrefix: string,
+    viewerId: string,
+  ): Promise<void> {
+    for (let i = 0; i < n; i += 1) {
+      await fixture.client`
+        insert into rsvps (event_id, user_id, status)
+        select id, ${viewerId}, 'waitlisted' from events where event_key = ${`${keyPrefix}-${i}`}`;
+    }
+  }
+
   async function seedFeatured(n: number, keyPrefix: string): Promise<void> {
     for (let i = 0; i < n; i += 1) {
       await fixture.client`
@@ -140,27 +159,52 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
   });
 
   it("serves the JSON collection with one aggregate and a flat statement count", async () => {
+    const viewerId = "collection-viewer";
     await seedUpcoming(10, "collection");
+    await seedViewerWaitlisted(10, "collection", viewerId);
 
-    const first = await countStatements(() =>
-      listJson(countedDb, { limit: 10, offset: 0, includeDrafts: false }),
-    );
-    expect(first.result.total).toBe(10);
-    expect(first.result.rows).toHaveLength(10);
+    // The route pairs listJson with one batched waitlistPositions call over
+    // the page rows, so both are counted together: a per-event waitlist
+    // query would break the bound and the flatness below.
+    const first = await countStatements(async () => {
+      const page = await listJson(countedDb, { limit: 10, offset: 0, includeDrafts: false });
+      const positions = await waitlistPositions(
+        countedDb,
+        page.rows.map((row) => row.id),
+        viewerId,
+      );
+      return { page, positions };
+    });
+    expect(first.result.page.total).toBe(10);
+    expect(first.result.page.rows).toHaveLength(10);
     // Correct on every row, not just cheap: three going each, with maybe,
     // not-going and waitlisted answers present on every event.
-    for (const row of first.result.rows) expect(row.goingCount).toBe(3);
-    // Total count + page rows + one grouped going aggregate.
+    for (const row of first.result.page.rows) expect(row.goingCount).toBe(3);
+    // The viewer is waitlisted behind the one seeded waitlisted row on every
+    // event, so each page row carries an exact rank of two.
+    expect(first.result.positions.size).toBe(10);
+    for (const row of first.result.page.rows) expect(first.result.positions.get(row.id)).toBe(2);
+    // Total count + page rows + one grouped going aggregate + one batched
+    // waitlist-position read.
     expect(first.count).toBeLessThan(5);
 
     // Twice the rows, same statements: no per-row query.
     await seedUpcoming(10, "collection-more");
-    const second = await countStatements(() =>
-      listJson(countedDb, { limit: 20, offset: 0, includeDrafts: false }),
-    );
-    expect(second.result.total).toBe(20);
-    expect(second.result.rows).toHaveLength(20);
-    for (const row of second.result.rows) expect(row.goingCount).toBe(3);
+    await seedViewerWaitlisted(10, "collection-more", viewerId);
+    const second = await countStatements(async () => {
+      const page = await listJson(countedDb, { limit: 20, offset: 0, includeDrafts: false });
+      const positions = await waitlistPositions(
+        countedDb,
+        page.rows.map((row) => row.id),
+        viewerId,
+      );
+      return { page, positions };
+    });
+    expect(second.result.page.total).toBe(20);
+    expect(second.result.page.rows).toHaveLength(20);
+    for (const row of second.result.page.rows) expect(row.goingCount).toBe(3);
+    expect(second.result.positions.size).toBe(20);
+    for (const row of second.result.page.rows) expect(second.result.positions.get(row.id)).toBe(2);
     expect(second.count).toBe(first.count);
     expect(second.count).toBeLessThan(5);
   });
