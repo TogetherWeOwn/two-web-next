@@ -13,7 +13,8 @@
 // belong in a follow-up, not in this nightly slice.
 //
 // Exit codes: 0 = report written (survivors are data, listed in the report).
-// 1 = runner infrastructure failure (stale mutant anchor, restore mismatch).
+// 1 = runner infrastructure failure (unmutated suite not green, a run with no
+// verdict, stale anchor, restore mismatch).
 // 2 = usage error or missing vitest. The workflow stays non-blocking: no
 // required check reads this job, whatever it reports.
 import { createHash } from "node:crypto";
@@ -39,7 +40,10 @@ const KILL_SUITE = [
   "test/join-blocked-copy.test.ts",
   "test/join-blank-bot.test.ts",
   "test/join-idempotence.test.ts",
+  "test/w15b-exposure-throttle-race.test.ts",
 ];
+
+const DB_URL_VARS = ["DATABASE_URL", "AUDIT_IMPORT_TEST_DATABASE_URL", "LEGACY_DATABASE_URL"];
 
 // One auth-check weakening each. `find` must occur exactly once in `file`;
 // when the source drifts the mutant reports STALE instead of silently
@@ -164,10 +168,25 @@ function countOccurrences(haystack, needle) {
   return haystack.split(needle).length - 1;
 }
 
+// green: every test passed. red: a test failed. error: no verdict (spawn failure,
+// timeout, signal, or an exit code vitest does not use for test failures).
+export function verdictFor({ status, signal, error }) {
+  if (error || signal || status === null) return "error";
+  if (status === 0) return "green";
+  if (status === 1) return "red";
+  return "error";
+}
+
+const OUTCOME = {
+  red: { status: "killed", detail: "kill suite failed as expected" },
+  green: { status: "survived", detail: "kill suite passed; coverage gap" },
+  error: { status: "error", detail: "kill suite gave no verdict" },
+};
+
 // Default kill command: the hermetic suite, DB-free by construction.
 function defaultKill(suite) {
   const env = { ...process.env };
-  delete env.DATABASE_URL;
+  for (const name of DB_URL_VARS) delete env[name];
   const child = spawnSync(process.execPath, [VITEST, "run", ...suite], {
     cwd: repoRoot,
     env,
@@ -175,7 +194,7 @@ function defaultKill(suite) {
     timeout: MUTANT_TIMEOUT_MS,
   });
   const output = [child.stdout, child.stderr].filter(Boolean).join("\n").slice(-4000);
-  return { killed: child.status !== 0, output };
+  return { verdict: verdictFor(child), output };
 }
 
 export function runMutant(root, mutant, kill = defaultKill) {
@@ -209,14 +228,9 @@ export function runMutant(root, mutant, kill = defaultKill) {
   };
   let outcome;
   try {
-    const { killed, output } = kill(KILL_SUITE);
-    outcome = {
-      id: mutant.id,
-      status: killed ? "killed" : "survived",
-      detail: killed ? "kill suite failed as expected" : "kill suite passed; coverage gap",
-      output,
-      ms: Date.now() - started,
-    };
+    const { verdict, output } = kill(KILL_SUITE);
+    const { status, detail } = OUTCOME[verdict] ?? OUTCOME.error;
+    outcome = { id: mutant.id, status, detail, output, ms: Date.now() - started };
   } finally {
     outcome = outcome ?? { id: mutant.id, status: "error", detail: "kill command threw" };
     outcome.restoreError = restore();
@@ -251,7 +265,7 @@ export function renderReport({ sha: headSha, startedAt, results }) {
     lines.push("");
   }
   if (stale.length) {
-    lines.push("## Stale mutants (anchor drifted, needs re-pinning)", "");
+    lines.push("## Mutants without a verdict (stale or ambiguous anchor, or runner error)", "");
     for (const r of stale) lines.push(`- ${r.id}: ${r.detail}.`);
     lines.push("");
   }
@@ -265,7 +279,7 @@ export function renderReport({ sha: headSha, startedAt, results }) {
   return { json: JSON.stringify(report, null, 2) + "\n", markdown: lines.join("\n") };
 }
 
-export function run(root, kill) {
+export function run(root, kill = defaultKill) {
   if (!existsSync(VITEST)) {
     console.error("vitest is not installed; run npm ci --include=dev first.");
     return 2;
@@ -298,6 +312,12 @@ export function run(root, kill) {
     }).trim();
   } catch {
     // Report still names the run; the sha is informational.
+  }
+  const baseline = kill(KILL_SUITE);
+  if (baseline.verdict !== "green") {
+    console.error(`refusing: the kill suite is ${baseline.verdict} on the unmutated tree.`);
+    console.error(baseline.output);
+    return 1;
   }
   const startedAt = new Date().toISOString();
   const results = MUTANTS.map((m) => runMutant(root, m, kill));
@@ -344,7 +364,7 @@ function selftest() {
         replace: "guard = false",
       };
       const before = readFileSync(target, "utf8");
-      const result = runMutant(dir, mutant, () => ({ killed: true, output: "1 failed" }));
+      const result = runMutant(dir, mutant, () => ({ verdict: "red", output: "1 failed" }));
       assert.equal(result.status, "killed");
       assert.equal(readFileSync(target, "utf8"), before);
     } finally {
@@ -364,7 +384,7 @@ function selftest() {
         find: "guard = true",
         replace: "guard = false",
       };
-      const result = runMutant(dir, mutant, () => ({ killed: false, output: "all passed" }));
+      const result = runMutant(dir, mutant, () => ({ verdict: "green", output: "all passed" }));
       assert.equal(result.status, "survived");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -393,10 +413,33 @@ function selftest() {
     }
   });
 
-  check("every committed mutant anchor occurs exactly once", () => {
-    for (const m of MUTANTS) {
-      const text = readFileSync(join(repoRoot, m.file), "utf8");
-      assert.equal(countOccurrences(text, m.find), 1, `${m.id} anchor`);
+  check("kill verdict: exit 0 is green, exit 1 is red, anything else is error", () => {
+    assert.equal(verdictFor({ status: 0, signal: null }), "green");
+    assert.equal(verdictFor({ status: 1, signal: null }), "red");
+    assert.equal(verdictFor({ status: 2, signal: null }), "error");
+    assert.equal(verdictFor({ status: null, signal: "SIGTERM" }), "error");
+    assert.equal(verdictFor({ status: 1, error: new Error("ETIMEDOUT") }), "error");
+  });
+
+  check("runner error is not counted as a kill", () => {
+    const dir = join(repoRoot, "artifacts", ".mutation-selftest");
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    try {
+      const target = join(dir, "sample.ts");
+      writeFileSync(target, "const guard = true;\n");
+      const before = readFileSync(target, "utf8");
+      const mutant = {
+        id: "T4",
+        file: "sample.ts",
+        find: "guard = true",
+        replace: "guard = false",
+      };
+      const result = runMutant(dir, mutant, () => ({ verdict: "error", output: "timed out" }));
+      assert.equal(result.status, "error");
+      assert.equal(readFileSync(target, "utf8"), before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -419,7 +462,7 @@ function selftest() {
     assert.equal(parsed.score.total, 3);
     assert.match(markdown, /\| S1-live-expiry-blind \| src\/sessions\.ts \| KILLED \|/);
     assert.match(markdown, /## Surviving mutants/);
-    assert.match(markdown, /## Stale mutants/);
+    assert.match(markdown, /## Mutants without a verdict/);
   });
 
   console.log(`mutation sessions-join selftest: ${cases} cases passed.`);
