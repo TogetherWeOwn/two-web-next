@@ -107,6 +107,49 @@ The checker does not certify a resolver's global propagation or prove what
 every CDN POP serves; preserve the JSON plus timestamp for each approved
 rehearsal/flip invocation.
 
+## Moderator role audit (W16 pre-flip)
+
+A read-only operator-invoked command compares the Discord-moderator set
+against the app-moderator set and exits non-zero on drift with a bounded
+report. Run it during the W16 rehearsal and again before the flip. It never
+mutates roles and never prints tokens or secrets.
+
+```sh
+npm run audit:moderator-roles -- --discord-file=discord-moderators.json --app-file=app-moderators.json
+npm run audit:moderator-roles -- --discord-ids=<csv> --app-ids=<csv> --json
+```
+
+- Each side needs exactly one source (`--*-file` or `--*-ids`, not both).
+  Files hold a JSON array of Discord user IDs or newline/comma separated
+  IDs. Exit 0 = sets match (empty-safe: no moderators on either side is a
+  clean pass), 1 = drift, 2 = usage or malformed input.
+- The report shows at most 20 IDs per side with exact counts; the rest is
+  `…and N more`. `discord-only` members would be denied the panel;
+  `app-only` members hold excess privilege until the next login recompute.
+- The command reads files or flags only. It opens no database, calls no
+  network, and reads no `DISCORD_BOT_TOKEN`, `SESSION_SECRET` or
+  `DATABASE_URL`; there is nothing credential-shaped to echo.
+
+Build the two inputs with read-only queries. Keep variable **names** in
+notes and logs, never values. Treat ID files as member data: keep them out
+of the repo and delete them after the run.
+
+```sh
+# App set: live moderator sessions only (read-only SELECT).
+psql "$DATABASE_URL" -tA -c \
+  "select distinct user_id from web_sessions where moderator is true and revoked_at is null and expires_at > now();" \
+  > app-moderators.txt
+
+# Discord set: guild members holding a configured moderator role (paginated
+# guild-member reads; filter roles client-side against DISCORD_MODERATOR_ROLE_IDS).
+curl -s -H "Authorization: Bot $DISCORD_BOT_TOKEN" \
+  "https://discord.com/api/v10/guilds/$DISCORD_GUILD_ID/members?limit=1000" > members.json
+```
+
+A clean audit is one pre-flip receipt, not permission to flip. On drift,
+recompute app state from Discord roles (sign-in recompute owns the flag),
+then re-run until clean.
+
 ## Local-only verification
 
 ```sh
