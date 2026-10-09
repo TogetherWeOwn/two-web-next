@@ -36,6 +36,68 @@ may have no originating HTTP request ID. Do not interpret a missing ID as a
 successful job. The W8 event-sync carrier and W13 queue-ledger carrier both
 propagate it; it is not a deduplication key and does not change job execution.
 
+## Sync-event retry-cause diagnostics
+
+The queue consumer emits one single-line `sync retry classified` warning per
+delivery at the retryable refusal/transport boundary, before the retry deadline
+is persisted (`src/jobs/consumer.ts`, via `projectSyncRetryDiagnostic` in
+`src/jobs/sync-retry-diagnostic.ts`). The same narrow projection is retained
+through retry-result persistence failure into the terminal `queue.failing`
+source alert; see [request-log queries](runbook-logs.md) for correlation and
+the [alert runbook](runbook-alerts.md#sync-event-retry-cause-diagnostics) for
+the paging side. These fields describe only the current delivery: they do not
+control retries (the bot's `retryable` flag and backoff still decide), and a
+waiting or already-exhausted claim carries no new observation.
+
+| Field | Meaning and safe values |
+| --- | --- |
+| `sync_retry_class` | `BotFailure` (a retryable bot refusal), `BotTransportError` (no usable bot result), or constant `unknown` for malformed diagnostic input |
+| `sync_retry_code` | Refusals only (`BotFailure`); every other/missing/malformed code becomes `unknown` |
+| `queue_carrier_attempts` | Positive integer delivery attempts of the current queue message |
+| `sync_request_attempts` | Nonnegative integer durable claims from `claimSync`; counts claims, not completed sends |
+| `sync_snapshot_age_at_claim_seconds` | Whole seconds from the snapshot's `mirroredAt` to this delivery's claim clock; unavailable, invalid or future times are omitted |
+
+Documented cause set: `discord_unavailable`, `in_progress`, `internal`, `rate_limited`, `unknown`, `upstream_timeout`.
+
+| Cause (`sync_retry_code`) | Meaning |
+| --- | --- |
+| `in_progress` | The bot reports the operation is already in progress (409 with a retryable answer); another attempt for the same logical operation is underway |
+| `rate_limited` | The bot or Discord rate-limited the call (429); the existing Retry-After/backoff still sets the wait |
+| `internal` | The bot reported a retryable internal error |
+| `discord_unavailable` | The bot surfaced Discord-side unavailability |
+| `upstream_timeout` | The bot's upstream call timed out |
+| `unknown` | Any other, missing or malformed code. Transport errors (`BotTransportError`) never carry a code. Behavior is unchanged: the `retryable` flag still decides |
+
+A new cause value added to `SyncRetryCode` must be documented in the tables
+above; `test/sync-retry-cause-docs.test.ts` fails CI until it is.
+
+No event payload, request body, bot response body, provider error message,
+token, secret, key material, member/event identity or raw key is logged or
+copied into this projection. Only own data properties are sampled; accessors
+are never invoked. The Tail Worker does not forward these fields.
+
+### Tally retry causes in Workers telemetry
+
+```sh
+# Live stream of classified retries (authorized Cloudflare access required)
+npx wrangler tail two-web-next --format json \
+  | jq -c 'select(.logs[]?.message[]? | tostring | contains("sync retry classified"))'
+
+# Count occurrences per cause over a saved tail file
+jq -r '.logs[]?.message[]? | tostring | select(contains("sync retry classified"))' \
+  deliveries.json | grep -o '"sync_retry_code":"[a-z_]*"' | sort | uniq -c
+
+# Same tally grouped by class
+jq -r '.logs[]?.message[]? | tostring | select(contains("sync retry classified"))' \
+  deliveries.json | grep -o '"sync_retry_class":"[A-Za-z]*"' | sort | uniq -c
+```
+
+In the dashboard (**Workers & Pages → two-web-next → Observability**), filter
+the message/text with `sync retry classified` over the incident window and
+group by `sync_retry_code` (refusals) or `sync_retry_class`. These receipts
+count occurrences, not distinct durable requests, and cannot reconstruct the
+causes of earlier exhausted deliveries.
+
 ## Privacy and boundaries
 
 Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
