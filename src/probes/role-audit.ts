@@ -56,9 +56,9 @@ export function assertSnowflakeIds(ids: string[], side: string): void {
 export type RoleAuditResult = {
   discordIds: string[];
   appIds: string[];
-  /** In Discord but not in the app: these moderators would be denied the panel. */
+  /** In Discord without a live app session: gains the panel at next login. */
   discordOnly: string[];
-  /** In the app but not in Discord: excess privilege until the next login recompute. */
+  /** In a live app session without the Discord role: excess privilege until expiry or revocation. */
   appOnly: string[];
   discordCount: number;
   appCount: number;
@@ -101,14 +101,14 @@ export function renderRoleAuditReport(
     "moderator role audit: Discord set vs app set",
     `  discord moderators: ${result.discordCount}`,
     `  app moderators: ${result.appCount}`,
-    `  discord-only (denied the panel): ${result.discordOnly.length}`,
+    `  discord-only (no live app session; panel at next login): ${result.discordOnly.length}`,
     boundedList(result.discordOnly, maxShown),
     `  app-only (excess privilege): ${result.appOnly.length}`,
     boundedList(result.appOnly, maxShown),
     "",
     result.ok
       ? "  CLEAN: the sets match (empty-safe: no moderators on either side is a clean pass)."
-      : "  DRIFT: the sets differ. Recompute app state from Discord roles, then re-run before the flip.",
+      : "  DRIFT: the sets differ. Sign in each discord-only moderator, clear app-only access, then re-run before the flip.",
     "  Read-only: no roles were changed by this check.",
   ];
   return lines.join("\n");

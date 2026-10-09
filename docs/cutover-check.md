@@ -124,8 +124,12 @@ npm run audit:moderator-roles -- --discord-ids=<csv> --app-ids=<csv> --json
   IDs. Exit 0 = sets match (empty-safe: no moderators on either side is a
   clean pass), 1 = drift, 2 = usage or malformed input.
 - The report shows at most 20 IDs per side with exact counts; the rest is
-  `…and N more`. `discord-only` members would be denied the panel;
-  `app-only` members hold excess privilege until the next login recompute.
+  `…and N more`. `discord-only` IDs hold the Discord role but have no live
+  app session: they gain the panel at their next login, so a clean pre-flip
+  receipt needs every Discord moderator signed in during the rehearsal
+  window (sessions slide on a 120-minute TTL). `app-only` IDs carry the flag
+  in a live session without the Discord role: excess privilege until that
+  session expires or is revoked.
 - The command reads files or flags only. It opens no database, calls no
   network, and reads no `DISCORD_BOT_TOKEN`, `SESSION_SECRET` or
   `DATABASE_URL`; there is nothing credential-shaped to echo.
@@ -135,20 +139,48 @@ notes and logs, never values. Treat ID files as member data: keep them out
 of the repo and delete them after the run.
 
 ```sh
-# App set: live moderator sessions only (read-only SELECT).
+# App set: live moderator sessions only (read-only SELECT). The flag lives
+# on each session, is recomputed from Discord roles at login, and slides
+# on a 120-minute TTL — so this list sees only currently signed-in
+# moderators. A clean pre-flip receipt needs every Discord moderator
+# signed in during the rehearsal window.
 psql "$DATABASE_URL" -tA -c \
   "select distinct user_id from web_sessions where moderator is true and revoked_at is null and expires_at > now();" \
   > app-moderators.txt
 
-# Discord set: guild members holding a configured moderator role (paginated
-# guild-member reads; filter roles client-side against DISCORD_MODERATOR_ROLE_IDS).
-curl -s -H "Authorization: Bot $DISCORD_BOT_TOKEN" \
-  "https://discord.com/api/v10/guilds/$DISCORD_GUILD_ID/members?limit=1000" > members.json
+# Discord set: guild members holding a configured moderator role. Needs
+# the bot's Server Members (GUILD_MEMBERS) privileged intent, curl, and
+# jq. Reads are paginated (Discord caps pages at 1000; `after` resumes
+# past the last-seen user ID) and roles are filtered client-side against
+# DISCORD_MODERATOR_ROLE_IDS (comma-separated role IDs). The token never
+# appears on a command line: curl reads the header from a config file.
+# Delete that file with the ID lists after the run.
+printf 'header = "Authorization: Bot %s"\n' "$DISCORD_BOT_TOKEN" > discord-auth.conf
+chmod 600 discord-auth.conf
+after=0
+: > members.jsonl
+while :; do
+  page="$(curl -sS -K discord-auth.conf \
+    "https://discord.com/api/v10/guilds/$DISCORD_GUILD_ID/members?limit=1000&after=$after")"
+  echo "$page" | jq -e 'type == "array"' >/dev/null \
+    || { echo "$page" | jq .; exit 1; }
+  echo "$page" | jq -c '.[]' >> members.jsonl
+  n="$(echo "$page" | jq 'length')"
+  [ "$n" -lt 1000 ] && break
+  after="$(echo "$page" | jq -r '.[-1].user.id')"
+done
+jq -r --arg roles "$DISCORD_MODERATOR_ROLE_IDS" '
+  ($roles | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $want
+  | select((.roles // []) | map(select(IN($want[]))) | length > 0)
+  | .user.id' members.jsonl | sort -u > discord-moderators.txt
 ```
 
 A clean audit is one pre-flip receipt, not permission to flip. On drift,
-recompute app state from Discord roles (sign-in recompute owns the flag),
-then re-run until clean.
+have each discord-only moderator sign in again (login recomputes the flag
+from Discord roles), clear any app-only access (revoke that session or
+wait out the 120-minute TTL), then re-run until clean. Treat the ID files
+and `discord-auth.conf` as member data and credentials respectively: keep
+them out of the repo and delete them after the run.
 
 ## Local-only verification
 

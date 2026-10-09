@@ -43,6 +43,13 @@ describe("moderator role audit (fixture mappings)", () => {
     expect(compareModeratorSets([], [A]).ok).toBe(false);
   });
 
+  it("labels discord-only as unsigned-in and points at sign-in, not denial", () => {
+    const text = renderRoleAuditReport(compareModeratorSets([A], []));
+    expect(text).toMatch(/discord-only \(no live app session/);
+    expect(text).toMatch(/sign in/i);
+    expect(text).not.toMatch(/denied the panel/);
+  });
+
   it("whitespace and blank entries are ignored", () => {
     const r = compareModeratorSets([`  ${A} `, "", "  "], [A]);
     expect(r.ok).toBe(true);
