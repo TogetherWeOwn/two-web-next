@@ -289,6 +289,7 @@ const MIDDLEWARE = [
   "ALL /*",
   "ALL /admin/*",
   "ALL /admin/queue/*",
+  "ALL /admin/queue/failed/:id/redispatch",
   "ALL /profile",
   "ALL /profile",
   "ALL /members/*",
@@ -353,7 +354,9 @@ it("an enabled dedicated operator redispatch refuses a real source socket outage
   expect(res.status).toBe(503);
   expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
   expect(res.headers.get("cache-control")).toBe("private, no-store");
-  expect(clients).toHaveLength(1);
+  // The write envelope's throttle opens its own refused client before the
+  // candidate read fails; a store failure allows, never refuses.
+  expect(clients).toHaveLength(2);
 });
 
 beforeEach(() => {

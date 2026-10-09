@@ -71,7 +71,15 @@ describe("every registered write route is body-limited", () => {
       ...new Set(rawApp.routes.filter((r) => r.method === "ALL").map((r) => r.path)),
     ];
     expect(allPaths.sort()).toEqual(
-      ["/*", "/admin/*", "/admin/queue/*", "/events/:key/rsvp", "/members/*", "/profile"].sort(),
+      [
+        "/*",
+        "/admin/*",
+        "/admin/queue/*",
+        "/admin/queue/failed/:id/redispatch",
+        "/events/:key/rsvp",
+        "/members/*",
+        "/profile",
+      ].sort(),
     );
   });
 

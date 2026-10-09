@@ -1,4 +1,5 @@
 // route-inventory: ALL /admin/queue/*
+// route-inventory: ALL /admin/queue/failed/:id/redispatch
 // route-inventory: POST /admin/queue/failed/:id/redispatch
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
@@ -72,6 +73,11 @@ async function cookie(store: SessionStore, userId = operator, moderator = true, 
     })
   ).split(";")[0]!;
 }
+// The write envelope's throttle consults this instead of a database: the
+// route suite proves guard ordering (untouched before the handler is
+// reachable), while the shared throttle suite owns the marker and the
+// Postgres suite owns the real bucket.
+const throttleStore = vi.fn(async () => null);
 function request(
   store: SessionStore,
   init: RequestInit = {},
@@ -87,7 +93,7 @@ function request(
   return app.request(
     `${origin}${path}`,
     { method: "POST", ...init, headers: { origin: bindings.APP_URL, ...init.headers } },
-    { ...bindings, REDISPATCH_DEPS: deps } as Env,
+    { ...bindings, REDISPATCH_DEPS: deps, THROTTLE_STORE: throttleStore } as Env,
   );
 }
 
@@ -98,6 +104,9 @@ describe("staging one-row guarded re-dispatch admission", () => {
     mocks.factory.mockImplementation(() =>
       Object.assign(mocks.audit, { json: (x: unknown) => x, end: mocks.end }),
     );
+    // A store failure allows (a missed count beats a 500); the seam only
+    // records that the envelope consulted the bucket.
+    throttleStore.mockImplementation(async () => null);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -123,6 +132,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
       expect(await res.json()).toEqual({ error: "redispatch_disabled" });
       expect(get).not.toHaveBeenCalled();
       expect(loadCandidate).not.toHaveBeenCalled();
+      expect(throttleStore).not.toHaveBeenCalled();
       expect(mocks.factory).not.toHaveBeenCalled();
     },
   );
@@ -231,7 +241,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     const res = await request(
       store,
       {
-        body: "x".repeat(1024 * 1024),
+        body: JSON.stringify({ eventKey: "forged", idempotencyKey: "forged" }),
         headers: { cookie: await cookie(store), "content-type": "application/json" },
       },
       env,
@@ -242,6 +252,27 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(res.status).toBe(200);
     for (const read of reads) expect(read).not.toHaveBeenCalled();
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(replayCandidate.eventKey, expect.any(String));
+  });
+  it("an oversized supplied payload is refused by size, still never parsed", async () => {
+    const parsers = ["json", "text", "formData", "arrayBuffer"] as const;
+    const reads = parsers.map((method) => vi.spyOn(Request.prototype, method));
+    const store = createMemorySessionStore();
+    const dispatch = vi.fn(async () => true);
+    const res = await request(
+      store,
+      {
+        body: "x".repeat(1024 * 1024),
+        headers: { cookie: await cookie(store), "content-type": "application/json" },
+      },
+      env,
+      undefined,
+      undefined,
+      { loadCandidate: async () => replayCandidate, dispatch },
+    );
+    expect(res.status).toBe(413);
+    for (const read of reads) expect(read).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
   });
 
   it("guest and expired sessions bounce through existing OAuth, never dispatch", async () => {
@@ -505,6 +536,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     );
     expect(previewSpy).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+    expect(throttleStore).toHaveBeenCalledTimes(1);
     expect(mocks.audit).toHaveBeenCalledTimes(1);
     expect(mocks.audit.mock.calls[0]![0]).toBeInstanceOf(Array);
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });

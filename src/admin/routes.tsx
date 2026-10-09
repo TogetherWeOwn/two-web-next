@@ -143,12 +143,21 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
+  // Same write envelope as every other admin POST. The wire cap runs before
+  // admission so oversized uploads refuse even while the boundary is
+  // disabled; the handler itself never parses a payload (dispatch always
+  // starts from the reconciled source) and only the dedicated staging
+  // operator principal can reach it.
+  admin.use("/queue/failed/:id/redispatch", requestBodyLimit("action"));
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
-  // No throttle or body limit: the handler never parses a payload, and only
-  // the dedicated staging operator principal can reach it.
-  admin.post("/queue/failed/:id/redispatch", queueRedispatchHandler);
+  admin.post(
+    "/queue/failed/:id/redispatch",
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    requestBodyLimit("action"),
+    queueRedispatchHandler,
+  );
 
   // Legacy Filament bookmarks: guard first, no query forwarding.
   // Only the featured edit alias needs a resource read to resolve the imported ID.
