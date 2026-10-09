@@ -106,7 +106,9 @@ Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
 query strings, IPs, resolved URL paths or Discord IDs. Error alerts include the
 exception class, not its message or stack (which may contain SQL bindings or
 personal data). Queue failure lines carry the class for an unexpected throw, or a
-fixed or sanitized reason for a handled failure; see
+fixed or sanitized reason for a handled failure, with one exception: the sync-attempt
+settlement line (`sync attempt settlement failed` in `src/jobs/consumer.ts`) logs the
+raw settlement error message, which may carry SQL or connection secrets; see
 [the alert runbook](runbook-alerts.md). Do not add those values when
 investigating an incident.
 
