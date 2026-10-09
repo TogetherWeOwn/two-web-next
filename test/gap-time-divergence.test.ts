@@ -1,6 +1,7 @@
-// Spring-gap wall-time divergence pin (TOG-12447; W15 ledger G1).
+// Spring-gap wall-time accepted divergence (TOG-12447; W15 ledger G1;
+// decision recorded TOG-19072).
 //
-// Divergence, no decision recorded: legacy moved a spring-forward gap wall
+// Accepted divergence: legacy Carbon silently moved a spring-forward gap wall
 // forward to a different instant — a `2026-03-29 01:30` Europe/London input
 // was stored as `01:30:00 UTC` (rendered `02:30` wall) — while Next refuses
 // gap walls on the single-event path (`wallToUtc` throws a ValidationError,
@@ -9,8 +10,15 @@
 // `01:30` lands on the `02:30` wall; Berlin `02:30` lands on the `03:30`
 // wall). `preciseWallToUtc` only delegates the minute to `wallToUtc`, so it
 // refuses gap minutes exactly like the single path; the forward-move lives in
-// `resolveWall`, which catches that refusal. This suite pins current Next
-// behavior on both paths; it records no decision.
+// `resolveWall`, which catches that refusal. This suite pins the accepted Next
+// contract on both paths.
+//
+// Rationale: a silent forward-shift stores a different wall time than the
+// moderator typed, losing user intent; the explicit 422 names the gap and
+// forces a real choice. Legacy fixed the same silent acceptance with its own
+// RealWallTime 422 (TOG-6803), so there is no live legacy contract to match.
+// Series continuity is preserved where it matters: a weekly slot never
+// vanishes for one week a year, it lands on the moved-forward wall.
 import { describe, expect, it } from "vitest";
 import { occurrences } from "../src/admin/recurrence";
 import { preciseWallToUtc } from "../src/admin/recurrence-wall";
