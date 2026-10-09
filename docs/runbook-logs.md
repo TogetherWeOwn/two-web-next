@@ -69,7 +69,8 @@ Documented cause set: `discord_unavailable`, `in_progress`, `internal`, `rate_li
 | `unknown` | Any other, missing or malformed code. Transport errors (`BotTransportError`) never carry a code. Behavior is unchanged: the `retryable` flag still decides |
 
 A new cause value added to `SyncRetryCode` must be documented in the tables
-above; `test/sync-retry-cause-docs.test.ts` fails CI until it is.
+above and in the refusal list in `runbook-alerts.md`;
+`test/sync-retry-cause-docs.test.ts` fails CI until both are.
 
 No event payload, request body, bot response body, provider error message,
 token, secret, key material, member/event identity or raw key is logged or
@@ -104,8 +105,9 @@ Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
 `duration_ms` and `colo`. They never include headers, cookies, tokens, bodies,
 query strings, IPs, resolved URL paths or Discord IDs. Error alerts include the
 exception class, not its message or stack (which may contain SQL bindings or
-personal data). Queue failure lines carry a fixed or sanitized reason instead;
-see [the alert runbook](runbook-alerts.md). Do not add those values when
+personal data). Queue failure lines carry the class for an unexpected throw, or a
+fixed or sanitized reason for a handled failure; see
+[the alert runbook](runbook-alerts.md). Do not add those values when
 investigating an incident.
 
 This is the application-log contract, not a claim that all platform telemetry

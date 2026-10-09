@@ -1,6 +1,6 @@
-// The sync retry-cause contract lives in docs/runbook-logs.md. A new cause
-// added to SyncRetryCode must be documented there: this test derives the
-// emitted set from the source union and fails until the runbook lists it.
+// The sync retry-cause contract lives in docs/runbook-logs.md, with the paging
+// refusal list in docs/runbook-alerts.md. A new cause added to SyncRetryCode must
+// be documented in both: this test derives the emitted set from the source union.
 import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -76,5 +76,7 @@ describe("sync retry-cause runbook contract", () => {
     expect(body).toMatch(/key material/i);
     expect(body).toContain("sync retry classified");
     expect(body).toContain("npx wrangler tail two-web-next");
+    expect(body).toContain('any(.message[]?; . == "sync retry classified")');
+    expect(body).toContain('select(type == "object")');
   });
 });
