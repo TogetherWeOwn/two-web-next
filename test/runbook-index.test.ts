@@ -108,6 +108,22 @@ describe("runbook first-responder index", () => {
     }
   });
 
+  it("scopes staging targets and keeps guarded diagnostics honest", () => {
+    // Staging bindings must not triage production: the scope note names the
+    // production path, and the backup row must not claim existence-only
+    // (check re-downloads every manifest archive locally).
+    expect(indexBlock).toContain("cutover-rollback.md");
+    expect(indexBlock).toMatch(/staging \(pre-cutover\)/i);
+    expect(indexBlock).not.toMatch(/existence only/i);
+    const backupLine = indexBlock.split("\n").find((line) => line.includes("Backup and restore"))!;
+    expect(backupLine).toMatch(/separate approval/);
+    expect(backupLine).toMatch(/EU custody/);
+    // rate_limited is a bot sync refusal under backoff, not a DB outage.
+    const rateLimitLine = indexBlock.split("\n").find((line) => line.includes("rate_limited"))!;
+    expect(rateLimitLine).toContain("queue-containment-drain-and-failed-job-replay");
+    expect(rateLimitLine).not.toContain("neon--hyperdrive-outage-behavior");
+  });
+
   it("stays docs-only and public-safe", () => {
     expect(indexBlock).not.toMatch(/TOG-\d+/i);
     expect(indexBlock).not.toMatch(/PAP-\d+/i);
