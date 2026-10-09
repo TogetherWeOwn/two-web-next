@@ -367,6 +367,9 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
 describe.skipIf(!process.env.DATABASE_URL)(
   "event navigation eligibility (isolated test database)",
   () => {
+    // Neighbor reads take an explicit clock: the default `now` is the real
+    // time, so every case below pins NOW — otherwise the suite starts failing
+    // once the wall clock passes the fixture window (2030-01-10T22:00Z).
     let fixture: MemberDataFixture;
     beforeAll(async () => {
       fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
@@ -389,15 +392,15 @@ describe.skipIf(!process.env.DATABASE_URL)(
         row(4, { status: "cancelled" }),
         row(6, { status: "past" }),
       ]);
-      expect(await getEventNeighbors(fixture.db, first!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, first!, NOW)).toMatchObject({
         previous: null,
         next: { id: 3 },
       });
-      expect(await getEventNeighbors(fixture.db, middle!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, middle!, NOW)).toMatchObject({
         previous: { id: 1 },
         next: { id: 5 },
       });
-      expect(await getEventNeighbors(fixture.db, last!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, last!, NOW)).toMatchObject({
         previous: { id: 3 },
         next: null,
       });
@@ -464,7 +467,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     it("returns no neighbors or related links for a lone event", async () => {
       const [current] = await seed([row(1)]);
-      expect(await getEventNeighbors(fixture.db, current!)).toEqual({ previous: null, next: null });
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toEqual({
+        previous: null,
+        next: null,
+      });
       expect(await listRelatedEvents(fixture.db, current!, NOW)).toEqual([]);
     });
 
@@ -473,22 +479,25 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await fixture.client`update events set starts_at = '2030-01-10T20:00:00.123456Z'::timestamptz where id = 2`;
       const [current] = await fixture.db.select().from(events);
       expect(current!.startsAt.toISOString()).toBe("2030-01-10T20:00:00.123Z");
-      expect(await getEventNeighbors(fixture.db, current!)).toEqual({ previous: null, next: null });
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toEqual({
+        previous: null,
+        next: null,
+      });
     });
 
     it("uses id tiebreaks for equal microsecond starts, including the first/last boundaries", async () => {
       await seed([row(1), row(2), row(3)]);
       await fixture.client`update events set starts_at = '2030-01-10T20:00:00.123456Z'::timestamptz`;
       const current = await fixture.db.select().from(events).orderBy(events.id);
-      expect(await getEventNeighbors(fixture.db, current[0]!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, current[0]!, NOW)).toMatchObject({
         previous: null,
         next: { id: 2 },
       });
-      expect(await getEventNeighbors(fixture.db, current[1]!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, current[1]!, NOW)).toMatchObject({
         previous: { id: 1 },
         next: { id: 3 },
       });
-      expect(await getEventNeighbors(fixture.db, current[2]!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, current[2]!, NOW)).toMatchObject({
         previous: { id: 2 },
         next: null,
       });
@@ -509,7 +518,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       else '2030-01-10T20:00:00.123500Z'::timestamptz end`;
       const current = await fixture.db.select().from(events);
       expect(new Set(current.map((e) => e.startsAt.toISOString())).size).toBe(1);
-      expect(await getEventNeighbors(fixture.db, current.find((e) => e.id === 2)!)).toMatchObject({
+      expect(
+        await getEventNeighbors(fixture.db, current.find((e) => e.id === 2)!, NOW),
+      ).toMatchObject({
         previous: { id: 3 },
         next: { id: 1 },
       });
@@ -562,7 +573,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const source = await app.request(`/e/${key(2)}`, undefined, env);
         const html = await source.text();
         expect(source.status).toBe(200);
-        expect(await getEventNeighbors(fixture.db, current!)).toEqual({
+        expect(await getEventNeighbors(fixture.db, current!, NOW)).toEqual({
           previous: null,
           next: null,
         });
@@ -570,7 +581,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(html).not.toContain(`href="/e/${key(4)}"`);
 
         await seed([row(1), row(3)]);
-        expect(await getEventNeighbors(fixture.db, current!)).toMatchObject({
+        expect(await getEventNeighbors(fixture.db, current!, NOW)).toMatchObject({
           previous: { id: 1 },
           next: { id: 3 },
         });
