@@ -16,11 +16,14 @@ import {
 const doc = readFileSync(new URL("../docs/performance-budgets.md", import.meta.url), "utf8");
 // Comma-grouped thousands ("1,500 ms") and plain ("1500 ms") are the same bound.
 const flat = doc.replace(/,/g, "");
-const rowFor = (label: RegExp): string => {
+const lineFor = (label: RegExp): string => {
   const line = flat.split("\n").find((line) => label.test(line));
-  expect(line, `budgets doc row for ${label}`).toBeDefined();
+  expect(line, `budgets doc line for ${label}`).toBeDefined();
   return line!;
 };
+const rowFor = lineFor;
+// Whole-number match: "500 ms" must not match inside "1500 ms".
+const num = (ms: number): RegExp => new RegExp(`(^|\\D)${ms} ms`);
 
 describe("performance budgets snapshot path", () => {
   it("pins the asserted deadline constants", () => {
@@ -41,13 +44,15 @@ describe("performance budgets snapshot path", () => {
   });
 
   it("keeps each documented bound equal to its asserted constant", () => {
-    expect(rowFor(/snapshot cold-claim/i)).toContain(`${DISCORD_STORE_DEADLINE_MS} ms`);
+    expect(rowFor(/snapshot cold-claim/i)).toMatch(num(DISCORD_STORE_DEADLINE_MS));
     const stale = rowFor(/stale-serve/i);
-    expect(stale).toContain(`${DISCORD_CACHE_FRESH_MS} ms`);
-    expect(stale).toContain(`${DISCORD_CACHE_STALE_MS} ms`);
-    expect(rowFor(/refresh-lease/i)).toContain(`${DISCORD_REFRESH_LEASE_MS} ms`);
-    expect(flat).toContain(`${DISCORD_READ_DEADLINE_MS} ms`);
-    expect(flat).toContain(`${DISCORD_STORE_SQL_TIMEOUT_MS} ms`);
-    expect(flat).toContain(`${DISCORD_FAILURE_HOLD_MS} ms`);
+    expect(stale).toMatch(num(DISCORD_CACHE_FRESH_MS));
+    expect(stale).toMatch(num(DISCORD_CACHE_STALE_MS));
+    expect(rowFor(/refresh-lease/i)).toMatch(num(DISCORD_REFRESH_LEASE_MS));
+    expect(lineFor(/headers-and-body deadline/i)).toMatch(num(DISCORD_READ_DEADLINE_MS));
+    const statements = lineFor(/lock timeout/i);
+    expect(statements).toMatch(num(DISCORD_STORE_SQL_TIMEOUT_MS));
+    expect(statements).toMatch(num(DISCORD_STORE_SQL_TIMEOUT_MS - 50));
+    expect(lineFor(/retry hold/i)).toMatch(num(DISCORD_FAILURE_HOLD_MS));
   });
 });
