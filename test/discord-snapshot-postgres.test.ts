@@ -37,6 +37,7 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       ...databaseOptions,
       password: () => url.password,
       connect_timeout: 1,
+      idle_timeout: 0, // pre-opened sessions may wait for their race
       connection: {
         search_path: fixture.schemaName,
         application_name: `discord-fence-${fixture.schemaName}`,
@@ -75,12 +76,14 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
     );
     const pending = a.upcoming();
     await started;
+    const loserClients = Array.from({ length: 6 }, connect);
+    for (const client of loserClients) await client`select pg_backend_pid()`;
     const losers = await Promise.all(
-      Array.from({ length: 6 }, async () => {
+      loserClients.map(async (client) => {
         const source = cachedDiscordEventsSource(
           env,
           { upcoming: read, lastReadFailed: () => false },
-          pgDiscordSnapshotStore(connect),
+          pgDiscordSnapshotStore(() => client),
         );
         expect(await source.upcoming()).toEqual([]);
         return source.lastReadFailed();
