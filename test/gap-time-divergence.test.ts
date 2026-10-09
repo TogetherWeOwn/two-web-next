@@ -1,5 +1,5 @@
-// Spring-gap wall-time accepted divergence (TOG-12447; W15 ledger G1;
-// decision recorded TOG-19072).
+// Spring-gap wall-time accepted divergence (TOG-12447; W15 ledger G1).
+// The ledger G1 row cites this suite as its proof.
 //
 // Accepted divergence: legacy Carbon silently moved a spring-forward gap wall
 // forward to a different instant — a `2026-03-29 01:30` Europe/London input
@@ -16,7 +16,7 @@
 // Rationale: a silent forward-shift stores a different wall time than the
 // moderator typed, losing user intent; the explicit 422 names the gap and
 // forces a real choice. Legacy fixed the same silent acceptance with its own
-// RealWallTime 422 (TOG-6803), so there is no live legacy contract to match.
+// RealWallTime 422, so there is no live legacy contract to match.
 // Series continuity is preserved where it matters: a weekly slot never
 // vanishes for one week a year, it lands on the moved-forward wall.
 import { describe, expect, it } from "vitest";
