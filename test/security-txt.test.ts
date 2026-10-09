@@ -74,6 +74,14 @@ describe("/.well-known/security.txt (RFC 9116)", () => {
     expect(body).not.toContain("//.well-known");
   });
 
+  it("omits Canonical rather than publish an http URI", async () => {
+    const body = await (await getSecurityTxt({ ...env, APP_URL: "http://localhost:8787" })).text();
+    expect(body).not.toContain("Canonical:");
+    expect(body).toContain(`Contact: ${CONTACT}`);
+    expect(body).toContain("Policy: ");
+    expect(expiresLine(body)).toBeDefined();
+  });
+
   it("answers HEAD with the same headers and an empty body", async () => {
     const res = await app.request("/.well-known/security.txt", { method: "HEAD" }, env);
     expect(res.status).toBe(200);

@@ -7,12 +7,14 @@ const POLICY = "https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY
 const EXPIRES_IN_MS = 364 * 24 * 60 * 60 * 1000;
 
 export function buildSecurityTxt(appUrl: string, now: Date): string {
+  const base = stripTrailingSlash(appUrl);
   const expires = new Date(now.getTime() + EXPIRES_IN_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
   return [
     `Contact: ${CONTACT}`,
     `Expires: ${expires}`,
     "Preferred-Languages: en",
-    `Canonical: ${stripTrailingSlash(appUrl)}/.well-known/security.txt`,
+    // RFC 9116 §2.5.2: a web Canonical must be https, so an http-only origin omits it.
+    ...(base.startsWith("https://") ? [`Canonical: ${base}/.well-known/security.txt`] : []),
     `Policy: ${POLICY}`,
     "",
   ].join("\n");
