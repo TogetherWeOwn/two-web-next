@@ -80,18 +80,23 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       );
       const pending = a.upcoming();
       await started;
+      let loserOpens = 0;
       const losers = await Promise.all(
         loserClients.map(async (client) => {
           const source = cachedDiscordEventsSource(
             env,
             { upcoming: read, lastReadFailed: () => false },
-            pgDiscordSnapshotStore(() => client),
+            pgDiscordSnapshotStore(() => {
+              loserOpens++;
+              return client;
+            }),
           );
           expect(await source.upcoming()).toEqual([]);
           return source.lastReadFailed();
         }),
       );
       expect(losers).toEqual(Array(6).fill(true));
+      expect(loserOpens).toBe(6);
       expect(read).toHaveBeenCalledTimes(1);
       release();
       expect(await pending).toEqual([]);
