@@ -1,0 +1,55 @@
+name: mutation-sessions-join
+
+# Nightly mutation signal for the auth blast radius (`src/sessions.ts` and
+# `src/join/service.ts`). The runner weakens one auth check at a time and runs
+# the hermetic DB-free kill suite against it; survivors are coverage gaps and
+# are listed in the uploaded report artifact. Hermetic on purpose: no database,
+# no Discord, no secrets, so a schedule tick can never be blocked on a service.
+#
+# Non-blocking by design: this workflow gates no merge. The required checks
+# stay exactly `check`, `gitleaks` and `pr-lint`; there is deliberately no
+# aggregator job here, so a red or skipped nightly never blocks anything.
+
+on:
+  # After the ci nightly full run, on an off-minute so fleet wake-ups spread.
+  schedule:
+    - cron: '41 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-sessions-join
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    name: mutation
+    # Public repo: standard GitHub-hosted Linux only, no larger or third-party runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Mutation harness selftest
+        run: npm run mutation:sessions-join:selftest
+      - name: Mutation run (sessions + join)
+        run: npm run mutation:sessions-join
+      - name: Surviving-mutant report summary
+        if: always() && hashFiles('artifacts/mutation-sessions-join/report.md') != ''
+        run: cat artifacts/mutation-sessions-join/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Surviving-mutant report artifact (including failures)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-sessions-join-${{ github.sha }}
+          path: artifacts/mutation-sessions-join/
+          if-no-files-found: error
+          retention-days: 14
