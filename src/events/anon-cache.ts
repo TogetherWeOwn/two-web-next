@@ -12,11 +12,15 @@
 // Entries are isolate-local, like `src/counts.ts` and
 // `src/not-found-suggestions.ts`: the mutating isolate retires immediately,
 // every other isolate converges on expiry (at most 60 s on `/events`, 300 s
-// on `/events/past` — the R12 bound, unchanged). The Worker Cache API would
-// share entries across isolates, but retire-by-enumeration needs `keys()`
-// and the pinned Miniflare/workerd build neither implements it nor persists
-// synthetic keys deterministically (probed 2026-10-10), so a shared retire
-// is not provable here. Only the anonymous calendar and past-archive
+// on `/events/past` from the last write — the R12 bound, unchanged). Hits
+// serve the entry's remaining TTL, so a browser never extends it past entry
+// expiry. A render already in flight when a retire lands never settles its
+// pre-retire bytes: each render captures the retire generation before its
+// first read and skips the write when the generation moved. The Worker Cache
+// API would share entries across isolates, but retire-by-enumeration needs
+// `keys()` and the pinned Miniflare/workerd build neither implements it nor
+// persists synthetic keys deterministically (probed 2026-10-10), so a shared
+// retire is not provable here. Only the anonymous calendar and past-archive
 // entries live here — home never does.
 import { databaseUrl } from "../db/connection";
 import type { Env } from "../env";
@@ -46,6 +50,17 @@ interface AnonEntry {
 }
 
 const entries = new Map<string, AnonEntry>();
+
+// Retire generation: bumped on every retire so a render that started its
+// reads before the retire can refuse to settle stale bytes after it. The
+// capture-then-compare in the route is synchronous between its last await
+// and the write, so it is atomic within the isolate.
+let generation = 0;
+
+/** The current retire generation; renders capture it before their first read. */
+export function anonCacheGeneration(): number {
+  return generation;
+}
 
 type EnvWithSeams = Env & { ADMIN_DB?: unknown; DISCORD_EVENTS?: unknown };
 
@@ -111,7 +126,7 @@ export function readAnonCache(
   key: string,
   source: AnonCacheSource,
   now: number = Date.now(),
-): Omit<AnonEntry, "source" | "expiresAt"> | null {
+): (Omit<AnonEntry, "source" | "expiresAt"> & { maxAgeSeconds: number }) | null {
   const hit = entries.get(key);
   if (!hit) return null;
   if (now >= hit.expiresAt) {
@@ -119,11 +134,14 @@ export function readAnonCache(
     return null;
   }
   if (!sameSource(hit.source, source)) return null;
+  // Remaining TTL, rounded up: a hit served 59 s after the write tells the
+  // browser `max-age=1`, never a fresh full window.
   return {
     status: hit.status,
     cacheControl: hit.cacheControl,
     vary: hit.vary,
     body: hit.body,
+    maxAgeSeconds: Math.max(1, Math.ceil((hit.expiresAt - now) / 1000)),
   };
 }
 
@@ -149,9 +167,11 @@ export function writeAnonCache(
  */
 export function retireAnonEventCaches(): void {
   entries.clear();
+  generation++;
 }
 
 /** Hermetic-test reset: same effect as a retire, without a mutation. */
 export function __resetAnonEventCacheForTests(): void {
   entries.clear();
+  generation++;
 }

@@ -18,6 +18,7 @@ import { MAX_QUERY_LENGTH, matchQuery, recordSearch } from "./search-log";
 import {
   ANON_EVENTS_TTL_MS,
   ANON_PAST_TTL_MS,
+  anonCacheGeneration,
   anonCacheSource,
   anonEventsKey,
   anonPastKey,
@@ -91,11 +92,20 @@ export function registerCalendarRoutes(
       anonKey = anonEventsKey(c.req.method, pathAndSearch, island);
       const hit = readAnonCache(anonKey, anonSource);
       if (hit) {
-        c.header("cache-control", hit.cacheControl);
+        // Remaining TTL, not the stored full window: a browser must never
+        // extend the entry past its origin expiry.
+        c.header(
+          "cache-control",
+          hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
+        );
         if (hit.vary) c.header("vary", hit.vary);
         return c.html(hit.body, hit.status as 200);
       }
     }
+    // Retire generation before the first render read: a publish, edit or RSVP
+    // that commits (and retires) while this render awaits its reads must stop
+    // the stale bytes from settling below.
+    const anonGen = anonSource ? anonCacheGeneration() : 0;
     const localUpcoming = await listUpcoming(db, now, opts);
     const localPast = await listCalendarPast(db, now, opts);
 
@@ -208,8 +218,10 @@ export function registerCalendarRoutes(
     );
     // Settle the shared entry only from an anonymous 200: the header guard
     // above already forced private on session/search/flash, so a `public`
-    // prefix re-checks that no viewer state slipped into shared bytes.
-    if (anonSource && anonKey && response.status === 200) {
+    // prefix re-checks that no viewer state slipped into shared bytes. The
+    // generation check drops a render overtaken by a retire mid-flight; the
+    // compare-and-write is synchronous, so it is atomic within the isolate.
+    if (anonSource && anonKey && response.status === 200 && anonCacheGeneration() === anonGen) {
       const cacheControl = response.headers.get("cache-control");
       if (cacheControl?.startsWith("public")) {
         writeAnonCache(
@@ -251,11 +263,17 @@ export function registerCalendarRoutes(
     if (pastSource && pastKey) {
       const hit = readAnonCache(pastKey, pastSource);
       if (hit) {
-        c.header("cache-control", hit.cacheControl);
+        c.header(
+          "cache-control",
+          hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
+        );
         if (hit.vary) c.header("vary", hit.vary);
         return c.html(hit.body, hit.status as 200);
       }
     }
+    // Same retire-generation guard as `/events`: an edit that commits while
+    // this archive render awaits its read must stop stale bytes settling.
+    const pastGen = pastSource ? anonCacheGeneration() : 0;
     const { rows, hasMore, totalPages } = await listPast(db, page);
     c.header("cache-control", "public, max-age=300");
     const pastResponse = await c.html(
@@ -267,7 +285,13 @@ export function registerCalendarRoutes(
         appUrl={c.env.APP_URL}
       />,
     );
-    if (pastSource && pastKey && pastResponse.status === 200 && rows.length > 0) {
+    if (
+      pastSource &&
+      pastKey &&
+      pastResponse.status === 200 &&
+      rows.length > 0 &&
+      anonCacheGeneration() === pastGen
+    ) {
       writeAnonCache(
         pastKey,
         pastSource,

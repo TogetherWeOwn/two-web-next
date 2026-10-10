@@ -231,8 +231,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
       // A write that bypasses the store leaves the timed entry stale: this
       // proves the second fetch comes from the shared entry, not a re-read.
+      // The hit serves the entry's remaining TTL, never a fresh full window.
       await fixture.client`update events set title = 'Smuggled title' where id = ${row.id}`;
-      const staleHtml = await (await guestGet("/events")).text();
+      const stale = await guestGet("/events");
+      expect(stale.headers.get("cache-control")).toMatch(/^public, max-age=(59|60)$/);
+      const staleHtml = await stale.text();
       expect(staleHtml).toContain("Game night");
       expect(staleHtml).not.toContain("Smuggled title");
 
@@ -243,6 +246,47 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const html = await fresh.text();
       expect(html).toContain("Renamed night");
       expect(html).not.toContain("Smuggled title");
+    });
+
+    it("an in-flight render never settles stale HTML after a retire", async () => {
+      const row = await seed({ title: "Old title" });
+      // Gate the Discord read: the handler reaches it only after both DB
+      // reads, so the in-flight render has already seen "Old title" when the
+      // gate holds it. The moderator PATCH path never reads Discord, so the
+      // gate cannot deadlock it.
+      let releaseGate!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      let arrived!: () => void;
+      const arrivedAtGate = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      const realUpcoming = discordStub.upcoming;
+      discordStub.upcoming = async () => {
+        arrived();
+        await gate;
+        return [];
+      };
+      try {
+        const inflight = guestGet("/events");
+        await arrivedAtGate;
+        const edited = await modWrite("PATCH", `/events/${row.eventKey}`, { title: "New title" });
+        expect(edited.status).toBe(200);
+        releaseGate();
+        // The overtaken render still answers itself with its pre-retire bytes,
+        // proving the race was exercised — but it settles nothing shared.
+        const overtaken = await inflight;
+        expect(overtaken.status).toBe(200);
+        expect(await overtaken.text()).toContain("Old title");
+        const fresh = await guestGet("/events");
+        const html = await fresh.text();
+        expect(html).toContain("New title");
+        expect(html).not.toContain("Old title");
+      } finally {
+        releaseGate();
+        discordStub.upcoming = realUpcoming;
+      }
     });
 
     it("publish retires the /events entry so the new event appears", async () => {
@@ -338,14 +382,20 @@ describe.skipIf(!process.env.DATABASE_URL)(
         body: "<html>unit</html>",
       };
       writeAnonCache(key, source, res, ANON_EVENTS_TTL_MS, 1_000);
-      expect(readAnonCache(key, source, 1_000 + ANON_EVENTS_TTL_MS - 1)).toEqual(res);
+      // Hits carry the entry's remaining TTL: 30 s in, 30 s left; 1 ms
+      // before expiry, 1 s left (rounded up, never zero on a hit).
+      expect(readAnonCache(key, source, 31_000)).toEqual({ ...res, maxAgeSeconds: 30 });
+      expect(readAnonCache(key, source, 1_000 + ANON_EVENTS_TTL_MS - 1)).toEqual({
+        ...res,
+        maxAgeSeconds: 1,
+      });
       expect(readAnonCache(key, source, 1_000 + ANON_EVENTS_TTL_MS)).toBeNull();
       // A re-fill under another source never reads a foreign entry.
       writeAnonCache(key, source, res, ANON_EVENTS_TTL_MS, 2_000);
       expect(
         readAnonCache(key, { ...source, appUrl: "https://other.example.test" }, 2_001),
       ).toBeNull();
-      expect(readAnonCache(key, source, 2_001)).toEqual(res);
+      expect(readAnonCache(key, source, 2_001)).toEqual({ ...res, maxAgeSeconds: 60 });
     });
 
     it("serves shared bytes only to cookieless anonymous renders", () => {
