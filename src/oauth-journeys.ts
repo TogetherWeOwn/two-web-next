@@ -21,6 +21,9 @@ const MIGRATION = [
   `create index if not exists web_oauth_journeys_expires_at_idx on web_oauth_journeys (expires_at)`,
 ];
 
+// Fixture helper only (TOG-19721): canonical DDL is
+// drizzle/1022_web-sessions-oauth-journeys.sql. Reached via sessions
+// migrate(); never from the request path (runtime role has no CREATE).
 export async function migrateOAuthJourneys(sql: Sql): Promise<void> {
   for (const stmt of MIGRATION) await sql.unsafe(stmt);
 }
