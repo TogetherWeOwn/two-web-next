@@ -8,7 +8,6 @@ import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
 import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
-import { cspReportsRoute } from "./csp-reports";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
@@ -24,21 +23,19 @@ import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { imageHosts } from "./image-policy";
-import { Join, Recovery, Home, Privacy, type Notice } from "./pages";
-import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
-import { POLICY_MARKDOWN } from "./privacy-content";
+import { Join, Recovery, Home, type Notice } from "./pages";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
+import { loadHomeUpcoming } from "./events/reads";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
+import { registerSeoLeaves } from "./seo-leaves";
 import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
 import { takeJoinResult } from "./return-journey";
-import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import { buildSecurityTxt } from "./security-txt";
 import {
   configReadiness,
@@ -405,19 +402,12 @@ app.get("/", async (c) => {
 // `safeNext` policy live there verbatim.
 registerStaticLeaves(app);
 
-// Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
-// `/privacy` + PrivacyController). Funnel-style: no session, no cookie, no
-// cache, no database — stays 200 during an app-DB outage. The markdown is
-// bundled at build (src/privacy-content.ts, generated from
-// content/privacy-policy-vN.md) and pre-rendered once at module load, so the
-// request path performs zero reads of any kind. CSP comes from the global
-// secureHeaders middleware above.
-const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
-
-app.get("/privacy", (c) => {
-  c.header("cache-control", "public, max-age=3600");
-  return c.html(<Privacy appUrl={c.env.APP_URL} version={POLICY_VERSION} html={PRIVACY_HTML} />);
-});
+// Policy/SEO leaves (`/privacy`, `/sitemap_index.xml`, `/robots.txt`,
+// `POST /csp-reports`): registered in ./seo-leaves so the Worker entry stays
+// under the M3 file-size gate. Paths, status codes, cache headers and the
+// DB-degrades-to-static sitemap policy live there verbatim. Registered before
+// the join journey so the CSP sink keeps its pre-session placement.
+registerSeoLeaves(app);
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;
 // /join/discord + /join/callback run the throttled OAuth round trip with the
@@ -462,42 +452,14 @@ registerJoinRoutes(
   },
 );
 
-// Sitemap (ports two-web routes/web.php's sitemap closure; crawl set per TOG-7072): published
-// events only. No DB binding yet, so the static entries ship now; the W8 events slice adds the
-// published /e/{key} rows (drafts 403 / cancelled 410 stay out of the index).
-// W6 adds /join (changefreq monthly, priority 0.9 — same as legacy).
-app.get("/sitemap_index.xml", async (c) => {
-  c.header("content-type", "application/xml; charset=UTF-8");
-  c.header("cache-control", "public, max-age=3600");
-  // Published events only; a DB outage degrades to the static entries, never a 500.
-  const db = await dbFor(c).catch(() => null);
-  const rows = db ? await sitemapEvents(db).catch(() => []) : [];
-  return c.body(renderSitemap(buildSitemapUrls(c.env.APP_URL, crawlableEvents(rows))));
-});
-
-// robots.txt is dynamic, not a static file in public/ (TOG-7071): the Sitemap line names this
-// environment's APP_URL host, so each environment advertises itself.
-app.get("/robots.txt", (c) => {
-  c.header("content-type", "text/plain; charset=UTF-8");
-  c.header("cache-control", "public, max-age=3600");
-  return c.body(buildRobots(c.env.APP_URL));
-});
-
 // RFC 9116 disclosure file. Database-free like robots.txt: no session, cookie or DB read.
+// Stays in the Worker entry: it arrived after the SEO/CSP extraction slice
+// (its own module owns the body builder) and is not part of `registerSeoLeaves`.
 app.get("/.well-known/security.txt", (c) => {
   c.header("content-type", "text/plain; charset=utf-8");
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildSecurityTxt(c.env.APP_URL));
 });
-
-// CSP violation sink (TOG-10107 — ports two-web routes/funnel.php's
-// `POST /csp-reports`). Funnel posture by placement: registered before any
-// session-touching handler and the handler itself reads no session, no
-// cookie, no cache, no database — it answers 204 during an app-DB outage.
-// Deliberately no throttle: throttle reads the database-backed store, like
-// `/discord`. Flood control lives in the handler instead.
-app.post("/csp-reports", cspReportsRoute);
-
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
 // `GET /up` — session-free DB/schema and secret-presence readiness plus the
