@@ -13,6 +13,12 @@ passed CI and review on `main`. The release-please release PR it replaces went
 stale on every merge and needed a freeze, dispatched checks and a separate
 review to land.
 
+## Cutting a release
+
+Nothing to do by hand: a successful `deploy-production` promote is the cut.
+The older freeze-and-merge procedure for the release PR no longer exists; the
+historical cutover docs that link here describe that earlier flow.
+
 ## Versions and notes
 
 - Bump rules and note sections are read from `release-please-config.json`
