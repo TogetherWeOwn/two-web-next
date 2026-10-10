@@ -105,7 +105,7 @@ Coverage reuses the CI journey logic with staging-safe setup:
 | Fixture event, RSVP going, withdraw, waitlist join + leave, waitlist promotion, cancel | `e2e/staging/event-rsvp.spec.ts` (local pre-merge pin: `e2e/event-waitlist.spec.ts`) | Moderator draft → publish; member PUT 201, `You're in`, reload persists; DELETE 204, going returns; capacity-1 fixture: moderator fills the seat, member waitlist-join asserts `#1 in line`, leave returns the join control; second capacity-1 fixture: moderator withdraws (204) and the member's reload shows `You're in` and `1 of 1 going` with `waitlist-position`, `waitlist-claim`, `waitlist-join` and `event-full` gone (promotion is automatic, no claim click), persisting across another reload; every fixture cancelled in `finally` through the request API (no cleanup page), with the global teardown sweep as backstop |
 | QA member keyboard profile edit | `e2e/staging/profile.spec.ts` | Same 1000 ms floor and Tab flow as CI; PATCH 200; `Profile saved.` focused; unique bio and games survive reload |
 | Moderator draft create and cancel | `e2e/staging/admin.spec.ts` | `Create draft` → `Status: draft`; guest draft 403; `Cancel event` → `Status: cancelled`; guest cancelled 410. Never publishes |
-| Moderator featured slot create, homepage render, edit, delete | `e2e/staging/featured.spec.ts` | `/admin/featured/new` form (published, UTC window, last position, no image) → `/admin/featured/<id>`; guest `/` shows a `featured-item` under `featured-content` ("From the community team") with the headline and body (bounded poll); edited headline replaces the old one; `delete-featured` → guest `/` drops it and `/admin/featured/<id>` answers 404; the fixture is deleted by id in `finally` through the request API, so a red run leaves no live card on the homepage |
+| Moderator featured slot create, homepage render, edit, delete | `e2e/featured.spec.ts` (local CI proves the same journey before merge against wrangler dev) + `e2e/staging/featured.spec.ts` (post-deploy proves it on staging with a bounded homepage poll) | `/admin/featured/new` form (published, UTC window, last position, no image) → `/admin/featured/<id>`; guest `/` shows a `featured-item` under `featured-content` ("From the community team") with the headline and body (bounded poll); edited headline replaces the old one; `delete-featured` → guest `/` drops it and `/admin/featured/<id>` answers 404; the fixture is deleted by id in `finally` through the request API, so a red run leaves no live card on the homepage |
 | Join funnel CTA, entries, QA profile | `e2e/staging/join.spec.ts` | Guest: homepage `join` CTA href `/auth/discord`, `/join` one-click href `/join/discord`, both entries 302 to Discord authorize with no follow; QA member session opens `/profile` (`QA Member`) with the tested staging revision recorded as a report annotation |
 | QA member sign-out, revoked replay | `e2e/staging/logout.spec.ts` | Sign out returns to guest `/`; session cookie cleared; old cookie replays to guest home and `/profile` bounces to OAuth |
 | Public collection feeds and SEO | `e2e/staging/feeds.spec.ts` | Guest GETs only, no QA token, no fixtures: sitemap/robots/RSS/ICS collections 200 with contract content-types and exact cache headers, no `set-cookie`; empty feeds are valid |
@@ -114,18 +114,23 @@ Coverage reuses the CI journey logic with staging-safe setup:
 The list spec also runs as `mobile-375` (375×812 viewport) and
 `reduced-motion` (`reducedMotion: reduce`) projects. Cleanup is structural:
 RSVPs are withdrawn in-spec and every fixture the suite creates is cancelled
-(events) or deleted (featured slots) in a `finally`, so a failed run leaves no
-draft behind and no live card on the staging homepage. A test timeout closes the
-browser contexts before that `finally` runs, so the event journeys also have a
-backstop: `e2e/staging/global-teardown.ts` signs the QA moderator in fresh and
-cancels every `Staging E2E` event still published or draft
-(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. Each list and the
-final verification traverse matching pages even when a page contains only
-substring lookalikes. Pagination keeps the guarded origin and filters, advances
-one page at a time, and fails closed past 20 pages per status. The sweep allows
-four cancellation passes and at most four shared throttle waits within a
-five-minute deadline; a wait retries the same cancel without spending a pass.
-An exhausted bound fails the run rather than claiming cleanup succeeded.
+(events) or deleted (featured slots) in a `finally`. A test timeout closes the
+browser contexts before that `finally` runs. Staging event journeys therefore
+have a staging-only backstop: `e2e/staging/global-teardown.ts` signs the QA
+moderator in fresh and cancels every `Staging E2E` event still published or draft
+(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. The local RSVP
+pin (`e2e/event-waitlist.spec.ts`) has its own backstop,
+`e2e/local-global-teardown.ts`, which only uses `https://localhost:8787`, only
+matches its `E2E Waitlist ` and `E2E Promotion ` fixture titles, and is guarded
+to run in GitHub Actions on Linux. Neither sweep crosses into the other's
+origin. Each list and final verification traverse matching pages even when a
+page contains substring lookalikes. Pagination keeps the fixed origin and
+filters, advances one page at a time, and fails closed past 20 pages per status.
+The local sweep allows four cancellation passes and up to two QA-login
+throttle waits within a shared five-minute deadline; it honors `Retry-After`
+without retrying refused credentials. The staging sweep allows four passes and
+at most four cancellation throttle waits within its five-minute sweep bound. An exhausted bound fails the run rather than claiming cleanup
+succeeded.
 On failure the job
 uploads `test-results/` traces/screenshots and the HTML report for seven days.
 The repo is public, so artifacts are world-readable and log masking does not

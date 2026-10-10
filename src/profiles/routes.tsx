@@ -40,6 +40,7 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import { checkJoinThrottle } from "../join/service";
 import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
+import { SESSION_COOKIE } from "../session-cookie";
 import {
   PROFILE_COPY,
   PROFILE_HONEY_FIELD,
@@ -58,7 +59,6 @@ import {
 } from "./stats";
 
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
-const SESSION_COOKIE = "__Host-two_session";
 const SNOWFLAKE = /^\d{10,25}$/;
 // UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
 // username, avatar, member…) refuses the whole write: no body key can name

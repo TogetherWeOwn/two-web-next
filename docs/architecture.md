@@ -44,6 +44,22 @@ the roster through `src/sessions.ts` and `src/db/roster.ts`, page reads
 through [src/db/](../src/db/). Without a configured database the app fails
 closed to guest sessions and unavailable DB features rather than crashing.
 
+### Agent ingress boundaries
+
+[src/agent-events/service.ts](../src/agent-events/service.ts) is the public
+re-export barrel; its numbered check-order header remains authoritative.
+[ingress.ts](../src/agent-events/ingress.ts) orchestrates admission and the
+operation transaction. [shield.ts](../src/agent-events/shield.ts) admits the
+hit before body processing, [grants.ts](../src/agent-events/grants.ts) checks
+credentials and live grant admission, [idempotency.ts](../src/agent-events/idempotency.ts)
+answers replays, and [rate-limit.ts](../src/agent-events/rate-limit.ts)
+applies the inner budgets. [dispatch.ts](../src/agent-events/dispatch.ts)
+executes the five operations under the existing locks; write-back runs only
+after commit. [audit.ts](../src/agent-events/audit.ts) writes receipts,
+[payload.ts](../src/agent-events/payload.ts) owns hashing and field validation,
+and [types.ts](../src/agent-events/types.ts) holds shared types and defaults.
+The split introduces no separate coordination store or new admission policy.
+
 ## 2. Configuration and secrets
 
 Read from: [src/env.ts](../src/env.ts), [wrangler.jsonc](../wrangler.jsonc),
@@ -138,6 +154,7 @@ web never migrates bot tables or queries member-level bot data.
 ## 6. Auth and sessions
 
 Read from: [src/sessions.ts](../src/sessions.ts),
+[src/session-cookie.ts](../src/session-cookie.ts),
 [src/session-revocation.ts](../src/session-revocation.ts),
 [bin/revoke-sessions.mjs](../bin/revoke-sessions.mjs),
 [src/discord.ts](../src/discord.ts), [src/oauth-journeys.ts](../src/oauth-journeys.ts),
@@ -146,7 +163,8 @@ Read from: [src/sessions.ts](../src/sessions.ts),
 
 Sign-in is Discord OAuth2 with the `identify` and `guilds.join` scopes
 ([src/discord.ts](../src/discord.ts)); the access token is used for the join
-request and never stored. The session cookie (`__Host-two_session`) carries
+request and never stored. The session cookie (`__Host-two_session`,
+[src/session-cookie.ts](../src/session-cookie.ts)) carries
 only a random `two_` token while the row in `web_sessions` carries identity,
 member/moderator flags, and expiry ([src/sessions.ts](../src/sessions.ts),
 [src/index.tsx](../src/index.tsx)); tokens are SHA-256 hashed at rest,
@@ -272,6 +290,7 @@ exactly once.
 | `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
 | `src/seo-leaves.tsx` | entry |
+| `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |
 | `src/sessions.ts` | auth |
 | `src/static-leaves.tsx` | entry |

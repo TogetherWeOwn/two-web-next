@@ -60,7 +60,7 @@ copy. The `basic-ftp` client API used by `get-uri` is unchanged between 5.3.1 an
 **22.12.0 or later**; CI remains on Node **24**. The performance regression suite
 checks LHCI's temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
-job must still collect all fifteen samples and pass the unchanged assertions.
+job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
 
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
@@ -75,7 +75,7 @@ unknown SQL, session-level settings and nested/configured transactions fail clos
 There is no SQL transport or mutable database state.
 
 `ci/lighthouse-admission.cjs` starts the same local Wrangler command and withholds
-LHCI's readiness marker until all five routes pass HTML/content admission. HTTP
+LHCI's readiness marker until all eight routes pass HTML/content admission. HTTP
 200 alone is insufficient: homepage teasers and featured content, the event card
 and detail must contain the fixture title, venue, aggregate and future dates.
 Redirects and empty/outage fallbacks are rejected. Probes have a five-second
@@ -97,6 +97,9 @@ Measured as a guest:
 | `/e/01ARZ3NDEKTSV4RRFFQ69G5FAV` | The same fixture, real detail renderer |
 | `/join` | Existing widget-free fallback (nonnumeric fixture guild ID) |
 | `/about` | Production static introduction |
+| `/faq` | Production static questions and answers |
+| `/rules` | Production static house rules (database-free; last-updated stamp from config) |
+| `/privacy` | Production versioned privacy policy, pre-rendered at module load |
 
 This is a rendering/assets regression gate, **not** staging acceptance, live DB
 latency, Discord widget availability, authenticated/member/admin coverage or an
@@ -120,6 +123,11 @@ Mobile screen 412 × 823, scale 1.75, simulated Slow 4G (150 ms RTT,
 1638.4 Kbps throughput) and 4× CPU slowdown are unchanged. The observed TTFB
 tripwire prevents Lantern's per-origin simulation from hiding slow HTML responses.
 `test/performance-ci.test.ts` pins all thresholds, the phone profile and route set.
+`test/lighthouse-inventory.test.ts` fails when the worker allowlist
+(`ci/lighthouse-paths.ts`), the LHCI list and the admission list disagree, or when
+any of them drops one of the eight routes. The post-cutover watch
+(`npm run lighthouse:origin`) reuses the LHCI route list, so it measures the same
+eight routes on its allowlisted origin with the same thresholds.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%

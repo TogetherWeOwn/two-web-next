@@ -99,6 +99,16 @@ function formData(body: Record<string, string | File>): Record<string, unknown> 
   return out;
 }
 
+// A malformed multipart body rejects the parse: answer 400 instead of throwing
+// into the alerting 500 path. Null means the caller must refuse the write.
+async function parsedForm(c: Context<Vars>): Promise<Record<string, unknown> | null> {
+  try {
+    return formData(await c.req.parseBody());
+  } catch {
+    return null;
+  }
+}
+
 function declareAccess(c: Context<Vars>, decl: AccessDecl): void {
   c.set("access", decl);
 }
@@ -319,7 +329,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       let recurrence;
       try {
@@ -387,7 +398,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const key = c.req.param("key");
       const existing = await getEvent(db, key);
       if (!existing) return errorPage(c, 404, "Event not found");
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant (TOG-6805 — see validation.preservedOrParsed).
       const carriers = {
@@ -518,7 +530,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -583,7 +596,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!db) return c.text("Admin temporarily unavailable", 503);
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);

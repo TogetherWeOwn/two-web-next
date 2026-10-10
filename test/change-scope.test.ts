@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -603,5 +611,85 @@ describe("changed-path fixture matrix", () => {
     const result = scope([["docs/rsvp-button.md", "assets/islands/rsvp-button.js"]]);
     expect(result.docsOnly).toBe("false");
     expect(result.skipE2e).toBe("false");
+  });
+});
+
+// The hermetic backup fixture suites run inside the required `check` job. They
+// are fixtures (fake pg_dump, R2 and clients on local disk), so a green run
+// proves the transport, custody and refusal logic, not a live restore.
+describe("backup selftest wiring", () => {
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+  const check = ci.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+  const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+  const selftests = [
+    "bash ci/backup-integrity-selftest",
+    "python3 ci/backup-target-selftest",
+    "bash ci/neon-backup-argv-selftest.sh",
+    "python3 ci/backup-manifest-admission-selftest",
+    "python3 ci/backup-restore-proof/selftest.py",
+  ];
+  const gate =
+    "if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')";
+
+  it.each(selftests)("check runs `%s` exactly once under the app/full gate", (command) => {
+    const matching = steps.filter((step) =>
+      step.split("\n").some((line) => line === `        run: ${command}`),
+    );
+    expect(matching).toHaveLength(1);
+    const lines = (matching[0] ?? "").split("\n");
+    expect(lines.filter((line) => line.startsWith("        if:"))).toEqual([`        ${gate}`]);
+  });
+
+  it("lets no backup step swallow a failure", () => {
+    const backup = steps.filter((step) => selftests.some((command) => step.includes(command)));
+    expect(backup).toHaveLength(selftests.length);
+    for (const step of backup) {
+      const body = step
+        .split("\n")
+        .filter((line) => !line.startsWith("        if:"))
+        .join("\n");
+      expect(body).not.toMatch(/continue-on-error|\|\||set \+e|; *true\b/);
+    }
+  });
+
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
+    );
+  const inputs = [
+    "bin/neon-backup.sh",
+    "ci/neon-backup-argv-selftest.sh",
+    ...walk("bin/backup"),
+    ...readdirSync("ci")
+      .filter((name) => name.startsWith("backup-"))
+      .flatMap((name) => {
+        const path = join("ci", name);
+        return statSync(path).isDirectory() ? walk(path) : [path];
+      }),
+  ];
+
+  it("finds the backup inputs it is about to check", () => {
+    expect(inputs).toEqual(
+      expect.arrayContaining([
+        "bin/neon-backup.sh",
+        "bin/backup/integrity-helper",
+        "ci/backup-integrity-selftest",
+        "ci/backup-restore-proof/selftest.py",
+        "ci/neon-backup-argv-selftest.sh",
+      ]),
+    );
+  });
+
+  it.each(inputs.map((path) => [path] as [string]))("%s selects the app area", (path) => {
+    const result = scope([[path, ""]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.app).toBe("true");
+    expect(result.draft).toBe("false");
+  });
+
+  it("selects the app area when a backup input is renamed away", () => {
+    const result = scope([["docs/old-backup.md", "bin/backup/integrity-helper"]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.app).toBe("true");
   });
 });

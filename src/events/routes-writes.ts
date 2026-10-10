@@ -20,6 +20,7 @@ import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
 import { getPublicEvent, withGoingCount } from "./reads";
 import { body, eventJson, type App, type Ctx, type SessionReader } from "./routes-shared";
+import { SESSION_COOKIE } from "../session-cookie";
 
 async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Session | Response> {
   // Non-rotating: concurrent writes with one cookie must all authenticate.
@@ -32,7 +33,7 @@ async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Se
   // admission pins assert.
   const session = await readFragmentSession(c);
   if (!session) {
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
+    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     if (token) return expiredWriteBounce(c, true);
     return c.json({ error: "unauthenticated" }, 401);
   }
@@ -42,9 +43,16 @@ async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Se
 
 async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
   // Event edits must not turn malformed/non-object JSON into an empty PATCH.
-  // Keep the RSVP trap's permissive body parsing independent of this admission.
-  if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json"))
-    return body(c);
+  // Keep the RSVP trap's permissive body parsing independent of this admission:
+  // a form body that fails to parse is a 422 here, never an empty edit that
+  // gets written, audited, and re-synced to Discord.
+  if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json")) {
+    try {
+      return await body(c, { onMalformedForm: "throw" });
+    } catch {
+      throw new ValidationError({ body: "Send a valid form body." });
+    }
+  }
   const input: unknown = await c.req.json().catch(() => null);
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new ValidationError({ body: "Send a JSON object." });

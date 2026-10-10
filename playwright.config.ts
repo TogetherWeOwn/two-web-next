@@ -4,6 +4,7 @@ import { requireGithubRunner } from "./e2e/ci-only.mjs";
 requireGithubRunner();
 
 export default defineConfig({
+  globalTeardown: "./e2e/local-global-teardown.ts",
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
   // Staging journey specs run only via playwright.staging.config.ts in the
