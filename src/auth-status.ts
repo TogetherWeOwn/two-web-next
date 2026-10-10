@@ -1,9 +1,9 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, generateSignedCookie, getSignedCookie } from "hono/cookie";
 import { hashToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
+import { SESSION_COOKIE } from "./session-cookie";
 
 export const AUTH_STATUS_COOKIE = "__Host-two_session_status";
-const SESSION_COOKIE = "__Host-two_session";
 const OPTIONS = {
   path: "/",
   secure: true,
