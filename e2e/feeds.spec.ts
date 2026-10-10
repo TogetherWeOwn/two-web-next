@@ -2,16 +2,18 @@ import { test, expect } from "./fixtures";
 import { STAGING_APP_URL } from "../src/qa";
 
 // Public GET-only pin for the local CI browser smoke: sitemap, robots, RSS
-// and ICS need no session and no fixtures. The local run is unauthenticated
+// and ICS need no session or test-owned fixtures. The local run is unauthenticated
 // by default, so no storageState override is required here (unlike the
-// staging config, which inherits a member storageState). Seeded rows may or
-// may not exist; empty collections are valid feeds, so this asserts status,
-// contract content-type and well-formed bodies only, never row content.
+// staging config, which inherits a member storageState). CI runs e2e/seed.mjs
+// first; pin its published event as well as the feed envelopes so a broken
+// database read cannot silently pass by returning an empty collection.
 // Handler contracts live in src/index.tsx (sitemap/robots) and
 // src/events/routes-feeds.ts (feeds). Runs in the existing browser-smoke job
 // with no workflow change: playwright.config.ts already picks up every
 // e2e/*.spec.ts outside staging/ and watch/.
 test("public feeds and SEO endpoints answer unauthenticated GETs", async ({ request }) => {
+  const eventKey = "01J00000000000000000000001";
+  const eventUrl = `${STAGING_APP_URL}/e/${eventKey}`;
   const sitemap = await request.get("/sitemap_index.xml");
   expect(sitemap.status()).toBe(200);
   expect(sitemap.headers()["content-type"]).toContain("application/xml");
@@ -23,6 +25,7 @@ test("public feeds and SEO endpoints answer unauthenticated GETs", async ({ requ
   // the static set, never a 500), so this loc pin holds with zero fixtures.
   // The local worker serves the virtual staging origin (e2e/worker.ts).
   expect(sitemapBody).toContain(`<loc>${STAGING_APP_URL}/join</loc>`);
+  expect(sitemapBody).toContain(`<loc>${eventUrl}</loc>`);
 
   const robots = await request.get("/robots.txt");
   expect(robots.status()).toBe(200);
@@ -43,6 +46,7 @@ test("public feeds and SEO endpoints answer unauthenticated GETs", async ({ requ
   expect(rssBody).toContain("<rss");
   expect(rssBody).toContain("<channel>");
   expect(rssBody).toContain("</rss>");
+  expect(rssBody).toContain(`<guid isPermaLink="true">${eventUrl}</guid>`);
 
   const ics = await request.get("/events.ics");
   expect(ics.status()).toBe(200);
@@ -52,8 +56,8 @@ test("public feeds and SEO endpoints answer unauthenticated GETs", async ({ requ
   const icsBody = await ics.text();
   expect(icsBody).toContain("BEGIN:VCALENDAR");
   expect(icsBody).toContain("END:VCALENDAR");
+  expect(icsBody).toContain(`\r\nUID:${eventKey}@${new URL(STAGING_APP_URL).host}\r\n`);
 });
 
 // Published per-event RSS/ICS coverage lives in the event-rsvp journey while
-// that journey's owned fixture is published. Empty collection feeds are valid
-// here.
+// that journey's owned fixture is published.
