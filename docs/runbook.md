@@ -132,7 +132,7 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 
 `DATABASE_URL` is supplied through the environment only, as in the procedure above.
 - Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, each reviewed Discord snowflake with its dry-run active-session count and its apply count, and confirmation that Discord role removal was verified before revocation. The command output is counts only; keep member identifiers in the private review record and never paste database URLs, tokens, or secrets.
-- Non-goal: the role-audit half waits for O5. This section covers only the revoke-command half.
+- Non-goal: the role-audit half is a separate future change. This section covers only the revoke-command half.
 
 ## Deploy and record the rollback pointer
 
