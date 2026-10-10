@@ -4,7 +4,7 @@
  * `./contracts` so existing import paths keep working.
  */
 
-import { MOUNT_ATTR } from "./contracts";
+import { MOUNT_ATTR } from "./contracts-shared";
 
 /** Collection JSON. Carries `going_count` per row (EventResource contract). */
 export const EVENTS_JSON_URL = "/events.json";
