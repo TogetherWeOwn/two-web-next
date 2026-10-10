@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 const release = readFileSync(".github/workflows/release.yml", "utf8");
 const deploy = readFileSync(".github/workflows/deploy-production.yml", "utf8");
 const releasePleaseConfig = JSON.parse(readFileSync("release-please-config.json", "utf8")) as {
-  packages: Record<string, { "bump-minor-pre-major"?: boolean }>;
+  packages: Record<string, { "bump-minor-pre-major"?: boolean; "release-as"?: string }>;
 };
 const changelog = readFileSync("CHANGELOG.md", "utf8");
 const header = release.slice(0, release.search(/^permissions:/m));
@@ -25,6 +25,10 @@ function job(text: string, id: string) {
 describe("release on promote", () => {
   it("keeps breaking changes on minor bumps before 1.0.0", () => {
     expect(releasePleaseConfig.packages["."]?.["bump-minor-pre-major"]).toBe(true);
+  });
+
+  it("cuts v1.0.0 at the production cutover promote", () => {
+    expect(releasePleaseConfig.packages["."]?.["release-as"]).toBe("1.0.0");
   });
 
   it("has no hand-written Unreleased heading above the first released section", () => {

@@ -164,7 +164,8 @@ stay out of the notes. Each squash-merged PR title becomes one entry, so
 write it for a reader of the release notes: imperative mood, one user-facing change.
 
 Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
-cutover. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
+cutover: `release-as: 1.0.0` in `release-please-config.json` makes the
+cutover promote cut `v1.0.0`. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
 from `1.0.0` onward, it bumps the major version.
 
 ## Local development

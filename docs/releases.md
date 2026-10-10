@@ -15,15 +15,23 @@ review to land.
 
 ## Cutting a release
 
-Nothing to do by hand: a successful `deploy-production` promote is the cut.
-The older freeze-and-merge procedure for the release PR no longer exists; the
-historical cutover docs that link here describe that earlier flow.
+Nothing to do by hand: a successful `deploy-production` promote is the cut. The
+cutover promote cuts `v1.0.0` (see `release-as` below). The release vehicle is
+the promoted commit itself. Every commit on `main` already has exact-head green
+required checks and a Paperclip Review 5/5 (rulesets). The promote gate
+(`ci/production-deploy-gate.mjs`) requires a green main `ci` on that exact SHA,
+plus staging evidence under auto-approve. There is no release PR and no
+release freeze.
 
 ## Versions and notes
 
 - Bump rules and note sections are read from `release-please-config.json`
   (`bump-minor-pre-major`, `bump-patch-for-minor-pre-major`,
   `changelog-sections`), so versions continue the existing tag line.
+- `release-as` in `release-please-config.json` forces the next version while it
+  is above the previous tag. It is set to `1.0.0`, so the production cutover
+  promote (the first production deploy) cuts `v1.0.0`; once `v1.0.0` exists it
+  is ignored and normal bumps resume (remove it in any later PR).
 - Before `1.0.0`: `feat!` / `BREAKING CHANGE` and `feat` bump the minor version;
   everything else bumps the patch version. From `1.0.0` onward: breaking bumps
   major, `feat` bumps minor, anything else bumps patch.
