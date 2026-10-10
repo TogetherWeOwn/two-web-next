@@ -543,7 +543,7 @@ app.get("/robots.txt", (c) => {
 app.get("/.well-known/security.txt", (c) => {
   c.header("content-type", "text/plain; charset=utf-8");
   c.header("cache-control", "public, max-age=3600");
-  return c.body(buildSecurityTxt(c.env.APP_URL, new Date()));
+  return c.body(buildSecurityTxt(c.env.APP_URL));
 });
 
 // CSP violation sink (TOG-10107 — ports two-web routes/funnel.php's

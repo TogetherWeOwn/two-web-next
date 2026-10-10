@@ -5,10 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
 import { SECURITY_HEADERS } from "../src/headers";
+import { SECURITY_TXT_EXPIRES } from "../src/security-txt";
 
 const ORIGIN = "https://next.example.test";
 const CONTACT = "https://github.com/TogetherWeOwn/two-web-next/security/advisories/new";
 const POLICY = "https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md";
+// Pinned review date: changing src/security-txt.ts requires updating this line too.
+const PINNED_EXPIRES = "2027-10-01T00:00:00Z";
 
 const env: Env = {
   APP_URL: ORIGIN,
@@ -43,7 +46,7 @@ describe("/.well-known/security.txt (RFC 9116)", () => {
     expect(await res.text()).toBe(
       [
         `Contact: ${CONTACT}`,
-        "Expires: 2027-10-08T10:20:30Z",
+        `Expires: ${PINNED_EXPIRES}`,
         "Preferred-Languages: en",
         `Canonical: ${ORIGIN}/.well-known/security.txt`,
         `Policy: ${POLICY}`,
@@ -52,20 +55,32 @@ describe("/.well-known/security.txt (RFC 9116)", () => {
     );
   });
 
+  it("exports the same pinned date the endpoint serves", () => {
+    expect(SECURITY_TXT_EXPIRES).toBe(PINNED_EXPIRES);
+  });
+
   it.each([
-    ["2026-12-31T23:59:59.999Z", "2027-12-30T23:59:59Z"],
-    ["2027-12-31T23:59:59Z", "2028-12-29T23:59:59Z"],
-    ["2028-02-29T00:00:00Z", "2029-02-27T00:00:00Z"],
-    ["2029-01-01T00:00:00Z", "2029-12-31T00:00:00Z"],
-  ])("at %s the expiry is %s: after now, less than one year ahead", async (now, expires) => {
+    "2026-10-10T00:00:00Z",
+    "2026-12-31T23:59:59.999Z",
+    "2027-12-31T23:59:59Z",
+    "2028-02-29T00:00:00Z",
+    "2029-01-01T00:00:00Z",
+  ])("at %s the expiry stays pinned at %s", async (now) => {
     vi.setSystemTime(new Date(now));
     const body = await (await getSecurityTxt()).text();
-    expect(expiresLine(body)).toBe(`Expires: ${expires}`);
-    const start = new Date(now);
-    const oneYearLater = new Date(start);
-    oneYearLater.setUTCFullYear(start.getUTCFullYear() + 1);
-    expect(Date.parse(expires)).toBeGreaterThan(start.getTime());
-    expect(Date.parse(expires)).toBeLessThan(oneYearLater.getTime());
+    expect(expiresLine(body)).toBe(`Expires: ${PINNED_EXPIRES}`);
+  });
+
+  it("keeps the pinned expiry in the future and less than one year ahead", () => {
+    vi.useRealTimers();
+    const now = Date.now();
+    const expires = Date.parse(SECURITY_TXT_EXPIRES);
+    expect(Number.isNaN(expires)).toBe(false);
+    expect(SECURITY_TXT_EXPIRES).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(expires).toBeGreaterThan(now);
+    const oneYearLater = new Date(now);
+    oneYearLater.setUTCFullYear(new Date(now).getUTCFullYear() + 1);
+    expect(expires).toBeLessThan(oneYearLater.getTime());
   });
 
   it("keeps Canonical on a single slash when APP_URL ends with slashes", async () => {
@@ -79,7 +94,7 @@ describe("/.well-known/security.txt (RFC 9116)", () => {
     expect(body).not.toContain("Canonical:");
     expect(body).toContain(`Contact: ${CONTACT}`);
     expect(body).toContain("Policy: ");
-    expect(expiresLine(body)).toBeDefined();
+    expect(expiresLine(body)).toBe(`Expires: ${PINNED_EXPIRES}`);
   });
 
   it("answers HEAD with the same headers and an empty body", async () => {

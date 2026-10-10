@@ -3,15 +3,16 @@ import { stripTrailingSlash } from "./seo";
 // The only reporting channel SECURITY.md names: GitHub private vulnerability reporting.
 const CONTACT = "https://github.com/TogetherWeOwn/two-web-next/security/advisories/new";
 const POLICY = "https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md";
-// RFC 9116 §2.5.5: less than a year ahead. Rolled from the request clock, never a fixed date.
-const EXPIRES_IN_MS = 364 * 24 * 60 * 60 * 1000;
+// Pinned review date (CISO decision 2026-10-10, option B): RFC 9116 §5.3 warns
+// stale contact data misroutes reports, so Expires is a fixed date reviewed
+// before it lapses, not a rolling clock. Must stay in RFC 3339 UTC.
+export const SECURITY_TXT_EXPIRES = "2027-10-01T00:00:00Z";
 
-export function buildSecurityTxt(appUrl: string, now: Date): string {
+export function buildSecurityTxt(appUrl: string): string {
   const base = stripTrailingSlash(appUrl);
-  const expires = new Date(now.getTime() + EXPIRES_IN_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
   return [
     `Contact: ${CONTACT}`,
-    `Expires: ${expires}`,
+    `Expires: ${SECURITY_TXT_EXPIRES}`,
     "Preferred-Languages: en",
     // RFC 9116 §2.5.2: a web Canonical must be https, so an http-only origin omits it.
     ...(base.startsWith("https://") ? [`Canonical: ${base}/.well-known/security.txt`] : []),
