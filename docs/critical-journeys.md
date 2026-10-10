@@ -114,18 +114,23 @@ Coverage reuses the CI journey logic with staging-safe setup:
 The list spec also runs as `mobile-375` (375×812 viewport) and
 `reduced-motion` (`reducedMotion: reduce`) projects. Cleanup is structural:
 RSVPs are withdrawn in-spec and every fixture the suite creates is cancelled
-(events) or deleted (featured slots) in a `finally`, so a failed run leaves no
-draft behind and no live card on the staging homepage. A test timeout closes the
-browser contexts before that `finally` runs, so the event journeys also have a
-backstop: `e2e/staging/global-teardown.ts` signs the QA moderator in fresh and
-cancels every `Staging E2E` event still published or draft
-(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. Each list and the
-final verification traverse matching pages even when a page contains only
-substring lookalikes. Pagination keeps the guarded origin and filters, advances
-one page at a time, and fails closed past 20 pages per status. The sweep allows
-four cancellation passes and at most four shared throttle waits within a
-five-minute deadline; a wait retries the same cancel without spending a pass.
-An exhausted bound fails the run rather than claiming cleanup succeeded.
+(events) or deleted (featured slots) in a `finally`. A test timeout closes the
+browser contexts before that `finally` runs. Staging event journeys therefore
+have a staging-only backstop: `e2e/staging/global-teardown.ts` signs the QA
+moderator in fresh and cancels every `Staging E2E` event still published or draft
+(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. The local RSVP
+pin (`e2e/event-waitlist.spec.ts`) has its own backstop,
+`e2e/local-global-teardown.ts`, which only uses `https://localhost:8787`, only
+matches its `E2E Waitlist ` and `E2E Promotion ` fixture titles, and is guarded
+to run in GitHub Actions on Linux. Neither sweep crosses into the other's
+origin. Each list and final verification traverse matching pages even when a
+page contains substring lookalikes. Pagination keeps the fixed origin and
+filters, advances one page at a time, and fails closed past 20 pages per status.
+The local sweep allows four cancellation passes and up to two QA-login
+throttle waits within a shared five-minute deadline; it honors `Retry-After`
+without retrying refused credentials. The staging sweep allows four passes and
+at most four cancellation throttle waits within its five-minute sweep bound. An exhausted bound fails the run rather than claiming cleanup
+succeeded.
 On failure the job
 uploads `test-results/` traces/screenshots and the HTML report for seven days.
 The repo is public, so artifacts are world-readable and log masking does not
