@@ -26,6 +26,15 @@ const remoteEnv = {
   SEED_STAGING_DB_NAME: "neondb",
   SEED_PRODUCTION_DB_HOSTS: "ep-live.example.neon.tech,ep-live-pooler.example.neon.tech",
 };
+const remotePlanetScaleEnv = {
+  APP_URL: STAGING_APP_URL,
+  SEED_CONFIRM: "staging",
+  DATABASE_URL:
+    "postgres://fixture:synthetic-password@staging-abc123.pg.psdb.cloud/planetseed_staging",
+  SEED_STAGING_DB_HOST: "staging-abc123.pg.psdb.cloud",
+  SEED_STAGING_DB_NAME: "planetseed_staging",
+  SEED_PRODUCTION_DB_HOSTS: "main-abc123.pg.psdb.cloud,ep-live.example.neon.tech",
+};
 const run = (args: string[] = [], env: Record<string, string> = localEnv) =>
   spawnSync(process.execPath, [script, ...args], { env, encoding: "utf8", timeout: 20_000 });
 const day = new Date("2099-10-01T12:00:00Z");
@@ -171,6 +180,70 @@ describe("staging seed: fail-closed offline CLI", () => {
         SEED_PRODUCTION_DB_HOSTS: " EP-STAGING.EXAMPLE.NEON.TECH. ",
       }),
     ).toThrow("production database host");
+  });
+
+  it("accepts allowlisted PlanetScale staging endpoints and refuses non-allowlisted or production targets", async () => {
+    expect(validateEnvironment(remotePlanetScaleEnv)).toMatchObject({
+      host: remotePlanetScaleEnv.SEED_STAGING_DB_HOST,
+      name: "planetseed_staging",
+    });
+    for (const overrides of [
+      { SEED_STAGING_DB_HOST: "" },
+      { SEED_STAGING_DB_NAME: "" },
+      { SEED_PRODUCTION_DB_HOSTS: "" },
+      { SEED_STAGING_DB_HOST: "other-xyz.pg.psdb.cloud" },
+      { SEED_STAGING_DB_NAME: "other" },
+      { APP_URL: "http://localhost:8787" },
+      {
+        DATABASE_URL:
+          "postgres://fixture:synthetic-password@other-xyz.pg.psdb.cloud/planetseed_staging",
+      },
+      {
+        DATABASE_URL:
+          "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/planetseed_staging",
+      },
+      {
+        DATABASE_URL:
+          "postgres://fixture:synthetic-password@main-abc123.pg.psdb.cloud/planetseed_staging",
+        SEED_STAGING_DB_HOST: "main-abc123.pg.psdb.cloud",
+        SEED_STAGING_DB_NAME: "planetseed_staging",
+      },
+      {
+        DATABASE_URL:
+          "postgres://fixture:synthetic-password@store.prod.pg.psdb.cloud/planetseed_staging",
+        SEED_STAGING_DB_HOST: "store.prod.pg.psdb.cloud",
+      },
+      {
+        DATABASE_URL:
+          "postgres://fixture:synthetic-password@staging-abc123.pg.psdb.cloud/production",
+      },
+      {
+        DATABASE_URL:
+          "postgres://fixture:synthetic-password@staging.example.test/planetseed_staging",
+        SEED_STAGING_DB_HOST: "staging.example.test",
+      },
+    ])
+      expect(() => validateEnvironment({ ...remotePlanetScaleEnv, ...overrides })).toThrow(
+        "Refusing seed:",
+      );
+    expect(() =>
+      validateEnvironment({
+        ...remotePlanetScaleEnv,
+        SEED_PRODUCTION_DB_HOSTS: " STAGING-ABC123.PG.PSDB.CLOUD. ",
+      }),
+    ).toThrow("production database host");
+    // Unreachable synthetic PlanetScale host: preview succeeds because no driver is constructed.
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await main([], remotePlanetScaleEnv);
+      expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({
+        mode: "dry-run",
+        planned: { events: 50, users: 3, rsvps: 12, featured: 3 },
+      });
+      expect(log.mock.calls[0]![0]).not.toContain("synthetic-password");
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("refuses production targets before any connection, so --apply writes nothing", () => {

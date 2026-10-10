@@ -17,6 +17,13 @@ const fixedStatements = {
 // Only bound-list cardinality varies; no interpolated identifiers/projections.
 const goingCounts =
   /^select "event_id", count\(\*\) from "rsvps" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+\) group by "rsvps"\."event_id"$/;
+// Roster totals return a single cardinality, never member identifiers. The
+// username filter is a bound parameter; only these two join/where shapes may
+// run under the roster-count classification.
+const rosterCountUnfiltered =
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" where "events"\."event_key" = \$\d+$/;
+const rosterCountFiltered =
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" left join "users" on "users"\."id" = "rsvps"\."user_id" where \("events"\."event_key" = \$\d+ and "users"\."username" ilike \$\d+\)$/;
 const fillCount =
   /select count\(\*\) from "rsvps" where \("rsvps"\."event_id" = "events"\."id" and "rsvps"\."status" = \$\d+\)/g;
 // The edit form needs PostgreSQL timestamp text, not lossy JS Dates. Only this
@@ -33,12 +40,28 @@ export function validateNonSensitiveRead(
     if (!goingCounts.test(query)) refuseMemberRead();
     return;
   }
-  if (classification !== "events" && classification !== "featured") {
+  if (classification === "roster-count") {
+    if (!rosterCountUnfiltered.test(query) && !rosterCountFiltered.test(query)) refuseMemberRead();
+    return;
+  }
+  if (
+    classification !== "events" &&
+    classification !== "featured" &&
+    classification !== "activity-log"
+  ) {
     if (query !== fixedStatements[classification]) refuseMemberRead();
     return;
   }
   if (classification === "featured" && fields?.length && query === featuredEditRead) return;
-  const table = classification === "events" ? "events" : "featured_contents";
+  const table =
+    classification === "events"
+      ? "events"
+      : classification === "featured"
+        ? "featured_contents"
+        : "activity_log";
+  // The viewer never renders the dirty before/after map: refuse any statement
+  // that selects it, so a future projection cannot leak raw properties JSON.
+  if (classification === "activity-log" && /\bproperties\b/i.test(query)) refuseMemberRead();
   if (
     !fields?.length ||
     fields.some(({ field }) => !is(field, Column) || getTableName(field.table) !== table)

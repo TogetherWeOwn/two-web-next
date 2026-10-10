@@ -8,6 +8,38 @@ The [parity matrix](parity.md) records what is implemented versus still missing.
 The production cutover and its DNS changes are outside this runbook; only the
 staging rollback and DNS flip-back rehearsal is covered here.
 
+**First responder index.** Match the symptom, open the section, run the first
+read-only diagnostic, then escalate. Every diagnostic below is a read; do not
+mutate, purge, roll back, migrate, rotate or restore from this table.
+
+Scope: staging (pre-cutover). Every host, Tail Worker and queue name below is
+the staging binding; for a production incident use
+[cutover-rollback.md](cutover-rollback.md) and the production bindings, never
+the staging targets.
+
+| Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
+| --- | --- | --- | --- |
+| Any incident: start here | [Safety and escalation](#safety-and-escalation) | Re-read the authorization box; confirm staging-vs-production scope first (staging targets below do not triage production); record UTC time, commit, Worker version IDs, route/job and redacted error class; keep logs private | DevOps & Reliability Engineer; Director of Engineering for technical dead-ends |
+| Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
+| `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
+| `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
+| `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
+| `queue.failing` or failed-history growth (terminal bot failures, dead-letter backlog) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `npx wrangler queues info two-sync-event` and `npx wrangler queues info two-internal-action` (transport metadata only); read the `/up` queue envelope; do not purge or replay | DevOps & Reliability Engineer |
+| Sign-in or join failing (`/auth/discord/callback`, `/join/discord`, `/join/callback`, `/auth/qa/:identity`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` readiness first; `GET /robots.txt` proves Worker startup only; on an auth failure stop and do not try another credential | DevOps & Reliability Engineer; through the Director to CISO if member data may have leaked |
+| Events page error state (`/events`, `/events.rss`, `/events.ics`, `/e/:key`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` plus `ready_wait_severity` and `oldest_ready_wait_age_seconds`; filter `http.request` by route and status in Observability per [runbook-logs.md](runbook-logs.md) | DevOps & Reliability Engineer |
+| Discord rate limiting (sync backoff, `rate_limited` bot sync refusal) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `GET /up` queue envelope plus `sync_retry_code` per [runbook-alerts.md](runbook-alerts.md); `rate_limited` is a retryable bot refusal under backoff, not a database outage; read the retry-cause table before touching delivery; do not purge or replay | DevOps & Reliability Engineer |
+| Bad deploy: need the rollback pointer | [Deploy and record the rollback pointer](#deploy-and-record-the-rollback-pointer) | `npx wrangler deployments status --name two-web-next --json` and `GET /up` `revision.version_id`; `wrangler deployments` wins on disagreement; do not roll back from this table | DevOps & Reliability Engineer; Director of Engineering for the rollback decision |
+| Database or Hyperdrive outage (configured DB unreachable, private 500/503 per the route table) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up`, which measures the selected `DATABASE_URL` else `DB.connectionString`; never substitute another backend or credential | Director of Engineering and the authorized custodian; through the Director to CISO if a leak is suspected |
+| Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/neon-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/neon-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
+
+Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
+(cutover-only authorized import),
+[Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
+(no rotation here) and
+[Quarterly moderator access review (revoke-command half)](#quarterly-moderator-access-review-revoke-command-half)
+(scheduled quarterly review, not incident response) are not incident entries;
+read those sections directly when that work is authorized.
+
 ## Safety and escalation
 
 - **Read the incident/release authorization first.** Commands labelled remote
@@ -85,6 +117,22 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 ```
 
 `DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
+
+## Quarterly moderator access review (revoke-command half)
+
+- Cadence: quarterly. Cadence ownership is a CTO/COO call; this section does not change it.
+- Owner: Director of Engineering, with security/access decisions through the CISO (see [Safety and escalation](#safety-and-escalation)).
+- Scope: every person confirmed to have lost the Discord moderator role since the last review. First confirm the Discord moderator role has been removed, as in [A moderator lost their role](#a-moderator-lost-their-role).
+- Procedure: for each such Discord snowflake, dry-run first, verify the active-session count, then apply:
+
+```sh
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+```
+
+`DATABASE_URL` is supplied through the environment only, as in the procedure above.
+- Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, each reviewed Discord snowflake with its dry-run active-session count and its apply count, and confirmation that Discord role removal was verified before revocation. The command output is counts only; keep member identifiers in the private review record and never paste database URLs, tokens, or secrets.
+- Non-goal: the role-audit half is a separate future change. This section covers only the revoke-command half.
 
 ## Deploy and record the rollback pointer
 
@@ -1020,17 +1068,18 @@ below, not its older `/up` row, define these outcomes.
 
 | Route(s) | Configured database outage behavior |
 | --- | --- |
-| `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join` (GET) | Stay **200**, DB-free. |
+| `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/.well-known/security.txt`, `/join` (GET) | Stay **200**, DB-free. |
 | `/up` (GET) | **503** `db:error`, `pending_migrations:null`; queue becomes `unknown`. A reachable DB with unreadable/pending web migrations is also 503 (`db:ok`). |
 | `/sitemap_index.xml` (GET) | Stays **200** with static entries; event lookup failure is caught. |
-| `/discord`, `/auth/discord` (GET) | Stay **302** to invite / OAuth start, DB-free. |
+| `/discord` (GET) | Stays **302** to the invite, DB-free. |
+| `/auth/discord` (GET) | With the app DB down, **302** to `/?n=signin_failed`, because the one-use journey is stored before the Discord redirect. Legacy `/auth/discord/redirect` stays DB-free and redirects to `/auth/discord`. |
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |
 | `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
 | `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
-| `/auth/discord/callback` (GET) | Session create/store failure **500**; roster-write-only failure is caught. Invalid state/Discord exchange failure redirects **302** before persistence. |
+| `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. Session-create failure after a successful Discord exchange is **500**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
 | `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
 | `/auth/qa/:identity` (POST) | Enabled/authorized session failure **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
-| `/logout` (POST) | Store construction/migration failure **500**; once resolved, revoke failure is swallowed and cookie deletion still returns **303**. Server-side revocation is then not proved. |
+| `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns **503** `Sign-out temporarily unavailable` and keeps the cookie, because the server row may still be valid. |
 | `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key` (GET) | Uncaught DB/session failure **500 HTML**; missing event DB **503**. Invalid keys can be **404** before DB access. |
 | `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | DB/session failure **500 HTML**; missing event DB **503 JSON**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
 | `/events/:key/rsvp` (PUT/DELETE) | Session/transaction failure **500 HTML**; missing event DB **503 JSON**, auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
@@ -1038,7 +1087,8 @@ below, not its older `/up` row, define these outcomes.
 | Implemented `/admin` routes | Session resolution failure **503**, later resource/dashboard query failure **500**; missing resource DB **503**. Default required access-log failure gives **503**; guest **302**, non-moderator **403**. |
 | `/api/agent-events` (POST) | Shared web database (`AGENT_DB` when bound, else `DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without any source **503**, service DB failure **500 JSON** `internal_error` (or **503** `ingress_unavailable` when the database is unreachable). No connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
 
-Sources: [src/index.tsx](../src/index.tsx), [join routes](../src/join/route.ts),
+Sources: [src/index.tsx](../src/index.tsx), [auth routes](../src/auth/routes.ts),
+[join routes](../src/join/route.ts),
 [event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
@@ -1118,10 +1168,11 @@ age-delete old rows or clear unique locks as an outage workaround.
 `queue_failed_jobs` ([drizzle/1007_queue-ledger.sql](../drizzle/1007_queue-ledger.sql))
 has `id`, `job_id`, `kind`, `key`, `reason`, `failed_at` only. It has **no payload
 and no original bot idempotency key**. There is no repo replay script,
-`queue:retry` command, Wrangler message-send subcommand, or operational mutation
-entrypoint. The default-off staging preview at
+`queue:retry` command, or Wrangler message-send subcommand. The default-off staging preview at
 `GET /admin/queue/failed/:id/preview` supplies read-only one-row advice, not replay
-or discard authority. Its activation, dedicated principal, audit and custody
+or discard authority; the guarded one-row re-dispatch at
+`POST /admin/queue/failed/:id/redispatch` is the single operational apply path
+for `replay` advice. Its activation, dedicated principal, audit and custody
 prerequisites are in [queue-redrive-runbook.md](queue-redrive-runbook.md#read-only-runtime-preview-disabled-until-separately-authorized).
 The sync-event library remains proved in `test/queue-replay.test.ts`. The operator
 inspect-list-redrive loop over these rows lives in
@@ -1157,10 +1208,14 @@ The reviewed one-row library function (`reconcileFailedJob` in
 advice after checking dirty source, current-revision refusal and surviving
 pending requests. The disabled runtime preview calls only that reconciliation
 function inside a consistent read-only snapshot; it never executes the advice.
-`replayFailedSyncEvent` remains a library-only mutation helper. It reuses a due
+`replayFailedSyncEvent` reuses a due
 pending request's key or mints a fresh one, then wraps the caller's raw queue
 binding and ledger with `trackingQueue` so the new message records its ledger
-job ID. No CLI, route or operational Worker caller wires replay or discard.
+job ID. Its single operational caller is the guarded one-row re-dispatch route
+(`POST /admin/queue/failed/:id/redispatch`, documented in
+[queue-redrive-runbook.md](queue-redrive-runbook.md#guarded-one-row-re-dispatch-disabled-until-separately-authorized)).
+No CLI or other operational Worker caller wires replay; `discardFailedJob`
+remains library-only with no operational route.
 A later explicit replay requires fresh reconciliation and separate authority.
 Only after confirmed recovery should separately approved history cleanup be
 considered; this runbook intentionally provides no blind `DELETE`, fabricated

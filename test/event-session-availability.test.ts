@@ -11,9 +11,10 @@ import {
 } from "../src/events/reads";
 import { env, EVENT_KEY, SUBJECT } from "./helpers/member-data";
 
-const { connect, ddl, throttleStore } = vi.hoisted(() => ({
+const { connect, ddl, query, throttleStore } = vi.hoisted(() => ({
   connect: vi.fn(),
   ddl: vi.fn(),
+  query: vi.fn(),
   throttleStore: vi.fn(async () => null),
 }));
 vi.mock("postgres", () => ({ default: connect }));
@@ -82,7 +83,10 @@ const request = (cookie?: string) =>
 beforeEach(() => {
   vi.clearAllMocks();
   ddl.mockRejectedValue(new Error("session DDL unavailable"));
-  connect.mockReturnValue({ unsafe: ddl });
+  // No runtime DDL: the request path reads the session row instead of
+  // migrating, so storage failure arrives as a rejected query, not DDL.
+  query.mockRejectedValue(new Error("session storage unavailable"));
+  connect.mockReturnValue(Object.assign(query, { unsafe: ddl }));
   vi.mocked(getPublicEvent).mockResolvedValue(event);
   vi.mocked(getEventNeighbors).mockResolvedValue({ previous: null, next: null });
   vi.mocked(listRelatedEvents).mockResolvedValue([]);
@@ -125,13 +129,15 @@ describe("guest event pages with unavailable session storage", () => {
     },
   );
 
-  it("a usable signed token still resolves storage and fails closed on session DDL failure", async () => {
+  it("a usable signed token still resolves storage and fails closed on session storage failure", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await request(await signedCookie("two_test-token"));
     expect(res.status).toBe(503);
     expect(await res.text()).not.toContain(SUBJECT.username);
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(ddl).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalled();
+    // The request path never issues schema DDL, even when storage is down.
+    expect(ddl).not.toHaveBeenCalled();
     expect(throttleStore).toHaveBeenCalledTimes(1);
     expect(listGoingAttendees).not.toHaveBeenCalled();
   });

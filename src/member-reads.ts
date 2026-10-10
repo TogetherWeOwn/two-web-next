@@ -15,8 +15,10 @@ type Capture = {
 export type NonSensitiveRead =
   | "events"
   | "featured"
+  | "activity-log"
   | "join-funnel"
   | "going-counts"
+  | "roster-count"
   | "search-widget"
   | "timeouts";
 type ReadPermit = { capture: Capture; queries: number; classification?: NonSensitiveRead };

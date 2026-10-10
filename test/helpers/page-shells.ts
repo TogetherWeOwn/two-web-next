@@ -27,6 +27,7 @@ export const HTML_READS = [
   "/profile",
   "/members/:user",
   "/admin",
+  "/admin/activity-log",
   "/admin/events",
   "/admin/events/new",
   "/admin/events/:key",
@@ -45,6 +46,8 @@ export const NON_HTML_READS = [
   "/auth/discord",
   "/auth/discord/callback",
   "/auth/discord/redirect",
+  "/login", // Vanity sign-in alias: 302 to /auth/discord, never an HTML page.
+  "/community", // Vanity lobby alias: 302 to /, never an HTML page.
   "/admin/events/create",
   "/admin/events/:key/edit",
   "/admin/featured-contents",
@@ -53,6 +56,7 @@ export const NON_HTML_READS = [
   "/admin/queue/failed/:id/preview", // Operational advice is buffered JSON, never HTML.
   "/sitemap_index.xml",
   "/robots.txt",
+  "/.well-known/security.txt", // Plain-text RFC 9116 disclosure file, never an HTML document.
   "/up",
   "/auth/status", // Bool-only JSON, never an HTML document.
   "/members", // Retired bare path: branded 404, never a member index.
@@ -200,6 +204,13 @@ export function pageShellFixture(status = "published") {
       sql.includes("from rsvps")
     )
       return { rows: [] };
+    // The activity-log viewer selects an explicit 7-column projection that
+    // never includes `properties`; one null-causer system row keeps the page
+    // shell covered without inventing an access-log subject.
+    if (sql.includes('from "activity_log"'))
+      return {
+        rows: [[1, "Fixture activity", "event", "1", null, "created", now.toISOString()]],
+      };
     if (
       sql.includes('from "rsvps"') ||
       sql.includes('from "event_search_log"') ||
