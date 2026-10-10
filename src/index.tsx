@@ -432,6 +432,25 @@ app.get("/discord", (c) => {
   return c.redirect(inviteDestination(c.env.DISCORD_INVITE_URL), 302);
 });
 
+// Vanity aliases (post-cutover): `/login` is the sign-in entry, `/community`
+// is the lobby front. Database-free by design like `/discord` — no session, no
+// cookie, no database — they stay 302 when everything behind them is down.
+// 302, not 301: the doors get retargeted, and a 301 is cached by browsers
+// effectively forever. `/login` keeps only a safe `next` under the same
+// `safeNext` policy as `/auth/discord/redirect`; it starts no OAuth state and
+// issues no cookie — `/auth/discord` remains responsible for fresh state.
+// `/community` drops every query.
+app.get("/login", (c) => {
+  const next = safeNext(c.req.query("next"));
+  c.header("cache-control", "no-store");
+  return c.redirect(next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord", 302);
+});
+
+app.get("/community", (c) => {
+  c.header("cache-control", "no-store, private");
+  return c.redirect("/", 302);
+});
+
 // Static funnel leaves (ports two-web routes/funnel.php's `/about` + `/faq`): dependency-free,
 // no controller, no session, no database — they stay 200 during an app-DB outage. No cookies are
 // read or set here on purpose, for the same reason.

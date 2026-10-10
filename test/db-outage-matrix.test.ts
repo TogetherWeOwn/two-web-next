@@ -66,6 +66,9 @@ const MATRIX: Case[] = [
   // sending the member through an OAuth round trip that could never be admitted.
   { method: "GET", route: "/auth/discord", status: 302, location: "/?n=signin_failed" },
   { method: "GET", route: "/auth/discord/redirect", status: 302, location: "/auth/discord" },
+  // Vanity aliases: no session, cookie or database read, so the same 302s hold during an outage.
+  { method: "GET", route: "/login", status: 302, location: "/auth/discord" },
+  { method: "GET", route: "/community", status: 302, location: "/" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
   // Stale-tab liveness probe and expired-write recovery (main #239): neither
   // reads the DB without a session cookie, so both stay 200 during an outage.
