@@ -76,10 +76,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.PR_LINT_CHECKOUT_SHA }}
+          # Read both immutable tracked trees, including the event's base snapshot.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Unit-test the lint
-        run: python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_internal_ref_ratchet.py'
+
+      - name: Ratchet tracked internal references
+        if: github.event_name != 'push'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ env.PR_LINT_CHECKOUT_SHA }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Dispatched release PRs have no pull_request event snapshot. The metadata
+          # binding below verifies their current head against this checked-out SHA.
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            BASE_SHA=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')
+          fi
+          python3 .github/scripts/internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
 
       - name: Resolve PR title/body
         id: pr
