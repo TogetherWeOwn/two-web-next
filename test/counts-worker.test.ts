@@ -20,7 +20,7 @@ describe("counts cache invocation lifetime in workerd", () => {
             async fetch(request) {
               const url = new URL(request.url);
               if (url.pathname === "/stats") return Response.json({ ...stats });
-              const env = { DATABASE_URL: "postgres://fixture.test/" + (url.searchParams.get("mode") || "counts") };
+              const env = { BOT_DATABASE_URL: "postgres://fixture.test/" + (url.searchParams.get("mode") || "counts") };
               if (url.pathname === "/abandon") {
                 void readCounts(env);
                 await new Promise(resolve => setTimeout(resolve, 300));

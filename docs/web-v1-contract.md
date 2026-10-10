@@ -79,9 +79,12 @@ not hide independently readable ranks.
 
 ## Connection, cache, and failure boundary
 
-- Reuse `src/db/connection.ts`: explicit local/dev `DATABASE_URL` wins when set;
-  otherwise use the Hyperdrive `DB.connectionString` binding. Choose once,
-  **never retry with the other source after an error**.
+- Reuse `src/db/connection.ts` (`botDatabaseUrl`): explicit local/dev
+  `BOT_DATABASE_URL` wins when set; otherwise use the Hyperdrive
+  `BOT_DB.connectionString` binding (bot-reader Hyperdrive at the bot
+  database). Choose once, **never retry with the other source after an
+  error**. The web `DB` is never read here: it holds no `web_v1` views, so
+  with no bot source the counts stay hidden.
 - Both queries are read-only, with prepared statements and type discovery off
   for Hyperdrive. Each per-read client closes after use.
 - Independent `counts.live` and `counts.ranks` caches use the legacy **60-second
