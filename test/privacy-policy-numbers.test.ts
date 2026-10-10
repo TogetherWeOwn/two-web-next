@@ -74,6 +74,21 @@ const UNIT =
 const DURATION =
   /(?<![\w-])(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|sixty|ninety|half a|a)[ -](?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?|months?|years?|ms)(?![\w-])/gi;
 
+const durationsOf = (text: string): string[] => text.toLowerCase().match(DURATION) ?? [];
+
+// Exact token match: "120 minutes" must not account for "20 minutes",
+// nor "half a second" for "a second".
+function unaccountedSentences(paragraphText: string, pinnedPhrases: string[]): string[] {
+  const pinned = new Set(pinnedPhrases.flatMap(durationsOf));
+  return paragraphText
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => UNIT.test(sentence))
+    .filter((sentence) => {
+      const durations = durationsOf(sentence);
+      return durations.length === 0 || durations.some((duration) => !pinned.has(duration));
+    });
+}
+
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
@@ -209,22 +224,83 @@ function cookieCalls(text: string): string[] {
   );
 }
 
-const pinnedLifetime = (text: string): boolean => {
-  const name = text.match(/maxAge:\s*(\w+)/)?.[1];
-  return name !== undefined && PINNED_COOKIE_LIFETIMES.includes(name);
+// The only modules that may define each lifetime; every other file must import
+// it from one of these under the same name.
+const PINNED_COOKIE_ORIGINS: Record<string, string[]> = {
+  SESSION_TTL_SECONDS: ["src/sessions.ts"],
+  STATE_TTL_SECONDS: ["src/index.tsx", "src/join/route.ts"],
+  JOURNEY_TTL_SECONDS: ["src/join/route.ts", "src/return-journey.ts"],
+  WRITE_RECOVERY_TTL_SECONDS: ["src/write-recovery.tsx"],
 };
+
+type ImportEntry = { local: string; imported: string; source: string };
+
+function importEntries(text: string): ImportEntry[] {
+  const entries: ImportEntry[] = [];
+  for (const statement of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*["']([^"']+)["']/g)) {
+    for (const part of statement[1]!.split(",")) {
+      const specifier = part.trim();
+      if (!specifier || specifier.startsWith("type ")) continue;
+      const alias = /^(\w+)\s+as\s+(\w+)$/.exec(specifier);
+      if (alias) entries.push({ imported: alias[1]!, local: alias[2]!, source: statement[2]! });
+      else if (/^\w+$/.test(specifier))
+        entries.push({ imported: specifier, local: specifier, source: statement[2]! });
+    }
+  }
+  return entries;
+}
+
+// A pinned name counts only from its canonical module: defined there, or imported
+// from there under the same name. A same-named local constant anywhere else is a
+// shadow, not the pin.
+function pinnedLifetimeInFile(where: string, fileText: string, snippet: string): boolean {
+  const name = snippet.match(/maxAge:\s*(\w+)/)?.[1];
+  if (name === undefined || !PINNED_COOKIE_LIFETIMES.includes(name)) return false;
+  const origins = PINNED_COOKIE_ORIGINS[name] ?? [];
+  if (origins.includes(where))
+    return new RegExp(`export\\s+(?:const|let|var)\\s+${name}\\b`).test(fileText);
+  return importEntries(fileText).some(
+    (entry) =>
+      entry.local === name &&
+      entry.imported === name &&
+      entry.source.startsWith(".") &&
+      origins.some((origin) => {
+        const base = join(dirname(where), entry.source);
+        return origin === base || origin.startsWith(`${base}.`);
+      }),
+  );
+}
 
 // A call passes when its options carry a pinned maxAge, inline or through a same-file options constant.
 function unpinnedCookieCalls(file: string, text: string): string[] {
+  const where = relative(root, file);
   return cookieCalls(text).flatMap((call) => {
-    if (pinnedLifetime(call)) return [];
+    if (pinnedLifetimeInFile(where, text, call)) return [];
     const lastArg = call.slice(0, -1).split(",").at(-1)?.trim() ?? "";
     if (/^\w+$/.test(lastArg)) {
       const definition = new RegExp(`const ${lastArg} = \\{[\\s\\S]*?\\};`).exec(text)?.[0] ?? "";
-      if (pinnedLifetime(definition)) return [];
+      if (pinnedLifetimeInFile(where, text, definition)) return [];
     }
-    return [`${relative(root, file)}: ${call.replace(/\s+/g, " ").slice(0, 80)}`];
+    return [`${where}: ${call.replace(/\s+/g, " ").slice(0, 80)}`];
   });
+}
+
+function cookieLifetimeOffenders(file: string, text: string): string[] {
+  const where = relative(root, file);
+  const expressions = [...text.matchAll(/maxAge:\s*([^,}\n]+)/g)].map((match) => match[1]!.trim());
+  return [
+    ...expressions.flatMap((expr) => {
+      if (!PINNED_COOKIE_LIFETIMES.includes(expr)) return [`${where}: maxAge: ${expr}`];
+      if (!pinnedLifetimeInFile(where, text, `maxAge: ${expr}`))
+        return [
+          `${where}: maxAge: ${expr} must come from its pinned module (${(PINNED_COOKIE_ORIGINS[expr] ?? []).join(" or ")})`,
+        ];
+      return [];
+    }),
+    ...(/\bmaxAge\s*[,}]/.test(text) ? [`${where}: shorthand maxAge`] : []),
+    ...(/\b(?:Max-Age|Expires)=/.test(text) ? [`${where}: raw cookie expiry`] : []),
+    ...unpinnedCookieCalls(file, text),
+  ];
 }
 
 describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
@@ -252,23 +328,26 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
     };
     for (const { anchor, phrase } of CLAIMS) pinParagraph(anchor, phrase);
     for (const { anchor, claim } of OUT_OF_SCOPE) pinParagraph(anchor, claim);
-    const unaccounted = POLICY.flatMap(({ text }) => {
-      const pinned = phrasesByParagraph.get(text) ?? [];
-      return text
-        .split(/(?<=[.!?])\s+/)
-        .filter((sentence) => UNIT.test(sentence))
-        .filter((sentence) => {
-          const durations = sentence.match(DURATION) ?? [];
-          return (
-            durations.length === 0 ||
-            durations.some(
-              (duration) => !pinned.some((phrase) => phrase.includes(duration.toLowerCase())),
-            )
-          );
-        })
-        .map((sentence) => sentence.slice(0, 90));
-    });
+    const unaccounted = POLICY.flatMap(({ text }) =>
+      unaccountedSentences(text, phrasesByParagraph.get(text) ?? []).map((sentence) =>
+        sentence.slice(0, 90),
+      ),
+    );
     expect(unaccounted, `${POLICY_FILE} states a duration that no test pins`).toEqual([]);
+  });
+
+  it("does not let a pinned phrase cover a shorter overlapping duration", () => {
+    expect(
+      unaccountedSentences("Sessions last 120 minutes. Idle seats free after 20 minutes.", [
+        "120 minutes",
+      ]),
+    ).not.toEqual([]);
+    expect(
+      unaccountedSentences("Stats finish in half a second. Snapshots take a second.", [
+        "half a second",
+      ]),
+    ).not.toEqual([]);
+    expect(unaccountedSentences("Sessions last 120 minutes.", ["120 minutes"])).toEqual([]);
   });
 
   it("keeps the access-log prune floor equal to the retention", () => {
@@ -298,23 +377,33 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
   });
 
   it("gives every cookie lifetime in src a pinned constant", () => {
-    const offenders = sourceFiles(resolve(root, "src")).flatMap((file) => {
-      const text = readFileSync(file, "utf8");
-      const where = relative(root, file);
-      const expressions = [...text.matchAll(/maxAge:\s*([^,}\n]+)/g)].map((match) =>
-        match[1]!.trim(),
-      );
-      return [
-        ...expressions
-          .filter((expr) => !PINNED_COOKIE_LIFETIMES.includes(expr))
-          .map((expr) => `${where}: maxAge: ${expr}`),
-        ...(/\bmaxAge\s*[,}]/.test(text) ? [`${where}: shorthand maxAge`] : []),
-        ...(/\b(?:Max-Age|Expires)=/.test(text) ? [`${where}: raw cookie expiry`] : []),
-        ...unpinnedCookieCalls(file, text),
-      ];
-    });
+    const offenders = sourceFiles(resolve(root, "src")).flatMap((file) =>
+      cookieLifetimeOffenders(file, readFileSync(file, "utf8")),
+    );
     expect(offenders, "every cookie lifetime in src must be one of the pinned constants").toEqual(
       [],
     );
+  });
+
+  it("rejects a same-named local constant shadowing a pinned lifetime", () => {
+    const rogue = [
+      'import { setCookie } from "hono/cookie";',
+      "const STATE_TTL_SECONDS = 31536000;",
+      "export function attack(c: never, v: string) {",
+      '  setCookie(c, "two_oauth_state", v, { maxAge: STATE_TTL_SECONDS });',
+      "}",
+    ].join("\n");
+    const rogueFile = resolve(root, "src/rogue.ts");
+    expect(
+      cookieLifetimeOffenders(rogueFile, rogue).some((offender) =>
+        offender.includes("pinned module"),
+      ),
+      "a same-named local constant must fail the origin gate",
+    ).toBe(true);
+    const legit = rogue.replace(
+      "const STATE_TTL_SECONDS = 31536000;",
+      'import { STATE_TTL_SECONDS } from "./index";',
+    );
+    expect(cookieLifetimeOffenders(rogueFile, legit)).toEqual([]);
   });
 });
