@@ -38,8 +38,9 @@ import {
   throttleGuard,
 } from "../throttle";
 import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding } from "../write-recovery";
+import { SESSION_COOKIE } from "../session-cookie";
 
-export const SESSION_COOKIE = "__Host-two_session";
+export { SESSION_COOKIE };
 const STATE_COOKIE = "__Host-two_oauth_state";
 
 type Ctx = Context<{ Bindings: Env }>;

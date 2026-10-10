@@ -138,6 +138,7 @@ web never migrates bot tables or queries member-level bot data.
 ## 6. Auth and sessions
 
 Read from: [src/sessions.ts](../src/sessions.ts),
+[src/session-cookie.ts](../src/session-cookie.ts),
 [src/session-revocation.ts](../src/session-revocation.ts),
 [bin/revoke-sessions.mjs](../bin/revoke-sessions.mjs),
 [src/discord.ts](../src/discord.ts), [src/oauth-journeys.ts](../src/oauth-journeys.ts),
@@ -146,7 +147,8 @@ Read from: [src/sessions.ts](../src/sessions.ts),
 
 Sign-in is Discord OAuth2 with the `identify` and `guilds.join` scopes
 ([src/discord.ts](../src/discord.ts)); the access token is used for the join
-request and never stored. The session cookie (`__Host-two_session`) carries
+request and never stored. The session cookie (`__Host-two_session`,
+[src/session-cookie.ts](../src/session-cookie.ts)) carries
 only a random `two_` token while the row in `web_sessions` carries identity,
 member/moderator flags, and expiry ([src/sessions.ts](../src/sessions.ts),
 [src/index.tsx](../src/index.tsx)); tokens are SHA-256 hashed at rest,
@@ -272,6 +274,7 @@ exactly once.
 | `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
 | `src/seo-leaves.tsx` | entry |
+| `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |
 | `src/sessions.ts` | auth |
 | `src/static-leaves.tsx` | entry |
