@@ -181,7 +181,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 |---|---|---|
 | `ALL /*` | middleware | member-exposure: global security headers |
 | `ALL /admin/*` | moderator | member-exposure: mounted admin gate |
-| `ALL /admin/queue/*` | staging-operator | queue-preview-route: default-off, exact staging origin, explicit GET Origin, non-QA dedicated principal, fail-closed operational audit |
+| `ALL /admin/queue/*` | staging-operator | queue-preview-route / queue-redispatch-route: default-off, exact staging origin, explicit Origin (GET preview, POST apply), non-QA dedicated principal, fail-closed operational audit |
 | `ALL /events/:key/rsvp` | public | rsvp: 405 fallback, not a public read |
 | `ALL /members/*` | member | member-exposure: gate + access log |
 | `ALL /profile` | member | member-exposure: gate + access log |
@@ -198,7 +198,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/featured/new` | moderator | admin: create form |
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
-| `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; no replay/delete entrypoint |
+| `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; the guarded apply lives on the redispatch route |
 | `GET /auth/discord` | public | app: OAuth start; legacy `/auth/discord/redirect` now temporarily redirects here |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
 | `GET /discord` | public | seo: invite redirect |
@@ -233,6 +233,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /admin/featured` | moderator | admin: featured create |
 | `POST /admin/featured/:id` | moderator | admin: featured update |
 | `POST /admin/featured/:id/delete` | moderator | admin: featured delete |
+| `POST /admin/queue/failed/:id/redispatch` | staging-operator | queue-redispatch-route / queue-redispatch-postgres: one-row guarded re-dispatch of replay advice only; refusals and stale rows are never deleted, reset or re-budgeted |
 | `POST /api/agent-events` | machine-bearer | agent-events: W14 machine ingress |
 | `POST /auth/qa/:identity` | staging-token | app: deliberate POST divergence from legacy GET |
 | `POST /csp-reports` | public | csp-reports: no-store violation sink |

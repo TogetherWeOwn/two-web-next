@@ -15,6 +15,8 @@
 // - GET  /admin/join-attempts/:id    read-only attempt detail
 // - GET  /admin/activity-log         read-only activity-log viewer (R11)
 // - GET  /admin/queue/failed/:id/preview  one-row advice only
+// - POST /admin/queue/failed/:id/redispatch  one-row guarded re-dispatch
+//   (replay advice only; refusals and stale rows are never deleted here)
 // - GET  /admin/featured             list, position order
 // - GET  /admin/featured/new         create form
 // - POST /admin/featured             create
@@ -31,6 +33,7 @@ import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
+import { queueRedispatchHandler } from "./queue-redispatch";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
@@ -144,9 +147,20 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
+  // Same write envelope as every other admin POST: throttle admits before
+  // buffering (oversized attempts count against the bucket), the wire cap
+  // refuses before parsing, and the handler itself never parses a payload
+  // (dispatch always starts from the reconciled source). Only the dedicated
+  // staging operator principal can reach the handler.
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
+  admin.post(
+    "/queue/failed/:id/redispatch",
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    requestBodyLimit("action"),
+    queueRedispatchHandler,
+  );
 
   // Legacy Filament bookmarks: guard first, no query forwarding.
   // Only the featured edit alias needs a resource read to resolve the imported ID.
