@@ -10,15 +10,19 @@ import assert from "node:assert/strict";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // Nested island helpers are budgeted too: an island may import a shared
 // `./vendor/*.js`, and Workers serves dot files/directories under public/ too.
-// Parent traversal can never be a valid budget key; the regex alone accepts `..`.
-const assetPattern = /^public\/(?:islands\/(?:[^/]+\/)*[^/]+\.js|styles\.css)$/;
+// Theme stylesheets are served from the public/ top level (`/theme.css` on
+// every themed page plus per-theme files); they are authored in place, not
+// built from assets/, but they still need ceilings. Parent traversal can never
+// be a valid budget key; the regex alone accepts `..`.
+const assetPattern = /^public\/(?:islands\/(?:[^/]+\/)*[^/]+\.js|[^/]+\.css)$/;
 
 function isBudgetKey(entry) {
   return typeof entry === "string" && assetPattern.test(entry) && !entry.split("/").includes("..");
 }
 
-// Every .js file served from public/islands, at any depth: a nested import
-// without an explicit ceiling fails closed instead of escaping enforcement.
+// Every .js file served from public/islands, at any depth, plus every
+// top-level public/*.css: a nested import or an unbudgeted stylesheet without
+// an explicit ceiling fails closed instead of escaping enforcement.
 function discoverServed(root) {
   const islands = [];
   const walk = (dir, prefix) => {
@@ -29,7 +33,12 @@ function discoverServed(root) {
   };
   walk(join(root, "public/islands"), "public/islands/");
   islands.sort();
-  return ["public/styles.css", ...islands];
+  const styles = [];
+  for (const name of readdirSync(join(root, "public"), { withFileTypes: true })) {
+    if (name.isFile() && name.name.endsWith(".css")) styles.push(`public/${name.name}`);
+  }
+  styles.sort();
+  return [...styles, ...islands];
 }
 
 export function run(root, output = console) {
@@ -249,6 +258,37 @@ function selftest() {
       },
       2,
       "no budget for public/styles.css",
+    );
+    check(
+      "unbudgeted top-level CSS cannot escape enforcement",
+      () => {
+        writeFileSync(join(root, "public/theme.css"), payload);
+      },
+      2,
+      "no budget for public/theme.css",
+    );
+    rmSync(join(root, "public/theme.css"), { force: true });
+    check(
+      "over-ceiling theme CSS fails",
+      (budget) => {
+        writeFileSync(join(root, "public/theme.css"), payload);
+        budget.budgets["public/theme.css"] = {
+          maxRawBytes: exact.maxRawBytes - 1,
+          maxGzipBytes: exact.maxGzipBytes,
+        };
+        save(budget);
+      },
+      1,
+      "public/theme.css: raw",
+    );
+    rmSync(join(root, "public/theme.css"), { force: true });
+    check(
+      "parent traversal CSS is rejected",
+      (budget) => {
+        budget.budgets["public/../x.css"] = { ...exact };
+        save(budget);
+      },
+      2,
     );
     console.log(`bundle budget selftest: ${cases} cases passed.`);
     return 0;
