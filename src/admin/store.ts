@@ -2,8 +2,9 @@
 // row write from a route. Ports:
 // - EventService::create/update/publish/cancel (transitionTo: cancelled is
 //   terminal; cancelled keeps its write-back because Discord was told).
-// - FeaturedContent CRUD + delete (safe: nothing downstream refers to it).
-// - spatie LogsActivity dirty-only audit on both resources (M7).
+// - FeaturedContent CRUD + delete lives in ./store-featured (safe: nothing
+//   downstream refers to it), re-exported below.
+// - spatie LogsActivity dirty-only audit on both resources (M7, ./store-shared).
 // - AccessRecorder one-row-per-request access log (M5).
 //
 // Pause/reopen and capacity edits share the RSVP service's event-row FOR UPDATE
@@ -16,7 +17,6 @@ import {
   count,
   desc,
   eq,
-  getTableColumns,
   gt,
   ilike,
   inArray,
@@ -26,19 +26,12 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
-import { parseFeaturedListQuery } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
-import {
-  activityLog,
-  events,
-  featuredContents,
-  memberDataAccessLogs,
-  rsvps,
-} from "../db/admin-schema";
+import { activityLog, events, memberDataAccessLogs, rsvps } from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
-import type { EventFormInput, EventStatus, FeaturedFormInput } from "./validation";
+import type { EventFormInput, EventStatus } from "./validation";
 import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
 import {
   CAPACITY_BELOW_GOING,
@@ -46,78 +39,27 @@ import {
   lockWaitlist,
   promoteWaitlist,
 } from "../events/waitlist";
+import { retireAnonEventCaches } from "../events/anon-cache";
+import { audit, dirty, NotFoundError, type Actor } from "./store-shared";
 
-export type Actor = { id: string; username: string };
+// Featured leaves live in ./store-featured; shared audit helpers in
+// ./store-shared. The export list below is exactly the previous export list
+// of this file, so all importers keep working untouched.
+export {
+  createFeatured,
+  deleteFeatured,
+  getFeatured,
+  getFeaturedIdByLegacyId,
+  listFeatured,
+  updateFeatured,
+} from "./store-featured";
+export type { FeaturedEditRow, FeaturedRow } from "./store-featured";
+export { type Actor, NotFoundError } from "./store-shared";
 
 export type EventRow = typeof events.$inferSelect;
-export type FeaturedRow = typeof featuredContents.$inferSelect;
-export type FeaturedEditRow = FeaturedRow & {
-  startsAtText: string | null;
-  endsAtText: string | null;
-};
-
-// Date decoding loses imported microseconds and cannot represent infinity.
-// Pin formatting to UTC independently of the connection's TimeZone/DateStyle.
-// Keep BC visible so validation cannot mistake an unsupported era for AD.
-const featuredEditSelection = {
-  ...getTableColumns(featuredContents),
-  startsAtText: sql<string | null>`CASE WHEN isfinite(${featuredContents.startsAt})
-    THEN to_char(${featuredContents.startsAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')
-      || CASE WHEN EXTRACT(YEAR FROM ${featuredContents.startsAt} AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END
-    ELSE ${featuredContents.startsAt}::text END`,
-  endsAtText: sql<string | null>`CASE WHEN isfinite(${featuredContents.endsAt})
-    THEN to_char(${featuredContents.endsAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')
-      || CASE WHEN EXTRACT(YEAR FROM ${featuredContents.endsAt} AT TIME ZONE 'UTC') < 0 THEN ' BC' ELSE '' END
-    ELSE ${featuredContents.endsAt}::text END`,
-};
-
-function featuredTimestamp(date: Date | null, text: string | null | undefined) {
-  return text === undefined ? date : text === null ? null : sql`${text}::timestamptz`;
-}
-
-function featuredAuditValues({ startsAtText, endsAtText, ...row }: FeaturedEditRow) {
-  return { ...row, startsAt: startsAtText, endsAt: endsAtText };
-}
 
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
-
-const AUDIT_EXCLUDE = new Set(["discordEventId", "icsSequence"]);
-
-function dirty<T extends Record<string, unknown>>(
-  before: T,
-  after: Partial<T>,
-): Record<string, { before: unknown; after: unknown }> {
-  const out: Record<string, { before: unknown; after: unknown }> = {};
-  for (const [k, v] of Object.entries(after)) {
-    if (AUDIT_EXCLUDE.has(k)) continue;
-    const b = before[k];
-    const norm = (x: unknown) => (x instanceof Date ? x.toISOString() : (x ?? null));
-    if (JSON.stringify(norm(b)) !== JSON.stringify(norm(v)))
-      out[k] = { before: norm(b), after: norm(v) };
-  }
-  return out;
-}
-
-async function audit(
-  db: Pick<Db, "insert">,
-  opts: {
-    subjectType: string;
-    subjectId: string;
-    causerId: string | null;
-    description: string;
-    properties: Record<string, { before: unknown; after: unknown }>;
-  },
-): Promise<void> {
-  await db.insert(activityLog).values({
-    logName: "default",
-    description: opts.description,
-    subjectType: opts.subjectType,
-    subjectId: opts.subjectId,
-    causerId: opts.causerId,
-    properties: opts.properties,
-  });
-}
 
 function toEventStatus(raw: string): EventStatus {
   if (raw === "draft" || raw === "published" || raw === "cancelled" || raw === "past") return raw;
@@ -173,6 +115,9 @@ export async function createEvent(
     });
     return parent;
   });
+  // Committed: a new event can appear on the calendar once published, so the
+  // anonymous entries retire here too (N6), never on a throw above.
+  retireAnonEventCaches();
   return { row, writeBack: null };
 }
 
@@ -275,68 +220,73 @@ export async function updateEvent(
   eventKey: string,
   input: EventFormInput,
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
-  return db.transaction(async (tx) => {
-    // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
-    // child shift below always sees the committed old times (no double-shift).
-    const [locked] = await tx
-      .select()
-      .from(events)
-      .where(eq(events.eventKey, eventKey))
-      .for("update");
-    if (!locked) throw new NotFoundError("event");
-    if (input.capacity !== null) {
-      const occupied = await goingCount(tx, locked.id);
-      if (input.capacity < occupied) {
-        throw new ValidationError({
-          capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
+  const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
+    await db.transaction(async (tx) => {
+      // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
+      // child shift below always sees the committed old times (no double-shift).
+      const [locked] = await tx
+        .select()
+        .from(events)
+        .where(eq(events.eventKey, eventKey))
+        .for("update");
+      if (!locked) throw new NotFoundError("event");
+      if (input.capacity !== null) {
+        const occupied = await goingCount(tx, locked.id);
+        if (input.capacity < occupied) {
+          throw new ValidationError({
+            capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
+          });
+        }
+      }
+      // Closed field list: the key is addressed by, never written through,
+      // this update (EventFormInput carries no key; forged keys never parse).
+      const [row] = await tx
+        .update(events)
+        .set({
+          title: input.title,
+          game: input.game,
+          description: input.description,
+          startsAt: input.startsAtUtc,
+          endsAt: input.endsAtUtc,
+          timezone: input.timezone,
+          location: input.location,
+          capacity: input.capacity,
+          // A moderator edit must invalidate an agent's full-field stale write.
+          agentVersion:
+            locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(events.eventKey, eventKey))
+        .returning();
+      if (!row) throw new Error("event update returned no row");
+      await promoteWaitlist(tx, row);
+      const changes = dirty(
+        locked as Record<string, unknown>,
+        row as unknown as Record<string, unknown>,
+      );
+      if (Object.keys(changes).length > 0) {
+        await tx.insert(activityLog).values({
+          logName: "default",
+          description: `updated event ${row.title}`,
+          subjectType: "Event",
+          subjectId: row.eventKey,
+          causerId: actor.id,
+          properties: changes,
         });
       }
-    }
-    // Closed field list: the key is addressed by, never written through,
-    // this update (EventFormInput carries no key; forged keys never parse).
-    const [row] = await tx
-      .update(events)
-      .set({
-        title: input.title,
-        game: input.game,
-        description: input.description,
-        startsAt: input.startsAtUtc,
-        endsAt: input.endsAtUtc,
-        timezone: input.timezone,
-        location: input.location,
-        capacity: input.capacity,
-        // A moderator edit must invalidate an agent's full-field stale write.
-        agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-        updatedAt: new Date(),
-      })
-      .where(eq(events.eventKey, eventKey))
-      .returning();
-    if (!row) throw new Error("event update returned no row");
-    await promoteWaitlist(tx, row);
-    const changes = dirty(
-      locked as Record<string, unknown>,
-      row as unknown as Record<string, unknown>,
-    );
-    if (Object.keys(changes).length > 0) {
-      await tx.insert(activityLog).values({
-        logName: "default",
-        description: `updated event ${row.title}`,
-        subjectType: "Event",
-        subjectId: row.eventKey,
-        causerId: actor.id,
-        properties: changes,
-      });
-    }
-    const childWriteBacks = row.recurrenceFrequency
-      ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
-      : [];
-    const status = toEventStatus(row.status);
-    return {
-      row,
-      writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
-      childWriteBacks,
-    };
-  });
+      const childWriteBacks = row.recurrenceFrequency
+        ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
+        : [];
+      const status = toEventStatus(row.status);
+      return {
+        row,
+        writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
+        childWriteBacks,
+      };
+    });
+  // Committed: the edit is visible to guests on the next fetch (N6).
+  retireAnonEventCaches();
+  return result;
 }
 
 /**
@@ -405,7 +355,7 @@ export async function transitionEvent(
   eventKey: string,
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
-  return db.transaction(async (tx) => {
+  const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
     // Share the ingress/RSVP row lock: judge the transition only after an
     // earlier writer commits, so publication cannot resurrect cancellation.
     const [locked] = await tx
@@ -444,6 +394,9 @@ export async function transitionEvent(
     });
     return { row, writeBack: { eventKey: row.eventKey, status: target } };
   });
+  // Committed: publish/cancel moves the row between guest views (N6).
+  retireAnonEventCaches();
+  return result;
 }
 
 /** Pause/reopen keeps the event published; only a changed flag needs a sync. */
@@ -454,7 +407,7 @@ export async function setRsvpOpen(
   open: boolean,
   clock: () => Date = () => new Date(),
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
-  return db.transaction(async (tx) => {
+  const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
     // Share the RSVP writer's event lock. Check the clock after acquiring it,
     // so a wait that crosses the end cannot reopen an expired event.
     const [locked] = await tx
@@ -493,12 +446,9 @@ export async function setRsvpOpen(
     });
     return { row, writeBack: { eventKey: row.eventKey, status: "published" } };
   });
-}
-
-export class NotFoundError extends Error {
-  constructor(readonly what: string) {
-    super(`${what} not found`);
-  }
+  // Committed: pausing/reopening can settle the waitlist line (N6).
+  retireAnonEventCaches();
+  return result;
 }
 
 /** One admin list row: the event plus its Going-only seat count. */
@@ -577,143 +527,6 @@ export async function getEvent(db: Db, eventKey: string): Promise<EventRow | nul
 // There is deliberately no deleteEvent: a published event was announced, and
 // the audit trail of a cancellation is the record that it was (legacy
 // EventsTable: "no delete anywhere on this resource").
-
-export async function createFeatured(
-  db: Db,
-  actor: Actor,
-  input: FeaturedFormInput,
-): Promise<FeaturedRow> {
-  return db.transaction(async (tx) => {
-    const [row] = await tx
-      .insert(featuredContents)
-      .values({
-        title: input.title,
-        body: input.body,
-        url: input.url,
-        imageUrl: input.imageUrl,
-        imageAlt: input.imageAlt,
-        isPublished: input.isPublished,
-        position: input.position,
-        startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
-        endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
-        createdBy: actor.id,
-      })
-      .returning(featuredEditSelection);
-    if (!row) throw new Error("featured insert returned no row");
-    await audit(tx, {
-      subjectType: "FeaturedContent",
-      subjectId: String(row.id),
-      causerId: actor.id,
-      description: `created featured content ${row.title}`,
-      properties: dirty({} as Record<string, unknown>, featuredAuditValues(row)),
-    });
-    return row;
-  });
-}
-
-export async function updateFeatured(
-  db: Db,
-  actor: Actor,
-  id: number,
-  input: FeaturedFormInput,
-): Promise<FeaturedRow> {
-  return db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select(featuredEditSelection)
-      .from(featuredContents)
-      .where(eq(featuredContents.id, id))
-      .for("update");
-    if (!locked) throw new NotFoundError("featured content");
-    const [row] = await tx
-      .update(featuredContents)
-      .set({
-        title: input.title,
-        body: input.body,
-        url: input.url,
-        imageUrl: input.imageUrl,
-        imageAlt: input.imageAlt,
-        isPublished: input.isPublished,
-        position: input.position,
-        startsAt: featuredTimestamp(input.startsAtUtc, input.startsAtUtcText),
-        endsAt: featuredTimestamp(input.endsAtUtc, input.endsAtUtcText),
-        updatedAt: new Date(),
-      })
-      .where(eq(featuredContents.id, id))
-      .returning(featuredEditSelection);
-    if (!row) throw new Error("featured update returned no row");
-    const changes = dirty(featuredAuditValues(locked), featuredAuditValues(row));
-    if (Object.keys(changes).length > 0) {
-      await tx.insert(activityLog).values({
-        logName: "default",
-        description: `updated featured content ${row.title}`,
-        subjectType: "FeaturedContent",
-        subjectId: String(row.id),
-        causerId: actor.id,
-        properties: changes,
-      });
-    }
-    return row;
-  });
-}
-
-/** Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited. */
-export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<void> {
-  await db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select()
-      .from(featuredContents)
-      .where(eq(featuredContents.id, id))
-      .for("update");
-    if (!locked) throw new NotFoundError("featured content");
-    await tx.delete(featuredContents).where(eq(featuredContents.id, id));
-    await tx.insert(activityLog).values({
-      logName: "default",
-      description: `deleted featured content ${locked.title}`,
-      subjectType: "FeaturedContent",
-      subjectId: String(locked.id),
-      causerId: actor.id,
-      properties: { title: { before: locked.title, after: null } },
-    });
-  });
-}
-
-export async function listFeatured(
-  db: Db,
-  opts: { published?: boolean; q?: string; sort?: string; order?: string },
-): Promise<FeaturedRow[]> {
-  const query = parseFeaturedListQuery({ q: opts.q, sort: opts.sort, order: opts.order });
-  const conds: SQL[] = [];
-  if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
-  if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
-  const column =
-    query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
-  const order = query.order === "desc" ? desc(column) : asc(column);
-  return nonSensitiveRead("featured", () =>
-    db
-      .select()
-      .from(featuredContents)
-      .where(and(...conds))
-      .orderBy(order, asc(featuredContents.id)),
-  );
-}
-
-/** Imported source IDs are independent of native IDs; never fall back to a native match. */
-export async function getFeaturedIdByLegacyId(db: Db, legacyId: string): Promise<number | null> {
-  const [row] = await nonSensitiveRead("featured", () =>
-    db
-      .select({ id: featuredContents.id })
-      .from(featuredContents)
-      .where(eq(featuredContents.legacyId, legacyId)),
-  );
-  return row?.id ?? null;
-}
-
-export async function getFeatured(db: Db, id: number): Promise<FeaturedEditRow | null> {
-  const [row] = await nonSensitiveRead("featured", () =>
-    db.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id)),
-  );
-  return row ?? null;
-}
 
 /**
  * Access-log recorder (M5, ports AccessRecorder::flush). One row per request

@@ -35,6 +35,7 @@ export const coverage = {
   ),
   "/sitemap_index.xml": skip("XML sitemap"),
   "/robots.txt": skip("Plain-text robots policy"),
+  "/.well-known/security.txt": skip("Plain-text RFC 9116 security policy"),
   "/up": skip("JSON queue health response"),
   "/admin/queue/failed/:id/preview": skip(
     "Default-off operator-only JSON advice, not an HTML document",
@@ -138,6 +139,12 @@ export const coverage = {
     cases: [
       { path: "/admin/join-attempts/1", identity: "moderator" },
       { path: "/admin/join-attempts/999999", identity: "moderator", status: 404 },
+    ],
+  },
+  "/admin/activity-log": {
+    cases: [
+      { path: "/admin/activity-log", identity: "moderator" },
+      { path: "/admin/activity-log?subject=zz-no-matches", identity: "moderator" },
     ],
   },
   "/__a11y/404": { cases: [{ path: "/__a11y/404", status: 404 }] },

@@ -2,17 +2,17 @@
 // docs/w15-events-acceptance-ledger.md:90).
 //
 // Decision: PARTIAL/ADAPTED. Drop the home-page (`/`) shared cache with
-// measurement; keep timed expiry on `/events` + `/events/past` with a
-// documented invalidation divergence from legacy
-// (Feature/Events/AnonymousEventCardCacheTest.php, TOG-9277). Anonymous
-// `/events` cards are `public, max-age=60` with `Vary: Cookie` and proven
-// anonymous (test/guest-calendar-anon.test.ts); anonymous `/events/past`
-// cards are `public, max-age=300` with no RSVP controls
-// (test/islands-past-events.test.ts:107-122). Divergence: legacy retired the
-// guest fragment on a model edit and on RSVP land/leave; Next uses timed
-// expiry with no retire, so guests can read a stale title or going count for
-// up to 60 s (`/events`) or 300 s (`/events/past`). Home stays
-// `private, no-store` because:
+// measurement; keep timed expiry on `/events` + `/events/past` with retire
+// on publish/edit/RSVP-settle (N6 closes the R12 invalidation divergence
+// from legacy: Feature/Events/AnonymousEventCardCacheTest.php, TOG-9277).
+// Anonymous `/events` cards are `public, max-age=60` with `Vary: Cookie` and
+// proven anonymous (test/guest-calendar-anon.test.ts); anonymous
+// `/events/past` cards are `public, max-age=300` with no RSVP controls
+// (test/islands-past-events.test.ts:107-122). Every committed request-path
+// event or RSVP mutation retires the shared entries, so the next guest fetch
+// shows the new title and going count; only the scheduled reconcile close
+// still relies on timed expiry (stale placement for up to 60 s on `/events`
+// or 300 s on `/events/past`). Home stays `private, no-store` because:
 // - no measured p95 problem: staging anonymous `/`, n=20, median 175 ms /
 //   p95 261 ms TTFB, inside the 600 ms server-response tripwire;
 // - home is viewer-specific funnel top (guest/member header, hero CTA,
@@ -23,9 +23,10 @@
 //   deadline with graceful fallback.
 //
 // This suite pins the disposition: the ledger row says Partial/adapted with
-// the timed-expiry divergence, anonymous home bodies stay private with no
-// session data, and viewer-specific variants (flash, notice) stay private
-// too. Hermetic pg-proxy fixtures only.
+// timed expiry, anonymous home bodies stay private with no session data,
+// and viewer-specific variants (flash, notice) stay private too. The retire
+// itself is pinned by test/anonymous-event-card-cache-retire.test.ts.
+// Hermetic pg-proxy fixtures only.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getTableColumns } from "drizzle-orm";

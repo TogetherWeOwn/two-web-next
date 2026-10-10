@@ -30,8 +30,10 @@ required on the release PR; the dispatched runs are still the only way they
 start on a `GITHUB_TOKEN`-created PR (see the header of `release.yml`).
 
 `test/release-workflow.test.ts` pins this: it fails if a push can regenerate
-the PR or dispatch checks, if publication is ever skipped, or if the schedule
-disappears.
+the PR or dispatch checks, if publication is ever skipped, if the schedule
+disappears, if the pre-1.0 breaking-change config pin is removed or changed, or
+if a hand-written `## Unreleased` heading appears above the first released
+changelog section.
 
 ## Cutting a release
 

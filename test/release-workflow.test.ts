@@ -6,6 +6,10 @@ import { describe, expect, it } from "vitest";
 // every merge rewrote the release PR head ~10x an hour, so it could never hold
 // one head long enough to get exact-head green and be merged.
 const text = readFileSync(".github/workflows/release.yml", "utf8");
+const releasePleaseConfig = JSON.parse(readFileSync("release-please-config.json", "utf8")) as {
+  packages: Record<string, { "bump-minor-pre-major"?: boolean }>;
+};
+const changelog = readFileSync("CHANGELOG.md", "utf8");
 const header = text.slice(0, text.search(/^permissions:/m));
 const body = text.slice(text.search(/^jobs:\n/m));
 
@@ -48,6 +52,17 @@ const dispatchCondition = () => {
 };
 
 describe("release workflow triggers", () => {
+  it("keeps breaking changes on minor bumps before 1.0.0", () => {
+    expect(releasePleaseConfig.packages["."]?.["bump-minor-pre-major"]).toBe(true);
+  });
+
+  it("has no hand-written Unreleased heading above the first released section", () => {
+    const firstReleaseHeading = changelog.search(/^## \[/m);
+    const unreleasedHeading = changelog.search(/^## Unreleased\s*$/m);
+
+    expect(firstReleaseHeading).toBeGreaterThanOrEqual(0);
+    expect(unreleasedHeading === -1 || unreleasedHeading > firstReleaseHeading).toBe(true);
+  });
   it("runs on push to main, a weekly schedule and manual dispatch only", () => {
     expect(header).toContain("\n  push:\n    branches: [main]\n");
     expect(header).toMatch(/^ {2}schedule:\n(?: {4}#[^\n]*\n)* {4}- cron: '\d+ \d+ \* \* [\d*]'$/m);

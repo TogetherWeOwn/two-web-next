@@ -47,6 +47,7 @@ const ADMIN_REDIRECTS = [
 ];
 const ADMIN_READS = [
   "/",
+  "/activity-log",
   "/events",
   "/events/new",
   "/events/:key",
@@ -70,6 +71,7 @@ const OTHER_READS = [
   "/join/callback",
   "/sitemap_index.xml",
   "/robots.txt",
+  "/.well-known/security.txt",
   "/up",
   "/auth/discord",
   "/auth/discord/callback",

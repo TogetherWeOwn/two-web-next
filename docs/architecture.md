@@ -31,8 +31,10 @@ agent-events and logout/QA posts, admission and throttles on the agent
 ingress, and the QA gate on the staging-only QA sign-in.
 
 Routes are a mix of direct handlers and mounted sub-apps
-([src/index.tsx](../src/index.tsx)): the join journey (`registerJoinRoutes`),
-`POST /csp-reports`, `POST /api/agent-events`, the error handlers, `/admin`,
+([src/index.tsx](../src/index.tsx)): the static leaves (`registerStaticLeaves`),
+the policy/SEO leaves (`registerSeoLeaves`: `/privacy`, `/sitemap_index.xml`,
+`/robots.txt`, `POST /csp-reports`), the join journey (`registerJoinRoutes`),
+`POST /api/agent-events`, the error handlers, `/admin`,
 `/` for profiles, event routes, and the alert probe.
 
 There is no global database pool. Each request builds a short-lived client
@@ -221,6 +223,7 @@ exactly once.
 | `src/alert-probe-error.ts` | observability |
 | `src/alert-probe.ts` | observability |
 | `src/alerts.ts` | observability |
+| `src/auth/` | auth |
 | `src/auth-status.ts` | auth |
 | `src/body-limit.ts` | http-guard |
 | `src/bot/` | bot |
@@ -252,6 +255,7 @@ exactly once.
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |
 | `src/oauth-journeys.ts` | auth |
+| `src/page-shell.tsx` | content |
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
 | `src/privacy-content.ts` | content |
@@ -264,9 +268,13 @@ exactly once.
 | `src/roles.ts` | auth |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
+| `src/screens/` | content |
+| `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
+| `src/seo-leaves.tsx` | entry |
 | `src/session-revocation.ts` | auth |
 | `src/sessions.ts` | auth |
+| `src/static-leaves.tsx` | entry |
 | `src/throttle.ts` | http-guard |
 | `src/trust-hosts.ts` | http-guard |
 | `src/up.ts` | observability |

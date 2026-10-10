@@ -1,14 +1,21 @@
 // Admin read surfaces (W12: M6 roster, M8 join viewer + funnel stats).
 // Read-only by construction: nothing here inserts, updates or deletes.
 
-import { and, asc, count, desc, eq, gte, ilike, or } from "drizzle-orm";
-import { JOIN_ATTEMPT_PAGE_SIZE, parseJoinAttemptsQuery, type RosterQuery } from "./table-list";
+import { and, asc, count, desc, eq, gte, ilike, or, type SQL } from "drizzle-orm";
+import {
+  ACTIVITY_LOG_PAGE_SIZE,
+  JOIN_ATTEMPT_PAGE_SIZE,
+  ROSTER_PAGE_SIZE,
+  parseActivityLogQuery,
+  parseJoinAttemptsQuery,
+  type RosterQuery,
+} from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
-import { events, rsvps } from "../db/admin-schema";
+import { activityLog, events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
-import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
+import { declareMemberResult, keyedMemberRead, nonSensitiveRead } from "../member-reads";
 
 /** config/join.php retention: attempts older than this are pruned (W13 cron). Canonical value lives in jobs/constants (legacy parity pin). */
 export const JOIN_RETENTION_DAYS = JOIN_ATTEMPT_RETENTION_DAYS;
@@ -20,17 +27,36 @@ export type RosterEntry = {
   answeredAt: Date;
 };
 
-/** Read-only RSVP roster for one event; most recent first unless explicitly sorted. */
+/** Paged read-only RSVP roster for one event; most recent first unless explicitly sorted.
+ *
+ * Search and sort apply before paging, so `total` is the filtered count and
+ * `rows` is one page of it. The deterministic `rsvps.userId` tie-break is kept.
+ * A page past the end returns no rows (with working navigation); callers render
+ * the past-end copy. The count is a classified aggregate: it returns only a
+ * number, never member identifiers.
+ */
 export async function listRoster(
   db: Db,
   eventKey: string,
-  query: RosterQuery = { q: "", sort: "answered", order: "desc" },
-): Promise<RosterEntry[]> {
-  const conds = [eq(events.eventKey, eventKey)];
-  if (query.q) conds.push(ilike(users.username, `%${escapeLikeTerm(query.q)}%`));
+  query: RosterQuery = { q: "", sort: "answered", order: "desc", page: 1 },
+): Promise<{ rows: RosterEntry[]; total: number }> {
+  const page = Number.isSafeInteger(query.page) && query.page > 0 ? query.page : 1;
+  const search: SQL | undefined = query.q
+    ? ilike(users.username, `%${escapeLikeTerm(query.q)}%`)
+    : undefined;
+  const conds = search ? and(eq(events.eventKey, eventKey), search) : eq(events.eventKey, eventKey);
   const column = query.sort === "status" ? rsvps.status : rsvps.updatedAt;
   const order = query.order === "asc" ? asc(column) : desc(column);
-  return keyedMemberRead(() =>
+  const countRows = await nonSensitiveRead("roster-count", () => {
+    const counted = db
+      .select({ n: count() })
+      .from(rsvps)
+      .innerJoin(events, eq(events.id, rsvps.eventId));
+    return search
+      ? counted.leftJoin(users, eq(users.id, rsvps.userId)).where(conds)
+      : counted.where(conds);
+  });
+  const rows = await keyedMemberRead(() =>
     db
       .select({
         userId: rsvps.userId,
@@ -42,9 +68,12 @@ export async function listRoster(
       .from(rsvps)
       .innerJoin(events, eq(events.id, rsvps.eventId))
       .leftJoin(users, eq(users.id, rsvps.userId))
-      .where(and(...conds))
-      .orderBy(order, rsvps.userId),
+      .where(conds)
+      .orderBy(order, rsvps.userId)
+      .limit(ROSTER_PAGE_SIZE)
+      .offset((page - 1) * ROSTER_PAGE_SIZE),
   );
+  return { rows, total: Number(countRows[0]?.n ?? 0) };
 }
 
 // Explicit projection works on both migrateJoin() bootstrap and imported
@@ -123,4 +152,73 @@ export async function joinFunnelStats(
   for (const r of rows.sort((a, b) => a.outcome.localeCompare(b.outcome)))
     out[r.outcome] = Number(r.n);
   return out;
+}
+
+// Read-only activity-log viewer (R11). The projection deliberately excludes
+// `properties`: the dirty before/after map is never selected, so it cannot be
+// rendered, and the read classifier refuses any statement that mentions it.
+export type ActivityLogViewerRow = Pick<
+  typeof activityLog.$inferSelect,
+  "id" | "description" | "subjectType" | "subjectId" | "causerId" | "event" | "createdAt"
+>;
+const activityLogColumns = {
+  id: activityLog.id,
+  description: activityLog.description,
+  subjectType: activityLog.subjectType,
+  subjectId: activityLog.subjectId,
+  causerId: activityLog.causerId,
+  event: activityLog.event,
+  createdAt: activityLog.createdAt,
+};
+
+/**
+ * Paginated activity rows, newest first. `subject` matches the subject
+ * type/id or description (substring); `causer` matches the causer snowflake
+ * (substring). The retrieved causer snowflakes are the access-log subjects:
+ * a page that names moderators writes one access-log row, and a failed
+ * access-log write fails closed in the guard's boundary. System rows with a
+ * null/non-snowflake causer contribute no subject, like pre-identity join
+ * attempts. Imported rows keep legacy internal causer IDs (docs/data-import.md):
+ * they render with an explicit legacy label and never become access-log
+ * subjects, because the guard only accepts snowflakes and inventing a member
+ * subject would be worse than logging none.
+ */
+export async function listActivityLog(
+  db: Db,
+  opts: { subject?: string; causer?: string; page?: number },
+): Promise<ActivityLogViewerRow[]> {
+  const parsed = parseActivityLogQuery({
+    subject: opts.subject,
+    causer: opts.causer,
+    page: String(opts.page ?? 1),
+  });
+  const conds: SQL[] = [];
+  if (parsed.subject) {
+    const term = `%${escapeLikeTerm(parsed.subject)}%`;
+    conds.push(
+      or(
+        ilike(activityLog.subjectType, term),
+        ilike(activityLog.subjectId, term),
+        ilike(activityLog.description, term),
+      )!,
+    );
+  }
+  if (parsed.causer) conds.push(ilike(activityLog.causerId, `%${escapeLikeTerm(parsed.causer)}%`));
+  const rows = await nonSensitiveRead("activity-log", () =>
+    db
+      .select(activityLogColumns)
+      .from(activityLog)
+      .where(and(...conds))
+      .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+      .limit(ACTIVITY_LOG_PAGE_SIZE + 1)
+      .offset((parsed.page - 1) * ACTIVITY_LOG_PAGE_SIZE),
+  );
+  // Only well-formed snowflakes become subjects; nulls (cron) and malformed
+  // values never reach the access log as invented members.
+  declareMemberResult(
+    rows.flatMap((r) =>
+      r.causerId !== null && /^\d{10,25}$/.test(r.causerId) ? [r.causerId] : [],
+    ),
+  );
+  return rows;
 }

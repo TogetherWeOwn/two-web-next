@@ -97,12 +97,15 @@ with `GITLEAKS_VERSION`.
 
 The required `check` job runs `npm run deps:audit:selftest` (local fixtures,
 including a loopback registry) and `npm run deps:audit` before installing
-dependencies. The audit reads `package-lock.json`, includes
-development/optional/peer dependencies, and blocks high, critical or unknown
-severity. It forces online auditing even when npm's environment or `.npmrc`
-enables offline mode, using a fresh per-invocation cache rather than the restored
+dependencies. The audit reads every lockfile root (`package-lock.json` and
+`web/package-lock.json`), includes development/optional/peer dependencies, and
+blocks high, critical or unknown severity. It prints one result per lockfile
+(`.` and `web`) and fails when either has a non-excepted finding. A missing
+`web/package-lock.json` or an unreachable registry for either lockfile fails
+closed. It forces online auditing even when npm's environment or `.npmrc`
+enables offline mode, using a fresh per-lockfile cache rather than the restored
 installation cache (which can retain stale advisory severity). The owned audit
-cache is removed on success or failure. A child-only Node preload also validates
+caches are removed on success or failure. A child-only Node preload also validates
 the exact raw bulk advisory response before npm can normalize it. A clean `{}`
 is valid; `null`, arrays and missing/unknown advisory severities are not. The
 preload observes bounded HTTP/HTTPS bodies (including compressed responses),
@@ -131,6 +134,10 @@ the gate never runs `npm audit fix`.
   "reason": "Why this risk is temporarily accepted; tracking issue and mitigation"
 }
 ```
+
+An exception may add an optional `lockfile` scope (`"."` or `"web"`). An
+exception without `lockfile` applies to both lockfiles; an exception with
+`lockfile` applies only to that lockfile.
 
 Add it to `exceptions` only through a reviewed PR. Match the audit's exact package,
 range, severity and complete numeric advisory ID set (including transitive
@@ -161,7 +168,8 @@ stay out of the changelog. Each squash-merged PR title becomes one entry, so
 write it for a reader of the changelog: imperative mood, one user-facing change.
 
 Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
-cutover. `feat!` / `BREAKING CHANGE` bumps major (minor while `0.x`).
+cutover. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
+from `1.0.0` onward, it bumps the major version.
 
 ## Local development
 

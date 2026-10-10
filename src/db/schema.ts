@@ -166,6 +166,9 @@ export const agentEventAudits = pgTable(
   (t) => [
     index("agent_event_audits_grant_created_idx").on(t.grantId, t.createdAt),
     index("agent_event_audits_event_key_idx").on(t.eventKey),
+    // Retention prune (model:prune) deletes by age; without this the daily
+    // mass delete scans.
+    index("agent_event_audits_created_at_idx").on(t.createdAt),
   ],
 );
 

@@ -57,7 +57,11 @@ const MATRIX: Case[] = [
     status: 200,
   })),
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
-  ...["/sitemap_index.xml", "/robots.txt"].map((route) => ({ method: "GET", route, status: 200 })),
+  ...["/sitemap_index.xml", "/robots.txt", "/.well-known/security.txt"].map((route) => ({
+    method: "GET",
+    route,
+    status: 200,
+  })),
   // Main #111: a failed DB ping is a readiness failure, so /up answers 503
   // with the sanitized readiness body instead of a false healthy 200.
   { method: "GET", route: "/up", status: 503, format: "json" },
@@ -194,6 +198,7 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
   // Operational admission is disabled before any session/source/audit lookup.
   { method: "GET", route: "/admin/queue/failed/:id/preview", status: 404, format: "json" },
+  { method: "POST", route: "/admin/queue/failed/:id/redispatch", status: 404, format: "json" },
   // Static aliases need a valid moderator session, but no resource lookup.
   {
     method: "GET",
@@ -240,6 +245,7 @@ const MATRIX: Case[] = [
     format: "html" as const,
   })),
   ...[
+    "/admin/activity-log",
     "/admin/join-attempts",
     "/admin/join-attempts/:id",
     "/admin/events",
@@ -333,6 +339,31 @@ it("an enabled dedicated operator preview refuses a real source socket outage", 
   expect(await res.json()).toEqual({ error: "preview_unavailable" });
   expect(res.headers.get("cache-control")).toBe("private, no-store");
   expect(clients).toHaveLength(1);
+});
+
+it("an enabled dedicated operator redispatch refuses a real source socket outage", async () => {
+  const store = createMemorySessionStore();
+  const bindings = {
+    ...outageEnv(),
+    APP_URL: STAGING_APP_URL,
+    QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
+    QUEUE_RECONCILE_OPERATOR_ID: MODERATOR.userId,
+    SESSION_STORE: store,
+  };
+  const res = await testApp.request(
+    "/admin/queue/failed/7/redispatch",
+    {
+      method: "POST",
+      headers: { origin: STAGING_APP_URL, cookie: await cookieFor(store, MODERATOR) },
+    },
+    bindings,
+  );
+  expect(res.status).toBe(503);
+  expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
+  expect(res.headers.get("cache-control")).toBe("private, no-store");
+  // The write envelope's throttle opens its own refused client before the
+  // candidate read fails; a store failure allows, never refuses.
+  expect(clients).toHaveLength(2);
 });
 
 beforeEach(() => {
