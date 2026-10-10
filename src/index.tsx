@@ -1,8 +1,9 @@
 import { type Context, Hono } from "hono";
-import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
+import { registerAuthRoutes, SESSION_COOKIE } from "./auth/routes";
 import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
 import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
@@ -17,14 +18,6 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import {
-  addGuildMember,
-  authorizeUrl,
-  exchangeCode,
-  failureMeta,
-  fetchUser,
-  isProviderOutage,
-} from "./discord";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
@@ -44,21 +37,7 @@ import { registerJoinRoutes } from "./join/route";
 import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
-import {
-  AUTH_THROTTLE_PER_MINUTE,
-  WRITE_THROTTLE_PER_MINUTE,
-  throttle,
-  throttleGuard,
-} from "./throttle";
-import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
-import { parseModeratorRoleIds, recomputeModerator } from "./roles";
-import {
-  consumeLoginReturn,
-  JOURNEY_TTL_SECONDS,
-  LOGIN_INTENDED_COOKIE,
-  rememberLoginNext,
-  takeJoinResult,
-} from "./return-journey";
+import { takeJoinResult } from "./return-journey";
 import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
 import {
   configReadiness,
@@ -70,19 +49,15 @@ import {
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
-import { authStatus, authStatusScript, clearAuthStatus, enableAuthStatus } from "./auth-status";
-import {
-  consumeExpiredWrite,
-  flashExpiredWrite,
-  recoveryLanding,
-  expiredWriteBanner,
-} from "./write-recovery";
+import { authStatusScript, enableAuthStatus } from "./auth-status";
+import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
-const SESSION_COOKIE = "__Host-two_session";
-const STATE_COOKIE = "__Host-two_oauth_state";
+// The session cookie name is defined once in ./auth/routes (it owns logout).
+// The OAuth state lifetime stays defined here: the privacy-numbers pin only
+// allows STATE_TTL_SECONDS to originate from this module (or join/route).
 export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
@@ -179,14 +154,16 @@ app.use("*", sameOrigin);
 app.use("*", authStatusScript);
 app.use("*", expiredWriteBanner);
 app.use("*", freezeBanner);
-app.get("/auth/status", (c) => authStatus(c, () => storeFor(c)));
-app.get("/auth/recover", recoveryLanding);
+
+// OAuth and login routes live in ./auth/routes; the app module only wires them.
+registerAuthRoutes(app, {
+  storeFor: (c) => storeFor(c),
+  issueSession: (c, store, row) => issueSession(c, store, row),
+});
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
 export { FALLBACK_INVITE, inviteDestination } from "./invite";
-
-const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 
 // Test seam: tests carry a SessionStore on the env object (`{...env, SESSION_STORE: store}`,
 // cast at the call site). Production bindings never set it, so this branch is dead in
@@ -580,160 +557,6 @@ app.get("/up", async (c) => {
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);
 
-// Legacy login links: retain only the existing guarded-next value, never OAuth input.
-app.get("/auth/discord/redirect", (c) => {
-  const next = safeNext(c.req.query("next"));
-  c.header("cache-control", "no-store");
-  return c.redirect(next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord", 302);
-});
-
-app.get("/auth/discord", async (c) => {
-  // Mints the OAuth state and sets its cookie: never cacheable, whatever sits at the edge.
-  c.header("cache-control", "no-store, private");
-  // throttle:10,1 like the other three OAuth routes (TOG-6788 envelope; W15b
-  // TOG-12088 ports OAuthReplayAndThrottleTest's all-four-routes guard). The
-  // guard degrades to allow without a store, so DB-free leaves stay up.
-  const limited = await throttleGuard(c, "login-redirect", AUTH_THROTTLE_PER_MINUTE);
-  if (limited) return limited;
-  const state = crypto.randomUUID();
-  const store = await storeFor(c).catch(() => null);
-  if (!store) return c.redirect("/?n=signin_failed", 302);
-  // No-DDL storeFor connects lazily, so an unreachable database surfaces on
-  // first use instead of in storeFor: fail the login the same way, never a 500.
-  // Both journey writes sit inside the guard: a transient failure in issue()
-  // redirects to signin_failed just like one in sweepExpired().
-  try {
-    await store.journeys.sweepExpired();
-    if (!(await store.journeys.issue(await hashToken(state), "auth")))
-      return c.redirect("/?n=signin_failed", 302);
-  } catch {
-    return c.redirect("/?n=signin_failed", 302);
-  }
-  // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
-  // OAuth round trip in a signed cookie; a hostile value leaves no trace.
-  await rememberLoginNext(c, c.req.query("next"));
-  await setSignedCookie(c, STATE_COOKIE, state, c.env.SESSION_SECRET, {
-    path: "/",
-    secure: true,
-    httpOnly: true,
-    sameSite: "Lax",
-    maxAge: STATE_TTL_SECONDS,
-  });
-  return c.redirect(authorizeUrl(c.env.DISCORD_CLIENT_ID, redirectUri(c.env), state), 302);
-});
-
-app.get("/auth/discord/callback", async (c) => {
-  // Clears the state cookie and issues the session on success: every outcome is
-  // per-visitor, so a shared cache must never keep one.
-  c.header("cache-control", "no-store, private");
-  const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
-  if (limited) return limited;
-  const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
-  deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
-  // Consume the return journey on every terminal path — success, denial and
-  // failure all clear it (legacy forget on login_next + url.intended).
-  const returnTo = await consumeLoginReturn(c);
-  const expiredWrite = await consumeExpiredWrite(c);
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const store =
-    state && typeof expected === "string" && state === expected
-      ? await storeFor(c).catch(() => null)
-      : null;
-  const admitted =
-    store && (await store.journeys.consume(await hashToken(state!), "auth").catch(() => false));
-  // A consent-screen refusal arrives as an `error` param before any code
-  // exists. Denied gets its own sentence (the member chose this); any other
-  // OAuth error keeps the generic one. Legacy DiscordLoginTest: the
-  // error_description is never echoed — we render only our own copy.
-  const oauthError = c.req.query("error");
-  if (oauthError) {
-    return c.redirect(
-      oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed",
-      302,
-    );
-  }
-
-  if (!admitted || !store || !code) return c.redirect("/?n=signin_failed", 302);
-
-  let accessToken: string;
-  let user;
-  try {
-    accessToken = await exchangeCode(
-      code,
-      c.env.DISCORD_CLIENT_ID,
-      c.env.DISCORD_CLIENT_SECRET,
-      redirectUri(c.env),
-    );
-    user = await fetchUser(accessToken);
-  } catch (err) {
-    // Bounded like the join route: exception class + kind + status, never the
-    // message (the token-exchange error body can quote the client secret).
-    const meta = failureMeta(err);
-    console.warn("discord sign-in failed", {
-      exception: meta.exception,
-      kind: meta.kind,
-      status: meta.status,
-    });
-    return c.redirect(
-      isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed",
-      302,
-    );
-  }
-
-  // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and
-  // never stored.
-  const botBlank = c.env.DISCORD_BOT_TOKEN.trim() === "";
-  const join = botBlank
-    ? "failed"
-    : await addGuildMember(
-        c.env.DISCORD_GUILD_ID,
-        user.id,
-        accessToken,
-        c.env.DISCORD_BOT_TOKEN,
-      ).catch(() => "failed" as const);
-  if (join === "failed") console.warn("guild auto-join failed", { user: user.id });
-
-  // Moderator recompute: roles re-read with the bot token against snowflake IDs
-  // (never names). A failed lookup fails closed on the flag, never on sign-in.
-  const moderator = botBlank
-    ? false
-    : await recomputeModerator({
-        guildId: c.env.DISCORD_GUILD_ID,
-        userId: user.id,
-        botToken: c.env.DISCORD_BOT_TOKEN,
-        moderatorRoleIds: parseModeratorRoleIds(c.env.DISCORD_MODERATOR_ROLE_IDS),
-      });
-
-  await issueSession(c, store, {
-    userId: user.id,
-    username: user.global_name ?? user.username,
-    avatar: user.avatar,
-    member: join !== "failed",
-    moderator,
-  });
-  await flashExpiredWrite(c, expiredWrite);
-  // A failed auto-join keeps the recovery landing even when a destination
-  // was remembered: the session is a non-member one, so a member-only gate
-  // (/profile, /members/*) would answer bare 403 and swallow the failure
-  // explanation plus the invite fallback. The intended destination is
-  // re-recorded for the retry instead of being lost. Successful joins keep
-  // the legacy precedence: explicit next, then intended page, then notice.
-  if (join === "failed") {
-    if (returnTo) {
-      await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
-        path: "/",
-        secure: true,
-        httpOnly: true,
-        sameSite: "Lax",
-        maxAge: JOURNEY_TTL_SECONDS,
-      });
-    }
-    return c.redirect("/?n=join_failed", 302);
-  }
-  return c.redirect(returnTo ?? `/?n=${join}`, 302);
-});
-
 // Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard
 // redirects guests to Discord OAuth and 403s signed-in non-moderators.
 app.route("/admin", adminApp());
@@ -747,60 +570,6 @@ registerEventRoutes(
   app,
   async (c) => readSession(c),
   async (c) => readSession(c, false),
-);
-
-app.post(
-  "/logout",
-  throttle("logout", WRITE_THROTTLE_PER_MINUTE),
-  requestBodyLimit("action"),
-  async (c) => {
-    // The route-scoped same-origin guard runs before throttling or session storage.
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    // No bearer: nothing to revoke — clear cookies and leave without touching
-    // session storage (stays 303 when the store is down; main #239 pins the
-    // authoritative 503 only for a presented token whose revocation fails).
-    if (token) {
-      try {
-        const store = await storeFor(c);
-        await store.revoke(await hashToken(token));
-      } catch {
-        // Authoritative, not best-effort: a failed revocation must not clear
-        // this browser's cookie as if the server row were gone.
-        return c.text("Sign-out temporarily unavailable", 503);
-      }
-    }
-    deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
-    clearAuthStatus(c);
-    await consumeExpiredWrite(c);
-    return c.redirect("/", 303);
-  },
-);
-
-// Staging-only QA seam. 404 everywhere that is not the staging host with
-// QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post(
-  "/auth/qa/:identity",
-  async (c, next) => {
-    if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
-    await next();
-  },
-  throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
-  requestBodyLimit("action"),
-  async (c) => {
-    const presented = c.req.header(QA_HEADER) ?? "";
-    const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
-    const fixture = qaIdentity(c.req.param("identity") ?? "");
-    if (!ok || !fixture) return c.notFound();
-    const store = await storeFor(c);
-    await issueSession(c, store, {
-      userId: fixture.discordId,
-      username: fixture.username,
-      avatar: null,
-      member: true,
-      moderator: fixture.moderator,
-    });
-    return c.body(null, 204);
-  },
 );
 
 registerAlertProbe(app);
