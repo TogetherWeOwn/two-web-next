@@ -142,8 +142,9 @@ export function assertProductionTarget(configText) {
   }
 }
 
-// The checkout must be the dispatch SHA itself: deploy-production.yml checks
-// out `github.sha` in both gate jobs, so a newer main head never deploys.
+// The checkout must be the promoted SHA itself: deploy-production.yml resolves
+// DEPLOY_SHA once (explicit input or latest staging-verified commit) and checks
+// it out in both gate jobs, so a newer main head never deploys.
 function currentCheckoutSha() {
   // The job container may not own the host checkout; trust only this path,
   // only for this command (https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory).
@@ -158,6 +159,11 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   let { checkoutSha, fetchCi = fetchEnvironment } = options;
   // Refuse before any API request, and before the protected deploy job can start.
   assertProductionRequest(env);
+  // The runner resets step-level GITHUB_* overrides to github.sha (the dispatch
+  // tip), so the promoted commit arrives as DEPLOY_SHA.
+  if (!/^[0-9a-f]{40}$/.test(env.DEPLOY_SHA ?? "")) {
+    throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
+  }
   if (!env.GITHUB_TOKEN || !/^[\w.-]+\/[\w.-]+$/.test(env.GITHUB_REPOSITORY ?? "")) {
     throw new Error("GitHub Environment protection cannot be verified");
   }
@@ -186,7 +192,7 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
       event: { repository: { full_name: env.GITHUB_REPOSITORY } },
       repository: env.GITHUB_REPOSITORY,
       ref: env.GITHUB_REF,
-      sha: env.GITHUB_SHA,
+      sha: env.DEPLOY_SHA,
       checkoutSha,
     },
     { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },

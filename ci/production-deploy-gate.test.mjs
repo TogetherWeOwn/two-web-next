@@ -17,6 +17,7 @@ const enabled = {
   GITHUB_REF: "refs/heads/main",
   GITHUB_REPOSITORY: "fixture/repo",
   GITHUB_TOKEN: "fixture-only",
+  DEPLOY_SHA: "a".repeat(40),
 };
 const protectedEnvironment = {
   name: "production",
@@ -152,7 +153,7 @@ function stubProductionApi(evidence, seen = {}) {
     assert.fail(`unexpected production gate API path ${parsed.pathname}`);
   };
 }
-const greenEnv = { ...enabled, GITHUB_SHA: dispatchSha };
+const greenEnv = { ...enabled, GITHUB_SHA: otherSha, DEPLOY_SHA: dispatchSha };
 function checkGreen(evidence, seen = {}, env = greenEnv, options = { checkoutSha: dispatchSha }) {
   return checkProductionGate(env, stubProductionApi(evidence, seen), options);
 }
@@ -443,7 +444,10 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   for (const gate of gates) {
     const block = gate.split("\n      - ")[0];
     assert.match(block, /GITHUB_TOKEN: /);
-    assert.match(block, /GITHUB_SHA: /);
+    // The runner resets step-level GITHUB_* overrides to github.sha, so the
+    // promoted commit must travel under a non-reserved name.
+    assert.match(block, /DEPLOY_SHA: \$\{\{ (steps\.target|needs\.preflight)\.outputs\.sha \}\}/);
+    assert.doesNotMatch(block, /GITHUB_SHA: /);
   }
 });
 
@@ -724,4 +728,29 @@ test("both production gate steps receive PRODUCTION_AUTO_APPROVE", () => {
     const block = gate.split("\n      - ")[0];
     assert.match(block, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
   }
+});
+
+test("gates the promoted DEPLOY_SHA, never the dispatch-time GITHUB_SHA", async () => {
+  // greenEnv carries a different GITHUB_SHA (main tip); evidence and checkout are for DEPLOY_SHA.
+  const result = await checkGreen(ciEvidence());
+  assert.equal(result.sha, dispatchSha);
+});
+
+test("refuses a missing or malformed DEPLOY_SHA before any API call", async () => {
+  for (const bad of [undefined, "", "main", dispatchSha.slice(1), `${dispatchSha};id`]) {
+    const seen = {};
+    const env = { ...greenEnv, DEPLOY_SHA: bad };
+    await assert.rejects(checkGreen(ciEvidence(), seen, env), /DEPLOY_SHA must be a full 40-hex commit/);
+  }
+});
+
+test("promotion counts only post-deploy e2e-staging runs whose deploy and journeys succeeded", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const resolver = workflow.split("- name: Resolve the commit to promote")[1].split("\n      - ")[0];
+  assert.match(resolver, /-f event=workflow_run/);
+  assert.match(resolver, /select\(\.name == "staging-journeys"\)/);
+  assert.match(resolver, /workflows\/deploy\.yml\/runs/);
 });

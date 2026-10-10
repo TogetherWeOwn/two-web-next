@@ -41,17 +41,22 @@ jobs:
         run: |
           sha="$(printf '%s' "$INPUT_SHA" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
           if [ -z "$sha" ]; then
-            # e2e-staging can conclude success with staging-journeys skipped (docs-only diff against the
-            # parent), so only runs whose journeys actually passed count as staging-verified.
+            # Staging-verified = an e2e-staging run that followed a deploy (event workflow_run, so its
+            # head_sha is the deployed commit; manual runs test whatever staging serves), whose
+            # staging-journeys job passed (it is skipped on docs-only diffs while the run still
+            # succeeds), and whose commit's latest deploy.yml run succeeded.
             for page in 1 2 3 4 5; do
               runs="$(gh api --method GET "repos/$REPO/actions/workflows/e2e-staging.yml/runs" \
-                -f branch=main -f status=success -f per_page=20 -f page="$page" \
+                -f branch=main -f event=workflow_run -f status=success -f per_page=20 -f page="$page" \
                 --jq '.workflow_runs[] | "\(.id) \(.head_sha)"')"
               [ -n "$runs" ] || break
               while read -r run_id run_sha; do
                 verdict="$(gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" -f per_page=100 \
                   --jq '[.jobs[] | select(.name == "staging-journeys") | .conclusion] | first // ""')"
-                if [ "$verdict" = "success" ]; then sha="$run_sha"; break; fi
+                [ "$verdict" = "success" ] || continue
+                deployed="$(gh api --method GET "repos/$REPO/actions/workflows/deploy.yml/runs" \
+                  -f branch=main -f head_sha="$run_sha" -f per_page=1 --jq '.workflow_runs[0].conclusion // ""')"
+                if [ "$deployed" = "success" ]; then sha="$run_sha"; break; fi
               done <<< "$runs"
               [ -n "$sha" ] && break
             done
@@ -75,7 +80,7 @@ jobs:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
           GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_SHA: ${{ steps.target.outputs.sha }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
 
   deploy-production:
     name: deploy-production
@@ -107,7 +112,7 @@ jobs:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
           GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_SHA: ${{ needs.preflight.outputs.sha }}
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       - run: npm ci --include=dev
       # No migrations, queue creation or SQL tests here: provisioning and W16
       # rehearsal are separate operator work. CI uses disposable SQL services.
