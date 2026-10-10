@@ -106,5 +106,10 @@ export async function body(c: Pick<Ctx, "req">): Promise<Record<string, unknown>
     const j = await c.req.json().catch(() => null);
     return j && typeof j === "object" ? (j as Record<string, unknown>) : {};
   }
-  return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
+  // A malformed multipart body rejects the parse (Node: TypeError from
+  // Response.formData()): treat it as an empty body so the caller answers a
+  // 4xx (401/422) instead of throwing into the alerting 500 path. The JSON
+  // branch above already fails open to {}; the form branch must do the same,
+  // before and independent of the session check.
+  return (await c.req.parseBody({ all: true }).catch(() => ({}))) as Record<string, unknown>;
 }
