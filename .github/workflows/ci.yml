@@ -353,6 +353,27 @@ jobs:
       - name: Neon backup selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/neon-backup-selftest.sh
+      # Hermetic backup fixture suites: fake pg_dump/R2/wrangler on local disk, no
+      # secrets, no network, no database. They gate the same `check` as every
+      # other step (no continue-on-error), and run when backup inputs change
+      # (bin/**, ci/** select `app`) and on every main, nightly and dispatch run
+      # (all areas true). Fixture proof is not a live restore. The "backup selftest
+      # wiring" block in test/change-scope.test.ts pins this.
+      - name: Backup custody integrity selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/backup-integrity-selftest
+      - name: Backup target selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: python3 ci/backup-target-selftest
+      - name: Neon backup argv selftest (stubbed, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/neon-backup-argv-selftest.sh
+      - name: Backup manifest admission selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: python3 ci/backup-manifest-admission-selftest
+      - name: Backup restore-proof selftest (no network, no database)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: python3 ci/backup-restore-proof/selftest.py
       - name: Migration numbering check
         shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
