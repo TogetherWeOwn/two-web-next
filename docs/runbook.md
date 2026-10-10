@@ -1050,7 +1050,7 @@ below, not its older `/up` row, define these outcomes.
 
 | Route(s) | Configured database outage behavior |
 | --- | --- |
-| `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join` (GET) | Stay **200**, DB-free. |
+| `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/.well-known/security.txt`, `/join` (GET) | Stay **200**, DB-free. |
 | `/up` (GET) | **503** `db:error`, `pending_migrations:null`; queue becomes `unknown`. A reachable DB with unreadable/pending web migrations is also 503 (`db:ok`). |
 | `/sitemap_index.xml` (GET) | Stays **200** with static entries; event lookup failure is caught. |
 | `/discord` (GET) | Stays **302** to the invite, DB-free. |

@@ -267,6 +267,7 @@ exactly once.
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
 | `src/screens/` | content |
+| `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
 | `src/session-revocation.ts` | auth |
 | `src/sessions.ts` | auth |
