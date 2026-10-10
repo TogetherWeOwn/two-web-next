@@ -151,11 +151,12 @@ export async function reconcileFailedJob(
  * Pass the `idempotencyKey` from a `replay` disposition when present; a fresh
  * key is minted otherwise (the constructor in Laravel).
  *
- * Library function with no operator entrypoint yet: no CLI, route, or worker
- * wiring imports this helper. The caller passes the raw queue binding plus
- * its ledger; the helper wraps them with `trackingQueue` itself so the live
- * message always records a `queue_jobs` row for the runbook's
- * dead-row-stays-until-recovery-confirmed check.
+ * Operator entrypoint: the staging-gated
+ * `POST /admin/queue/failed/:id/redispatch` route calls this helper for a
+ * single reconciled row. No CLI or worker wiring imports it. The caller
+ * passes the raw queue binding plus its ledger; the helper wraps them with
+ * `trackingQueue` itself so the live message always records a `queue_jobs`
+ * row for the runbook's dead-row-stays-until-recovery-confirmed check.
  */
 export async function replayFailedSyncEvent(
   queue: Sendable,

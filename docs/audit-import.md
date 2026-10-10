@@ -96,9 +96,12 @@ precision, rather than truncating through JS Dates. Null and non-finite creation
 times (`-infinity`/`infinity`) cannot establish a bounded retention window and are
 counted as expired. See [PostgreSQL `isfinite(timestamp)`](https://www.postgresql.org/docs/17/functions-datetime.html#FUNCTIONS-DATETIME-TABLE).
 No retention rules are changed for any table.
-Older audit evidence is retained; the normal retention job remains responsible
-for its policy. Re-running with `--enable-grants` never changes an already-imported
-grant, so choose the intended admission policy before the first apply.
+Older audit evidence is retained by the import; the normal retention job remains
+responsible for its policy, and that job deletes `agent_event_audits` older than
+90 days. Keep it frozen until verification is signed off
+([data-import.md](data-import.md#retention-selection)). Re-running with
+`--enable-grants` never changes an already-imported grant, so choose the intended
+admission policy before the first apply.
 
 Apply holds destination writer locks for the import transaction; pause writers
 and budget downtime for the volume. After inserts, the tool advances owned serial
