@@ -26,7 +26,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
-import { parseFeaturedListQuery } from "./table-list";
+import { FEATURED_PAGE_SIZE, parseFeaturedListQuery } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
@@ -694,21 +694,29 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
 
 export async function listFeatured(
   db: Db,
-  opts: { published?: boolean; q?: string; sort?: string; order?: string },
+  opts: { published?: boolean; q?: string; sort?: string; order?: string; page?: string | number },
 ): Promise<FeaturedRow[]> {
-  const query = parseFeaturedListQuery({ q: opts.q, sort: opts.sort, order: opts.order });
+  const query = parseFeaturedListQuery({
+    q: opts.q,
+    sort: opts.sort,
+    order: opts.order,
+    page: opts.page === undefined ? undefined : String(opts.page),
+  });
   const conds: SQL[] = [];
   if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
   if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
   const column =
     query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
   const order = query.order === "desc" ? desc(column) : asc(column);
+  // Fetch one extra row so pagination needs no separate count query.
   return nonSensitiveRead("featured", () =>
     db
       .select()
       .from(featuredContents)
       .where(and(...conds))
-      .orderBy(order, asc(featuredContents.id)),
+      .orderBy(order, asc(featuredContents.id))
+      .limit(FEATURED_PAGE_SIZE + 1)
+      .offset((query.page - 1) * FEATURED_PAGE_SIZE),
   );
 }
 
