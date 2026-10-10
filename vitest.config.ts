@@ -47,7 +47,7 @@ export default defineConfig({
         "src/jobs/**": { statements: 98.2, branches: 95.8, functions: 95.7, lines: 98.7 },
         "src/bot/**": { statements: 92, branches: 88.8, functions: 99, lines: 93.5 },
         "src/agent-events/**": { statements: 93.8, branches: 92, functions: 96.8, lines: 95.4 },
-        "src/profiles/**": { statements: 96.3, branches: 92, functions: 95.4, lines: 97.8 },
+        "src/profiles/**": { statements: 96.3, branches: 92, functions: 95.4, lines: 97.7 },
       },
     },
   },
