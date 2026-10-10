@@ -66,7 +66,7 @@ Live runs belong to the authorized cutover procedure, not CI.
 
 ## Screens and route reference
 
-Use the navigation **Events**, **Featured**, **Join attempts**, or **Site**.
+Use the navigation **Events**, **Featured**, **Join attempts**, **Activity log**, or **Site**.
 There is no panel-specific sign-out button; return to the homepage to sign out.
 In the table, `:key` means an event's key and `:id` a featured slot's ID. The
 POST paths are form actions, **not URLs to open or call manually**.
@@ -91,8 +91,9 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/featured/:id/delete` | **Delete this slot**. |
 | GET | `/admin/join-attempts` | Read-only join diagnostics, filters and pagination. |
 | GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
+| GET | `/admin/activity-log` | Read-only activity log, subject/causer filters and pagination. |
 
-These are the 18 canonical routes in `src/admin/routes.tsx` (9 GET, 9 POST).
+These are the 19 canonical routes in `src/admin/routes.tsx` (10 GET, 9 POST).
 Five additional GET routes retain legacy bookmarks as 301 redirects:
 
 | Legacy path | Destination |
@@ -103,7 +104,7 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 | `/admin/featured-contents/create` | `/admin/featured/new` |
 | `/admin/featured-contents/:id/edit` | `/admin/featured/:id` with the native ID resolved from the imported legacy ID, not a native-ID fallback. |
 
-All 23 routes (14 GET, 9 POST) use the moderator guard. Legacy redirects drop
+All 24 routes (15 GET, 9 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
 Mutating buttons submit immediately: there is no action-confirmation dialog.
@@ -219,9 +220,11 @@ The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
 **Answered** (UTC), newest responses first by default. **Search members** with
 **Search** matches username text case-insensitively; **Status** and **Answered**
 column links toggle sorting while retaining the search. The count is the number
-of displayed answers (all statuses, not just going seats), so searching can
-reduce it. There is no roster pagination. Save event edits before these controls
-reload the page. This is a read-only roster: no adding/removing answers,
+of matching answers (all statuses, not just going seats), so searching can
+reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
+line; **Previous** and **Next** keep the search and sort and return to the
+roster section. Sorting or searching again starts back on page 1. Save event
+edits before these controls reload the page. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation.
 Reads of other members are access-logged; empty rosters and self-only reads create
 no access row. Audit-write failures always refuse protected contents, including
@@ -306,10 +309,24 @@ Request ID is normally blank for the current live Discord add-member call.
 The ordinary sign-in flow does not write these rows; absence is not proof of
 success or no attempted join. Keep member identifiers private.
 
+### Read-only activity log
+
+`/admin/activity-log` shows **Who**, **What**, **When** and **Subject** for each
+recorded change. It shows up to **50 rows per page**, newest first. Use
+**Subject** (type, ID or description) and **Causer** (ID substring), then
+**Filter**; use **Next** for older rows and **Previous** to return. There is no
+edit or delete control, and the raw change payload is never shown.
+
+**Who** is a Discord ID for current activity. Imported rows keep their legacy
+internal causer IDs, shown with a **legacy ID** label; those IDs are not
+remapped to members and are never access-log subjects. Views that name a member
+write one access row; system-only or legacy-only pages create no per-subject
+row, the same rule as join attempts. Keep member identifiers private.
+
 ### Dashboard
 
-`/admin` has **Events** and **Featured content** cards plus these diagnostic
-sections when their data is available:
+`/admin` has **Events**, **Featured content** and **Activity log** cards plus
+these diagnostic sections when their data is available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
@@ -330,7 +347,7 @@ Missing database configuration is different: normal signed-in session resolution
 and admin access are unavailable, not just the widgets. A signed-session request
 can return 503; guests still go to sign-in. Stop and escalate rather than assuming
 an otherwise usable panel with empty counts.
-There is no activity-log/member-access-log viewer, user editor, role/ban manager
+There is no member-access-log viewer, user editor, role/ban manager
 or join-attempt mutation screen here.
 
 ## Member deletion requests

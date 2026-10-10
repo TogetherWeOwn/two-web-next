@@ -76,6 +76,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
             const stores = pgPruneStores(db);
             const lock = pgUniqueLock(db);
             for (const table of [
+              stores.agentEventAudits,
               stores.accessLog,
               stores.joinAttempts,
               stores.idempotencyKeys,

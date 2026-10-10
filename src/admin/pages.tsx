@@ -11,13 +11,22 @@ import { FeaturedContentItem, SkipLink } from "../pages";
 import type { EventListRow, EventRow, FeaturedRow } from "./store";
 import { goingCountText } from "../islands/contracts";
 import { eventEmptyText, eventListUrl, type EventListQuery, type EventSort } from "./event-list";
-import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 import {
+  JOIN_RETENTION_DAYS,
+  type ActivityLogViewerRow,
+  type JoinAttemptRow,
+  type RosterEntry,
+} from "./reads";
+import {
+  ROSTER_PAGE_SIZE,
+  activityLogEmptyText,
+  activityLogUrl,
   featuredEmptyText,
   featuredListUrl,
   joinAttemptsUrl,
   rosterEmptyText,
   rosterUrl,
+  type ActivityLogQuery,
   type FeaturedListQuery,
   type JoinAttemptsQuery,
   type RosterQuery,
@@ -60,7 +69,8 @@ const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =>
         </a>
         <nav aria-label="Administration">
           <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> ·{" "}
-          <a href="/admin/join-attempts">Join attempts</a> · <a href="/">Site</a>
+          <a href="/admin/join-attempts">Join attempts</a> ·{" "}
+          <a href="/admin/activity-log">Activity log</a> · <a href="/">Site</a>
         </nav>
       </header>
       <main id="main" tabindex={-1}>
@@ -106,6 +116,12 @@ export const AdminDashboard: FC<{
             <a href="/admin/featured">Featured content</a>
           </h2>
           <p>Landing-page slots: publish toggle, ordering, show window.</p>
+        </li>
+        <li class="card">
+          <h2>
+            <a href="/admin/activity-log">Activity log</a>
+          </h2>
+          <p>Who changed what, when. Read-only; views that name a member are access-logged.</p>
         </li>
       </ul>
       {funnel ? (
@@ -306,6 +322,102 @@ export const JoinAttemptPage: FC<{ row: JoinAttemptRow }> = ({ row }) => (
         <dt>Discord ID</dt>
         <dd>{row.discordId ?? "—"}</dd>
       </dl>
+    </section>
+  </Shell>
+);
+
+// Imported rows keep legacy internal causer IDs (docs/data-import.md), which the
+// access-log guard cannot take as subjects (snowflakes only). Label them so a
+// legacy ID never reads as a Discord identity.
+const SNOWFLAKE_ID = /^\d{10,25}$/;
+const formatActivityCauser = (causerId: string | null): string =>
+  causerId === null ? "—" : SNOWFLAKE_ID.test(causerId) ? causerId : `${causerId} (legacy ID)`;
+
+export const ActivityLogPage: FC<{
+  rows: ActivityLogViewerRow[];
+  query: ActivityLogQuery;
+  hasNext: boolean;
+}> = ({ rows, query, hasNext }) => (
+  <Shell title="Activity log">
+    <section>
+      <h1>Activity log</h1>
+      <p class="hint">
+        Read-only. Who changed what, when. Views that name a member are access-logged; imported
+        causer IDs are labeled legacy.
+      </p>
+      <form method="get" action="/admin/activity-log" class="filters">
+        <div class="field">
+          <label for="subject">Subject</label>
+          <input id="subject" name="subject" type="search" value={query.subject} />
+        </div>
+        <div class="field">
+          <label for="causer">Causer</label>
+          <input id="causer" name="causer" type="search" value={query.causer} />
+        </div>
+        <div class="field">
+          <button type="submit" class="btn">
+            Filter
+          </button>
+        </div>
+      </form>
+      <p id="activity-log-scroll-hint">
+        Scroll horizontally to see all columns on smaller screens.
+      </p>
+      <div
+        class="admin-table-scroll"
+        role="region"
+        aria-label="Activity log list"
+        aria-describedby="activity-log-scroll-hint"
+        tabindex={0}
+        data-testid="activity-log-table-scroll"
+      >
+        <table class="admin-table" data-testid="activity-log-table">
+          <thead>
+            <tr>
+              <th scope="col">Who</th>
+              <th scope="col">What</th>
+              <th scope="col">When</th>
+              <th scope="col">Subject</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colspan={4} data-testid="activity-log-empty">
+                  {activityLogEmptyText(query)}
+                </td>
+              </tr>
+            ) : (
+              rows.map((r) => (
+                <tr key={r.id}>
+                  <td>{formatActivityCauser(r.causerId)}</td>
+                  <td>{r.description}</td>
+                  <td>
+                    <time datetime={r.createdAt.toISOString()}>{r.createdAt.toISOString()}</time>
+                  </td>
+                  <td>
+                    {[r.subjectType, r.subjectId].filter(Boolean).join(" ") || "—"}
+                    {r.event ? ` (${r.event})` : ""}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      <nav aria-label="Activity pages" class="actions">
+        {query.page > 1 ? (
+          <a rel="prev" href={activityLogUrl(query, query.page - 1)}>
+            Previous
+          </a>
+        ) : null}
+        <span>Page {query.page}</span>
+        {hasNext ? (
+          <a rel="next" href={activityLogUrl(query, query.page + 1)}>
+            Next
+          </a>
+        ) : null}
+      </nav>
     </section>
   </Shell>
 );
@@ -571,6 +683,7 @@ export const EventFormPage: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   roster?: RosterEntry[];
+  rosterTotal?: number;
   rosterQuery?: RosterQuery;
 }> = ({
   mode,
@@ -578,8 +691,15 @@ export const EventFormPage: FC<{
   values,
   errors,
   roster,
-  rosterQuery = { q: "", sort: "answered", order: "desc" },
+  rosterTotal,
+  rosterQuery = { q: "", sort: "answered", order: "desc", page: 1 },
 }) => {
+  const total = rosterTotal ?? roster?.length ?? 0;
+  const rangeStart =
+    roster && roster.length > 0 ? (rosterQuery.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
+  const rangeEnd =
+    roster && roster.length > 0 ? (rosterQuery.page - 1) * ROSTER_PAGE_SIZE + roster.length : 0;
+  const rosterHasNext = rosterQuery.page * ROSTER_PAGE_SIZE < total;
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
@@ -769,8 +889,11 @@ export const EventFormPage: FC<{
         ) : null}
         {mode === "edit" && roster ? (
           <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
-            <h2>RSVPs ({roster.length})</h2>
+            <h2>RSVPs ({total})</h2>
             <p class="hint">Save event changes before searching or sorting the roster.</p>
+            <p data-testid="roster-range">
+              Showing {rangeStart}-{rangeEnd} of {total}
+            </p>
             <form method="get" action={`${action}#rsvp-roster`} class="filters">
               <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
               <input type="hidden" name="roster_order" value={rosterQuery.order} />
@@ -804,7 +927,7 @@ export const EventFormPage: FC<{
                       active={rosterQuery.sort === "status"}
                       order={rosterQuery.order}
                       url={(order) =>
-                        rosterUrl(row!.eventKey, rosterQuery, { sort: "status", order })
+                        rosterUrl(row!.eventKey, rosterQuery, { sort: "status", order, page: 1 })
                       }
                     />
                     <TableSortHeader
@@ -812,7 +935,7 @@ export const EventFormPage: FC<{
                       active={rosterQuery.sort === "answered"}
                       order={rosterQuery.order}
                       url={(order) =>
-                        rosterUrl(row!.eventKey, rosterQuery, { sort: "answered", order })
+                        rosterUrl(row!.eventKey, rosterQuery, { sort: "answered", order, page: 1 })
                       }
                     />
                   </tr>
@@ -821,7 +944,7 @@ export const EventFormPage: FC<{
                   {roster.length === 0 ? (
                     <tr>
                       <td colspan={3} data-testid="roster-empty">
-                        {rosterEmptyText(rosterQuery)}
+                        {total > 0 ? "No RSVPs on this page." : rosterEmptyText(rosterQuery)}
                       </td>
                     </tr>
                   ) : (
@@ -836,6 +959,25 @@ export const EventFormPage: FC<{
                 </tbody>
               </table>
             </div>
+            <nav aria-label="RSVP roster pages" class="actions">
+              {rosterQuery.page > 1 ? (
+                <a
+                  rel="prev"
+                  href={rosterUrl(row!.eventKey, rosterQuery, { page: rosterQuery.page - 1 })}
+                >
+                  Previous
+                </a>
+              ) : null}
+              <span>Page {rosterQuery.page}</span>
+              {rosterHasNext ? (
+                <a
+                  rel="next"
+                  href={rosterUrl(row!.eventKey, rosterQuery, { page: rosterQuery.page + 1 })}
+                >
+                  Next
+                </a>
+              ) : null}
+            </nav>
           </section>
         ) : null}
       </section>

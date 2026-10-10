@@ -245,6 +245,31 @@ describe("join signed-in re-entry (TOG-12272)", () => {
     expect(await store.get(await hashToken(bearerOf(res)))).not.toBeNull();
   });
 
+  it("rejects a live journey state that differs from the signed state cookie", async () => {
+    const { fake, env: e } = isolated();
+    const calls = mockDiscord();
+
+    // Two fresh journeys: both states are live and unconsumed.
+    const first = await app.request("/join/discord", {}, e);
+    const firstState = new URL(first.headers.get("location")!).searchParams.get("state")!;
+    const second = await app.request("/join/discord", {}, e);
+
+    // Cross the streams: a live, unconsumed state with the other journey's
+    // cookie. The state/cookie binding (J9) must reject it before the store
+    // opens; without the binding the journey would be consumed and exchanged.
+    const res = await app.request(
+      `/join/callback?code=abc&state=${firstState}`,
+      { headers: { cookie: jarOf(second) } },
+      e,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Join link expired");
+    // Nothing downstream ran: no token exchange, no bot call, no attempt row.
+    expect(calls).toHaveLength(0);
+    expect(fake.attempts).toHaveLength(0);
+  });
+
   it("a second chained re-join still leaves exactly one live session", async () => {
     const { store, create, replace, fake, env: e } = isolated();
     mockDiscord();
