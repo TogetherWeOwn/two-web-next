@@ -4,8 +4,9 @@
 // real producer + consumer against staging (TOG-11706), and
 // `test/internal-action-drill.test.ts:156` pins the handler only accepts
 // role.assign/announcement.post. This suite pins the other half: no web route
-// (src/index.tsx, src/worker.ts, src/events/*, src/admin/*, plus the sibling
-// web families) enqueues or calls the internal-action path. A future route
+// (src/index.tsx, src/worker.ts, src/auth/*, src/static-leaves.tsx,
+// src/events/*, src/admin/*, plus the sibling web families) enqueues or calls
+// the internal-action path. A future route
 // that silently wires production dispatch fails here.
 //
 // Shape: a runtime inventory scan over the mounted Hono app (every
@@ -30,8 +31,20 @@ const read = (path: string): string => readFileSync(path, "utf8");
 // future route could hide dispatch in. src/env.ts is deliberately excluded:
 // it declares the INTERNAL_ACTION_QUEUE binding type (not a dispatch site);
 // the send-site test below pins the only sender.
-const WEB_ROOT_FILES = ["src/index.tsx", "src/worker.ts", "src/alert-probe.ts"];
-const WEB_DIRS = ["src/events", "src/admin", "src/profiles", "src/join", "src/agent-events"];
+const WEB_ROOT_FILES = [
+  "src/index.tsx",
+  "src/worker.ts",
+  "src/alert-probe.ts",
+  "src/static-leaves.tsx",
+];
+const WEB_DIRS = [
+  "src/auth",
+  "src/events",
+  "src/admin",
+  "src/profiles",
+  "src/join",
+  "src/agent-events",
+];
 
 function webFiles(): string[] {
   const out: string[] = [...WEB_ROOT_FILES];

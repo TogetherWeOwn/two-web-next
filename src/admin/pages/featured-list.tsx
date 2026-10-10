@@ -6,11 +6,12 @@ import type { FeaturedRow } from "../store";
 import { featuredEmptyText, featuredListUrl, type FeaturedListQuery } from "../table-list";
 import { Shell, TableSortHeader } from "./shell";
 
-export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; now?: Date }> = ({
-  rows,
-  query,
-  now = new Date(),
-}) => (
+export const FeaturedPage: FC<{
+  rows: FeaturedRow[];
+  query: FeaturedListQuery;
+  hasNext?: boolean;
+  now?: Date;
+}> = ({ rows, query, hasNext = false, now = new Date() }) => (
   <Shell title="Featured content">
     <section>
       <h1>Featured content</h1>
@@ -64,14 +65,14 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; n
                 label="Position"
                 active={query.sort === "position"}
                 order={query.order}
-                url={(order) => featuredListUrl(query, { sort: "position", order })}
+                url={(order) => featuredListUrl(query, { sort: "position", order, page: 1 })}
               />
               <th scope="col">Window (UTC)</th>
               <TableSortHeader
                 label="Last changed"
                 active={query.sort === "updated_at"}
                 order={query.order}
-                url={(order) => featuredListUrl(query, { sort: "updated_at", order })}
+                url={(order) => featuredListUrl(query, { sort: "updated_at", order, page: 1 })}
               />
             </tr>
           </thead>
@@ -118,6 +119,19 @@ export const FeaturedPage: FC<{ rows: FeaturedRow[]; query: FeaturedListQuery; n
           </tbody>
         </table>
       </div>
+      <nav aria-label="Featured content pages" class="actions">
+        {query.page > 1 ? (
+          <a rel="prev" href={featuredListUrl(query, { page: query.page - 1 })}>
+            Previous
+          </a>
+        ) : null}
+        <span>Page {query.page}</span>
+        {hasNext ? (
+          <a rel="next" href={featuredListUrl(query, { page: query.page + 1 })}>
+            Next
+          </a>
+        ) : null}
+      </nav>
     </section>
   </Shell>
 );
