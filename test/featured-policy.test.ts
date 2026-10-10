@@ -141,7 +141,7 @@ describe("featured write surface (DB-free source allowlist)", () => {
 
   it("the featuredContents table object is touched only by schema, public read and the admin store", () => {
     expect(filesMatching(/\bfeaturedContents\b/)).toEqual([
-      "src/admin/store.ts",
+      "src/admin/store-featured.ts",
       "src/db/admin-schema.ts",
       "src/featured.ts",
     ]);
@@ -150,7 +150,7 @@ describe("featured write surface (DB-free source allowlist)", () => {
   it("deleteFeatured is defined once and called only from the admin delete route", () => {
     expect(filesMatching(/deleteFeatured\(/)).toEqual([
       "src/admin/routes.tsx",
-      "src/admin/store.ts",
+      "src/admin/store-featured.ts",
     ]);
   });
 
