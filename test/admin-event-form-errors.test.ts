@@ -247,6 +247,26 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       expect(saved?.startsAt.toISOString()).toBe("2026-11-04T20:00:00.000Z");
       expect(saved?.endsAt.toISOString()).toBe("2026-11-04T22:00:00.000Z");
     });
+
+    it(`${mode}: a malformed multipart body answers 400 with no writes`, async () => {
+      const before = await fixture.db.select().from(events);
+      const res = await app.request(
+        APP_URL + path,
+        {
+          method: "POST",
+          headers: {
+            cookie,
+            origin: APP_URL,
+            "content-type": "multipart/form-data; boundary=x",
+          },
+          body: "garbage",
+        },
+        env,
+      );
+      expect(res.status).toBe(400);
+      expect(await fixture.db.select().from(events)).toEqual(before);
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
+    });
   }
 
   it("fresh fold input saves the second occurrence deterministically", async () => {
