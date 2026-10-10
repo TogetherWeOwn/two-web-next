@@ -25,6 +25,9 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
 Exit codes: 0 success, 2 usage/config/refusal (including a malformed id),
 1 driver/transaction failure (changes rolled back).
 
+For the separate case where a moderator has lost their Discord role but their
+member account should remain, use the [moderator session-revocation procedure](moderator-admin-guide.md#a-moderator-lost-their-role). It explains the session expiry window and how to end active sessions without erasing member data.
+
 ## What is deleted
 
 For ONE Discord id, in one transaction:
@@ -47,8 +50,9 @@ A second apply is a no-op: every count returns 0.
 - `member_data_access_logs` is immutable with a 90-day prune
   (`drizzle/1018_audit-immutability.sql`, W13 `model:prune`). Past access
   records are compliance evidence and cannot be rewritten per request.
-- `activity_log` is append-only for the same reason: cutover and moderation
-  evidence, pruned by age, never edited per subject.
+- `activity_log` is append-only and retained. No job prunes it today; although
+  the database trigger permits deletion after 90 days, nothing currently does so.
+  It records cutover and moderation evidence and is never edited per subject.
 - The Discord-side mirror (roles, messages, tickets) is out of scope here:
   Discord is governed by Discord's own privacy policy, and removal there
   happens through Discord's moderation tools, not this command.

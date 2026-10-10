@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
+import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import { registerEventRoutes } from "../src/events/routes";
 import { listCalendarPast, listUpcoming, type PublicEvent } from "../src/events/reads";
 
@@ -96,6 +97,9 @@ async function page(path: string) {
 }
 
 beforeEach(() => {
+  // One shared fake env serves every test while the mocks vary per test, so
+  // drop shared entries: each test asserts a fresh render contract.
+  __resetAnonEventCacheForTests();
   vi.mocked(listUpcoming).mockResolvedValue([eventRow(1, new Date("2030-01-12T20:00:00Z"))]);
   vi.mocked(listCalendarPast).mockResolvedValue([eventRow(2, new Date("2020-01-12T20:00:00Z"))]);
   vi.spyOn(console, "info").mockImplementation(() => {});

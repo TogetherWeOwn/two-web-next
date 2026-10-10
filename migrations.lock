@@ -92,6 +92,14 @@
     {
       "path": "drizzle/1021_discord-event-snapshots.sql",
       "sha256": "e0b67fd7455fe9edae9e940b6a64b4e6b84174958a4ec02f7e908dd77514eab1"
+    },
+    {
+      "path": "drizzle/1022_web-sessions-oauth-journeys.sql",
+      "sha256": "2d2614d1d1246868806a9cf99c0b0227a0f59cbc14ecf2890034aed794e835ba"
+    },
+    {
+      "path": "drizzle/1023_agent-event-audits-prune-idx.sql",
+      "sha256": "5777eb8ee518d7cd745e6a321089bbb76778f5a4ef211d04937902506b61980a"
     }
   ]
 }

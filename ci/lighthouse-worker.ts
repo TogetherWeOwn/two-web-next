@@ -24,7 +24,7 @@ const goingSql =
 const localOrigin = "http://127.0.0.1:8787";
 
 function neighborSql(comparison: "<" | ">", direction: "asc" | "desc"): string {
-  return `${linkSelect} where ("events"."status" = $1 and "events"."id" <> $2 and isfinite("events"."starts_at") and ("events"."starts_at" ${comparison} (select "starts_at" from "events" where "events"."id" = $3) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $4) and "events"."id" ${comparison} $5))) order by "events"."starts_at" ${direction}, "events"."id" ${direction} limit $6`;
+  return `${linkSelect} where ("events"."status" = $1 and "events"."id" <> $2 and isfinite("events"."starts_at") and "events"."ends_at" >= $3 and ("events"."starts_at" ${comparison} (select "starts_at" from "events" where "events"."id" = $4) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $5) and "events"."id" ${comparison} $6))) order by "events"."starts_at" ${direction}, "events"."id" ${direction} limit $7`;
 }
 
 function isInstant(value: unknown): value is string {
@@ -160,7 +160,14 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // The one fixture has no neighboring or related events.
         if (
           (sql === neighborSql("<", "desc") || sql === neighborSql(">", "asc")) &&
-          sameParams(params, ["published", fixture.id, fixture.id, fixture.id, fixture.id, 1])
+          params.length === 7 &&
+          params[0] === "published" &&
+          params[1] === fixture.id &&
+          isInstant(params[2]) &&
+          params[3] === fixture.id &&
+          params[4] === fixture.id &&
+          params[5] === fixture.id &&
+          params[6] === 1
         )
           return { rows: [] };
         if (

@@ -12,7 +12,6 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
-  migrate,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
@@ -28,12 +27,11 @@ import {
 } from "./discord";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
-import { migrateRoster, upsertRosterUser } from "./db/roster";
+import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
-import { inviteDestination } from "./invite";
 import { imageHosts } from "./image-policy";
-import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
+import { Join, Recovery, Home, Privacy, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
@@ -43,6 +41,7 @@ import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
+import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
 import {
@@ -55,6 +54,7 @@ import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
 import { parseModeratorRoleIds, recomputeModerator } from "./roles";
 import {
   consumeLoginReturn,
+  JOURNEY_TTL_SECONDS,
   LOGIN_INTENDED_COOKIE,
   rememberLoginNext,
   takeJoinResult,
@@ -71,7 +71,6 @@ import {
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
-import { rulesLastUpdated } from "./rules-last-updated";
 import { authStatus, authStatusScript, clearAuthStatus, enableAuthStatus } from "./auth-status";
 import {
   consumeExpiredWrite,
@@ -85,7 +84,7 @@ export { rulesLastUpdated } from "./rules-last-updated";
 
 const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
-const STATE_TTL_SECONDS = 600;
+export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -202,8 +201,10 @@ type EnvWithRoster = Env & { ROSTER_STORE?: Sql };
 // The cookie never carries identity claims. It carries a random token; the row
 // in Postgres is the session. A stolen DB dump yields hashes, not logins, and
 // rotation/revocation are a row delete, not waiting for a signature to expire.
-const migratedUrls = new Set<string>();
-
+//
+// No DDL here (TOG-19721): web_sessions comes from the migrate workflow
+// (drizzle/1022), so the runtime role stays read/write-only. A database that
+// predates that migration surfaces as a query failure, like any other outage.
 async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
@@ -213,29 +214,20 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedUrls.has(url)) {
-    await migrate(sql);
-    migratedUrls.add(url);
-  }
   return createPostgresSessionStore(sql);
 }
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
 // read the same users sign-in writes. Tests may inject ROSTER_STORE; no DB
 // configuration means a no-op upsert so DB-free sign-in tests still work.
-const migratedRosterUrls = new Set<string>();
-
+// No DDL here either (TOG-19721): the users table is drizzle/0000, owned by
+// the migrate workflow.
 async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
   if (injected) return injected;
   const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedRosterUrls.has(url)) {
-    await migrateRoster(sql);
-    migratedRosterUrls.add(url);
-  }
-  return sql;
+  return postgres(url, databaseOptions) as unknown as Sql;
 }
 
 async function issueSession(
@@ -430,36 +422,11 @@ app.get("/", async (c) => {
   );
 });
 
-// `/discord` — the front door, and the only web-to-Discord conversion path (ports two-web
-// routes/funnel.php + DiscordInviteController). Database-free floor by design: this handler reads
-// no session, no cookie, no cache, no database — it must stay 200→302 when everything behind it
-// is down. 302, not 301: the door gets retargeted, and a 301 is cached by browsers effectively
-// forever. `no-store` for the same reason at the edge.
-app.get("/discord", (c) => {
-  c.header("cache-control", "no-store, private");
-  return c.redirect(inviteDestination(c.env.DISCORD_INVITE_URL), 302);
-});
-
-// Static funnel leaves (ports two-web routes/funnel.php's `/about` + `/faq`): dependency-free,
-// no controller, no session, no database — they stay 200 during an app-DB outage. No cookies are
-// read or set here on purpose, for the same reason.
-for (const path of ["/about", "/faq"] as const) {
-  app.get(path, (c) => {
-    c.header("cache-control", "public, max-age=3600");
-    return c.html(
-      path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />,
-    );
-  });
-}
-
-// Static house rules (ports two-web `Route::view('/rules')`, TOG-5147): no database — renders
-// even when the bot's database is down. The last-updated stamp comes from config, and an empty
-// or unparseable value hides the stamp instead of 500ing (TOG-7323).
-app.get("/rules", (c) => {
-  const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
-  c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules appUrl={c.env.APP_URL} lastUpdated={stamp} />);
-});
+// Database-free static leaves (`/discord`, `/login`, `/community`, `/about`,
+// `/faq`, `/rules`): registered in ./static-leaves so the Worker entry stays
+// under the M3 file-size gate. Paths, status codes, cache headers and the
+// `safeNext` policy live there verbatim.
+registerStaticLeaves(app);
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
 // `/privacy` + PrivacyController). Funnel-style: no session, no cookie, no
@@ -639,9 +606,17 @@ app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
   const store = await storeFor(c).catch(() => null);
   if (!store) return c.redirect("/?n=signin_failed", 302);
-  await store.journeys.sweepExpired();
-  if (!(await store.journeys.issue(await hashToken(state), "auth")))
+  // No-DDL storeFor connects lazily, so an unreachable database surfaces on
+  // first use instead of in storeFor: fail the login the same way, never a 500.
+  // Both journey writes sit inside the guard: a transient failure in issue()
+  // redirects to signin_failed just like one in sweepExpired().
+  try {
+    await store.journeys.sweepExpired();
+    if (!(await store.journeys.issue(await hashToken(state), "auth")))
+      return c.redirect("/?n=signin_failed", 302);
+  } catch {
     return c.redirect("/?n=signin_failed", 302);
+  }
   // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
   // OAuth round trip in a signed cookie; a hostile value leaves no trace.
   await rememberLoginNext(c, c.req.query("next"));
@@ -759,7 +734,7 @@ app.get("/auth/discord/callback", async (c) => {
         secure: true,
         httpOnly: true,
         sameSite: "Lax",
-        maxAge: 600,
+        maxAge: JOURNEY_TTL_SECONDS,
       });
     }
     return c.redirect("/?n=join_failed", 302);
