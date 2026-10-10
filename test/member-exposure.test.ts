@@ -47,6 +47,7 @@ const ADMIN_REDIRECTS = [
 ];
 const ADMIN_READS = [
   "/",
+  "/activity-log",
   "/events",
   "/events/new",
   "/events/:key",
@@ -75,6 +76,8 @@ const OTHER_READS = [
   "/auth/discord",
   "/auth/discord/callback",
   "/auth/discord/redirect",
+  "/login", // Vanity sign-in entry: DB-free 302 to /auth/discord, no member access.
+  "/community", // Vanity lobby front: DB-free 302 to /, no member access.
   "/auth/status",
   "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
   "/members", // Retired bare path: frozen 404, answered before the member gate.

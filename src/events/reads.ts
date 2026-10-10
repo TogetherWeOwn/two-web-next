@@ -285,10 +285,11 @@ export function isRenderableEventWindow(
   return Number.isFinite(row.startsAt.getTime()) && Number.isFinite(row.endsAt.getTime());
 }
 
-/** Published links only, even for moderators. Equal starts use id as the legacy tiebreak. */
+/** Published, not-ended links only, even for moderators. Equal starts use id as the legacy tiebreak. */
 export async function getEventNeighbors(
   db: Db,
   event: Pick<PublicEvent, "id">,
+  now = new Date(),
 ): Promise<EventNeighbors> {
   // Compare the stored timestamp: a JS Date loses PostgreSQL's microseconds.
   const anchorStartsAt = db
@@ -305,6 +306,7 @@ export async function getEventNeighbors(
             eq(events.status, "published"),
             ne(events.id, event.id),
             finiteEventStart,
+            gte(events.endsAt, now),
             or(
               lt(events.startsAt, anchorStartsAt),
               and(eq(events.startsAt, anchorStartsAt), lt(events.id, event.id)),
@@ -323,6 +325,7 @@ export async function getEventNeighbors(
             eq(events.status, "published"),
             ne(events.id, event.id),
             finiteEventStart,
+            gte(events.endsAt, now),
             or(
               gt(events.startsAt, anchorStartsAt),
               and(eq(events.startsAt, anchorStartsAt), gt(events.id, event.id)),

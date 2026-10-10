@@ -35,9 +35,16 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // Table names cannot be parameterized in postgres.js tagged templates, so
   // each age-pruned table gets its own static statement (same MassPrunable
   // shape as legacy: `... where <age column> < ${cutoff}`).
-  // Access logs are append-only audit rows (drizzle/1018): the database refuses
-  // to delete one unless it is strictly older than 90 days by its own clock. A
-  // caller clock running ahead must skip, not raise on, the rows in between.
+  // Append-only audit rows (drizzle/1018): the database refuses to delete one
+  // unless it is strictly older than 90 days by its own clock. A caller clock
+  // running ahead must skip, not raise on, the rows in between.
+  const agentEventAudits: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (
+        await sql`delete from agent_event_audits where created_at < ${cutoff}
+          and created_at < clock_timestamp() - interval '2160 hours' returning 1`
+      ).length,
+  };
   const accessLog: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
       (
@@ -59,6 +66,7 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
       (await sql`delete from event_search_logs where occurred_at < ${cutoff} returning 1`).length,
   };
   return {
+    agentEventAudits,
     accessLog,
     joinAttempts,
     idempotencyKeys,

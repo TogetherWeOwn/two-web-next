@@ -180,6 +180,7 @@ describe("join-blocked copy (legacy JoinBlockedWidgetTest)", () => {
     const res = await finishJoinCb(e, state!, cookie);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("We couldn&#39;t add you automatically");
+    expect(fake.attempts[0]).toMatchObject({ outcome: "degraded", discordId: "42" });
   });
 
   it("blocked copy stays distinct from denied, outage, expired-grant and expired-link copy", async () => {

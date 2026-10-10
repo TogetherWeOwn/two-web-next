@@ -36,7 +36,6 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
-  migrate,
   type SessionStore,
   type Sql,
 } from "../sessions";
@@ -51,18 +50,14 @@ type EnvWithStore = Env & { SESSION_STORE?: SessionStore };
 // Mirrors src/index.tsx's storeFor (kept local: index does not export it,
 // and the admin slice must not import the site's route module). One pooled
 // connection max, idle sockets close themselves; no binding fails closed.
-const migratedUrls = new Set<string>();
-
+// No DDL here (TOG-19721): web_sessions comes from the migrate workflow
+// (drizzle/1022); the runtime role stays read/write-only.
 export async function sessionStoreFor(c: { env: Env }): Promise<SessionStore | null> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
   const url = databaseUrl(c.env);
   if (!url) return null;
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedUrls.has(url)) {
-    await migrate(sql);
-    migratedUrls.add(url);
-  }
   return createPostgresSessionStore(sql);
 }
 
