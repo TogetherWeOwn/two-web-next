@@ -337,17 +337,22 @@ function assertProductionHyperdrivePlaceholderCommentMatchesId(text) {
   const id = config.env?.production?.hyperdrive?.find((entry) => entry?.binding === "DB")?.id;
   assert.equal(typeof id, "string");
 
-  const productionStart = text.indexOf('"production": {');
-  const hyperdriveStart = text.indexOf('"hyperdrive":', productionStart);
-  assert.ok(productionStart >= 0 && hyperdriveStart > productionStart);
+  const productionStart = text.search(/"production"\s*:\s*\{/);
+  assert.ok(productionStart >= 0);
+  const hyperdriveOffset = text.slice(productionStart).search(/"hyperdrive"\s*:/);
+  assert.ok(hyperdriveOffset >= 0);
+  const hyperdriveStart = productionStart + hyperdriveOffset;
   const lines = text.slice(productionStart, hyperdriveStart).trimEnd().split(/\r?\n/);
   const comments = [];
   while (lines.at(-1)?.trimStart().startsWith("//")) {
     comments.unshift(lines.pop().trim());
   }
-  const placeholderHyperdriveComment = comments.some(
-    (line) => /placeholder/i.test(line) && /hyperdrive/i.test(line),
+  const resourceCommentIndex = comments.findIndex(
+    (line) => /hyperdrive/i.test(line) && /two-web-next-production/i.test(line),
   );
+  assert.ok(resourceCommentIndex >= 0, "production Hyperdrive comment must identify its resource");
+  const productionHyperdriveComment = comments.slice(resourceCommentIndex).join(" ");
+  const placeholderHyperdriveComment = /placeholder/i.test(productionHyperdriveComment);
   assert.equal(
     placeholderHyperdriveComment,
     id === sentinel,
@@ -361,15 +366,30 @@ test("checked-in production Hyperdrive uses placeholder wording only for the sen
   const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   assertProductionHyperdrivePlaceholderCommentMatchesId(text);
 
-  const unrelatedPlaceholder = text.replace(
-    "// Production Hyperdrive for the separately named two-web-next-production",
-    "// PLACEHOLDER: unrelated queue setting\n      // Production Hyperdrive for the separately named two-web-next-production",
-  );
-  assertProductionHyperdrivePlaceholderCommentMatchesId(unrelatedPlaceholder);
+  for (const unrelated of [
+    "// PLACEHOLDER: unrelated queue setting",
+    "// PLACEHOLDER: hyperdrive timeout tuning for queues",
+    "// PLACEHOLDER: production hyperdrive timeout tuning for queues",
+  ]) {
+    const withUnrelatedPlaceholder = text.replace(
+      "// Production Hyperdrive for the separately named two-web-next-production",
+      `${unrelated}\n      // Production Hyperdrive for the separately named two-web-next-production`,
+    );
+    assertProductionHyperdrivePlaceholderCommentMatchesId(withUnrelatedPlaceholder);
+  }
 
-  const productionStart = text.indexOf('"production": {');
-  const hyperdriveStart = text.indexOf('"hyperdrive":', productionStart);
-  const idStart = text.indexOf('"id": "', hyperdriveStart) + '"id": "'.length;
+  const reformattedKeys = text
+    .replace('"production": {', '"production" : {')
+    .replace('"hyperdrive":', '"hyperdrive" :')
+    .replace('"id": "', '"id" : "');
+  assertProductionHyperdrivePlaceholderCommentMatchesId(reformattedKeys);
+
+  const productionStart = text.search(/"production"\s*:\s*\{/);
+  const hyperdriveOffset = text.slice(productionStart).search(/"hyperdrive"\s*:/);
+  const hyperdriveStart = productionStart + hyperdriveOffset;
+  const idMatch = /"id"\s*:\s*"/.exec(text.slice(hyperdriveStart));
+  assert.ok(idMatch);
+  const idStart = hyperdriveStart + idMatch.index + idMatch[0].length;
   const idEnd = text.indexOf('"', idStart);
   const sentinelWithProvisionedComment = `${text.slice(0, idStart)}${sentinel}${text.slice(idEnd)}`;
   assert.throws(
@@ -379,7 +399,7 @@ test("checked-in production Hyperdrive uses placeholder wording only for the sen
 
   const placeholderOnProvisionedId = text.replace(
     "// Production Hyperdrive for the separately named two-web-next-production",
-    "// PLACEHOLDER: replace with the separately provisioned production Hyperdrive",
+    "// PLACEHOLDER: replace with the separately provisioned two-web-next-production Hyperdrive",
   );
   assert.throws(
     () => assertProductionHyperdrivePlaceholderCommentMatchesId(placeholderOnProvisionedId),
