@@ -26,10 +26,14 @@
 //   PATCH /members/:user, POST /members/:user (member-owner, via profiles gate → bounceToLogin →
 //   expiredWriteBounce); POST /admin/* (9 routes, via admin guard → bounceToLogin → expiredWriteBounce).
 // - Listed with a reason (no user-session write, so no recovery gate):
-//   POST /logout (terminal idempotent revocation: dead bearer still 303 + clears cookies, never a
-//   recovery bounce); POST /csp-reports (public session-free sink, always 204); POST /api/agent-events
-//   (machine-bearer, dead session cookie is ignored); POST /__probe/alert (staging-token, dead session
-//   cookie is ignored); POST /auth/qa/:identity (session-issuing, not session-gated).
+//   POST /logout (terminal idempotent revocation through the production route: dead bearer still
+//   303 + clears cookies, never a recovery bounce); POST /csp-reports (public session-free sink,
+//   always 204 even with a dead session); POST /api/agent-events (machine-bearer, dead session
+//   cookie is ignored); POST /__probe/alert (staging-token, dead session cookie is ignored);
+//   POST /auth/qa/:identity (session-issuing, not session-gated).
+//   The dead session below is always a properly signed, expired bearer (never an unsigned
+//   cookie the app would read as no session at all), so a future recovery gate placed in
+//   front of these routes would bounce it and fail this file instead of passing silently.
 //
 // Contract on every bounce: JSON callers keep 401 { error, recovery } with a recovery link, native
 // form callers keep 303 to /auth/recover?next=<safe GET> (never the write URL); the recovery landing
@@ -434,44 +438,43 @@ describe("non-session writes: reasons, never a recovery bounce", () => {
   const prod = (path: string, init?: RequestInit) =>
     production.request(new URL(path, APP_URL), init, { ...env });
 
-  it("POST /logout on a dead bearer still clears and redirects, never bounces to recovery", async () => {
+  // A properly signed session that has expired, with the production route
+  // resolving it from the same store: the shape recovery gates bounce on.
+  // An unsigned cookie would read as no session at all and never reach one.
+  async function deadSession() {
     const store = createMemorySessionStore();
-    const deadToken = newSessionToken();
-    const dead = (
-      await serializeSigned("__Host-two_session", deadToken, SESSION_SECRET, {
-        path: "/",
-        secure: true,
-        httpOnly: true,
-        sameSite: "Lax",
-      })
-    ).split(";")[0]!;
-    const app = new Hono<{ Bindings: Env }>();
-    app.use("*", sameOrigin);
-    // Minimal logout: revoke is idempotent, so a missing row still clears.
-    app.post("/logout", async (c) => {
-      const { hashToken: h } = await import("../src/sessions");
-      const { getSignedCookie, deleteCookie } = await import("hono/cookie");
-      const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
-      if (token) await store.revoke(await h(token));
-      deleteCookie(c, "__Host-two_session", { path: "/", secure: true });
-      return c.redirect("/", 303);
-    });
-    const res = await app.request(
-      "/logout",
-      { method: "POST", headers: { cookie: dead, origin: APP_URL } },
-      env,
+    const cookie = await bearer(
+      store,
+      { userId: MEMBER, username: "gone", member: true },
+      new Date(0),
     );
+    const authed = (path: string, init?: RequestInit) =>
+      production.request(new URL(path, APP_URL), init, { ...env, SESSION_STORE: store });
+    return { store, cookie, authed };
+  }
+
+  it("POST /logout on a dead bearer still clears and redirects, never bounces to recovery", async () => {
+    // Through the production route (throttle, body limit, store, cookie
+    // clearing), not a local copy: breaking the real handler must fail here.
+    const f = recoveryFixture();
+    const dead = await f.login(new Date(0));
+    const res = await f.request("/logout", {
+      method: "POST",
+      headers: { cookie: dead.cookie, origin: f.env.APP_URL },
+    });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/");
     expect(res.headers.getSetCookie().some((c) => c.startsWith("__Host-two_session="))).toBe(true);
+    expect(await f.sessions.get(dead.tokenHash)).toBeNull();
     void prod;
   });
 
-  it("POST /csp-reports is a session-free sink: always 204 with any cookie", async () => {
-    for (const cookie of ["", "__Host-two_session=garbage"]) {
-      const res = await prod("/csp-reports", {
+  it("POST /csp-reports is a session-free sink: always 204, even with a dead session", async () => {
+    const { cookie, authed } = await deadSession();
+    for (const jar of ["", cookie]) {
+      const res = await authed("/csp-reports", {
         method: "POST",
-        headers: { ...(cookie ? { cookie } : {}), "content-type": "application/json" },
+        headers: { ...(jar ? { cookie: jar } : {}), "content-type": "application/json" },
         body: JSON.stringify({ "csp-report": { "blocked-uri": "https://example.test/x" } }),
       });
       expect(res.status).toBe(204);
@@ -480,10 +483,11 @@ describe("non-session writes: reasons, never a recovery bounce", () => {
   });
 
   it("POST /api/agent-events ignores a dead session cookie: still the machine ingress refusal", async () => {
-    const res = await prod("/api/agent-events", {
+    const { cookie, authed } = await deadSession();
+    const res = await authed("/api/agent-events", {
       method: "POST",
       headers: {
-        cookie: "__Host-two_session=garbage",
+        cookie,
         "content-type": "application/json",
       },
       body: JSON.stringify({ kind: "probe" }),
@@ -496,10 +500,11 @@ describe("non-session writes: reasons, never a recovery bounce", () => {
   });
 
   it("POST /__probe/alert ignores a dead session cookie: still the staging-token 404", async () => {
-    const res = await prod("/__probe/alert", {
+    const { cookie, authed } = await deadSession();
+    const res = await authed("/__probe/alert", {
       method: "POST",
       headers: {
-        cookie: "__Host-two_session=garbage",
+        cookie,
         origin: APP_URL,
         "content-type": "application/json",
       },
@@ -509,9 +514,10 @@ describe("non-session writes: reasons, never a recovery bounce", () => {
   });
 
   it("POST /auth/qa/:identity without staging QA stays 404 with a dead session cookie", async () => {
-    const res = await prod("/auth/qa/member", {
+    const { cookie, authed } = await deadSession();
+    const res = await authed("/auth/qa/member", {
       method: "POST",
-      headers: { cookie: "__Host-two_session=garbage", origin: APP_URL, "x-qa-token": "wrong" },
+      headers: { cookie, origin: APP_URL, "x-qa-token": "wrong" },
     });
     expect(res.status).toBe(404);
   });
