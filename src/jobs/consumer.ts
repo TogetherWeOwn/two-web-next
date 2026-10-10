@@ -259,10 +259,11 @@ export async function consume(
             await deps.dispatchPending!(body.eventKey, controller.signal);
           }
         })().catch((e: unknown) => {
-          console.warn(
-            "sync successor dispatch failed; reconcile will retry",
-            e instanceof Error ? e.message : e,
-          );
+          // Class-only: dispatch errors come from the same Postgres calls as
+          // settlement errors and can carry SQL or connection secrets.
+          console.warn("sync successor dispatch failed; reconcile will retry", {
+            exception: queueExceptionClass(e),
+          });
         });
         await Promise.race([successor, timeout]).finally(() => clearTimeout(timer));
       }

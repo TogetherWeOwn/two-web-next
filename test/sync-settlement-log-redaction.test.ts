@@ -1,10 +1,12 @@
-// Sync-settlement failure log line is class-only.
+// Sync failure log lines are class-only.
 //
 // `consume()` settles a definitive refusal via `failSync`. That settlement is
 // correctness-critical (never ack while it still blocks future revisions), but
 // its throw can carry SQL or connection secrets, so the diagnostic line must
-// carry the bounded exception class, never the raw message. Mirrors
-// `test/queue-error-redaction.test.ts` / `test/bot-client-no-secret-log.test.ts`.
+// carry the bounded exception class, never the raw message. The same holds for
+// the successor-dispatch line: its Postgres calls fail with the same secrets.
+// Mirrors `test/queue-error-redaction.test.ts` /
+// `test/bot-client-no-secret-log.test.ts`.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { consume } from "../src/jobs/consumer";
 import { BotTerminalError } from "../src/jobs/types";
@@ -126,6 +128,50 @@ describe("sync settlement failure log line is class-only", () => {
     expect(m.retry).toHaveBeenCalledOnce();
     expect(m.ack).not.toHaveBeenCalled();
     expect(lines.filter((l) => l.includes("sync attempt settlement failed"))).toHaveLength(1);
+    for (const line of lines) {
+      expect(line).not.toContain(TOK);
+      expect(line).not.toContain(SQL);
+    }
+  });
+});
+
+describe("sync successor dispatch failure log line is class-only", () => {
+  it("a throwing dispatchPending acks without logging its SQL/token message", async () => {
+    const lines = capture();
+    const d = depsWithFailingSettlement(new Error("unused"));
+    // Succeed the sync so consume reaches the successor-dispatch branch, then
+    // fail the dispatch itself with a secret-carrying error.
+    const bot = {
+      upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }),
+      cancelEvent: async () => ({ ok: true, requestId: null, discordEventId: "d1" }),
+    } as unknown as BotClient;
+    const m = {
+      body: { kind: "sync-event", eventKey: "e1", idempotencyKey: "k-settle" },
+      attempts: 1,
+      ack: vi.fn(),
+      retry: vi.fn(),
+    };
+    await consume(
+      {
+        messages: [m],
+      },
+      {
+        ...d,
+        bot,
+        needsSync: async () => true,
+        dispatchPending: async () => {
+          throw new Error(`dispatch down ${SQL} ${TOK}`);
+        },
+      },
+    );
+
+    // A rejected send leaves the dirty revision for reconciliation: ack anyway.
+    expect(m.ack).toHaveBeenCalledOnce();
+    expect(m.retry).not.toHaveBeenCalled();
+
+    const dispatch = lines.filter((l) => l.includes("sync successor dispatch failed"));
+    expect(dispatch).toHaveLength(1);
+    expect(dispatch[0]).toContain('"exception":"Error"');
     for (const line of lines) {
       expect(line).not.toContain(TOK);
       expect(line).not.toContain(SQL);
