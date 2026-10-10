@@ -224,7 +224,7 @@ API access, unset/false flag or any other ref fails closed. Both gate jobs inher
 `contents: read` and `actions: read`; the latter is required to
 [read an Environment in this private repository](https://docs.github.com/en/rest/deployments/environments#get-an-environment--fine-grained-access-tokens).
 The deploy job uses that Environment, checks the gate again after approval, and
-deploys the dispatch SHA with `wrangler deploy --env production`. It does not
+deploys the target SHA (via DEPLOY_SHA) with `wrangler deploy --env production`. It does not
 create resources or run migrations/tests on production. Its post-deploy smoke runs
 the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`

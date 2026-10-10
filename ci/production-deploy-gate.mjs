@@ -58,6 +58,14 @@ export function assertProductionProtection(environment, { autoApprove = false } 
 
 export const stagingEvidenceWorkflows = ["deploy.yml", "e2e-staging.yml"];
 
+// Per-workflow required trigger event for valid staging evidence.
+// Manual workflow_dispatch of e2e-staging must not count as verification
+// for a SHA that may not have been deployed to staging.
+const stagingEvidenceEvent = {
+  "deploy.yml": null, // push or workflow_dispatch both acceptable
+  "e2e-staging.yml": "workflow_run",
+};
+
 // Automated approval evidence: for each staging workflow, the most recent run on
 // the deployment SHA must be a completed success. An older success does not
 // count if a later run on the same SHA failed or is still running.
@@ -67,7 +75,12 @@ export async function requireStagingEvidence(
 ) {
   const evidence = [];
   for (const file of workflows) {
-    const query = new URLSearchParams({ branch: "main", head_sha: sha, per_page: "100" });
+    const params = { branch: "main", head_sha: sha, per_page: "100" };
+    const requiredEvent = stagingEvidenceEvent[file];
+    if (requiredEvent) {
+      params.event = requiredEvent;
+    }
+    const query = new URLSearchParams(params);
     const response = await fetchImpl(
       `https://api.github.com/repos/${repository}/actions/workflows/${file}/runs?${query}`,
       {
@@ -143,7 +156,7 @@ export function assertProductionTarget(configText) {
 }
 
 // The checkout must be the dispatch SHA itself: deploy-production.yml checks
-// out `github.sha` in both gate jobs, so a newer main head never deploys.
+// out `github.sha` (via DEPLOY_SHA) in both gate jobs, so a newer main head never deploys.
 function currentCheckoutSha() {
   // The job container may not own the host checkout; trust only this path,
   // only for this command (https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory).
@@ -180,13 +193,19 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   // Exact-SHA green main CI, shared with the staging gate: a red or pending
   // ci.yml run on this SHA must never reach production.
   checkoutSha ??= currentCheckoutSha();
+  // Use DEPLOY_SHA (non-reserved name) so the runner does not discard it.
+  // Falls back to GITHUB_SHA only for legacy callers; new callers must pass DEPLOY_SHA.
+  const deploySha = env.DEPLOY_SHA || env.GITHUB_SHA;
+  if (!/^[a-f0-9]{40}$/.test(deploySha ?? "")) {
+    throw new Error("DEPLOY_SHA must be a 40-hex commit SHA");
+  }
   const ci = await requireSuccessfulCi(
     {
       eventName: env.GITHUB_EVENT_NAME,
       event: { repository: { full_name: env.GITHUB_REPOSITORY } },
       repository: env.GITHUB_REPOSITORY,
       ref: env.GITHUB_REF,
-      sha: env.GITHUB_SHA,
+      sha: deploySha,
       checkoutSha,
     },
     { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
