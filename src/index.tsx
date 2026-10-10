@@ -585,7 +585,8 @@ app.get("/up", async (c) => {
       sql,
       configReadiness(c.env),
     );
-    return c.json(body, upHttpStatus(body));
+    // Informational only: the revision never moves the status code.
+    return c.json({ ...body, ...revisionReadiness(c.env.CF_VERSION_METADATA) }, upHttpStatus(body));
   } finally {
     // Close request-owned clients without waiting to drain. Transaction-local
     // server limits bound active queries; disconnect alone is not cancellation.
@@ -612,6 +613,8 @@ app.get("/auth/discord/redirect", (c) => {
 });
 
 app.get("/auth/discord", async (c) => {
+  // Mints the OAuth state and sets its cookie: never cacheable, whatever sits at the edge.
+  c.header("cache-control", "no-store, private");
   // throttle:10,1 like the other three OAuth routes (TOG-6788 envelope; W15b
   // TOG-12088 ports OAuthReplayAndThrottleTest's all-four-routes guard). The
   // guard degrades to allow without a store, so DB-free leaves stay up.
@@ -620,7 +623,13 @@ app.get("/auth/discord", async (c) => {
   const state = crypto.randomUUID();
   const store = await storeFor(c).catch(() => null);
   if (!store) return c.redirect("/?n=signin_failed", 302);
-  await store.journeys.sweepExpired();
+  // No-DDL storeFor connects lazily, so an unreachable database surfaces on
+  // first use instead of in storeFor: fail the login the same way, never a 500.
+  try {
+    await store.journeys.sweepExpired();
+  } catch {
+    return c.redirect("/?n=signin_failed", 302);
+  }
   if (!(await store.journeys.issue(await hashToken(state), "auth")))
     return c.redirect("/?n=signin_failed", 302);
   // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
@@ -637,6 +646,9 @@ app.get("/auth/discord", async (c) => {
 });
 
 app.get("/auth/discord/callback", async (c) => {
+  // Clears the state cookie and issues the session on success: every outcome is
+  // per-visitor, so a shared cache must never keep one.
+  c.header("cache-control", "no-store, private");
   const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
   if (limited) return limited;
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
