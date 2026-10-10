@@ -3,6 +3,7 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { parseEventForm, ValidationError } from "../src/admin/validation";
 import { DEFAULT_CONFIG, validateFields } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 import {
@@ -80,6 +81,101 @@ describe("machine capacity bounds (pure)", () => {
       });
     },
   );
+});
+
+describe("machine control and bidi character rules (pure)", () => {
+  it.each(["title", "description", "location"] as const)(
+    "rejects NUL in %s with the field named",
+    (field) => {
+      expect(validateFields({ ...FIELDS, [field]: "Game\u0000night" })).toMatchObject({
+        ok: false,
+        errors: { [field]: [expect.any(String)] },
+      });
+    },
+  );
+
+  it.each(["title", "description", "location"] as const)(
+    "rejects a U+202E bidi override in %s with the field named",
+    (field) => {
+      expect(validateFields({ ...FIELDS, [field]: "Game\u202enight" })).toMatchObject({
+        ok: false,
+        errors: { [field]: [expect.any(String)] },
+      });
+    },
+  );
+
+  it.each([
+    ["title", "   "],
+    ["location", " \t "],
+  ] as const)("rejects whitespace-only %s as missing", (field, value) => {
+    expect(validateFields({ ...FIELDS, [field]: value })).toMatchObject({
+      ok: false,
+      errors: { [field]: [`The ${field} field is required.`] },
+    });
+  });
+
+  it("accepts a newline in description", () => {
+    const description = "Line one\nLine two";
+    expect(validateFields({ ...FIELDS, description })).toMatchObject({
+      ok: true,
+      fields: { description },
+    });
+  });
+
+  it("accepts a genuine emoji ZWJ sequence in title", () => {
+    const title = "👩‍💻 game night";
+    expect(validateFields({ ...FIELDS, title })).toMatchObject({ ok: true, fields: { title } });
+  });
+
+  it("leaves a whitespace-only game null, like the human form", () => {
+    expect(validateFields({ ...FIELDS, game: "   " })).toMatchObject({
+      ok: true,
+      fields: { game: null },
+    });
+  });
+});
+
+describe("human/machine shared-field parity (pure)", () => {
+  const cases: Array<{
+    label: string;
+    field: "title" | "description" | "location";
+    value: string;
+  }> = [
+    { label: "NUL in title", field: "title", value: "Game\u0000night" },
+    { label: "NUL in description", field: "description", value: "Game\u0000night" },
+    { label: "NUL in location", field: "location", value: "Game\u0000night" },
+    { label: "U+202E in title", field: "title", value: "Game\u202enight" },
+    { label: "U+202E in description", field: "description", value: "Game\u202enight" },
+    { label: "U+202E in location", field: "location", value: "Game\u202enight" },
+    { label: "zero-width space in title", field: "title", value: "\u200bGame" },
+    { label: "whitespace-only title", field: "title", value: "   " },
+    // No whitespace-only location row: the machine ingress requires location
+    // while the human form leaves it optional, a deliberate pre-existing
+    // divergence outside this change (covered by the required-check test above).
+    { label: "whitespace-only description", field: "description", value: "  " },
+    { label: "newline in description", field: "description", value: "Line one\nLine two" },
+    { label: "tab inside title", field: "title", value: "Game\tnight" },
+    { label: "emoji ZWJ in title", field: "title", value: "👩‍💻 game night" },
+    { label: "emoji ZWJ in description", field: "description", value: "👩‍💻 workshop" },
+    { label: "plain title", field: "title", value: "Game night" },
+  ];
+  it.each(cases)("$label: parseEventForm and validateFields agree", ({ field, value }) => {
+    let humanFields: Record<string, string> | null = null;
+    try {
+      parseEventForm({ ...FIELDS, [field]: value });
+    } catch (error) {
+      if (!(error instanceof ValidationError)) throw error;
+      humanFields = error.fields;
+    }
+    const machine = validateFields({ ...FIELDS, [field]: value });
+    if (humanFields === null) {
+      if (!machine.ok) expect(Object.keys(machine.errors)).not.toContain(field);
+    } else {
+      expect(Object.keys(humanFields)).toEqual([field]);
+      expect(machine.ok).toBe(false);
+      if (machine.ok === false) expect(Object.keys(machine.errors)).toEqual([field]);
+    }
+  });
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("machine input bounds (mounted route / SQL)", () => {

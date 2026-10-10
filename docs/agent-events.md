@@ -29,6 +29,8 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   Replay bodies are bound as text then cast to JSONB objects, independent of Drizzle's client serializers;
   earlier double-encoded JSONB strings remain readable without rewriting the saved receipt.
 
+Event text follows the human event form exactly: `title`, `description` and `location` are trimmed before the required and length checks (so a whitespace-only `title` or `location` is missing), and control and invisible/bidi characters are refused with a 422 field error via the same shared predicate. Tab, LF and CR in `description`, and genuine emoji ZWJ sequences, stay accepted; `game` stays optional with no control-character check, as in the human form.
+
 ## Publication and write-back
 
 Publishing exposes the shared row through `/events`, `/e/:key`, and the sitemap. Cancelled detail pages

@@ -17,7 +17,12 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { events } from "../db/admin-schema";
 import { CAPACITY_BELOW_GOING, goingCount, promoteWaitlist } from "../events/waitlist";
 import { retireAnonEventCaches } from "../events/anon-cache";
-import { utcToWall, wallToUtc, type EventStatus } from "../admin/validation";
+import {
+  containsControlCharacters,
+  utcToWall,
+  wallToUtc,
+  type EventStatus,
+} from "../admin/validation";
 import type { WriteBack } from "../admin/store";
 import { observeDiscordEvent, type ObservationEvent, type EventReader } from "../bot/event-read";
 
@@ -159,7 +164,9 @@ type Fields = {
   capacity: number | null;
 };
 
-// Same rules as the human event form (two-web StoreEventRequest::fieldRules).
+// Same rules as the human event form (parseEventForm in src/admin/validation):
+// trimmed before the required/length checks, and title/description/location
+// refuse control and invisible/bidi characters via the shared predicate.
 export function validateFields(
   raw: unknown,
 ): { ok: true; fields: Fields } | { ok: false; errors: Record<string, string[]> } {
@@ -177,17 +184,31 @@ export function validateFields(
       bad(k, `The ${k} field must be a string.`);
       return null;
     }
-    if ([...v].length > max) {
+    // Like the human form's str(): whitespace-only is missing (required) or
+    // null (optional), and the limit measures the trimmed value.
+    const t = v.trim();
+    if (t === "") {
+      if (required) bad(k, `The ${k} field is required.`);
+      return null;
+    }
+    if ([...t].length > max) {
       bad(k, `The ${k} field must not be greater than ${max} characters.`);
       return null;
     }
-    return v;
+    return t;
   };
   const title = str("title", 100, true);
   const game = str("game", 100, false);
   const description = str("description", 1000, false);
   const location = str("location", 255, true);
   const timezone = str("timezone", 64, true);
+  // Like the human form, check the raw submitted text (trim removes BOM): tab,
+  // LF and CR and genuine emoji ZWJ sequences stay accepted.
+  for (const k of ["title", "description", "location"] as const) {
+    const v = raw[k];
+    if (typeof v === "string" && v !== "" && containsControlCharacters(v))
+      bad(k, `The ${k} field must not contain control or invisible characters.`);
+  }
   if (timezone !== null) {
     try {
       new Intl.DateTimeFormat("en", { timeZone: timezone });
