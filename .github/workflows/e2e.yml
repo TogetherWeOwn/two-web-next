@@ -32,7 +32,7 @@ permissions:
 
 concurrency:
   group: e2e-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose
