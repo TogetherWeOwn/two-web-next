@@ -322,7 +322,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const row = await getEvent(db, c.req.param("key"));
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
-    const roster = await listRoster(db, row.eventKey, rosterQuery);
+    const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
     return bufferedMemberHtml(
       c,
       <EventFormPage
@@ -331,6 +331,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         values={eventValues(row)}
         errors={{}}
         roster={roster}
+        rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
       />,
     );

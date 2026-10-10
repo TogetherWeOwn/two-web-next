@@ -9,6 +9,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { RSVP_RATE_LIMIT, RSVP_STATUSES, type RsvpWriteStatus } from "../islands/contracts";
+import { THROTTLE_COUNTER_RETENTION_MINUTES } from "../join/service";
 import { enqueueEventSync } from "./sync";
 import { lockWaitlist, promoteWaitlist, waitlistPosition } from "./waitlist";
 import type { Env } from "../env";
@@ -190,7 +191,7 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
  * must run before any accept/charge decision — never between the debit and the write. */
 async function pruneThrottle(tx: Tx): Promise<void> {
   await tx.execute(
-    sql`delete from web_throttle_hits where at < clock_timestamp() - interval '5 minutes'`,
+    sql`delete from web_throttle_hits where at < clock_timestamp() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`,
   );
 }
 

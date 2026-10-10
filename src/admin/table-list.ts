@@ -10,9 +10,11 @@ export type FeaturedListQuery = {
   order: SortOrder;
 };
 export type RosterSort = "status" | "answered";
-export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder };
+export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder; page: number };
 export type JoinAttemptsQuery = { outcome: string; q: string; page: number };
 export const JOIN_ATTEMPT_PAGE_SIZE = 100;
+/** The RSVP roster reuses the 100-row admin convention. */
+export const ROSTER_PAGE_SIZE = 100;
 
 export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
   return {
@@ -24,10 +26,18 @@ export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
 }
 
 export function parseRosterQuery(params: ListParams): RosterQuery {
+  const page = Number(params.roster_page);
+  // Same unsafe-OFFSET guard as the join-attempts viewer: PostgreSQL OFFSET
+  // is a signed bigint, so keep the arithmetic exact in JS too.
+  const validPage =
+    /^[1-9]\d*$/.test(params.roster_page ?? "") &&
+    Number.isSafeInteger(page) &&
+    Number.isSafeInteger((page - 1) * ROSTER_PAGE_SIZE);
   return {
     q: (params.roster_q ?? "").trim(),
     sort: params.roster_sort === "status" ? "status" : "answered",
     order: params.roster_order === "asc" ? "asc" : "desc",
+    page: validPage ? page : 1,
   };
 }
 
@@ -60,6 +70,8 @@ export function rosterUrl(
   const q = { ...query, ...patch };
   const params = new URLSearchParams({ roster_sort: q.sort, roster_order: q.order });
   if (q.q) params.set("roster_q", q.q);
+  // Page 1 stays bare so sort/search links reset the roster to its first page.
+  if (q.page > 1) params.set("roster_page", String(q.page));
   return `/admin/events/${encodeURIComponent(eventKey)}?${params}#rsvp-roster`;
 }
 

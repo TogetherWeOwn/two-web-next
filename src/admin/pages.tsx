@@ -13,6 +13,7 @@ import { goingCountText } from "../islands/contracts";
 import { eventEmptyText, eventListUrl, type EventListQuery, type EventSort } from "./event-list";
 import { JOIN_RETENTION_DAYS, type JoinAttemptRow, type RosterEntry } from "./reads";
 import {
+  ROSTER_PAGE_SIZE,
   featuredEmptyText,
   featuredListUrl,
   joinAttemptsUrl,
@@ -571,6 +572,7 @@ export const EventFormPage: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   roster?: RosterEntry[];
+  rosterTotal?: number;
   rosterQuery?: RosterQuery;
 }> = ({
   mode,
@@ -578,8 +580,15 @@ export const EventFormPage: FC<{
   values,
   errors,
   roster,
-  rosterQuery = { q: "", sort: "answered", order: "desc" },
+  rosterTotal,
+  rosterQuery = { q: "", sort: "answered", order: "desc", page: 1 },
 }) => {
+  const total = rosterTotal ?? roster?.length ?? 0;
+  const rangeStart =
+    roster && roster.length > 0 ? (rosterQuery.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
+  const rangeEnd =
+    roster && roster.length > 0 ? (rosterQuery.page - 1) * ROSTER_PAGE_SIZE + roster.length : 0;
+  const rosterHasNext = rosterQuery.page * ROSTER_PAGE_SIZE < total;
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
@@ -769,8 +778,11 @@ export const EventFormPage: FC<{
         ) : null}
         {mode === "edit" && roster ? (
           <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
-            <h2>RSVPs ({roster.length})</h2>
+            <h2>RSVPs ({total})</h2>
             <p class="hint">Save event changes before searching or sorting the roster.</p>
+            <p data-testid="roster-range">
+              Showing {rangeStart}-{rangeEnd} of {total}
+            </p>
             <form method="get" action={`${action}#rsvp-roster`} class="filters">
               <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
               <input type="hidden" name="roster_order" value={rosterQuery.order} />
@@ -804,7 +816,7 @@ export const EventFormPage: FC<{
                       active={rosterQuery.sort === "status"}
                       order={rosterQuery.order}
                       url={(order) =>
-                        rosterUrl(row!.eventKey, rosterQuery, { sort: "status", order })
+                        rosterUrl(row!.eventKey, rosterQuery, { sort: "status", order, page: 1 })
                       }
                     />
                     <TableSortHeader
@@ -812,7 +824,7 @@ export const EventFormPage: FC<{
                       active={rosterQuery.sort === "answered"}
                       order={rosterQuery.order}
                       url={(order) =>
-                        rosterUrl(row!.eventKey, rosterQuery, { sort: "answered", order })
+                        rosterUrl(row!.eventKey, rosterQuery, { sort: "answered", order, page: 1 })
                       }
                     />
                   </tr>
@@ -821,7 +833,7 @@ export const EventFormPage: FC<{
                   {roster.length === 0 ? (
                     <tr>
                       <td colspan={3} data-testid="roster-empty">
-                        {rosterEmptyText(rosterQuery)}
+                        {total > 0 ? "No RSVPs on this page." : rosterEmptyText(rosterQuery)}
                       </td>
                     </tr>
                   ) : (
@@ -836,6 +848,25 @@ export const EventFormPage: FC<{
                 </tbody>
               </table>
             </div>
+            <nav aria-label="RSVP roster pages" class="actions">
+              {rosterQuery.page > 1 ? (
+                <a
+                  rel="prev"
+                  href={rosterUrl(row!.eventKey, rosterQuery, { page: rosterQuery.page - 1 })}
+                >
+                  Previous
+                </a>
+              ) : null}
+              <span>Page {rosterQuery.page}</span>
+              {rosterHasNext ? (
+                <a
+                  rel="next"
+                  href={rosterUrl(row!.eventKey, rosterQuery, { page: rosterQuery.page + 1 })}
+                >
+                  Next
+                </a>
+              ) : null}
+            </nav>
           </section>
         ) : null}
       </section>

@@ -172,8 +172,10 @@ yet provisioned; this PR changes no live role or credential):
   Hyperdrive and the bot container) do not own these tables and are not
   superusers or members of the owner role.
 - On these three tables the runtime roles hold only `SELECT, INSERT, DELETE`,
-  plus `USAGE` on their id sequences. They hold no `UPDATE`, `TRUNCATE`,
-  `TRIGGER` or `REFERENCES`.
+  plus `USAGE` on their id sequences. They hold no `TRUNCATE`, `TRIGGER` or
+  `REFERENCES`. One exception is accepted: the production PlanetScale runtime
+  role inherits `pg_write_all_data`, which also grants `UPDATE`. The guard
+  refuses `UPDATE` on these tables, so that role cannot update audit rows.
 - The runtime roles hold `CREATE` on no schema, so they cannot plant shadow
   functions or operators. Separately, the guard function pins its own
   `search_path`, so a shadowed `clock_timestamp()` or `<` cannot reach it.
@@ -199,8 +201,10 @@ Nightly `pg_dump -Fc` of the Neon `staging` branch (and the PlanetScale
 - Schedule: `.github/workflows/neon-backup.yml` — nightly `03:17Z` cron
   + manual `workflow_dispatch`. Staging reads repo secret
   `NEON_STAGING_DATABASE_URL` (operator-provisioned); the production target
-  reads `PRODUCTION_DATABASE_URL` (PlanetScale direct endpoint, same
-  `pg_dump -Fc` path — direct `5432`, never the pooled `6432` port).
+  reads `PRODUCTION_BACKUP_DATABASE_URL` (a read-only role that inherits
+  `pg_read_all_data` and no write, DDL or admin role, on the PlanetScale direct
+  endpoint, same `pg_dump -Fc` path — direct `5432`, never the pooled `6432`
+  port).
   Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
 - Layout: `neon-staging/neon-<UTC>.dump` (staging) and
   `neon-production/neon-<UTC>.dump` (production after cutover); weeklies are
