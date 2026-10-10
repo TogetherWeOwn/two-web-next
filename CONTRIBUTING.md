@@ -168,7 +168,8 @@ stay out of the changelog. Each squash-merged PR title becomes one entry, so
 write it for a reader of the changelog: imperative mood, one user-facing change.
 
 Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
-cutover. `feat!` / `BREAKING CHANGE` bumps major (minor while `0.x`).
+cutover. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
+from `1.0.0` onward, it bumps the major version.
 
 ## Local development
 
