@@ -41,10 +41,31 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
   };
 }
 
-/** Durable request snapshot; first claims recheck eligibility, attempted retries are immutable. */
+/** Durable request snapshot; first claims recheck eligibility, attempted retries are immutable.
+ * Evidence-only verifier support: every source SELECT executed through this
+ * store reports its statement name, row count and `clock_timestamp()` marker
+ * (null when the SELECT legitimately returns no rows). The callback is
+ * optional; when absent nothing is reported and behavior is unchanged. */
+export type SourceReadStatement =
+  | "queue_failed_jobs_by_id"
+  | "events_by_key_exists"
+  | "stale_keys"
+  | "pending_sync"
+  | "failed_sync";
+export type SourceReadReport = {
+  statement: SourceReadStatement;
+  rowCount: number;
+  readAt: unknown;
+};
+function markerOf(row: { preview_read_at?: unknown } | undefined): unknown {
+  return row?.preview_read_at ?? null;
+}
 export function pgEventStore(
   sql: ReturnType<typeof postgres> | TxClient,
-  { bypassReadCache = false }: { bypassReadCache?: boolean } = {},
+  {
+    bypassReadCache = false,
+    onSourceRead,
+  }: { bypassReadCache?: boolean; onSourceRead?: (report: SourceReadReport) => void } = {},
 ): EventStore {
   // Operational previews cannot combine a fresh timestamp with cached source reads.
   // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
@@ -68,6 +89,11 @@ export function pgEventStore(
             (status = 'published' and (discord_event_id is null or exists (
               select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
             ))))))`;
+    onSourceRead?.({
+      statement: "stale_keys",
+      rowCount: rows.length,
+      readAt: markerOf(rows[0] as { preview_read_at?: unknown } | undefined),
+    });
     return rows.map((row: { event_key: string }) => row.event_key);
   };
   return {
@@ -160,12 +186,22 @@ export function pgEventStore(
         where e.event_key = ${eventKey}
           and rejected.revision = e.sync_revision
           and rejected.state = 'failed' limit 1`;
+      onSourceRead?.({
+        statement: "failed_sync",
+        rowCount: rows.length,
+        readAt: markerOf(rows[0] as { preview_read_at?: unknown } | undefined),
+      });
       return rows.length > 0;
     },
     async pendingSync(eventKey) {
       const [row] =
         await sql`select a.*${readMarker()} from event_sync_attempts a join events e on e.id = a.event_id
         where e.event_key = ${eventKey} and a.state = 'pending'`;
+      onSourceRead?.({
+        statement: "pending_sync",
+        rowCount: row ? 1 : 0,
+        readAt: markerOf(row as { preview_read_at?: unknown } | undefined),
+      });
       return row ? attemptFrom(row) : null;
     },
     async closeFinished(now) {

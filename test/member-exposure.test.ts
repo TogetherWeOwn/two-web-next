@@ -58,7 +58,7 @@ const ADMIN_READS = [
   "/join-attempts/:id",
   ...ADMIN_REDIRECTS,
 ];
-const OPERATIONAL_READS = ["/queue/failed/:id/preview"];
+const OPERATIONAL_READS = ["/queue/failed/:id/preview", "/queue/source-evidence/:id"];
 const OTHER_READS = [
   "/",
   "/discord",

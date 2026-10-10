@@ -199,6 +199,16 @@ const MATRIX: Case[] = [
   // Operational admission is disabled before any session/source/audit lookup.
   { method: "GET", route: "/admin/queue/failed/:id/preview", status: 404, format: "json" },
   { method: "POST", route: "/admin/queue/failed/:id/redispatch", status: 404, format: "json" },
+  // Evidence-only verifier is inert without runtime-only settings, so the
+  // outage envelope sees the DB-free disabled refusal; write verbs refuse
+  // before any middleware or source read.
+  { method: "GET", route: "/admin/queue/source-evidence/:id", status: 404, format: "json" },
+  ...["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].map((method) => ({
+    method,
+    route: "/admin/queue/source-evidence/:id",
+    status: 405,
+    format: "json" as const,
+  })),
   // Static aliases need a valid moderator session, but no resource lookup.
   {
     method: "GET",
