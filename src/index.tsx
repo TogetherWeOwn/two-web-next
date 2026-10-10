@@ -12,7 +12,6 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
-  migrate,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
@@ -28,7 +27,7 @@ import {
 } from "./discord";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
-import { migrateRoster, upsertRosterUser } from "./db/roster";
+import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { inviteDestination } from "./invite";
@@ -201,8 +200,10 @@ type EnvWithRoster = Env & { ROSTER_STORE?: Sql };
 // The cookie never carries identity claims. It carries a random token; the row
 // in Postgres is the session. A stolen DB dump yields hashes, not logins, and
 // rotation/revocation are a row delete, not waiting for a signature to expire.
-const migratedUrls = new Set<string>();
-
+//
+// No DDL here (TOG-19721): web_sessions comes from the migrate workflow
+// (drizzle/1022), so the runtime role stays read/write-only. A database that
+// predates that migration surfaces as a query failure, like any other outage.
 async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
@@ -212,29 +213,20 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedUrls.has(url)) {
-    await migrate(sql);
-    migratedUrls.add(url);
-  }
   return createPostgresSessionStore(sql);
 }
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
 // read the same users sign-in writes. Tests may inject ROSTER_STORE; no DB
 // configuration means a no-op upsert so DB-free sign-in tests still work.
-const migratedRosterUrls = new Set<string>();
-
+// No DDL here either (TOG-19721): the users table is drizzle/0000, owned by
+// the migrate workflow.
 async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
   if (injected) return injected;
   const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedRosterUrls.has(url)) {
-    await migrateRoster(sql);
-    migratedRosterUrls.add(url);
-  }
-  return sql;
+  return postgres(url, databaseOptions) as unknown as Sql;
 }
 
 async function issueSession(
@@ -593,8 +585,7 @@ app.get("/up", async (c) => {
       sql,
       configReadiness(c.env),
     );
-    // Informational only: the revision never moves the status code.
-    return c.json({ ...body, ...revisionReadiness(c.env.CF_VERSION_METADATA) }, upHttpStatus(body));
+    return c.json(body, upHttpStatus(body));
   } finally {
     // Close request-owned clients without waiting to drain. Transaction-local
     // server limits bound active queries; disconnect alone is not cancellation.
@@ -621,8 +612,6 @@ app.get("/auth/discord/redirect", (c) => {
 });
 
 app.get("/auth/discord", async (c) => {
-  // Mints the OAuth state and sets its cookie: never cacheable, whatever sits at the edge.
-  c.header("cache-control", "no-store, private");
   // throttle:10,1 like the other three OAuth routes (TOG-6788 envelope; W15b
   // TOG-12088 ports OAuthReplayAndThrottleTest's all-four-routes guard). The
   // guard degrades to allow without a store, so DB-free leaves stay up.
@@ -648,9 +637,6 @@ app.get("/auth/discord", async (c) => {
 });
 
 app.get("/auth/discord/callback", async (c) => {
-  // Clears the state cookie and issues the session on success: every outcome is
-  // per-visitor, so a shared cache must never keep one.
-  c.header("cache-control", "no-store, private");
   const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
   if (limited) return limited;
   const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);

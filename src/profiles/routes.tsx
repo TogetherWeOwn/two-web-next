@@ -37,7 +37,7 @@ import { databaseUnavailable, NotFoundPage, rateLimitExceeded } from "../errors"
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
-import { checkJoinThrottle, migrateJoin } from "../join/service";
+import { checkJoinThrottle } from "../join/service";
 import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
 import {
@@ -88,8 +88,6 @@ type Viewer = { id: string; username: string; member: boolean; moderator: boolea
 type Vars = { viewerId: string; access: AccessDecl; viewer: Viewer };
 type Ctx = Context<{ Bindings: Env; Variables: Vars }>;
 
-const migratedThrottle = new Set<string>();
-
 export function profilesApp(deps: ProfileDeps = {}) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
   app.onError((error, c) => {
@@ -135,11 +133,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
     if (deps.throttle) return deps.throttle(bucket);
     const url = databaseUrl(c.env);
     if (!url) return { limited: false };
+    // No DDL here (TOG-19721): web_throttle_hits comes from the migrate
+    // workflow (drizzle/1000); the runtime role stays read/write-only.
     const sql = postgres(url, databaseOptions) as unknown as Sql;
-    if (!migratedThrottle.has(url)) {
-      await migrateJoin(sql);
-      migratedThrottle.add(url);
-    }
     return checkJoinThrottle(sql, bucket, PROFILE_WRITE_THROTTLE_PER_MINUTE);
   };
 
@@ -186,15 +182,6 @@ export function profilesApp(deps: ProfileDeps = {}) {
     c.header("cache-control", "private, no-store");
   };
 
-  // Bare /members is retired (URL freeze), not a member index: answer the
-  // frozen 404 before the gate below. Registered first so the "/members/*"
-  // middleware never bounces it to OAuth; members get the same 404, with no
-  // session read, no cookie and no access-log row. Hono also serves HEAD here.
-  // Strict routing distinguishes the trailing slash; retire that form too.
-  // https://hono.dev/docs/api/hono#strict-mode
-  app.get("/members", (c) => c.notFound());
-  app.get("/members/", (c) => c.notFound());
-
   // Scoped to this slice's paths: the app is mounted at "/", so a "*" here
   // would gate every route in the worker.
   for (const path of ["/profile", "/members/*"]) {
@@ -239,7 +226,6 @@ export function profilesApp(deps: ProfileDeps = {}) {
         member={member}
         stats={stats}
         isOwner={viewer.id === member.id}
-        isModerator={viewer.moderator}
         appUrl={c.env.APP_URL}
         joinResult={joinResult}
       />,
@@ -298,7 +284,6 @@ export function profilesApp(deps: ProfileDeps = {}) {
           member={member}
           stats={await statsFor(c, member.id)}
           isOwner
-          isModerator={c.get("viewer").moderator}
           appUrl={c.env.APP_URL}
           errors={result.errors}
           values={{
