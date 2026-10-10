@@ -35,7 +35,6 @@ import {
   checkJoinThrottle,
   finishJoin,
   liveBotAdd,
-  migrateJoin,
   recordAttempt,
   safeNext,
   sanitizeSource,
@@ -45,8 +44,8 @@ import {
 export const JOIN_STATE_COOKIE = "__Host-two_join_state";
 export const JOIN_SOURCE_COOKIE = "__Host-two_join_source";
 export const JOIN_NEXT_COOKIE = "__Host-two_join_next";
-const STATE_TTL_SECONDS = 600;
-const JOURNEY_TTL_SECONDS = 600;
+export const STATE_TTL_SECONDS = 600;
+export const JOURNEY_TTL_SECONDS = 600;
 
 /** Injectable at the call site (`{...env, JOIN_STORE: …}`), like SESSION_STORE. */
 export type JoinRouteDeps = {
@@ -61,20 +60,15 @@ type Ctx = Context<{ Bindings: Env }>;
 // Postgres access for the journey. Same posture as sessions (`storeFor` in the
 // app module): tests inject a client through JOIN_DEPS; runtime uses the
 // explicit DATABASE_URL or the Hyperdrive DB binding. With neither, throttle
-// and attempts degrade to no-ops so the DB-free funnel stays up.
-const migratedJoinUrls = new Set<string>();
-
+// and attempts degrade to no-ops so the DB-free funnel stays up. No DDL here
+// (TOG-19721): join_attempts/web_throttle_hits come from the migrate workflow
+// (drizzle/1000); the runtime role stays read/write-only.
 async function joinStore(c: Ctx): Promise<Sql | null> {
   const deps = (c.env as EnvWithJoin).JOIN_DEPS;
   if (deps?.store) return deps.store();
   const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedJoinUrls.has(url)) {
-    await migrateJoin(sql);
-    migratedJoinUrls.add(url);
-  }
-  return sql;
+  return postgres(url, databaseOptions) as unknown as Sql;
 }
 
 function background(c: Ctx): ((work: Promise<void>) => void) | undefined {

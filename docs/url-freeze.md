@@ -56,7 +56,8 @@ applies to the HTML adapter as to all cookie-authenticated mutations.
 ## Redirect map
 
 Legacy-only aliases ([TOG-11156](/TOG/issues/TOG-11156)); request proof:
-`test/legacy-redirects.test.ts`. GET and automatic HEAD share this behavior.
+`test/legacy-redirects.test.ts`. Post-cutover vanity aliases; request proof:
+`test/vanity-redirects.test.ts`. GET and automatic HEAD share this behavior.
 
 | Legacy method + Hono pattern | Status | Location | Query policy |
 |---|---|---|---|
@@ -66,6 +67,8 @@ Legacy-only aliases ([TOG-11156](/TOG/issues/TOG-11156)); request proof:
 | `GET /admin/featured-contents/create` | 301 | `/admin/featured/new` | Drop all |
 | `GET /admin/featured-contents/:id/edit` | 301 if mapped, 404 if missing/invalid, 503 if DB unavailable | `/admin/featured/{nativeId}` resolved by `featured_contents.legacy_id = :id` | Drop all |
 | `GET /auth/discord/redirect` | 302 | `/auth/discord` | Preserve only `next` accepted by `safeNext` (`src/join/service.ts`), URL-encoded; otherwise no query |
+| `GET /login` | 302 | `/auth/discord` | Same `safeNext` `next` policy as `/auth/discord/redirect`; starts no OAuth state, issues no cookie |
+| `GET /community` | 302 | `/` | Drop all |
 
 Admin aliases run behind the same moderator guard as their targets: guests
 302 to `/auth/discord`, signed-in non-moderators receive the same 403. No

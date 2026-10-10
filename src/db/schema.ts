@@ -238,3 +238,46 @@ export const queueFailedJobs = pgTable("queue_failed_jobs", {
   reason: text("reason").notNull(),
   failedAt: timestamp("failed_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Session store (TOG-19721): previously runtime-DDL-only (`migrate()` in
+// src/sessions.ts created this on first request, forcing the runtime role to
+// hold schema CREATE). The migrate workflow owns the DDL now; the request
+// path assumes the table exists. Shape is byte-identical to the retired
+// runtime DDL, including the additive `status_hash` rollout column.
+export const webSessions = pgTable(
+  "web_sessions",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    userId: text("user_id").notNull(),
+    username: text("username").notNull(),
+    avatar: text("avatar"),
+    member: boolean("member").notNull(),
+    moderator: boolean("moderator").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    statusHash: text("status_hash"),
+  },
+  (t) => [
+    index("web_sessions_status_hash_idx").on(t.statusHash),
+    index("web_sessions_user_id_idx").on(t.userId),
+    index("web_sessions_expires_at_idx").on(t.expiresAt),
+  ],
+);
+
+// OAuth journey admission (TOG-19721): same move as web_sessions —
+// `migrateOAuthJourneys()` in src/oauth-journeys.ts used to self-create this
+// table per request. Canonical DDL lives in the 1022 migration now.
+export const webOAuthJourneys = pgTable(
+  "web_oauth_journeys",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    flow: text("flow").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("web_oauth_journeys_flow_check", sql`${t.flow} IN ('auth', 'join')`),
+    index("web_oauth_journeys_expires_at_idx").on(t.expiresAt),
+  ],
+);

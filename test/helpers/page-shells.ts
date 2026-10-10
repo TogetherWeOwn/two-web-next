@@ -46,6 +46,8 @@ export const NON_HTML_READS = [
   "/auth/discord",
   "/auth/discord/callback",
   "/auth/discord/redirect",
+  "/login", // Vanity sign-in alias: 302 to /auth/discord, never an HTML page.
+  "/community", // Vanity lobby alias: 302 to /, never an HTML page.
   "/admin/events/create",
   "/admin/events/:key/edit",
   "/admin/featured-contents",

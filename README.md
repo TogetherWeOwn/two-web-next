@@ -10,42 +10,21 @@ Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest,
 [Drizzle](https://orm.drizzle.team) + Postgres, server-rendered HTML with plain
 JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration;
 migration plan: TOG-9671.
+How it fits together: [docs/architecture.md](docs/architecture.md).
 Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
 Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 [docs/runbook.md](docs/runbook.md).
 
 ## What works today
 
-- Homepage, rules (optional last-updated stamp), privacy page, branded error pages,
-  manifest/icons, canonical URLs, sitemap, robots and security/cache headers.
-  Homepage member counts currently show an unavailable state, not live statistics.
-- Discord sign-in (`identify` + `guilds.join`) and the join journey, including
-  fallback invite and join-attempt audit. The OAuth access token is used once,
-  never stored. OAuth-state and session cookies contain signed random values;
-  only persisted session tokens are hashed. Authenticated views rotate session
-  tokens and logout revokes them.
-- Moderator status is recomputed at login from Discord snowflake role IDs (not
-  names); missing configuration or failed lookups fail closed. The QA sign-in
-  seam requires the exact staging `APP_URL` configuration and is disabled
-  without its token; that configuration gate is not a request-host allowlist.
-- Member-gated `/profile` and `/members/:user` views, plus self-only profile
-  edits. Member-data access is recorded; log-write failures refuse reads by
-  default.
-- Event listing, calendar and past-event islands, event detail/search, iCalendar
-  and Google Calendar links, event feeds, RSVP/leave endpoints and going counts.
-  RSVP endpoints are implemented; the event detail page does not yet mount an
-  RSVP-button island. Discord-native calendar rows use [shared expiring snapshots](docs/discord-snapshots.md)
-  and atomic refresh admission in the existing database; they never become canonical events.
-- Moderator admin screens: event and featured-event CRUD, read-only RSVP roster,
-  join audit and funnel summary.
-- Guarded agent-event ingress with caller/guild validation, idempotency and
-  outer rate limiting. CSP report ingestion and human-route throttle responses
-  have fixture coverage; the general human throttle currently needs an explicit
-  `DATABASE_URL` (the Hyperdrive-only path does not enforce it).
-- Worker queue/scheduler scaffolding: retries, locking, queue ledger,
-  `events:reconcile`, retention pruning and readiness `/up` (503 on DB/schema failure or a missing required secret).
-  Bot/Discord adapters are still reject-all stubs; the separate event write-back
-  queue is not bound. These are not a claim of end-to-end live bot parity.
+- Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)).
+- Discord sign-in requests `identify` + `guilds.join`; the join journey includes an invite fallback and join-attempt audit. The OAuth access token is used for the join request and not stored. OAuth state and return-journey cookies are signed; persisted session tokens are hashed, rotated on authenticated reads, and revoked on logout ([`src/index.tsx`](src/index.tsx), [`src/join/route.ts`](src/join/route.ts), [`src/sessions.ts`](src/sessions.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/sessions.test.ts`](test/sessions.test.ts)).
+- Moderator status is recomputed at login by matching Discord snowflake role IDs, not names; a blank allowlist or failed lookup denies moderator status. QA sign-in requires its configured token and exact staging `APP_URL`; this is not a request-host allowlist ([`src/index.tsx`](src/index.tsx), [`src/roles.ts`](src/roles.ts), [`src/qa.ts`](src/qa.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/qa-identity-admission.test.ts`](test/qa-identity-admission.test.ts)).
+- `/profile` and `/members/:user` are member-gated; profile edits are self-only. Reads of another member's data are recorded, and these profile/member reads are refused if audit recording fails ([`src/profiles/routes.tsx`](src/profiles/routes.tsx), [`src/member-reads.ts`](src/member-reads.ts), [`test/profiles.test.ts`](test/profiles.test.ts), [`test/profile-self-only.test.ts`](test/profile-self-only.test.ts), [`test/member-data-access.test.ts`](test/member-data-access.test.ts)).
+- Event listing, calendar and past-event islands, event detail/search, iCalendar and Google Calendar links, event feeds, RSVP/leave endpoints, and going counts are implemented. The event detail page mounts the RSVP-button island. Discord-native calendar rows use [shared expiring snapshots](docs/discord-snapshots.md) and atomic refresh admission in Postgres; they are display-only, not canonical events ([`src/events/pages.tsx`](src/events/pages.tsx), [`src/events/routes.tsx`](src/events/routes.tsx), [`src/events/reads.ts`](src/events/reads.ts), [`test/events.test.ts`](test/events.test.ts), [`test/event-page.test.ts`](test/event-page.test.ts), [`test/islands-rsvp-button.test.ts`](test/islands-rsvp-button.test.ts), [`test/event-feeds.test.ts`](test/event-feeds.test.ts), [`test/discord-snapshot-postgres.test.ts`](test/discord-snapshot-postgres.test.ts)).
+- Moderator admin screens include event and featured-event CRUD, a read-only RSVP roster, join-attempt audit, and a funnel summary ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`test/admin.test.ts`](test/admin.test.ts), [`test/admin-reads.test.ts`](test/admin-reads.test.ts)).
+- Agent-event ingress validates its caller and guild, supports idempotency, and applies an outer rate limit. CSP report ingestion and human-route throttles have fixture coverage; the human throttle uses `DATABASE_URL` when set, otherwise Hyperdrive's `DB.connectionString`. Shared throttle middleware allows when no store is configured or a store operation fails; `/join/discord` and `/join/callback` use a separate check that can fail if its configured store errors ([`src/agent-events/route.ts`](src/agent-events/route.ts), [`src/agent-events/service.ts`](src/agent-events/service.ts), [`src/throttle.ts`](src/throttle.ts), [`src/join/route.ts`](src/join/route.ts), [`src/db/connection.ts`](src/db/connection.ts), [`test/agent-events.test.ts`](test/agent-events.test.ts), [`test/agent-events-shield.test.ts`](test/agent-events-shield.test.ts), [`test/csp-reports.test.ts`](test/csp-reports.test.ts), [`test/throttle-db-connection.test.ts`](test/throttle-db-connection.test.ts)).
+- Queue and scheduler code includes retries, locking, a queue ledger, `events:reconcile`, retention pruning, and `/up` readiness (503 on DB/schema failure or missing `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, or `DISCORD_BOT_TOKEN`). The jobs worker uses a bot client and Postgres event store; missing bot endpoint/key/secret configuration makes bot calls fail as terminal jobs. Internal-action producer/consumer logic and its Wrangler queue binding exist, but the alert probe is the only sender to the internal-action queue; this does not claim normal web dispatch or end-to-end live bot parity ([`src/jobs/worker.ts`](src/jobs/worker.ts), [`src/jobs/call-internal-action.ts`](src/jobs/call-internal-action.ts), [`src/bot/client.ts`](src/bot/client.ts), [`src/alert-probe.ts`](src/alert-probe.ts), [`src/up.ts`](src/up.ts), [`wrangler.jsonc`](wrangler.jsonc), [`test/jobs.test.ts`](test/jobs.test.ts), [`test/jobs-worker-config.test.ts`](test/jobs-worker-config.test.ts), [`test/callinternalaction-no-web-dispatch.test.ts`](test/callinternalaction-no-web-dispatch.test.ts), [`test/up.test.ts`](test/up.test.ts)).
 
 ## Moderator guides
 

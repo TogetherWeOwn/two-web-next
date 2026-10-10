@@ -58,6 +58,11 @@ Related links prefer the same non-null game, then fill to three by `starts_at, i
 including ongoing events (`ends_at >= now`) and excluding the current event.
 Links are **published-only for every viewer**, per [TOG-10821](/TOG/issues/TOG-10821):
 this deliberately narrows legacy's moderator-draft and `past`-status eligibility.
+Prev/next neighbors carry the same not-ended bound as the related rail
+(`ends_at >= now`, PR #565): this deliberately narrows legacy
+`EventPageController::neighbor()`, which applies no `ends_at` bound, so an
+archived page shows no `previous` link and `next` jumps to the first ongoing or
+upcoming event. Ended events stay browsable in `/events/past`.
 Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
 private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
 per-event RSVP reads.
@@ -260,10 +265,10 @@ go hunting for them.
 | Legacy | Next status | Card |
 |---|---|---|
 | Share meta (canonical + OG/Twitter, no og:image) + RSS autodiscovery | ✅ layout-level + per-event tags: canonical, og:url/title/description, twitter:title/description/card, no og:image (`src/pages.tsx` Layout, `src/events/pages.tsx` EventDetailShell/EventPage; `test/event-page.test.ts` per-event tags, `test/page-description-metadata.test.ts`, `test/seo.test.ts`) | W4 ✅ + W8 ✅ |
-| `site.webmanifest` + icons (192/512/maskable/apple) + theme-color `#0b0714` | ❌ missing (`public/` has styles + islands only) | **N2** (new: manifest/icons) |
+| `site.webmanifest` + icons (192/512/maskable/apple) + theme-color `#151720` | ✅ ships: `public/site.webmanifest` + `public/icons/` (`icon-192.png`, `icon-512.png`, `maskable-512.png`, `apple-touch-icon.png`), linked from the `src/pages.tsx` Layout; pinned by `test/n2-manifest-errors.test.ts` | **N2** ✅ ([TOG-9894](/TOG/issues/TOG-9894)) + [TOG-9906](/TOG/issues/TOG-9906) + [TOG-11712](/TOG/issues/TOG-11712) |
 | Branded 404/429/500/503 pages | ✅ branded shells; 404 now has a fail-open, 500 ms lookup (3 upcoming published events) and GET `/events?q=` search, without session reads/writes; 500/429 recovery CTA points at the Discord invite (`test/errors-recovery-cta.test.ts`) | **N2** + [TOG-10824](/TOG/issues/TOG-10824) |
 | Draft/noindex + gone-410 + past-never-indexed rules | ✅ sitemap side (published-only `src/seo.ts`) + route side (draft/past meta + header noindex, cancelled 410 + noindex, published no signal; `src/events/routes.tsx`, `src/events/pages.tsx`; `test/event-page.test.ts`, `test/event-gone-surfaces.test.ts`) | W8 ✅ |
-| `content/privacy-policy-v1.md` (superseded by v2, retained as history) | ❌ see N1 | **N1** |
+| `content/privacy-policy-v1.md` (superseded by v2, retained as history) | ✅ v1 retained as history; live `/privacy` serves v2 via `src/privacy.ts` (`POLICY_VERSION=2`) + `test/privacy.test.ts` + `test/privacy-content-generation.test.ts` | **N1** ✅ ([TOG-9893](/TOG/issues/TOG-9893)) |
 | `content/faq-preview*.md` (docs-only), `content/welcome/*` (unwired drafts) | copy inlined / never wired | dropped (docs-only / dead) |
 | Design-lab routes (non-prod visual experiments) | ✅ correctly absent | dropped (never production) |
 | DB sessions, 120-min sliding lifetime | ✅ DB-backed + rotation; 120-minute window re-stamped on login and every authenticated page view (`SESSION_TTL_SECONDS`, `src/sessions.ts`), status cookie follows it. No divergence: the earlier 30 d CPO divergence is withdrawn (privacy v2 keeps the v1 "no remember-me" promise, [TOG-12556](/TOG/issues/TOG-12556)) | W5 ✅ + [TOG-12928](/TOG/issues/TOG-12928) |

@@ -16,6 +16,8 @@ export const coverage = {
   "/auth/discord/redirect": skip(
     "Legacy login alias redirects to the non-document OAuth start route",
   ),
+  "/login": skip("Vanity sign-in alias redirects to the non-document OAuth start route"),
+  "/community": skip("Vanity lobby alias redirects to the audited homepage"),
   "/admin/events/create": skip(
     "Legacy admin alias redirects to the audited /admin/events/new form",
   ),

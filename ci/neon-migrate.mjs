@@ -8,6 +8,40 @@ const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
 const lockKey = 11161001;
 
+// PlanetScale Postgres identity pins (infrastructure identifiers, not secrets).
+// Usernames carry the branch as <role-credential>.<branch_id>, so the username
+// suffix is the branch identity even if branch hosts ever converge. Both pins
+// are required: the suffix proves the branch, the host pin keeps a
+// mis-provisioned production endpoint out. Update both when the staging branch
+// is recreated (its roles and secrets rotate then too).
+export const PLANETSCALE_STAGING_HOST = "aws-us-east-1-4.pg.psdb.cloud";
+export const PLANETSCALE_STAGING_BRANCH_ID = "4vmu64sp52p4";
+export const PLANETSCALE_PRODUCTION_HOST = "aws-us-east-1-1.pg.psdb.cloud";
+export const PLANETSCALE_PRODUCTION_BRANCH_ID = "mmzi498bs6m5";
+
+const branchIdOf = (username) => username.split(".").pop() ?? "";
+
+// A production URL in the staging secret must fail closed: staging migrations
+// run automatically on every push to main with no reviewers.
+const isProductionIdentity = (url) =>
+  /^[a-z0-9-]+\.pg\.psdb\.cloud$/.test(url.hostname) &&
+  (url.hostname === PLANETSCALE_PRODUCTION_HOST ||
+    branchIdOf(url.username) === PLANETSCALE_PRODUCTION_BRANCH_ID);
+
+// Staging accepts the direct Neon endpoint or the pinned PlanetScale staging
+// branch during the provider transition; pooled hosts never are.
+const isStagingEndpoint = (url) => {
+  const hostname = url.hostname;
+  if (/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(hostname))
+    return !hostname.split(".")[0].endsWith("-pooler");
+  if (
+    hostname === PLANETSCALE_STAGING_HOST &&
+    branchIdOf(url.username) === PLANETSCALE_STAGING_BRANCH_ID
+  )
+    return true;
+  return false;
+};
+
 class MigrationError extends Error {}
 const refuse = (message) => {
   throw new MigrationError(message);
@@ -49,12 +83,10 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     if ((!agent && !ci) || url.search || !/^\/web_migrate_test_[a-f0-9]+$/.test(url.pathname)) {
       refuse("Selftest requires its owned database on agent-testdb or the CI Postgres service.");
     }
-  } else if (
-    target === "staging" &&
-    (!/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(url.hostname) ||
-      url.hostname.split(".")[0].endsWith("-pooler"))
-  ) {
-    refuse("Migrations require a direct Neon endpoint with TLS; value withheld.");
+  } else if (target === "staging" && isProductionIdentity(url)) {
+    refuse("Refusing staging migration against the production database; value withheld.");
+  } else if (target === "staging" && !isStagingEndpoint(url)) {
+    refuse("Migrations require the pinned staging endpoint with TLS; value withheld.");
   } else if (
     target === "production" &&
     // PlanetScale Postgres direct endpoint: <id>.pg.psdb.cloud:5432.
@@ -213,7 +245,7 @@ export async function runMigration(mode, env = process.env, options = {}) {
       // month/day on SQL/DMY output and shifts the PITR receipt by months.
       const [clock] =
         await transaction`select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as timestamp`;
-      await summary(`Pre-migration Neon PITR timestamp (UTC): ${clock.timestamp}`);
+      await summary(`Pre-migration PITR timestamp (UTC): ${clock.timestamp}`);
       await summary(
         `Release: ${/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? "") ? env.GITHUB_SHA : "local selftest"}`,
       );

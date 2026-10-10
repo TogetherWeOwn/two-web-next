@@ -27,6 +27,26 @@ Never borrow another person's session or use the QA authentication seam to get
 admin access. If access or member-data audit logging fails, stop and escalate;
 do not bypass it with direct database queries or another endpoint.
 
+## A moderator lost their role
+
+Moderator status is copied into the session at sign-in, so removing a Discord
+role does not update existing sessions. First confirm the Discord moderator
+role has been removed. If the moderator stops visiting pages, the idle session
+expires within two hours (120 minutes after its last session-refreshing page view);
+normal browsing can rotate and extend that window. For immediate invalidation,
+an authorized operator should run the command below. It does not depend on the
+moderator signing out. First dry-run, check the active-session count, then apply
+revocation for the moderator's Discord snowflake:
+
+```sh
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+```
+
+The command revokes only active sessions; the database URL is supplied through
+`DATABASE_URL`, never as an argument. Remote database URLs—including
+production-looking ones—require `--target production`. See [the runbook procedure](runbook.md#a-moderator-lost-their-role).
+
 ## Auth-wall probe (staging only)
 
 `bin/admin-authwall-probe.mjs` verifies all nine admin POST routes answer each
@@ -200,9 +220,11 @@ The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
 **Answered** (UTC), newest responses first by default. **Search members** with
 **Search** matches username text case-insensitively; **Status** and **Answered**
 column links toggle sorting while retaining the search. The count is the number
-of displayed answers (all statuses, not just going seats), so searching can
-reduce it. There is no roster pagination. Save event edits before these controls
-reload the page. This is a read-only roster: no adding/removing answers,
+of matching answers (all statuses, not just going seats), so searching can
+reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
+line; **Previous** and **Next** keep the search and sort and return to the
+roster section. Sorting or searching again starts back on page 1. Save event
+edits before these controls reload the page. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation.
 Reads of other members are access-logged; empty rosters and self-only reads create
 no access row. Audit-write failures always refuse protected contents, including

@@ -17,6 +17,13 @@ const fixedStatements = {
 // Only bound-list cardinality varies; no interpolated identifiers/projections.
 const goingCounts =
   /^select "event_id", count\(\*\) from "rsvps" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+\) group by "rsvps"\."event_id"$/;
+// Roster totals return a single cardinality, never member identifiers. The
+// username filter is a bound parameter; only these two join/where shapes may
+// run under the roster-count classification.
+const rosterCountUnfiltered =
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" where "events"\."event_key" = \$\d+$/;
+const rosterCountFiltered =
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" left join "users" on "users"\."id" = "rsvps"\."user_id" where \("events"\."event_key" = \$\d+ and "users"\."username" ilike \$\d+\)$/;
 const fillCount =
   /select count\(\*\) from "rsvps" where \("rsvps"\."event_id" = "events"\."id" and "rsvps"\."status" = \$\d+\)/g;
 // The edit form needs PostgreSQL timestamp text, not lossy JS Dates. Only this
@@ -31,6 +38,10 @@ export function validateNonSensitiveRead(
   const query = normalizedStatement(statement);
   if (classification === "going-counts") {
     if (!goingCounts.test(query)) refuseMemberRead();
+    return;
+  }
+  if (classification === "roster-count") {
+    if (!rosterCountUnfiltered.test(query) && !rosterCountFiltered.test(query)) refuseMemberRead();
     return;
   }
   if (

@@ -55,8 +55,9 @@ Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
 (served code, assets, tests, journeys), `worker` (dispatch configs, the Tail
 worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 `.github/**`, shared config, or anything unknown: run everything) and `draft`.
-`a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, `check` always
-runs but skips its heavy steps on docs-only and draft PRs, and the `ci-ok`
+`a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, and `docs-links`
+checks relative links and anchors on every PR. `check` always runs, skips its
+heavy steps on docs-only and draft PRs, and requires `docs-links`; the `ci-ok`
 aggregator reports the overall conclusion. Main pushes and the nightly schedule
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
 OPERATOR step after merge plus green probes — never part of a PR.
