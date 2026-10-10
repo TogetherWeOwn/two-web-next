@@ -155,6 +155,8 @@ psql "$DATABASE_URL" -tA -c \
 # DISCORD_MODERATOR_ROLE_IDS (comma-separated role IDs). The token never
 # appears on a command line: curl reads the header from a config file.
 # Delete that file with the ID lists after the run.
+# printf, not echo: dash/sh/zsh interpret backslashes (nicknames can end in
+# one), which corrupts the JSON before jq sees it.
 printf 'header = "Authorization: Bot %s"\n' "$DISCORD_BOT_TOKEN" > discord-auth.conf
 chmod 600 discord-auth.conf
 after=0
@@ -162,12 +164,12 @@ after=0
 while :; do
   page="$(curl -sS -K discord-auth.conf \
     "https://discord.com/api/v10/guilds/$DISCORD_GUILD_ID/members?limit=1000&after=$after")"
-  echo "$page" | jq -e 'type == "array"' >/dev/null \
-    || { echo "$page" | jq .; exit 1; }
-  echo "$page" | jq -c '.[]' >> members.jsonl
-  n="$(echo "$page" | jq 'length')"
+  printf '%s' "$page" | jq -e 'type == "array"' >/dev/null \
+    || { printf '%s' "$page" | jq .; exit 1; }
+  printf '%s' "$page" | jq -c '.[]' >> members.jsonl
+  n="$(printf '%s' "$page" | jq 'length')"
   [ "$n" -lt 1000 ] && break
-  after="$(echo "$page" | jq -r '.[-1].user.id')"
+  after="$(printf '%s' "$page" | jq -r '.[-1].user.id')"
 done
 jq -r --arg roles "$DISCORD_MODERATOR_ROLE_IDS" '
   ($roles | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $want
