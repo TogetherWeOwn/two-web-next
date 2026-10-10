@@ -1,8 +1,11 @@
 // Build the served public assets from readable sources (minification follow-up):
 // assets/islands/*.js and assets/styles.css are the reviewed sources;
 // public/islands/*.js and public/styles.css are the deterministic esbuild
-// --minify output that Workers serves. The budget ceilings in
-// ci/bundle-budget.json measure the minified bytes, and every binder test
+// --minify output that Workers serves. Top-level theme stylesheets
+// (public/theme.css, public/*-theme.css) are authored in place with no
+// assets/ source, so they are budgeted but never minified here. The budget
+// ceilings in ci/bundle-budget.json measure the minified bytes for built
+// assets and the authored bytes for theme stylesheets, and every binder test
 // executes them, so the suite itself proves the minified output equivalent.
 // Regenerate with `npm run build:assets`; CI fails on drift (`--check`).
 // 0 = built/verified, 1 = drift or minify failure.
@@ -16,9 +19,22 @@ import assert from "node:assert/strict";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const esbuild = join(repoRoot, "node_modules", ".bin", "esbuild");
 
+// Theme stylesheets are authored in public/ with no assets/ source, so they
+// are skipped here and a new authored file must extend this list explicitly;
+// anything else budgeted without a source fails closed in minifyBytes instead
+// of silently escaping the drift check (still enforced by
+// check-bundle-budget.mjs either way).
+const AUTHORED_CSS = new Set([
+  "public/theme.css",
+  "public/event-theme.css",
+  "public/profile-theme.css",
+  "public/schedule-theme.css",
+]);
 const BUDGET_PATHS = Object.keys(
   JSON.parse(readFileSync(join(repoRoot, "ci", "bundle-budget.json"), "utf8")).budgets,
-).sort();
+)
+  .filter((entry) => !AUTHORED_CSS.has(entry))
+  .sort();
 
 function sourceFor(entry) {
   // public/islands/<name>.js -> assets/islands/<name>.js; public/styles.css -> assets/styles.css.
