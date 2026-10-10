@@ -133,6 +133,21 @@ describe("machine control and bidi character rules (pure)", () => {
       fields: { game: null },
     });
   });
+
+  it("stores a padded title trimmed", () => {
+    expect(validateFields({ ...FIELDS, title: "  Game night  " })).toMatchObject({
+      ok: true,
+      fields: { title: "Game night" },
+    });
+  });
+
+  it("measures the length limit on the trimmed title", () => {
+    const padded = `  ${"G".repeat(100)}  `;
+    expect(validateFields({ ...FIELDS, title: padded })).toMatchObject({
+      ok: true,
+      fields: { title: "G".repeat(100) },
+    });
+  });
 });
 
 describe("human/machine shared-field parity (pure)", () => {
