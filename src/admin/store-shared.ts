@@ -1,7 +1,8 @@
 // Shared admin-store helpers (W11). Imported by both `./store` (event
 // writes, access log) and `./store-featured` (featured CRUD) so the two
-// leaves share one audit shape with no import cycle. Re-exported through
-// `./store`, so existing importers keep working untouched.
+// leaves share one audit shape with no import cycle. `Actor` and
+// `NotFoundError` are re-exported through `./store`, so existing importers
+// keep working untouched; `dirty`/`audit` stay module-private as before.
 
 import type { Db } from "../db/index";
 import { activityLog } from "../db/admin-schema";
