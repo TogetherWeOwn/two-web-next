@@ -80,6 +80,12 @@ function pageFixture(
           : [],
       };
     }
+    // Neighbor reads carry the same not-ended bound as related ones, so route
+    // them on their starts_at comparisons before the ends_at branch below.
+    if (sql.includes('"starts_at" <') || sql.includes('"starts_at" >')) {
+      const neighbor = sql.includes('"starts_at" desc') ? previous : next;
+      return { rows: neighbor ? [linkValues(neighbor)] : [] };
+    }
     if (sql.includes('"ends_at" >=')) return { rows: related.map(linkValues) };
     const neighbor = sql.includes('"starts_at" desc') ? previous : next;
     return { rows: neighbor ? [linkValues(neighbor)] : [] };
@@ -132,9 +138,9 @@ const relatedKeys = (html: string) =>
   [...html.matchAll(/href="\/e\/([^"]+)" data-testid="event-related-link"/g)].map((m) => m[1]);
 
 describe("event navigation SQL and SSR (local fixtures)", () => {
-  it("uses three bounded, published-only reads, with id tiebreaks and no RSVP aggregates", async () => {
+  it("uses three bounded, published, not-ended reads, with id tiebreaks and no RSVP aggregates", async () => {
     const f = pageFixture();
-    await getEventNeighbors(f.db, row(2));
+    await getEventNeighbors(f.db, row(2), NOW);
     await listRelatedEvents(f.db, row(2), NOW);
     expect(f.queries).toHaveLength(3);
     for (const q of f.queries) {
@@ -142,6 +148,10 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
       expect(q.params).toContain("published");
       expect(q.sql).not.toContain("rsvps");
       expect(q.sql).toContain('isfinite("events"."starts_at")');
+      // Navigation and related rails share the visibility scope: published and
+      // not yet ended, so drafts and ended-only neighbours never leak.
+      expect(q.sql).toContain('"events"."ends_at" >=');
+      expect(q.params).toContain(NOW.toISOString());
     }
     expect(f.queries[0]!.sql).toMatch(/"starts_at" < .*"starts_at" = .*"id" </);
     expect(f.queries[0]!.sql).toContain('order by "events"."starts_at" desc, "events"."id" desc');
@@ -150,7 +160,6 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     for (const q of f.queries.slice(0, 2)) {
       expect(q.sql).toContain('"events"."id" <>');
       expect(q.sql).toContain('(select "starts_at" from "events" where "events"."id" =');
-      expect(q.params).not.toContain(NOW.toISOString());
     }
     expect(f.queries.slice(0, 2).map((q) => q.params.at(-1))).toEqual([1, 1]);
     const related = f.queries[2]!;
@@ -358,6 +367,9 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
 describe.skipIf(!process.env.DATABASE_URL)(
   "event navigation eligibility (isolated test database)",
   () => {
+    // Neighbor reads take an explicit clock: the default `now` is the real
+    // time, so every case below pins NOW — otherwise the suite starts failing
+    // once the wall clock passes the fixture window (2030-01-10T22:00Z).
     let fixture: MemberDataFixture;
     beforeAll(async () => {
       fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
@@ -380,35 +392,85 @@ describe.skipIf(!process.env.DATABASE_URL)(
         row(4, { status: "cancelled" }),
         row(6, { status: "past" }),
       ]);
-      expect(await getEventNeighbors(fixture.db, first!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, first!, NOW)).toMatchObject({
         previous: null,
         next: { id: 3 },
       });
-      expect(await getEventNeighbors(fixture.db, middle!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, middle!, NOW)).toMatchObject({
         previous: { id: 1 },
         next: { id: 5 },
       });
-      expect(await getEventNeighbors(fixture.db, last!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, last!, NOW)).toMatchObject({
         previous: { id: 3 },
         next: null,
       });
     });
 
-    it("orders neighbors by starts_at before id, including ended published events", async () => {
+    it("orders neighbors by starts_at before id, excluding ended published events", async () => {
       const [current] = await seed([
         row(3),
         row(9, { startsAt: new Date("2020-01-01"), endsAt: new Date("2020-01-02") }),
         row(1, { startsAt: new Date("2040-01-01"), endsAt: new Date("2040-01-02") }),
       ]);
-      expect(await getEventNeighbors(fixture.db, current!)).toMatchObject({
-        previous: { id: 9 },
+      // The 2020 row is published but ended, so it never leaks into navigation.
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toMatchObject({
+        previous: null,
+        next: { id: 1 },
+      });
+    });
+
+    it("keeps an event ending exactly now, drops one ended a millisecond earlier", async () => {
+      const [current] = await seed([
+        row(3),
+        row(9, {
+          startsAt: new Date("2029-01-01"),
+          endsAt: new Date(NOW.getTime() - 1),
+        }),
+        row(1, {
+          startsAt: new Date("2031-01-01"),
+          endsAt: NOW,
+        }),
+      ]);
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toMatchObject({
+        previous: null,
+        next: { id: 1 },
+      });
+    });
+
+    it("hides ended-only neighbours entirely, leaving no dangling links", async () => {
+      const [current] = await seed([
+        row(3),
+        row(9, { startsAt: new Date("2020-01-01"), endsAt: new Date("2020-01-02") }),
+        row(1, { startsAt: new Date("2040-01-01"), endsAt: new Date("2020-01-03") }),
+      ]);
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toEqual({
+        previous: null,
+        next: null,
+      });
+    });
+
+    it("never links drafts, cancelled or past rows, even beside a moderator-visible draft page", async () => {
+      const [current] = await seed([
+        row(3),
+        row(9, { startsAt: new Date("2029-06-01"), status: "draft" }),
+        row(8, { startsAt: new Date("2029-07-01"), status: "cancelled" }),
+        row(7, { startsAt: new Date("2029-08-01"), status: "past" }),
+        row(1, { startsAt: new Date("2040-01-01"), endsAt: new Date("2040-01-02") }),
+      ]);
+      // Drafts are the moderator-only rows: invisible to members, and never
+      // navigation destinations even when the current page is itself a draft.
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toMatchObject({
+        previous: null,
         next: { id: 1 },
       });
     });
 
     it("returns no neighbors or related links for a lone event", async () => {
       const [current] = await seed([row(1)]);
-      expect(await getEventNeighbors(fixture.db, current!)).toEqual({ previous: null, next: null });
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toEqual({
+        previous: null,
+        next: null,
+      });
       expect(await listRelatedEvents(fixture.db, current!, NOW)).toEqual([]);
     });
 
@@ -417,22 +479,25 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await fixture.client`update events set starts_at = '2030-01-10T20:00:00.123456Z'::timestamptz where id = 2`;
       const [current] = await fixture.db.select().from(events);
       expect(current!.startsAt.toISOString()).toBe("2030-01-10T20:00:00.123Z");
-      expect(await getEventNeighbors(fixture.db, current!)).toEqual({ previous: null, next: null });
+      expect(await getEventNeighbors(fixture.db, current!, NOW)).toEqual({
+        previous: null,
+        next: null,
+      });
     });
 
     it("uses id tiebreaks for equal microsecond starts, including the first/last boundaries", async () => {
       await seed([row(1), row(2), row(3)]);
       await fixture.client`update events set starts_at = '2030-01-10T20:00:00.123456Z'::timestamptz`;
       const current = await fixture.db.select().from(events).orderBy(events.id);
-      expect(await getEventNeighbors(fixture.db, current[0]!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, current[0]!, NOW)).toMatchObject({
         previous: null,
         next: { id: 2 },
       });
-      expect(await getEventNeighbors(fixture.db, current[1]!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, current[1]!, NOW)).toMatchObject({
         previous: { id: 1 },
         next: { id: 3 },
       });
-      expect(await getEventNeighbors(fixture.db, current[2]!)).toMatchObject({
+      expect(await getEventNeighbors(fixture.db, current[2]!, NOW)).toMatchObject({
         previous: { id: 2 },
         next: null,
       });
@@ -453,7 +518,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       else '2030-01-10T20:00:00.123500Z'::timestamptz end`;
       const current = await fixture.db.select().from(events);
       expect(new Set(current.map((e) => e.startsAt.toISOString())).size).toBe(1);
-      expect(await getEventNeighbors(fixture.db, current.find((e) => e.id === 2)!)).toMatchObject({
+      expect(
+        await getEventNeighbors(fixture.db, current.find((e) => e.id === 2)!, NOW),
+      ).toMatchObject({
         previous: { id: 3 },
         next: { id: 1 },
       });
@@ -506,7 +573,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const source = await app.request(`/e/${key(2)}`, undefined, env);
         const html = await source.text();
         expect(source.status).toBe(200);
-        expect(await getEventNeighbors(fixture.db, current!)).toEqual({
+        expect(await getEventNeighbors(fixture.db, current!, NOW)).toEqual({
           previous: null,
           next: null,
         });
@@ -514,7 +581,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(html).not.toContain(`href="/e/${key(4)}"`);
 
         await seed([row(1), row(3)]);
-        expect(await getEventNeighbors(fixture.db, current!)).toMatchObject({
+        expect(await getEventNeighbors(fixture.db, current!, NOW)).toMatchObject({
           previous: { id: 1 },
           next: { id: 3 },
         });

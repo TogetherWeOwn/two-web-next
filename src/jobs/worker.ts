@@ -3,7 +3,6 @@ import { createBotClient } from "../bot/client";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { qaEnabled } from "../qa";
-import { migrate as migrateSessions, type Sql as SessionSql } from "../sessions";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
@@ -168,12 +167,9 @@ export async function handleScheduled(
   // and an early consumer must see and settle the committed rows.
   const dispatchSql = sqlFor(env);
   try {
-    // web_sessions is runtime-DDL-only (no drizzle migration owns it); only
-    // the web path runs migrate(). A prune before any web traffic would fail
-    // the whole pass on a missing table, so ensure it here too (no-op when
-    // already migrated). Outside the flight: DDL must not run inside the
-    // advisory-lock transaction.
-    await migrateSessions(sql as unknown as SessionSql);
+    // No DDL here (TOG-19721): web_sessions comes from the migrate workflow
+    // (drizzle/1022), like every other table the prune pass reads. A database
+    // that predates that migration fails the pass like any other outage.
     await runScheduled(controller.cron, pgSingleFlight(sql), {
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,

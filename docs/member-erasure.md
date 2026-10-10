@@ -25,6 +25,9 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
 Exit codes: 0 success, 2 usage/config/refusal (including a malformed id),
 1 driver/transaction failure (changes rolled back).
 
+For the separate case where a moderator has lost their Discord role but their
+member account should remain, use the [moderator session-revocation procedure](moderator-admin-guide.md#a-moderator-lost-their-role). It explains the session expiry window and how to end active sessions without erasing member data.
+
 ## What is deleted
 
 For ONE Discord id, in one transaction:
