@@ -33,10 +33,12 @@ the staging targets.
 | Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/neon-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/neon-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
 
 Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
-(cutover-only authorized import) and
+(cutover-only authorized import),
 [Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
-(no rotation here) are not incident entries; read those sections directly when
-that work is authorized.
+(no rotation here) and
+[Quarterly moderator access review (revoke-command half)](#quarterly-moderator-access-review-revoke-command-half)
+(scheduled quarterly review, not incident response) are not incident entries;
+read those sections directly when that work is authorized.
 
 ## Safety and escalation
 
@@ -115,6 +117,22 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 ```
 
 `DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
+
+## Quarterly moderator access review (revoke-command half)
+
+- Cadence: quarterly. Cadence ownership is a CTO/COO call; this section does not change it.
+- Owner: Director of Engineering, with security/access decisions through the CISO (see [Safety and escalation](#safety-and-escalation)).
+- Scope: every person confirmed to have lost the Discord moderator role since the last review. First confirm the Discord moderator role has been removed, as in [A moderator lost their role](#a-moderator-lost-their-role).
+- Procedure: for each such Discord snowflake, dry-run first, verify the active-session count, then apply:
+
+```sh
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+```
+
+`DATABASE_URL` is supplied through the environment only, as in the procedure above.
+- Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, each reviewed Discord snowflake with its dry-run active-session count and its apply count, and confirmation that Discord role removal was verified before revocation. The command output is counts only; keep member identifiers in the private review record and never paste database URLs, tokens, or secrets.
+- Non-goal: the role-audit half is a separate future change. This section covers only the revoke-command half.
 
 ## Deploy and record the rollback pointer
 
