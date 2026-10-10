@@ -30,9 +30,8 @@ import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
-import { inviteDestination } from "./invite";
 import { imageHosts } from "./image-policy";
-import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
+import { Join, Recovery, Home, Privacy, type Notice } from "./pages";
 import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
 import { POLICY_MARKDOWN } from "./privacy-content";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
@@ -42,6 +41,7 @@ import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
+import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
 import {
@@ -70,7 +70,6 @@ import {
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
-import { rulesLastUpdated } from "./rules-last-updated";
 import { authStatus, authStatusScript, clearAuthStatus, enableAuthStatus } from "./auth-status";
 import {
   consumeExpiredWrite,
@@ -422,55 +421,11 @@ app.get("/", async (c) => {
   );
 });
 
-// `/discord` — the front door, and the only web-to-Discord conversion path (ports two-web
-// routes/funnel.php + DiscordInviteController). Database-free floor by design: this handler reads
-// no session, no cookie, no cache, no database — it must stay 200→302 when everything behind it
-// is down. 302, not 301: the door gets retargeted, and a 301 is cached by browsers effectively
-// forever. `no-store` for the same reason at the edge.
-app.get("/discord", (c) => {
-  c.header("cache-control", "no-store, private");
-  return c.redirect(inviteDestination(c.env.DISCORD_INVITE_URL), 302);
-});
-
-// Vanity aliases (post-cutover): `/login` is the sign-in entry, `/community`
-// is the lobby front. Database-free by design like `/discord` — no session, no
-// cookie, no database — they stay 302 when everything behind them is down.
-// 302, not 301: the doors get retargeted, and a 301 is cached by browsers
-// effectively forever. `/login` keeps only a safe `next` under the same
-// `safeNext` policy as `/auth/discord/redirect`; it starts no OAuth state and
-// issues no cookie — `/auth/discord` remains responsible for fresh state.
-// `/community` drops every query.
-app.get("/login", (c) => {
-  const next = safeNext(c.req.query("next"));
-  c.header("cache-control", "no-store");
-  return c.redirect(next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord", 302);
-});
-
-app.get("/community", (c) => {
-  c.header("cache-control", "no-store, private");
-  return c.redirect("/", 302);
-});
-
-// Static funnel leaves (ports two-web routes/funnel.php's `/about` + `/faq`): dependency-free,
-// no controller, no session, no database — they stay 200 during an app-DB outage. No cookies are
-// read or set here on purpose, for the same reason.
-for (const path of ["/about", "/faq"] as const) {
-  app.get(path, (c) => {
-    c.header("cache-control", "public, max-age=3600");
-    return c.html(
-      path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />,
-    );
-  });
-}
-
-// Static house rules (ports two-web `Route::view('/rules')`, TOG-5147): no database — renders
-// even when the bot's database is down. The last-updated stamp comes from config, and an empty
-// or unparseable value hides the stamp instead of 500ing (TOG-7323).
-app.get("/rules", (c) => {
-  const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
-  c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules appUrl={c.env.APP_URL} lastUpdated={stamp} />);
-});
+// Database-free static leaves (`/discord`, `/login`, `/community`, `/about`,
+// `/faq`, `/rules`): registered in ./static-leaves so the Worker entry stays
+// under the M3 file-size gate. Paths, status codes, cache headers and the
+// `safeNext` policy live there verbatim.
+registerStaticLeaves(app);
 
 // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
 // `/privacy` + PrivacyController). Funnel-style: no session, no cookie, no
