@@ -625,13 +625,15 @@ app.get("/auth/discord", async (c) => {
   if (!store) return c.redirect("/?n=signin_failed", 302);
   // No-DDL storeFor connects lazily, so an unreachable database surfaces on
   // first use instead of in storeFor: fail the login the same way, never a 500.
+  // Both journey writes sit inside the guard: a transient failure in issue()
+  // redirects to signin_failed just like one in sweepExpired().
   try {
     await store.journeys.sweepExpired();
+    if (!(await store.journeys.issue(await hashToken(state), "auth")))
+      return c.redirect("/?n=signin_failed", 302);
   } catch {
     return c.redirect("/?n=signin_failed", 302);
   }
-  if (!(await store.journeys.issue(await hashToken(state), "auth")))
-    return c.redirect("/?n=signin_failed", 302);
   // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
   // OAuth round trip in a signed cookie; a hostile value leaves no trace.
   await rememberLoginNext(c, c.req.query("next"));
