@@ -53,7 +53,7 @@ import { freezeBanner } from "./freeze-banner";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
-// The session cookie name is defined once in ./auth/routes (it owns logout).
+// The session cookie name is defined once in ./session-cookie (re-exported by ./auth/routes, which owns logout).
 // The OAuth state lifetime stays defined here: the privacy-numbers pin only
 // allows STATE_TTL_SECONDS to originate from this module (or join/route).
 export const STATE_TTL_SECONDS = 600;
