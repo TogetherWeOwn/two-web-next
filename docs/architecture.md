@@ -252,6 +252,7 @@ exactly once.
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |
 | `src/oauth-journeys.ts` | auth |
+| `src/page-shell.tsx` | content |
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
 | `src/privacy-content.ts` | content |
@@ -264,6 +265,7 @@ exactly once.
 | `src/roles.ts` | auth |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
+| `src/screens/` | content |
 | `src/seo.ts` | content |
 | `src/session-revocation.ts` | auth |
 | `src/sessions.ts` | auth |
