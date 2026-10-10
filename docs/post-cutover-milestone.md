@@ -16,7 +16,8 @@ All three hold before any M5 item is carded:
 2. **Production Worker serving.** The production deploy receipt and public-route
    smoke are recorded per
    [runbook.md](runbook.md#deploy-and-record-the-rollback-pointer), and the
-   release was cut per [releases.md](releases.md#cutting-a-release).
+   `v1.0.0` release was cut by the cutover promote per
+   [releases.md](releases.md#cutting-a-release).
 3. **Staging database move complete.** Staging runs on the managed Postgres
    branch: Hyperdrive repointed, migrations at zero pending, legacy database
    retired. Topology: [db-migrations.md](db-migrations.md#topology-target).

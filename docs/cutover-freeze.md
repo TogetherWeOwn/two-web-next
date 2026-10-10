@@ -13,10 +13,10 @@ only drafts the freeze notice and the member-facing words.
 ## Freeze window (proposed text for the release card and ops channel)
 
 > Freeze from `2026-10-14 00:00 UTC` to `2026-10-18 00:00 UTC`: no merges to `main` except the
-> reviewed cutover release and Director-approved Sev-1 fixes. The freeze
-> lifts when the 48h post-flip watch exits; the lifter posts the lift on
-> the same card. See the short release freeze in
-> [releases.md](releases.md#cutting-a-release) for the cut mechanics.
+> Director-approved Sev-1 fixes. The cutover promote itself cuts the
+> `v1.0.0` release, so no release merge is needed. The freeze lifts when
+> the 48h post-flip watch exits; the lifter posts the lift on the same card.
+> See [releases.md](releases.md#cutting-a-release) for the release mechanics.
 
 Read-only checks (no mutation, no credentials):
 

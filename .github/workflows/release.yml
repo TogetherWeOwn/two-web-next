@@ -1,90 +1,61 @@
 name: release
 
-# release-please (TOG-9865): CHANGELOG.md + SemVer tags + GitHub Releases from
-# Conventional Commits on main. Manifest mode: release-please-config.json +
-# .release-please-manifest.json, release-type node. New repos start at 0.1.0
-# and stay 0.x until production cutover; 1.0.0 = cutover.
-#
-# Required-checks fix: PRs opened with GITHUB_TOKEN trigger no workflows, so
-# the required `check` / `gitleaks` / `pr-lint` would never run on the release
-# PR and it could never merge. The dispatch job below calls `gh workflow run`
-# (workflow_dispatch IS allowed from GITHUB_TOKEN) for ci / pr-gates on the
-# release branch. The pr-gates dispatch path validates the open PR via the API
-# (pr_number input). The check runs land on the PR head SHA, which is what
-# required checks match on. No App key or PAT in Actions secrets.
-#
-# TOG-13034 (port of two-bot-next #365): only `schedule` and `workflow_dispatch`
-# (re)generate the release PR. A `push` to main runs release-please with
-# skip-github-pull-request, so it still publishes the tag/release when the
-# release PR merges but never rewrites the PR head or dispatches ci / pr-gates
-# on it (a rewrite on every merge meant the PR never held a head long enough to
-# get exact-head green). See docs/releases.md for the freeze -> dispatch ->
-# merge -> unfreeze procedure.
+# Release on production promote (replaces the release-please release PR).
+# deploy-production calls this after a successful production deploy with the
+# exact deployed SHA. It tags that commit vX.Y.Z and publishes a GitHub Release
+# whose notes come from the Conventional Commit subjects since the previous
+# tag (ci/release-on-promote.cjs). Bump rules and note sections stay in
+# release-please-config.json, so versions continue the existing tag line.
+# No release PR: nothing new needs CI or review, nothing goes stale, and main
+# never needs a freeze. Manual dispatch repairs a missed tag for a deployed SHA.
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    # Off the hour to avoid the busiest scheduled-run window (UTC); weekly,
-    # because the normal cut is an operator dispatch (docs/releases.md).
-    - cron: '23 4 * * 1'
+  workflow_call:
+    inputs:
+      sha:
+        description: Deployed commit to tag
+        type: string
+        required: true
   workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-hex commit on main that is live in production
+        type: string
+        required: true
+      dry_run:
+        description: Print the version and notes without publishing
+        type: boolean
+        default: false
 
-# Least privilege: no workflow-wide token. Each job below grants only its own.
+# Least privilege: no workflow-wide token; the job grants only its own.
 permissions: {}
 
-concurrency:
-  group: release
-  cancel-in-progress: false
-
 jobs:
-  release-please:
-    name: release-please
+  tag:
+    name: tag-release
     permissions:
-      contents: write # Publish tags/releases and reconcile the release branch.
-      pull-requests: write # Create and reconcile the release PR.
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
-    timeout-minutes: 10
-    outputs:
-      prs_created: ${{ steps.release.outputs.prs_created }}
-      pr: ${{ steps.release.outputs.pr }}
-    steps:
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
-        id: release
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-          # Publication stays enabled on every event (skip-github-release is
-          # never set). Only a push skips PR generation, so it cannot rewrite
-          # the release PR head or leave a new head with no checks.
-          skip-github-pull-request: ${{ github.event_name == 'push' }}
-
-  dispatch-checks:
-    name: dispatch-checks
-    permissions:
-      actions: write # Dispatch required checks for GITHUB_TOKEN-created release PRs.
-    needs: release-please
-    # Never on a push: it did not regenerate the PR, so there is no new head.
-    if: github.event_name != 'push' && needs.release-please.outputs.prs_created == 'true'
+      contents: write # Create the tag and its GitHub Release.
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
+    # One release at a time; a queued promote waits instead of racing the tag.
+    concurrency:
+      group: release
+      cancel-in-progress: false
     steps:
-      - env:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          # Full history and tags: the version and notes come from the commits
+          # since the previous vX.Y.Z tag.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Tag the deployed commit and publish its release
+        run: node ci/release-on-promote.cjs
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No checkout in this job: gh needs the repo named explicitly.
           GH_REPO: ${{ github.repository }}
-          PR_JSON: ${{ needs.release-please.outputs.pr }}
-        run: |
-          set -euo pipefail
-          read -r PR_NUMBER HEAD_BRANCH < <(python3 -c "
-          import json, os
-          pr = json.loads(os.environ['PR_JSON'])
-          print(pr['number'], pr['headBranchName'])
-          ")
-          echo "Release PR #$PR_NUMBER on branch $HEAD_BRANCH; dispatching required checks."
-          gh workflow run ci.yml --ref "$HEAD_BRANCH"
-          gh workflow run pr-gates.yml --ref "$HEAD_BRANCH" -f pr_number="$PR_NUMBER"

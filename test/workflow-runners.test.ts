@@ -25,6 +25,8 @@ function jobs(text: string) {
   const found: { id: string; runsOn: string | undefined }[] = [];
   for (const block of body.split(/^(?=  [A-Za-z0-9_-]+:\n)/m).slice(1)) {
     const id = block.match(/^  ([A-Za-z0-9_-]+):\n/)?.[1] ?? "";
+    // A reusable-workflow call has no runner; the called workflow's jobs are checked.
+    if (/^    uses: \.\/\.github\/workflows\/[\w.-]+\.ya?ml$/m.test(block)) continue;
     found.push({ id, runsOn: block.match(/^    runs-on: (.*)$/m)?.[1] });
   }
   return found;
