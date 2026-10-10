@@ -27,9 +27,8 @@ version.
   followed by digits), private URLs, tokens or secrets in any title, body, commit,
   comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
   or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
-- Be honest about the model and the tests. Name the model that wrote or assisted the
-  change, give the exact commands you ran and their results, and say what you did
-  not run. Never claim a green run you did not see.
+- Be honest about the tests. Give the exact commands you ran and their results in
+  Verification, and say what you did not run. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
 - Credit the contributors whose work you build on.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a
