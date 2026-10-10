@@ -241,10 +241,11 @@ production probe is performed by delivering or testing this template.
 - Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
   apex **placeholder target**. Defining it does not flip DNS; deploying would
   claim that custom domain, so do not deploy before W16 authorization.
-- Hyperdrive `DB`: all-zero id `00000000000000000000000000000000` is an inert
-  dry-run placeholder, never the staging Hyperdrive. Provision the separately
-  named `two-web-next-production` Hyperdrive and replace the id in a reviewed
-  cutover PR.
+- Hyperdrive `DB`: the separately named `two-web-next-production` Hyperdrive
+  with its provisioned id in `wrangler.jsonc` `env.production`, distinct from
+  the staging Hyperdrive. The all-zero id `00000000000000000000000000000000`
+  is only the inert sentinel `ci/production-deploy-gate.mjs` refuses; it never
+  lives in config or deploys.
 - Queues: `two-web-next-production-sync-event` and
   `two-web-next-production-internal-action` are reserved, unprovisioned names;
   provision both separately from staging before cutover. Producers and consumers

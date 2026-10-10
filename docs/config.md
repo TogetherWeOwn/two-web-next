@@ -21,10 +21,17 @@ PRs, logs or command arguments.
   `next.togetherweown.com`. The GitHub Environment `staging` is a deployment
   gate, not a Wrangler named environment. Worker name is `two-web-next`;
   Hyperdrive's resource name is not a Worker selector or isolation guarantee.
-- **prod (planned):** configuration requirements below describe intended use at
-  cutover, not existing deployment evidence or permission to deploy. There are
-  currently **no `env.staging` or `env.production` blocks** and no production
-  deployment job. Do not infer isolation from a var's name or these labels.
+- **prod (cutover template, not live):** [`wrangler.jsonc`](../wrangler.jsonc)
+  declares a named **`env.production`** block (isolated Worker name, apex
+  route, queues, Hyperdrive binding and explicit vars; bindings and vars are
+  not inherited), and
+  [`.github/workflows/deploy-production.yml`](../.github/workflows/deploy-production.yml)
+  is a manual `workflow_dispatch`-on-`main` workflow gated by
+  `PRODUCTION_DEPLOY_ENABLED`, live `production` Environment reviewers and the
+  Hyperdrive sentinel check. Neither the checked-in template nor the workflow
+  is permission to deploy: production deployment, DNS and database/queue
+  provisioning stay separately gated until cutover authorization. There is no
+  `env.staging` block. Do not infer isolation from a var's name or these labels.
 
 `dev/staging/prod` in the table means the setting is applicable in each, with
 production still planned. Optional settings are not supplied by Wrangler unless
@@ -158,9 +165,16 @@ These names are deliberately **not** extra rows in the marked inventory:
   `ADMIN_DB`, `AGENT_EVENT_SQL`, `THROTTLE_STORE`, `JOIN_DEPS`, `DISCORD_EVENTS` are in-process
   dependency/store objects, not Wrangler string vars or secrets. They are
   absent from normal deployment configuration; tests inject local fixtures.
-- **Alerts:** [`src/alerts.ts`](../src/alerts.ts) uses a fixed five-minute
+- **Alerts (app Worker):** [`src/alerts.ts`](../src/alerts.ts) uses a fixed five-minute
   per-isolate rate window. There are no alert environment variables in the
-  current Worker contract. Do not invent settings from proposed work.
+  app Worker `Env`/`JobsEnv` contract. Do not invent settings from proposed work.
+- **Tail Worker settings (not machine-checked):** the separate Tail Worker
+  ([`tail/wrangler.jsonc`](../tail/wrangler.jsonc),
+  [`tail/worker.ts`](../tail/worker.ts)) reads public var `UPTIME_URL` and
+  secret `OPS_ALERT_WEBHOOK_URL` (secret name only, never a value; install
+  with `wrangler secret put`, never in a file). They are not app
+  `Env`/`JobsEnv` keys and are not read by `ci/check-config-docs.mjs`. See
+  [runbook-alerts](runbook-alerts.md) for the install procedure.
 - **CI/tooling secrets:** deployment uses `CLOUDFLARE_API_TOKEN` and
   `CLOUDFLARE_ACCOUNT_ID`; backup automation additionally references
   `NEON_STAGING_DATABASE_URL`. These are workflow inputs, not Worker bindings,
@@ -182,7 +196,11 @@ npm run config:check
 TypeScript 7 native API to resolve `Env` and `JobsEnv` properties (including
 intersections/inheritance) and parses the actual JSONC Wrangler vars/bindings
 from `wrangler.jsonc` and `wrangler.local.jsonc`, including named-environment
-overrides if added. Binding declarations include name-based Durable Objects,
+overrides if added. It does not read `tail/wrangler.jsonc` (Tail Worker
+`UPTIME_URL` / `OPS_ALERT_WEBHOOK_URL`) or
+`spike/hyperdrive-semantics/wrangler.probe.jsonc`; those settings stay
+documented under "Settings outside the checked Worker contract" above.
+Binding declarations include name-based Durable Objects,
 email and rate limits; nested JSON var data is not a declaration. It rejects:
 
 - Missing documentation for any required **or optional** property.

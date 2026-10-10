@@ -332,6 +332,19 @@ test("actual production config retains isolated bindings before and after sentin
   assert.doesNotThrow(() => assertProductionTarget(JSON.stringify(provisioned)));
 });
 
+test("checked-in production Hyperdrive comment matches the provisioned id, not the PLACEHOLDER sentinel text", () => {
+  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = readWranglerConfig(text);
+  const id = config.env?.production?.hyperdrive?.find((entry) => entry?.binding === "DB")?.id;
+  assert.equal(typeof id, "string");
+  if (id !== sentinel) {
+    assert.ok(
+      !text.includes("PLACEHOLDER"),
+      "wrangler.jsonc still carries the PLACEHOLDER comment while the production Hyperdrive id differs from the sentinel",
+    );
+  }
+});
+
 test("preserves the owner exception for admin bypass without relaxing self-review protection", () => {
   for (const can_admins_bypass of [true, false]) {
     const environment = { ...protectedEnvironment, can_admins_bypass };
