@@ -55,6 +55,7 @@ function fixture(
     createdBy: null,
     recurrenceFrequency: null,
     recurrenceCount: null,
+    recurrenceEndsOn: null,
     parentEventId: null,
     recurrenceIndex: null,
     createdAt: start,
