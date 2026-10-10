@@ -306,7 +306,7 @@ jobs:
         run: bash ci/biome-selftest.sh
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs
+        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
