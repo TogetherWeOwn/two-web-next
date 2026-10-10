@@ -1,6 +1,6 @@
-// W13 model:prune (TOG-10100): daily retention sweep over JoinAttempt +
-// AgentEventIdempotencyKey + EventSearchLog (90-day windows, legacy
-// constants) plus the web_sessions expiry cleanup (no legacy equivalent).
+// Daily model:prune retention sweep over agent-event audits,
+// access logs, join attempts, idempotency keys and search logs (90-day windows)
+// plus the web_sessions expiry cleanup (no legacy equivalent).
 // Runs inside the existing prune cron under the advisory-lock single-flight.
 //
 // Memory fakes always run; live round-trips use a guarded disposable schema
@@ -8,6 +8,7 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  AGENT_EVENT_AUDIT_RETENTION_DAYS,
   EVENT_SEARCH_LOG_RETENTION_DAYS,
   IDEMPOTENCY_KEY_RETENTION_DAYS,
   JOIN_ATTEMPT_RETENTION_DAYS,
@@ -18,6 +19,7 @@ import { pruneModelTables, runScheduled } from "../src/jobs/cron";
 import { pgPruneStores } from "../src/jobs/postgres";
 import type { PruneStores } from "../src/jobs/types";
 import { createMemorySessionStore, type SessionStore } from "../src/sessions";
+import { clearAuditRows } from "./helpers/audit-rows";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 const DAY = 86_400_000;
@@ -47,6 +49,7 @@ function memStores(now: Date): Omit<PruneStores, "sessions"> & {
   tables: Record<string, ReturnType<typeof memTable>>;
 } {
   const tables = {
+    agentEventAudits: memTable(),
     accessLog: memTable(),
     joinAttempts: memTable(),
     idempotencyKeys: memTable(),
@@ -63,6 +66,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
   it("retention windows match the legacy 90-day defaults", () => {
     // Legacy: config/member_access_log.php, config/join.php,
     // config/agent-events.php, config/event_search_log.php — all 90.
+    expect(AGENT_EVENT_AUDIT_RETENTION_DAYS).toBe(90);
     expect(MEMBER_ACCESS_LOG_RETENTION_DAYS).toBe(90);
     expect(JOIN_ATTEMPT_RETENTION_DAYS).toBe(90);
     expect(IDEMPOTENCY_KEY_RETENTION_DAYS).toBe(90);
@@ -79,6 +83,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
 
     const counts = await pruneModelTables(stores, now);
     expect(counts).toMatchObject({
+      agentEventAudits: 1,
       accessLog: 1,
       joinAttempts: 1,
       idempotencyKeys: 1,
@@ -127,6 +132,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     });
     await pruneModelTables(stores, now);
     expect(await pruneModelTables(stores, now)).toEqual({
+      agentEventAudits: 0,
       accessLog: 0,
       joinAttempts: 0,
       idempotencyKeys: 0,
@@ -171,12 +177,30 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     await fixture?.dispose();
   });
 
+  it("audit pruning skips only rows inside the worker/database clock-skew window", async () => {
+    // Fixed 2160 hours, as the trigger guard is; '90 days' shifts by an hour across DST.
+    await sql`insert into agent_event_audits (operation, request_id, result, created_at)
+      values ('create', 'skew-old', 'ok', clock_timestamp() - interval '2160 hours' - interval '60 seconds'),
+             ('create', 'skew-in-window', 'ok', clock_timestamp() - interval '2160 hours' + interval '60 seconds')`;
+
+    try {
+      const workerNow = new Date(Date.now() + 120_000);
+      expect((await pruneModelTables(pgPruneStores(sql), workerNow)).agentEventAudits).toBe(1);
+      const left = await sql<{ request_id: string }[]>`select request_id from agent_event_audits`;
+      expect(left.map((r) => r.request_id)).toEqual(["skew-in-window"]);
+    } finally {
+      await clearAuditRows(sql, ["agent_event_audits"]);
+    }
+  });
+
   it("prunes each table by age, sweeps expired sessions, and re-runs clean", async () => {
     const now = new Date();
     const old = new Date(now.getTime() - 91 * DAY);
     const edge = new Date(now.getTime() - 90 * DAY);
     const fresh = new Date(now.getTime() - DAY);
 
+    await sql`insert into agent_event_audits (operation, request_id, result, created_at)
+      values ('create','old','ok',${old}),('create','edge','ok',${edge}),('create','fresh','ok',${fresh})`;
     await sql`insert into member_data_access_logs (viewer_discord_id, resource, action, subject_user_ids, subject_count, occurred_at)
       values ('1','members','view','["2"]',1,${old}),('1','members','view','["2"]',1,${edge}),('1','members','view','["2"]',1,${fresh})`;
     await sql`insert into join_attempts (outcome, source, request_id, discord_id, created_at)
@@ -196,12 +220,19 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
 
     const counts = await pruneModelTables(pgPruneStores(sql), now);
     expect(counts).toEqual({
+      agentEventAudits: 1,
       accessLog: 1,
       joinAttempts: 1,
       idempotencyKeys: 1,
       searchLog: 1,
       sessions: 2,
     });
+
+    // Audit cutoff-exact rows survive; newer rows remain untouched.
+    const audits = await sql<
+      { request_id: string }[]
+    >`select request_id from agent_event_audits where request_id in ('old', 'edge', 'fresh') order by id`;
+    expect(audits.map((r) => r.request_id)).toEqual(["edge", "fresh"]);
 
     // Survivors: cutoff-exact age rows stay; only expired sessions are gone.
     const access = await sql<
@@ -224,6 +255,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     expect(sessions.map((r) => r.token_hash)).toEqual(["live"]);
 
     expect(await pruneModelTables(pgPruneStores(sql), now)).toEqual({
+      agentEventAudits: 0,
       accessLog: 0,
       joinAttempts: 0,
       idempotencyKeys: 0,

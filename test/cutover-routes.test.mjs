@@ -43,14 +43,19 @@ for (const phase of ["before", "after"]) {
     // Hostnames are in-process identities; DNS and unrelated requests are stubbed.
     const target = phase === "before" ? "next.togetherweown.com" : "togetherweown.com";
     const options = parseArgs(["--phase", phase, "--target", target, "--event-key", "fixture"]);
-    const path = "/auth/discord/redirect";
+    const cases = [
+      { path: "/auth/discord/redirect", location: "/auth/discord", cache: "no-store" },
+      { path: "/login", location: "/auth/discord", cache: "no-store" },
+      { path: "/community", location: "/", cache: "no-store, private" },
+    ];
+    const byPath = Object.fromEntries(cases.map((entry) => [entry.path, entry]));
     const env = {
       APP_URL: `https://${target}`,
       get DB() {
-        throw new Error("login alias must not read DB");
+        throw new Error("alias must not read DB");
       },
       get DATABASE_URL() {
-        throw new Error("login alias must not read DATABASE_URL");
+        throw new Error("alias must not read DATABASE_URL");
       },
     };
     const seen = [];
@@ -58,14 +63,15 @@ for (const phase of ["before", "after"]) {
       resolver: { resolve4: async () => ["127.0.0.1"], resolve6: async () => [] },
       request: async (url) => {
         const parsed = new URL(url);
-        if (parsed.hostname !== target || parsed.pathname !== path) {
+        const expected = parsed.hostname === target ? byPath[parsed.pathname] : undefined;
+        if (!expected) {
           return { status: 404, headers: {}, body: "", tlsVerified: true };
         }
         seen.push(parsed.pathname);
         const response = await app.request(url, {}, env);
         expect(response.status).toBe(302);
-        expect(response.headers.get("location")).toBe("/auth/discord");
-        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(response.headers.get("location")).toBe(expected.location);
+        expect(response.headers.get("cache-control")).toBe(expected.cache);
         expect(response.headers.getSetCookie()).toHaveLength(0);
         return {
           status: response.status,
@@ -75,12 +81,14 @@ for (const phase of ["before", "after"]) {
         };
       },
     });
-    expect(seen).toEqual([path]);
+    expect(seen.sort()).toEqual(Object.keys(byPath).sort());
     // Other gates deliberately fail; each alias gate must exist and pass.
     const aliasChecks = result.checks.filter((check) =>
-      ["url:", "location:", "no-store:"].some((prefix) => check.id === prefix + path),
+      Object.keys(byPath).some((path) =>
+        ["url:", "location:", "no-store:"].some((prefix) => check.id === prefix + path),
+      ),
     );
-    expect(aliasChecks).toHaveLength(3);
+    expect(aliasChecks).toHaveLength(9);
     expect(aliasChecks.filter((check) => !check.ok)).toEqual([]);
   });
 }

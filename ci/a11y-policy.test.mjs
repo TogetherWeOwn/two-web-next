@@ -175,7 +175,7 @@ test("audit artifacts omit Wrangler's synthetic session and DB configuration val
 test("the required CI job runs after a non-green audit and rejects every non-success result", async () => {
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.slice(workflow.indexOf("\n  check:\n"));
-  assert.match(check, /\n    needs: \[a11y, lighthouse, bundle-budget, scope\]\n/);
+  assert.match(check, /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
   assert.match(check, /\n    if: always\(\)\n/);
   assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
   const guard = check.match(
@@ -243,7 +243,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "npm run test:smoke",
     "npm run db:migrate",
     "npm run config:check",
-    "npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
+    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
     "npm run test:cutover",
     "bash ci/neon-backup-selftest.sh",
     "bash ci/check-migration-numbers.sh",

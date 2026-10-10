@@ -1,23 +1,25 @@
 # Changelog
 
-## Unreleased
+## [0.4.0](https://github.com/TogetherWeOwn/two-web-next/compare/v0.3.0...v0.4.0) (2026-10-09)
+
 
 ### Added
 
-- Internal-action smoke `--announcement-only` mode (and `announcement_only` workflow input) for receivers that support `announcement.post` alone; skips `role.assign` and `event.upsert`.
-- Network-free moderator configuration preflight and staging-only signed internal-action smoke, with production-host/redirect refusal and idempotent announcement replay checks.
-- Weekly event series with timezone-aware recurrence input and idempotent occurrence materialization during event reconciliation.
-- Legacy auth, session, join and QA-login acceptance mapping with explicit parity gaps; Hono, Miniflare/workerd and test-container Postgres regression coverage.
-- Port member-data exposure and access-log acceptance tests from Pest to Vitest, including the mounted Worker role matrix and real failing Postgres INSERTs.
+* **admin:** add guarded one-row failed-job reconciliation preview ([#542](https://github.com/TogetherWeOwn/two-web-next/issues/542)) ([b172f9d](https://github.com/TogetherWeOwn/two-web-next/commit/b172f9d4c88737def4a87b11c6d69d1db77ac077))
+* **json-smoke:** emit per-check ledger for skipped exposure guards ([#534](https://github.com/TogetherWeOwn/two-web-next/issues/534)) ([aef6fd0](https://github.com/TogetherWeOwn/two-web-next/commit/aef6fd0f558759fe129baffa11bbc9f142725887))
+* **queue:** add one-row sync-event replay helper ([#537](https://github.com/TogetherWeOwn/two-web-next/issues/537)) ([46920da](https://github.com/TogetherWeOwn/two-web-next/commit/46920da4f1d3d623938ee522c3ca761d0fede1e4))
+
 
 ### Fixed
 
-- Record each materialized occurrence's creation audit in the same transaction as its event row; retries do not duplicate audit entries.
-- Align removed-diagnostic route tests with the global same-origin guard: trusted POSTs reach 404 routing while unsafe requests without trusted origin evidence remain 403.
-- Keep the accessibility route inventory current after diagnostic removal and the new admin join-attempt detail page, with local success and not-found shell coverage.
-- Join landing links preserve safe return paths and reject whitespace in return destinations; recovery pages share the validated Discord invite fallback and the widget sends no referrer.
-- Refuse admin member-data responses when the access-log INSERT fails; replace Hono's finalized response rather than returning an ignored 503.
-- Isolate member-data test cleanup and failure DDL in disposable test-service schemas; include directly mounted GET and ALL routes in the exposure inventory.
+* **deps:** bump source-map-js to 1.2.2 ([#536](https://github.com/TogetherWeOwn/two-web-next/issues/536)) ([7cf6a48](https://github.com/TogetherWeOwn/two-web-next/commit/7cf6a48bc2e02544a269c6a866863db2bacdc468))
+* **deps:** override sharp to 0.35.5 for the new high-severity advisory ([#538](https://github.com/TogetherWeOwn/two-web-next/issues/538)) ([1d6a7ac](https://github.com/TogetherWeOwn/two-web-next/commit/1d6a7ac4938bec7a9ed8b5d70e462fbd79736d24))
+* **e2e:** fail loud on all-skipped staging journeys ([#533](https://github.com/TogetherWeOwn/two-web-next/issues/533)) ([e00ea23](https://github.com/TogetherWeOwn/two-web-next/commit/e00ea2303eb2c3608ce6e5f0b155a0f9a81822ee))
+* **events:** cache the Discord scheduled-events read and serve stale on error ([#539](https://github.com/TogetherWeOwn/two-web-next/issues/539)) ([a7b5b67](https://github.com/TogetherWeOwn/two-web-next/commit/a7b5b670caafdd674128721c6191b054c1df120d))
+* **events:** share Discord snapshots and fence refresh admission ([b68bfdb](https://github.com/TogetherWeOwn/two-web-next/commit/b68bfdbca4d6dd526cebd1a69c2a661df169cec7))
+* **sync:** retain payload-safe retry-cause diagnostics ([#540](https://github.com/TogetherWeOwn/two-web-next/issues/540)) ([deb2e1e](https://github.com/TogetherWeOwn/two-web-next/commit/deb2e1e777c4ee2bcdbc305fa325d25b56d330bc))
+* **test-db:** allow run-owned databases in fixture suites ([c5cf9d0](https://github.com/TogetherWeOwn/two-web-next/commit/c5cf9d0e8fc8d671585a3e585ce9fc36cd434bf1))
+* **workers:** use redirect manual; Workers fetch throws on redirect error ([#530](https://github.com/TogetherWeOwn/two-web-next/issues/530)) ([5194a48](https://github.com/TogetherWeOwn/two-web-next/commit/5194a4864323fd4a9bf0964004e003af45fab89a))
 
 ## [0.3.0](https://github.com/TogetherWeOwn/two-web-next/compare/v0.2.0...v0.3.0) (2026-10-05)
 
