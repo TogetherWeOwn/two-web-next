@@ -200,8 +200,6 @@ def check_pull_request(env):
             out.append(Finding(level, "Card reference", "Add 'Refs: TOG-1234' to the PR body."))
     else:
         for where, text in (("title", title), ("body", body), ("branch name", head_ref)):
-            if generated and where == "branch name":
-                continue
             hits = internal_hits(text, prefixes, slug=where == "branch name")
             if hits:
                 level = mode

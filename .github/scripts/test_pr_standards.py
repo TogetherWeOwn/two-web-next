@@ -232,10 +232,18 @@ class CardAndInternalRefs(unittest.TestCase):
 
     def test_release_please_heads_untouched(self):
         clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
-        # release-please heads produce no internal-ref finding even if knob would otherwise apply
+        # Real release-please heads carry no internal ID, so no finding either way.
         f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", HEAD_REF="release-please--branches--main--tags--v1.0.0",
                             PR_NUMBER="700", HEAD_REF_ERROR_FROM_PR="627", PR_STANDARDS_MODE="warn"))
         self.assertEqual([], f)
+
+    def test_release_please_heads_with_ids_error(self):
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        # A release-please-- head holding an internal ID is still flagged, with the cutoff knob applying.
+        f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", HEAD_REF="release-please--tog-123-x",
+                            PR_NUMBER="700", HEAD_REF_ERROR_FROM_PR="627", PR_STANDARDS_MODE="warn"))
+        self.assertEqual([("error", "Internal reference")], levels(f))
+        self.assertIn("branch name", f[0].message)
 
     def test_public_branch_head_ref_cutoff_leaves_title_body_unchanged(self):
         # Title/body internal refs still follow PR_STANDARDS_MODE, not the branch cutoff knob
