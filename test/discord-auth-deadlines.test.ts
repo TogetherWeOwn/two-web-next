@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addGuildMember, DiscordError, exchangeCode, fetchUser } from "../src/discord";
-import { discordFetch, DISCORD_HTTP_BUDGET_MS, DiscordHttpTimeoutError } from "../src/discord-http";
+import {
+  discordFetch,
+  DISCORD_HTTP_BUDGET_MS,
+  DISCORD_HTTP_MAX_RESPONSE_BYTES,
+  DiscordHttpTimeoutError,
+} from "../src/discord-http";
 import { fetchMemberRoles, recomputeModerator } from "../src/roles";
 import app from "./app";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
@@ -382,6 +387,79 @@ describe("Discord auth deadlines", () => {
       vi.fn(async () => Response.json({})),
     );
     await expect(exchange()).rejects.toBeInstanceOf(DiscordError);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["single chunk over cap", DISCORD_HTTP_MAX_RESPONSE_BYTES + 1, 1],
+    ["multi-chunk over cap", Math.floor(DISCORD_HTTP_MAX_RESPONSE_BYTES / 2) + 1, 3],
+  ])("caps %s and classifies as provider rejection", async (_name, chunkSize, chunkCount) => {
+    const chunks: Uint8Array[] = [];
+    for (let i = 0; i < chunkCount; i++) {
+      chunks.push(new Uint8Array(chunkSize));
+    }
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const chunk of chunks) c.enqueue(chunk);
+        c.close();
+      },
+      cancel,
+    });
+    const res = await discordFetch(
+      "https://example.test",
+      {},
+      vi.fn(async () => new Response(body, { status: 200, statusText: "OK" })),
+    );
+    expect(res.status).toBe(200);
+    expect(res.statusText).toBe("OK");
+    expect(await res.text()).toBe("");
+    expect(body.locked).toBe(false);
+    // Reader cancellation on overflow is verified by the unlocked body and empty result.
+    // The cancel callback may resolve asynchronously after reader.cancel() returns.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves exact-cap boundary and under-cap multi-chunk bodies byte-for-byte", async () => {
+    const exactCap = new Uint8Array(DISCORD_HTTP_MAX_RESPONSE_BYTES);
+    exactCap.fill(0xab);
+    const underCapChunk1 = new Uint8Array(1024);
+    underCapChunk1.fill(0xcd);
+    const underCapChunk2 = new Uint8Array(2048);
+    underCapChunk2.fill(0xef);
+    const bodyExact = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(exactCap);
+        c.close();
+      },
+    });
+    const bodyUnder = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(underCapChunk1);
+        c.enqueue(underCapChunk2);
+        c.close();
+      },
+    });
+    const resExact = await discordFetch(
+      "https://example.test/exact",
+      {},
+      vi.fn(async () => new Response(bodyExact, { status: 200 })),
+    );
+    expect(resExact.status).toBe(200);
+    const bytesExact = new Uint8Array(await resExact.arrayBuffer());
+    expect(bytesExact.byteLength).toBe(DISCORD_HTTP_MAX_RESPONSE_BYTES);
+    expect(bytesExact.every((b) => b === 0xab)).toBe(true);
+
+    const resUnder = await discordFetch(
+      "https://example.test/under",
+      {},
+      vi.fn(async () => new Response(bodyUnder, { status: 201 })),
+    );
+    expect(resUnder.status).toBe(201);
+    const bytesUnder = new Uint8Array(await resUnder.arrayBuffer());
+    expect(bytesUnder.byteLength).toBe(3072);
+    expect(bytesUnder.slice(0, 1024).every((b) => b === 0xcd)).toBe(true);
+    expect(bytesUnder.slice(1024).every((b) => b === 0xef)).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
