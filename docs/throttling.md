@@ -56,8 +56,13 @@ path is [`checkJoinThrottle`](../src/join/service.ts); RSVP writes use
 Generic and join buckets key on the client key above (`<name>:<clientKey>`);
 RSVP and profile-write buckets key on the member id instead, so switching verb
 or path cannot multiply the budget. The join bucket additionally carries the
-current minute, but the 60-second row window still judges admission. Policy
-refusals return before the hit is stamped and spend nothing.
+current minute, but the 60-second row window still judges admission. RSVP PUT
+policy refusals (`not_found`, closed events) return before the charge in
+[`chargeThrottle`](../src/events/rsvp.ts) and spend nothing; other paths spend
+before policy is judged — the generic middleware charges before the handler
+runs, profile-write 403s charge before the owner check in
+[`admitWrite`](../src/profiles/routes.tsx), and RSVP DELETE on a missing event
+charges in [`withdrawRsvp`](../src/events/rsvp.ts).
 
 ## Prune and storage bound
 
