@@ -77,6 +77,14 @@ async function cookie(store: SessionStore, userId = operator, moderator = true, 
 // reachable), while the shared throttle suite owns the marker and the
 // Postgres suite owns the real bucket.
 const throttleStore = vi.fn(async () => null);
+// The mocked postgres tag passes interpolated values through, so the receipt
+// properties object is one of the recorded call arguments.
+function attemptProperties() {
+  const found = mocks.audit.mock.calls
+    .flat()
+    .find((v) => v && typeof v === "object" && !Array.isArray(v) && "outcome" in (v as object));
+  return found as unknown as { outcome: { before: null; after: string } };
+}
 function request(
   store: SessionStore,
   init: RequestInit = {},
@@ -432,6 +440,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(send).not.toHaveBeenCalled();
     // The refusal carries the preview advice, so it carries a receipt.
     expect(mocks.audit).toHaveBeenCalledTimes(1);
+    expect(attemptProperties().outcome).toEqual({ before: null, after: "refused" });
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
   });
   it("a missing queue binding fails closed before anything is written", async () => {
@@ -467,6 +476,7 @@ describe("staging one-row guarded re-dispatch admission", () => {
     // the attempt receipt and a retry writes its own.
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(mocks.audit).toHaveBeenCalledTimes(1);
+    expect(attemptProperties().outcome).toEqual({ before: null, after: "attempted" });
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
   });
   it("a held lock reports the in-flight dispatch instead of queueing a duplicate", async () => {
@@ -544,11 +554,30 @@ describe("staging one-row guarded re-dispatch admission", () => {
     expect(throttleStore).toHaveBeenCalledTimes(1);
     expect(mocks.audit).toHaveBeenCalledTimes(1);
     expect(mocks.audit.mock.calls[0]![0]).toBeInstanceOf(Array);
+    expect(attemptProperties().outcome).toEqual({ before: null, after: "attempted" });
     expect(mocks.end).toHaveBeenCalledExactlyOnceWith({ timeout: 1 });
     // The receipt is written before the dispatch is attempted.
     expect(mocks.audit.mock.invocationCallOrder[0]!).toBeLessThan(
       dispatch.mock.invocationCallOrder[0]!,
     );
+  });
+  it("a dispatch attempt writes exactly one receipt: the trail is append-only", async () => {
+    const store = createMemorySessionStore();
+    const dispatch = vi.fn(async () => true);
+    const res = await request(
+      store,
+      { headers: { cookie: await cookie(store) } },
+      env,
+      undefined,
+      undefined,
+      { loadCandidate: async () => replayCandidate, dispatch },
+    );
+    expect(res.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    // One receipt per attempt; the outcome is never stamped afterwards because
+    // the audit trail refuses UPDATEs. The response carries the final state.
+    expect(mocks.audit).toHaveBeenCalledTimes(1);
+    expect(attemptProperties().outcome).toEqual({ before: null, after: "attempted" });
   });
   it("audit failure always refuses the dispatch before anything is queued", async () => {
     mocks.audit.mockRejectedValue(new Error("private audit failure"));

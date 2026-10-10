@@ -207,6 +207,14 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       event: "dispatch",
     });
     expect(JSON.stringify(receipts[0])).not.toContain("private transport diagnostics");
+    // Receipts count attempts: the dispatch outcome lives in the response,
+    // and the trail stays append-only. Real dispatches are the live rows.
+    expect(
+      (receipts[0] as { properties: { outcome: { after: string } } }).properties.outcome,
+    ).toEqual({
+      before: null,
+      after: "attempted",
+    });
     // The advice is unchanged: the row stays until a confirmed recovery discards it.
     const preview = await previewAdvice(failureId);
     expect(preview.status).toBe(200);
@@ -229,6 +237,12 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     // One receipt per attempt: the deduped report reuses its own attempt's
     // receipt instead of borrowing the in-flight dispatch's.
     expect(receipts).toHaveLength(2);
+    const outcomes = (receipts as unknown as { properties: { outcome: { after: string } } }[]).map(
+      (r) => r.properties.outcome.after,
+    );
+    // Both attempts share the attempt outcome; only the responses tell the
+    // dispatch apart from the deduped report.
+    expect(outcomes).toEqual(["attempted", "attempted"]);
   });
 
   it("a definitive refusal is refused untouched with unchanged advice", async () => {
@@ -255,6 +269,9 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     expect(live).toHaveLength(0);
     // The refusal carries the preview advice, so it carries a receipt.
     expect(receipts).toHaveLength(1);
+    expect(
+      (receipts[0] as { properties: { outcome: { after: string } } }).properties.outcome.after,
+    ).toBe("refused");
     const preview = await previewAdvice(failureId);
     expect(preview.body).toMatchObject({ disposition: { action: "keep" } });
   });
@@ -273,6 +290,9 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     expect(live).toHaveLength(0);
     // The refusal carries the preview advice, so it carries a receipt.
     expect(receipts).toHaveLength(1);
+    expect(
+      (receipts[0] as { properties: { outcome: { after: string } } }).properties.outcome.after,
+    ).toBe("refused");
     const preview = await previewAdvice(failureId);
     expect(preview.body).toMatchObject({ disposition: { action: "discard-stale" } });
   });
@@ -299,6 +319,9 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     expect(live).toHaveLength(0);
     // The receipt is written before the queue send, so the 503 keeps it.
     expect(receipts).toHaveLength(1);
+    expect(
+      (receipts[0] as { properties: { outcome: { after: string } } }).properties.outcome.after,
+    ).toBe("attempted");
     const preview = await previewAdvice(failureId);
     expect(preview.body).toMatchObject({ disposition: { action: "replay" } });
   });
@@ -317,5 +340,8 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     expect(dead).toBeDefined();
     // The refusal carries the preview advice, so it carries a receipt.
     expect(receipts).toHaveLength(1);
+    expect(
+      (receipts[0] as { properties: { outcome: { after: string } } }).properties.outcome.after,
+    ).toBe("refused");
   });
 });

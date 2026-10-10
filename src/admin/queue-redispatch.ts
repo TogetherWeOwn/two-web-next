@@ -79,10 +79,13 @@ async function dispatchRedispatch(
 }
 
 /** Operational writes use the existing activity trail, not invented member subjects. */
+export type RedispatchOutcome = "attempted" | "refused" | "dispatched" | "deduped" | "send_failed";
+
 export async function recordQueueRedispatchAccess(
   env: Env,
   actorId: string,
   preview: FailedJobPreview,
+  outcome: RedispatchOutcome,
 ): Promise<void> {
   const url = databaseUrl(env);
   if (!url) throw new Error("no audit database configured");
@@ -95,6 +98,13 @@ export async function recordQueueRedispatchAccess(
     // This is the only write besides the new live queue row and its lock
     // lease: one audit receipt, no job/source mutations. Do not persist
     // payloads, failure diagnostics, ledger keys or idempotency keys.
+    // Receipts count attempts, not dispatches. A 'refused' receipt means the
+    // advice was refused and nothing was queued; an 'attempted' receipt means
+    // a dispatch was tried, and only the response tells whether it queued
+    // (200), reported an in-flight duplicate (200 with deduped: true), or
+    // failed to send (503, ledger-compensated, retry writes its own receipt).
+    // The trail is append-only, so the outcome cannot be stamped afterwards;
+    // to count real dispatches, read the live queue rows, not this trail.
     await sql`insert into activity_log
       (log_name, description, subject_type, subject_id, causer_type, causer_id, event, properties)
       values ('operations', 'queue.failed.redispatch', 'queue_failed_jobs', ${String(preview.failure.id)},
@@ -102,6 +112,7 @@ export async function recordQueueRedispatchAccess(
           disposition: { before: null, after: preview.disposition.action },
           reason: { before: null, after: preview.disposition.reason },
           observedAt: { before: null, after: preview.observedAt },
+          outcome: { before: null, after: outcome },
         })})`;
   } finally {
     await sql.end({ timeout: 1 });
@@ -139,17 +150,18 @@ export async function queueRedispatchAdmission(c: Context<QueuePreviewVars>, nex
 
 /**
  * Every response that carries redispatch advice carries a receipt written
- * earlier in the same request. Refusals and dispatch attempts (including
- * ones that turn out deduped) are audited before their outcome is known, so
- * a response never shows preview advice without a trail. A receipt that
- * cannot be written refuses the attempt before anything is queued.
+ * earlier in the same request. Refusals are audited with outcome 'refused';
+ * dispatch attempts are audited with outcome 'attempted', so a response never
+ * shows preview advice without a trail. A receipt that cannot be written
+ * refuses the attempt before anything is queued.
  */
 async function recordAttemptOrRefuse(
   c: Context<QueuePreviewVars>,
   preview: FailedJobPreview,
+  outcome: RedispatchOutcome,
 ): Promise<Response | null> {
   try {
-    await recordQueueRedispatchAccess(c.env, c.get("adminActor").id, preview);
+    await recordQueueRedispatchAccess(c.env, c.get("adminActor").id, preview, outcome);
     return null;
   } catch {
     // No raw exception message, SQL bindings or diagnostic payload in logs.
@@ -179,8 +191,9 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
     // Refusal: the row stays untouched and the preview advice is unchanged.
     // Stale rows are never deleted here either — only replay dispatches. The
     // refusal carries the preview advice, so it carries a receipt too: audit
-    // first, and refuse the refusal when the trail cannot be written.
-    const refused = await recordAttemptOrRefuse(c, candidate.preview);
+    // first with outcome 'refused', and refuse the refusal when the trail
+    // cannot be written.
+    const refused = await recordAttemptOrRefuse(c, candidate.preview, "refused");
     if (refused) return refused;
     return bufferedMemberJson(
       c,
@@ -201,7 +214,7 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
   // the queue send itself fails afterwards, the 503 keeps the attempt
   // receipt and the ledger compensation removes the un-sent row; a retry
   // writes its own receipt for its own report.
-  const audited = await recordAttemptOrRefuse(c, candidate.preview);
+  const audited = await recordAttemptOrRefuse(c, candidate.preview, "attempted");
   if (audited) return audited;
   let dispatched: boolean;
   try {
