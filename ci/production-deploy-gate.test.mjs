@@ -332,6 +332,81 @@ test("actual production config retains isolated bindings before and after sentin
   assert.doesNotThrow(() => assertProductionTarget(JSON.stringify(provisioned)));
 });
 
+function assertProductionHyperdrivePlaceholderCommentMatchesId(text) {
+  const config = readWranglerConfig(text);
+  const id = config.env?.production?.hyperdrive?.find((entry) => entry?.binding === "DB")?.id;
+  assert.equal(typeof id, "string");
+
+  const productionStart = text.search(/"production"\s*:\s*\{/);
+  assert.ok(productionStart >= 0);
+  const hyperdriveOffset = text.slice(productionStart).search(/"hyperdrive"\s*:/);
+  assert.ok(hyperdriveOffset >= 0);
+  const hyperdriveStart = productionStart + hyperdriveOffset;
+  const lines = text.slice(productionStart, hyperdriveStart).trimEnd().split(/\r?\n/);
+  const comments = [];
+  while (lines.at(-1)?.trimStart().startsWith("//")) {
+    comments.unshift(lines.pop().trim());
+  }
+  const resourceCommentIndex = comments.findIndex(
+    (line) => /hyperdrive/i.test(line) && /two-web-next-production/i.test(line),
+  );
+  assert.ok(resourceCommentIndex >= 0, "production Hyperdrive comment must identify its resource");
+  const productionHyperdriveComment = comments.slice(resourceCommentIndex).join(" ");
+  const placeholderHyperdriveComment = /placeholder/i.test(productionHyperdriveComment);
+  assert.equal(
+    placeholderHyperdriveComment,
+    id === sentinel,
+    id === sentinel
+      ? "the production sentinel comment must identify the placeholder Hyperdrive"
+      : "a provisioned production Hyperdrive comment must not call its id a placeholder",
+  );
+}
+
+test("checked-in production Hyperdrive uses placeholder wording only for the sentinel id", () => {
+  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  assertProductionHyperdrivePlaceholderCommentMatchesId(text);
+
+  for (const unrelated of [
+    "// PLACEHOLDER: unrelated queue setting",
+    "// PLACEHOLDER: hyperdrive timeout tuning for queues",
+    "// PLACEHOLDER: production hyperdrive timeout tuning for queues",
+  ]) {
+    const withUnrelatedPlaceholder = text.replace(
+      "// Production Hyperdrive for the separately named two-web-next-production",
+      `${unrelated}\n      // Production Hyperdrive for the separately named two-web-next-production`,
+    );
+    assertProductionHyperdrivePlaceholderCommentMatchesId(withUnrelatedPlaceholder);
+  }
+
+  const reformattedKeys = text
+    .replace('"production": {', '"production" : {')
+    .replace('"hyperdrive":', '"hyperdrive" :')
+    .replace('"id": "', '"id" : "');
+  assertProductionHyperdrivePlaceholderCommentMatchesId(reformattedKeys);
+
+  const productionStart = text.search(/"production"\s*:\s*\{/);
+  const hyperdriveOffset = text.slice(productionStart).search(/"hyperdrive"\s*:/);
+  const hyperdriveStart = productionStart + hyperdriveOffset;
+  const idMatch = /"id"\s*:\s*"/.exec(text.slice(hyperdriveStart));
+  assert.ok(idMatch);
+  const idStart = hyperdriveStart + idMatch.index + idMatch[0].length;
+  const idEnd = text.indexOf('"', idStart);
+  const sentinelWithProvisionedComment = `${text.slice(0, idStart)}${sentinel}${text.slice(idEnd)}`;
+  assert.throws(
+    () => assertProductionHyperdrivePlaceholderCommentMatchesId(sentinelWithProvisionedComment),
+    /production sentinel comment must identify the placeholder Hyperdrive/,
+  );
+
+  const placeholderOnProvisionedId = text.replace(
+    "// Production Hyperdrive for the separately named two-web-next-production",
+    "// PLACEHOLDER: replace with the separately provisioned two-web-next-production Hyperdrive",
+  );
+  assert.throws(
+    () => assertProductionHyperdrivePlaceholderCommentMatchesId(placeholderOnProvisionedId),
+    /provisioned production Hyperdrive comment must not call its id a placeholder/,
+  );
+});
+
 test("preserves the owner exception for admin bypass without relaxing self-review protection", () => {
   for (const can_admins_bypass of [true, false]) {
     const environment = { ...protectedEnvironment, can_admins_bypass };
