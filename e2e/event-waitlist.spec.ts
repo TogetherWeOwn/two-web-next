@@ -12,8 +12,8 @@ import { expect, localOrigin, qaLogin, test } from "./fixtures";
 // seat-holder withdraw (no claim click, `You're in` + `1 of 1 going`,
 // persisting across reload). Runs in the existing CI browser job with no
 // workflow change: playwright.config.ts already matches every local spec.
-// Fixture cleanup cancels through the request API (no cleanup page); the
-// disposable CI Postgres is the backstop, so there is no sweep to fail.
+// Fixture cleanup cancels through the request API (no cleanup page); a
+// local-origin-only global teardown sweep is the backstop for leftovers.
 
 // The cancel form endpoint needs only the session cookie plus the explicit
 // local Origin the same-origin guard requires (the request API sends neither
@@ -50,9 +50,9 @@ async function cleanUpFixture(
     try {
       const status = await cancelFixtureViaApi(moderator.request, eventKey);
       if (status !== 303)
-        note(`cancel answered ${status}; the disposable CI database is the backstop`);
+        note(`cancel answered ${status}; the local teardown sweep is the backstop`);
     } catch {
-      note("cancel request failed; the disposable CI database is the backstop");
+      note("cancel request failed; the local teardown sweep is the backstop");
     }
   }
 }

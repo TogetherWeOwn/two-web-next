@@ -51,11 +51,18 @@ test("staging guard permits only the exact staging origin", () => {
   }
 });
 
-test("default Playwright project ignores the staging specs", () => {
+test("default Playwright project ignores staging specs and wires a local-only teardown", () => {
   // Staging specs need the deployed Worker (QA seam + Hyperdrive/queues) and
   // fail under wrangler dev + CI Postgres. Only e2e-staging.yml may run them.
   const config = readFileSync(new URL("../playwright.config.ts", import.meta.url), "utf8");
   assert.match(config, /testIgnore:\s*"[^"]*staging[^"]*"/);
+  assert.match(config, /globalTeardown:\s*"\.\/e2e\/local-global-teardown\.ts"/);
+
+  const teardown = readFileSync(new URL("./local-global-teardown.ts", import.meta.url), "utf8");
+  assert.match(teardown, /requireGithubRunner\(\)/);
+  assert.match(teardown, /baseURL:\s*LOCAL_FIXTURE_ORIGIN/);
+  assert.match(teardown, /ignoreHTTPSErrors:\s*true/);
+  assert.doesNotMatch(teardown, /stagingOrigin|playwright\.staging\.config/);
 });
 
 test("database guard permits only the disposable CI target", () => {

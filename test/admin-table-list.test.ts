@@ -39,6 +39,7 @@ describe("admin table query state (no DB)", () => {
       q: "",
       sort: "position",
       order: "asc",
+      page: 1,
     });
     expect(
       parseFeaturedListQuery({
@@ -47,12 +48,13 @@ describe("admin table query state (no DB)", () => {
         sort: injection,
         order: injection,
       }),
-    ).toEqual({ published: "", q: injection, sort: "position", order: "asc" });
+    ).toEqual({ published: "", q: injection, sort: "position", order: "asc", page: 1 });
     expect(parseFeaturedListQuery({ published: "0", sort: "updated_at", order: "desc" })).toEqual({
       published: "0",
       q: "",
       sort: "updated_at",
       order: "desc",
+      page: 1,
     });
   });
 

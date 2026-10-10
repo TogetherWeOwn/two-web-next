@@ -44,6 +44,11 @@ env:
   # Upstream body/branch/reference rules (`.github/scripts/pr_standards.py`) start as
   # warnings; flip to "error" once the repo's open PRs are clear (target 2026-10-10).
   PR_STANDARDS_MODE: "warn"
+  # Dedicated cutoff (PR number) for branch-name internal-ID *errors* on public repos.
+  # PRs numbered at/above this value get an error for internal IDs in the head ref;
+  # older open PRs keep the warning (a head ref cannot be renamed after the PR is open).
+  # Set at merge time to (newest open PR number + 1). Title/body checks stay on PR_STANDARDS_MODE.
+  HEAD_REF_ERROR_FROM_PR: "627"
 
 jobs:
   # Convention for every change that lands on main:
@@ -106,6 +111,8 @@ jobs:
           COMMIT_SUBJECTS_PATH: ${{ runner.temp }}/pr-commit-subjects.txt
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           REPO_PRIVATE: ${{ github.event.repository.private }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
+          HEAD_REF_ERROR_FROM_PR: ${{ env.HEAD_REF_ERROR_FROM_PR }}
         run: python3 ci/pr-lint-output.py check
 
   # Full-history gitleaks scan; `gitleaks` is a required check on main. Uses

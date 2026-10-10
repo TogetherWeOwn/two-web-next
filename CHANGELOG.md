@@ -1,24 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Added
-
-- Internal-action smoke `--announcement-only` mode (and `announcement_only` workflow input) for receivers that support `announcement.post` alone; skips `role.assign` and `event.upsert`.
-- Network-free moderator configuration preflight and staging-only signed internal-action smoke, with production-host/redirect refusal and idempotent announcement replay checks.
-- Weekly event series with timezone-aware recurrence input and idempotent occurrence materialization during event reconciliation.
-- Legacy auth, session, join and QA-login acceptance mapping with explicit parity gaps; Hono, Miniflare/workerd and test-container Postgres regression coverage.
-- Port member-data exposure and access-log acceptance tests from Pest to Vitest, including the mounted Worker role matrix and real failing Postgres INSERTs.
-
-### Fixed
-
-- Record each materialized occurrence's creation audit in the same transaction as its event row; retries do not duplicate audit entries.
-- Align removed-diagnostic route tests with the global same-origin guard: trusted POSTs reach 404 routing while unsafe requests without trusted origin evidence remain 403.
-- Keep the accessibility route inventory current after diagnostic removal and the new admin join-attempt detail page, with local success and not-found shell coverage.
-- Join landing links preserve safe return paths and reject whitespace in return destinations; recovery pages share the validated Discord invite fallback and the widget sends no referrer.
-- Refuse admin member-data responses when the access-log INSERT fails; replace Hono's finalized response rather than returning an ignored 503.
-- Isolate member-data test cleanup and failure DDL in disposable test-service schemas; include directly mounted GET and ALL routes in the exposure inventory.
-
 ## [0.4.0](https://github.com/TogetherWeOwn/two-web-next/compare/v0.3.0...v0.4.0) (2026-10-09)
 
 

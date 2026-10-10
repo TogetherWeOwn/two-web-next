@@ -411,9 +411,17 @@ describe.skipIf(!process.env.DATABASE_URL)(
             // Keep the actual server lock held until statement_timeout cancels the
             // query. waitUntil settlement is bounded independently of this holder.
             await Promise.all(background);
-            expect(
-              warnings.mock.calls.some((call) => String(call[1]).includes("statement timeout")),
-            ).toBe(true);
+            // Class-only since the successor-dispatch redaction: the timeout
+            // error's raw message ("statement timeout") must not reach the
+            // log, only its bounded class. The cancelled server query and the
+            // empty receipts below still prove the timeout itself happened.
+            const dispatchWarns = warnings.mock.calls.filter(
+              ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+            );
+            expect(dispatchWarns.length).toBeGreaterThanOrEqual(1);
+            for (const [, detail] of dispatchWarns) {
+              expect(detail).toEqual({ exception: "PostgresError" });
+            }
             expect(await blocked()).toHaveLength(0);
             expect(pools.every(({ ended }) => ended)).toBe(true);
           }
