@@ -97,6 +97,19 @@ describe("GET /auth/discord is never cacheable", () => {
     expect(res.headers.get("cache-control")).toBe(NO_STORE);
   });
 
+  it("the signin_failed redirect when issuing the OAuth journey throws", async () => {
+    // A transient DB failure in issue() must redirect, never throw to a 500:
+    // the issue() call sits inside the same guard as sweepExpired().
+    const store = createMemorySessionStore();
+    store.journeys.issue = async () => {
+      throw new Error("db down");
+    };
+    const res = await app.request("/auth/discord", {}, isolated({ SESSION_STORE: store }));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?n=signin_failed");
+    expect(res.headers.get("cache-control")).toBe(NO_STORE);
+  });
+
   it.each([
     ["browser", {}],
     ["json", { accept: "application/json" }],
