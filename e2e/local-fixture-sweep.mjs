@@ -1,6 +1,8 @@
 // Backstop sweep for RSVP fixtures made by the local browser spec.
 // This module is local-origin-only and never constructs a request to staging.
 
+import { parseRetryAfterSeconds, QA_LOGIN_MAX_ATTEMPTS, sleep } from "./qa-login-retry.mjs";
+
 export const LOCAL_FIXTURE_ORIGIN = "https://localhost:8787";
 export const LOCAL_FIXTURE_TITLE_PREFIXES = Object.freeze(["E2E Waitlist ", "E2E Promotion "]);
 export const LOCAL_SWEEP_STATUSES = Object.freeze(["published", "draft"]);
@@ -74,13 +76,40 @@ export function localSweepNextListPath(html, currentPath) {
   return expectedPath;
 }
 
-export async function sweepLocalFixtures(api, { now = Date.now } = {}) {
-  const deadline = now() + LOCAL_SWEEP_MAX_DURATION_MS;
-  const requestTimeout = () => {
-    const remaining = deadline - now();
-    if (remaining <= 0) throw new Error("local fixture sweep: time limit exhausted");
-    return Math.min(30_000, remaining);
-  };
+function requestTimeout(deadline, now) {
+  const remaining = deadline - now();
+  if (remaining <= 0) throw new Error("local fixture sweep: time limit exhausted");
+  return Math.min(30_000, remaining);
+}
+
+// Earlier journeys can consume the shared QA-login window. Retry only 429,
+// using the same credential and honoring Retry-After within the sweep deadline.
+export async function loginLocalSweep(
+  send,
+  { now = Date.now, wait = sleep, deadline = now() + LOCAL_SWEEP_MAX_DURATION_MS } = {},
+) {
+  for (let attempt = 1; attempt <= QA_LOGIN_MAX_ATTEMPTS; attempt++) {
+    const response = await send({ maxRedirects: 0, timeout: requestTimeout(deadline, now) });
+    if (response.status() === 204) return;
+    if (response.status() !== 429) {
+      throw new Error(`local fixture sweep: QA moderator login answered ${response.status()}`);
+    }
+    if (attempt === QA_LOGIN_MAX_ATTEMPTS) {
+      throw new Error("local fixture sweep: QA login throttle retry limit exhausted");
+    }
+    const waitMs = parseRetryAfterSeconds(response.headers()) * 1000;
+    if (waitMs >= deadline - now()) {
+      throw new Error("local fixture sweep: time limit exhausted before QA login retry");
+    }
+    await wait(waitMs);
+  }
+}
+
+export async function sweepLocalFixtures(
+  api,
+  { now = Date.now, deadline = now() + LOCAL_SWEEP_MAX_DURATION_MS } = {},
+) {
+  const timeout = () => requestTimeout(deadline, now);
   const listLive = async () => {
     const keys = new Set();
     for (const prefix of LOCAL_FIXTURE_TITLE_PREFIXES) {
@@ -92,7 +121,7 @@ export async function sweepLocalFixtures(api, { now = Date.now } = {}) {
           }
           const response = await api.get(path, {
             maxRedirects: 0,
-            timeout: requestTimeout(),
+            timeout: timeout(),
           });
           if (response.status() !== 200) {
             throw new Error(`local fixture sweep: admin events list answered ${response.status()}`);
@@ -114,7 +143,7 @@ export async function sweepLocalFixtures(api, { now = Date.now } = {}) {
       const response = await api.post(`/admin/events/${eventKey}/cancel`, {
         headers: { Origin: LOCAL_FIXTURE_ORIGIN },
         maxRedirects: 0,
-        timeout: requestTimeout(),
+        timeout: timeout(),
       });
       if (response.status() !== 303) {
         throw new Error(

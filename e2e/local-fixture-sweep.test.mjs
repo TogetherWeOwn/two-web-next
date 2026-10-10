@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   LOCAL_FIXTURE_ORIGIN,
   LOCAL_FIXTURE_TITLE_PREFIXES,
+  loginLocalSweep,
   localSweepListPath,
   localSweepNextListPath,
   parseLocalFixtureRows,
@@ -12,6 +13,102 @@ import {
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const row = (key, title) => `<a href="/admin/events/${key}">${title}</a>`;
 const response = (status, html = "") => ({ status: () => status, text: async () => html });
+const throttled = () => ({ status: () => 429, headers: () => ({ "retry-after": "60" }) });
+
+test("local teardown login honors the shared throttle before retrying", async () => {
+  let time = 0;
+  let attempts = 0;
+  const waits = [];
+  await loginLocalSweep(
+    async (options) => {
+      attempts++;
+      assert.equal(options.maxRedirects, 0);
+      assert.equal(options.timeout, 30_000);
+      return attempts === 1 ? throttled() : response(204);
+    },
+    {
+      now: () => time,
+      wait: async (ms) => {
+        waits.push(ms);
+        time += ms;
+      },
+    },
+  );
+  assert.equal(attempts, 2);
+  assert.deepEqual(waits, [60_000]);
+});
+
+test("local teardown login exhausts after three throttled attempts", async () => {
+  let attempts = 0;
+  let waits = 0;
+  await assert.rejects(
+    loginLocalSweep(
+      async () => {
+        attempts++;
+        return throttled();
+      },
+      { wait: async () => waits++ },
+    ),
+    /QA login throttle retry limit exhausted/,
+  );
+  assert.equal(attempts, 3);
+  assert.equal(waits, 2);
+});
+
+test("local teardown login never retries refused credentials or transport errors", async () => {
+  for (const status of [302, 401, 403, 404, 500]) {
+    let attempts = 0;
+    await assert.rejects(
+      loginLocalSweep(async () => {
+        attempts++;
+        return response(status);
+      }),
+      new RegExp(`QA moderator login answered ${status}`),
+    );
+    assert.equal(attempts, 1);
+  }
+  let attempts = 0;
+  await assert.rejects(
+    loginLocalSweep(async () => {
+      attempts++;
+      throw new Error("sanitized transport failure");
+    }),
+    /sanitized transport failure/,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("local teardown login refuses a wait beyond the shared deadline", async () => {
+  await assert.rejects(
+    loginLocalSweep(async () => throttled(), {
+      now: () => 0,
+      deadline: 60_000,
+      wait: async () => assert.fail("No time remains for another request"),
+    }),
+    /time limit exhausted before QA login retry/,
+  );
+});
+
+test("local teardown checks the shared deadline again after a throttle wait", async () => {
+  let time = 0;
+  let attempts = 0;
+  await assert.rejects(
+    loginLocalSweep(
+      async () => {
+        attempts++;
+        return throttled();
+      },
+      {
+        now: () => time,
+        wait: async () => {
+          time = 300_000;
+        },
+      },
+    ),
+    /time limit exhausted/,
+  );
+  assert.equal(attempts, 1);
+});
 
 test("local sweep targets only its fixed origin and cancels matching leftovers", async () => {
   let cancelled = false;

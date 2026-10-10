@@ -126,9 +126,10 @@ to run in GitHub Actions on Linux. Neither sweep crosses into the other's
 origin. Each list and final verification traverse matching pages even when a
 page contains substring lookalikes. Pagination keeps the fixed origin and
 filters, advances one page at a time, and fails closed past 20 pages per status.
-The local sweep allows four cancellation passes within a five-minute deadline;
-the staging sweep allows four passes and at most four shared throttle waits in
-the same bound. An exhausted bound fails the run rather than claiming cleanup
+The local sweep allows four cancellation passes and up to two QA-login
+throttle waits within a shared five-minute deadline; it honors `Retry-After`
+without retrying refused credentials. The staging sweep allows four passes and
+at most four cancellation throttle waits within its five-minute sweep bound. An exhausted bound fails the run rather than claiming cleanup
 succeeded.
 On failure the job
 uploads `test-results/` traces/screenshots and the HTML report for seven days.

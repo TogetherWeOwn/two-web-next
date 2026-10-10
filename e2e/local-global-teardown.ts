@@ -1,6 +1,11 @@
 import { request, type APIRequestContext } from "@playwright/test";
 import { requireGithubRunner } from "./ci-only.mjs";
-import { LOCAL_FIXTURE_ORIGIN, sweepLocalFixtures } from "./local-fixture-sweep.mjs";
+import {
+  LOCAL_FIXTURE_ORIGIN,
+  LOCAL_SWEEP_MAX_DURATION_MS,
+  loginLocalSweep,
+  sweepLocalFixtures,
+} from "./local-fixture-sweep.mjs";
 import { sendTokenRequest } from "./qa-request.mjs";
 
 export default async function globalTeardown(): Promise<void> {
@@ -13,24 +18,28 @@ export default async function globalTeardown(): Promise<void> {
     baseURL: LOCAL_FIXTURE_ORIGIN,
     ignoreHTTPSErrors: true,
   });
+  const deadline = Date.now() + LOCAL_SWEEP_MAX_DURATION_MS;
   try {
-    const login = await sendTokenRequest("local fixture sweep QA login", token, () =>
-      api.post("/auth/qa/qa-moderator", {
-        headers: { "X-TWO-QA-Auth": token, Origin: LOCAL_FIXTURE_ORIGIN },
-        maxRedirects: 0,
-        timeout: 30_000,
-      }),
+    await loginLocalSweep(
+      (options: Parameters<APIRequestContext["post"]>[1]) =>
+        sendTokenRequest("local fixture sweep QA login", token, () =>
+          api.post("/auth/qa/qa-moderator", {
+            ...options,
+            headers: { "X-TWO-QA-Auth": token, Origin: LOCAL_FIXTURE_ORIGIN },
+          }),
+        ),
+      { deadline },
     );
-    if (login.status() !== 204) {
-      throw new Error(`local fixture sweep: QA moderator login answered ${login.status()}`);
-    }
 
-    const swept = await sweepLocalFixtures({
-      get: (path: string, options: Parameters<APIRequestContext["get"]>[1]) =>
-        sendTokenRequest("local fixture sweep list", token, () => api.get(path, options)),
-      post: (path: string, options: Parameters<APIRequestContext["post"]>[1]) =>
-        sendTokenRequest("local fixture sweep cancel", token, () => api.post(path, options)),
-    });
+    const swept = await sweepLocalFixtures(
+      {
+        get: (path: string, options: Parameters<APIRequestContext["get"]>[1]) =>
+          sendTokenRequest("local fixture sweep list", token, () => api.get(path, options)),
+        post: (path: string, options: Parameters<APIRequestContext["post"]>[1]) =>
+          sendTokenRequest("local fixture sweep cancel", token, () => api.post(path, options)),
+      },
+      { deadline },
+    );
     if (swept > 0) console.log(`local fixture sweep cancelled ${swept} orphaned RSVP fixture(s)`);
   } finally {
     await api.dispose();
