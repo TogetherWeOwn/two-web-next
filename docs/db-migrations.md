@@ -18,15 +18,15 @@ bot rewrite, framework ADR pending).
 | Bot path | Container → direct `postgres` driver (no Hyperdrive) → staging Neon pooled URL / production PlanetScale `5432` direct URL |
 | Migrations | direct (non-pooled) URL on port `5432`; pooled endpoints can break DDL transactionally. Staging reads `NEON_STAGING_DATABASE_URL`; production reads `PRODUCTION_DATABASE_URL` (PlanetScale direct `<id>.pg.psdb.cloud:5432`, never `6432`) |
 
-Status 2026-09-29: Neon **not yet provisioned** (host step:
-`Operator:` card under [TOG-9679](/TOG/issues/TOG-9679)). R2 bucket
-`two-web-next-backups` **exists, EU-jurisdiction-pinned** (jurisdiction
-`eu` / location `EEUR`, verified 2026-09-29 on the host track
-[TOG-9836](/TOG/issues/TOG-9836); empty, no data uploaded). The legacy
-`paperclip-backups` bucket (jurisdiction `default` / location `ENAM`)
-is explicitly out of scope for member-data dumps per the CISO condition
-[TOG-9837](/TOG/issues/TOG-9837). Until Neon lands, all DB tests run
-against `agent-testdb` — never prod or staging databases.
+Repository configuration targets Neon staging through the Worker's `DB`
+Hyperdrive binding ([Wrangler config](../wrangler.jsonc)).
+The [backup workflow](../.github/workflows/neon-backup.yml) schedules nightly
+staging backups using `NEON_STAGING_DATABASE_URL`; an unset target secret skips the backup.
+The [backup script](../bin/neon-backup.sh) defaults to `two-web-next-backups`
+with request jurisdiction `eu`. These defaults do not prove the live bucket's
+jurisdiction or contents, or that a backup has succeeded.
+Tests use only disposable `agent-testdb` databases or the CI Postgres service,
+never staging or production ([safe-test rules](../README.md#database-and-migrations)).
 
 ## Migration numbering (reserved)
 
