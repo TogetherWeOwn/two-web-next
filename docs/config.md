@@ -130,7 +130,8 @@ Failure/default details are implemented in [`src/index.tsx`](../src/index.tsx),
 [`src/access-log.ts`](../src/access-log.ts),
 [`src/admin/guard.ts`](../src/admin/guard.ts),
 [`src/csp-reports.ts`](../src/csp-reports.ts) and
-[`src/agent-events/service.ts`](../src/agent-events/service.ts).
+[`src/agent-events/types.ts`](../src/agent-events/types.ts) (defaults) and
+[`src/agent-events/ingress.ts`](../src/agent-events/ingress.ts) (admission).
 
 ## Settings outside the checked Worker contract
 
