@@ -38,6 +38,8 @@ export type JoinOutcome = (typeof JOIN_OUTCOMES)[number];
  */
 export const JOIN_THROTTLE_PER_MINUTE = 10;
 export const JOIN_THROTTLE_BUCKET = "join";
+// The privacy policy promises this window for rate-limit counters; change it only with a policy version.
+export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
 
 /**
  * Legacy join_source validation (JoinController::rememberSource): starts
@@ -105,7 +107,7 @@ export async function checkJoinThrottle(
   });
   // Global expiry cleanup must not prolong the per-bucket admission lock.
   if (!verdict.limited)
-    await sql`DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`;
+    await sql`DELETE FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`;
   return verdict;
 }
 
