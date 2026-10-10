@@ -20,7 +20,8 @@ const cancels = (text: string) =>
 // is only safe when its group is per SHA (main pushes then never share a group).
 const pushesMain = (text: string) => /\n  push:\n    branches: \[main\]/.test(triggers(text));
 const bareCancel = (text: string) => /\n  cancel-in-progress: true\n/.test(text);
-const groupPerSha = (text: string) => /\nconcurrency:\n  group: [^\n]*github\.sha[^\n]*\n/.test(text);
+const groupPerSha = (text: string) =>
+  /\nconcurrency:\n  group: [^\n]*github\.sha[^\n]*\n/.test(text);
 
 describe("workflow concurrency", () => {
   it("cancels superseded runs of every pull_request workflow", () => {
