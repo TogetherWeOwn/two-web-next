@@ -169,6 +169,13 @@
       "when": 1791599405342,
       "tag": "1022_web-sessions-oauth-journeys",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791621386747,
+      "tag": "1023_agent-event-audits-prune-idx",
+      "breakpoints": true
     }
   ]
 }

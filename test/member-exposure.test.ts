@@ -47,6 +47,7 @@ const ADMIN_REDIRECTS = [
 ];
 const ADMIN_READS = [
   "/",
+  "/activity-log",
   "/events",
   "/events/new",
   "/events/:key",

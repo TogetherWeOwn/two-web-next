@@ -140,6 +140,12 @@ export const coverage = {
       { path: "/admin/join-attempts/999999", identity: "moderator", status: 404 },
     ],
   },
+  "/admin/activity-log": {
+    cases: [
+      { path: "/admin/activity-log", identity: "moderator" },
+      { path: "/admin/activity-log?subject=zz-no-matches", identity: "moderator" },
+    ],
+  },
   "/__a11y/404": { cases: [{ path: "/__a11y/404", status: 404 }] },
   "/__a11y/404-empty": { cases: [{ path: "/__a11y/404-empty", status: 404 }] },
   "/__a11y/429": { cases: [{ path: "/__a11y/429", status: 429 }] },

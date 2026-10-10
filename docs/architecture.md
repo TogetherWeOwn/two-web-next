@@ -268,6 +268,7 @@ exactly once.
 | `src/seo.ts` | content |
 | `src/session-revocation.ts` | auth |
 | `src/sessions.ts` | auth |
+| `src/static-leaves.tsx` | entry |
 | `src/throttle.ts` | http-guard |
 | `src/trust-hosts.ts` | http-guard |
 | `src/up.ts` | observability |

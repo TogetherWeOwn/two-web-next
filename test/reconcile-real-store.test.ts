@@ -11,6 +11,9 @@
 //
 // Runs against the adapter directly, not through `src/jobs/worker.ts`
 // (PR #68 hot, do not rewire). Test-only: no src changes.
+// The first pass additionally runs the prepare phase inside a `sql.begin`
+// write transaction (the production shape in `src/jobs/worker.ts`) and
+// asserts the pre-pass `staleEventKeys` selection directly.
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { reconcileEvents } from "../src/jobs/cron";
@@ -139,11 +142,27 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
       const sent: { eventKey: string }[] = [];
       const queue = { send: async (b: unknown) => void sent.push(b as { eventKey: string }) };
+      // Direct adapter selection before the pass: both finished rows are still
+      // published, so the finished-but-dirty row is stale-eligible here. The
+      // already-mirrored rows (running-mirrored, clean cancelled, draft, past,
+      // finished-mirrored) are skipped by staleEventKeys itself, not just by dispatch.
+      const preStale = (await pgEventStore(sql).staleEventKeys()).sort();
+      expect(preStale).toEqual(
+        [
+          finishedStale.eventKey,
+          runningStale.eventKey,
+          halfSynced.eventKey,
+          cancelledDirty.eventKey,
+        ].sort(),
+      );
+      // Production path (src/jobs/worker.ts): the prepare phase runs inside the
+      // scheduler's write transaction so close is visible to the stale selection.
       const r = await reconcileEvents({
         events: pgEventStore(sql),
         queue,
         lock: memLock(),
         now: () => NOW,
+        writeTransaction: (work) => sql.begin(async (tx) => work(pgEventStore(tx as never))),
       });
 
       expect(r).toEqual({ closed: 2, materialized: 0, resynced: 3 });

@@ -289,7 +289,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
         fresh: new Date(now.getTime() - DAY),
         future: new Date(now.getTime() + DAY),
       };
-      for (const when of Object.values(at)) await insert.member_data_access_logs(app!, when);
+      for (const when of Object.values(at)) {
+        await insert.agent_event_audits(app!, when);
+        await insert.member_data_access_logs(app!, when);
+      }
       const flight = pgSingleFlight(app!);
       const name = `w15-audit-prune-${randomUUID()}`;
       let release!: () => void;
@@ -310,6 +313,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       release();
       expect(await first).toBe(true);
       expect(counts).toEqual({
+        agentEventAudits: 1,
         accessLog: 1,
         joinAttempts: 0,
         idempotencyKeys: 0,
@@ -322,6 +326,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(survivors.map((r) => r.occurred_at.getTime())).toEqual(
         [at.edge, at.fresh, at.future].map((d) => d.getTime()),
       );
+      const auditSurvivors = await owner<
+        { created_at: Date }[]
+      >`select created_at from agent_event_audits order by id`;
+      expect(auditSurvivors.map((r) => r.created_at.getTime())).toEqual(
+        [at.edge, at.fresh, at.future].map((d) => d.getTime()),
+      );
       let again: typeof counts;
       expect(
         await flight(name, async (db) => {
@@ -329,6 +339,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         }),
       ).toBe(true);
       expect(again).toEqual({
+        agentEventAudits: 0,
         accessLog: 0,
         joinAttempts: 0,
         idempotencyKeys: 0,
