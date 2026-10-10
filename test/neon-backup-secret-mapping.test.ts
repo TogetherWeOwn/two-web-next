@@ -25,11 +25,11 @@ describe("neon-backup production secret mapping", () => {
 
     // The migration secret must not appear in the dump workflow in any
     // spelling GitHub would resolve (dot or bracket syntax).
-    expect(code).not.toMatch(/secrets\.PRODUCTION_DATABASE_URL\b/);
+    expect(code).not.toMatch(/secrets\.PRODUCTION_DATABASE_URL\b/i);
     expect(code).not.toMatch(/secrets\s*\[\s*['"]PRODUCTION_DATABASE_URL['"]\s*\]/i);
     // Bare-token check fails closed after removing the read-only name (which
     // does not contain the migration name as a substring).
-    const withoutBackup = workflow.split("PRODUCTION_BACKUP_DATABASE_URL").join("");
-    expect(withoutBackup).not.toMatch(/PRODUCTION_DATABASE_URL/);
+    const withoutBackup = workflow.replace(/PRODUCTION_BACKUP_DATABASE_URL/gi, "");
+    expect(withoutBackup).not.toMatch(/PRODUCTION_DATABASE_URL/i);
   });
 });
