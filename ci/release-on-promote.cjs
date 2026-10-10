@@ -117,7 +117,9 @@ function git(...args) {
 
 function releaseExists(tag) {
   try {
-    execFileSync("gh", ["release", "view", tag, "--json", "tagName"], { stdio: "ignore" });
+    execFileSync("gh", ["release", "view", tag, "--json", "tagName"], {
+      stdio: "ignore",
+    });
     return true;
   } catch {
     return false;
@@ -173,22 +175,23 @@ function main() {
     version = tagsAt.map(parseTag).sort((a, b) => compareVersions(b, a))[0];
   } else {
     const prev = parseTag(prevTag);
-    version =
-      opts.releaseAs && compareVersions(opts.releaseAs, prev) > 0
-        ? opts.releaseAs
-        : nextVersion(prev, commits, opts);
     const highest = git("tag", "--list", "v*")
       .split("\n")
       .map(parseTag)
       .filter(Boolean)
       .sort((a, b) => compareVersions(b, a))[0];
-    if (highest && compareVersions(version, highest) <= 0) {
-      // Promoting a commit older than the newest release (a rollback): its
-      // next version already exists on a newer commit, so it is not tagged.
+    if (compareVersions(prev, highest) < 0) {
+      // The newest release is not reachable from this commit, so it is older
+      // than that release (a rollback or a redeploy of a prior commit). It is
+      // never tagged, not even by release-as.
       console.log(`${sha} is older than v${highest.join(".")}; rollback promote, no new tag`);
       output({ tag_name: "", released: "false" });
       return;
     }
+    version =
+      opts.releaseAs && compareVersions(opts.releaseAs, prev) > 0
+        ? opts.releaseAs
+        : nextVersion(prev, commits, opts);
   }
   const tag = `v${version.join(".")}`;
   const notes = renderNotes({
@@ -228,7 +231,14 @@ function main() {
   output({ tag_name: tag, released: "true" });
 }
 
-module.exports = { parseCommit, parseTag, nextVersion, renderNotes, compareVersions, loadOptions };
+module.exports = {
+  parseCommit,
+  parseTag,
+  nextVersion,
+  renderNotes,
+  compareVersions,
+  loadOptions,
+};
 
 if (require.main === module) {
   try {
