@@ -152,20 +152,16 @@ workflow or change repository scanning settings as part of the dependency gate.
 
 ## Releases
 
-Releases are automated with [release-please](https://github.com/googleapis/release-please)
-(`release-please-config.json` + `.release-please-manifest.json`, release-type
-`node`). The `release` workflow regenerates the release PR on a weekly schedule
-or a manual dispatch, not on every merge to `main` (a push only publishes).
-Merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
-Release. Cut one with the short freeze procedure in
-[`docs/releases.md`](docs/releases.md#cutting-a-release). Never tag or release
-by hand.
+Each successful production promote tags the deployed commit `vX.Y.Z` and
+publishes a GitHub Release from the Conventional Commit subjects since the
+previous tag (`release.yml`, called by `deploy-production`). There is no release
+PR. See [`docs/releases.md`](docs/releases.md). Never tag or release by hand.
 
-`CHANGELOG.md` uses the [Common Changelog](https://common-changelog.org/)
+Release notes use the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
 **Fixed** (`fix`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
-stay out of the changelog. Each squash-merged PR title becomes one entry, so
-write it for a reader of the changelog: imperative mood, one user-facing change.
+stay out of the notes. Each squash-merged PR title becomes one entry, so
+write it for a reader of the release notes: imperative mood, one user-facing change.
 
 Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
 cutover. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;

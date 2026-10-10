@@ -14,9 +14,8 @@ on:
   # past area-gated PR runs within hours.
   schedule:
     - cron: '19 2 * * *'
-  # Dispatched by the release workflow (TOG-9865) on release-please branches:
-  # PRs opened with GITHUB_TOKEN trigger no workflows, so the required `check`
-  # would never run on the release PR without this path.
+  # Manual re-run on a branch. Releases no longer dispatch it: there is no
+  # release PR (docs/releases.md).
   workflow_dispatch:
 
 permissions:
