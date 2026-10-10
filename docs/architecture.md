@@ -221,6 +221,7 @@ exactly once.
 | `src/alert-probe-error.ts` | observability |
 | `src/alert-probe.ts` | observability |
 | `src/alerts.ts` | observability |
+| `src/auth/` | auth |
 | `src/auth-status.ts` | auth |
 | `src/body-limit.ts` | http-guard |
 | `src/bot/` | bot |
