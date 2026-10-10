@@ -21,6 +21,7 @@ import {
   ANON_PAST_TTL_MS,
   __resetAnonEventCacheForTests,
   anonCacheSource,
+  anonPastKey,
   isAnonCacheEligible,
   readAnonCache,
   writeAnonCache,
@@ -41,6 +42,33 @@ import {
 vi.mock("postgres", async () => {
   const actual = await vi.importActual<{ default: typeof postgres }>("postgres");
   return { ...actual, default: vi.fn(actual.default) };
+});
+
+// The past archive has no Discord read to hold an in-flight render on (unlike
+// /events), so the past race test pauses listPast itself: the wrapper lets the
+// rows resolve, then holds the handler before it renders and settles. The
+// channel lives on globalThis because the mock factory runs before the module
+// body. One-shot (the first gated call consumes it) so a concurrent moderator
+// write can never deadlock on the same seam.
+vi.mock("../src/events/reads", async () => {
+  const actual = await vi.importActual<typeof import("../src/events/reads")>("../src/events/reads");
+  return {
+    ...actual,
+    listPast: async (...args: Parameters<typeof actual.listPast>) => {
+      const result = await actual.listPast(...args);
+      const gate = (
+        globalThis as unknown as {
+          __pastListGate?: { used: boolean; arrived: () => void; gate: Promise<void> };
+        }
+      ).__pastListGate;
+      if (gate && !gate.used) {
+        gate.used = true;
+        gate.arrived();
+        await gate.gate;
+      }
+      return result;
+    },
+  };
 });
 
 const APP_URL = "https://next.example.test";
@@ -340,6 +368,89 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const html = await fresh.text();
       expect(html).toContain("Renamed past");
       expect(html).not.toContain("Smuggled past");
+    });
+
+    it("an in-flight past render never settles stale HTML after a retire", async () => {
+      const row = await seed({
+        title: "Old past",
+        startsAt: PAST_START,
+        endsAt: PAST_END,
+      });
+      // Gate the listPast seam: the handler captures the retire generation
+      // before this read, so the in-flight render has already seen "Old past"
+      // when the gate holds it. The moderator PATCH path never reads listPast,
+      // and the gate is one-shot, so the gate cannot deadlock it.
+      let releaseGate!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      let arrived!: () => void;
+      const arrivedAtGate = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      (globalThis as unknown as { __pastListGate?: unknown }).__pastListGate = {
+        used: false,
+        arrived,
+        gate,
+      };
+      try {
+        const inflight = guestGet("/events/past");
+        await arrivedAtGate;
+        const edited = await modWrite("PATCH", `/events/${row.eventKey}`, { title: "New past" });
+        expect(edited.status).toBe(200);
+        releaseGate();
+        // The overtaken render still answers itself with its pre-retire bytes,
+        // proving the race was exercised — but it settles nothing shared.
+        const overtaken = await inflight;
+        expect(overtaken.status).toBe(200);
+        expect(await overtaken.text()).toContain("Old past");
+        const fresh = await guestGet("/events/past");
+        const html = await fresh.text();
+        expect(html).toContain("New past");
+        expect(html).not.toContain("Old past");
+      } finally {
+        releaseGate();
+        delete (globalThis as unknown as { __pastListGate?: unknown }).__pastListGate;
+      }
+    });
+
+    it("past hits serve the entry's remaining TTL, not a fresh full window", async () => {
+      const row = await seed({
+        title: "Old night",
+        startsAt: PAST_START,
+        endsAt: PAST_END,
+      });
+      const first = await guestGet("/events/past");
+      expect(first.status).toBe(200);
+      expect(first.headers.get("cache-control")).toBe("public, max-age=300");
+      expect(await first.text()).toContain("Old night");
+
+      // A write that bypasses the store leaves the timed entry stale: this
+      // proves the second fetch comes from the shared entry, not a re-read.
+      await fixture.client`update events set title = 'Smuggled past' where id = ${row.id}`;
+      const stale = await guestGet("/events/past");
+      expect(stale.headers.get("cache-control")).toMatch(/^public, max-age=(299|300)$/);
+      expect(await stale.text()).toContain("Old night");
+
+      // Age the entry by 100 s through the module's own clock seam: the next
+      // hit must report the ~200 s that are left. Replaying the stored
+      // `max-age=300` verbatim fails this assertion.
+      writeAnonCache(
+        anonPastKey("GET", 1),
+        anonCacheSource(env),
+        {
+          status: 200,
+          cacheControl: "public, max-age=300",
+          vary: null,
+          body: "<main>aged past entry</main>",
+        },
+        ANON_PAST_TTL_MS,
+        Date.now() - 100_000,
+      );
+      const aged = await guestGet("/events/past");
+      expect(aged.status).toBe(200);
+      expect(aged.headers.get("cache-control")).toMatch(/^public, max-age=(199|200)$/);
+      expect(await aged.text()).toContain("aged past entry");
     });
 
     it("keeps member, flash and search variants private without poisoning the shared entry", async () => {
