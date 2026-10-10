@@ -740,17 +740,9 @@ test("refuses a missing or malformed DEPLOY_SHA before any API call", async () =
   for (const bad of [undefined, "", "main", dispatchSha.slice(1), `${dispatchSha};id`]) {
     const seen = {};
     const env = { ...greenEnv, DEPLOY_SHA: bad };
-    await assert.rejects(checkGreen(ciEvidence(), seen, env), /DEPLOY_SHA must be a full 40-hex commit/);
+    await assert.rejects(
+      checkGreen(ciEvidence(), seen, env),
+      /DEPLOY_SHA must be a full 40-hex commit/,
+    );
   }
-});
-
-test("promotion counts only post-deploy e2e-staging runs whose deploy and journeys succeeded", () => {
-  const workflow = readFileSync(
-    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
-    "utf8",
-  );
-  const resolver = workflow.split("- name: Resolve the commit to promote")[1].split("\n      - ")[0];
-  assert.match(resolver, /-f event=workflow_run/);
-  assert.match(resolver, /select\(\.name == "staging-journeys"\)/);
-  assert.match(resolver, /workflows\/deploy\.yml\/runs/);
 });

@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Full 40-hex main commit to deploy. Empty promotes the latest main commit whose e2e-staging staging-journeys passed. Always set it explicitly for a redeploy of a prior good commit"
+        description: "Full 40-hex main commit to deploy. Empty promotes the newest deployed commit whose post-deploy staging-journeys passed (ci/resolve-promotion-sha.mjs). Always set it explicitly to redeploy a prior good commit"
         required: false
         type: string
         default: ""
@@ -32,41 +32,17 @@ jobs:
       # Promote what staging last verified: merges keep landing on main, so the
       # newest main SHA is rarely staged yet. The gate below still requires the
       # exact SHA's green main ci.yml (and staging evidence under auto-approve).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: ci
       - name: Resolve the commit to promote
         id: target
+        run: node ci/resolve-promotion-sha.mjs
         env:
-          GH_TOKEN: ${{ github.token }}
           INPUT_SHA: ${{ inputs.sha }}
-          REPO: ${{ github.repository }}
-        run: |
-          sha="$(printf '%s' "$INPUT_SHA" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
-          if [ -z "$sha" ]; then
-            # Staging-verified = an e2e-staging run that followed a deploy (event workflow_run, so its
-            # head_sha is the deployed commit; manual runs test whatever staging serves), whose
-            # staging-journeys job passed (it is skipped on docs-only diffs while the run still
-            # succeeds), and whose commit's latest deploy.yml run succeeded.
-            for page in 1 2 3 4 5; do
-              runs="$(gh api --method GET "repos/$REPO/actions/workflows/e2e-staging.yml/runs" \
-                -f branch=main -f event=workflow_run -f status=success -f per_page=20 -f page="$page" \
-                --jq '.workflow_runs[] | "\(.id) \(.head_sha)"')"
-              [ -n "$runs" ] || break
-              while read -r run_id run_sha; do
-                verdict="$(gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" -f per_page=100 \
-                  --jq '[.jobs[] | select(.name == "staging-journeys") | .conclusion] | first // ""')"
-                [ "$verdict" = "success" ] || continue
-                deployed="$(gh api --method GET "repos/$REPO/actions/workflows/deploy.yml/runs" \
-                  -f branch=main -f head_sha="$run_sha" -f per_page=1 --jq '.workflow_runs[0].conclusion // ""')"
-                if [ "$deployed" = "success" ]; then sha="$run_sha"; break; fi
-              done <<< "$runs"
-              [ -n "$sha" ] && break
-            done
-            echo "Promoting the latest staging-verified commit (staging-journeys passed): ${sha:-none}"
-          fi
-          if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
-            echo "::error::No full 40-hex commit to deploy (input empty and no successful e2e-staging run on main)"
-            exit 1
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.target.outputs.sha }}
