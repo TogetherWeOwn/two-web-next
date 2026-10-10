@@ -21,6 +21,7 @@ import {
   ANON_PAST_TTL_MS,
   __resetAnonEventCacheForTests,
   anonCacheSource,
+  isAnonCacheEligible,
   readAnonCache,
   writeAnonCache,
 } from "../src/events/anon-cache";
@@ -345,6 +346,24 @@ describe.skipIf(!process.env.DATABASE_URL)(
         readAnonCache(key, { ...source, appUrl: "https://other.example.test" }, 2_001),
       ).toBeNull();
       expect(readAnonCache(key, source, 2_001)).toEqual(res);
+    });
+
+    it("serves shared bytes only to cookieless anonymous renders", () => {
+      const anon = {
+        method: "GET",
+        hasCookie: false,
+        hasSession: false,
+        searching: false,
+        flashed: false,
+      };
+      expect(isAnonCacheEligible(anon)).toBe(true);
+      expect(isAnonCacheEligible({ ...anon, method: "HEAD" })).toBe(true);
+      // Any cookie at all bypasses: session, flash and stray OAuth cookies.
+      expect(isAnonCacheEligible({ ...anon, hasCookie: true })).toBe(false);
+      expect(isAnonCacheEligible({ ...anon, hasSession: true })).toBe(false);
+      expect(isAnonCacheEligible({ ...anon, searching: true })).toBe(false);
+      expect(isAnonCacheEligible({ ...anon, flashed: true })).toBe(false);
+      expect(isAnonCacheEligible({ ...anon, method: "POST" })).toBe(false);
     });
   },
 );
