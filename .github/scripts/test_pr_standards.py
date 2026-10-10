@@ -210,6 +210,41 @@ class CardAndInternalRefs(unittest.TestCase):
         f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", HEAD_REF="fix/acme-77-x", INTERNAL_ID_PREFIXES="ACME"))
         self.assertEqual([("error", "Internal reference")], levels(f))
 
+    def test_public_branch_head_ref_cutoff_makes_error_above_pr_number(self):
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        base = {"BODY": clean, "REPO_PRIVATE": "false", "HEAD_REF": "TOG-20524-head-refs", "PR_STANDARDS_MODE": "warn"}
+        # Below cutoff: still warning (even with knob set)
+        f = ps.evaluate(env(**base, PR_NUMBER="626", HEAD_REF_ERROR_FROM_PR="627"))
+        self.assertEqual([("warning", "Internal reference")], levels(f))
+        # At cutoff: error
+        f = ps.evaluate(env(**base, PR_NUMBER="627", HEAD_REF_ERROR_FROM_PR="627"))
+        self.assertEqual([("error", "Internal reference")], levels(f))
+        # Above: error
+        f = ps.evaluate(env(**base, PR_NUMBER="700", HEAD_REF_ERROR_FROM_PR="627"))
+        self.assertEqual([("error", "Internal reference")], levels(f))
+        # No cutoff set: follows mode (warning)
+        f = ps.evaluate(env(**base, PR_NUMBER="700"))
+        self.assertEqual([("warning", "Internal reference")], levels(f))
+        # qa/tog-1-x (any case) still caught
+        f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", HEAD_REF="qa/tog-1-x", PR_NUMBER="700", HEAD_REF_ERROR_FROM_PR="627", PR_STANDARDS_MODE="warn"))
+        self.assertEqual([("error", "Internal reference")], levels(f))
+        self.assertIn("branch name", f[0].message)
+
+    def test_release_please_heads_untouched(self):
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        # release-please heads produce no internal-ref finding even if knob would otherwise apply
+        f = ps.evaluate(env(BODY=clean, REPO_PRIVATE="false", HEAD_REF="release-please--branches--main--tags--v1.0.0",
+                            PR_NUMBER="700", HEAD_REF_ERROR_FROM_PR="627", PR_STANDARDS_MODE="warn"))
+        self.assertEqual([], f)
+
+    def test_public_branch_head_ref_cutoff_leaves_title_body_unchanged(self):
+        # Title/body internal refs still follow PR_STANDARDS_MODE, not the branch cutoff knob
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        for mode, level in (("warn", "warning"), ("error", "error")):
+            f = ps.evaluate(env(TITLE="fix(auth): TOG-123 refresh", BODY=clean, REPO_PRIVATE="false",
+                                PR_STANDARDS_MODE=mode, PR_NUMBER="700", HEAD_REF_ERROR_FROM_PR="627"))
+            self.assertEqual([(level, "Internal reference")], levels(f), mode)
+
     def test_private_repo_allows_lowercase_ids_in_branch(self):
         self.assertEqual([], ps.evaluate(env(HEAD_REF="qa/tog-123-example")))
 

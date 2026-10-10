@@ -200,11 +200,29 @@ def check_pull_request(env):
             out.append(Finding(level, "Card reference", "Add 'Refs: TOG-1234' to the PR body."))
     else:
         for where, text in (("title", title), ("body", body), ("branch name", head_ref)):
+            if generated and where == "branch name":
+                continue
             hits = internal_hits(text, prefixes, slug=where == "branch name")
             if hits:
-                out.append(Finding(mode, "Internal reference", f"The PR {where} holds {', '.join(hits)}. Public "
-                                   "repos carry no internal references: say it in plain words, link only public "
-                                   "GitHub issues, and name the branch after the change (fix/short-slug)."))
+                level = mode
+                if where == "branch name":
+                    cutoff = (env.get("HEAD_REF_ERROR_FROM_PR") or "").strip()
+                    pr_num_str = (env.get("PR_NUMBER") or "0").strip()
+                    try:
+                        pr_num = int(pr_num_str) if pr_num_str else 0
+                        cutoff_num = int(cutoff) if cutoff else 0
+                        if cutoff_num > 0 and pr_num >= cutoff_num:
+                            level = "error"
+                    except ValueError:
+                        pass
+                msg = (f"The PR {where} holds {', '.join(hits)}. Public "
+                       "repos carry no internal references: say it in plain words, link only public "
+                       "GitHub issues, and name the branch after the change (fix/short-slug).")
+                if where == "branch name":
+                    msg += (" Push the same SHA with "
+                            "`git push origin HEAD:refs/heads/<type>/<short-slug>` "
+                            "and open the PR from that ref.")
+                out.append(Finding(level, "Internal reference", msg))
     return out
 
 
