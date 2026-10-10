@@ -332,17 +332,59 @@ test("actual production config retains isolated bindings before and after sentin
   assert.doesNotThrow(() => assertProductionTarget(JSON.stringify(provisioned)));
 });
 
-test("checked-in production Hyperdrive comment matches the provisioned id, not the PLACEHOLDER sentinel text", () => {
-  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+function assertProductionHyperdrivePlaceholderCommentMatchesId(text) {
   const config = readWranglerConfig(text);
   const id = config.env?.production?.hyperdrive?.find((entry) => entry?.binding === "DB")?.id;
   assert.equal(typeof id, "string");
-  if (id !== sentinel) {
-    assert.ok(
-      !text.includes("PLACEHOLDER"),
-      "wrangler.jsonc still carries the PLACEHOLDER comment while the production Hyperdrive id differs from the sentinel",
-    );
+
+  const productionStart = text.indexOf('"production": {');
+  const hyperdriveStart = text.indexOf('"hyperdrive":', productionStart);
+  assert.ok(productionStart >= 0 && hyperdriveStart > productionStart);
+  const lines = text.slice(productionStart, hyperdriveStart).trimEnd().split(/\r?\n/);
+  const comments = [];
+  while (lines.at(-1)?.trimStart().startsWith("//")) {
+    comments.unshift(lines.pop().trim());
   }
+  const placeholderHyperdriveComment = comments.some(
+    (line) => /placeholder/i.test(line) && /hyperdrive/i.test(line),
+  );
+  assert.equal(
+    placeholderHyperdriveComment,
+    id === sentinel,
+    id === sentinel
+      ? "the production sentinel comment must identify the placeholder Hyperdrive"
+      : "a provisioned production Hyperdrive comment must not call its id a placeholder",
+  );
+}
+
+test("checked-in production Hyperdrive uses placeholder wording only for the sentinel id", () => {
+  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  assertProductionHyperdrivePlaceholderCommentMatchesId(text);
+
+  const unrelatedPlaceholder = text.replace(
+    "// Production Hyperdrive for the separately named two-web-next-production",
+    "// PLACEHOLDER: unrelated queue setting\n      // Production Hyperdrive for the separately named two-web-next-production",
+  );
+  assertProductionHyperdrivePlaceholderCommentMatchesId(unrelatedPlaceholder);
+
+  const productionStart = text.indexOf('"production": {');
+  const hyperdriveStart = text.indexOf('"hyperdrive":', productionStart);
+  const idStart = text.indexOf('"id": "', hyperdriveStart) + '"id": "'.length;
+  const idEnd = text.indexOf('"', idStart);
+  const sentinelWithProvisionedComment = `${text.slice(0, idStart)}${sentinel}${text.slice(idEnd)}`;
+  assert.throws(
+    () => assertProductionHyperdrivePlaceholderCommentMatchesId(sentinelWithProvisionedComment),
+    /production sentinel comment must identify the placeholder Hyperdrive/,
+  );
+
+  const placeholderOnProvisionedId = text.replace(
+    "// Production Hyperdrive for the separately named two-web-next-production",
+    "// PLACEHOLDER: replace with the separately provisioned production Hyperdrive",
+  );
+  assert.throws(
+    () => assertProductionHyperdrivePlaceholderCommentMatchesId(placeholderOnProvisionedId),
+    /provisioned production Hyperdrive comment must not call its id a placeholder/,
+  );
 });
 
 test("preserves the owner exception for admin bypass without relaxing self-review protection", () => {
