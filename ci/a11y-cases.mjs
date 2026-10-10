@@ -33,6 +33,7 @@ export const coverage = {
   ),
   "/sitemap_index.xml": skip("XML sitemap"),
   "/robots.txt": skip("Plain-text robots policy"),
+  "/.well-known/security.txt": skip("Plain-text RFC 9116 security policy"),
   "/up": skip("JSON queue health response"),
   "/admin/queue/failed/:id/preview": skip(
     "Default-off operator-only JSON advice, not an HTML document",
