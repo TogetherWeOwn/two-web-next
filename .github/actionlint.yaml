@@ -1,0 +1,10 @@
+# Tier 0 workflow lint (pipeline review 2026-10-10). CI/workflow-logic findings were the
+# largest deterministic bucket of Paperclip Review findings (REPORT-20261009, bucket C).
+self-hosted-runner:
+  labels:
+    - two-selfhosted
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      # GitHub Actions accepts YAML anchors/aliases (db-migrate.yml, deploy.yml); actionlint 1.7.7 does not yet.
+      - 'env is alias node but mapping node is expected'
