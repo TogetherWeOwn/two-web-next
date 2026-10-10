@@ -1,5 +1,6 @@
 // Nightly mutation signal for the auth blast radius: `src/sessions.ts`,
-// `src/join/service.ts` and `src/join/route.ts`.
+// `src/join/service.ts`, `src/join/route.ts`, and RSVP write admission
+// (member-denied matrix in routes-rsvp, throttle/waitlist/capacity in rsvp.ts).
 //
 // Each mutant weakens exactly one auth check (expired-session blindness, lost
 // revocation, throttle/review bypass, forged join outcomes). The runner applies
@@ -41,6 +42,9 @@ const KILL_SUITE = [
   "test/join-blank-bot.test.ts",
   "test/join-idempotence.test.ts",
   "test/w15b-exposure-throttle-race.test.ts",
+  "test/rsvp-member-denied.test.ts",
+  "test/rsvp-throttle-denied.test.ts",
+  "test/rsvp-waitlist-admission.test.ts",
 ];
 
 const DB_URL_VARS = ["DATABASE_URL", "AUDIT_IMPORT_TEST_DATABASE_URL", "LEGACY_DATABASE_URL"];
@@ -158,6 +162,28 @@ const MUTANTS = [
     find: "if (limited) return limited;\n    const sql = await joinStore(c);",
     replace: "if (limited && false) return limited;\n    const sql = await joinStore(c);",
   },
+  {
+    id: "R1-member-guard-bypassed",
+    file: "src/events/routes-rsvp.tsx",
+    note: "member() guard: non-member sessions are admitted to RSVP writes (member-denied matrix)",
+    find: 'if (!session.member) return c.json({ error: "forbidden" }, 403);',
+    replace: 'if (false) return c.json({ error: "forbidden" }, 403);',
+  },
+  {
+    id: "R2-throttle-budget-ignored",
+    file: "src/events/rsvp.ts",
+    note: "per-member 12/min write budget: an over-budget write is still accepted (throttle budget)",
+    find: "if (r && r.n >= maxAttempts) return { limited: true, retryAfter: Math.max(1, r.wait) } as const;",
+    replace:
+      "if (r && r.n >= maxAttempts && false) return { limited: true, retryAfter: Math.max(1, r.wait) } as const;",
+  },
+  {
+    id: "R3-waitlist-bypassed",
+    file: "src/events/rsvp.ts",
+    note: "new going answers join the waitlist line first: they take a seat directly (waitlist/capacity admission)",
+    find: 'status === "going" && existing?.status !== "going" ? "waitlisted" : status;',
+    replace: 'status === "going" && existing?.status !== "going" ? status : status;',
+  },
 ];
 
 function sha(text) {
@@ -244,7 +270,7 @@ export function renderReport({ sha: headSha, startedAt, results }) {
   const survived = results.filter((r) => r.status === "survived");
   const stale = results.filter((r) => r.status !== "killed" && r.status !== "survived");
   const lines = [
-    "# Mutation report: sessions + join (nightly, non-blocking)",
+    "# Mutation report: sessions + join + rsvp (nightly, non-blocking)",
     "",
     `- head: ${headSha}`,
     `- started: ${startedAt}`,
@@ -334,7 +360,7 @@ export function run(root, kill = defaultKill) {
   const stale = results.filter((r) => r.status !== "killed" && r.status !== "survived");
   const survivedRows = survived(results);
   console.log(
-    `mutation sessions+join: ${results.length - survivedRows.length - stale.length}/${results.length} killed.`,
+    `mutation sessions+join+rsvp: ${results.length - survivedRows.length - stale.length}/${results.length} killed.`,
   );
   console.log(`report: artifacts/mutation-sessions-join/report.{json,md}`);
   for (const r of [...survivedRows, ...stale])
