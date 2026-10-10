@@ -16,6 +16,14 @@ const operator = "100000000000000111";
 const secret = "test-session-secret-at-least-32-bytes-long";
 const sourceIdentity = "01ARZ3NDEKTSV4RRFFQ69G5FAA";
 
+// Derive host and credentials from the ambient DATABASE_URL so the suite runs
+// against the CI Postgres service as well as the local agent-testdb.
+function testDbUrl(): string {
+  const url = new URL(process.env.DATABASE_URL!);
+  url.pathname = `/${DB_NAME}`;
+  return url.href;
+}
+
 function baseEnv(queueSend: (body: QueueMessage) => void): Env {
   return {
     APP_URL: STAGING_APP_URL,
@@ -25,7 +33,7 @@ function baseEnv(queueSend: (body: QueueMessage) => void): Env {
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET: secret,
-    DATABASE_URL: `postgres://agent_test@agent-testdb:5432/${DB_NAME}`,
+    DATABASE_URL: testDbUrl(),
     QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
     QUEUE_RECONCILE_OPERATOR_ID: operator,
     // The transport receipt is irrelevant here; the suite counts deliveries.
@@ -57,7 +65,7 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       )) as unknown as { owner: string }[];
       const owner = rows[0]?.owner;
       if (owner) {
-        if (owner !== "agent_test") {
+        if (owner !== adminUrl.username) {
           throw new Error(`refusing to drop database owned by ${owner}`);
         }
         await admin.unsafe(`DROP DATABASE "${DB_NAME}" WITH (FORCE)`);
@@ -66,11 +74,11 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     } finally {
       await admin.end({ timeout: 1 });
     }
-    const dbUrl = `postgres://agent_test@agent-testdb:5432/${DB_NAME}`;
+    const dbUrl = testDbUrl();
     const migrate = postgres(dbUrl, {
       max: 1,
       connect_timeout: 5,
-      password: () => "",
+      password: () => new URL(dbUrl).password,
       onnotice: () => {},
     });
     try {
@@ -86,7 +94,12 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     } finally {
       await migrate.end({ timeout: 1 });
     }
-    sql = postgres(dbUrl, { max: 2, connect_timeout: 5, password: () => "", onnotice: () => {} });
+    sql = postgres(dbUrl, {
+      max: 2,
+      connect_timeout: 5,
+      password: () => new URL(dbUrl).password,
+      onnotice: () => {},
+    });
     store = createMemorySessionStore();
     const token = newSessionToken();
     await store.create({
